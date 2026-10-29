@@ -175,14 +175,24 @@ def serve(
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
     ``served_address`` is the Unix socket of this user by default.
-    ``--served_address=@positronic.teleop.command.network`` serves on a host and a port, and needs the bearer token in
-    ``AUTH_TOKEN_ENV``. A run sets the parameters of its session (``SessionParams``) in the query of its address.
+    ``--served_address=@positronic.teleop.command.network`` serves on a host and a port. It checks the bearer token in
+    ``AUTH_TOKEN_ENV``, and serves open when that is unset. A run sets the parameters of its session (``SessionParams``)
+    in the query of its address.
     ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
     # lock out `cfg.policy.teleop`, which sends none.
-    auth_token = os.environ.get(AUTH_TOKEN_ENV) if isinstance(served_address, ServedHostPort) else None
+    auth_token = None
+    if isinstance(served_address, ServedHostPort):
+        auth_token = os.environ.get(AUTH_TOKEN_ENV)
+        if auth_token is None:
+            logger.warning(
+                '%s is unset: each peer that reaches %s:%d can open a teleop session',
+                AUTH_TOKEN_ENV,
+                served_address.host,
+                served_address.port,
+            )
     service = TeleopService(
         served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token
     )

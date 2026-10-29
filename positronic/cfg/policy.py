@@ -109,7 +109,8 @@ nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius
 file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)
 
 # A person, through a teleop service on another machine: `--policy.address.host` names it. The token in `AUTH_TOKEN_ENV`
-# is the token of the service. `--policy.address.query=@positronic.cfg.policy.teleop_molmo_query` sets the cameras.
+# is the token of the service, and `--policy.headers=None` dials a service with no token.
+# `--policy.address.query=@positronic.cfg.policy.teleop_molmo_query` sets the cameras.
 teleop_network = teleop.override(
     wire='websocket', address=network_address.override(port=DEFAULT_PORT, query=teleop_query), headers=bearer_headers
 )

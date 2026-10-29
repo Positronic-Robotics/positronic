@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 from positronic_model_server import spec
 from positronic_model_server.server import Model, ModelServer, PreparationCancelled, Session
-from positronic_model_server.server_wire import ServedAddress, ServedHostPort
+from positronic_model_server.server_wire import ServedAddress
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 
 from positronic import geom, keys
@@ -185,7 +185,7 @@ class _Sample:
 class TeleopService:
     """Serve one teleop session at a time at ``served_address``, as a model server.
 
-    A host and a port need ``auth_token``, because the input of the service drives the robot. The Unix socket is in a
+    With no ``auth_token``, a host and a port serve open to each peer that reaches them. The Unix socket is in a
     directory of this user only.
 
     ``take_sample`` takes each sample of the right controller. A frame request waits for the next sample. When none
@@ -210,8 +210,6 @@ class TeleopService:
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
             if not 0 < value < math.inf:
                 raise ValueError(f'{name} must be finite and positive, got {value}')
-        if isinstance(served_address, ServedHostPort) and auth_token is None:
-            raise ValueError('a teleop service on a host and a port needs an auth token')
         self._binds = served_address
         self._auth_token = auth_token
         self.ready_limit = ready_limit

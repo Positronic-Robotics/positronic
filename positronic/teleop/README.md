@@ -206,7 +206,9 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
      --output_dir=~/datasets/stack_cubes_demos
    ```
 
-- The service does not start on a host and a port with no token. A session with no token or a wrong one gets HTTP 403.
+- A session with no token or a wrong one gets HTTP 403.
+- With `AUTH_TOKEN` unset, the service serves open: each peer that reaches the port can open a session. Then dial it
+  with `--policy.headers=None`.
 - The sessions have no TLS. Use a private network, such as a tailnet.
 - Each frame waits for one round trip of the network.
 - `--served_address.port` changes the port. Give `--policy.address.port` the same value.
