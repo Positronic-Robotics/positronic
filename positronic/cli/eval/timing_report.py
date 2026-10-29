@@ -25,6 +25,7 @@ import pos3
 
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.telemetry import (
+    COMPRESSED_SPANS_SUFFIX,
     GPU_INDEX,
     GPU_MEM_USED_B,
     GPU_PROC_MEM_B,
@@ -225,9 +226,10 @@ def _local_path(named: str) -> Path:
 
 
 def _read_spans_dir(telemetry_dir: Path) -> list[SpanRec]:
-    """Every span across all per-process ``*.spans.jsonl`` files under the telemetry dir."""
+    """Every span across all per-process ``*.spans.jsonl`` and ``*.spans.jsonl.zst`` files under the telemetry dir."""
     spans: list[SpanRec] = []
-    for path in sorted(telemetry_dir.glob(f'*{SPANS_SUFFIX}')):
+    paths = [*telemetry_dir.glob(f'*{SPANS_SUFFIX}'), *telemetry_dir.glob(f'*{COMPRESSED_SPANS_SUFFIX}')]
+    for path in sorted(paths):
         with _refusing_inaccessible(path):
             spans.extend(read_spans(path))
     return spans
