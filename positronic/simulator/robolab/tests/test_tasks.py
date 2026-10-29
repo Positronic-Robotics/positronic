@@ -100,7 +100,11 @@ _GT_STATE = {
 
 def test_the_privileged_channel_carries_the_subtask_progress_and_the_scene_state():
     subtask = np.array([0, 0, 1, 0.0], dtype=np.float32)
-    raw = {robolab_keys.SUBTASK: subtask, robolab_keys.GT_STATE: _GT_STATE, 'wrist_cam': np.zeros((2, 2, 3))}
+    raw = {
+        robolab_keys.SUBTASK: subtask,
+        robolab_keys.GT_STATE: _GT_STATE,
+        robolab_keys.WRIST_CAMERA: np.zeros((2, 2, 3)),
+    }
 
     privileged = RobolabAdapter({}).privileged(raw)
 
