@@ -232,10 +232,15 @@ class RTCScheduleV1(Policy):
         self._fps = fps
         self._call_after_sec = call_after_sec
         self._latency_estimate = DurationEstimate.from_spec(latency_estimate)
+        self._schedule_part = RTCSchedule(fps, call_after_sec, ConstantDuration())
         self._schedule = Sequential(
-            TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False, replan_on_error=False),
-            RTCSchedule(fps, call_after_sec, ConstantDuration()),
+            TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False, replan_on_error=False), self._schedule_part
         )
+
+    @property
+    def schedule(self) -> RTCSchedule:
+        """The RTC schedule that this recipe plays."""
+        return self._schedule_part
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Any]) -> PolicyRun:
         duration = self._latency_estimate.run()

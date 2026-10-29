@@ -500,6 +500,10 @@ class RequestTiming:
     def reference(self) -> Reference:
         return self._reference
 
+    @property
+    def seconds(self) -> float:
+        return self.duration_ns / 1e9
+
     @classmethod
     def before_end(cls) -> Self:
         """Request before the trajectory ends, using the estimated duration as the lead."""

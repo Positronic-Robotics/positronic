@@ -34,7 +34,7 @@ from .base import Answer, Policy, PolicyRun, Processor, Runtime, Step
 from .codecs import EncodeImages, PolicyCommandError, TransformImages
 from .codecs.action import JointPositionAction
 from .codecs.image import ResizeCache
-from .compatibility import from_v1_spec, unnest_seq
+from .compatibility import RTCScheduleV1, from_v1_spec, unnest_seq
 from .executor import ExecutionRuntime
 from .processors import InferenceSchedule, RequestTiming, TemporalStack
 from .spec import ComponentFactory, from_spec
@@ -257,6 +257,7 @@ class RemotePolicy(Policy):
                 return call(streamed)
             except FrameMiss as miss:
                 # The protocol takes the request in full after a frame_miss answer.
+                streamer.frame_misses += 1
                 logger.warning(
                     'The server does not have the streamed rows %s; sending the request in full', miss.missing
                 )
@@ -294,14 +295,19 @@ class RemotePolicy(Policy):
 
     class _ReportingRuntime(Runtime):
         """``inner``, with each answer reporting its result, its ``elapsed_sec`` and the ``replans`` count at its submit
-        to ``on_read`` at the first read."""
+        to ``on_read`` at the first read, and each submit to ``on_submit`` before the call starts."""
 
         def __init__(
-            self, inner: Runtime, on_read: cabc.Callable[[Any, float, int], None], replans: cabc.Callable[[], int]
+            self,
+            inner: Runtime,
+            on_read: cabc.Callable[[Any, float, int], None],
+            replans: cabc.Callable[[], int],
+            on_submit: cabc.Callable[[], None] | None = None,
         ) -> None:
             self._inner = inner
             self._on_read = on_read
             self._replans = replans
+            self._on_submit = on_submit
 
         def set_metadata(self, name: str, value: Any) -> None:
             self._inner.set_metadata(name, value)
@@ -316,6 +322,8 @@ class RemotePolicy(Policy):
 
         def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
             replans = self._replans()
+            if self._on_submit is not None:
+                self._on_submit()
             return RemotePolicy._ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read, replans)
 
         def _submit_on(
@@ -375,7 +383,7 @@ class RemotePolicy(Policy):
             policy_runtime = (
                 execution
                 if streamer is None
-                else self._ReportingRuntime(execution, streamer.on_answer, lambda: streamer.replans)
+                else self._ReportingRuntime(execution, streamer.on_answer, lambda: streamer.replans, streamer.on_submit)
             )
             run = policy_runtime.start(stack, infer)
             obs = yield
@@ -471,10 +479,13 @@ class RemotePolicy(Policy):
     @staticmethod
     def _predicts(schedule: Policy) -> bool:
         """Whether the frame streamer predicts the calls of ``schedule``: a chunked schedule's, one call at a time,
-        each after the previous chunk less its lead (``ChunkedSchedule``)."""
+        each after the previous chunk less its lead (``ChunkedSchedule``), or an RTC schedule's, one call at a time,
+        each ``call_after_sec`` after the previous call (``RTCSchedule``)."""
         if not isinstance(schedule, InferenceSchedule):
             return False
-        return schedule.request_timing.reference is RequestTiming.Reference.BEFORE_END and schedule.merge.chained
+        reference, chained = schedule.request_timing.reference, schedule.merge.chained
+        Reference = RequestTiming.Reference
+        return (reference is Reference.BEFORE_END and chained) or (reference is Reference.AFTER_START and not chained)
 
     @staticmethod
     def _stream_refusal(
@@ -522,6 +533,7 @@ class RemotePolicy(Policy):
         temporal: list[TemporalStack] = []
         transforms: list[TransformImages] = []
         schedules: list[InferenceSchedule] = []
+        rtc: list[RTCScheduleV1] = []
         encodes: list[RemotePolicy._PassImages] = []
         hooks = self._StreamerHooks()
         overrides: dict[ComponentFactory, ComponentFactory] = {
@@ -532,12 +544,14 @@ class RemotePolicy(Policy):
             InferenceSchedule.from_spec_args: self._recorded(
                 partial(InferenceSchedule.from_spec_args, on_replan=hooks.replan), schedules
             ),
+            RTCScheduleV1.from_spec_args: self._recorded(RTCScheduleV1.from_spec_args, rtc),
             EncodeImages.from_spec_args: self._recorded(
                 partial(self._PassImages.from_spec_args, fallback_quality=self._jpeg_quality), encodes
             ),
         }
         stack = declared_stack(meta, version, overrides)
-        refusal = self._stream_refusal(unnest_seq(meta[offboard_keys.LOCAL_STACK]), temporal, schedules, encodes)
+        parts = unnest_seq(meta[offboard_keys.LOCAL_STACK])
+        refusal = self._stream_refusal(parts, temporal, [*schedules, *(v1.schedule for v1 in rtc)], encodes)
         if refusal is not None:
             logger.warning('The frame stream does not mirror the declared stack: %s; requests go in full', refusal)
             return declared_stack(meta, version), None, self._jpeg_quality
@@ -560,9 +574,10 @@ class RemotePolicy(Policy):
             horizon_sec=stack_meta.get(policy_keys.ACTION_HORIZON_SEC),
             # The schedule's own estimate of its lead, fed the same elapsed times: one estimate per session, as per
             # episode.
-            lead=schedules[0].latency_estimate.run().update,
+            lead=schedules[0].latency_estimate.run().update if schedules else None,
             resize=partial(self._transform_row, transforms) if transforms else None,
             jpeg_quality=quality,
+            call_after_sec=rtc[0].schedule.request_timing.seconds if rtc else None,
         )
         hooks.streamer = streamer
         return stack, streamer, quality
