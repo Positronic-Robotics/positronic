@@ -3,6 +3,8 @@ import json
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import replace
+from itertools import pairwise
 from typing import cast
 from unittest.mock import Mock
 
@@ -11,6 +13,7 @@ import pytest
 from PIL import Image
 from pydantic_ai.messages import (
     BinaryContent,
+    CachePoint,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -117,7 +120,7 @@ def frames(messages):
     ]
 
 
-def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
+def test_history_keeps_every_frame_and_reports_actual_pose(model):
     requests, replies = model
     replies.extend([move(), move(), finish()])
     policy = LLMPolicy(Endpoint('test'), Motion(), image_size=8)
@@ -130,7 +133,7 @@ def test_history_keeps_two_observations_images_and_reports_actual_pose(model):
         assert runtime.metadata_snapshot()[policy_keys.STOP_REASON] == 'done'
         assert runtime.metadata_snapshot()[policy_keys.HINDSIGHT] == 'Inspect the final image.'
         events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
-    assert [len(frames(messages)) for messages, _ in requests] == [2, 4, 4]
+    assert [len(frames(messages)) for messages, _ in requests] == [2, 4, 6]
     states = [e for e in events if e['event'] == 'observation']
     assert states[1]['remaining_translation_m'] == [0.01, 0.0, 0.0]
     assert 'privileged-value-never-send' not in str(requests)
@@ -167,18 +170,26 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [2]
 
 
+def without_cache_point(messages):
+    """The request as the stored history holds it: the request without its final cache point."""
+    *earlier, last = messages
+    *parts, part = last.parts
+    *content, point = part.content
+    assert point == CachePoint()
+    stored = content[0] if len(content) == 1 and isinstance(content[0], str) else content
+    return [*earlier, replace(last, parts=[*parts, replace(part, content=stored)])]
+
+
 @pytest.mark.parametrize('images', list(Images))
-@pytest.mark.parametrize('image_horizon', [1, 2])
-def test_retained_history_prunes_images_by_observation(model, images, image_horizon):
+def test_each_request_starts_with_the_whole_previous_request(model, images):
     requests, replies = model
-    policy = LLMPolicy(Endpoint('test'), Motion(), images=images, image_horizon=image_horizon)
-    pictured, motion_replies = [], []
+    policy = LLMPolicy(Endpoint('test'), Motion(), images=images)
+    pictured, motion_replies = 0, []
     with execution(policy) as (run, runtime, clock):
         for second in range(1, 5):
-            time_ns = second * 1_000_000_000
-            clock.advance_to_ns(time_ns)
+            clock.advance_to_ns(second * 1_000_000_000)
             if images is Images.ALWAYS or second != 3:
-                pictured.append(time_ns)
+                pictured += 1
             if images is Images.ON_DEMAND and second != 3:
                 replies.extend(
                     ModelResponse([
@@ -192,19 +203,10 @@ def test_retained_history_prunes_images_by_observation(model, images, image_hori
             motion_replies.append(reply)
             replies.append(reply)
             complete(run, runtime, clock, observation())
-            messages = requests[-1][0]
-            assert len(frames(messages)) == 2 * min(len(pictured), image_horizon)
-        messages = requests[-1][0]
-        retained = [
-            message.metadata[policy_keys.OBS_TIME_NS]
-            for message in messages
-            if isinstance(message, ModelRequest) and message.metadata is not None and frames([message])
-        ]
-        assert set(retained) == set(pictured[-image_horizon:])
-        assert '[older camera frame omitted]' in str(messages)
-        assert all(reply in messages for reply in motion_replies[:-1])
-    first_pictures = next(messages for messages, _ in requests if frames(messages))
-    assert len(frames(first_pictures)) == (2 if images is Images.ALWAYS else 1)
+            assert len(frames(requests[-1][0])) == 2 * pictured
+        assert all(reply in requests[-1][0] for reply in motion_replies[:-1])
+    sent = [without_cache_point(messages) for messages, _ in requests]
+    assert all(later[: len(earlier)] == earlier for earlier, later in pairwise(sent))
 
 
 @pytest.mark.parametrize(

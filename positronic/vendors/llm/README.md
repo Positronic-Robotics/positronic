@@ -89,10 +89,9 @@ Defaults are experimental bounds for supervised testing:
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
 | `image_size` | 640 pixels on the longest edge; aspect ratio preserved |
-| `image_horizon` | Most recent 2 observations containing images |
 | `images` | `always` |
 
-Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. Older images are removed from stored and outgoing history while text, tool results, and native reasoning metadata remain.
+Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. The history keeps every frame and is never rewritten, so each request starts with the whole previous request. OpenAI caches that prefix without settings. For Anthropic, each request ends with a cache point.
 
 Translation is linear and rotation follows the shortest spherical interpolation. A returned move starts from the latest measured pose. Oversized translation and rotation are clamped independently to the per-move limits, preserving the translation direction and shortest rotation path. The processor waits one sampling period after the final command before requesting the next decision. The tool result and recorded acceptance contain the bounded target, whether it was clamped, and the trajectory duration including that final period. The next observation reports that target alongside the measured state; scheduling a target does not confirm arrival. Malformed tool arguments still require correction. The driver performs inverse kinematics and enforces its own joint constraints. These bounds are not collision detection or contact-force limits.
 
