@@ -9,7 +9,7 @@ from pimm.time import RECEIVED_WORLD
 from positronic import keys
 from positronic.cli.eval.run import TaskDriver, run_world
 from positronic.dataset.episode import Episode
-from positronic.dataset.local_dataset import LocalDataset
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
@@ -119,7 +119,7 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
     )
     policy = Sequential(PauseOnUnavailable(), LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)))
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
-    run_world(embodiment, TaskDriver(lambda: [task, task], policy, tmp_path))
+    run_world(embodiment, TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(tmp_path)))
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 2
     assert len(states) == 4

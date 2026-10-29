@@ -11,7 +11,11 @@ from .signal import IndicesLike
 
 
 class DatasetWriter(AbstractContextManager, ABC):
-    """Abstract factory for creating new Episodes within a dataset."""
+    """A recording destination that allocates episode writers.
+
+    Construction stores configuration; context entry opens resources in the receiving process.
+    An unopened writer must support serialization when submitted across processes.
+    """
 
     @abstractmethod
     def new_episode(self) -> EpisodeWriter:

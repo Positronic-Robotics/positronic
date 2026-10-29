@@ -1,4 +1,7 @@
 import json
+import pickle
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -19,6 +22,95 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 
 from .test_dataset import build_dataset_with_signal, episode_ids
+
+
+def test_unopened_writer_serializes_without_touching_its_destination(tmp_path):
+    root = tmp_path / 'recordings'
+    writer = LocalDatasetWriter(root)
+    snapshot = pickle.dumps(writer)
+    assert not root.exists()
+    for value in (1, 2):
+        with pickle.loads(snapshot) as received, received.new_episode() as episode:
+            episode.set_static('value', value)
+    assert [episode['value'] for episode in LocalDataset(root)] == [1, 2]
+
+
+def test_writer_requires_context_entry_and_retains_allocations_across_reopens(tmp_path):
+    writer = LocalDatasetWriter(tmp_path / 'recordings')
+    with pytest.raises(RuntimeError, match='context manager'):
+        writer.new_episode()
+    with writer:
+        with pytest.raises(RuntimeError, match='already open'):
+            writer.__enter__()
+        with writer.new_episode() as aborted:
+            aborted.abort()
+    with pytest.raises(RuntimeError, match='context manager'):
+        writer.new_episode()
+    with writer, writer.new_episode() as episode:
+        assert episode.path != aborted.path
+
+
+def test_writer_excludes_other_instances_and_releases_after_error(tmp_path):
+    first = LocalDatasetWriter(tmp_path)
+    second = LocalDatasetWriter(tmp_path)
+    with pytest.raises(ValueError, match='recording failed'), first:
+        with pytest.raises(RuntimeError, match='already open for writing'):
+            with second:
+                pytest.fail('Concurrent writer entered')
+        with LocalDatasetWriter(tmp_path / 'independent'):
+            pass
+        raise ValueError('recording failed')
+    with second, second.new_episode() as episode:
+        episode.set_static('value', 1)
+    assert LocalDataset(tmp_path)[0]['value'] == 1
+
+
+def test_writer_releases_lock_when_entry_fails(tmp_path, monkeypatch):
+    writer = LocalDatasetWriter(tmp_path)
+    with monkeypatch.context() as patch:
+
+        def fail_scan(self):
+            raise OSError('scan failed')
+
+        patch.setattr(LocalDatasetWriter, '_compute_next_episode_id', fail_scan)
+        with pytest.raises(OSError, match='scan failed'):
+            writer.__enter__()
+    with LocalDatasetWriter(tmp_path):
+        pass
+    with writer:
+        pass
+
+
+def test_writer_lock_excludes_another_process(tmp_path):
+    script = """
+import sys
+from pathlib import Path
+from positronic.dataset.local_dataset import LocalDatasetWriter
+
+with LocalDatasetWriter(Path(sys.argv[1])) as writer, writer.new_episode() as episode:
+    episode.set_static('value', 42)
+"""
+    with LocalDatasetWriter(tmp_path):
+        result = subprocess.run([sys.executable, '-c', script, str(tmp_path)], capture_output=True, timeout=30)
+        assert result.returncode != 0
+        assert b'Dataset is already open for writing' in result.stderr
+    subprocess.run([sys.executable, '-c', script, str(tmp_path)], check=True, capture_output=True, timeout=30)
+    assert LocalDataset(tmp_path)[0]['value'] == 42
+
+
+def test_writer_lock_releases_after_process_exit_without_cleanup(tmp_path):
+    script = """
+import os
+import sys
+from pathlib import Path
+from positronic.dataset.local_dataset import LocalDatasetWriter
+
+with LocalDatasetWriter(Path(sys.argv[1])):
+    os._exit(0)
+"""
+    subprocess.run([sys.executable, '-c', script, str(tmp_path)], check=True, capture_output=True, timeout=30)
+    with LocalDatasetWriter(tmp_path), LocalDatasetWriter(tmp_path / 'independent'):
+        pass
 
 
 def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
@@ -55,12 +147,10 @@ def test_local_dataset_writer_creates_structure_and_persists(tmp_path):
 def test_local_dataset_writer_appends_existing(tmp_path):
     root = tmp_path / 'append'
 
-    writer = LocalDatasetWriter(root)
-    with writer.new_episode() as episode:
+    with LocalDatasetWriter(root) as writer, writer.new_episode() as episode:
         episode.append('test_signal', np.array([1.0], dtype=np.float32), Time(**{RECORDED_TIME: 1}))
 
-    writer = LocalDatasetWriter(root)
-    with writer.new_episode() as episode:
+    with LocalDatasetWriter(root) as writer, writer.new_episode() as episode:
         episode.append('test_signal', np.array([2.0], dtype=np.float32), Time(**{RECORDED_TIME: 2}))
 
     ds = LocalDataset(root)
@@ -83,8 +173,8 @@ def test_local_dataset_ignores_unfinished_episodes(tmp_path):
         with w.new_episode() as ew:
             ew.set_static('id', 0)
 
-    writer = LocalDatasetWriter(root)
-    unfinished = writer.new_episode()
+    with LocalDatasetWriter(root) as writer:
+        unfinished = writer.new_episode()
     marker = unfinished.path / UNFINISHED_MARKER
     assert marker.exists()
 

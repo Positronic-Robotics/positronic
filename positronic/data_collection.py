@@ -1,7 +1,6 @@
 import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -10,18 +9,18 @@ import numpy as np
 import pos3
 
 import pimm
+import positronic.cfg.dataset_writer
 import positronic.cfg.hardware.camera
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.simulator
 import positronic.cfg.sound
-import positronic.cfg.video_encoder
 import positronic.cfg.webxr
 from pimm.logging import init_logging
 from positronic import geom, keys, utils, wire
+from positronic.dataset.dataset import DatasetFactory
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, VideoEncoder
 from positronic.drivers import roboarm
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import State as RoboarmState
@@ -250,7 +249,7 @@ def main(
     stream_video_to_webxr: str | None = None,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
-    video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -277,16 +276,22 @@ def main(
         static_meta.update(wire.ROBOT_STATIC_META)
     output_path = None
     if output_dir is not None:
-        video_encoder.ensure_available()
         output_path = pos3.sync(output_dir, sync_on_error=True)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
         operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
     )
 
-    dataset_factory = partial(LocalDatasetWriter, video_encoder=video_encoder) if output_path is not None else None
     with pimm.World() as world:
-        ds_agent = wire.wire(world, data_collection, dataset_factory, camera_emitters, robot_arm, gripper, None)
+        ds_agent = wire.wire(
+            world,
+            data_collection,
+            dataset_factory if output_path is not None else None,
+            camera_emitters,
+            robot_arm,
+            gripper,
+            None,
+        )
         _wire(world, ds_agent, data_collection, webxr, robot_arm, sound)
 
         # SO-101 fills both the arm and gripper slots with one object; a control system runs in exactly one process.
@@ -326,11 +331,12 @@ def main_sim(
     fps: int = 30,
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
+    dataset_factory: DatasetFactory = LocalDatasetWriter,
 ):
     """Runs data collection in simulator."""
 
     sim = MujocoSim(mujoco_model_path, loaders, camera_fps=fps)
-    cameras = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
+    camera_emitters = {name: sim.cameras[orig_name] for name, orig_name in cameras.items()}
     gui = dpg_ui()
 
     static_meta: dict[str, Any] = dict(wire.ROBOT_STATIC_META)
@@ -349,10 +355,11 @@ def main_sim(
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
     )
 
-    dataset_factory = LocalDatasetWriter if output_path is not None else None
     with pimm.World(virtual_time=True) as world:
         # The sim carries both the arm and the gripper ports, so it fills both slots.
-        ds_agent = wire.wire(world, data_collection, dataset_factory, cameras, sim, sim, gui)
+        ds_agent = wire.wire(
+            world, data_collection, dataset_factory if output_path is not None else None, camera_emitters, sim, sim, gui
+        )
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
         world.connect(data_collection.redraw_scene, sim.env_reset)
 
@@ -407,7 +414,7 @@ yamcfg = arm_as_gripper.override(
     robot_arm=positronic.cfg.hardware.roboarm.yam,
     cameras={},
     nominal_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
-    video_encoder=positronic.cfg.video_encoder.jetson_h264,
+    dataset_factory=positronic.cfg.dataset_writer.jetson,
 )
 
 

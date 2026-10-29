@@ -19,12 +19,10 @@ from pimm.tests.testing import Passive, wire_call
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from pimm.world import VirtualClock
 from positronic import keys, telemetry, telemetry_keys, wire
-from positronic.cli.eval.run import run_world
 from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
-from positronic.dataset.video import LibavEncoder
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
@@ -330,8 +328,7 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             simulated=True,
         )
         dataset = MemoryDataset()
-        dataset_factory = Mock(return_value=dataset)
-        harness = Harness(embodiment, dataset_factory=dataset_factory)
+        harness = Harness(embodiment)
         for name, handler in readiness.items():
             wire_call(world, harness.ready[name], handler)
         for name, handler in preparation.items():
@@ -369,8 +366,6 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             privileged=privileged_emitters,
             serializer=serializer,
             dataset=dataset,
-            dataset_factory=dataset_factory,
-            output_path=Path('recording'),
             deadlines=Trace(world.clock),
             commands=Trace(world.clock),
         )
@@ -418,12 +413,12 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     frame = np.array([1])
     h.observation.emit(frame)
     h.done.emit({'stale': True})
-    first = h.caller(Rollout(Task('first', 0.01), Observe(), h.output_path))
+    first = h.caller(Rollout(Task('first', 0.01), Observe(), h.dataset))
     next(h.loop)
     assert h.deadlines.values == [(0, 10_000_000)]
 
     h.manual.emit({MOTOR: 99})
-    overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), h.output_path))
+    overlapping = h.caller(Rollout(Task('overlapping', None), Observe(), h.dataset))
     h.world.clock.advance_to_ns(5_000_000)
     h.done.emit({'success': True})
     h.world.clock.advance_to_ns(12_000_000)
@@ -439,7 +434,7 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     assert h.dataset.episodes[-1].static[keys.TASK] == 'first'
 
     frame[0] = 2  # No new signal: the next episode must rebuild its observation cache.
-    second = h.caller(Rollout(Task('second', None), Observe(), h.output_path))
+    second = h.caller(Rollout(Task('second', None), Observe(), h.dataset))
     next(h.loop)
     assert h.serializer.call_count == 2
     assert [obs[POSITION][0] for obs in observations] == [1, 2]
@@ -515,7 +510,7 @@ def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_
     h = episode_harness
     policy = EndAfter(calls=3, end=end)
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), policy, h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), policy, h.dataset))
     ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
     assert _until_answered(h, answer) == ended
     assert policy.calls == 3
@@ -528,7 +523,7 @@ def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_
 def test_an_env_done_in_the_iteration_of_a_return_ends_the_episode(episode_harness):
     h = episode_harness
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), EndAfter(calls=1), h.dataset))
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     assert _until_answered(h, answer) == {eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
@@ -538,7 +533,7 @@ def test_a_return_after_the_deadline_counts_as_a_timeout(episode_harness):
     h = episode_harness
     h.observation.emit(1)
     policy = EndAfter(calls=1, clock=h.world.clock, slow_to_ns=11_000_000)
-    answer = h.caller(Rollout(Task('test', 0.01), policy, h.output_path))
+    answer = h.caller(Rollout(Task('test', 0.01), policy, h.dataset))
     assert _until_answered(h, answer) == {eval_keys.TERMINATED: False}
     assert eval_keys.ENDED_BY not in h.dataset.episodes[0].static
 
@@ -553,7 +548,7 @@ def test_a_return_that_is_not_a_policy_end_fails_the_episode(episode_harness, re
             return returned
 
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsSomethingElse()), h.output_path))
+    answer = h.caller(Rollout(Task('test', 1.0), cast(Policy, ReturnsSomethingElse()), h.dataset))
     with pytest.raises(ValueError, match='PolicyEnd'):
         _until_answered(h, answer)
 
@@ -578,7 +573,7 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
     if failure == 'conversion':
         error = pimm.NoValueException
         h.serializer.side_effect = error('conversion failed')
-    answer = h.caller(Rollout(Task('test', 0.01), Failing(), h.output_path))
+    answer = h.caller(Rollout(Task('test', 0.01), Failing(), h.dataset))
     next(h.loop)
     assert closed == [True]
     with pytest.raises(error, match=f'{failure} failed'):
@@ -589,7 +584,7 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
     assert [deadline for _, deadline in h.deadlines.values] == ([10_000_000, None] if opened else [])
 
     h.serializer.side_effect = lambda value: value
-    h.caller(Rollout(Task('next', None), Hold(), h.output_path))
+    h.caller(Rollout(Task('next', None), Hold(), h.dataset))
     next(h.loop)
     assert not h.dataset.episodes[-1].closed
 
@@ -643,7 +638,7 @@ def test_an_observation_error_discards_the_episode_and_an_old_value_does_not(epi
     h.harness._embodiment = replace(h.embodiment, simulated=False)
     policy = Positions()
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('move', None), policy, h.output_path))
+    answer = h.caller(Rollout(Task('move', None), policy, h.dataset))
     next(h.loop)
     error = pimm.SignalError('camera lost')
     if lost:
@@ -672,7 +667,7 @@ def test_recorder_polls_do_not_fail_on_errors_between_policy_calls(episode_harne
     h = episode_harness
     policy = Positions()
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('move', None), policy, h.output_path if record else None))
+    answer = h.caller(Rollout(Task('move', None), policy, h.dataset if record else None))
     next(h.loop)
 
     h.world.clock.advance_to_ns(1_000_000)
@@ -976,17 +971,14 @@ class Hold(Policy):
 
 
 @pytest.mark.parametrize('record', [False, True])
-def test_recording_path_and_final_metadata(episode_harness, tmp_path, record):
+def test_recording_writer_and_final_metadata(episode_harness, record):
     h = episode_harness
     h.embodiment.static_meta['rig'] = 'test-rig'
-    output = tmp_path if record else None
+    writer = h.dataset if record else None
     task = Task('move', None, meta={'seed': 42})
-    answer = h.caller(Rollout(task, Hold(), output))
+    answer = h.caller(Rollout(task, Hold(), writer))
     next(h.loop)
-    if record:
-        h.dataset_factory.assert_called_once_with(output)
-    else:
-        h.dataset_factory.assert_not_called()
+    assert bool(h.dataset.episodes) is record
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
     next(h.loop)
@@ -1020,11 +1012,10 @@ class ReadInstruction(Policy):
 
 def test_each_instruction_the_policy_gets_is_recorded_at_the_time_it_changes(episode_harness, tmp_path):
     h = episode_harness
-    h.harness._dataset_factory = LocalDatasetWriter
     current = ['open the top drawer']
     policy = ReadInstruction()
     h.observation.emit(np.array([0]))
-    answer = h.caller(Rollout(Task(lambda: current[0], None), policy, tmp_path))
+    answer = h.caller(Rollout(Task(lambda: current[0], None), policy, LocalDatasetWriter(tmp_path)))
     next(h.loop)
     for at_ns, instruction in [
         (5_000_000, 'open the top drawer'),
@@ -1057,7 +1048,7 @@ def test_each_instruction_the_policy_gets_is_recorded_at_the_time_it_changes(epi
 def test_an_instruction_that_never_changes_is_recorded_once_at_the_first_observation(episode_harness):
     h = episode_harness
     h.world.clock.advance_to_ns(1_000_000)
-    answer = h.caller(Rollout(Task('move', None), ReadInstruction(), h.output_path))
+    answer = h.caller(Rollout(Task('move', None), ReadInstruction(), h.dataset))
     next(h.loop)  # no observation yet: the policy gets nothing, so nothing is recorded
     h.world.clock.advance_to_ns(2_000_000)
     h.observation.emit(0)
@@ -1095,7 +1086,7 @@ def test_run_metadata_overrides_definition_and_is_snapshotted_before_cleanup(epi
     policy = Record()
     h.observation.emit(0)
     for _ in range(2):
-        answer = h.caller(Rollout(Task('move', None), policy, tmp_path))
+        answer = h.caller(Rollout(Task('move', None), policy, h.dataset))
         next(h.loop)
         h.done.emit({eval_keys.SUCCESS: True})
         next(h.loop)
@@ -1116,9 +1107,8 @@ def test_policy_cleanup_failure_keeps_recording_and_next_episode_inputs(episode_
                 raise RuntimeError('policy cleanup failed')
 
     h = episode_harness
-    h.harness._dataset_factory = LocalDatasetWriter
     h.observation.emit(1)
-    answer = h.caller(Rollout(Task('move', None), FailsOnClose(), tmp_path))
+    answer = h.caller(Rollout(Task('move', None), FailsOnClose(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
@@ -1128,7 +1118,7 @@ def test_policy_cleanup_failure_keeps_recording_and_next_episode_inputs(episode_
     assert episode.static[eval_keys.SUCCESS] is True
     assert list(episode[POSITION].values()) == [1]
 
-    answer = h.caller(Rollout(Task('again', None), Hold(), tmp_path))
+    answer = h.caller(Rollout(Task('again', None), Hold(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
@@ -1300,7 +1290,7 @@ def test_idle_manual_commands_pass_through(episode_harness):
 def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_path, ending):
     h = episode_harness
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode'):
-        h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+        h.caller(Rollout(Task('move', None), Hold(), h.dataset))
         next(h.loop)
         h.world.clock.advance_to_ns(100_000_000)
         if ending == 'failure':
@@ -1464,7 +1454,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, motion])
-        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), tmp_path))
+        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), LocalDatasetWriter(tmp_path)))
         try:
             for _ in range(1000):
                 next(loop)
@@ -1506,26 +1496,6 @@ def test_wiring_rejects_privileged_names_shared_with_policy_signals(episode_harn
         wire.wire_embodiment(h.world, h.harness, h.embodiment, privileged=privileged)
 
 
-def test_recorder_refuses_an_encoder_this_host_cannot_run():
-    class AbsentEncoder(LibavEncoder):
-        def ensure_available(self) -> None:
-            raise RuntimeError('no such encoder here')
-
-    motion = Motion()
-    embodiment = Embodiment(
-        descriptor='recording-test',
-        observations={POSITION: Observation(motion.position, None)},
-        commands={MOTOR: Command(motion.command, None)},
-        prepare_handlers={},
-        static_meta={},
-        meta_source=None,
-        simulated=True,
-        video_encoder=AbsentEncoder(),
-    )
-    with pytest.raises(RuntimeError, match='no such encoder here'):
-        run_world(embodiment, Passive())
-
-
 def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
     class Move(Policy):
         def run(self, runtime):
@@ -1548,7 +1518,7 @@ def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
         wire.wire_embodiment(world, harness, embodiment)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, timer])
-        answer = caller(Rollout(Task('move', 0.005), Move(), tmp_path))
+        answer = caller(Rollout(Task('move', 0.005), Move(), LocalDatasetWriter(tmp_path)))
         try:
             while not answer.done():
                 next(loop)
@@ -1579,7 +1549,7 @@ def test_policy_completion_resets_the_sampling_deadline(episode_harness):
                 obs = yield Step({}, runtime.time_ns + 100_000_000)
 
     h.observation.emit(0)
-    h.caller(Rollout(Task('sample', None), Await(), h.output_path))
+    h.caller(Rollout(Task('sample', None), Await(), h.dataset))
     try:
         assert next(h.loop) == pimm.Sleep(0.001)
         h.world.clock.advance_to_ns(800_000)
@@ -1608,7 +1578,7 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         policy = Positions()
         h.observation.emit(0)
         h.privileged[GROUND_TRUTH].emit(np.array([10]))
-        answer = h.caller(Rollout(Task('sample', None), policy, h.output_path))
+        answer = h.caller(Rollout(Task('sample', None), policy, h.dataset))
         next(h.loop)
         episode = h.dataset.episodes[0]
         assert [name for name, _, _ in episode.records] == [POSITION, GROUND_TRUTH, eval_keys.INSTRUCTION]
@@ -1646,12 +1616,11 @@ def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeup
         h.observation.emit(0)
         h.caller(Rollout(Task('move', None), Hold(), None))
         assert next(h.loop) == pimm.Sleep(0.1)
-        h.dataset_factory.assert_not_called()
+        assert h.dataset.episodes == []
 
 
 def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_instant(episode_harness, tmp_path):
     h = episode_harness
-    h.harness._dataset_factory = LocalDatasetWriter
 
     class Chain(Policy):
         def run(self, runtime):
@@ -1664,7 +1633,7 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
                 yield Step({}, runtime.time_ns + 100_000_000)
 
     h.observation.emit(0)
-    answer = h.caller(Rollout(Task('move', None, charge_inference_time=False), Chain(), tmp_path))
+    answer = h.caller(Rollout(Task('move', None, charge_inference_time=False), Chain(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     assert h.world.clock.now_ns() == 0
     h.done.emit({eval_keys.SUCCESS: True})
@@ -1697,7 +1666,7 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
 
     frame = np.array([10])
     h.observation.emit(frame)
-    answer = h.caller(Rollout(Task('move', None), Move(), h.output_path))
+    answer = h.caller(Rollout(Task('move', None), Move(), h.dataset))
     next(h.loop)
     episode = h.dataset.episodes[0]
     append = episode.append
@@ -1730,7 +1699,6 @@ def test_inputs_are_written_before_the_policy_and_commands_after_emission(episod
 
 def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_harness, tmp_path):
     h = episode_harness
-    h.harness._dataset_factory = LocalDatasetWriter
     observations = []
 
     class Normalize(Policy):
@@ -1743,7 +1711,7 @@ def test_recorded_arrays_do_not_change_when_the_policy_mutates_inputs(episode_ha
 
     frame = np.array([10])
     h.observation.emit(frame)
-    answer = h.caller(Rollout(Task('move', None), Normalize(), tmp_path))
+    answer = h.caller(Rollout(Task('move', None), Normalize(), LocalDatasetWriter(tmp_path)))
     next(h.loop)
     frame[:] = 20
     h.world.clock.advance_to_ns(5_000_000)
@@ -1770,7 +1738,7 @@ def test_a_held_input_records_once_at_the_read_and_keeps_its_receipt_times(name)
         assert message is not None
         original_time = message.time
         h.world.clock.advance_to_ns(2_000_000)
-        h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+        h.caller(Rollout(Task('move', None), Hold(), h.dataset))
         wall_before_ns = time.monotonic_ns()
         next(h.loop)
         wall_after_ns = time.monotonic_ns()
@@ -1791,7 +1759,7 @@ def test_a_held_input_records_once_at_the_read_and_keeps_its_receipt_times(name)
 def test_producer_cannot_overwrite_harness_recording_timestamps(episode_harness, timeline):
     h = episode_harness
     h.observation.emit(1, time=pimm.Time(**{timeline: 123}))
-    answer = h.caller(Rollout(Task('move', None), Hold(), h.output_path))
+    answer = h.caller(Rollout(Task('move', None), Hold(), h.dataset))
     next(h.loop)
     with pytest.raises(TypeError, match=timeline):
         answer.result()
@@ -1804,7 +1772,7 @@ def test_writer_failure_reaches_the_episode_caller(episode_harness, failure, mon
     if failure == 'close':
         monkeypatch.setattr(MemoryEpisode, '__exit__', Mock(side_effect=OSError('disk failed')))
     h.observation.emit(0)
-    answer = h.caller(Rollout(Task('fail', None), Hold(), h.output_path))
+    answer = h.caller(Rollout(Task('fail', None), Hold(), h.dataset))
     next(h.loop)
     episode = h.dataset.episodes[0]
     if failure == 'append':
@@ -2150,7 +2118,7 @@ def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose
             simulated=True,
         )
         dataset = MemoryDataset()
-        harness = Harness(embodiment, dataset_factory=Mock(return_value=dataset))
+        harness = Harness(embodiment)
         wire.wire_embodiment(world, harness, embodiment)
         caller = world.pair(harness.perform_task)
         done = world.pair(harness.done)
@@ -2158,7 +2126,7 @@ def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose
         try:
             state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
             policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, command=command)
-            answer = caller(Rollout(Task('move', None), policy, Path('recording')))
+            answer = caller(Rollout(Task('move', None), policy, dataset))
             next(loop)
             done.emit({eval_keys.SUCCESS: True})
             while not answer.done():
