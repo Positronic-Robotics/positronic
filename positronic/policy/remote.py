@@ -167,7 +167,10 @@ class RemotePolicy(Policy):
         return {policy_keys.TYPE: 'remote'}
 
     def wait_for_server(self) -> None:
-        """Return once the server has loaded its model. Opens no session."""
+        """Return once the server has loaded its model. Opens no session.
+
+        On a Modal Server with sticky sessions it starts the Modal session that the next run dials.
+        """
         self._client.wait_for_server()
 
     def run(self, runtime: Runtime) -> PolicyRun:

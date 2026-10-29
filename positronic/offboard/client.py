@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -88,20 +89,36 @@ def _session_token(answer: bytes) -> str:
 
 
 class ModalSessions:
-    """Sticky sessions on a Modal Server (`@app.server` with `@modal.sessioned`).
+    """The sticky sessions that one client holds on a Modal Server (`@app.server` with `@modal.sessioned`).
 
-    `start` places one session on one container: on a free container, on a container that Modal starts for it,
-    or on the next container that frees. The token it returns routes every request of the session to that
-    container. The edge answers a start that waits past its own limit with a 5xx; the next attempt carries the
-    same idempotency key, so the start continues and places one session. A start under a new key places another
-    session, which holds a container until its idle timeout.
+    A start places one session on one container: on a free container, on a container that Modal starts for it, or
+    on the next container that frees. Its token routes every request of the session to that container. The edge
+    answers a start that waits past its own limit with a 5xx; the next attempt carries the same idempotency key, so
+    the start continues and places one session. A start under a new key places another session, which holds a
+    container until its idle timeout.
 
-    The session calls go to ``base_url`` alone: the client follows no redirect.
+    The session calls go to ``base_url`` alone: the client follows no redirect. The client holds the sessions its
+    open sessions dialed, and a spare that a call outside a session started for the next session to dial. A
+    pickled copy holds none of them.
     """
 
     def __init__(self, base_url: str, idle_timeout: int = MODAL_SESSION_IDLE_TIMEOUT):
         self._base_url = base_url.rstrip('/')
         self.idle_timeout = idle_timeout
+        # A call outside a session can run beside a session, so a lock guards the held sessions, and a second one
+        # lets one call at a time start the spare.
+        self._lock = threading.Lock()
+        self._open: dict[str, None] = {}
+        self._spare: str | None = None
+        self._spare_start = threading.Lock()
+        # Starts in flight (each waits for a container). A call that finds one waits for its token instead of
+        # starting a spare, which would boot a second container on a cold app.
+        self._starting = 0
+        self._started = threading.Condition(self._lock)
+
+    def __reduce__(self) -> tuple[type['ModalSessions'], tuple[str, int]]:
+        # The held sessions belong to this process, and a lock does not pickle.
+        return ModalSessions, (self._base_url, self.idle_timeout)
 
     def _post(self, path: str, headers: Mapping[str, str], timeout: float) -> bytes:
         """The answer to a ``POST`` on ``path`` at the endpoint. A refusal and a redirect raise
@@ -150,6 +167,76 @@ class ModalSessions:
                 logger.error('Modal session terminate answered %s; the session ends at its idle timeout', answer.code)
         except (TimeoutError, urllib.error.URLError) as lost:
             logger.error('Modal session terminate got no answer (%s); the session ends at its idle timeout', lost)
+
+    def open(self, headers: Mapping[str, str] | None, deadline: float) -> str:
+        """The token of a new session, held open: ``start``, counted as in flight."""
+        return self._counted_start(headers, deadline, spare=False)
+
+    def hold(self, token: str) -> None:
+        """Hold open the session ``token`` names, which a dial reuses."""
+        with self._lock:
+            self._open[token] = None
+
+    def take_spare(self) -> str | None:
+        """The spare session, for a dial that then holds it open; ``None`` without one."""
+        with self._lock:
+            token, self._spare = self._spare, None
+            return token
+
+    def end(self, headers: Mapping[str, str] | None, token: str) -> None:
+        """Forget the session ``token`` names, and end it."""
+        self.forget(token)
+        self.terminate(headers, token)
+
+    def forget(self, token: str) -> None:
+        """Drop ``token`` from the sessions the client holds."""
+        with self._lock:
+            self._open.pop(token, None)
+            if self._spare == token:
+                self._spare = None
+
+    def call_token(self, headers: Mapping[str, str] | None, deadline: float) -> tuple[str, bool]:
+        """The token that a call outside a session carries, and whether the client held it before the call.
+
+        That is the token of an open session, or else of the spare, which this starts when there is none. While a
+        start is in flight, the call waits for its token (up to the ``time.monotonic()`` instant ``deadline``)
+        instead of starting a spare: on a cold app the start waits for a container, and a second start would boot
+        another one.
+        """
+        with self._spare_start:
+            with self._lock:
+                while True:
+                    held = next(reversed(self._open), None) or self._spare
+                    if held is not None:
+                        return held, True
+                    left = deadline - time.monotonic()
+                    if not self._starting or left <= 0:
+                        break
+                    self._started.wait(timeout=left)
+            return self._counted_start(headers, deadline, spare=True), False
+
+    def call_headers(self, token: str) -> dict[str, str]:
+        """The headers of a call outside a session on the session ``token`` names."""
+        return {MODAL_SESSION_HEADER: f'Bearer {token}', MODAL_SESSION_IDLE_TIMEOUT_HEADER: str(self.idle_timeout)}
+
+    def _counted_start(self, headers: Mapping[str, str] | None, deadline: float, *, spare: bool) -> str:
+        """``start``, counted as in flight so that a call meanwhile waits for its token. The token is held (as the
+        spare, or open) in the same step that ends the count, so a waiting call never sees neither."""
+        with self._lock:
+            self._starting += 1
+        token: str | None = None
+        try:
+            token = self.start(headers, deadline)
+            return token
+        finally:
+            with self._lock:
+                self._starting -= 1
+                if token is not None:
+                    if spare:
+                        self._spare = token
+                    else:
+                        self._open[token] = None
+                self._started.notify_all()
 
 
 class InferenceSession:
@@ -429,8 +516,9 @@ class InferenceClient:
 
     ``modal_sessions`` is for a Modal Server with sticky sessions (``ModalSessions``): each session starts a Modal
     session before it dials, and dials with its token. The start waits for the container, so one session starts
-    one container. ``.modal_remote`` in ``positronic.cfg.policy`` sets it, and ``.modal_remote_legacy`` the long
-    dial for a Modal web endpoint without sessions.
+    one container. The edge refuses every request without a token, so the calls outside a session carry one too.
+    ``.modal_remote`` in ``positronic.cfg.policy`` sets it, and ``.modal_remote_legacy`` the long dial for a Modal
+    web endpoint without sessions.
     """
 
     def __init__(
@@ -484,10 +572,12 @@ class InferenceClient:
             if token is None:
                 # The session waits for its container here, so the dial below opens at once. The start and the dial
                 # fit in one connect deadline.
-                token = sessions.start(self.headers, ready_by)
+                token = sessions.open(self.headers, ready_by)
                 open_timeout = max(0.0, min(open_timeout, ready_by - time.monotonic()))
+            else:
+                sessions.hold(token)
             headers = {MODAL_SESSION_HEADER: f'Bearer {token}'}
-            on_close = partial(sessions.terminate, self.headers, token)
+            on_close = partial(sessions.end, self.headers, token)
 
         try:
             conn = self._wire.dial(self._address, headers, open_timeout)
@@ -523,14 +613,17 @@ class InferenceClient:
         """Return once a server answers on the address, without opening a session.
 
         Retries a cold server as ``new_session`` does, until the connect deadline. Raises ``wire.ConnectRefused``
-        when the wire refuses the server and no retry clears it.
+        when the wire refuses the server and no retry clears it. On a Modal Server with sticky sessions the probe
+        carries a session token, as ``keepalive`` does: on a cold app its start wakes a container, and the next
+        ``new_session`` dials that session.
         """
+        deadline = time.monotonic() + self.connect_deadline
 
-        def probe(open_timeout: float) -> None:
-            if (refusal := self._wire.probe(self._address, self.headers, open_timeout)) is not None:
+        def probe(headers: Mapping[str, str] | None, open_timeout: float) -> None:
+            if (refusal := self._wire.probe(self._address, headers, open_timeout)) is not None:
                 raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
 
-        self._retry(time.monotonic() + self.connect_deadline, probe)
+        self._retry(deadline, lambda open_timeout: self._call_outside_a_session(probe, deadline, open_timeout))
 
     def _connect(
         self,
@@ -540,12 +633,15 @@ class InferenceClient:
     ) -> InferenceSession:
         """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock.
 
-        A reconnect dials the Modal session that ``modal_token`` names. Only the first attempt dials that token: a
-        failed attempt ends its Modal session, and the next one starts a new one. The edge answers a dial on a session
-        that ended (its idle timeout passed, or it was ended) with 404, which reads as a permanent refusal: that one
-        starts a new session at once and spends no retry.
+        A reconnect dials the Modal session that ``modal_token`` names, and a new session dials the spare that a
+        call outside a session started. Only the first attempt dials that token: a failed attempt ends its Modal
+        session, and the next one starts a new one. The edge answers a dial on a session that ended (its idle
+        timeout passed, or it was ended) with 404, which reads as a permanent refusal: that one starts a new session
+        at once and spends no retry.
         """
         deadline = time.monotonic() + deadline_sec
+        if modal_token is None and self._modal_sessions is not None:
+            modal_token = self._modal_sessions.take_spare()
         held = iter([modal_token] if modal_token is not None else [])
 
         def attempt(open_timeout: float) -> InferenceSession:
@@ -594,8 +690,43 @@ class InferenceClient:
 
         A server binds its wires only after its model has loaded and warmed, so any answer means it is ready.
         Raises ``wire.KeepaliveUnsupported`` where the server serves sessions but not the call.
+
+        On a Modal Server with sticky sessions the call carries a session token, so it reaches that session's
+        container. Each call keeps the spare session alive; unused, it ends ``ModalSessions.idle_timeout`` after
+        the last call.
         """
-        return self._wire.keepalive(self._address, self.headers, self.open_timeout)
+        return self._call_outside_a_session(
+            partial(self._wire.keepalive, self._address), time.monotonic() + self.connect_deadline, self.open_timeout
+        )
+
+    def _call_outside_a_session(
+        self, call: Callable[[Mapping[str, str] | None, float], T], deadline: float, timeout: float
+    ) -> T:
+        """``call`` on the headers of a call outside a session, and on ``timeout``.
+
+        On a Modal Server with sticky sessions the headers carry a session token: the token of a session this client
+        has open, or else of a spare session that this starts. The start waits for a container, up to the
+        ``time.monotonic()`` instant ``deadline``, so on a cold app it wakes one, and the next ``new_session``
+        dials the spare instead of starting another. The start and the call fit in one deadline: the call gets
+        ``timeout`` or the time left, whichever is shorter. A token whose session has ended (the edge answers 404, a
+        permanent refusal) is dropped, and ``call`` runs once more on a new session.
+        """
+        sessions = self._modal_sessions
+        if sessions is None:
+            return call(self.headers, timeout)
+
+        def call_on(token: str) -> T:
+            return call(sessions.call_headers(token), max(0.0, min(timeout, deadline - time.monotonic())))
+
+        token, held = sessions.call_token(self.headers, deadline)
+        try:
+            return call_on(token)
+        except wire.ConnectRefused as refused:
+            if not held or refused.refusal is not wire.Refusal.FINAL:
+                raise
+            logger.info('The Modal session this call named has ended (%s); starting a new one', refused)
+        sessions.forget(token)
+        return call_on(sessions.call_token(self.headers, deadline)[0])
 
 
 def _https_root(session_url: str) -> str:

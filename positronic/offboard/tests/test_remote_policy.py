@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import pathlib
+import pickle
 import re
 import threading
 import time
@@ -95,7 +96,7 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     ) -> wire.Refusal | None:
         return None
 
-    def keepalive(self, address, headers, timeout):
+    def keepalive(self, address, headers, timeout) -> int | None:
         raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
@@ -111,6 +112,31 @@ class _FakeTlsWire(_FakeWire):
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         return f'wss://{wire.netloc(address, 443)}{address.path}'
+
+
+class _KeepaliveTlsWire(_FakeTlsWire):
+    """The TLS fake whose keepalive answers each call from ``keepalives`` (then 120 s), and whose probe answers each
+    call from ``probes`` (then ``None``), recording their headers."""
+
+    def __init__(self, *outcomes: wire.ClientConnection | wire.ConnectRefused, keepalives=(), probes=()):
+        super().__init__(*outcomes)
+        self._keepalives = list(keepalives)
+        self.keepalives: list[Mapping[str, str] | None] = []
+        self._probes = list(probes)
+        self.probes: list[Mapping[str, str] | None] = []
+
+    def probe(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        self.probes.append(headers)
+        return self._probes.pop(0) if self._probes else None
+
+    def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
+        self.keepalives.append(headers)
+        outcome = self._keepalives.pop(0) if self._keepalives else 120
+        if isinstance(outcome, wire.ConnectRefused):
+            raise outcome
+        return outcome
 
 
 def _address(host: str, port: int, query: str = '') -> wire.HostPortAddress:
@@ -778,6 +804,72 @@ class TestModalSessions:
         assert len(edge.starts) == 1
         assert len(fake.dials) == 1
 
+    def test_a_keepalive_carries_the_token_of_the_open_modal_session(self):
+        """A sessioned Modal Server refuses a call without a session token (401). The keepalive names the session
+        the client has open, so it reaches that container, with the session's idle timeout for the server."""
+        edge = _ModalEdge()
+        fake, client = self._client(_KeepaliveTlsWire(MagicMock()))
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen),
+            patch('positronic.offboard.client.InferenceSession') as session_cls,
+        ):
+            client.new_session()
+            assert client.keepalive() == 120
+            session_cls.call_args.kwargs['on_close']()
+
+        assert len(edge.starts) == 1
+        idle = {'x-modal-server-session-idle-timeout': '120'}
+        assert fake.keepalives == [{'Modal-Authorization': 'Bearer tok-1', **idle}]
+        assert edge.terminated == ['tok-1']
+
+    def test_a_keepalive_with_no_session_open_starts_the_one_the_next_session_dials(self):
+        """With no session open the keepalive starts one, which waits for a container: on a cold app it wakes one.
+        The next session dials that session instead of starting a second."""
+        edge = _ModalEdge()
+        fake, client = self._client(_KeepaliveTlsWire(MagicMock()))
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen),
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            assert client.keepalive() == 120
+            assert client.keepalive() == 120
+            client.new_session()
+
+        assert len(edge.starts) == 1
+        assert [headers['Modal-Authorization'] for headers in fake.keepalives] == ['Bearer tok-1'] * 2
+        assert fake.dials[0][1] == {'Modal-Authorization': 'Bearer tok-1'}
+
+    def test_a_keepalive_on_a_modal_session_that_ended_starts_a_new_one_and_asks_again(self):
+        """The edge answers 404 to a call on a session that ended, which the wire reads as a permanent refusal."""
+        edge = _ModalEdge()
+        fake, client = self._client(_KeepaliveTlsWire(MagicMock(), keepalives=[120, _refused(wire.Refusal.FINAL)]))
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen),
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client.keepalive()
+            assert client.keepalive() == 120
+            client.new_session()
+
+        assert len(edge.starts) == 2
+        assert [headers['Modal-Authorization'] for headers in fake.keepalives] == [
+            'Bearer tok-1',
+            'Bearer tok-1',
+            'Bearer tok-2',
+        ]
+        assert fake.dials[0][1] == {'Modal-Authorization': 'Bearer tok-2'}
+
+    def test_a_keepalive_refused_on_a_modal_session_it_just_started_surfaces(self):
+        edge = _ModalEdge()
+        _, client = self._client(_KeepaliveTlsWire(keepalives=[_refused(wire.Refusal.FINAL)]))
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen),
+            pytest.raises(wire.ConnectRefused),
+        ):
+            client.keepalive()
+
+        assert len(edge.starts) == 1
+
     @pytest.mark.parametrize(
         'failure', [TimeoutError('no answer'), wire.PeerDisconnected('dropped')], ids=['timeout', 'drop']
     )
@@ -789,7 +881,7 @@ class TestModalSessions:
         first = _connection(_ready('s1', meta), _answer({'action': 'ok'}), failure)
         second = _connection(_ready('s2', meta))
         edge = _ModalEdge()
-        fake, client = self._client(_FakeTlsWire(first, second))
+        fake, client = self._client(_KeepaliveTlsWire(first, second))
         with patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen):
             session = client.new_session()
             session.infer({'image': 'test'})
@@ -798,8 +890,11 @@ class TestModalSessions:
             session.close()
             session.close()  # a second close ends nothing more
             assert edge.terminated == ['tok-1']
+            client.keepalive()
             client.new_session()
 
+        # the keepalive started a fresh session, and the next session dialed it
+        assert [headers['Modal-Authorization'] for headers in fake.keepalives] == ['Bearer tok-2']
         assert fake.dials[1][1] == {'Modal-Authorization': 'Bearer tok-2'}
         assert len(edge.starts) == 2
 
@@ -822,6 +917,48 @@ class TestModalSessions:
                 session.close()
 
         assert edge.terminated == ['tok-1', 'tok-2']
+        sessions = client._modal_sessions
+        assert sessions is not None
+        assert sessions._open == {}
+
+    def test_a_keepalive_during_a_cold_session_start_reuses_that_start(self):
+        """A keepalive while a session start waits for a container waits for that start's token instead of
+        starting a second session, which would boot another container when ``max_containers >= 2``."""
+        release = threading.Event()
+        entered = threading.Event()
+        edge = _ModalEdge()
+
+        def urlopen(request, timeout):
+            if request.full_url.endswith('/_modal/sessions/start'):
+                entered.set()
+                assert release.wait(5), 'the test never released the start'
+            return edge.urlopen(request, timeout)
+
+        fake, client = self._client(_KeepaliveTlsWire(MagicMock()))
+        answers: list = []
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=urlopen),
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            opener = threading.Thread(target=client.new_session)
+            opener.start()
+            assert entered.wait(5)
+            keeper = threading.Thread(target=lambda: answers.append(client.keepalive()))
+            keeper.start()
+            time.sleep(0.2)
+            assert len(edge.starts) == 0  # still inside the first start
+            release.set()
+            opener.join(5)
+            keeper.join(5)
+
+        assert answers == [120]
+        assert len(edge.starts) == 1
+        assert [headers['Modal-Authorization'] for headers in fake.keepalives] == ['Bearer tok-1']
+
+    def test_a_keepalive_without_modal_sessions_carries_the_headers_alone(self):
+        fake = _KeepaliveTlsWire()
+        assert InferenceClient(fake, self._TLS, headers={'Modal-Key': 'k'}).keepalive() == 120
+        assert fake.keepalives == [{'Modal-Key': 'k'}]
 
     def test_a_server_without_sessions_keeps_the_plain_dial(self):
         fake = _FakeWire(MagicMock())
@@ -833,6 +970,68 @@ class TestModalSessions:
     def test_sessions_need_a_tls_endpoint(self):
         with pytest.raises(ValueError, match='TLS'):
             InferenceClient(_FakeWire(), _ADDRESS, modal_sessions=True)
+
+    def test_waiting_for_the_server_probes_with_the_modal_session_the_next_session_dials(self):
+        """The edge refuses a probe without a session token (401). The wait starts a session, which waits for a
+        container, probes on its token, and leaves it for the next session to dial."""
+        edge = _ModalEdge()
+        fake, client = self._client(_KeepaliveTlsWire(MagicMock()))
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen),
+            patch('positronic.offboard.client.InferenceSession'),
+        ):
+            client.wait_for_server()
+            client.new_session()
+
+        assert len(edge.starts) == 1
+        idle = {'x-modal-server-session-idle-timeout': '120'}
+        assert fake.probes == [{'Modal-Authorization': 'Bearer tok-1', **idle}]
+        assert fake.dials[0][1] == {'Modal-Authorization': 'Bearer tok-1'}
+
+    def test_a_cold_probe_retries_on_the_same_modal_session(self):
+        edge = _ModalEdge()
+        fake, client = self._client(_KeepaliveTlsWire(probes=[wire.Refusal.COLD, wire.Refusal.COLD]))
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen),
+            patch('positronic.offboard.client.time.sleep'),
+        ):
+            client.wait_for_server()
+
+        assert len(edge.starts) == 1
+        assert [headers['Modal-Authorization'] for headers in fake.probes] == ['Bearer tok-1'] * 3
+
+    def test_a_probe_on_a_modal_session_that_ended_starts_a_new_one(self):
+        edge = _ModalEdge()
+        fake, client = self._client(_KeepaliveTlsWire(probes=[wire.Refusal.FINAL]))
+        with patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen):
+            client.keepalive()
+            client.wait_for_server()
+
+        assert len(edge.starts) == 2
+        assert [headers['Modal-Authorization'] for headers in fake.probes] == ['Bearer tok-1', 'Bearer tok-2']
+
+    def test_a_call_after_a_session_start_gets_no_more_than_the_time_left(self):
+        """The start and the keepalive fit in one connect deadline."""
+        clock = [0.0]
+        edge = _ModalEdge()
+
+        def slow_start(request, timeout):
+            clock[0] += 50.0
+            return edge.urlopen(request, timeout)
+
+        timeouts: list[float] = []
+        fake = _KeepaliveTlsWire()
+        client = InferenceClient(
+            fake, self._TLS, headers={'Modal-Key': 'k'}, open_timeout=900.0, connect_deadline=60.0, modal_sessions=True
+        )
+        with (
+            patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=slow_start),
+            patch.object(fake, 'keepalive', side_effect=lambda address, headers, timeout: timeouts.append(timeout)),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+        ):
+            client.keepalive()
+
+        assert timeouts == [10.0]
 
     def test_an_rtc_run_sends_its_requests_on_its_modal_session(self, runtime):
         """An RTC run sends each request on the session's connection, so every request reaches the container of
@@ -932,6 +1131,23 @@ class TestModalSessions:
             client.new_session()
 
         assert [open_timeout for _, _, open_timeout in fake.dials] == [10.0]
+
+    def test_a_pickled_client_holds_none_of_the_modal_sessions(self):
+        """A background process gets a pickled copy of its policy. The sessions belong to the process that holds
+        them, so the copy starts its own."""
+        edge = _ModalEdge()
+        fake, client = self._client(_KeepaliveTlsWire())
+        with patch('positronic.offboard.client._SESSION_CALLS.open', side_effect=edge.urlopen):
+            client.keepalive()
+            copy = pickle.loads(pickle.dumps(client))
+            copy.keepalive()
+
+        held = client._modal_sessions
+        copied = copy._modal_sessions
+        assert held is not None and copied is not None
+        assert (held._spare, copied._spare) == ('tok-1', 'tok-2')
+        assert copied.idle_timeout == held.idle_timeout
+        assert len(edge.starts) == 2
 
 
 def test_remote_policy_hands_the_connect_timeouts_to_the_client():

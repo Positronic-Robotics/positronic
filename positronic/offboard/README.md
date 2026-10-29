@@ -469,7 +469,9 @@ session that ended (404) starts a new one, and close ends it (`positronic.cfg.po
 request, never abandoned: a start the edge answers with a 5xx after its own limit continues under the same
 idempotency key, so it places one session. The start and the dial fit in one `connect_deadline`. The session
 calls go to the endpoint alone: the client follows no redirect, since the calls carry the endpoint's
-credentials.
+credentials. The edge refuses a request without a session token, so `keepalive()` and `wait_for_server()`
+carry one too: the token of a session the client has open, or of a spare session the call starts. That start
+waits for a container, so it wakes a cold app, and the next `new_session` dials the spare.
 
 A session recovers a connection that drops before the server's first answer. A later drop raises
 `wire.PeerDisconnected`.

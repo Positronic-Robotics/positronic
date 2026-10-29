@@ -90,7 +90,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
-**A Modal Server with sticky sessions takes `.modal_remote`.** Its URL ends in `.modal.direct`. `.modal_remote` is `.file_authed_remote` on `websocket_tls`, port 443. Each session first starts a Modal session with the header file. The start waits until a container takes it, so one session starts one container. The client then dials with the session token, and a reconnect uses the same token, so it reaches the same container. A dial on a session that ended (404) starts a new one. The client ends the Modal session when it closes. The URL names the region that routes requests, for example `<app>-server.eu-west.modal.direct`.
+**A Modal Server with sticky sessions takes `.modal_remote`.** Its URL ends in `.modal.direct`. `.modal_remote` is `.file_authed_remote` on `websocket_tls`, port 443. Each session first starts a Modal session with the header file. The start waits until a container takes it, so one session starts one container. The client then dials with the session token, and a reconnect uses the same token, so it reaches the same container. A dial on a session that ended (404) starts a new one. The client ends the Modal session when it closes. The edge refuses a request without a session token, so the keepalive and the wait for the server carry one too. With no session open, such a call starts one, which waits for a container (it wakes a cold app), and the next session dials it. The URL names the region that routes requests, for example `<app>-server.eu-west.modal.direct`.
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
