@@ -98,6 +98,16 @@ with LocalDatasetWriter(Path(sys.argv[1])) as writer, writer.new_episode() as ep
     assert LocalDataset(tmp_path)[0]['value'] == 42
 
 
+def test_writer_adds_no_file_beside_the_episodes_while_open_or_after_close(tmp_path):
+    # A mirror of the dataset directory uploads every file in it, while the writer is open too.
+    with LocalDatasetWriter(tmp_path) as writer:
+        assert list(tmp_path.iterdir()) == []
+        with writer.new_episode() as episode:
+            episode.set_static('value', 1)
+        assert [path.name for path in tmp_path.iterdir()] == ['000000000000']
+    assert [path.name for path in tmp_path.iterdir()] == ['000000000000']
+
+
 def test_writer_lock_releases_after_process_exit_without_cleanup(tmp_path):
     script = """
 import os
@@ -109,6 +119,7 @@ with LocalDatasetWriter(Path(sys.argv[1])):
     os._exit(0)
 """
     subprocess.run([sys.executable, '-c', script, str(tmp_path)], check=True, capture_output=True, timeout=30)
+    assert list(tmp_path.iterdir()) == []
     with LocalDatasetWriter(tmp_path), LocalDatasetWriter(tmp_path / 'independent'):
         pass
 
