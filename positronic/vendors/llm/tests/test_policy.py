@@ -120,26 +120,27 @@ def frames(messages):
     ]
 
 
-def test_history_keeps_every_frame_and_reports_actual_pose(model):
+def test_history_keeps_the_frames_of_the_last_observations_and_reports_actual_pose(model):
     requests, replies = model
-    replies.extend([move(), move(), finish()])
+    replies.extend([move(), move(), move(), finish()])
     policy = LLMPolicy(Endpoint('test'), Motion(), image_size=8)
     with execution(policy) as (run, runtime, clock):
         decisions = []
-        for second in range(3):
+        for second in range(4):
             clock.advance_to_ns(second * 1_000_000_000)
             decisions.append(complete(run, runtime, clock, observation()))
         assert decisions[-1] is PolicyEnd.COMPLETE
         assert runtime.metadata_snapshot()[policy_keys.STOP_REASON] == 'done'
         assert runtime.metadata_snapshot()[policy_keys.HINDSIGHT] == 'Inspect the final image.'
         events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
-    assert [len(frames(messages)) for messages, _ in requests] == [2, 4, 6]
+    assert [len(frames(messages)) for messages, _ in requests] == [2, 4, 6, 6]
+    assert str(requests[-1][0]).count('[older camera frame omitted]') == 2
     states = [e for e in events if e['event'] == 'observation']
     assert states[1]['remaining_translation_m'] == [0.01, 0.0, 0.0]
     assert 'privileged-value-never-send' not in str(requests)
     assert Image.open(io.BytesIO(frames(requests[-1][0])[0].data)).size == (8, 4)
-    assert [e[policy_keys.OBS_TIME_NS] for e in states] == [0, 1_000_000_000, 2_000_000_000]
-    assert [e['call'] for e in events if e['event'] == 'accepted'] == [1, 2, 3]
+    assert [e[policy_keys.OBS_TIME_NS] for e in states] == [0, 1_000_000_000, 2_000_000_000, 3_000_000_000]
+    assert [e['call'] for e in events if e['event'] == 'accepted'] == [1, 2, 3, 4]
     assert len([e for e in events if e['event'] == 'instructions']) == 1
     assert 'privileged-value-never-send' not in json.dumps(events)
     with execution(policy) as (fresh, runtime, clock):
@@ -151,6 +152,11 @@ def test_history_keeps_every_frame_and_reports_actual_pose(model):
         assert [e['call'] for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'request'] == [
             1
         ]
+
+
+def test_image_horizon_must_be_positive():
+    with pytest.raises(ValueError, match='image horizon'):
+        LLMPolicy(Endpoint('test'), Motion(), image_horizon=0)
 
 
 def test_on_demand_pictures_reveal_only_requested_cameras(model):
@@ -170,26 +176,30 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [2]
 
 
-def without_cache_point(messages):
-    """The request as the stored history holds it: the request without its final cache point."""
-    *earlier, last = messages
-    *parts, part = last.parts
-    *content, point = part.content
-    assert point == CachePoint()
-    stored = content[0] if len(content) == 1 and isinstance(content[0], str) else content
-    return [*earlier, replace(last, parts=[*parts, replace(part, content=stored)])]
+def without_cache_points(messages):
+    """The indices of the messages that end with a cache point, and the request as the stored history holds it."""
+    marked, stored = [], []
+    for index, message in enumerate(messages):
+        *parts, part = message.parts
+        if isinstance(part, UserPromptPart) and not isinstance(part.content, str) and part.content[-1] == CachePoint():
+            marked.append(index)
+            *content, _ = part.content
+            text = content[0] if len(content) == 1 and isinstance(content[0], str) else content
+            message = replace(message, parts=[*parts, replace(part, content=text)])
+        stored.append(message)
+    assert 'CachePoint' not in str(stored)
+    return marked, stored
 
 
 @pytest.mark.parametrize('images', list(Images))
-def test_each_request_starts_with_the_whole_previous_request(model, images):
+def test_each_request_keeps_the_previous_request_up_to_its_newest_stub(model, images):
     requests, replies = model
-    policy = LLMPolicy(Endpoint('test'), Motion(), images=images)
-    pictured, motion_replies = 0, []
+    policy = LLMPolicy(Endpoint('test'), Motion(), images=images, image_horizon=2)
+    pictured, motion_replies = [], []
     with execution(policy) as (run, runtime, clock):
-        for second in range(1, 5):
+        for second in range(1, 7):
             clock.advance_to_ns(second * 1_000_000_000)
-            if images is Images.ALWAYS or second != 3:
-                pictured += 1
+            pictured.append(images is Images.ALWAYS or second != 3)
             if images is Images.ON_DEMAND and second != 3:
                 replies.extend(
                     ModelResponse([
@@ -203,10 +213,17 @@ def test_each_request_starts_with_the_whole_previous_request(model, images):
             motion_replies.append(reply)
             replies.append(reply)
             complete(run, runtime, clock, observation())
-            assert len(frames(requests[-1][0])) == 2 * pictured
+            assert len(frames(requests[-1][0])) == 2 * sum(pictured[-2:])
         assert all(reply in requests[-1][0] for reply in motion_replies[:-1])
-    sent = [without_cache_point(messages) for messages, _ in requests]
-    assert all(later[: len(earlier)] == earlier for earlier, later in pairwise(sent))
+    sent = [without_cache_points(messages) for messages, _ in requests]
+    assert all(len(marked) <= 2 and marked[-1] == len(stored) - 1 for marked, stored in sent)
+    for (marked, earlier), (_, later) in pairwise(sent):
+        anchor = marked[0] if len(marked) == 2 else -1
+        pairs = zip(earlier, later, strict=False)
+        changed = next((i for i, (old, new) in enumerate(pairs) if old != new), len(earlier))
+        assert changed > anchor
+        assert changed == len(earlier) or (frames([earlier[changed]]) and not frames([later[changed]]))
+    assert any(len(marked) == 2 for marked, _ in sent)
 
 
 @pytest.mark.parametrize(

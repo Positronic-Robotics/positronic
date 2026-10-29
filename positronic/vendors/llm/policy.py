@@ -146,6 +146,8 @@ class LLMPolicy(Policy):
             self._transcript: list[dict[str, Any]] = []
             self._runtime.set_metadata(policy_keys.TRANSCRIPT, self._transcript)
             self._messages: list[ModelMessage] = []
+            self._frames: list[list[int]] = []  # per observation, the indices of its frame messages
+            self._anchor: int | None = None  # the newest frame message that holds stubs
             self._obs: _Observation | None = None
             self._pictures: list[str] = []
             self._revealed: set[str] = set()
@@ -191,9 +193,24 @@ class LLMPolicy(Policy):
             state = self._obs.state(self._target)
             self._record({'event': 'observation', **state})
             self._messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
+            self._frames.append([])
+            if len(self._frames) > self._policy.image_horizon:
+                self._stub(self._frames[-self._policy.image_horizon - 1])
             self._pictures = list(self._obs.images) if self._policy.images is Images.ALWAYS else []
             self._revealed = set(self._pictures)
             self._failures = 0
+
+        def _stub(self, indices: list[int]) -> None:
+            for index in indices:
+                message = self._messages[index]
+                assert isinstance(message, ModelRequest)
+                (part,) = message.parts
+                assert isinstance(part, UserPromptPart) and not isinstance(part.content, str)
+                content = [
+                    '[older camera frame omitted]' if isinstance(item, BinaryContent) else item for item in part.content
+                ]
+                self._messages[index] = replace(message, parts=[replace(part, content=content)])
+                self._anchor = index
 
         def _select_cameras(self, requested: list[str]) -> list[str]:
             assert self._obs is not None
@@ -259,9 +276,18 @@ class LLMPolicy(Policy):
             self._failures = 0
             return (calls[0], data) if data is not None else None
 
+        @staticmethod
+        def _with_cache_point(message: ModelMessage) -> ModelMessage:
+            part = message.parts[-1]
+            if not isinstance(message, ModelRequest) or not isinstance(part, UserPromptPart):
+                return message
+            content = [part.content] if isinstance(part.content, str) else part.content
+            return replace(message, parts=[*message.parts[:-1], replace(part, content=[*content, CachePoint()])])
+
         def _request_messages(self) -> list[ModelMessage]:
             assert self._obs is not None
             if self._pictures:
+                self._frames[-1].append(len(self._messages))
                 self._messages.append(self._obs.frames(self._pictures, self._policy.image_size))
                 self._pictures = []
             self._calls += 1
@@ -271,14 +297,14 @@ class LLMPolicy(Policy):
                 'cameras': sorted(self._revealed),
                 policy_keys.OBS_TIME_NS: self._obs.time_ns,
             })
-            # A provider reuses a cached prompt only as the start of a later one, so the stored history is never
-            # rewritten. The cache point goes on the outgoing copy: stored ones would pass the provider's limit.
-            *history, last = self._messages
-            part = last.parts[-1]
-            if not isinstance(part, UserPromptPart):
-                return list(self._messages)
-            content = [part.content] if isinstance(part.content, str) else part.content
-            return [*history, replace(last, parts=[*last.parts[:-1], replace(part, content=[*content, CachePoint()])])]
+            # A provider caches a prompt only up to a cache point or to the end of a request. The stored history
+            # changes only where a frame message ages out, so the newest stubbed one marks the stable prefix.
+            # Cache points go on the outgoing copy only: stored ones would pass the provider's limit.
+            messages = list(self._messages)
+            if self._anchor is not None:
+                messages[self._anchor] = self._with_cache_point(messages[self._anchor])
+            messages[-1] = self._with_cache_point(messages[-1])
+            return messages
 
         def _accept(
             self, call: ToolCallPart, data: MoveTo | Finish, obs: Mapping[str, Any], time_ns: int
@@ -319,15 +345,16 @@ class LLMPolicy(Policy):
         images: Images = Images.ALWAYS,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         image_size: int = 640,
+        image_horizon: int = 3,
         max_calls: int = 100,
         max_invalid: int = 3,
     ):
-        if min(image_size, max_calls, max_invalid) < 1:
-            raise ValueError('Image size, call budget and invalid-reply limit must be positive')
+        if min(image_size, image_horizon, max_calls, max_invalid) < 1:
+            raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
             raise ValueError('camera_keys must name at least one camera, without duplicates')
         self.endpoint, self.motion, self.images = endpoint, motion, images
-        self.camera_keys, self.image_size = camera_keys, image_size
+        self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid = max_calls, max_invalid
         self._tools = [
             ToolDefinition(
@@ -351,6 +378,7 @@ class LLMPolicy(Policy):
             'images': self.images.value,
             'camera_keys': list(self.camera_keys),
             'image_size': self.image_size,
+            'image_horizon': self.image_horizon,
         })
 
     def run(self, runtime: Runtime) -> PolicyRun:
@@ -403,6 +431,7 @@ class LLMPolicy(Policy):
     images=Images.ALWAYS.value,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     image_size=640,
+    image_horizon=3,
     max_calls=100,
     max_invalid=3,
 )
@@ -414,6 +443,7 @@ def llm(
     images: str,
     camera_keys: tuple[str, ...],
     image_size: int,
+    image_horizon: int,
     max_calls: int,
     max_invalid: int,
 ) -> Policy:
@@ -424,6 +454,7 @@ def llm(
         images=Images(images),
         camera_keys=tuple(camera_keys),
         image_size=image_size,
+        image_horizon=image_horizon,
         max_calls=max_calls,
         max_invalid=max_invalid,
     )

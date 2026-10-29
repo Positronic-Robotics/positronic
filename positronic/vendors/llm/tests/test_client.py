@@ -8,7 +8,16 @@ from multiprocessing.reduction import ForkingPickler
 
 import httpx
 import pytest
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ThinkingPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    CachePoint,
+    ModelRequest,
+    ModelResponse,
+    SystemPromptPart,
+    TextPart,
+    ThinkingPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.usage import RequestUsage
 
@@ -122,6 +131,66 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
         assert len(clients) == 2
     assert all(client.is_closed for client in clients)
     assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
+
+
+def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the_block_before_it(monkeypatch):
+    pytest.importorskip('openai')
+    requests = []
+
+    async def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                'id': 'resp_1',
+                'object': 'response',
+                'created_at': 1,
+                'model': 'test-model',
+                'status': 'completed',
+                'output': [
+                    {
+                        'type': 'function_call',
+                        'id': 'fc_1',
+                        'call_id': 'call_1',
+                        'name': 'done',
+                        'arguments': json.dumps({'reason': 'finished', 'hindsight': 'check the image'}),
+                        'status': 'completed',
+                    }
+                ],
+                'parallel_tool_calls': True,
+                'tool_choice': 'auto',
+                'tools': [],
+                'usage': {
+                    'input_tokens': 100,
+                    'output_tokens': 20,
+                    'total_tokens': 120,
+                    'input_tokens_details': {'cached_tokens': 0},
+                    'output_tokens_details': {'reasoning_tokens': 0},
+                },
+            },
+        )
+
+    initialize = httpx.AsyncClient.__init__
+    monkeypatch.setattr(
+        httpx.AsyncClient,
+        '__init__',
+        lambda client, **kwargs: initialize(client, **kwargs, transport=httpx.MockTransport(respond)),
+    )
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-secret-do-not-record')
+    image = BinaryContent(b'png', media_type='image/png')
+    messages = [
+        ModelRequest([SystemPromptPart('Control the arm.')]),
+        ModelRequest([UserPromptPart(['Camera wrist:', image, CachePoint()])]),
+        ModelRequest([UserPromptPart(['Observation.', CachePoint()])]),
+    ]
+    with Endpoint('openai-responses:test-model').open() as request:
+        request(messages, [])
+    system, frames, last = json.loads(requests[0].content)['input']
+    breakpoint = {'mode': 'explicit'}
+    assert [block.get('prompt_cache_breakpoint') for block in frames['content']] == [None, breakpoint]
+    assert frames['content'][1]['type'] == 'input_image'
+    assert [block.get('prompt_cache_breakpoint') for block in last['content']] == [breakpoint]
+    assert system == {'role': 'system', 'content': 'Control the arm.'}
 
 
 def test_run_records_compact_reply_and_usage(monkeypatch):

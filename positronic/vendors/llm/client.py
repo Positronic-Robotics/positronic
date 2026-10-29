@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from pydantic_ai.direct import model_request
 from pydantic_ai.messages import ModelMessage, ModelResponse
-from pydantic_ai.models import Model, ModelRequestParameters, infer_model
+from pydantic_ai.models import Model, ModelRequestParameters, infer_model, parse_model_id
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
@@ -35,11 +35,23 @@ class Endpoint:
     def model_id(self) -> str:
         return self.model.model_id if isinstance(self.model, Model) else self.model
 
+    @staticmethod
+    def _infer_model(model: str | Model) -> Model:
+        """The model `infer_model` builds, with an OpenAI Responses model that keeps prompt cache points."""
+        if isinstance(model, str):
+            kind, name = parse_model_id(model)
+            if kind == 'openai-responses':
+                # The OpenAI SDK comes with the optional `llm-openai` extra.
+                from .responses import BreakpointResponsesModel  # noqa: PLC0415
+
+                return BreakpointResponsesModel(name, provider=kind)
+        return infer_model(model)
+
     @contextmanager
     def open(self) -> Iterator[Callable[[list[ModelMessage], list[ToolDefinition]], ModelResponse]]:
         """Own one model client and event loop until all requests have finished."""
         with asyncio.Runner() as runner:
-            model = infer_model(self.model)
+            model = self._infer_model(self.model)
             runner.run(model.__aenter__())
             try:
                 if model.base_url is not None:
