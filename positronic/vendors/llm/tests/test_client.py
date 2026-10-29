@@ -209,7 +209,7 @@ def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the
     model = 'openai-responses:test-model'
     if configured:
         model = pytest.importorskip('positronic.vendors.llm.responses').BreakpointResponsesModel('test-model')
-    with Endpoint(model).open() as request:
+    with Endpoint(model, cache_breakpoints=True).open() as request:
         request(messages, [])
     system, frames, last = json.loads(requests[0].content)['input']
     breakpoint = {'mode': 'explicit'}
@@ -224,7 +224,17 @@ def test_endpoint_refuses_a_configured_responses_model_that_drops_cache_points()
     openai_models = pytest.importorskip('pydantic_ai.models.openai')
     provider = pytest.importorskip('pydantic_ai.providers.openai').OpenAIProvider(api_key='test-secret')
     with pytest.raises(ValueError, match='BreakpointResponsesModel'):
-        Endpoint(openai_models.OpenAIResponsesModel('test-model', provider=provider))
+        Endpoint(openai_models.OpenAIResponsesModel('test-model', provider=provider), cache_breakpoints=True)
+
+
+def test_openai_responses_endpoint_sends_no_breakpoint_unless_asked(monkeypatch):
+    pytest.importorskip('openai')
+    requests = serve(monkeypatch, [responses_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})])
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-secret-do-not-record')
+    messages = [ModelRequest([UserPromptPart(['Observation.', CachePoint()])])]
+    with Endpoint('openai-responses:test-model').open() as request:
+        request(messages, [])
+    assert 'prompt_cache_breakpoint' not in requests[0].content.decode()
 
 
 def anthropic_marks(body: dict) -> list[tuple[int, int]]:
@@ -260,7 +270,7 @@ def test_request_after_a_rejected_tool_call_keeps_the_cache_point_of_the_request
     finished = {'reason': 'finished', 'hindsight': 'check the image'}
     requests = serve(monkeypatch, [reply('move_to', {'x': 'invalid'}), reply('done', finished)])
     monkeypatch.setenv(key, 'test-secret-do-not-record')
-    with execution(llm(model=f'{provider}:test-model')) as (active, rt, clock):
+    with execution(llm(model=f'{provider}:test-model', cache_breakpoints=True)) as (active, rt, clock):
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
     first, retry = (json.loads(request.content) for request in requests)
     assert 'Rejected' in json.dumps(retry)

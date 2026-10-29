@@ -378,6 +378,7 @@ class LLMPolicy(Policy):
             policy_keys.TYPE: 'llm',
             'model': self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
+            'cache_breakpoints': self.endpoint.cache_breakpoints,
             'motion': asdict(self.motion),
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
@@ -441,6 +442,7 @@ class LLMPolicy(Policy):
     image_horizon=3,
     max_calls=100,
     max_invalid=3,
+    cache_breakpoints=False,
 )
 def llm(
     model: str | Model,
@@ -453,10 +455,11 @@ def llm(
     image_horizon: int,
     max_calls: int,
     max_invalid: int,
+    cache_breakpoints: bool,
 ) -> Policy:
     """Direct API policy with trajectory scheduling on the rig."""
     return LLMPolicy(
-        Endpoint(model, timeout=timeout, settings=settings),
+        Endpoint(model, timeout=timeout, settings=settings, cache_breakpoints=cache_breakpoints),
         motion,
         images=Images(images),
         camera_keys=tuple(camera_keys),

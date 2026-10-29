@@ -19,13 +19,24 @@ from positronic import telemetry, telemetry_keys
 
 
 class Endpoint:
-    """Model configuration and recorded generation settings."""
+    """Model configuration and recorded generation settings.
 
-    def __init__(self, model: str | Model, *, timeout: float = 120.0, settings: ModelSettings | None = None):
+    ``cache_breakpoints`` sends each cache point to an OpenAI Responses model as a ``prompt_cache_breakpoint``. Only
+    the GPT-5.6 family and later accept it; an earlier model answers a request that carries it with HTTP 400.
+    """
+
+    def __init__(
+        self,
+        model: str | Model,
+        *,
+        timeout: float = 120.0,
+        settings: ModelSettings | None = None,
+        cache_breakpoints: bool = False,
+    ):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('timeout must be finite and positive')
         # An `OpenAIResponsesModel` exists only after its module loads the SDK of the optional `llm-openai` extra.
-        if isinstance(model, Model) and 'pydantic_ai.models.openai' in sys.modules:
+        if cache_breakpoints and isinstance(model, Model) and 'pydantic_ai.models.openai' in sys.modules:
             from pydantic_ai.models.openai import OpenAIResponsesModel  # noqa: PLC0415
 
             from .responses import BreakpointResponsesModel  # noqa: PLC0415
@@ -35,6 +46,7 @@ class Endpoint:
         # TODO: Represent custom providers without retaining preconstructed SDK models.
         self.model = model
         self.timeout = timeout
+        self.cache_breakpoints = cache_breakpoints
         defaults = model.settings if isinstance(model, Model) else None
         self.settings: ModelSettings = {**(defaults or {}), **(settings or {})}
         if {'extra_headers', 'extra_body', 'extra_query'}.intersection(self.settings):
@@ -44,10 +56,10 @@ class Endpoint:
     def model_id(self) -> str:
         return self.model.model_id if isinstance(self.model, Model) else self.model
 
-    @staticmethod
-    def _infer_model(model: str | Model) -> Model:
-        """The model `infer_model` builds, with an OpenAI Responses model that keeps prompt cache points."""
-        if isinstance(model, str):
+    def _infer_model(self) -> Model:
+        """The model `infer_model` builds, or an OpenAI Responses model that keeps cache points as breakpoints."""
+        model = self.model
+        if isinstance(model, str) and self.cache_breakpoints:
             kind, name = parse_model_id(model)
             if kind == 'openai-responses':
                 # The OpenAI SDK comes with the optional `llm-openai` extra.
@@ -60,7 +72,7 @@ class Endpoint:
     def open(self) -> Iterator[Callable[[list[ModelMessage], list[ToolDefinition]], ModelResponse]]:
         """Own one model client and event loop until all requests have finished."""
         with asyncio.Runner() as runner:
-            model = self._infer_model(self.model)
+            model = self._infer_model()
             runner.run(model.__aenter__())
             try:
                 if model.base_url is not None:
