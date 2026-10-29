@@ -31,6 +31,9 @@ _TOKEN = {
 _SCENE = (
     f'<mujoco><compiler angle="radian"/><option timestep="{_TIMESTEP}"/><worldbody>'
     f'{hinge_chain_xml("left", 0.3, mapping.ARM_JOINTS)}{hinge_chain_xml("right", -0.3, mapping.ARM_JOINTS)}'
+    '<body name="gate" pos="0.1 0.05 1.6" quat="0.9 0.1 0.3 0.2"><camera name="top" quat="0 1 0 0" fovy="58"/></body>'
+    '<body name="left_wrist" pos="0.4 0.3 1.2"><camera name="left" quat="0 1 0 0" fovy="58"/></body>'
+    '<body name="right_wrist" pos="0.4 -0.3 1.2"><camera name="right" pos="0.01 0 0" quat="0 1 0 0" fovy="58"/></body>'
     '</worldbody></mujoco>'
 )
 
@@ -56,6 +59,8 @@ class _FakeScene:
         # How many builds raise as ABC's unseeded build-time draw raises when it cannot lay out a scene.
         self.failed_layouts = 0
         self.builds = 0
+        # How many observations were rendered after a reset, as a moved camera needs.
+        self.renders = 0
         # The gripper width ABC reports per arm, in i2rt's aperture (1 open).
         self.apertures = dict.fromkeys(mapping.ARMS, 0.0)
 
@@ -64,6 +69,10 @@ class _FakeScene:
 
     def reset(self, seed: int | None = None, randomize: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
         return self._obs(), {}
+
+    def get_obs(self) -> dict[str, Any]:
+        self.renders += 1
+        return self._obs()
 
     def evaluate_task(self) -> Any:
         if self.task_eval is None:
@@ -106,8 +115,8 @@ def scene() -> _FakeScene:
 
 
 @pytest.fixture
-def env(monkeypatch, scene: _FakeScene) -> Any:
-    """An ``AbcEnv`` loaded as the server's interpreter loads it, with ``abc_sim`` answering ``scene``."""
+def server_modules(monkeypatch, scene: _FakeScene) -> types.ModuleType:
+    """The env server module loaded as the server's interpreter loads it, with ``abc_sim`` answering ``scene``."""
     abc_sim = types.ModuleType('abc_sim')
     task = types.SimpleNamespace(name=_TOKEN[mapping.TOKEN_TASK], env_task='bottles', prompt=_PROMPT)
 
@@ -129,7 +138,25 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
         monkeypatch.setitem(sys.modules, name, _load(name, _SERVER_DIR / f'{name}.py'))
     monkeypatch.setitem(sys.modules, 'mapping', _load('mapping', _ABC_DIR / 'mapping.py'))
     monkeypatch.setitem(sys.modules, 'aperture', _load('aperture', _APERTURE_PATH))
-    return _load('abc_env', _ABC_DIR / 'env.py').AbcEnv()
+    monkeypatch.setitem(sys.modules, 'camera_fit', _load('camera_fit', _ABC_DIR / 'camera_fit.py'))
+    return _load('abc_env', _ABC_DIR / 'env.py')
+
+
+@pytest.fixture
+def env(server_modules: types.ModuleType) -> Any:
+    return server_modules.AbcEnv()
+
+
+@pytest.fixture
+def yambox_env(server_modules: types.ModuleType) -> Any:
+    fits = sys.modules['camera_fit']
+    return server_modules.AbcEnv(fits.camera_fit_from_env({fits.CAMERA_FIT_ENV: 'yambox'}))
+
+
+def _camera(scene: _FakeScene, name: str) -> tuple[np.ndarray, np.ndarray, float]:
+    camera = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+    rotation = scene.data.cam_xmat[camera].reshape(3, 3).copy()
+    return scene.data.cam_xpos[camera].copy(), rotation, scene.model.cam_fovy[camera]
 
 
 def _hold_both() -> dict[str, Any]:
@@ -148,6 +175,63 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
     assert protocol.arm_channel(protocol.OBS_JOINT_POS, 'right') in slot[protocol.FRAME_OBS]
     assert frame[protocol.FRAME_META] == {mapping.META_TASK: _PROMPT}
     assert frame[protocol.FRAME_CONTROL_DT] == pytest.approx(_TIMESTEP * _DECIMATION)
+
+
+def test_a_reset_without_a_camera_fit_keeps_abcs_own_cameras(env, scene):
+    stock = {name: (scene.model.cam_pos[c].copy(), scene.model.cam_quat[c].copy()) for name, c in _camera_ids(scene)}
+    env.reset(_TOKEN)
+
+    for name, c in _camera_ids(scene):
+        np.testing.assert_array_equal(scene.model.cam_pos[c], stock[name][0])
+        np.testing.assert_array_equal(scene.model.cam_quat[c], stock[name][1])
+        assert scene.model.cam_fovy[c] == 58
+    assert scene.renders == 0
+
+
+def _camera_ids(scene: _FakeScene) -> list[tuple[str, int]]:
+    return [(n, mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_CAMERA, n)) for n in ('top', 'left', 'right')]
+
+
+def test_the_yambox_fit_places_the_top_camera_from_the_arm_mounts_and_renders_the_frame_again(yambox_env, scene):
+    frame = yambox_env.reset(_TOKEN)
+
+    top = sys.modules['camera_fit'].CAMERA_FITS['yambox'].top
+    position, rotation, fovy = _camera(scene, 'top')
+    # The fake scene's arm mounts stand at y = +-0.3 on the world axes, so their midpoint is the origin.
+    np.testing.assert_allclose(position, top.offset, atol=1e-9)
+    forward = -rotation[:, 2]
+    assert np.degrees(np.arcsin(-forward[2])) == pytest.approx(top.pitch_deg, abs=1e-6)
+    assert np.degrees(np.arctan2(forward[1], forward[0])) == pytest.approx(top.yaw_deg, abs=1e-6)
+    assert fovy == top.fovy_deg
+    assert scene.renders == 1
+    assert frame[protocol.SLOTS]
+
+
+def test_the_yambox_fit_turns_each_wrist_camera_from_abcs_pose_and_keeps_it_on_its_body(yambox_env, scene):
+    mujoco.mj_kinematics(scene.model, scene.data)
+    mujoco.mj_camlight(scene.model, scene.data)
+    stock = {arm: _camera(scene, arm) for arm in ('left', 'right')}
+    yambox_env.reset(_TOKEN)
+
+    fit = sys.modules['camera_fit'].CAMERA_FITS['yambox']
+    for arm, wrist in fit.wrists.items():
+        position, rotation, fovy = _camera(scene, arm)
+        stock_position, stock_rotation, _ = stock[arm]
+        np.testing.assert_allclose(stock_rotation.T @ (position - stock_position), wrist.offset, atol=1e-9)
+        # Turns about the camera's own x, then y, then z axes: MuJoCo's 'xyz' Euler sequence.
+        quat, turn = np.empty(4), np.empty(9)
+        mujoco.mju_euler2Quat(quat, np.radians(wrist.rotation_deg), 'xyz')
+        mujoco.mju_quat2Mat(turn, quat)
+        np.testing.assert_allclose(stock_rotation.T @ rotation, turn.reshape(3, 3), atol=1e-9)
+        assert fovy == wrist.fovy_deg
+
+
+def test_an_unknown_camera_fit_name_is_refused(server_modules):
+    fits = sys.modules['camera_fit']
+    assert fits.camera_fit_from_env({}) is None
+    assert fits.camera_fit_from_env({fits.CAMERA_FIT_ENV: ''}) is None
+    with pytest.raises(ValueError, match='names no camera fit'):
+        fits.camera_fit_from_env({fits.CAMERA_FIT_ENV: 'brunello'})
 
 
 _EVER_SUCCESS, _EVER_FAILED = mapping.ABC_EVAL_EVER_SUCCESS, mapping.ABC_EVAL_EVER_FAILED

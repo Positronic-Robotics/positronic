@@ -6,11 +6,13 @@ Runs in ABC's own interpreter, which the launcher builds.
 import argparse
 import functools
 import logging
+import os
 from typing import Any
 
 import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC's own venv
 import aperture
 import arm_action
+import camera_fit
 import mapping
 import mujoco
 import mujoco_state
@@ -53,7 +55,8 @@ class _Arm:
 
 
 class AbcEnv(EnvProtocol):
-    def __init__(self):
+    def __init__(self, cameras: camera_fit.CameraFit | None = None):
+        self._cameras = cameras  # None keeps ABC's own cameras
         self._key: tuple[Any, ...] | None = None
         self._env: Any = None
         self._arms: list[_Arm] = []
@@ -96,6 +99,11 @@ class AbcEnv(EnvProtocol):
         obs, _info = self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)
         # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
+        if self._cameras is not None:
+            camera_fit.CameraPlacer(self._cameras, self._env.model).place(
+                self._env.model, self._env.data, [arm.base_body_id for arm in self._arms]
+            )
+            obs = self._env.get_obs()  # The reset rendered the scene before the cameras moved.
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._task_eval())}],
             protocol.FRAME_META: self._meta(obs),
@@ -273,7 +281,7 @@ def main() -> None:
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
     args = parser.parse_args()
-    EnvServer(AbcEnv(), args.host, args.port).serve_forever()
+    EnvServer(AbcEnv(camera_fit.camera_fit_from_env(os.environ)), args.host, args.port).serve_forever()
 
 
 if __name__ == '__main__':
