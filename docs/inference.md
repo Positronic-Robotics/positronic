@@ -79,6 +79,17 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
+**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default) and `--policy.connect_deadline` the retries until the server answers (900 s). No retry waits past the deadline. Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` as long as the cold start, up to the `connect_deadline`: one dial then waits through it.
+
+```bash
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+  --policy=.file_authed_remote \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
+  --policy.headers.path=~/.config/endpoint/headers.json \
+  --policy.open_timeout=900 \
+  --output_dir=~/datasets/inference_logs/exp_v1
+```
+
 **Session parameters** are `--policy.address.query`, a query string: the server applies them as overrides to its pipeline config, so you can tune the served pipeline without restarting the server. Keys are dotted paths into that config and values are JSON literals, forwarded verbatim so they arrive exactly as written (`fps=10`, `pad=false`, `name="s3"`).
 
 Session parameters reach the pipeline only. The model (`--model.checkpoints_dir`, `--model.checkpoint`, device...) is fixed at server launch, and a key that names it is an unknown key. A server serves one checkpoint; to serve another, start another server. Bad params fail at connect with a clear server error. Full rules in the [Offboard README](../positronic/offboard/README.md).

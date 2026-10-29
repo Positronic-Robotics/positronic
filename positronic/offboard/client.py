@@ -287,7 +287,13 @@ class InferenceClient:
     handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
     ``connect_deadline`` the retries until a cold backend answers, ``infer_timeout`` one inference
     round trip, and ``reconnect_deadline`` the rebuild of a connection that drops before its first answer.
-    No attempt begins past a deadline, and no handshake waits for a further status update past it.
+    No attempt begins past a deadline, and no handshake waits for a further status update past it. The first
+    dial gets the whole ``open_timeout``, so a deadline of 0 is one attempt, and no later dial waits past the
+    deadline.
+
+    An edge that holds a dial while it starts a backend wants an ``open_timeout`` as long as the cold start:
+    one dial then waits through it. A shorter one makes the client re-dial, and such an edge can start a
+    backend for each dial the client gave up on.
     """
 
     def __init__(
@@ -315,14 +321,17 @@ class InferenceClient:
         self.infer_timeout = infer_timeout
         self.reconnect_deadline = reconnect_deadline
 
-    def _open_session(self, ready_by: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
-        """One attempt at a session, whose handshake waits for no status update past the ``time.monotonic()``
-        instant ``ready_by``. The connection closes when the handshake does not finish.
+    def _open_session(
+        self, ready_by: float, reopen: Callable[[], InferenceSession] | None, open_timeout: float
+    ) -> InferenceSession:
+        """One attempt at a session, whose dial waits ``open_timeout`` at most and whose handshake waits for no
+        status update past the ``time.monotonic()`` instant ``ready_by``. The connection closes when the handshake
+        does not finish.
 
         A refusal sent as a protocol frame (a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
-        conn = self._wire.dial(self._address, self.headers, self.open_timeout)
+        conn = self._wire.dial(self._address, self.headers, open_timeout)
         try:
             return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen)
         except BaseException:
@@ -343,8 +352,8 @@ class InferenceClient:
         when the wire refuses the server and no retry clears it.
         """
 
-        def probe() -> None:
-            if (refusal := self._wire.probe(self._address, self.headers, self.open_timeout)) is not None:
+        def probe(open_timeout: float) -> None:
+            if (refusal := self._wire.probe(self._address, self.headers, open_timeout)) is not None:
                 raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
 
         self._retry(time.monotonic() + self.connect_deadline, probe)
@@ -352,15 +361,20 @@ class InferenceClient:
     def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
         """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock."""
         deadline = time.monotonic() + deadline_sec
-        return self._retry(deadline, lambda: self._open_session(deadline, reopen))
+        return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout))
 
-    def _retry(self, deadline: float, attempt: Callable[[], T]) -> T:
-        """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``."""
+    def _retry(self, deadline: float, attempt: Callable[[float], T]) -> T:
+        """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``.
+
+        ``attempt`` takes the seconds its dial may wait. The first attempt gets the whole ``open_timeout``, and a
+        retry gets ``open_timeout`` or the time left, whichever is shorter.
+        """
         backoff = 1.0
         retries = ConnectRetries()
+        open_timeout = self.open_timeout
         while True:
             try:
-                return attempt()
+                return attempt(open_timeout)
             except wire.ConnectRefused as e:
                 refusal, not_ready = e.refusal, e
             # A status handshake the server did not finish: a backend that is not ready.
@@ -373,6 +387,7 @@ class InferenceClient:
             backoff = min(backoff * 2, 30.0)
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
+            open_timeout = max(0.0, min(self.open_timeout, deadline - time.monotonic()))
 
     def keepalive(self) -> int | None:
         """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after
