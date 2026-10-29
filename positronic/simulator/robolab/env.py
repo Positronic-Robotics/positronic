@@ -26,10 +26,15 @@ clone is a slot of the env server, driven by a client of its own. RoboLab freeze
 rather than re-rolling it, and zeroes its action, so a batch runs until its slowest clone ends and every clone
 reports the verdict it froze on.
 
-Every frame also carries each slot's ``gt_state`` (``keys.GT_STATE``): the pose of every object in the task's
-contact list, whether the gripper touches it, and RoboLab's own progress through each condition chain of the
-current subtask. The positions are in the frame of the slot's scene clone and the rotations in the world frame, as
-for the eef. The progress is what RoboLab's subtask recorder already tracks, so the record adds no condition checks.
+Every frame also carries the ``gt_state`` (``keys.GT_STATE``) of each slot. It holds three things for each object
+in the task's contact list, except the table:
+
+- the pose of the object, with the position in the frame of the slot's scene clone and the rotation in the world
+  frame, as for the eef;
+- whether RoboLab's gripper contact sensor touches the object;
+- RoboLab's own progress through each condition chain of the current subtask.
+
+The progress is what RoboLab's subtask recorder already tracks, so the record adds no condition checks.
 """
 
 import argparse
@@ -38,7 +43,6 @@ import os
 import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from functools import partial
 from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
@@ -111,7 +115,7 @@ from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.events.subtask_recorder import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     SubtaskCompletionRecorderTerm,
 )
-from robolab.core.logging.results import get_all_env_subtask_infos  # noqa: E402
+from robolab.core.utils.function_loader import get_callable_info  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.core.world.world_state import get_world  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.registrations.droid import camera_presets  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
@@ -124,12 +128,6 @@ from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
 robolab.constants.ENABLE_SUBTASK_PROGRESS_CHECKING = True
 robolab.constants.RECORD_IMAGE_DATA = False
 robolab.constants.set_output_dir(tempfile.mkdtemp(prefix='robolab-env-'))
-
-# RoboLab's contact sensor body for the gripper, and the one entry of a task's contact list that the gripper's batch
-# sensor leaves out. A contact query over the other entries, in their order, reads that sensor in one pass
-# (``robolab.core.sensors.contact_sensor_utils.create_contact_sensors``).
-_GRIPPER = 'gripper'
-_TABLE = 'table'
 
 
 def _load_robot_meta() -> dict[str, Any]:
@@ -157,6 +155,11 @@ class RobolabEnv(EnvProtocol):
     task on every reset, since RoboLab clones a single registered env.
     """
 
+    # The one entry of a task's contact list that the gripper's batch contact sensor leaves out. A contact query over
+    # the other entries, in their order, reads that sensor in one pass
+    # (``robolab.core.sensors.contact_sensor_utils.create_contact_sensors``).
+    _TABLE = 'table'
+
     def __init__(self, num_envs: int = 1):
         if num_envs < 1:
             raise ValueError(f'a server steps at least one scene clone, not {num_envs}')
@@ -181,8 +184,10 @@ class RobolabEnv(EnvProtocol):
         self._ik = None
         self._grip: Any = None  # each slot's latest grip command, which a slot with no command holds
         self._world: Any = None
+        self._gripper = ''
         self._objects: list[str] = []
         self._subtask_recorder: Any = None
+        self._shown_chains: list[Any] = [None] * num_envs  # each slot's chain machine at the last frame
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
@@ -281,13 +286,17 @@ class RobolabEnv(EnvProtocol):
         self._ik = DifferentialIKController(cfg, num_envs=self._num_envs, device=self._env.device)
         self._grip = torch.zeros(self._num_envs, dtype=torch.float32, device=self._env.device)
         self._world = get_world(self._env)
-        self._objects = [name for name in self._env_cfg.contact_object_list if name != _TABLE]
-        # RoboLab's own ``get_all_env_subtask_infos`` finds the term the same way: this pin's recorder manager has no
-        # lookup by type.
+        (self._gripper,) = self._env_cfg.contact_gripper
+        self._objects = [name for name in self._env_cfg.contact_object_list if name != self._TABLE]
+        # HACK: this pin's recorder manager has no lookup by type, so this reads its private terms. RoboLab adds no
+        # term for a task without subtasks.
         self._subtask_recorder = next(
-            term
-            for term in self._env.recorder_manager._terms.values()
-            if isinstance(term, SubtaskCompletionRecorderTerm)
+            (
+                term
+                for term in self._env.recorder_manager._terms.values()
+                if isinstance(term, SubtaskCompletionRecorderTerm)
+            ),
+            None,
         )
 
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
@@ -301,6 +310,7 @@ class RobolabEnv(EnvProtocol):
             self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
         assert self._env is not None  # built above (key change) or already live (cached)
         self._grip.zero_()
+        self._shown_chains = [None] * self._num_envs
         # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
         # placed scene into the sensors (robolab/eval/episode.py).
         self._env.reset()
@@ -318,10 +328,11 @@ class RobolabEnv(EnvProtocol):
         # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's
         # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
         # would replay the prior trial's final values.
+        # The contact sensor also holds the prior trial's last physics step until the first step, so the reset frame
+        # reports no contact.
+        observed = self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32), reset=True)
         return {
-            protocol.SLOTS: [
-                {protocol.FRAME_OBS: o} for o in self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32))
-            ],
+            protocol.SLOTS: [{protocol.FRAME_OBS: o} for o in observed],
             protocol.FRAME_META: self._meta,
             protocol.FRAME_ROBOT_META: self._robot_meta,
             protocol.FRAME_CONTROL_DT: self._control_dt,
@@ -352,7 +363,7 @@ class RobolabEnv(EnvProtocol):
         # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
         frozen = self._frozen_slots()
         results = self._env.get_env_results()
-        observed = self._observe(obs, self._subtask_progress())
+        observed = self._observe(obs, self._subtask_progress(), reset=False)
         return {
             protocol.SLOTS: [
                 {
@@ -465,12 +476,13 @@ class RobolabEnv(EnvProtocol):
         """Every slot's live subtask progress as the wire ``[status, completed, total, score]`` vector,
         ``(num_envs, 4)``. A width RoboLab reports for some other number of slots raises here."""
         subtask = np.zeros((self._num_envs, 4), dtype=np.float32)
-        infos = get_all_env_subtask_infos(self._env)
-        if infos is not None:
+        if self._subtask_recorder is not None:
+            infos = self._subtask_recorder.infos
             subtask[:] = [(info['status'], info['completed'], info['total'], info['score']) for info in infos]
         return subtask
 
-    def _gt_state(self) -> list[dict[str, Any]]:
+    @telemetry.traced('gt_state')
+    def _gt_state(self, *, reset: bool) -> list[dict[str, Any]]:
         """Every slot's ``keys.GT_STATE`` entry: a flat dict from a recorded suffix to its value."""
         states: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
         for name in self._objects:
@@ -479,7 +491,11 @@ class RobolabEnv(EnvProtocol):
             for slot, pose in enumerate(poses):
                 states[slot][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}'] = pose
         for slot, state in enumerate(states):
-            touched = set(self._world.get_objects_in_contact_with(_GRIPPER, self._objects, env_id=slot))
+            touched = (
+                set()
+                if reset
+                else set(self._world.get_objects_in_contact_with(self._gripper, self._objects, env_id=slot))
+            )
             for name in self._objects:
                 state[f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_GRIPPER_CONTACT}'] = name in touched
             state.update(self._progress(slot))
@@ -488,22 +504,32 @@ class RobolabEnv(EnvProtocol):
     def _progress(self, slot: int) -> dict[str, bool]:
         """Per condition of each chain in the slot's current subtask, whether RoboLab counts it done.
 
-        Empty when the task has no subtasks or when the slot completed the last one.
+        RoboLab replaces a subtask's chain machine in the step that completes the subtask, so the frame of that step
+        also reports the machine it replaced, where the last condition is done. Empty for a task without subtasks.
         """
-        machines = self._subtask_recorder.subtask_state_machines
-        chains = machines[slot].conditionals_state_machine if machines else None
-        if chains is None:
+        if self._subtask_recorder is None:
             return {}
+        current = self._subtask_recorder.subtask_state_machines[slot].conditionals_state_machine
+        shown, self._shown_chains[slot] = self._shown_chains[slot], current
+        progress = {}
+        for chains in {id(c): c for c in (shown, current) if c is not None}.values():
+            progress.update(self._chain_progress(chains))
+        return progress
+
+    @staticmethod
+    def _chain_progress(chains: Any) -> dict[str, bool]:
+        """Per condition of each chain that one RoboLab chain machine tracks, whether it is done."""
+        prefix = f'.{keys.GT_STATE_PROGRESS}.{chains.subtask_group_id}'
         progress = {}
         for group, done in chains.object_completed_table.items():
             for index, ((condition, _score), condition_done) in enumerate(
                 zip(chains.subtask.get_group(group), done, strict=True)
             ):
-                function = condition.func if isinstance(condition, partial) else condition
-                progress[f'.{keys.GT_STATE_PROGRESS}.{group}.{index}.{function.__name__}'] = bool(condition_done)
+                name, _params = get_callable_info(condition)
+                progress[f'{prefix}.{group}.{index}.{name}'] = bool(condition_done)
         return progress
 
-    def _observe(self, obs: dict[str, Any], subtask: np.ndarray) -> list[dict[str, Any]]:
+    def _observe(self, obs: dict[str, Any], subtask: np.ndarray, *, reset: bool) -> list[dict[str, Any]]:
         """One observation payload per slot."""
         # The eef pose is reported in the control frame Cartesian commands arrive in (``eef_frame``: env-local
         # position, world quat wxyz), so the observed and commanded pose share a frame. The proprio group has
@@ -511,7 +537,7 @@ class RobolabEnv(EnvProtocol):
         proprio = obs['proprio_obs']
         images = obs['image_obs']
         joint_vel = self._robot.data.joint_vel[:, self._joint_ids].cpu().numpy()
-        gt_states = self._gt_state()
+        gt_states = self._gt_state(reset=reset)
         return [
             {
                 protocol.OBS_JOINT_POS: proprio['arm_joint_pos'][slot].cpu().numpy(),

@@ -8,7 +8,14 @@ from typing import Any
 
 import numpy as np
 import pytest
-from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
+from eval_vocabulary.episode import (
+    GT_STATE_GRIPPER_CONTACT,
+    GT_STATE_OBJECTS,
+    GT_STATE_POSE,
+    GT_STATE_PROGRESS,
+    GT_STATE_SIGNAL,
+    SUBTASK_SIGNAL,
+)
 
 from positronic import keys
 from positronic.cfg.eval.sim import robolab as robolab_cfg
@@ -94,7 +101,7 @@ def test_the_spec_reaches_the_env_unmapped(asked):
 _GT_STATE = {
     f'.{robolab_keys.GT_STATE_OBJECTS}.banana.{robolab_keys.GT_STATE_POSE}': np.zeros(7, dtype=np.float32),
     f'.{robolab_keys.GT_STATE_OBJECTS}.banana.{robolab_keys.GT_STATE_GRIPPER_CONTACT}': True,
-    f'.{robolab_keys.GT_STATE_PROGRESS}.banana.0.object_grabbed': True,
+    f'.{robolab_keys.GT_STATE_PROGRESS}.0.banana.0.object_grabbed': True,
 }
 
 
@@ -108,12 +115,26 @@ def test_the_privileged_channel_carries_the_subtask_progress_and_the_scene_state
 
     privileged = RobolabAdapter({}).privileged(raw)
 
-    assert privileged == {robolab_keys.SUBTASK: subtask, robolab_keys.GT_STATE: _GT_STATE}
+    assert privileged.keys() == {robolab_keys.SUBTASK, robolab_keys.GT_STATE}
+    assert privileged[robolab_keys.SUBTASK] is subtask
+    assert privileged[robolab_keys.GT_STATE] is _GT_STATE
 
 
-def test_the_eval_records_each_scene_state_value_as_a_signal_of_its_own():
+def test_the_eval_records_the_scene_state_that_the_env_sends():
     ev = robolab_cfg.banana_in_bowl.instantiate()
+    proxy = ev.privileged[SUBTASK_SIGNAL].owner
 
-    assert set(ev.privileged) == {SUBTASK_SIGNAL, GT_STATE_SIGNAL}
+    assert ev.privileged.keys() == {SUBTASK_SIGNAL, GT_STATE_SIGNAL}
+    assert ev.privileged[SUBTASK_SIGNAL] is proxy.privileged[robolab_keys.SUBTASK]
+    assert ev.privileged[GT_STATE_SIGNAL] is proxy.privileged[robolab_keys.GT_STATE]
+
+
+def test_the_env_writes_the_scene_state_in_the_layout_that_a_labeler_reads():
+    assert [robolab_keys.GT_STATE_OBJECTS, robolab_keys.GT_STATE_POSE, robolab_keys.GT_STATE_GRIPPER_CONTACT] == [
+        GT_STATE_OBJECTS,
+        GT_STATE_POSE,
+        GT_STATE_GRIPPER_CONTACT,
+    ]
+    assert robolab_keys.GT_STATE_PROGRESS == GT_STATE_PROGRESS
     recorded = dict(expand_suffixed(GT_STATE_SIGNAL, _GT_STATE))
-    assert recorded == {f'{GT_STATE_SIGNAL}{suffix}': value for suffix, value in _GT_STATE.items()}
+    assert f'{GT_STATE_SIGNAL}.{GT_STATE_OBJECTS}.banana.{GT_STATE_POSE}' in recorded

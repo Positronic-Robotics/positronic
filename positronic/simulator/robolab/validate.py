@@ -5,7 +5,8 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
 (no sockets), and checks:
 
 - the wire observation contract: keys, shapes, dtypes, quat normalization, grip range;
-- ``gt_state``: a pose and a contact flag for every object, bool progress, and no progress on a reset frame;
+- ``gt_state``: a pose and a contact flag for every object, and bool progress. On a reset frame, no contact and
+  no condition done;
 - grip: the binary gripper term reaches both closure extremes;
 - ``joint_pos`` pass-through: the applied action is bit-identical to the commanded joints (the leaderboard
   equivalence claim) and the arm converges onto the target;
@@ -44,6 +45,9 @@ import torch
 from env import RobolabEnv, args, simulation_app
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
 
+from robolab.core.sensors.contact_sensor_utils import (  # pyright: ignore[reportMissingImports]
+    get_batch_contact_sensor,
+)
 from robolab.robots.droid import EEF_OFFSET_ROT
 
 _TOKEN = {'task': 'BananaInBowlTask', 'instruction_type': 'default'}
@@ -154,6 +158,7 @@ def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
         assert abs(float(np.linalg.norm(pose[3:])) - 1.0) < 1e-3, f'{name} quat norm {pose[3:]}'
         contact = state.pop(f'{objects}{name}.{keys.GT_STATE_GRIPPER_CONTACT}')
         assert isinstance(contact, bool), f'{name} contact {contact!r}'
+        assert not (reset and contact), f'{name} touches the gripper on a reset frame, so it holds the prior trial'
     assert state, 'gt_state has no progress, but the task has a subtask'
     for key, done in state.items():
         assert key.startswith(progress), f'gt_state holds {key}, which is no object and no progress'
@@ -161,13 +166,28 @@ def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
         assert not (reset and done), f'{key} is done on a reset frame, so it holds the prior trial'
 
 
+def _check_gt_state_is_the_clones_own(env: RobolabEnv, obs: dict, slot: int) -> None:
+    """Each object's ``gt_state`` pose is the pose that RoboLab reads for this clone alone."""
+    for name in env._objects:
+        pos, quat = env._world.get_pose(name, is_relative=True, env_id=slot)
+        own = torch.cat([pos, quat]).cpu().numpy()
+        recorded = obs[keys.GT_STATE][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}']
+        assert np.allclose(recorded, own, atol=1e-5), f'clone {slot} reports {recorded} for {name}, not its own {own}'
+
+
 def _check_gt_state_contract(env: RobolabEnv) -> None:
+    sensor = get_batch_contact_sensor(env._env.scene, env._gripper)
+    assert sensor is not None, f'the scene has no batch contact sensor for {env._gripper}'
+    filtered = sensor.data.force_matrix_w.shape[2]
+    assert filtered == len(env._objects), (
+        f'the batch sensor filters {filtered} bodies, not the {len(env._objects)} objects'
+    )
     out = _reset(env, _TOKEN)
     _check_gt_state(env, out[protocol.FRAME_OBS], reset=True)
     for _ in range(_SETTLE_STEPS):
         out = _step(env, _HOLD)
     _check_gt_state(env, out[protocol.FRAME_OBS], reset=False)
-    print(f'  gt_state: OK ({len(env._objects)} objects with pose and contact; bool progress, none at reset)')
+    print(f'  gt_state: OK ({len(env._objects)} objects with pose and contact; bool progress; reset frame clean)')
 
 
 def _check_grip(env: RobolabEnv) -> None:
@@ -351,6 +371,7 @@ def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
     banana.write_root_velocity_to_sim(torch.zeros(1, 6, device=rl_env.device), env_ids=clone_1)
 
     best_score = 0.0
+    frames = []
     for _ in range(_HOLD_STEPS):
         frames = env.step(holds)[protocol.SLOTS]
         best_score = max(best_score, float(frames[1][protocol.FRAME_OBS][keys.SUBTASK][3]))
@@ -358,6 +379,13 @@ def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
         running = [slot for slot in range(2, env.num_slots) if frames[slot][protocol.FRAME_DONE]]
         assert not running, f'clones {running} ended, but only clones 0 and 1 had a reason to'
     assert best_score > 0, 'clone 1 made no subtask progress, so the step this checks never ran'
+    banana_pose = f'.{keys.GT_STATE_OBJECTS}.banana.{keys.GT_STATE_POSE}'
+    bowl_pose = f'.{keys.GT_STATE_OBJECTS}.bowl.{keys.GT_STATE_POSE}'
+    gaps = [
+        float(np.linalg.norm(state[banana_pose][:2] - state[bowl_pose][:2]))
+        for state in (frame[protocol.FRAME_OBS][keys.GT_STATE] for frame in frames)
+    ]
+    assert gaps[1] < 0.05 < min(gaps[:1] + gaps[2:]), f'only clone 1 has its banana in its bowl; xy gaps {gaps}'
     print(f'  batch: OK (clone 0 ended first; clone 1 reached subtask score {best_score:.2f} after it)')
 
 
@@ -371,7 +399,9 @@ def _first_clone(state: Any) -> Any:
 def _check_a_recorded_state_reaches_every_clone(env: RobolabEnv) -> None:
     """A reset with a one-scene recorded state restores that state into every clone."""
     recorded = _first_clone(env._env.scene.get_state(is_relative=True))
-    env.reset({**_TOKEN, 'state': recorded})
+    out = env.reset({**_TOKEN, 'state': recorded})
+    for frame in out[protocol.SLOTS]:
+        _check_gt_state(env, frame[protocol.FRAME_OBS], reset=True)
     joints = env._env.scene.get_state(is_relative=True)['articulation']['robot']['joint_position'].cpu().numpy()
     err = float(np.max(np.abs(joints - recorded['articulation']['robot']['joint_position'])))
     assert err < 1e-5, f'a recorded state reached the clones {err:.6f} rad off its joints'
@@ -415,6 +445,7 @@ def _check_batch(num_envs: int) -> None:
         nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
         assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
         _check_gt_state(env, frame[protocol.FRAME_OBS], reset=False)
+        _check_gt_state_is_the_clones_own(env, frame[protocol.FRAME_OBS], slot)
     print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')
     _check_a_clone_that_ends_first(env)
     _check_a_recorded_state_reaches_every_clone(env)
