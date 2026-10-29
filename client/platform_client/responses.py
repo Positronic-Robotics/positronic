@@ -349,6 +349,7 @@ class SubmissionListRow(_ReasonBearing):
     """One row of `submissions.list`. `user_id` attributes it — an admin listing spans users.
 
     `eval` is the name the catalogue expanded, and is absent on a run that stated its own tasks.
+    `estimated_end_at` is the platform's estimate of `ended_at`; each time is absent until it is known.
     """
 
     id: SubmissionId
@@ -357,6 +358,9 @@ class SubmissionListRow(_ReasonBearing):
     eval: EvalRef | None = None
     episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
     received_at: AwareDatetime
+    started_at: AwareDatetime | None = None
+    ended_at: AwareDatetime | None = None
+    estimated_end_at: AwareDatetime | None = None
 
 
 class SubmissionListResponse(BaseModel):
