@@ -7,12 +7,6 @@ TASK = 'task'
 EXTERIOR_IMAGE = 'image.exterior'
 EXTERIOR_IMAGE_2 = 'image.exterior_2'
 WRIST_IMAGE = 'image.wrist'
-ACTION_PREFIX = 'action_prefix'
-PREFIX_ACTIONS = 'actions'
-CHUNK_OFFSET_SEC = 'chunk_offset_sec'
-OBSERVATION_OFFSET_SEC = 'observation_offset_sec'
-ESTIMATED_LATENCY_SEC = 'estimated_latency_sec'
-MEASURED_LATENCY_SEC = 'measured_latency_sec'
 
 CHECKPOINT_ID = 'checkpoint_id'
 CHECKPOINT_PATH = 'checkpoint_path'
@@ -23,12 +17,26 @@ COMPRESS_IMAGES = 'compress_images'
 FPS = 'fps'
 HORIZON_SEC = 'horizon_sec'
 EMBODIMENT = 'embodiment'
-RTC = 'rtc'
-CALL_AFTER_SEC = 'call_after_sec'
-BLEND_SEC = 'blend_sec'
-MAX_DELAY_SEC = 'max_delay_sec'
-RAMP_RATE = 'ramp_rate'
-ACTION_HORIZON = 'action_horizon'
-RTC_OVERLAP_STEPS = 'rtc_overlap_steps'
-RTC_FROZEN_STEPS = 'rtc_frozen_steps'
-RTC_RAMP_RATE = 'rtc_ramp_rate'
+
+
+class RTC:
+    """RTC observation fields, session parameters and native inference options."""
+
+    FIELD = 'rtc'
+
+    ACTION_PREFIX = 'action_prefix'
+    PREFIX_ACTIONS = 'actions'
+    CHUNK_OFFSET_SEC = 'chunk_offset_sec'
+    OBSERVATION_OFFSET_SEC = 'observation_offset_sec'
+    ESTIMATED_LATENCY_SEC = 'estimated_latency_sec'
+    MEASURED_LATENCY_SEC = 'measured_latency_sec'
+
+    CALL_AFTER_SEC = 'call_after_sec'
+    BLEND_SEC = 'blend_sec'
+    MAX_DELAY_SEC = 'max_delay_sec'
+    RAMP_RATE = 'ramp_rate'
+
+    ACTION_HORIZON = 'action_horizon'
+    OVERLAP_STEPS = 'rtc_overlap_steps'
+    FROZEN_STEPS = 'rtc_frozen_steps'
+    NATIVE_RAMP_RATE = 'rtc_ramp_rate'

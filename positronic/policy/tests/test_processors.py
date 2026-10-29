@@ -53,15 +53,7 @@ from positronic.policy.codecs.observation import (
 )
 from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.keys import (
-    ACTION_PREFIX,
-    CHUNK_OFFSET_SEC,
-    END,
-    ESTIMATED_LATENCY_SEC,
-    MEASURED_LATENCY_SEC,
-    OBSERVATION_OFFSET_SEC,
-    PREFIX_ACTIONS,
-)
+from positronic.policy.keys import END, RTC
 from positronic.policy.processors import (
     ChunkedSchedule,
     ConstantDuration,
@@ -374,7 +366,7 @@ class SlowModel:
 
     def submit(self, function, obs):
         self.requests.append(dict(obs))
-        prefix = obs[ACTION_PREFIX][PREFIX_ACTIONS] if ACTION_PREFIX in obs else []
+        prefix = obs[RTC.ACTION_PREFIX][RTC.PREFIX_ACTIONS] if RTC.ACTION_PREFIX in obs else []
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
@@ -834,7 +826,7 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
                 run.send({})
             assert model.calls[-1][0] == call_ns
             if rtc:
-                assert model.requests[-1][ESTIMATED_LATENCY_SEC] == pytest.approx(delay_ns / 1e9)
+                assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(delay_ns / 1e9)
                 assert len(model.calls[-1][1]) == 5
         finally:
             run.close()
@@ -993,13 +985,13 @@ def test_rtc_keeps_original_actions_and_reports_their_time_offsets(execution, mo
         step(1)
         clock.advance_to_ns(call_ns)
         run.send({})
-        prefix = model.requests[-1][ACTION_PREFIX]
+        prefix = model.requests[-1][RTC.ACTION_PREFIX]
         first = min(int(round(call_after_sec * 1e9) // PERIOD_NS), len(actions))
-        assert [action[MOTOR] for action in prefix[PREFIX_ACTIONS]] == list(range(first, len(actions)))
-        if prefix[PREFIX_ACTIONS]:
-            assert prefix[CHUNK_OFFSET_SEC] == pytest.approx(first / 10)
-            assert prefix[OBSERVATION_OFFSET_SEC] == pytest.approx(first / 10 - call_after_sec)
-            for expected, actual in zip(actions[first:], prefix[PREFIX_ACTIONS], strict=True):
+        assert [action[MOTOR] for action in prefix[RTC.PREFIX_ACTIONS]] == list(range(first, len(actions)))
+        if prefix[RTC.PREFIX_ACTIONS]:
+            assert prefix[RTC.CHUNK_OFFSET_SEC] == pytest.approx(first / 10)
+            assert prefix[RTC.OBSERVATION_OFFSET_SEC] == pytest.approx(first / 10 - call_after_sec)
+            for expected, actual in zip(actions[first:], prefix[RTC.PREFIX_ACTIONS], strict=True):
                 assert actual['joints'] is expected['joints']
     finally:
         run.close()
@@ -1331,7 +1323,7 @@ class _EndingModel:
         self.prefixes: list[list] = []
 
     def __call__(self, obs):
-        prefix = obs[ACTION_PREFIX][PREFIX_ACTIONS] if ACTION_PREFIX in obs else []
+        prefix = obs[RTC.ACTION_PREFIX][RTC.PREFIX_ACTIONS] if RTC.ACTION_PREFIX in obs else []
         call = len(self.calls)
         self.calls.append(self._runtime.time_ns)
         self.prefixes.append(list(prefix))
@@ -1534,16 +1526,16 @@ def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(executi
         run.send({})
         clock.advance_to_ns(600_000_000)
         run.send({})
-        first = model.requests[0][ACTION_PREFIX]
-        second = model.requests[1][ACTION_PREFIX]
-        assert first[PREFIX_ACTIONS] == []
-        assert second[CHUNK_OFFSET_SEC] == 0.5
-        assert second[OBSERVATION_OFFSET_SEC] == 0.0
-        assert model.requests[0][MEASURED_LATENCY_SEC] is None
-        assert model.requests[1][MEASURED_LATENCY_SEC] == 0.1
-        assert model.requests[0][ESTIMATED_LATENCY_SEC] == 0.0
-        assert model.requests[1][ESTIMATED_LATENCY_SEC] == 0.2
-        assert [action[MOTOR] for action in second[PREFIX_ACTIONS]] == [f'old{i}' for i in range(5, 10)]
+        first = model.requests[0][RTC.ACTION_PREFIX]
+        second = model.requests[1][RTC.ACTION_PREFIX]
+        assert first[RTC.PREFIX_ACTIONS] == []
+        assert second[RTC.CHUNK_OFFSET_SEC] == 0.5
+        assert second[RTC.OBSERVATION_OFFSET_SEC] == 0.0
+        assert model.requests[0][RTC.MEASURED_LATENCY_SEC] is None
+        assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
+        assert model.requests[0][RTC.ESTIMATED_LATENCY_SEC] == 0.0
+        assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.2
+        assert [action[MOTOR] for action in second[RTC.PREFIX_ACTIONS]] == [f'old{i}' for i in range(5, 10)]
     finally:
         run.close()
 
@@ -1565,12 +1557,12 @@ def test_rtc_description_preserves_commands_without_a_model_codec(execution, mon
         run.send({})
         clock.advance_to_ns(600_000_000)
         run.send({})
-        prefix = model.requests[-1][ACTION_PREFIX]
+        prefix = model.requests[-1][RTC.ACTION_PREFIX]
         np.testing.assert_array_equal(
-            [action[keys.ROBOT_COMMAND].positions for action in prefix[PREFIX_ACTIONS]],
+            [action[keys.ROBOT_COMMAND].positions for action in prefix[RTC.PREFIX_ACTIONS]],
             [[i, i + 1] for i in range(5, 10)],
         )
-        assert [action[keys.TARGET_GRIP] for action in prefix[PREFIX_ACTIONS]] == [1.0, 0.0, 1.0, 0.0, 1.0]
+        assert [action[keys.TARGET_GRIP] for action in prefix[RTC.PREFIX_ACTIONS]] == [1.0, 0.0, 1.0, 0.0, 1.0]
     finally:
         run.close()
 

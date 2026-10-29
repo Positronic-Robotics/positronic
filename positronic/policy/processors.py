@@ -471,9 +471,9 @@ class _TimedChunk:
     def prefix(self, now_ns: int) -> dict[str, Any]:
         running = self._running_index(now_ns)
         return {
-            policy_keys.PREFIX_ACTIONS: [dict(action) for action in self._actions[running:]],
-            policy_keys.CHUNK_OFFSET_SEC: running / self._fps,
-            policy_keys.OBSERVATION_OFFSET_SEC: (self._due_ns(running) - now_ns) / 1e9,
+            policy_keys.RTC.PREFIX_ACTIONS: [dict(action) for action in self._actions[running:]],
+            policy_keys.RTC.CHUNK_OFFSET_SEC: running / self._fps,
+            policy_keys.RTC.OBSERVATION_OFFSET_SEC: (self._due_ns(running) - now_ns) / 1e9,
         }
 
     def take_due(self, now_ns: int) -> dict[str, Any]:
@@ -572,18 +572,18 @@ class RTCSchedule(Policy):
                 if answer is None and now_ns >= next_call_ns:
                     prefix = (
                         {
-                            policy_keys.PREFIX_ACTIONS: [],
-                            policy_keys.CHUNK_OFFSET_SEC: 0.0,
-                            policy_keys.OBSERVATION_OFFSET_SEC: 0.0,
+                            policy_keys.RTC.PREFIX_ACTIONS: [],
+                            policy_keys.RTC.CHUNK_OFFSET_SEC: 0.0,
+                            policy_keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
                         }
                         if chunk is None
                         else chunk.prefix(now_ns)
                     )
                     called_at_ns = now_ns
                     context = {
-                        policy_keys.ACTION_PREFIX: prefix,
-                        policy_keys.ESTIMATED_LATENCY_SEC: expected_sec,
-                        policy_keys.MEASURED_LATENCY_SEC: measured_sec,
+                        policy_keys.RTC.ACTION_PREFIX: prefix,
+                        policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
+                        policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
                     }
                     answer = runtime.submit(infer, ChainMap(context, obs))
 

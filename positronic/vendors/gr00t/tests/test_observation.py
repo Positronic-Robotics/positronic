@@ -233,16 +233,16 @@ def test_rtc_targets_survive_observation_packing_and_image_compression(observati
         horizon_sec=None,
         image_mappings=settings[model_settings.IMAGE_MAPPINGS],
         compress_images=True,
-        rtc={serving_keys.CALL_AFTER_SEC: 0.5, serving_keys.MAX_DELAY_SEC: 1.0},
+        rtc={serving_keys.RTC.CALL_AFTER_SEC: 0.5, serving_keys.RTC.MAX_DELAY_SEC: 1.0},
     )
     definition = spec.from_spec(stack[SEQ][1])
     assert isinstance(definition, Codec)
     codec = definition | EncodeImages()
     targets = [{keys.ROBOT_COMMAND: JointPosition(np.ones(7)), keys.TARGET_GRIP: 1.0}]
     prefix = {
-        policy_keys.PREFIX_ACTIONS: targets,
-        policy_keys.CHUNK_OFFSET_SEC: 0.2,
-        policy_keys.OBSERVATION_OFFSET_SEC: -0.01,
+        policy_keys.RTC.PREFIX_ACTIONS: targets,
+        policy_keys.RTC.CHUNK_OFFSET_SEC: 0.2,
+        policy_keys.RTC.OBSERVATION_OFFSET_SEC: -0.01,
     }
     received = []
 
@@ -252,16 +252,16 @@ def test_rtc_targets_survive_observation_packing_and_image_compression(observati
 
     result = codec.wrap(infer)({
         **observation,
-        policy_keys.ACTION_PREFIX: prefix,
-        policy_keys.ESTIMATED_LATENCY_SEC: 0.2,
-        policy_keys.MEASURED_LATENCY_SEC: 0.15,
+        policy_keys.RTC.ACTION_PREFIX: prefix,
+        policy_keys.RTC.ESTIMATED_LATENCY_SEC: 0.2,
+        policy_keys.RTC.MEASURED_LATENCY_SEC: 0.15,
     })
     assert len(result) == 40
-    restored = received[0][serving_keys.RTC]
-    assert restored[serving_keys.CHUNK_OFFSET_SEC] == 0.2
-    assert restored[serving_keys.OBSERVATION_OFFSET_SEC] == -0.01
+    restored = received[0][serving_keys.RTC.FIELD]
+    assert restored[serving_keys.RTC.CHUNK_OFFSET_SEC] == 0.2
+    assert restored[serving_keys.RTC.OBSERVATION_OFFSET_SEC] == -0.01
     np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.JOINT_POSITION], np.ones(7, dtype=np.float32))
     np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.GRIP], [1.0])
-    assert restored[serving_keys.ESTIMATED_LATENCY_SEC] == 0.2
-    assert restored[serving_keys.MEASURED_LATENCY_SEC] == 0.15
-    assert set(received[0]) == {gr00t.VIDEO, gr00t.STATE, gr00t.LANGUAGE, serving_keys.RTC}
+    assert restored[serving_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.2
+    assert restored[serving_keys.RTC.MEASURED_LATENCY_SEC] == 0.15
+    assert set(received[0]) == {gr00t.VIDEO, gr00t.STATE, gr00t.LANGUAGE, serving_keys.RTC.FIELD}

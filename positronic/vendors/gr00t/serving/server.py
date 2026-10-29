@@ -114,9 +114,9 @@ class Gr00tSession(Session):
         self._previous_poses: np.ndarray | None = None
 
     def _rtc_options(self, context: dict[str, Any]) -> dict[str, Any] | None:
-        for name in (keys.CHUNK_OFFSET_SEC, keys.OBSERVATION_OFFSET_SEC, keys.ESTIMATED_LATENCY_SEC):
+        for name in (keys.RTC.CHUNK_OFFSET_SEC, keys.RTC.OBSERVATION_OFFSET_SEC, keys.RTC.ESTIMATED_LATENCY_SEC):
             value = context[name]
-            if not _is_finite_number(value) or (name != keys.OBSERVATION_OFFSET_SEC and value < 0):
+            if not _is_finite_number(value) or (name != keys.RTC.OBSERVATION_OFFSET_SEC and value < 0):
                 raise ValueError(f'{name} must be finite seconds, non-negative except for the observation offset')
         targets = context[ACTION]
         if not isinstance(targets, list) or any(not isinstance(target, dict) for target in targets):
@@ -126,19 +126,19 @@ class Gr00tSession(Session):
         if self._previous_poses is None:
             raise ValueError('RTC overlap requires a preceding prediction in this session')
         horizon = len(self._policy.get_modality_config()[ACTION].delta_indices)
-        source_position = context[keys.CHUNK_OFFSET_SEC] * self._fps
+        source_position = context[keys.RTC.CHUNK_OFFSET_SEC] * self._fps
         start = round(source_position)
         if not math.isclose(source_position, start, abs_tol=1e-6) or start + len(targets) > horizon:
             raise ValueError('GR00T prefix must align with the preceding prediction and fit its horizon')
-        if context[keys.OBSERVATION_OFFSET_SEC] > 0:
+        if context[keys.RTC.OBSERVATION_OFFSET_SEC] > 0:
             raise ValueError('GR00T prefix must cover the observation moment')
-        skipped = math.floor(round(-context[keys.OBSERVATION_OFFSET_SEC] * 1e9) * self._fps / 1e9)
+        skipped = math.floor(round(-context[keys.RTC.OBSERVATION_OFFSET_SEC] * 1e9) * self._fps / 1e9)
         available = len(targets) - skipped
         if available <= 0:
             return None
         assert self._rtc is not None
-        frozen = min(available, math.ceil(round(context[keys.ESTIMATED_LATENCY_SEC] * 1e9) * self._fps / 1e9))
-        overlap = min(available, frozen + math.ceil(self._rtc[keys.BLEND_SEC] * self._fps))
+        frozen = min(available, math.ceil(round(context[keys.RTC.ESTIMATED_LATENCY_SEC] * 1e9) * self._fps / 1e9))
+        overlap = min(available, frozen + math.ceil(self._rtc[keys.RTC.BLEND_SEC] * self._fps))
         actions = {EE_POSE: self._previous_poses[start + skipped : start + skipped + overlap].copy()}
         targets = targets[skipped : skipped + overlap]
         if any(set(target) != {JOINT_POSITION, GRIP} for target in targets):
@@ -154,19 +154,19 @@ class Gr00tSession(Session):
         }
         return {
             ACTION: actions,
-            keys.ACTION_HORIZON: overlap,
-            keys.RTC_OVERLAP_STEPS: overlap,
-            keys.RTC_FROZEN_STEPS: frozen,
-            keys.RTC_RAMP_RATE: self._rtc[keys.RAMP_RATE],
+            keys.RTC.ACTION_HORIZON: overlap,
+            keys.RTC.OVERLAP_STEPS: overlap,
+            keys.RTC.FROZEN_STEPS: frozen,
+            keys.RTC.NATIVE_RAMP_RATE: self._rtc[keys.RTC.RAMP_RATE],
         }
 
     def infer(self, observation: Any) -> Any:
         if self._rtc is None:
-            if keys.RTC in observation:
+            if keys.RTC.FIELD in observation:
                 raise ValueError('This session does not enable RTC')
             return self._policy.get_action(observation)
-        options = self._rtc_options(observation[keys.RTC])
-        inputs = {name: value for name, value in observation.items() if name != keys.RTC}
+        options = self._rtc_options(observation[keys.RTC.FIELD])
+        inputs = {name: value for name, value in observation.items() if name != keys.RTC.FIELD}
         result = self._policy.get_action(inputs, options=options)
         self._previous_poses = result[0][EE_POSE][0].copy()
         return result
@@ -200,7 +200,7 @@ class Gr00tModel(Model):
                 model_settings.IMAGE_MAPPINGS: settings[model_settings.IMAGE_MAPPINGS],
                 keys.COMPRESS_IMAGES: compress_images,
                 keys.JPEG_QUALITY: jpeg_quality,
-                keys.RTC: rtc,
+                keys.RTC.FIELD: rtc,
             },
             metadata={**metadata, keys.TYPE: 'groot', keys.EMBODIMENT: EMBODIMENT},
         )
@@ -226,11 +226,11 @@ class Gr00tModel(Model):
             warm = Gr00tSession(policy, {}, rtc, fps=self.parameters[keys.FPS])
             warm.infer({
                 **observation,
-                keys.RTC: {
+                keys.RTC.FIELD: {
                     ACTION: [],
-                    keys.CHUNK_OFFSET_SEC: 0.0,
-                    keys.OBSERVATION_OFFSET_SEC: 0.0,
-                    keys.ESTIMATED_LATENCY_SEC: 0.0,
+                    keys.RTC.CHUNK_OFFSET_SEC: 0.0,
+                    keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
+                    keys.RTC.ESTIMATED_LATENCY_SEC: 0.0,
                 },
             })
             targets = [
@@ -238,11 +238,11 @@ class Gr00tModel(Model):
             ]
             warm.infer({
                 **observation,
-                keys.RTC: {
+                keys.RTC.FIELD: {
                     ACTION: targets,
-                    keys.CHUNK_OFFSET_SEC: 0.0,
-                    keys.OBSERVATION_OFFSET_SEC: 0.0,
-                    keys.ESTIMATED_LATENCY_SEC: 1 / self.parameters[keys.FPS],
+                    keys.RTC.CHUNK_OFFSET_SEC: 0.0,
+                    keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
+                    keys.RTC.ESTIMATED_LATENCY_SEC: 1 / self.parameters[keys.FPS],
                 },
             })
             warm.close()
@@ -269,11 +269,11 @@ class Gr00tModel(Model):
         return action_horizon
 
     def prepare_session(self, params: dict[str, Any]) -> Gr00tSession:
-        rtc = params[keys.RTC]
+        rtc = params[keys.RTC.FIELD]
         if rtc is not None:
-            if self.parameters[keys.RTC] is None:
+            if self.parameters[keys.RTC.FIELD] is None:
                 raise ValueError('Launch droid_rtc to enable warmed RTC sessions')
-            expected = {keys.CALL_AFTER_SEC, keys.BLEND_SEC, keys.MAX_DELAY_SEC, keys.RAMP_RATE}
+            expected = {keys.RTC.CALL_AFTER_SEC, keys.RTC.BLEND_SEC, keys.RTC.MAX_DELAY_SEC, keys.RTC.RAMP_RATE}
             if not isinstance(rtc, dict) or set(rtc) != expected:
                 raise ValueError(f'rtc must be None or contain {sorted(expected)}')
             for name, value in rtc.items():
@@ -354,7 +354,7 @@ def grpc(served_address: dict[str, Any]):
         keys.HORIZON_SEC: 1.0,
         keys.COMPRESS_IMAGES: True,
         keys.JPEG_QUALITY: DEFAULT_JPEG_QUALITY,
-        keys.RTC: None,
+        keys.RTC.FIELD: None,
     },
     websocket=websocket,
     grpc=None,
@@ -377,7 +377,12 @@ def main() -> None:
     three_cameras = droid.override(**{'pipeline.settings': model_settings.droid_three_cameras()})
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     rtc = droid.override(**{
-        'pipeline.rtc': {keys.CALL_AFTER_SEC: 0.5, keys.BLEND_SEC: 0.5, keys.MAX_DELAY_SEC: 1.0, keys.RAMP_RATE: 5.0},
+        'pipeline.rtc': {
+            keys.RTC.CALL_AFTER_SEC: 0.5,
+            keys.RTC.BLEND_SEC: 0.5,
+            keys.RTC.MAX_DELAY_SEC: 1.0,
+            keys.RTC.RAMP_RATE: 5.0,
+        },
         'pipeline.horizon_sec': None,
     })
     cfn.cli({'serve': droid, 'droid': droid, 'droid_three_cameras': three_cameras, 'droid_rtc': rtc})

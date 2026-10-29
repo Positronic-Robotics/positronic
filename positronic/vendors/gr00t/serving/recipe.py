@@ -17,12 +17,14 @@ def inference(settings: dict[str, Any], *, rtc: bool = False) -> dict[str, Any]:
     observation_keys = settings[model_settings.OBSERVATION_KEYS]
     ee_frame = settings[model_settings.EE_FRAMES][observation_keys[EE_POSE]]
     state = {observation_keys[name]: {observation_keys[name]: size} for name, size in STATE_DIMS.items()}
-    action_args = {'commands_path': [obs_keys.ACTION_PREFIX, obs_keys.PREFIX_ACTIONS]} if rtc else {}
+    action_args = {'commands_path': [obs_keys.RTC.ACTION_PREFIX, obs_keys.RTC.PREFIX_ACTIONS]} if rtc else {}
     timing = (
         [
             component(
                 'select_observation_fields',
-                mapping={name: name for name in (obs_keys.ESTIMATED_LATENCY_SEC, obs_keys.MEASURED_LATENCY_SEC)},
+                mapping={
+                    name: name for name in (obs_keys.RTC.ESTIMATED_LATENCY_SEC, obs_keys.RTC.MEASURED_LATENCY_SEC)
+                },
             )
         ]
         if rtc
@@ -33,12 +35,15 @@ def inference(settings: dict[str, Any], *, rtc: bool = False) -> dict[str, Any]:
             component(
                 'pack_fields',
                 encode_layout={
-                    obs_keys.RTC: {
-                        ACTION: [obs_keys.ACTION_PREFIX, obs_keys.PREFIX_ACTIONS],
-                        obs_keys.CHUNK_OFFSET_SEC: [obs_keys.ACTION_PREFIX, obs_keys.CHUNK_OFFSET_SEC],
-                        obs_keys.OBSERVATION_OFFSET_SEC: [obs_keys.ACTION_PREFIX, obs_keys.OBSERVATION_OFFSET_SEC],
-                        obs_keys.ESTIMATED_LATENCY_SEC: [obs_keys.ESTIMATED_LATENCY_SEC],
-                        obs_keys.MEASURED_LATENCY_SEC: [obs_keys.MEASURED_LATENCY_SEC],
+                    obs_keys.RTC.FIELD: {
+                        ACTION: [obs_keys.RTC.ACTION_PREFIX, obs_keys.RTC.PREFIX_ACTIONS],
+                        obs_keys.RTC.CHUNK_OFFSET_SEC: [obs_keys.RTC.ACTION_PREFIX, obs_keys.RTC.CHUNK_OFFSET_SEC],
+                        obs_keys.RTC.OBSERVATION_OFFSET_SEC: [
+                            obs_keys.RTC.ACTION_PREFIX,
+                            obs_keys.RTC.OBSERVATION_OFFSET_SEC,
+                        ],
+                        obs_keys.RTC.ESTIMATED_LATENCY_SEC: [obs_keys.RTC.ESTIMATED_LATENCY_SEC],
+                        obs_keys.RTC.MEASURED_LATENCY_SEC: [obs_keys.RTC.MEASURED_LATENCY_SEC],
                     }
                 },
                 decode_layout={},
@@ -136,8 +141,8 @@ def client_stack(
         schedule = component(
             'rtc_schedule',
             fps=fps,
-            call_after_sec=rtc[obs_keys.CALL_AFTER_SEC],
-            latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.MAX_DELAY_SEC]},
+            call_after_sec=rtc[obs_keys.RTC.CALL_AFTER_SEC],
+            latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.RTC.MAX_DELAY_SEC]},
         )
     parts = [schedule, codec, component('metadata', values={model_settings.ACTION_FPS: fps})]
     if compress_images:
