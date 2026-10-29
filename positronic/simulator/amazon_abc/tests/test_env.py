@@ -31,6 +31,7 @@ _TOKEN = {
 _SCENE = (
     f'<mujoco><compiler angle="radian"/><option timestep="{_TIMESTEP}"/><worldbody>'
     f'{hinge_chain_xml("left", 0.3, mapping.ARM_JOINTS)}{hinge_chain_xml("right", -0.3, mapping.ARM_JOINTS)}'
+    '<body name="gate" pos="0.1 0.05 1.6" quat="0.9 0.1 0.3 0.2"><camera name="top" quat="0 1 0 0" fovy="70"/></body>'
     '</worldbody></mujoco>'
 )
 
@@ -58,12 +59,18 @@ class _FakeScene:
         self.builds = 0
         # The gripper width ABC reports per arm, in i2rt's aperture (1 open).
         self.apertures = dict.fromkeys(mapping.ARMS, 0.0)
+        self.config = types.SimpleNamespace(
+            robots={arm: types.SimpleNamespace(init_q=[0.5] * (mapping.ARM_JOINTS + 1)) for arm in mapping.ARMS}
+        )
 
     def forget_arm_state(self) -> None:
         pass
 
     def reset(self, seed: int | None = None, randomize: bool = True) -> tuple[dict[str, Any], dict[str, Any]]:
         return self._obs(), {}
+
+    def get_obs(self) -> dict[str, Any]:
+        return self._obs()
 
     def evaluate_task(self) -> Any:
         if self.task_eval is None:
@@ -148,6 +155,27 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
     assert protocol.arm_channel(protocol.OBS_JOINT_POS, 'right') in slot[protocol.FRAME_OBS]
     assert frame[protocol.FRAME_META] == {mapping.META_TASK: _PROMPT}
     assert frame[protocol.FRAME_CONTROL_DT] == pytest.approx(_TIMESTEP * _DECIMATION)
+
+
+def test_a_reset_places_the_top_camera_at_the_molmospaces_pose_above_the_arm_mounts(env, scene):
+    env.reset(_TOKEN)
+
+    camera = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_CAMERA, 'top')
+    np.testing.assert_allclose(scene.data.cam_xpos[camera], [0.0, 0.0, 0.86], atol=1e-9)
+    rotation = scene.data.cam_xmat[camera].reshape(3, 3)
+    # The camera looks along its -z: forward along the arms' +x and down, with the image's top away from the arms.
+    np.testing.assert_allclose(-rotation[:, 2], [0.4603, 0.0, -0.8878], atol=1e-3)
+    np.testing.assert_allclose(rotation[:, 1], [0.8878, 0.0, 0.4603], atol=1e-3)
+    assert scene.model.cam_fovy[camera] == 58.0
+
+
+def test_the_arms_start_from_the_median_first_state_of_the_molmoact2_yam_dataset(env, scene):
+    env.reset(_TOKEN)
+
+    assert {arm: robot.init_q for arm, robot in scene.config.robots.items()} == {
+        'left': [-0.002, 0.013, 0.014, -0.064, 0.028, -0.055, 0.992],
+        'right': [0.039, 0.013, 0.008, -0.070, -0.057, 0.018, 0.993],
+    }
 
 
 _EVER_SUCCESS, _EVER_FAILED = mapping.ABC_EVAL_EVER_SUCCESS, mapping.ABC_EVAL_EVER_FAILED

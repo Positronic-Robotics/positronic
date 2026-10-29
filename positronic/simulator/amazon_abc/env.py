@@ -27,6 +27,19 @@ _BUILD_ATTEMPTS = 3
 _IK_POSITION_TOLERANCE = 1e-3  # m
 _IK_ROTATION_TOLERANCE = 1e-2  # rad
 
+# Experiment only: the view and start pose of AI2's MolmoSpaces bimanual YAM, not ABC's benchmark.
+# MolmoSpaces' BimanualYamCameraSystem exo camera: 0.86 m above the midpoint of the two arm mounts,
+# with this wxyz rotation in the mount frame (MuJoCo camera axes: it looks along -z, up is +y).
+_TOP_CAMERA = 'top'
+_TOP_CAMERA_ABOVE_MOUNTS = 0.86  # m
+_TOP_CAMERA_QUAT = (0.6870, 0.1675, -0.1675, -0.6870)
+_TOP_CAMERA_FOVY = 58.0  # deg
+# The median first state of 220 episodes of allenai/MolmoAct2-BimanualYAM-Dataset, ``[joints(6), aperture]``.
+START_Q = {
+    'left': (-0.002, 0.013, 0.014, -0.064, 0.028, -0.055, 0.992),
+    'right': (0.039, 0.013, 0.008, -0.070, -0.057, 0.018, 0.993),
+}
+
 
 def _joint_delta_width(command: dict[str, Any]) -> int | None:
     """The number of joints a joint-delta command names, or None for any other command."""
@@ -88,14 +101,18 @@ class AbcEnv(EnvProtocol):
                 if attempt == _BUILD_ATTEMPTS:
                     raise
                 logger.warning(f'Building the ABC env for {spec.name} failed ({error}); building it again')
+        for name in self._env.robot_names:
+            self._env.config.robots[name].init_q = list(START_Q[name])
         self._key = key
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         self._build(token)
         self._env.forget_arm_state()  # ABC otherwise starts each episode where the last one left the arms
-        obs, _info = self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)
+        self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)
         # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
+        self._place_top_camera()
+        obs = self._env.get_obs()  # The reset rendered the scene before the camera moved.
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._task_eval())}],
             protocol.FRAME_META: self._meta(obs),
@@ -187,6 +204,26 @@ class AbcEnv(EnvProtocol):
             signal = protocol.arm_channel(protocol.ROBOT_STATE, arm.name) + protocol.JOINTS_SUFFIX
             mounts[signal] = self._env.data.xpos[arm.base_body_id].tolist()
         return mounts
+
+    def _place_top_camera(self) -> None:
+        """Move the top camera to the MolmoSpaces exo pose, relative to the arm mounts of this scene."""
+        model, data = self._env.model, self._env.data
+        mujoco.mj_kinematics(model, data)
+        camera = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, _TOP_CAMERA)
+        mount_rot = data.xmat[self._arms[0].base_body_id].reshape(3, 3)
+        mounts = np.mean([data.xpos[arm.base_body_id] for arm in self._arms], axis=0)
+        position = mounts + mount_rot @ np.array([0.0, 0.0, _TOP_CAMERA_ABOVE_MOUNTS])
+        local_rot = np.empty(9)
+        mujoco.mju_quat2Mat(local_rot, np.asarray(_TOP_CAMERA_QUAT, dtype=np.float64))
+        rotation = mount_rot @ local_rot.reshape(3, 3)
+        body = model.cam_bodyid[camera]
+        body_pos, body_rot = data.xpos[body], data.xmat[body].reshape(3, 3)
+        model.cam_pos[camera] = body_rot.T @ (position - body_pos)
+        mujoco.mju_mat2Quat(model.cam_quat[camera], np.ascontiguousarray(body_rot.T @ rotation).reshape(9))
+        model.cam_fovy[camera] = _TOP_CAMERA_FOVY
+        # The renderer reads the camera pose from ``data``, which only mj_camlight writes.
+        mujoco.mj_comPos(model, data)
+        mujoco.mj_camlight(model, data)
 
     def _sync_sites(self) -> None:
         # A site pose lags ``qpos`` by one forward pass after a reset or a step.
