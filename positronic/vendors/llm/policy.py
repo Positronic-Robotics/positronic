@@ -277,12 +277,16 @@ class LLMPolicy(Policy):
             return (calls[0], data) if data is not None else None
 
         @staticmethod
+        def _ends_with_prompt(message: ModelMessage) -> bool:
+            return isinstance(message, ModelRequest) and isinstance(message.parts[-1], UserPromptPart)
+
+        @staticmethod
         def _with_cache_point(message: ModelMessage) -> ModelMessage:
-            part = message.parts[-1]
-            if not isinstance(message, ModelRequest) or not isinstance(part, UserPromptPart):
-                return message
+            assert isinstance(message, ModelRequest)
+            *parts, part = message.parts
+            assert isinstance(part, UserPromptPart)
             content = [part.content] if isinstance(part.content, str) else part.content
-            return replace(message, parts=[*message.parts[:-1], replace(part, content=[*content, CachePoint()])])
+            return replace(message, parts=[*parts, replace(part, content=[*content, CachePoint()])])
 
         def _request_messages(self) -> list[ModelMessage]:
             assert self._obs is not None
@@ -299,11 +303,14 @@ class LLMPolicy(Policy):
             })
             # A provider caches a prompt only up to a cache point or to the end of a request. The stored history
             # changes only where a frame message ages out, so the newest stubbed one marks the stable prefix.
+            # Only a user prompt can hold a cache point: OpenAI and Bedrock map a prompt that holds only a cache point
+            # to an empty message or an error. So when a request ends in tool results, the newest prompt holds it.
             # Cache points go on the outgoing copy only: stored ones would pass the provider's limit.
             messages = list(self._messages)
             if self._anchor is not None:
                 messages[self._anchor] = self._with_cache_point(messages[self._anchor])
-            messages[-1] = self._with_cache_point(messages[-1])
+            end = next(i for i in reversed(range(len(messages))) if self._ends_with_prompt(messages[i]))
+            messages[end] = self._with_cache_point(messages[end])
             return messages
 
         def _accept(

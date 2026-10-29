@@ -133,42 +133,56 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert pickle.loads(ForkingPickler.dumps(policy)).meta() == metadata
 
 
-def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the_block_before_it(monkeypatch):
-    pytest.importorskip('openai')
+def responses_reply(name: str, arguments: dict) -> dict:
+    return {
+        'id': 'resp_1',
+        'object': 'response',
+        'created_at': 1,
+        'model': 'test-model',
+        'status': 'completed',
+        'output': [
+            {
+                'type': 'function_call',
+                'id': 'fc_1',
+                'call_id': 'call_1',
+                'name': name,
+                'arguments': json.dumps(arguments),
+                'status': 'completed',
+            }
+        ],
+        'parallel_tool_calls': True,
+        'tool_choice': 'auto',
+        'tools': [],
+        'usage': {
+            'input_tokens': 100,
+            'output_tokens': 20,
+            'total_tokens': 120,
+            'input_tokens_details': {'cached_tokens': 0},
+            'output_tokens_details': {'reasoning_tokens': 0},
+        },
+    }
+
+
+def anthropic_reply(name: str, arguments: dict) -> dict:
+    return {
+        'id': 'msg_1',
+        'type': 'message',
+        'role': 'assistant',
+        'model': 'test-model',
+        'content': [{'type': 'tool_use', 'id': 'toolu_1', 'name': name, 'input': arguments}],
+        'stop_reason': 'tool_use',
+        'stop_sequence': None,
+        'usage': {'input_tokens': 100, 'output_tokens': 20},
+    }
+
+
+def serve(monkeypatch, replies: list[dict]) -> list[httpx.Request]:
+    """Answer each HTTP request of every new client with the next reply, and collect the requests."""
     requests = []
 
     async def respond(request):
         requests.append(request)
-        return httpx.Response(
-            200,
-            json={
-                'id': 'resp_1',
-                'object': 'response',
-                'created_at': 1,
-                'model': 'test-model',
-                'status': 'completed',
-                'output': [
-                    {
-                        'type': 'function_call',
-                        'id': 'fc_1',
-                        'call_id': 'call_1',
-                        'name': 'done',
-                        'arguments': json.dumps({'reason': 'finished', 'hindsight': 'check the image'}),
-                        'status': 'completed',
-                    }
-                ],
-                'parallel_tool_calls': True,
-                'tool_choice': 'auto',
-                'tools': [],
-                'usage': {
-                    'input_tokens': 100,
-                    'output_tokens': 20,
-                    'total_tokens': 120,
-                    'input_tokens_details': {'cached_tokens': 0},
-                    'output_tokens_details': {'reasoning_tokens': 0},
-                },
-            },
-        )
+        return httpx.Response(200, json=replies.pop(0))
 
     initialize = httpx.AsyncClient.__init__
     monkeypatch.setattr(
@@ -176,6 +190,15 @@ def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the
         '__init__',
         lambda client, **kwargs: initialize(client, **kwargs, transport=httpx.MockTransport(respond)),
     )
+    return requests
+
+
+@pytest.mark.parametrize('configured', [False, True])
+def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the_block_before_it(
+    monkeypatch, configured
+):
+    pytest.importorskip('openai')
+    requests = serve(monkeypatch, [responses_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})])
     monkeypatch.setenv('OPENAI_API_KEY', 'test-secret-do-not-record')
     image = BinaryContent(b'png', media_type='image/png')
     messages = [
@@ -183,7 +206,10 @@ def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the
         ModelRequest([UserPromptPart(['Camera wrist:', image, CachePoint()])]),
         ModelRequest([UserPromptPart(['Observation.', CachePoint()])]),
     ]
-    with Endpoint('openai-responses:test-model').open() as request:
+    model = 'openai-responses:test-model'
+    if configured:
+        model = pytest.importorskip('positronic.vendors.llm.responses').BreakpointResponsesModel('test-model')
+    with Endpoint(model).open() as request:
         request(messages, [])
     system, frames, last = json.loads(requests[0].content)['input']
     breakpoint = {'mode': 'explicit'}
@@ -191,6 +217,56 @@ def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the
     assert frames['content'][1]['type'] == 'input_image'
     assert [block.get('prompt_cache_breakpoint') for block in last['content']] == [breakpoint]
     assert system == {'role': 'system', 'content': 'Control the arm.'}
+
+
+def test_endpoint_refuses_a_configured_responses_model_that_drops_cache_points():
+    pytest.importorskip('openai')
+    openai_models = pytest.importorskip('pydantic_ai.models.openai')
+    provider = pytest.importorskip('pydantic_ai.providers.openai').OpenAIProvider(api_key='test-secret')
+    with pytest.raises(ValueError, match='BreakpointResponsesModel'):
+        Endpoint(openai_models.OpenAIResponsesModel('test-model', provider=provider))
+
+
+def anthropic_marks(body: dict) -> list[tuple[int, int]]:
+    return [
+        (i, j)
+        for i, message in enumerate(body['messages'])
+        for j, block in enumerate(message['content'])
+        if 'cache_control' in block
+    ]
+
+
+def responses_marks(body: dict) -> list[tuple[int, int]]:
+    return [
+        (i, j)
+        for i, item in enumerate(body['input'])
+        if isinstance(item.get('content'), list)
+        for j, block in enumerate(item['content'])
+        if 'prompt_cache_breakpoint' in block
+    ]
+
+
+@pytest.mark.parametrize(
+    'provider,sdk,key,reply,marks',
+    [
+        ('anthropic', 'anthropic', 'ANTHROPIC_API_KEY', anthropic_reply, anthropic_marks),
+        ('openai-responses', 'openai', 'OPENAI_API_KEY', responses_reply, responses_marks),
+    ],
+)
+def test_request_after_a_rejected_tool_call_keeps_the_cache_point_of_the_request_before_it(
+    monkeypatch, provider, sdk, key, reply, marks
+):
+    pytest.importorskip(sdk)
+    finished = {'reason': 'finished', 'hindsight': 'check the image'}
+    requests = serve(monkeypatch, [reply('move_to', {'x': 'invalid'}), reply('done', finished)])
+    monkeypatch.setenv(key, 'test-secret-do-not-record')
+    with execution(llm(model=f'{provider}:test-model')) as (active, rt, clock):
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
+    first, retry = (json.loads(request.content) for request in requests)
+    assert 'Rejected' in json.dumps(retry)
+    assert marks(first)
+    assert marks(retry) == marks(first)
+    assert all(item.get('content') != [] for item in retry.get('input', retry.get('messages')))
 
 
 def test_run_records_compact_reply_and_usage(monkeypatch):

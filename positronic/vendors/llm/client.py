@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import copy_context
@@ -23,6 +24,14 @@ class Endpoint:
     def __init__(self, model: str | Model, *, timeout: float = 120.0, settings: ModelSettings | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('timeout must be finite and positive')
+        # An `OpenAIResponsesModel` exists only after its module loads the SDK of the optional `llm-openai` extra.
+        if isinstance(model, Model) and 'pydantic_ai.models.openai' in sys.modules:
+            from pydantic_ai.models.openai import OpenAIResponsesModel  # noqa: PLC0415
+
+            from .responses import BreakpointResponsesModel  # noqa: PLC0415
+
+            if isinstance(model, OpenAIResponsesModel) and not isinstance(model, BreakpointResponsesModel):
+                raise ValueError('OpenAIResponsesModel drops cache points; configure a BreakpointResponsesModel')
         # TODO: Represent custom providers without retaining preconstructed SDK models.
         self.model = model
         self.timeout = timeout
