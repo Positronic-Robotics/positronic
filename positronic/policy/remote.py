@@ -126,39 +126,6 @@ def _log_late_close_failure(closed: Future[None]) -> None:
         logger.error('The session close failed after the run continued: %r', failure)
 
 
-# The components that a streaming session's stack may hold for its temporal stack to give ``StackRows``: each one
-# passes a stack on untouched, or (an image transform) defers its transform to the rows a request carries.
-_ROWS_PASS_THROUGH = frozenset({
-    PauseOnUnavailable.WIRE_NAME,
-    EndOnField.WIRE_NAME,
-    TemporalStack.WIRE_NAME,
-    RTCSchedule.WIRE_NAME,
-    ChunkedSchedule.WIRE_NAME,
-    TransformImages.WIRE_NAME,
-    'restrict_image_size',  # the v1 name of a bounding transform_images
-    EncodeImages.WIRE_NAME,
-    ACTION_TIMESTAMP,
-    ACTION_HORIZON,
-})
-
-
-def _stacked(obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
-    """``obs`` with each ``StackRows`` sized and stacked: the observation of a request that goes in full."""
-    return {key: value.stack() if isinstance(value, StackRows) else value for key, value in obs.items()}
-
-
-class _EntryFeed:
-    """Hands the entries of a streaming session's temporal stack to its frame streamer, once the streamer exists."""
-
-    def __init__(self) -> None:
-        self.streamer: FrameStreamer | None = None
-
-    def __call__(self, t: float, entry: dict[str, np.ndarray] | None) -> tuple[str, ...]:
-        if self.streamer is None:
-            raise RuntimeError('The temporal stack runs before its frame streamer exists')
-        return self.streamer.on_entry(t, entry)
-
-
 def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
     """The frame of each pose signal that a server states in its metadata or through its client stack."""
     # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
@@ -265,6 +232,11 @@ class RemotePolicy(Policy):
                 self._on_submit()
             return RemotePolicy._ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read)
 
+    @staticmethod
+    def _stacked(obs: cabc.Mapping[str, Any]) -> dict[str, Any]:
+        """``obs`` with each ``StackRows`` sized and stacked: the observation of a request that goes in full."""
+        return {key: value.stack() if isinstance(value, StackRows) else value for key, value in obs.items()}
+
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
         connection_lock = Lock()
@@ -297,7 +269,7 @@ class RemotePolicy(Policy):
                     with connection_lock:
                         return round_trip(session, obs, compress_images, quality)
                 if streamer.call == 0:
-                    full = _stacked(obs)
+                    full = self._stacked(obs)
                     with connection_lock:
                         return round_trip(session, full, compress_images, quality)
                 streamed = streamer.request(obs)
@@ -310,7 +282,7 @@ class RemotePolicy(Policy):
                         logger.warning(
                             'The server does not have the streamed rows %s; sending the request in full', miss.missing
                         )
-                        return round_trip(session, _stacked(obs), compress_images, quality)
+                        return round_trip(session, self._stacked(obs), compress_images, quality)
 
             with closing(policy_runtime.start(stack, infer)) as run:
                 obs = yield
@@ -363,15 +335,36 @@ class RemotePolicy(Policy):
 
     class _StreamerHooks:
         """The calls that the components of a streaming session's stack make on its frame streamer, which is built after
-        them."""
+        them: the schedule's replans and the temporal stack's entries."""
 
         def __init__(self) -> None:
             self.streamer: FrameStreamer | None = None
 
-        def replan(self, now_ns: int) -> None:
+        def _built(self) -> FrameStreamer:
             if self.streamer is None:
-                raise RuntimeError('The schedule replans before its frame streamer exists')
-            self.streamer.on_replan(now_ns)
+                raise RuntimeError('A component of the stack calls its frame streamer before the streamer exists')
+            return self.streamer
+
+        def replan(self, now_ns: int) -> None:
+            self._built().on_replan(now_ns)
+
+        def entry(self, t: float, entry: dict[str, np.ndarray] | None) -> tuple[str, ...]:
+            return self._built().on_entry(t, entry)
+
+    # The components that a streaming session's stack may hold for its temporal stack to give ``StackRows``: each one
+    # passes a stack on untouched, or (an image transform) defers its transform to the rows a request carries.
+    _ROWS_PASS_THROUGH = frozenset({
+        PauseOnUnavailable.WIRE_NAME,
+        EndOnField.WIRE_NAME,
+        TemporalStack.WIRE_NAME,
+        RTCSchedule.WIRE_NAME,
+        ChunkedSchedule.WIRE_NAME,
+        TransformImages.WIRE_NAME,
+        'restrict_image_size',  # the v1 name of a bounding transform_images
+        EncodeImages.WIRE_NAME,
+        ACTION_TIMESTAMP,
+        ACTION_HORIZON,
+    })
 
     def _stack_and_streamer(
         self, session: InferenceSession, compress_images: bool, connection_lock: Lock, runtime: Runtime
@@ -397,10 +390,9 @@ class RemotePolicy(Policy):
         # A stack of known components gives the streamer its buffer's entries, and each request its stacks as
         # StackRows: the request sizes and stacks only the rows it carries, and refers to the others by entry.
         parts = unnest_seq(meta[offboard_keys.LOCAL_STACK])
-        fed = all(part.get(NAME) in _ROWS_PASS_THROUGH for part in parts)
-        feed = _EntryFeed()
+        fed = all(part.get(NAME) in self._ROWS_PASS_THROUGH for part in parts)
         hooks = self._StreamerHooks()
-        stacking = partial(TemporalStack.from_spec_args, on_entry=feed) if fed else TemporalStack.from_spec_args
+        stacking = partial(TemporalStack.from_spec_args, on_entry=hooks.entry) if fed else TemporalStack.from_spec_args
         overrides: dict[ComponentFactory, ComponentFactory] = {
             TemporalStack.from_spec_args: self._recorded(stacking, temporal),
             TransformImages.from_spec_args: self._recorded(
@@ -442,6 +434,5 @@ class RemotePolicy(Policy):
             call_after_sec=rtc[0].call_after_sec if len(rtc) == 1 else None,
             snap_sec=self._frame_stream_snap_sec,
         )
-        feed.streamer = streamer
         hooks.streamer = streamer
         return stack, streamer, quality, fed

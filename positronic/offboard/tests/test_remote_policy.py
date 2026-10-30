@@ -1886,7 +1886,7 @@ def test_a_chunked_stream_fed_by_its_temporal_stack_sends_the_bytes_of_the_strea
     fed = _run_on_mock_session(
         _stream_meta(_RESIZE), 26, frame_stream=frame_stream, replies=replies, frame=_noise_frame
     )
-    monkeypatch.setattr(remote_module, '_ROWS_PASS_THROUGH', frozenset())  # the stream before the feed
+    monkeypatch.setattr(RemotePolicy, '_ROWS_PASS_THROUGH', frozenset())  # the stream before the feed
     compared = _run_on_mock_session(
         _stream_meta(_RESIZE), 26, frame_stream=frame_stream, replies=replies, frame=_noise_frame
     )
@@ -1900,7 +1900,7 @@ def test_a_chunked_stream_fed_by_its_temporal_stack_sends_the_bytes_of_the_strea
 def test_an_rtc_stream_fed_by_its_temporal_stack_sends_the_bytes_of_the_stream_that_compares_pixels(monkeypatch, snap):
     meta = _rtc_stream_meta(TransformImages(12, 8, mode=ResizeMode.BOUND).to_spec())
     fed = _run_v2_rtc(meta, 15, frame=_noise_frame, frame_stream_snap_sec=snap)
-    monkeypatch.setattr(remote_module, '_ROWS_PASS_THROUGH', frozenset())
+    monkeypatch.setattr(RemotePolicy, '_ROWS_PASS_THROUGH', frozenset())
     compared = _run_v2_rtc(meta, 15, frame=_noise_frame, frame_stream_snap_sec=snap)
 
     assert _wire_bytes(fed) == _wire_bytes(compared)
