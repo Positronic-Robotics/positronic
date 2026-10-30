@@ -12,13 +12,18 @@ from positronic.vendors.llm.motion import Motion, MovePath, Waypoint
 SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'linear_speed': 0.05}
 
 
+def played(motion: Motion, start: geom.Transform3D, grip: float, path: list[Waypoint]):
+    bounded, parts = motion.trajectory(start, grip, path)
+    return bounded, [command for part in parts for command in part]
+
+
 @pytest.mark.parametrize('quaternion_sign', [1, -1])
 def test_motion_uses_short_rotation_path_and_respects_speed(quaternion_sign):
     start = geom.Transform3D([0, 0, 0], geom.Rotation.from_euler([0, 0, math.radians(179)]))
     start.rotation = geom.Rotation.from_quat(quaternion_sign * start.rotation.as_quat)
     target = Waypoint(x=0.05, y=0, z=0, roll=0, pitch=0, yaw=math.radians(-179), gripper=0.7)
     motion = Motion(**SHORT_BOUNDS)
-    (bounded,), trajectory = motion.trajectory(start, 0.7, [target])
+    (bounded,), trajectory = played(motion, start, 0.7, [target])
     assert bounded == target
     previous, previous_time = start, 0
     for index, action in enumerate(trajectory, 1):
@@ -44,7 +49,7 @@ def test_translation_clamps_distance_preserving_direction(offset):
     target = Waypoint(x=x, y=y, z=z, roll=0, pitch=0, yaw=0, gripper=0.7)
     original = target.model_dump()
     motion = Motion(**SHORT_BOUNDS)
-    (bounded,), trajectory = motion.trajectory(start, 0.7, [target])
+    (bounded,), trajectory = played(motion, start, 0.7, [target])
     offset = np.asarray(offset)
     distance = math.hypot(*offset)
     expected = offset / distance * motion.max_translation if distance > motion.max_translation else offset
@@ -75,7 +80,7 @@ def test_rotation_clamps_shortest_arc_independently_of_translation(quaternion_si
     roll, pitch, yaw = requested.as_euler('xyz')
     target = Waypoint(x=0.2, y=0, z=0, roll=roll, pitch=pitch, yaw=yaw, gripper=0.3)
     motion = Motion(**SHORT_BOUNDS)
-    (bounded,), trajectory = motion.trajectory(start, 0.3, [target])
+    (bounded,), trajectory = played(motion, start, 0.3, [target])
     relative = initial.inv() * requested
     fraction = min(1, motion.max_rotation / relative.magnitude()) if relative.magnitude() > 0 else 1
     expected = initial * Rotation.from_rotvec(relative.as_rotvec() * fraction)
@@ -94,7 +99,7 @@ def test_rotation_clamps_shortest_arc_independently_of_translation(quaternion_si
 def test_each_waypoint_is_clamped_from_the_previous_clamped_waypoint():
     motion = Motion(**SHORT_BOUNDS)
     path = [Waypoint(x=x, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0) for x in (0.2, 0.02)]
-    bounded, trajectory = motion.trajectory(geom.Transform3D([0, 0, 0]), 0, path)
+    bounded, trajectory = played(motion, geom.Transform3D([0, 0, 0]), 0, path)
     assert [waypoint.x for waypoint in bounded] == pytest.approx([0.05, 0.02])
     xs = [action[keys.ROBOT_COMMAND].pose.translation[0] for action in trajectory]
     assert max(xs) == pytest.approx(0.05)
@@ -110,7 +115,7 @@ def test_a_waypoint_that_changes_the_gripper_holds_still_at_it(grip):
         Waypoint(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=1),
         Waypoint(x=0.01, y=0, z=0.01, roll=0, pitch=0, yaw=0, gripper=1),
     ]
-    _, trajectory = motion.trajectory(geom.Transform3D([0, 0, 0]), grip, path)
+    _, trajectory = played(motion, geom.Transform3D([0, 0, 0]), grip, path)
     hold = math.ceil(motion.grip_hold * motion.fps)
     segment = round(0.01 / motion.linear_speed * motion.fps)
     holds = (grip != 0) + 1
@@ -136,6 +141,14 @@ def test_a_path_needs_a_waypoint():
         MovePath(waypoints=[], note='approach')
 
 
+def test_a_gripper_hold_is_a_part_of_its_own():
+    motion = Motion(**SHORT_BOUNDS)
+    path = [Waypoint(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=g) for g in (0, 1)]
+    _, parts = motion.trajectory(geom.Transform3D([0, 0, 0]), 0, path)
+    assert [len(part) for part in parts] == [5, 1, math.ceil(motion.grip_hold * motion.fps)]
+    assert {command[keys.TARGET_GRIP] for command in parts[-1]} == {1}
+
+
 @pytest.mark.parametrize(
     'change', [{'fps': 0}, {'max_translation': float('inf')}, {'linear_speed': 0.00001}, {'max_waypoints': 0.5}]
 )
@@ -155,5 +168,5 @@ def test_motion_can_expire_at_duration_bound(fps, max_translation):
     motion = Motion(**SHORT_BOUNDS | {'max_translation': max_translation, 'fps': fps})
     start = geom.Transform3D([0, 0, 0])
     target = Waypoint(x=max_translation, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0)
-    _, trajectory = motion.trajectory(start, 0, [target])
+    _, trajectory = played(motion, start, 0, [target])
     assert (len(trajectory) + 1) / motion.fps == pytest.approx(10)

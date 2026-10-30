@@ -445,6 +445,19 @@ def test_late_resume_emits_final_command_before_requesting_next_decision(model):
         assert len(requests) == 2
 
 
+def test_a_late_step_does_not_combine_commands_past_a_waypoint(model):
+    requests, replies = model
+    replies.extend([move(0.04, 0.0), finish()])
+    with execution(LLMPolicy(Endpoint('test'), Motion(linear_speed=0.05))) as (run, runtime, clock):
+        complete(run, runtime, clock, observation())
+        clock.advance_to_ns(10_000_000_000)
+        step = run.send(observation())
+        assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
+        step = run.send(observation())
+        assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0)
+        assert len(requests) == 1
+
+
 def test_a_path_plays_every_waypoint_before_the_next_decision(model):
     requests, replies = model
     replies.extend([move(0.04, 0.0), finish()])

@@ -1,6 +1,7 @@
 """A stop–look–move policy whose model calls run on the rig's worker runtime."""
 
 import io
+import itertools
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
@@ -321,7 +322,7 @@ class LLMPolicy(Policy):
 
         def _accept(
             self, call: ToolCallPart, data: MovePath | Finish, obs: Mapping[str, Any], time_ns: int
-        ) -> list[dict]:
+        ) -> list[list[dict]]:
             self._obs = None
             if isinstance(data, Finish):
                 self._messages.append(
@@ -338,19 +339,19 @@ class LLMPolicy(Policy):
                 return []
             start = _Observation.measured_pose(obs)
             grip = float(obs[keys.GRIP]) if self._target is None else self._target.gripper
-            waypoints, trajectory = self._policy.motion.trajectory(start, grip, data.waypoints)
+            waypoints, parts = self._policy.motion.trajectory(start, grip, data.waypoints)
             self._target = waypoints[-1]
             result = {
                 'waypoints': [waypoint.model_dump() for waypoint in waypoints],
                 'clamped': waypoints != data.waypoints,
-                'duration_s': (len(trajectory) + 1) / self._policy.motion.fps,
+                'duration_s': (sum(map(len, parts)) + 1) / self._policy.motion.fps,
                 'feedback': 'Path scheduled. Check the next measured observation for actual arrival.',
             }
             self._messages.append(
                 ModelRequest([ToolReturnPart(call.tool_name, result, tool_call_id=call.tool_call_id)])
             )
             self._record({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
-            return trajectory
+            return parts
 
     def __init__(
         self,
@@ -425,11 +426,15 @@ class LLMPolicy(Policy):
                 if decision is None:
                     continue
                 call, data = decision
-                chunk = conversation._accept(call, data, obs, runtime.time_ns)
+                parts = conversation._accept(call, data, obs, runtime.time_ns)
                 if isinstance(data, Finish):
                     runtime.set_metadata(policy_keys.STOP_REASON, call.tool_name)
                     runtime.set_metadata(policy_keys.HINDSIGHT, data.hindsight)
                     return PolicyEnd.COMPLETE if call.tool_name == Tool.DONE else PolicyEnd.GIVE_UP
+                chunk = [command for part in parts for command in part]
+                # A late step combines overdue commands, but never past the end of a part: each waypoint and
+                # each gripper hold reaches the robot.
+                part_ends = set(itertools.accumulate(map(len, parts)))
                 started_ns, index = runtime.time_ns, 0
                 end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
                 while index < len(chunk) or runtime.time_ns < end_ns:
@@ -439,6 +444,8 @@ class LLMPolicy(Policy):
                         commands.update(chunk[index])
                         index += 1
                         due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
+                        if index in part_ends:
+                            break
                     obs = yield Step(commands, due_ns)
 
 

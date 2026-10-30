@@ -108,7 +108,7 @@ Events contain the system prompt and tool schemas, measured observations, call n
 
 The processor records responses when it consumes them. The recorded snapshot contains events available when the episode finishes; an unconsumed response is absent even if its API call has completed. Later responses and generator cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
-Only one model invocation can be in flight. The processor continues consuming replies and playing commands while the robot reports an unavailable status. Playback combines overdue commands into the latest command. API failures propagate. Follow-up invocations start only when the control loop resumes the processor. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including SDK retries within its timeout, before closing the generator.
+Only one model invocation can be in flight. The processor continues consuming replies and playing commands while the robot reports an unavailable status. Playback combines overdue commands into the latest command, but not past the end of a segment or a gripper hold, so each waypoint and each gripper change reaches the robot. API failures propagate. Follow-up invocations start only when the control loop resumes the processor. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including SDK retries within its timeout, before closing the generator.
 
 ## Supervised hardware
 

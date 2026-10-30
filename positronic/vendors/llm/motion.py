@@ -89,15 +89,15 @@ class Motion:
 
     def trajectory(
         self, start: geom.Transform3D, grip: float, path: list[Waypoint]
-    ) -> tuple[list[Waypoint], list[dict]]:
-        """Return the clamped waypoints and their trajectory from the measured pose and the gripper in force."""
-        bounded, trajectory = [], []
+    ) -> tuple[list[Waypoint], list[list[dict]]]:
+        """Return the clamped waypoints and the commands of each segment and gripper hold, in order."""
+        bounded, parts = [], []
         for waypoint in path:
             target = self._clamp(start, waypoint)
-            trajectory.extend(self._segment(start, target))
+            parts.append(self._segment(start, target))
             if target.gripper != grip:
                 hold = {keys.ROBOT_COMMAND: CartesianPosition(target.pose), keys.TARGET_GRIP: target.gripper}
-                trajectory.extend([hold] * math.ceil(self.grip_hold * self.fps))
+                parts.append([hold] * math.ceil(self.grip_hold * self.fps))
             bounded.append(target)
             start, grip = target.pose, target.gripper
-        return bounded, trajectory
+        return bounded, parts
