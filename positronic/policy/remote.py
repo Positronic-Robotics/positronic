@@ -14,12 +14,15 @@ from positronic_model_server.tree import map_leaves
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
+from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 
-from .base import Policy, PolicyRun, Processor, Runtime
+from .base import Policy, PolicyRun, Processor, Runtime, Step
+from .codecs import PolicyCommandError
+from .codecs.action import JointPositionAction
 from .compatibility import from_v1_spec
 from .spec import from_spec
 
@@ -60,16 +63,22 @@ def round_trip(
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
-    """The client stack a server's handshake declares, in the form ``protocol_version`` runs."""
+    """The client stack a server's handshake declares, in the form ``protocol_version`` runs.
+
+    Raise ``PolicyCommandError`` when this client cannot build that stack.
+    """
     declared = meta.get(offboard_keys.LOCAL_STACK)
     if declared is None:
-        raise ValueError('Server declares no client processor stack')
-    if protocol_version is ProtocolVersion.V1:
-        stack = from_v1_spec(declared, meta, from_spec)
-    else:
-        stack = from_spec(declared)
+        raise PolicyCommandError('Server declares no client processor stack')
+    try:
+        if protocol_version is ProtocolVersion.V1:
+            stack = from_v1_spec(declared, meta, from_spec)
+        else:
+            stack = from_spec(declared)
+    except Exception as e:
+        raise PolicyCommandError(f'This client cannot build the client stack that the server declares: {e!r}') from e
     if not isinstance(stack, Processor):
-        raise ValueError('The declared client stack must be a processor')
+        raise PolicyCommandError('The declared client stack must be a processor')
     return stack
 
 
@@ -154,28 +163,44 @@ class RemotePolicy(Policy):
         """Return once the server has loaded its model. Opens no session."""
         self._client.wait_for_server()
 
+    @staticmethod
+    def _require_robot_commands(step: Step) -> None:
+        """Raise ``PolicyCommandError`` when a robot command channel of ``step`` holds no command object."""
+        for name, value in step.commands.items():
+            if keys.is_robot_command(name) and not isinstance(value, command.CommandType):
+                raise PolicyCommandError(
+                    f'{name} carries a {type(value).__name__}, not a command. A protocol v3 server answers the output '
+                    'of its model, and the client stack that it declares decodes that output into commands, for '
+                    f'example with {JointPositionAction.WIRE_NAME}. Only a v1 or v2 server can answer a command as a '
+                    'plain mapping.'
+                )
+
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
         connection_lock = Lock()
         try:
-            server_meta = dict(session.metadata)
-            stack = declared_stack(server_meta, session.protocol_version)
-            client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
-            # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
-            # by pose signal.
-            frames = _server_frames(
-                server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
-            )
+            try:
+                server_meta = dict(session.metadata)
+                stack = declared_stack(server_meta, session.protocol_version)
+                client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+                # Either side of the server's deployment may state the frames, so the run records both as one entry
+                # keyed by pose signal.
+                frames = _server_frames(
+                    server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
+                )
+                server_compresses_images = bool(server_meta.get(policy_keys.COMPRESS_IMAGES))
+            except PolicyCommandError:
+                raise
+            except Exception as e:
+                raise PolicyCommandError(f'This client cannot use the metadata that the server states: {e!r}') from e
             episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
             if frames:
                 episode_meta[roboarm_keys.EE_FRAMES] = frames
-            if server_meta.get(policy_keys.COMPRESS_IMAGES):
+            if server_compresses_images:
                 episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
             for name, value in episode_meta.items():
                 runtime.set_metadata(name, value)
-            compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
-                server_meta.get(policy_keys.COMPRESS_IMAGES)
-            )
+            compress_images = session.protocol_version is not ProtocolVersion.V3 and server_compresses_images
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
                 with connection_lock:
@@ -186,8 +211,17 @@ class RemotePolicy(Policy):
                 while True:
                     try:
                         step = run.send(obs)
+                        if isinstance(step, Step):
+                            self._require_robot_commands(step)
                     except StopIteration as end:
                         return end.value
+                    except PolicyCommandError:
+                        raise
+                    # A data error from the declared stack or its step is the policy's; a transport error is not one.
+                    except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
+                        raise PolicyCommandError(
+                            f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
+                        ) from e
                     obs = yield step
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.

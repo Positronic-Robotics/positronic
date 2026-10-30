@@ -568,7 +568,7 @@ your submissions:
 | `image_unpullable` | Is the image public, or does your credential read it? Is the digest correct? |
 | `image_too_large` | the compressed size of the image, against the limit in the rules |
 | `policy_setup_crash` | `policy_log`: the server did not start, or it refused the token of the run |
-| `policy_inference_crash` | `policy_log`: the server stopped after it started to serve |
+| `policy_inference_crash` | `policy_log`: the server stopped after it started to serve. Or `reason`: the client could not use the client stack that the server declared, or an answer |
 | `policy_oom` | `diagnostics.container_oom_killed`, and the size of the model against the memory limits |
 | `latency_budget_exceeded` | the inference time for each step |
 | `wall_clock_exceeded` | the run went past its time limit |

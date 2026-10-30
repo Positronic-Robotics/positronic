@@ -27,7 +27,7 @@ from positronic.eval import Embodiment, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
-from positronic.policy.codecs import ChangeEEFrame, Codec
+from positronic.policy.codecs import ChangeEEFrame, Codec, PolicyCommandError
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils import flatten_dict, frozen_view
 
@@ -412,6 +412,10 @@ class Harness(pimm.ControlSystem):
                 finally:
                     step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (time.perf_counter_ns() - policy_started_ns) / 1e6
                 assert step is not None, 'a policy must yield a Step for each observation'
+                if unknown := sorted(step.commands.keys() - self._embodiment.commands.keys()):
+                    raise PolicyCommandError(
+                        f'The step names {unknown}, and the embodiment takes only {sorted(self._embodiment.commands)}'
+                    )
                 emit_started_ns = time.perf_counter_ns()
                 self._telemetry.step()
                 messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}

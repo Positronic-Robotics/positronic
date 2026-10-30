@@ -12,7 +12,7 @@ from positronic.utils import merge_dicts
 
 
 class PolicyCommandError(ValueError):
-    """A codec cannot decode the command that a policy returned. The codec's own error is the cause."""
+    """The client cannot use what a policy declared or returned. The error that refused it is the cause."""
 
 
 class Codec:
@@ -57,9 +57,8 @@ class Codec:
     ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
-        Steps retain their wake-up time; only nonempty commands are decoded. A ``ValueError`` or ``KeyError``
-        from the decode becomes a ``PolicyCommandError``. The caller owns the wrapped dependency, including
-        closing it when it is a generator.
+        Steps retain their wake-up time; only nonempty commands are decoded. Any error from the decode becomes a
+        ``PolicyCommandError``. The caller owns the wrapped dependency, including closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -80,7 +79,9 @@ class Codec:
                 if isinstance(result, Step):
                     return Step(self.decode(dict(result.commands)), result.resume_at_ns)
                 return self.decode(result)
-            except (ValueError, KeyError) as e:
+            except PolicyCommandError:
+                raise
+            except Exception as e:
                 raise PolicyCommandError(f'{type(self).__name__} cannot decode the policy command: {e!r}') from e
 
         return call

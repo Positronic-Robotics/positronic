@@ -303,9 +303,28 @@ The session handshake and inference envelopes are defined in the
 [Offboard Protocol](../positronic/offboard/README.md). Use `PolicyServer` to handle
 session IDs, model loading, cleanup, and errors.
 
-A server written against another stack cannot import that module. Answer with the command as the plain
+A protocol v2 server written in another stack cannot import that module. Answer with the command as the plain
 mapping `positronic.drivers.roboarm.command.to_wire` produces — `{"type": "cartesian_pos", "pose": [...]}`
 — under the `robot_command` key, and the client types it on arrival.
+
+The [lightweight model server](../model_server/README.md) speaks protocol v3, and the client does not type a
+mapping that it answers. The client stack that the session declares turns the model's output into commands.
+This session answers joint targets, and the stack passes the observation through to the model:
+
+```python
+from positronic_model_server.spec import component, parallel, sequence
+
+description = sequence(
+    component("chunked_schedule", fps=15.0),
+    parallel(
+        component("rename_observation_fields", mapping={}),
+        component("joint_position_action", joints_key="robot_command", grip_key="target_grip"),
+    ),
+)
+# Session.infer returns [{"robot_command": [7 joint positions], "target_grip": grip}, ...]
+```
+
+The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
 
 ## See Also
 

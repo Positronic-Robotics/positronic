@@ -509,7 +509,7 @@ fault is not.
 | `image_unpullable` | caller | is the image public, or does your credential read it? Is the digest right? |
 | `image_too_large` | caller | the compressed size, against 50 GB |
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or refused the run's own token |
-| `policy_inference_crash` | caller | `policy_log`: the server died after it served |
+| `policy_inference_crash` | caller | `policy_log`: the server died after it served. Or `reason`: the client could not use the declared client stack, or an answer |
 | `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against its slice (`vram_capacity_mib`) |
 | `latency_budget_exceeded` | caller | inference time per step |
 | `wall_clock_exceeded` | caller | the run passed its ceiling |

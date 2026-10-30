@@ -47,7 +47,7 @@ from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
-from positronic.policy.codecs import ChangeEEFrame
+from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
@@ -1942,6 +1942,33 @@ def test_a_policy_that_states_frames_sees_no_other_signal_the_rig_states_as_a_po
     assert run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
     assert keys.JOINTS not in policy.observations[0]
     assert keys.EE_POSE in policy.observations[0]
+
+
+class ExtraChannelPolicy(StubPolicy):
+    """A ``StubPolicy`` whose step also names ``channel``."""
+
+    def __init__(self, channel):
+        super().__init__()
+        self.channel = channel
+
+    def run(self, runtime) -> PolicyRun:
+        yield
+        while True:
+            yield Step({keys.ROBOT_COMMAND: self.command, self.channel: 0.0}, runtime.time_ns + 100_000_000)
+
+
+def test_a_step_that_names_a_channel_the_embodiment_lacks_fails_the_episode_as_a_policy_command_error():
+    with pytest.raises(PolicyCommandError, match="'timestamp'"):
+        run_robot_rollout(ExtraChannelPolicy('timestamp'), robot_meta=bundled_franka_model()).result()
+
+
+def test_a_step_that_names_only_channels_the_embodiment_takes_reaches_the_rig():
+    commands = []
+    policy = ExtraChannelPolicy(keys.TARGET_GRIP)
+    assert run_robot_rollout(policy, robot_meta=bundled_franka_model(), commands=commands).result()[
+        eval_keys.TERMINATED
+    ]
+    assert isinstance(commands[0], CartesianPosition)
 
 
 def test_a_policy_that_states_the_rig_site_sees_the_pose(caplog):

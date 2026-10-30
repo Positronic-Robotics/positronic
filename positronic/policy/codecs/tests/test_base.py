@@ -279,13 +279,24 @@ def test_a_command_with_no_action_field_raises_a_policy_command_error_with_the_k
     assert isinstance(raised.value.__cause__, KeyError)
 
 
-def test_a_value_error_from_the_wrapped_policy_stays_a_plain_value_error():
-    def policy(_obs):
-        raise ValueError('model failed')
+def test_a_mapping_where_a_pose_codec_expects_a_command_raises_a_policy_command_error_with_the_type_error_as_cause():
+    codec = ChangeEEFrame(EEFrame(site=GRIPPER_SITE, offset=Transform3D(translation=np.array([0.0, 0.0, 0.1]))))
+    mapping = {'type': 'joint_pos', 'positions': [0.0] * 7}
+    wrapped = codec.wrap(lambda _obs: Step({obs_keys.ROBOT_COMMAND: mapping}, 0))
 
-    with pytest.raises(ValueError, match='model failed') as raised:
+    with pytest.raises(PolicyCommandError, match='ChangeEEFrame') as raised:
+        wrapped({})
+    assert type(raised.value.__cause__) is TypeError
+
+
+@pytest.mark.parametrize('error_type', [ValueError, TypeError])
+def test_an_error_from_the_wrapped_policy_stays_the_error_it_raised(error_type):
+    def policy(_obs):
+        raise error_type('model failed')
+
+    with pytest.raises(error_type, match='model failed') as raised:
         _joints_codec().wrap(policy)({})
-    assert type(raised.value) is ValueError
+    assert type(raised.value) is error_type
 
 
 def test_a_command_the_codec_decodes_reaches_the_caller():
