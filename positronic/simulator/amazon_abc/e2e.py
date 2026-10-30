@@ -13,8 +13,8 @@ import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import keys as eval_keys
+from positronic.simulator.amazon_abc import camera_fit, mapping
 from positronic.simulator.amazon_abc import keys as abc_keys
-from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.amazon_abc.launcher import serve_abc
 from positronic.simulator.env_server import protocol
@@ -87,6 +87,7 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--camera-height', type=int, default=260)
     parser.add_argument('--camera-width', type=int, default=416)
+    parser.add_argument('--camera-view', choices=camera_fit.CAMERA_VIEWS, default=camera_fit.ZED_X_VIEW)
     args = parser.parse_args()
 
     adapter = AbcAdapter(CAMERAS)
@@ -101,6 +102,7 @@ def main() -> None:
             eval_keys.SEED: args.seed,
             abc_keys.CAMERA_HEIGHT: args.camera_height,
             abc_keys.CAMERA_WIDTH: args.camera_width,
+            abc_keys.CAMERA_VIEW: args.camera_view,
         })
         frame = conn.reset(token)
         assert frame[protocol.FRAME_META][mapping.META_TASK], 'the env reported no instruction'

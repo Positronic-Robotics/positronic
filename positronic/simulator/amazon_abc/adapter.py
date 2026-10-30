@@ -33,6 +33,7 @@ class AbcAdapter(WireCommandAdapter):
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
             mapping.TOKEN_CAMERA_HEIGHT: params[abc_keys.CAMERA_HEIGHT],
             mapping.TOKEN_CAMERA_WIDTH: params[abc_keys.CAMERA_WIDTH],
+            mapping.TOKEN_CAMERA_VIEW: params[abc_keys.CAMERA_VIEW],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

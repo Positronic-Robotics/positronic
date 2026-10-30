@@ -22,6 +22,7 @@ TOKEN_TASK = 'task'
 TOKEN_SEED = 'seed'
 TOKEN_CAMERA_HEIGHT = 'camera_height'
 TOKEN_CAMERA_WIDTH = 'camera_width'
+TOKEN_CAMERA_VIEW = 'camera_view'
 
 META_TASK = 'task'
 
