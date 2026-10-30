@@ -35,6 +35,16 @@ DEFAULT_RECONNECT_DEADLINE = 45.0
 # cost the two minus ``served_ms``, because the server's own span sits inside the second one.
 SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
+# The answer to a frame stream request that refers to a row the server does not have (``frame_stream``).
+FRAME_MISS = 'frame_miss'
+
+
+class FrameMiss(RuntimeError):
+    """A ``frame_miss`` answer: the server does not have a streamed row that the request refers to."""
+
+    def __init__(self, missing: Any) -> None:
+        super().__init__(f'The server does not have the streamed rows {missing}')
+        self.missing = missing
 
 
 class InferenceSession:
@@ -122,6 +132,18 @@ class InferenceSession:
     @property
     def metadata(self) -> dict[str, Any]:
         return self._metadata
+
+    def send_message(self, message: dict[str, Any]) -> None:
+        """Send one message that the server does not answer, such as a frame stream row, on a protocol v1 or v2
+        session. The message goes as it is, without the v2 session envelope.
+
+        Do not call it while a round trip waits for its answer.
+        """
+        if self._closed:
+            raise wire.PeerDisconnected('The inference session is closed')
+        if self._protocol not in (protocol.ProtocolVersion.V1, protocol.ProtocolVersion.V2):
+            raise RuntimeError('A message without an answer needs a protocol v1 or v2 session')
+        self._conn.send(serialise(message))
 
     def infer(self, obs: dict[str, Any]) -> Any:
         """Send an observation and receive native v3 data, or typed robot commands for legacy versions.
@@ -222,6 +244,8 @@ class InferenceSession:
                 self._conn.close()
             raise RuntimeError(f'Server error: {response[protocol.ERROR]}')
 
+        if isinstance(response, dict) and FRAME_MISS in response:
+            raise FrameMiss(response[FRAME_MISS])
         result = response[protocol.RESULT]
         return result if self._protocol is protocol.ProtocolVersion.V3 else typed_commands(result)
 

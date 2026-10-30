@@ -347,6 +347,21 @@ def test_component_versions_are_independent_and_exact():
             spec.from_spec({'name': 'chunked_schedule', 'version': version, 'args': {'fps': 10}})
 
 
+def test_an_override_builds_a_declared_component_in_place_of_its_registered_factory():
+    built = []
+
+    def transform(**args):
+        built.append(args)
+        return TransformImages.from_spec_args(**args)
+
+    temporal = {'name': 'temporal_stack', 'args': {'keys': ['image'], 'offsets_sec': [0.0]}}
+    resize = {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 24}}
+    overrides: dict[spec.ComponentFactory, spec.ComponentFactory] = {TransformImages.from_spec_args: transform}
+    from_v1_spec({'seq': [temporal, resize]}, {ACTION_FPS: 10}, lambda node: spec.from_spec(node, overrides))
+    spec.from_spec(resize, overrides)
+    assert built == [{'width': 32, 'height': 24, 'mode': 'bound', 'resample': 'bilinear'}] * 2
+
+
 @pytest.mark.parametrize(
     'timing',
     [{'name': 'action_timestamp', 'args': {'fps': 10}}, {'name': 'action_horizon', 'args': {'horizon_sec': 0.1}}],

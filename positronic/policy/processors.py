@@ -17,7 +17,7 @@ Describe a local stack without creating episode state::
 from abc import ABC, abstractmethod
 from bisect import insort
 from collections import ChainMap, deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
@@ -31,6 +31,7 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
+from positronic.offboard.frame_stream import StackRows
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
@@ -264,6 +265,7 @@ class ChunkedSchedule(Policy):
     ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
     immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
     until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
+    ``on_replan`` (a streaming session's frame streamer, not part of the spec) gets the time of each such reset.
     """
 
     WIRE_NAME = 'chunked_schedule'
@@ -342,6 +344,7 @@ class ChunkedSchedule(Policy):
         record_stats: bool = True,
         inference_lead: DurationEstimate | None = None,
         replan_on_error: bool = True,
+        on_replan: Callable[[int], None] | None = None,
     ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
@@ -352,6 +355,11 @@ class ChunkedSchedule(Policy):
         self._record_stats = record_stats
         self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
         self._replan_on_error = replan_on_error
+        self._on_replan = on_replan
+
+    @property
+    def inference_lead(self) -> DurationEstimate:
+        return self._inference_lead
 
     @staticmethod
     def _next_call_ns(start_ns: int, end_ns: int, lead_sec: float) -> int:
@@ -392,6 +400,8 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
+                    if self._on_replan is not None:
+                        self._on_replan(now_ns)
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns
@@ -548,6 +558,10 @@ class RTCSchedule(Policy):
         self._call_after_ns = round(call_after_sec * 1e9)
         self._latency_estimate = latency_estimate
 
+    @property
+    def call_after_sec(self) -> float:
+        return self._call_after_ns / 1e9
+
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
         duration = self._latency_estimate.run()
         expected_sec = 0.0
@@ -640,6 +654,27 @@ class _StackedObs(Mapping[str, Any]):
         return len(self._obs)
 
 
+class _RowsObs(_StackedObs):
+    """``_StackedObs`` whose ``row_keys`` read as their ``StackRows``, which hold the picked entries unstacked."""
+
+    def __init__(self, obs: Obs, picked: list[dict[str, np.ndarray]], row_keys: Collection[str]):
+        super().__init__(obs, picked)
+        self._row_keys = row_keys
+        self._rows: dict[str, StackRows] = {}
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self._row_keys and key in self._picked[0]:
+            if key not in self._rows:
+                self._rows[key] = StackRows(key, self._picked)
+            return self._rows[key]
+        return super().__getitem__(key)
+
+
+StackEntryFeed = Callable[[float, dict[str, np.ndarray] | None], Collection[str]]
+"""Gets each tick's time and the entry the stack buffer stored then (None: the tick repeated the last entry).
+Returns the keys whose stacks go on as ``StackRows``."""
+
+
 class _StackBuffer:
     """Time-ordered history of ``(timestamp, values)`` entries, capped to the sampled window.
 
@@ -661,20 +696,27 @@ class _StackBuffer:
     def reset(self):
         self._entries.clear()
 
-    def append(self, now: float, values: dict[str, np.ndarray]):
+    def append(self, now: float, values: dict[str, np.ndarray]) -> dict[str, np.ndarray] | None:
+        """Record ``values`` at ``now``. Returns the stored entry, or None when it repeats the previous one."""
         if self._entries and all(np.array_equal(self._entries[-1][1][k], v) for k, v in values.items()):
-            return
-        self._entries.append((now, {k: np.array(v) for k, v in values.items()}))
+            return None
+        stored = {k: np.array(v) for k, v in values.items()}
+        self._entries.append((now, stored))
         cutoff = now + min(self._offsets_sec)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             self._entries.popleft()
+        return stored
 
-    def sample(self, now: float, obs: Obs) -> Obs:
+    def picks(self, now: float) -> list[dict[str, np.ndarray]]:
+        """The stored entry that each sampled offset takes at ``now``, oldest first."""
         times = np.array([t for t, _ in self._entries])
         targets = [now + off for off in self._offsets_sec]
         if not self._pad_start:
             targets = [t for t in targets if t >= times[0]]
-        return _StackedObs(dict(obs), [self._entries[self._at_or_before(times, t)][1] for t in targets])
+        return [self._entries[self._at_or_before(times, t)][1] for t in targets]
+
+    def sample(self, now: float, obs: Obs) -> Obs:
+        return _StackedObs(dict(obs), self.picks(now))
 
     @staticmethod
     def _at_or_before(times: np.ndarray, target: float) -> int:
@@ -695,28 +737,54 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
 
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
     are omitted, and the stack grows until the full window has been observed.
+
+    ``on_entry`` (a streaming session's frame streamer, not part of the spec) gets every tick and each entry the
+    buffer stores, and the keys it returns go on as ``StackRows`` in place of stacked arrays.
     """
 
     WIRE_NAME = 'temporal_stack'
     WIRE_VERSION = 2
 
-    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True) -> None:
+    def __init__(
+        self,
+        keys: tuple[str, ...],
+        offsets_sec: tuple[float, ...],
+        pad_start: bool = True,
+        on_entry: StackEntryFeed | None = None,
+    ) -> None:
         self._keys = tuple(keys)
         self._offsets_sec = tuple(offsets_sec)
         self._pad_start = pad_start
+        self._on_entry = on_entry
         assert pad_start or 0.0 in self._offsets_sec, (
             'pad_start=False requires 0.0 in offsets_sec: with only past offsets the first observation has no '
             'in-range targets and the stack would be empty'
         )
+
+    @property
+    def keys(self) -> tuple[str, ...]:
+        return self._keys
+
+    @property
+    def offsets_sec(self) -> tuple[float, ...]:
+        return self._offsets_sec
+
+    @property
+    def pad_start(self) -> bool:
+        return self._pad_start
 
     def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT, ReturnT]) -> ProcessorRun[Obs, OutputT, ReturnT]:
         buffer = _StackBuffer(self._offsets_sec, pad_start=self._pad_start)
         obs = yield
         while True:
             now_sec = runtime.time_ns / 1e9
-            buffer.append(now_sec, {k: obs[k] for k in self._keys})
+            entry = buffer.append(now_sec, {k: obs[k] for k in self._keys})
+            if self._on_entry is None:
+                stacked = buffer.sample(now_sec, obs)
+            else:
+                stacked = _RowsObs(dict(obs), buffer.picks(now_sec), self._on_entry(now_sec, entry))
             try:
-                output = inner.send(buffer.sample(now_sec, obs))
+                output = inner.send(stacked)
             except StopIteration as end:
                 return end.value
             obs = yield output

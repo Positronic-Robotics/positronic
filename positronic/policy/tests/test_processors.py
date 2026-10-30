@@ -18,6 +18,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
+from positronic.offboard.frame_stream import StackRows
 from positronic.policy import spec
 from positronic.policy.base import Answer, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
@@ -439,6 +440,26 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, sta
             assert requests == [{}]
     finally:
         run.close()
+
+
+@pytest.mark.parametrize('replan_on_error', [False, True])
+def test_each_replan_reports_its_time_to_on_replan(execution, monkeypatch, replan_on_error):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    replans: list[int] = []
+    run = runtime.start(ChunkedSchedule(fps=10, replan_on_error=replan_on_error, on_replan=replans.append), Mock())
+    try:
+        run.send({keys.ROBOT_STATUS: RobotStatus.AVAILABLE})
+        model.answer('a', length=5)
+        run.send({keys.ROBOT_STATUS: RobotStatus.AVAILABLE})
+        for now_ns in (PERIOD_NS, 2 * PERIOD_NS):  # the second error waits for a command, so it does not replan
+            clock.advance_to_ns(now_ns)
+            run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
+        assert replans == ([PERIOD_NS] if replan_on_error else [])
+    finally:
+        run.close()
+    assert ChunkedSchedule(fps=10, on_replan=replans.append).to_spec() == ChunkedSchedule(fps=10).to_spec()
 
 
 @pytest.mark.parametrize('initial_status', [RobotStatus.AVAILABLE, RobotStatus.ERROR])
@@ -1589,3 +1610,32 @@ def test_rtc_keeps_camera_history_lazy_until_inference(execution, monkeypatch):
         stack.assert_called_once()
     finally:
         run.close()
+
+
+def test_a_temporal_stack_with_an_entry_feed_gives_each_stored_entry_and_the_rows_unstacked(execution):
+    runtime, clock = execution
+    fed = []
+
+    def on_entry(t, entry):
+        fed.append((t, entry))
+        return (POSITION,)
+
+    plain = runtime.start(Sequential(TemporalStack((POSITION,), (-0.2, -0.1, 0.0)), Echo()))
+    rows = runtime.start(Sequential(TemporalStack((POSITION,), (-0.2, -0.1, 0.0), on_entry=on_entry), Echo()))
+    try:
+        for ns, value in [(0, 1), (100_000_000, 1), (150_000_000, 2), (300_000_000, 3)]:
+            clock.advance_to_ns(ns)
+            expected = plain.send({POSITION: np.array([value])}).commands[POSITION]
+            got = rows.send({POSITION: np.array([value])}).commands[POSITION]
+            assert isinstance(got, StackRows)
+            np.testing.assert_array_equal(got.stack(), expected)
+        assert [(t, None if e is None else int(e[POSITION][0])) for t, e in fed] == [
+            (0.0, 1),
+            (0.1, None),
+            (0.15, 2),
+            (0.3, 3),
+        ]
+        assert got.entries[-1] is fed[-1][1] and got.entries[-2] is fed[2][1]
+    finally:
+        plain.close()
+        rows.close()
