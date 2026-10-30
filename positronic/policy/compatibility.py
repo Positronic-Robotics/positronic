@@ -33,6 +33,8 @@ TIMESTAMP = 'timestamp'
 WALL_TIME_NS = 'wall_time_ns'
 ACTION_TIMESTAMP = 'action_timestamp'
 ACTION_HORIZON = 'action_horizon'
+# The v1 name of a bounding ``transform_images``.
+RESTRICT_IMAGE_SIZE = 'restrict_image_size'
 V1_FPS_ARG = 'fps'
 V1_HORIZON_SEC_ARG = 'horizon_sec'
 V1_LAYERS_UPGRADED_IN_PLACE = (PauseOnUnavailable.WIRE_NAME, TemporalStack.WIRE_NAME)

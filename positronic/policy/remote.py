@@ -25,7 +25,7 @@ from positronic.policy import keys as policy_keys
 from .base import Answer, Policy, PolicyRun, Processor, Runtime
 from .codecs import EncodeImages, TransformImages
 from .codecs.image import ResizeCache
-from .compatibility import ACTION_HORIZON, ACTION_TIMESTAMP, from_v1_spec, unnest_seq
+from .compatibility import ACTION_HORIZON, ACTION_TIMESTAMP, RESTRICT_IMAGE_SIZE, from_v1_spec, unnest_seq
 from .processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, RTCSchedule, TemporalStack
 from .spec import ComponentFactory, from_spec
 
@@ -360,7 +360,7 @@ class RemotePolicy(Policy):
         RTCSchedule.WIRE_NAME,
         ChunkedSchedule.WIRE_NAME,
         TransformImages.WIRE_NAME,
-        'restrict_image_size',  # the v1 name of a bounding transform_images
+        RESTRICT_IMAGE_SIZE,
         EncodeImages.WIRE_NAME,
         ACTION_TIMESTAMP,
         ACTION_HORIZON,

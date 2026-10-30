@@ -37,6 +37,7 @@ from positronic.policy.codecs.observation import (
     StateObservationCodec,
 )
 from positronic.policy.compatibility import (
+    RESTRICT_IMAGE_SIZE,
     ObservationCodecV1,
     chunked_schedule_v2,
     pack_observation_fields_v1,
@@ -86,7 +87,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 COMPONENTS.update({
     'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
-    'restrict_image_size': {1: Version(restrict_image_size_v1)},
+    RESTRICT_IMAGE_SIZE: {1: Version(restrict_image_size_v1)},
 })
 COMPONENTS[ChunkedSchedule.WIRE_NAME][2] = Version(chunked_schedule_v2)
 # Version 1 takes no arguments and flips the one-arm channels.
