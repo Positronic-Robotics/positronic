@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import json
 import multiprocessing
 import pickle
+import secrets
 from contextvars import ContextVar, copy_context
 from copy import copy
 from multiprocessing.reduction import ForkingPickler
@@ -24,7 +26,7 @@ from pydantic_ai.usage import RequestUsage
 from positronic import keys
 from positronic.policy import PolicyEnd
 from positronic.policy import keys as policy_keys
-from positronic.vendors.llm.client import Endpoint
+from positronic.vendors.llm.client import ANTHROPIC_API_KEYS_ENV, Endpoint
 from positronic.vendors.llm.policy import llm
 from positronic.vendors.llm.tests.test_policy import complete, execution, finish, observation
 
@@ -209,8 +211,8 @@ def test_openai_responses_endpoint_sends_each_cache_point_as_a_breakpoint_on_the
     model = 'openai-responses:test-model'
     if configured:
         model = pytest.importorskip('positronic.vendors.llm.responses').BreakpointResponsesModel('test-model')
-    with Endpoint(model, cache_breakpoints=True).open() as request:
-        request(messages, [])
+    with Endpoint(model, cache_breakpoints=True).open() as client:
+        client.request(messages, [])
     system, frames, last = json.loads(requests[0].content)['input']
     breakpoint = {'mode': 'explicit'}
     assert [block.get('prompt_cache_breakpoint') for block in frames['content']] == [None, breakpoint]
@@ -232,8 +234,8 @@ def test_openai_responses_endpoint_sends_no_breakpoint_unless_asked(monkeypatch)
     requests = serve(monkeypatch, [responses_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})])
     monkeypatch.setenv('OPENAI_API_KEY', 'test-secret-do-not-record')
     messages = [ModelRequest([UserPromptPart(['Observation.', CachePoint()])])]
-    with Endpoint('openai-responses:test-model').open() as request:
-        request(messages, [])
+    with Endpoint('openai-responses:test-model').open() as client:
+        client.request(messages, [])
     assert 'prompt_cache_breakpoint' not in requests[0].content.decode()
 
 
@@ -277,6 +279,58 @@ def test_request_after_a_rejected_tool_call_keeps_the_cache_point_of_the_request
     assert marks(first)
     assert marks(retry) == marks(first)
     assert all(item.get('content') != [] for item in retry.get('input', retry.get('messages')))
+
+
+def test_each_anthropic_episode_sends_a_key_from_the_pool_and_records_only_its_fingerprint(monkeypatch):
+    pytest.importorskip('anthropic')
+    pool = ['test-secret-first-org', 'test-secret-second-org']
+    finished = {'reason': 'finished', 'hindsight': 'check the image'}
+    requests = serve(monkeypatch, [anthropic_reply('done', finished), anthropic_reply('done', finished)])
+    draws = iter([1, 0])
+    monkeypatch.setattr(secrets, 'choice', lambda keys: keys[next(draws)])
+    monkeypatch.setenv(ANTHROPIC_API_KEYS_ENV, ' , '.join(pool))
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-secret-single')
+    monkeypatch.delenv('ANTHROPIC_CUSTOM_HEADERS', raising=False)
+    policy = llm(model='anthropic:test-model')
+    recorded = []
+    for _ in pool:
+        with execution(policy) as (active, rt, clock):
+            assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
+            recorded.append(policy.meta() | rt.metadata_snapshot())
+    sent = [request.headers['x-api-key'] for request in requests]
+    assert sent == [pool[1], pool[0]]
+    for key, meta in zip(sent, recorded, strict=True):
+        assert meta[policy_keys.API_KEY_FINGERPRINT] == hashlib.sha256(key.encode()).hexdigest()[:8]
+        assert 'test-secret' not in json.dumps(meta)
+
+
+@pytest.mark.parametrize('pool', ['', 'test-secret-first-org,', 'test-secret-first-org, ,test-secret-second-org'])
+def test_anthropic_endpoint_refuses_a_key_pool_with_a_blank_entry(monkeypatch, pool):
+    monkeypatch.setenv(ANTHROPIC_API_KEYS_ENV, pool)
+    with pytest.raises(ValueError, match='blank entries') as error:
+        with Endpoint('anthropic:test-model').open():
+            pytest.fail('The endpoint must refuse the pool before it yields a client')
+    assert 'test-secret' not in str(error.value)
+
+
+@pytest.mark.parametrize('configured', [False, True])
+def test_anthropic_endpoint_without_a_pool_key_sends_its_own_key_and_records_no_fingerprint(monkeypatch, configured):
+    pytest.importorskip('anthropic')
+    requests = serve(monkeypatch, [anthropic_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})])
+    own = 'test-secret-single'
+    monkeypatch.setenv('ANTHROPIC_API_KEY', own)
+    monkeypatch.delenv('ANTHROPIC_CUSTOM_HEADERS', raising=False)
+    model = 'anthropic:test-model'
+    if configured:
+        monkeypatch.setenv(ANTHROPIC_API_KEYS_ENV, 'test-secret-first-org')
+        provider = pytest.importorskip('pydantic_ai.providers.anthropic').AnthropicProvider(api_key=own)
+        model = pytest.importorskip('pydantic_ai.models.anthropic').AnthropicModel('test-model', provider=provider)
+    else:
+        monkeypatch.delenv(ANTHROPIC_API_KEYS_ENV, raising=False)
+    with execution(llm(model=model)) as (active, rt, clock):
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
+        assert policy_keys.API_KEY_FINGERPRINT not in rt.metadata_snapshot()
+    assert requests[0].headers['x-api-key'] == own
 
 
 def test_run_records_compact_reply_and_usage(monkeypatch):
@@ -330,8 +384,8 @@ def test_endpoint_deadline_cancels_the_model_request():
         raise AssertionError('The timeout should cancel this request')
 
     endpoint = Endpoint(FunctionModel(delayed), timeout=1.0)
-    with endpoint.open() as request, pytest.raises(TimeoutError):
-        request([ModelRequest.user_text_prompt('stop')], [])
+    with endpoint.open() as client, pytest.raises(TimeoutError):
+        client.request([ModelRequest.user_text_prompt('stop')], [])
     assert cancelled
 
 
@@ -339,8 +393,8 @@ def test_endpoint_propagates_model_errors():
     async def fail(messages, info):
         raise RuntimeError('Request failed')
 
-    with Endpoint(FunctionModel(fail)).open() as request, pytest.raises(RuntimeError, match='Request failed'):
-        request([ModelRequest.user_text_prompt('stop')], [])
+    with Endpoint(FunctionModel(fail)).open() as client, pytest.raises(RuntimeError, match='Request failed'):
+        client.request([ModelRequest.user_text_prompt('stop')], [])
 
 
 def test_each_request_inherits_its_callers_context():
@@ -351,11 +405,11 @@ def test_each_request_inherits_its_callers_context():
         seen.append(marker.get())
         return finish()
 
-    with Endpoint(FunctionModel(respond)).open() as request:
+    with Endpoint(FunctionModel(respond)).open() as client:
         for value in ('first', 'second'):
             context = copy_context()
             context.run(marker.set, value)
-            context.run(request, [ModelRequest.user_text_prompt('stop')], [])
+            context.run(client.request, [ModelRequest.user_text_prompt('stop')], [])
     assert seen == ['first', 'second']
 
 

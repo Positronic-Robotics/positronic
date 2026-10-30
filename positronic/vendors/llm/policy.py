@@ -390,7 +390,9 @@ class LLMPolicy(Policy):
         })
 
     def run(self, runtime: Runtime) -> PolicyRun:
-        with self.endpoint.open() as request:
+        with self.endpoint.open() as client:
+            if client.api_key_fingerprint is not None:
+                runtime.set_metadata(policy_keys.API_KEY_FINGERPRINT, client.api_key_fingerprint)
             conversation = self._Conversation(self, runtime)
             obs = yield
             while True:
@@ -407,7 +409,7 @@ class LLMPolicy(Policy):
                 if conversation._obs is None:
                     conversation._observe(obs, runtime.time_ns)
                 messages = conversation._request_messages()
-                answer = runtime.submit(request, messages, self._tools)
+                answer = runtime.submit(client.request, messages, self._tools)
                 obs = yield Step({}, runtime.time_ns)
                 while not answer.done():
                     obs = yield Step({}, runtime.time_ns)
