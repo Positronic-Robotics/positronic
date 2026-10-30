@@ -235,9 +235,9 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_at = 0.0
 
     @functools.cached_property
+    @_chain_call()
     def _robot_info(self) -> dict[str, Any]:
-        with _chain_call():
-            return self.vendor.get_robot_info()
+        return self.vendor.get_robot_info()
 
     @functools.cached_property
     def _joint_range(self) -> tuple[np.ndarray, np.ndarray]:
