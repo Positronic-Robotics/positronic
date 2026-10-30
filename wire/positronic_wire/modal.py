@@ -46,19 +46,6 @@ TERMINATE_TIMEOUT = 60.0
 MAX_ANSWER_BYTES = 16 * 1024
 
 
-class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-    """Answers a redirect as an ``HTTPError``. A session call carries the endpoint's credentials, so it goes to the
-    endpoint alone. ``urllib`` makes a redirected ``POST`` a ``GET`` without its body, which no session call is."""
-
-    def redirect_request(
-        self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
-    ) -> None:
-        return None
-
-
-_SESSION_CALLS = urllib.request.build_opener(_RefuseRedirects)
-
-
 @dataclasses.dataclass
 class _Endpoint:
     """The Modal sessions this process holds on one endpoint."""
@@ -409,9 +396,20 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         except (OSError, HTTPException) as lost:
             _logger.error('Modal session terminate got no answer (%s); the session ends at its idle timeout', lost)
 
-    @staticmethod
-    def _post(url: str, headers: Mapping[str, str], timeout: float) -> bytes:
+    class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+        """Answers a redirect as an ``HTTPError``. A session call carries the endpoint's credentials, so it goes to the
+        endpoint alone. ``urllib`` makes a redirected ``POST`` a ``GET`` without its body, which no session call is."""
+
+        def redirect_request(
+            self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
+        ) -> None:
+            return None
+
+    _SESSION_CALLS = urllib.request.build_opener(_RefuseRedirects)
+
+    @classmethod
+    def _post(cls, url: str, headers: Mapping[str, str], timeout: float) -> bytes:
         """The answer to a ``POST`` on ``url``. A refusal and a redirect raise ``urllib.error.HTTPError``."""
         request = urllib.request.Request(url, data=b'', method='POST', headers=dict(headers))
-        with _SESSION_CALLS.open(request, timeout=timeout) as answer:
+        with cls._SESSION_CALLS.open(request, timeout=timeout) as answer:
             return answer.read(MAX_ANSWER_BYTES)
