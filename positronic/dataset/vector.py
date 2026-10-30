@@ -25,6 +25,24 @@ def timestamp_table(columns: Mapping[str, Sequence[int]]) -> pa.Table:
     return pa.table({TIMESTAMP_COLUMN_PREFIX + name: values for name, values in columns.items()}, schema=schema)
 
 
+def parquet_write_options(schema: pa.Schema) -> dict[str, Any]:
+    """zstd-3, delta-coded integer columns and byte-split float columns: what each signal file is written with.
+
+    A reader needs Parquet's DELTA_BINARY_PACKED and BYTE_STREAM_SPLIT encodings and the zstd codec.
+    """
+    encodings = {}
+    for field in schema:
+        # pyarrow applies an encoding to the leaf column only, and ignores it on a list.
+        column, leaf = field.name, field.type
+        while pa.types.is_list(leaf):
+            column, leaf = f'{column}.list.element', leaf.value_type
+        if pa.types.is_integer(leaf):
+            encodings[column] = 'DELTA_BINARY_PACKED'
+        elif pa.types.is_floating(leaf):
+            encodings[column] = 'BYTE_STREAM_SPLIT'
+    return {'compression': 'zstd', 'compression_level': 3, 'use_dictionary': False, 'column_encoding': encodings}
+
+
 class ParquetTimeIndex:
     """Named timestamp columns and footer bounds for native and legacy signal files."""
 
@@ -188,7 +206,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             return
         table = timestamp_table(self._timestamps).append_column(VALUE_COLUMN, pa.array(self._values))
         if self._writer is None:
-            self._writer = pq.ParquetWriter(self.filepath, table.schema)
+            self._writer = pq.ParquetWriter(self.filepath, table.schema, **parquet_write_options(table.schema))
         self._writer.write_table(table)
         self._values.clear()
         for values in self._timestamps.values():
@@ -250,7 +268,7 @@ class SimpleSignalWriter(SignalWriter[T]):
                 self._writer.close()
             else:
                 table = timestamp_table(self._timestamps).append_column(VALUE_COLUMN, pa.array([], type=pa.int64()))
-                pq.write_table(table, self.filepath)
+                pq.write_table(table, self.filepath, **parquet_write_options(table.schema))
 
     def abort(self) -> None:
         """Abort writing and remove any partial output file."""

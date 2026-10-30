@@ -388,6 +388,14 @@ def test_video_named_timelines(video_paths, count):
         assert_frames_equal(frame, create_frame(0))
 
 
+def test_a_frames_index_is_zstd_with_delta_times(video_paths):
+    with VideoSignalWriter(video_paths['video'], video_paths['frames']) as writer:
+        for i in range(3):
+            writer.append(create_frame(i * 100), Time(camera=1000 + i * 100))
+    column = pq.ParquetFile(video_paths['frames']).metadata.row_group(0).column(0)
+    assert (column.compression, [e for e in column.encodings if e != 'RLE']) == ('ZSTD', ['DELTA_BINARY_PACKED'])
+
+
 def test_legacy_video_queries(video_paths):
     create_video_signal(video_paths, [(create_frame(40), 1000)])
     pq.write_table(pa.table({'ts_ns': [1000], 'ts_ns.wall': [900]}), video_paths['frames'])
