@@ -508,6 +508,33 @@ class TestADroppedConnectionReconnects:
             channel.close()
 
     @pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
+    def test_a_session_that_opened_with_no_ring_takes_none_from_a_reconnect(self, socket_path):
+        """The run records the image transport of the session it opened, so a reconnect cannot change it."""
+        channel = _Channel(socket_path)
+        dropped = _connection(_ready('first', _RING_META), wire.PeerDisconnected('dropped'))
+        dropped.send.side_effect = lambda _message: channel.start('second')
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        reopened = _connection(_ready('second', _RING_META), _answer({'action_data': [1]}), _answer({}), end_ack)
+        unix = wire.UnixSocketAddress(pathlib.Path(socket_path), wire.SESSION_PATH, '')
+        image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+        try:
+            session = InferenceClient(_FakeUnixWire(dropped, reopened), unix).new_session()
+            try:
+                assert not session.sends_frames_through_ring
+                session.infer({'image': image})
+                session.infer({'image': image})
+                assert not session.sends_frames_through_ring
+            finally:
+                session.close()
+        finally:
+            channel.stop()
+
+        sent = _observations_sent(reopened)
+        assert len(sent) == 2
+        for observation in sent:
+            np.testing.assert_array_equal(observation['image'], image)
+
+    @pytest.mark.skipif(not frame_ring.SUPPORTED, reason='a frame ring needs memfd_create, which macOS has not')
     def test_a_wire_with_no_frame_channel_keeps_the_frames_in_the_message(self):
         """A server that declares a ring gets whole images from a client whose wire has no frame channel."""
         meta = {'model_name': 'test', frame_ring.HANDSHAKE_KEY: True}
@@ -630,7 +657,7 @@ class _RingCase(Enum):
     RING = 'a ring'
     CHANNEL_STOPS_BEFORE_THE_RING_GROWS = 'a channel that stops answering before the ring grows'
     RECONNECT_LOSES_THE_RING = 'a reconnect to a session whose channel does not answer'
-    RECONNECT_GAINS_A_RING = 'a reconnect from a session with no ring to one with a ring'
+    RECONNECT_OFFERS_A_RING = 'a reconnect from a session with no ring to one that offers a ring'
 
 
 def _ring_case(
@@ -667,7 +694,7 @@ def _ring_case(
         end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
         reopened = _connection(_ready('second', _RING_META), end_ack)
         return InferenceClient(_FakeUnixWire(dropped, reopened), unix).new_session, True
-    if case is _RingCase.RECONNECT_GAINS_A_RING:
+    if case is _RingCase.RECONNECT_OFFERS_A_RING:
         dropped = _connection(_ready('first', _RING_META), wire.PeerDisconnected('dropped'))
         dropped.send.side_effect = lambda _message: channel.start('second')
         reopened = _connection(_ready('second', _RING_META), answer)

@@ -154,7 +154,8 @@ sending whole images, and so does a client whose wire has no frame channel.
   channel — a hard link to the session socket, or a bind mount of the socket file alone — takes no ring, logs
   why, and sends whole images. The client sends the descriptor with `SCM_RIGHTS`, names the session ID from the
   handshake, and waits for the server to map it.
-  A session that reconnects hands a new ring over, under the new session ID.
+  A session with a ring that reconnects hands a new ring over, under the new session ID. A session that opened
+  with no ring takes none from a reconnect, because the run records the transport of the session it opened.
 - **A session with a ring never moves its images to the message.** A channel that stops answering when the ring
   must grow raises, and so does a reconnect to a session that has no ring.
 - **A server may keep a frame for four calls.** `frame_ring.CALLS_A_FRAME_STAYS_VALID` is that count, and the
