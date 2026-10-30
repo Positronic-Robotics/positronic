@@ -37,7 +37,7 @@ from platform_client.identity_providers import (
     IdentityProvider,
     workos_register_timeout,
 )
-from platform_client.requests import RegisterRequest
+from platform_client.requests import RegisterRequest, team_name
 from platform_client.responses import RegisterResponse
 from pydantic import ValidationError
 
@@ -482,6 +482,12 @@ def run_registration(
     would refuse: the token goes to the link `plaintext_http` names, or to none.
     """
     base_url = allowed_platform_url(platform_url, plaintext_http=plaintext_http)
+    if alias is not None:
+        try:
+            team_name(alias)
+        except ValueError as exc:
+            # The sign-in runs before the request model sees the alias.
+            raise SystemExit(f'--alias: {exc}') from exc
     with httpx.Client(timeout=REQUEST_TIMEOUT) as provider_http, PlatformClient(base_url) as platform:
         try:
             sign_in = sign_in_flow(platform, provider_http, client_ids)

@@ -422,7 +422,9 @@ readable by anyone, a tenant's board only by its members.
 
 A board row reads `<display name>#<tag>`. The name is an alias and is not unique — a board may hide
 it altogether — so the tag is what tells two rows apart, and it is how you find your own: it is the
-same on every board you appear on.
+same on every board you appear on. The name has 1 to 64 characters after the spaces at its ends are
+removed, and no control or text-direction character (Unicode Cc, or Bidi_Control). `--alias` refuses
+any other name before the sign-in, and the platform refuses it too.
 
 A row with `baseline` set is a reference model, and `baseline.publisher` names the organization that
 released it. A baseline row has no `rank`. The other rows rank 1..N among themselves, and the board
