@@ -38,6 +38,7 @@ from .compatibility import (
     ACTION_HORIZON,
     ACTION_TIMESTAMP,
     CHUNKED_SCHEDULE,
+    RESTRICT_IMAGE_SIZE,
     PauseOnUnavailable,
     RTCScheduleV1,
     from_v1_spec,
@@ -517,7 +518,7 @@ class RemotePolicy(Policy):
         InferenceSchedule.WIRE_NAME,
         TrajectoryPlayer.WIRE_NAME,
         TransformImages.WIRE_NAME,
-        'restrict_image_size',  # the v1 name of a bounding transform_images
+        RESTRICT_IMAGE_SIZE,
         EncodeImages.WIRE_NAME,
         ACTION_TIMESTAMP,
         ACTION_HORIZON,

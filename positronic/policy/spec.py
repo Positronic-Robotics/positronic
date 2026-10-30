@@ -38,6 +38,7 @@ from positronic.policy.codecs.observation import (
 )
 from positronic.policy.compatibility import (
     CHUNKED_SCHEDULE,
+    RESTRICT_IMAGE_SIZE,
     ObservationCodecV1,
     PauseOnUnavailable,
     RTCScheduleV1,
@@ -91,7 +92,7 @@ COMPONENTS.update({
     PauseOnUnavailable.WIRE_NAME: {PauseOnUnavailable.WIRE_VERSION: Version(PauseOnUnavailable.from_spec_args)},
     'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
-    'restrict_image_size': {1: Version(restrict_image_size_v1)},
+    RESTRICT_IMAGE_SIZE: {1: Version(restrict_image_size_v1)},
 })
 COMPONENTS[CHUNKED_SCHEDULE] = {2: Version(chunked_schedule_v2), 3: Version(chunked_schedule_v3)}
 COMPONENTS[RTCScheduleV1.WIRE_NAME] = {1: Version(RTCScheduleV1.from_spec_args)}
