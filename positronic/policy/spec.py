@@ -1,8 +1,9 @@
 """Registry and wire-spec decoding for client-side processors and codecs."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import reduce
 from operator import and_, or_
+from types import MappingProxyType
 from typing import Any, cast
 
 from positronic_model_server.spec import ARGS, LATEST, NAME, PAR, SEQ, VERSION
@@ -92,10 +93,14 @@ COMPONENTS[ChunkedSchedule.WIRE_NAME][2] = Version(chunked_schedule_v2)
 COMPONENTS[FlipGrip.WIRE_NAME][FlipGrip.ONE_ARM_VERSION] = Version(lambda: FlipGrip())
 
 
-def from_spec(node: dict[str, Any]) -> Processor | Codec:
+def from_spec(
+    node: dict[str, Any], overrides: Mapping[ComponentFactory, ComponentFactory] = MappingProxyType({})
+) -> Processor | Codec:
     """Resolve versioned components and expand config translations before constructing their replacements.
 
-    Missing versions mean v1; deprecations warn once per component version in this stack.
+    Missing versions mean v1; deprecations warn once per component version in this stack. ``overrides`` maps a
+    registered factory, such as ``TransformImages.from_spec_args``, to the factory that this client builds in its
+    place.
     """
     selected: dict[str, dict[int, ComponentFactory]] = {}
 
@@ -124,7 +129,8 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
         if type(version) is not int or version not in versions:
             factory = resolve_version(COMPONENTS[name], version, f'component {name!r}')
             versions[version] = factory
-        result = versions[version](**node.get(ARGS, {}))
+        registered = versions[version]
+        result = overrides.get(registered, registered)(**node.get(ARGS, {}))
         return build(result) if isinstance(result, dict) else result
 
     return build(node)

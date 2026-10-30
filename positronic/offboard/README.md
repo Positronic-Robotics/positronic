@@ -184,6 +184,18 @@ This metadata tells the client:
   sending. It is true unless the deployment sets it false.
   The client sets the quality with `RemotePolicy(jpeg_quality=...)`, 90 by default, and
   each run records it in the episode metadata.
+- `frame_stream` — optional, protocol v1 or v2 (rows go without the v2 envelope):
+  `{"version": 1, "codecs": ["jpeg", "h264"]}`.
+  A client that asks for it with `RemotePolicy(frame_stream='jpeg')` (or `'h264'`) sends the history
+  frames of the next request while the robot executes the current chunk. A declared `encode_images` sets the
+  JPEG quality of the rows and the requests. The request then refers to them, and the server can start
+  its work before the request arrives. Without a request from the
+  client and a declaration from the server, requests go in full. `positronic/offboard/frame_stream.py`
+  describes the messages. `PolicyServer` declares the stream for a deployment whose client compresses
+  images and stacks frames with one `TemporalStack` that ends at the current frame, and resolves each
+  request's rows (`StreamedRows`). A client goes in full for a declared stack whose rows the stream does
+  not carry.
+  A server may implement its side without positronic, so that description is the protocol.
 - `positronic_version` — the server's positronic version, for diagnosing declaration mismatches
 
 #### Compatibility and deprecation

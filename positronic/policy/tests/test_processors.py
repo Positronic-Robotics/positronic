@@ -441,6 +441,26 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, sta
         run.close()
 
 
+@pytest.mark.parametrize('replan_on_error', [False, True])
+def test_each_replan_reports_its_time_to_on_replan(execution, monkeypatch, replan_on_error):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    replans: list[int] = []
+    run = runtime.start(ChunkedSchedule(fps=10, replan_on_error=replan_on_error, on_replan=replans.append), Mock())
+    try:
+        run.send({keys.ROBOT_STATUS: RobotStatus.AVAILABLE})
+        model.answer('a', length=5)
+        run.send({keys.ROBOT_STATUS: RobotStatus.AVAILABLE})
+        for now_ns in (PERIOD_NS, 2 * PERIOD_NS):  # the second error waits for a command, so it does not replan
+            clock.advance_to_ns(now_ns)
+            run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
+        assert replans == ([PERIOD_NS] if replan_on_error else [])
+    finally:
+        run.close()
+    assert ChunkedSchedule(fps=10, on_replan=replans.append).to_spec() == ChunkedSchedule(fps=10).to_spec()
+
+
 @pytest.mark.parametrize('initial_status', [RobotStatus.AVAILABLE, RobotStatus.ERROR])
 def test_repeated_errors_keep_one_recovery_request_and_play_its_answer(execution, monkeypatch, initial_status):
     runtime, clock = execution

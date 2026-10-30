@@ -216,9 +216,10 @@ class ChunkFromV1Answer(Codec):
         return [{key: row[key] for key in row if key != TIMESTAMP} for row in rows if set(row) != {TIMESTAMP}]
 
 
-def _unnest_seq(node: dict[str, Any]) -> list[dict[str, Any]]:
+def unnest_seq(node: dict[str, Any]) -> list[dict[str, Any]]:
+    """The components of ``node``, with nested sequences flattened."""
     if SEQ in node:
-        return [part for child in node[SEQ] for part in _unnest_seq(child)]
+        return [part for child in node[SEQ] for part in unnest_seq(child)]
     return [node]
 
 
@@ -232,7 +233,7 @@ def from_v1_spec(
     """Build the stack a protocol v1 server declares, from its spec and its handshake metadata."""
     timing: dict[str, float] = {}
     parts: list[dict[str, Any]] = []
-    for part in _unnest_seq(node):
+    for part in unnest_seq(node):
         if part.get(NAME) == RTCSchedule.WIRE_NAME:
             raise ValueError('Protocol v1 adds its own chunked schedule; serve rtc_schedule over protocol v2 or later')
         if _is_v1(part, ACTION_TIMESTAMP):

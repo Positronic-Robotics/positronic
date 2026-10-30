@@ -1,6 +1,9 @@
+import collections.abc as cabc
 import os
+import threading
+from collections import OrderedDict
+from collections.abc import Hashable
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from typing import Any, Self
 
 import numpy as np
@@ -54,13 +57,53 @@ class EncodeImages(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
+class ResizeCache:
+    """The most recent image transforms, so that a frame that comes again is not transformed again. Codecs that
+    transform the same frames can share one.
+
+    A fingerprint of a strided pixel sample finds an entry. A hit needs the whole frame to equal the
+    stored frame, so it gives the pixels of a transform. The cache shares one read-only array between its hits.
+    """
+
+    def __init__(self, capacity: int = 96) -> None:
+        self._capacity = capacity
+        self._entries: OrderedDict[tuple, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(image: np.ndarray, work: Hashable) -> tuple:
+        sample = np.ascontiguousarray(image[:: max(1, image.shape[0] // 24), :: max(1, image.shape[1] // 24)])
+        return (image.shape, image.dtype.str, work, hash(sample.tobytes()))
+
+    def get(self, image: np.ndarray, work: Hashable) -> np.ndarray | None:
+        """The stored result of ``work`` on a frame equal to ``image``, or None. Equal ``work`` names equal
+        transforms."""
+        key = self._key(image, work)
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                self._entries.move_to_end(key)
+        if entry is not None and np.array_equal(entry[0], image):
+            return entry[1]
+        return None
+
+    def put(self, image: np.ndarray, work: Hashable, transformed: np.ndarray) -> None:
+        key = self._key(image, work)
+        transformed.flags.writeable = False  # shared by every hit
+        with self._lock:
+            self._entries[key] = (image.copy(), transformed)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._capacity:
+                self._entries.popitem(last=False)
+
+
 class TransformImages(Codec):
     """Transform RGB images in nested observations, including temporal frame stacks.
 
     ``BOUND`` only shrinks to fit. ``PAD`` fits and pads to the exact size, preserving aspect ratio.
     ``STRETCH`` resizes to the exact size, allowing distortion. Width, height and mode are required.
     ``paths=None`` finds arrays automatically; explicit paths require images and leave other values untouched.
-    Field names and decoded results pass through unchanged.
+    Field names and decoded results pass through unchanged. ``cache`` keeps the most recent transforms.
     """
 
     WIRE_NAME = 'transform_images'
@@ -77,6 +120,7 @@ class TransformImages(Codec):
         mode: ResizeMode,
         resample: Resample = Resample.BILINEAR,
         paths: list[list[str | int]] | None = None,
+        cache: ResizeCache | None = None,
     ):
         if type(width) is not int or type(height) is not int or min(width, height) < 1:
             raise ValueError('Image dimensions must be positive integers')
@@ -87,6 +131,7 @@ class TransformImages(Codec):
         self._mode = mode
         self._resample = resample
         self._paths = None if paths is None else tuple(tuple(path) for path in paths)
+        self._cache = cache
 
     @classmethod
     def from_spec_args(cls, **args: Any) -> Self:
@@ -112,7 +157,28 @@ class TransformImages(Codec):
             raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
         if value.ndim == 4:
             return np.stack(self._scaled_frames(value))
-        return image.transform_frame(value, self._width, self._height, mode=self._mode, resample=self._resample)
+        return self._transform_frame(value)
+
+    def transform_frames(self, frames: cabc.Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Each ``(H, W, 3)`` frame of ``frames``, transformed as ``encode`` transforms it at the top level of an
+        observation: every frame with ``paths=None``, and the frames at the one-key paths otherwise."""
+        chosen = None if self._paths is None else {path[0] for path in self._paths if len(path) == 1}
+        return {
+            key: self._transform_frame(frame) if chosen is None or key in chosen else frame
+            for key, frame in frames.items()
+        }
+
+    def _transform_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self._cache is None:
+            return image.transform_frame(frame, self._width, self._height, mode=self._mode, resample=self._resample)
+        work = (self._width, self._height, self._mode, self._resample)
+        hit = self._cache.get(frame, work)
+        if hit is not None:
+            return hit
+        out = image.transform_frame(frame, self._width, self._height, mode=self._mode, resample=self._resample)
+        if out is not frame:  # a frame that needs no transform is the caller's own array
+            self._cache.put(frame, work, out)
+        return out
 
     @staticmethod
     def _usable_cpus() -> int:
@@ -134,9 +200,7 @@ class TransformImages(Codec):
     def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
         """Every frame of one stack, scaled. Pillow and OpenCV drop the GIL for a resize and the frames are
         independent, so more than one may run at a time."""
-        scale = partial(
-            image.transform_frame, width=self._width, height=self._height, mode=self._mode, resample=self._resample
-        )
+        scale = self._transform_frame
         workers = self._workers(len(stack))
         if workers == 1:
             return [scale(frame) for frame in stack]
