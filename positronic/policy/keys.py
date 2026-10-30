@@ -9,6 +9,10 @@ CHECKPOINT_ID = 'checkpoint_id'
 CHECKPOINT_PATH = 'checkpoint_path'
 EXPERIMENT_NAME = 'experiment_name'
 CONFIG_NAME = 'config_name'
+# The `provider:model` id that an API policy calls.
+MODEL = 'model'
+# The `TYPE` of an LLM policy, which the results tables name by its `MODEL`.
+LLM_TYPE = 'llm'
 ACTION_HORIZON_SEC = 'action_horizon_sec'
 ACTION_FPS = 'action_fps'
 JPEG_QUALITY = 'jpeg_quality'

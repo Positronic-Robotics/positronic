@@ -11,6 +11,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
+from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import app_state_restored, configure_tables
 
 
@@ -68,6 +69,30 @@ def test_ckpt_remote_resolves_lerobot_pretrained_model_path():
         'inference.policy.server.checkpoint_path': 'checkpoints/050000/pretrained_model',
     })
     assert ckpt(ep) == '050000'
+
+
+@pytest.mark.parametrize(
+    ('model_id', 'name'),
+    [
+        ('azure:gpt-4.1', 'gpt4.1'),
+        ('openai-responses:gpt-4.1-2025-04-14', 'gpt4.1'),
+        ('openai-responses:gpt-6-astra', 'gpt6-astra'),
+        ('anthropic:claude-opus-5-5', 'opus5.5'),
+        ('anthropic:claude-sonnet-5-5-20260929', 'sonnet5.5'),
+        ('anthropic:claude-fable-5-1', 'fable5.1'),
+        ('gpt-4.1', 'gpt4.1'),
+    ],
+)
+def test_an_llm_episode_shows_the_short_name_of_its_configured_model(model_id, name):
+    ep = EpisodeContainer({
+        f'{policy_keys.POLICY_META}.{policy_keys.TYPE}': policy_keys.LLM_TYPE,
+        f'{policy_keys.POLICY_META}.{policy_keys.MODEL}': model_id,
+    })
+    assert analysis.model(ep) == name
+
+
+def test_an_unknown_llm_model_shows_its_id_without_provider_and_date():
+    assert analysis.short_model_name('openai-chat:new-model-2027-01-01') == 'new-model'
 
 
 @pytest.mark.parametrize('held_ns', [200_000_000, 300_000_000])

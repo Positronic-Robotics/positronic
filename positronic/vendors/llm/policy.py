@@ -358,8 +358,8 @@ class LLMPolicy(Policy):
         # The model reads the measured pose and moves the hand in the frame the rig reports it in.
         frames = ee_frames_entry(dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE)))
         return frames | flatten_dict({
-            policy_keys.TYPE: 'llm',
-            'model': self.endpoint.model_id,
+            policy_keys.TYPE: policy_keys.LLM_TYPE,
+            policy_keys.MODEL: self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
             'motion': asdict(self.motion),
             'max_calls': self.max_calls,

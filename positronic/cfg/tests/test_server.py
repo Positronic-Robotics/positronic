@@ -11,6 +11,7 @@ from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
+from positronic.policy import keys as policy_keys
 from positronic.server.positronic_server import filter_spelling
 from positronic.server.rollouts import NO_RATE, NO_STAGE, StageCell
 
@@ -113,6 +114,15 @@ def test_the_model_group_table_groups_on_the_key_the_preset_derives():
 
     assert group.group_keys == cfg_server.DERIVED_MODEL
     assert set(group.format_table) >= {cfg_server.DERIVED_MODEL}
+
+
+def test_an_unlabelled_llm_rollout_takes_the_short_name_of_its_model():
+    ep = EpisodeContainer({
+        f'{policy_keys.POLICY_META}.{policy_keys.TYPE}': policy_keys.LLM_TYPE,
+        f'{policy_keys.POLICY_META}.{policy_keys.MODEL}': 'azure:gpt-4.1',
+    })
+
+    assert cfg_server.rollout_model(ep) == 'gpt4.1'
 
 
 def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
