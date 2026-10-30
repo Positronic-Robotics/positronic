@@ -1,6 +1,6 @@
 [project]
 name = "positronic-platform-client"
-version = "0.47.3"
+version = "0.47.4"
 description = "Typed wire contract and HTTP client for the Positronic evaluation platform API"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ dependencies = [
     "packaging>=24",
     "typing-extensions>=4.12.2",
     # The eval names and the wire codec of an enum. The root pins it exactly at the same version.
-    "positronic-evals==0.2.2",
+    "positronic-evals==0.2.3",
 ]
 
 [project.scripts]

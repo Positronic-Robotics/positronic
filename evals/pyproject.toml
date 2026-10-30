@@ -2,7 +2,7 @@
 name = "positronic-evals"
 # Bumped by the change that edits this distribution, so a consumer pinning it can say which definitions it
 # was written against.
-version = "0.2.2"
+version = "0.2.3"
 description = "The public evals of the Positronic platform: their definitions, labelers, scoring rules and episode lists"
 readme = "README.md"
 requires-python = ">=3.11"

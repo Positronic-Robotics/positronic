@@ -90,6 +90,8 @@ trial that runs out of time scores 0. Progress is not part of `Scores`.
 `abc.yam_bimanual` runs the 29 tasks that ABC ships a success evaluator for, on the bimanual i2rt YAM.
 `abc.yam_bimanual_multitask` runs the five tasks that ABC's multi-task sim policy trained on. Each task runs 20
 trials with the seeds 20260511 to 20260530. By default, ABC's own sim eval draws its first 20 worlds from the same seeds.
+Both evals render from the `zed_x` camera view, a fit to the ZED-X stations of the ABC-130k dataset, at 416 by
+260 pixels.
 
 ## MolmoSpaces episode lists
 
