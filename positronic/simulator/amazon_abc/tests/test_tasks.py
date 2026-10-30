@@ -47,7 +47,7 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
         **params[0],
         abc_keys.CAMERA_HEIGHT: 168,
         abc_keys.CAMERA_WIDTH: 224,
-        abc_keys.CAMERA_VIEW: camera_fit.D405_VIEW,
+        abc_keys.CAMERA_VIEW: camera_fit.CameraView.D405.value,
         eval_keys.SEED: 7,
     })
     assert token == {
@@ -55,7 +55,7 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
         mapping.TOKEN_SEED: 7,
         mapping.TOKEN_CAMERA_HEIGHT: 168,
         mapping.TOKEN_CAMERA_WIDTH: 224,
-        mapping.TOKEN_CAMERA_VIEW: camera_fit.D405_VIEW,
+        mapping.TOKEN_CAMERA_VIEW: camera_fit.CameraView.D405.value,
     }
 
 
@@ -70,12 +70,12 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
     scene = trials[0].prepare_args[eval_keys.SCENE]
     assert scene[eval_keys.TASK] == 'put_plastic_bottles_in_bin'
     assert (scene[abc_keys.CAMERA_HEIGHT], scene[abc_keys.CAMERA_WIDTH]) == (260, 416)
-    assert scene[abc_keys.CAMERA_VIEW] == camera_fit.ZED_X_VIEW
+    assert scene[abc_keys.CAMERA_VIEW] == camera_fit.CameraView.ZED_X.value
     assert [t.meta[eval_keys.SEED] for t in trials] == [3, 4, 3, 4]
 
 
 def test_the_config_refuses_an_unknown_camera_view():
-    with pytest.raises(ValueError, match='names no ABC camera view'):
+    with pytest.raises(ValueError, match='is not a valid CameraView'):
         abc_cfg.put_bottles.override(camera_view='brunello').instantiate()
 
 

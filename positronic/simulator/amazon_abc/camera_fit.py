@@ -5,16 +5,18 @@ camera, and gives each camera a vertical field of view.
 """
 
 import dataclasses
+import enum
 from collections.abc import Mapping
 
 import mujoco
 import numpy as np
 
-# The views the eval config names. ABC's own cameras match the RealSense D405 stations of the ABC-130k dataset.
-ZED_X_VIEW = 'zed_x'
-D405_VIEW = 'd405'
-CAMERA_VIEWS = (ZED_X_VIEW, D405_VIEW)
 TOP_CAMERA = 'top'
+
+
+class CameraView(enum.StrEnum):
+    ZED_X = 'zed_x'  # the cameras of ``ZED_X_FIT``
+    D405 = 'd405'  # ABC's own cameras, which match the RealSense D405 stations of the ABC-130k dataset
 
 
 @dataclasses.dataclass(frozen=True)
@@ -65,13 +67,6 @@ ZED_X_FIT = CameraFit(
         ),
     },
 )
-
-
-def for_view(view: str) -> CameraFit | None:
-    """The fit that places the cameras of ``view``, or None for ABC's own cameras; an unknown view raises."""
-    if view not in CAMERA_VIEWS:
-        raise ValueError(f'{view!r} names no ABC camera view; known: {list(CAMERA_VIEWS)}')
-    return ZED_X_FIT if view == ZED_X_VIEW else None
 
 
 def _rotation(axis: int, angle_deg: float) -> np.ndarray:

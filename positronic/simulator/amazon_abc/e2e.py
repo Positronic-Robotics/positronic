@@ -87,7 +87,7 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--camera-height', type=int, default=260)
     parser.add_argument('--camera-width', type=int, default=416)
-    parser.add_argument('--camera-view', choices=camera_fit.CAMERA_VIEWS, default=camera_fit.ZED_X_VIEW)
+    parser.add_argument('--camera-view', type=camera_fit.CameraView, default=camera_fit.CameraView.ZED_X)
     args = parser.parse_args()
 
     adapter = AbcAdapter(CAMERAS)
@@ -102,7 +102,7 @@ def main() -> None:
             eval_keys.SEED: args.seed,
             abc_keys.CAMERA_HEIGHT: args.camera_height,
             abc_keys.CAMERA_WIDTH: args.camera_width,
-            abc_keys.CAMERA_VIEW: args.camera_view,
+            abc_keys.CAMERA_VIEW: args.camera_view.value,
         })
         frame = conn.reset(token)
         assert frame[protocol.FRAME_META][mapping.META_TASK], 'the env reported no instruction'

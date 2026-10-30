@@ -97,9 +97,8 @@ class AbcEnv(EnvProtocol):
         obs, _info = self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)
         # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
-        fit = camera_fit.for_view(token[mapping.TOKEN_CAMERA_VIEW])
-        if fit is not None:
-            camera_fit.CameraPlacer(fit, self._env.model).place(
+        if camera_fit.CameraView(token[mapping.TOKEN_CAMERA_VIEW]) is camera_fit.CameraView.ZED_X:
+            camera_fit.CameraPlacer(camera_fit.ZED_X_FIT, self._env.model).place(
                 self._env.model, self._env.data, [arm.base_body_id for arm in self._arms]
             )
             obs = self._env.get_obs()  # The reset rendered the scene before the cameras moved.

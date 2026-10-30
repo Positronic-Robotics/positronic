@@ -25,7 +25,7 @@ _TOKEN = {
     mapping.TOKEN_TASK: 'put_plastic_bottles_in_bin',
     mapping.TOKEN_CAMERA_HEIGHT: 4,
     mapping.TOKEN_CAMERA_WIDTH: 6,
-    mapping.TOKEN_CAMERA_VIEW: camera_fit.ZED_X_VIEW,
+    mapping.TOKEN_CAMERA_VIEW: camera_fit.CameraView.ZED_X.value,
 }
 
 
@@ -173,7 +173,7 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
 
 def test_the_d405_view_keeps_abcs_own_cameras(env, scene):
     stock = {name: (scene.model.cam_pos[c].copy(), scene.model.cam_quat[c].copy()) for name, c in _camera_ids(scene)}
-    env.reset({**_TOKEN, mapping.TOKEN_CAMERA_VIEW: camera_fit.D405_VIEW})
+    env.reset({**_TOKEN, mapping.TOKEN_CAMERA_VIEW: camera_fit.CameraView.D405.value})
 
     for name, c in _camera_ids(scene):
         np.testing.assert_array_equal(scene.model.cam_pos[c], stock[name][0])
@@ -216,7 +216,7 @@ def test_the_zed_x_view_turns_each_wrist_camera_from_abcs_pose_and_keeps_it_on_i
 
 
 def test_a_reset_refuses_an_unknown_camera_view(env):
-    with pytest.raises(ValueError, match='names no ABC camera view'):
+    with pytest.raises(ValueError, match='is not a valid CameraView'):
         env.reset({**_TOKEN, mapping.TOKEN_CAMERA_VIEW: 'brunello'})
 
 
