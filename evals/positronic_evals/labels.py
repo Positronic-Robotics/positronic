@@ -37,7 +37,7 @@ from eval_vocabulary.episode import (
     UID,
     VALUE_COLUMN,
 )
-from eval_vocabulary.timeline import EMITTED_WORLD
+from eval_vocabulary.timeline import EMITTED_WORLD, RECORDED_TIME, RECORDING_TIMELINE_ORDER
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -447,6 +447,85 @@ def recorded_span(episode: Path) -> tuple[int, int] | None:
         )
         return None
     return min(firsts), max(lasts)
+
+
+# The one time column of a file in the format before named timelines: a signal's, then a video frames index's.
+_LEGACY_TIME_COLUMNS = (LEGACY_TIME_COLUMN, 'ts_ns')
+
+
+def _recording_time_column(signal: Path) -> str | None:
+    """The column of `signal` on the first of `RECORDING_TIMELINE_ORDER` that it carries, or None.
+
+    A file in the format before named timelines carries its one time column on `RECORDED_TIME`. ArrowInvalid when the
+    file does not parse.
+    """
+    names = pq.read_schema(signal).names
+    timelines = {
+        name.removeprefix(TIMESTAMP_COLUMN_PREFIX): name for name in names if name.startswith(TIMESTAMP_COLUMN_PREFIX)
+    }
+    if not timelines:
+        legacy = next((name for name in _LEGACY_TIME_COLUMNS if name in names), None)
+        timelines = {RECORDED_TIME: legacy} if legacy is not None else {}
+    return next((timelines[clock] for clock in RECORDING_TIMELINE_ORDER if clock in timelines), None)
+
+
+# The signals of the marks that a person makes. A mark is written when it is made, so it is never a held reading.
+_MARK_SIGNAL_PREFIXES = ('progress.', 'data_annotation.')
+# A first sample that the next sample of its signal follows by more than this is a held reading. A held reading
+# arrived before the try, and a recording can carry it at its arrival time.
+_HELD_READING_GAP_NS = 1_000_000_000
+
+
+def _sample_that_starts_the_try(signal: Path, times: pa.ChunkedArray) -> int | None:
+    """The first sample of `signal`, or its second where the first is a held reading.
+
+    None for a signal other than a mark with one sample.
+    """
+    first = times[0].as_py()
+    if signal.stem.startswith(_MARK_SIGNAL_PREFIXES):
+        return first
+    if len(times) < 2:
+        return None
+    second = times[1].as_py()
+    return first if second - first <= _HELD_READING_GAP_NS else second
+
+
+class TryWindow(NamedTuple):
+    """The world times of the first and the last sample of a try, in nanoseconds."""
+
+    start_ns: int
+    end_ns: int
+
+
+def recorded_try_window(episode: Path) -> TryWindow | None:
+    """The world times of the first and the last sample of the try that `episode` records.
+
+    The start is the earliest first sample of any signal. Where a signal other than a mark opens with a held reading,
+    its next sample counts in its place. The end is the latest last sample of any signal. Each signal is read on the
+    first of `RECORDING_TIMELINE_ORDER` that it carries, and a signal on none of them places nothing. None when no
+    signal places a start, or a signal file does not parse.
+    """
+    starts, ends = [], []
+    for signal in sorted(episode.glob(f'*{SIGNAL_FILE_SUFFIX}')):
+        try:
+            column = _recording_time_column(signal)
+            if column is None:
+                continue
+            times = pq.read_table(signal, columns=[column]).column(column)
+        except pa.ArrowInvalid:
+            # One damaged upload leaves the other episodes placed, so this is logged, not raised.
+            log.error('%s does not parse; this episode has no try window', signal)
+            return None
+        if not len(times):
+            continue
+        ends.append(times[-1].as_py())
+        start = _sample_that_starts_the_try(signal, times)
+        if start is not None:
+            starts.append(start)
+    if not starts:
+        log.error('%s holds no signal that places the start of its try; this episode has no try window', episode)
+        return None
+    return TryWindow(min(starts), max(ends))
 
 
 # The end event of each outcome that one states. `out_of_time` has none.

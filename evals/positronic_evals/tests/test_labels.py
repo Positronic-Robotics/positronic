@@ -37,7 +37,8 @@ from eval_vocabulary.episode import (
     UID,
     VALUE_COLUMN,
 )
-from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD
+from eval_vocabulary.progress import STATE_SIGNAL
+from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD, HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME
 from positronic_evals import labels
 from positronic_evals.labels import (
     ABC_LABELER,
@@ -57,12 +58,14 @@ from positronic_evals.labels import (
     StageReached,
     SubtaskAchieved,
     Success,
+    TryWindow,
     abc_label,
     abc_max_progress,
     label,
     molmo_label,
     read_static,
     recorded_task_and_outcome,
+    recorded_try_window,
     robolab_label,
 )
 from positronic_evals.slug import slug_of
@@ -463,6 +466,107 @@ def test_a_signal_that_does_not_parse_leaves_the_episode_without_a_label(
     (episode / f'grip{SIGNAL_FILE_SUFFIX}').write_bytes(b'not parquet')
     with caplog.at_level(logging.ERROR, logger=labels.__name__):
         assert molmo_label(episode) is None
+    assert 'does not parse' in caplog.records[0].getMessage()
+
+
+NS_PER_S = 1_000_000_000
+TRY_OPEN_NS = 1000 * NS_PER_S
+ANNOTATOR_STATE = 'data_annotation.state'
+
+
+def _at(*seconds: float) -> list[int]:
+    """The world times `seconds` after `TRY_OPEN_NS`."""
+    return [TRY_OPEN_NS + round(s * NS_PER_S) for s in seconds]
+
+
+def _window(start_s: float, end_s: float) -> TryWindow:
+    start_ns, end_ns = _at(start_s, end_s)
+    return TryWindow(start_ns, end_ns)
+
+
+def _write_clocked_signal(episode: Path, name: str, timelines: dict[str, list[int]]) -> None:
+    """A signal in the format with named timelines."""
+    columns = {f'{TIMESTAMP_COLUMN_PREFIX}{timeline}': times for timeline, times in timelines.items()}
+    pq.write_table(pa.table(columns), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
+
+
+def test_a_held_first_reading_does_not_start_the_try_and_the_next_sample_starts_it(tmp_path: Path):
+    _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: _at(-405.6, 0.03, 0.05, 9.0)})
+    _write_signal(tmp_path, STATE_SIGNAL, _at(0.5))
+    assert recorded_try_window(tmp_path) == _window(0.03, 9.0)
+
+
+@pytest.mark.parametrize(
+    ('gap_ns', 'start_ns'), [(NS_PER_S, 0), (NS_PER_S + 1, NS_PER_S + 1)], ids=['at-1s', 'over-1s']
+)
+def test_a_first_sample_starts_the_try_only_when_the_next_follows_within_one_second(
+    tmp_path: Path, gap_ns: int, start_ns: int
+):
+    _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: [TRY_OPEN_NS, TRY_OPEN_NS + gap_ns, *_at(5.0)]})
+    assert recorded_try_window(tmp_path) == TryWindow(TRY_OPEN_NS + start_ns, *_at(5.0))
+
+
+@pytest.mark.parametrize('mark', [STATE_SIGNAL, ANNOTATOR_STATE])
+def test_a_mark_with_one_sample_starts_the_try(tmp_path: Path, mark: str):
+    _write_signal(tmp_path, mark, _at(0.0))
+    _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: _at(0.7, 0.72, 20.0)})
+    assert recorded_try_window(tmp_path) == _window(0.0, 20.0)
+
+
+def test_a_mark_starts_the_try_although_the_next_mark_comes_much_later(tmp_path: Path):
+    _write_signal(tmp_path, STATE_SIGNAL, _at(0.0, 20.0))
+    _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: _at(0.7, 0.72, 9.0)})
+    assert recorded_try_window(tmp_path) == _window(0.0, 20.0)
+
+
+def test_a_signal_other_than_a_mark_with_one_sample_does_not_start_the_try_but_can_end_it(tmp_path: Path):
+    _write_clocked_signal(tmp_path, 'target_grip', {HARNESS_WORLD: _at(-86.5)})
+    _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: _at(0.0, 0.02, 9.0)})
+    _write_clocked_signal(tmp_path, 'robot_command.joints', {HARNESS_WORLD: _at(12.0)})
+    assert recorded_try_window(tmp_path) == _window(0.0, 12.0)
+
+
+def test_a_signal_on_none_of_the_reading_timelines_places_nothing(tmp_path: Path):
+    _write_signal(tmp_path, STATE_SIGNAL, _at(0.0, 12.0))
+    world = _at(-50.0, -49.98, 30.0)
+    _write_clocked_signal(tmp_path, 'grip', {EMITTED_WORLD: world, EMITTED_WALL: world})
+    assert recorded_try_window(tmp_path) == _window(0.0, 12.0)
+
+
+def test_each_signal_is_read_on_harness_world_then_received_world_then_recorded(tmp_path: Path):
+    _write_clocked_signal(
+        tmp_path, 'grip', {RECORDED_TIME: _at(-3.0, 0.0), RECEIVED_WORLD: _at(-2.0, 0.0), HARNESS_WORLD: _at(-1.0, 0.0)}
+    )
+    _write_clocked_signal(tmp_path, 'target_grip', {RECORDED_TIME: _at(30.0, 50.0), RECEIVED_WORLD: _at(20.0, 40.0)})
+    _write_clocked_signal(tmp_path, 'robot_state.q', {RECORDED_TIME: _at(0.0, 0.01, 45.0)})
+    assert recorded_try_window(tmp_path) == _window(-1.0, 45.0)
+
+
+def test_an_older_recording_places_its_try_by_its_signals_and_its_video_frames(tmp_path: Path):
+    _write_signal(tmp_path, 'grip', _at(0.0, 0.02, 46.18))
+    pq.write_table(
+        pa.table({'ts_ns': _at(0.005, 0.04, 46.19)}), tmp_path / f'image.exterior.frames{SIGNAL_FILE_SUFFIX}'
+    )
+    assert recorded_try_window(tmp_path) == _window(0.0, 46.19)
+
+
+def test_a_recording_with_no_signal_that_starts_its_try_has_no_try_window_and_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    _write_clocked_signal(tmp_path, 'target_grip', {HARNESS_WORLD: _at(-86.5)})
+    _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: []})
+    with caplog.at_level(logging.ERROR, logger=labels.__name__):
+        assert recorded_try_window(tmp_path) is None
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+
+
+def test_a_signal_that_does_not_parse_leaves_the_episode_without_a_try_window(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    _write_signal(tmp_path, STATE_SIGNAL, _at(0.0, 12.0))
+    (tmp_path / f'grip{SIGNAL_FILE_SUFFIX}').write_bytes(b'not parquet')
+    with caplog.at_level(logging.ERROR, logger=labels.__name__):
+        assert recorded_try_window(tmp_path) is None
     assert 'does not parse' in caplog.records[0].getMessage()
 
 

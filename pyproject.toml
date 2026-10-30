@@ -52,7 +52,7 @@ dependencies = [
     "positronic-eval-vocabulary==0.7.0",
     # The public evals that `positronic eval run` runs here, and the episode lists the MolmoSpaces sim server
     # reads. A workspace member in a clone; pinned exactly for the same reason the client is.
-    "positronic-evals==0.2.1",
+    "positronic-evals==0.3.0",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",

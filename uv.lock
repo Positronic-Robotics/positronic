@@ -5792,7 +5792,7 @@ source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-evals"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "evals" }
 dependencies = [
     { name = "positronic-eval-vocabulary" },
