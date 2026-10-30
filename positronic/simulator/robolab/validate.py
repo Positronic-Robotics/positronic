@@ -159,7 +159,8 @@ def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
         contact = state.pop(f'{objects}{name}.{keys.GT_STATE_GRIPPER_CONTACT}')
         assert isinstance(contact, bool), f'{name} contact {contact!r}'
         assert not (reset and contact), f'{name} touches the gripper on a reset frame, so it holds the prior trial'
-    assert state, 'gt_state has no progress, but the task has a subtask'
+    _status, completed, total, _score = obs[keys.SUBTASK]
+    assert state or completed == total > 0, f'gt_state has no progress, but {completed} of {total} subtasks are done'
     for key, done in state.items():
         assert key.startswith(progress), f'gt_state holds {key}, which is no object and no progress'
         assert isinstance(done, bool), f'{key}: {done!r}'
