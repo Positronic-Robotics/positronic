@@ -40,7 +40,7 @@ class MovePath(BaseModel):
 
 @dataclass(frozen=True)
 class Motion:
-    """Bounds on one requested path and the speed of its sampled reference."""
+    """Bounds on each segment of a requested path, on its waypoint count, and the speed of its sampled reference."""
 
     max_translation: float = 0.4
     max_rotation: float = math.radians(90)
@@ -54,9 +54,11 @@ class Motion:
         for name, value in vars(self).items():
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f'{name} must be finite and positive')
+        if not isinstance(self.max_waypoints, int):
+            raise ValueError('max_waypoints must be an integer')
         duration = max(self.max_translation / self.linear_speed, self.max_rotation / self.angular_speed, 1 / self.fps)
         if duration > 10 or math.ceil(duration * self.fps) / self.fps + 1 / self.fps > 10:
-            raise ValueError('Motion limits must fit within a 10 second trajectory')
+            raise ValueError('Motion limits must fit one segment within a 10 second trajectory')
 
     def _clamp(self, start: geom.Transform3D, target: Waypoint) -> Waypoint:
         end = target.pose

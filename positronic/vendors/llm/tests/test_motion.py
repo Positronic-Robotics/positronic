@@ -104,7 +104,7 @@ def test_each_waypoint_is_clamped_from_the_previous_clamped_waypoint():
 
 @pytest.mark.parametrize('grip', [0.0, 1.0])
 def test_a_waypoint_that_changes_the_gripper_holds_still_at_it(grip):
-    motion = Motion()
+    motion = Motion(**SHORT_BOUNDS)
     path = [
         Waypoint(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0),
         Waypoint(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=1),
@@ -136,7 +136,9 @@ def test_a_path_needs_a_waypoint():
         MovePath(waypoints=[], note='approach')
 
 
-@pytest.mark.parametrize('change', [{'fps': 0}, {'max_translation': float('inf')}, {'linear_speed': 0.00001}])
+@pytest.mark.parametrize(
+    'change', [{'fps': 0}, {'max_translation': float('inf')}, {'linear_speed': 0.00001}, {'max_waypoints': 0.5}]
+)
 def test_invalid_motion_configuration_fails(change):
     with pytest.raises(ValueError):
         Motion(**change)

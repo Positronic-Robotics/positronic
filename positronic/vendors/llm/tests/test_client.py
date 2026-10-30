@@ -274,7 +274,7 @@ def test_request_after_a_rejected_tool_call_keeps_the_cache_point_of_the_request
 ):
     pytest.importorskip(sdk)
     finished = {'reason': 'finished', 'hindsight': 'check the image'}
-    requests = serve(monkeypatch, [reply('move_to', {'x': 'invalid'}), reply('done', finished)])
+    requests = serve(monkeypatch, [reply('move_path', {'waypoints': 'invalid'}), reply('done', finished)])
     monkeypatch.setenv(key, 'test-secret-do-not-record')
     with execution(llm(model=f'{provider}:test-model', cache_breakpoints=True)) as (active, rt, clock):
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
