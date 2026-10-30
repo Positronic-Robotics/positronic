@@ -9,7 +9,7 @@ from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
-from positronic.offboard.client import DEFAULT_CONNECT_DEADLINE, ConnectOutcome, ConnectRetries, retry_cold
+from positronic.offboard.client import DEFAULT_CONNECT_DEADLINE, ConnectOutcome, ConnectRetries, retry_connect
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ class RoboarenaClient:
             if (refusal := self._wire.probe(self._address, self._headers, READY_PROBE_TIMEOUT_S)) is not None:
                 raise wire.ConnectRefused(refusal, f'{self.url} refused the probe: {refusal.value}')
 
-        retry_cold(time.monotonic() + deadline_s, probe, self.url)
+        retry_connect(time.monotonic() + deadline_s, probe, self.url)
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
         """The action chunk the server answers ``observation`` with."""

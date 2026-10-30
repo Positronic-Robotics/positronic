@@ -280,8 +280,8 @@ class ConnectRetries:
 T = TypeVar('T')
 
 
-def retry_cold(deadline: float, attempt: Callable[[], T], url: str) -> T:
-    """``attempt``, retried while the server at ``url`` is cold, until the ``time.monotonic()`` instant ``deadline``."""
+def retry_connect(deadline: float, attempt: Callable[[], T], url: str) -> T:
+    """``attempt``, retried as ``ConnectRetries`` allows, until the ``time.monotonic()`` instant ``deadline``."""
     backoff = 1.0
     retries = ConnectRetries()
     while True:
@@ -368,12 +368,12 @@ class InferenceClient:
             if (refusal := self._wire.probe(self._address, self.headers, self.open_timeout)) is not None:
                 raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
 
-        retry_cold(time.monotonic() + self.connect_deadline, probe, self.session_url)
+        retry_connect(time.monotonic() + self.connect_deadline, probe, self.session_url)
 
     def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
         """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock."""
         deadline = time.monotonic() + deadline_sec
-        return retry_cold(deadline, lambda: self._open_session(deadline, reopen), self.session_url)
+        return retry_connect(deadline, lambda: self._open_session(deadline, reopen), self.session_url)
 
     def keepalive(self) -> int | None:
         """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after

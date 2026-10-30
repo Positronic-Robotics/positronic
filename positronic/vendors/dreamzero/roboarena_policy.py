@@ -208,6 +208,4 @@ class RoboarenaPolicy(Policy):
                 client.close()
 
 
-# `--policy=@positronic.vendors.dreamzero.roboarena_policy.remote` in `positronic eval run`. The caller names the
-# endpoint, and `--policy.headers=@positronic.cfg.policy.bearer_headers` dials a server that checks a token.
 remote = cfn.Config(RoboarenaPolicy, address=cfn.Config(roboarena_wire.RoboarenaAddress, host='localhost', port=8000))
