@@ -24,6 +24,7 @@ from eval_vocabulary.episode import (
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
     SIGNAL_FILE_SUFFIX,
@@ -446,7 +447,9 @@ def test_an_older_recording_takes_its_end_from_the_first_and_last_samples_of_its
     (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True})
     _write_signal(episode, 'grip', [2_000_000_000, 3_000_000_000])
     _write_signal(episode, 'robot_state.q', [1_000_000_000, 4_500_000_000])
-    pq.write_table(pa.table({'ts_ns': [0, 9_000_000_000]}), episode / f'image.frames{SIGNAL_FILE_SUFFIX}')
+    pq.write_table(
+        pa.table({LEGACY_FRAMES_TIME_COLUMN: [0, 9_000_000_000]}), episode / f'image.frames{SIGNAL_FILE_SUFFIX}'
+    )
     assert molmo_label(episode) == _label(Success(seconds=3.5), seconds_to_end=3.5, annotator=MOLMO_LABELER)
 
 
@@ -545,7 +548,8 @@ def test_each_signal_is_read_on_harness_world_then_received_world_then_recorded(
 def test_an_older_recording_places_its_try_by_its_signals_and_its_video_frames(tmp_path: Path):
     _write_signal(tmp_path, 'grip', _at(0.0, 0.02, 46.18))
     pq.write_table(
-        pa.table({'ts_ns': _at(0.005, 0.04, 46.19)}), tmp_path / f'image.exterior.frames{SIGNAL_FILE_SUFFIX}'
+        pa.table({LEGACY_FRAMES_TIME_COLUMN: _at(0.005, 0.04, 46.19)}),
+        tmp_path / f'image.exterior.frames{SIGNAL_FILE_SUFFIX}',
     )
     assert recorded_try_window(tmp_path) == _window(0.0, 46.19)
 

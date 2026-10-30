@@ -11,6 +11,9 @@ from enum import StrEnum
 
 # The signal a marked episode carries the state codes in.
 STATE_SIGNAL = 'progress.state'
+# The channel of the marks that an annotator makes on a recorded episode: one `<ANNOTATION_CHANNEL>.<mark>` signal
+# for each mark.
+ANNOTATION_CHANNEL = 'data_annotation'
 
 
 class Stage(StrEnum):

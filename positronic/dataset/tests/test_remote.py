@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import uvicorn
+from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 from fastapi.testclient import TestClient
 from positronic_model_server.serialization import deserialize
 
@@ -374,9 +375,10 @@ def test_migrate_remote_dataset_with_video(running_server, tmp_path):
 def test_legacy_video_encoding_and_migration(dataset_with_video, running_server, tmp_path, remote):
     camera = dataset_with_video[0]['cam']
     assert isinstance(camera, VideoSignal)
-    legacy_index = pa.table({'ts_ns': [1000, 1100, 1200], 'ts_ns.capture': [30, 20, 10]}).replace_schema_metadata({
-        TIMELINE_METADATA_KEY: b'world'
-    })
+    legacy_index = pa.table({
+        LEGACY_FRAMES_TIME_COLUMN: [1000, 1100, 1200],
+        'ts_ns.capture': [30, 20, 10],
+    }).replace_schema_metadata({TIMELINE_METADATA_KEY: b'world'})
     pq.write_table(legacy_index, camera.frames_index_path)
     destination = tmp_path / 'legacy_migrated'
 

@@ -38,6 +38,8 @@ SIGNAL_FILE_SUFFIX = '.parquet'
 TIMESTAMP_COLUMN_PREFIX = 'ts.'
 # The one time column of a signal file in the format before named timelines, on the world clock.
 LEGACY_TIME_COLUMN = 'timestamp'
+# The one time column of a video frames index in the format before named timelines.
+LEGACY_FRAMES_TIME_COLUMN = 'ts_ns'
 # The column of a signal file that holds each sample's value.
 VALUE_COLUMN = 'value'
 

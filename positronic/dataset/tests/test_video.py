@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from av.codec.codec import UnknownCodecError
+from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 
 from positronic.dataset.signal import Kind
 from positronic.dataset.time import Time
@@ -398,7 +399,7 @@ def test_a_frames_index_is_zstd_with_delta_times(video_paths):
 
 def test_legacy_video_queries(video_paths):
     create_video_signal(video_paths, [(create_frame(40), 1000)])
-    pq.write_table(pa.table({'ts_ns': [1000], 'ts_ns.wall': [900]}), video_paths['frames'])
+    pq.write_table(pa.table({LEGACY_FRAMES_TIME_COLUMN: [1000], 'ts_ns.wall': [900]}), video_paths['frames'])
     signal = VideoSignal(video_paths['video'], video_paths['frames'])
     assert signal.timelines == (RECORDED_TIME,)
     frame, ts = signal.time[Time(**{RECORDED_TIME: 1000})]

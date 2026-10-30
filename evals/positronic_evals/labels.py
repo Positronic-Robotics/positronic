@@ -22,6 +22,7 @@ from eval_vocabulary.episode import (
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
     SIGNAL_FILE_SUFFIX,
@@ -37,7 +38,8 @@ from eval_vocabulary.episode import (
     UID,
     VALUE_COLUMN,
 )
-from eval_vocabulary.timeline import EMITTED_WORLD, RECORDED_TIME, RECORDING_TIMELINE_ORDER
+from eval_vocabulary.progress import ANNOTATION_CHANNEL, STATE_SIGNAL
+from eval_vocabulary.timeline import EMITTED_WORLD, RECORDED_TIME, recording_timeline
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -450,11 +452,11 @@ def recorded_span(episode: Path) -> tuple[int, int] | None:
 
 
 # The one time column of a file in the format before named timelines: a signal's, then a video frames index's.
-_LEGACY_TIME_COLUMNS = (LEGACY_TIME_COLUMN, 'ts_ns')
+_LEGACY_TIME_COLUMNS = (LEGACY_TIME_COLUMN, LEGACY_FRAMES_TIME_COLUMN)
 
 
 def _recording_time_column(signal: Path) -> str | None:
-    """The column of `signal` on the first of `RECORDING_TIMELINE_ORDER` that it carries, or None.
+    """The column of `signal` on the timeline that `recording_timeline` picks from those it carries, or None.
 
     A file in the format before named timelines carries its one time column on `RECORDED_TIME`. ArrowInvalid when the
     file does not parse.
@@ -466,18 +468,18 @@ def _recording_time_column(signal: Path) -> str | None:
     if not timelines:
         legacy = next((name for name in _LEGACY_TIME_COLUMNS if name in names), None)
         timelines = {RECORDED_TIME: legacy} if legacy is not None else {}
-    return next((timelines[clock] for clock in RECORDING_TIMELINE_ORDER if clock in timelines), None)
+    return timelines.get(recording_timeline(timelines))
 
 
 # The signals of the marks that a person makes. A mark is written when it is made, so it is never a held reading.
-_MARK_SIGNAL_PREFIXES = ('progress.', 'data_annotation.')
+_MARK_SIGNAL_PREFIXES = tuple(f'{channel}.' for channel in (STATE_SIGNAL.partition('.')[0], ANNOTATION_CHANNEL))
 # A first sample that the next sample of its signal follows by more than this is a held reading. A held reading
 # arrived before the try, and a recording can carry it at its arrival time.
 _HELD_READING_GAP_NS = 1_000_000_000
 
 
-def _sample_that_starts_the_try(signal: Path, times: pa.ChunkedArray) -> int | None:
-    """The first sample of `signal`, or its second where the first is a held reading.
+def _time_that_starts_the_try(signal: Path, times: pa.ChunkedArray) -> int | None:
+    """The world time of the first sample of `signal`, or of its second where the first is a held reading.
 
     None for a signal other than a mark with one sample.
     """
@@ -502,8 +504,8 @@ def recorded_try_window(episode: Path) -> TryWindow | None:
 
     The start is the earliest first sample of any signal. Where a signal other than a mark opens with a held reading,
     its next sample counts in its place. The end is the latest last sample of any signal. Each signal is read on the
-    first of `RECORDING_TIMELINE_ORDER` that it carries, and a signal on none of them places nothing. None when no
-    signal places a start, or a signal file does not parse.
+    timeline that `recording_timeline` picks, and a signal that carries none of `RECORDING_TIMELINE_ORDER` places
+    nothing. None when no signal places a start, or a signal file does not parse.
     """
     starts, ends = [], []
     for signal in sorted(episode.glob(f'*{SIGNAL_FILE_SUFFIX}')):
@@ -519,7 +521,7 @@ def recorded_try_window(episode: Path) -> TryWindow | None:
         if not len(times):
             continue
         ends.append(times[-1].as_py())
-        start = _sample_that_starts_the_try(signal, times)
+        start = _time_that_starts_the_try(signal, times)
         if start is not None:
             starts.append(start)
     if not starts:
