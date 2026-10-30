@@ -27,11 +27,10 @@ from positronic.dataset.dataset import DatasetFactory, DatasetWriter
 from positronic.dataset.episode import META_PATH
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.eval import Embodiment, Eval, Task
-from positronic.policy import Policy, RemotePolicy
+from positronic.policy import Policy, ServedPolicy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.utils.git import get_package_git_state
-from positronic.vendors.dreamzero.roboarena_policy import RoboarenaPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +226,7 @@ def main(
     if timing:
         _validate_timing([ev.embodiment for ev in evals], output_dir)
 
-    if isinstance(policy, RemotePolicy | RoboarenaPolicy):
+    if isinstance(policy, ServedPolicy):
         logger.info('Waiting for the policy server')
         # The server loads and warms its model before it answers, which keeps the load outside the timed sweep.
         # TODO: The preparation of each session falls inside the `eval.pass` span, and a one-time warm-up in the

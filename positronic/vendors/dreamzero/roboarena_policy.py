@@ -13,6 +13,7 @@ from contextlib import closing
 from threading import Lock
 from typing import Any
 
+import configuronic as cfn
 import numpy as np
 from positronic_wire import roboarena as roboarena_wire
 
@@ -205,3 +206,8 @@ class RoboarenaPolicy(Policy):
         finally:
             with connection_lock:
                 client.close()
+
+
+# `--policy=@positronic.vendors.dreamzero.roboarena_policy.remote` in `positronic eval run`. The caller names the
+# endpoint, and `--policy.headers=@positronic.cfg.policy.bearer_headers` dials a server that checks a token.
+remote = cfn.Config(RoboarenaPolicy, address=cfn.Config(roboarena_wire.RoboarenaAddress, host='localhost', port=8000))

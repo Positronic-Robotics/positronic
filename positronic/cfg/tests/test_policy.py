@@ -10,7 +10,6 @@ from positronic.cfg import policy as policy_cfg
 from positronic.cfg.eval.sim.positronic import stack_cubes_collect
 from positronic.cfg.policy import file_headers
 from positronic.policy import RemotePolicy
-from positronic.vendors.dreamzero.roboarena_policy import RoboarenaPolicy
 
 SECRET = 'ak-do-not-print-me'
 
@@ -57,20 +56,13 @@ def test_file_headers_refuses_what_is_not_a_header_set_without_quoting_it(tmp_pa
     assert excinfo.value.__suppress_context__
 
 
-@pytest.mark.parametrize('name', ['remote', 'authed_remote', 'nebius_remote', 'file_authed_remote', 'roboarena'])
+@pytest.mark.parametrize('name', ['remote', 'authed_remote', 'nebius_remote', 'file_authed_remote'])
 def test_a_remote_policy_config_carries_an_address_its_network_flags_reach(name):
     """`--policy.address.host` overrides a nested config, so every policy config holds one to override."""
     overridden = getattr(policy_cfg, name).override(**{'address.host': 'gpu-host', 'address.port': 443})
 
     address = overridden.kwargs['address'].instantiate()
     assert (address.host, address.port) == ('gpu-host', 443)
-
-
-def test_the_roboarena_policy_dials_the_named_server_with_no_token_by_default():
-    policy = policy_cfg.roboarena.override(**{'address.host': 'gpu-host', 'address.port': 8001}).instantiate()
-
-    assert isinstance(policy, RoboarenaPolicy)
-    assert (policy._address.host, policy._address.port, policy._headers) == ('gpu-host', 8001, None)
 
 
 def test_the_collection_eval_records_every_camera_that_the_teleop_collection_policy_shows():

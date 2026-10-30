@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
 from functools import partial
-from typing import Any, ClassVar, Generic, ParamSpec, Self
+from typing import Any, ClassVar, Generic, ParamSpec, Protocol, Self, runtime_checkable
 
 from attr import dataclass
 from eval_vocabulary.episode import PolicyEnd
@@ -171,3 +171,11 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
 
 Policy = Processor[Obs, Step, PolicyEnd]
 PolicyRun = ProcessorRun[Obs, Step, PolicyEnd]
+
+
+@runtime_checkable
+class ServedPolicy(Protocol):
+    """A policy whose model answers from a server, which may still load the model when a run starts."""
+
+    def wait_for_server(self) -> None:
+        """Return once the server has loaded its model. Opens no session."""

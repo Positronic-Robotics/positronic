@@ -11,6 +11,7 @@ from positronic_wire.roboarena import RoboarenaAddress
 from positronic import keys as rig
 from positronic.drivers.roboarm import RobotStatus
 from positronic.offboard.roboarena import RoboarenaClient
+from positronic.policy import ServedPolicy
 from positronic.policy.codecs import ACTION
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.dreamzero import roboarena as wire
@@ -346,6 +347,14 @@ class TestTheWire:
             run.close()
 
         assert dial.call_args.kwargs['additional_headers'] == headers
+
+    def test_the_config_dials_the_named_server_with_no_token_by_default(self):
+        policy = roboarena_policy.remote.override(**{'address.host': 'gpu-host', 'address.port': 8001}).instantiate()
+
+        assert (policy._address, policy._headers) == (RoboarenaAddress('gpu-host', 8001), None)
+
+    def test_the_policy_is_one_whose_server_an_eval_waits_for(self):
+        assert isinstance(roboarena_policy.RoboarenaPolicy(ADDRESS), ServedPolicy)
 
     def test_waiting_for_the_server_probes_the_policy_s_address_with_its_headers(self):
         headers = {'Authorization': 'Bearer run-token'}
