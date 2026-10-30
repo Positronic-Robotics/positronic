@@ -206,14 +206,22 @@ class Baseline(BaseModel):
     publisher: str | None = Field(default=None, min_length=1)
 
 
+class TeamSubmission(BaseModel):
+    """The one submission that the numbers of a team row come from. `replay` is absent until its page is built."""
+
+    id: SubmissionId
+    submitted_at: AwareDatetime
+    replay: DataBackedReplayLink | None = None
+
+
 class LeaderboardRow(BaseModel):
     """One row of a leaderboard: a model family, or a team.
 
     `entrant` identifies the row. `display_name` is what the row shows, and two rows can show the same name. A row
-    that measures a model names its family, and the checkpoints whose episodes it counts. `metrics` holds a value for
-    each metric that the row has a value for. `episodes` counts the episodes that its numbers read, where the
-    leaderboard counts them, and `outcome_shares` gives the share of those episodes in each outcome group. A
-    `baseline` row has no `rank`.
+    that measures a model names its family, and the checkpoints whose episodes it counts. A team row names the
+    `submission` that its numbers come from. `metrics` holds a value for each metric that the row has a value for.
+    `episodes` counts the episodes that its numbers read, where the leaderboard counts them, and `outcome_shares`
+    gives the share of those episodes in each outcome group. A `baseline` row has no `rank`.
     """
 
     entrant: EntrantId
@@ -225,10 +233,7 @@ class LeaderboardRow(BaseModel):
     metrics: dict[str, Estimate] = Field(default_factory=dict)
     episodes: int | None = Field(default=None, ge=0)
     outcome_shares: dict[str, float] = Field(default_factory=dict)
-    # The submission that the numbers of a team row come from, and the page that plays its episodes back, once built.
-    submission_id: SubmissionId | None = None
-    submitted_at: AwareDatetime | None = None
-    replay: DataBackedReplayLink | None = None
+    submission: TeamSubmission | None = None
     caveats: list[Caveat] = Field(default_factory=list)
 
     @model_validator(mode='after')
@@ -456,16 +461,21 @@ class CardLine(BaseModel):
     facts: list[CardFact] = Field(min_length=1)
 
 
-class RunCommands(BaseModel):
-    """The commands that run a checkpoint: the server that serves it, then the robot client, each with its source.
+class RunStep(BaseModel):
+    """One command that a reader runs, under the `label` that names the step, with the `source` it is from."""
 
-    `checkpoint` names the checkpoint that the server serves, where the card covers more than one.
+    label: str
+    command: str
+    source: str
+
+
+class RunCommands(BaseModel):
+    """The commands that run a checkpoint, in the order a reader runs them.
+
+    `checkpoint` names the checkpoint that the commands run, where the card covers more than one.
     """
 
-    server: str
-    server_source: str
-    robot: str
-    robot_source: str
+    steps: list[RunStep] = Field(min_length=1)
     checkpoint: CheckpointRef | None = None
 
 

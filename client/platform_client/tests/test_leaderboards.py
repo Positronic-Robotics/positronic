@@ -50,7 +50,9 @@ from platform_client.leaderboards import (
     ProgressPanel,
     RankRange,
     RunCommands,
+    RunStep,
     TagPosition,
+    TeamSubmission,
     TimeLimit,
 )
 from platform_client.requests import (
@@ -85,9 +87,7 @@ TEAM_ROW = LeaderboardRow(
     display_name='demo',
     rank=RankRange(best=1, worst=1),
     metrics={PRIMARY_METRIC: Estimate(value=0.75, low=0.75, high=0.75)},
-    submission_id=SUB,
-    submitted_at=AT,
-    replay=REPLAY,
+    submission=TeamSubmission(id=SUB, submitted_at=AT, replay=REPLAY),
 )
 TEAM_BASELINE_ROW = LeaderboardRow(
     entrant=EntrantId('9c41de'),
@@ -96,8 +96,16 @@ TEAM_BASELINE_ROW = LeaderboardRow(
     rank=None,
     baseline=Baseline(publisher='Example Labs'),
     metrics={PRIMARY_METRIC: Estimate(value=0.5, low=0.5, high=0.5)},
-    submission_id=SUB,
-    submitted_at=AT,
+    submission=TeamSubmission(id=SUB, submitted_at=AT),
+)
+TEAM_LEADERBOARD = LeaderboardResponse(
+    leaderboard=BOARD,
+    title='Example qualifier',
+    method='example_best_run',
+    tags=[TagPosition(tag=TAG, position=1)],
+    descriptor=TEAM_DESCRIPTOR,
+    computed_at=AT,
+    rows=[TEAM_ROW, TEAM_BASELINE_ROW],
 )
 
 MODEL_DESCRIPTOR = LeaderboardDescriptor(
@@ -176,15 +184,6 @@ MODEL_LEADERBOARD = LeaderboardResponse(
             media=MEDIA,
         )
     ],
-)
-TEAM_LEADERBOARD = LeaderboardResponse(
-    leaderboard=BOARD,
-    title='Example qualifier',
-    method='example_best_run',
-    tags=[TagPosition(tag=TAG, position=1)],
-    descriptor=TEAM_DESCRIPTOR,
-    computed_at=AT,
-    rows=[TEAM_ROW, TEAM_BASELINE_ROW],
 )
 SERIES = EstimateSeries(
     value=[None, 10.0, 20.5], low=[None, 5.0, 15.0], high=[None, 15.0, 26.0], margin=[None, 5.0, 5.5]
@@ -279,10 +278,12 @@ PROGRESS = LeaderboardProgressResponse(
     },
 )
 RUN_COMMANDS = RunCommands(
-    server='docker run example/model-a',
-    server_source='https://code.example/Dockerfile',
-    robot='example-robot --policy=remote',
-    robot_source='https://code.example/docs.md',
+    steps=[
+        RunStep(
+            label='Start the server', command='docker run example/model-a', source='https://code.example/Dockerfile'
+        ),
+        RunStep(label='Run the robot', command='example-robot --policy=remote', source='https://code.example/docs.md'),
+    ],
     checkpoint=CheckpointRef('model-a-v2'),
 )
 MODELS_RESPONSE = LeaderboardModelsResponse(
@@ -403,11 +404,10 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
         'metrics',
         'episodes',
         'outcome_shares',
-        'submission_id',
-        'submitted_at',
-        'replay',
+        'submission',
         'caveats',
     },
+    TeamSubmission: {'id', 'submitted_at', 'replay'},
     PairVerdict: {'entrants', 'separated'},
     LeaderboardTask: {'id', 'label', 'counted', 'difficulty'},
     LeaderboardCounts: {'tasks', 'episodes'},
@@ -456,7 +456,8 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     LeaderboardProgressResponse: {'leaderboard', 'version', 'entrants'},
     CardFact: {'text', 'source', 'href'},
     CardLine: {'field', 'facts'},
-    RunCommands: {'server', 'server_source', 'robot', 'robot_source', 'checkpoint'},
+    RunStep: {'label', 'command', 'source'},
+    RunCommands: {'steps', 'checkpoint'},
     ModelCard: {'lines', 'run_commands', 'run_guide'},
     ModelCheckpoint: {'id', 'display_name'},
     ModelFamily: {
@@ -501,9 +502,11 @@ TEAM_ROW_WIRE = {
     'display_name': 'demo',
     'rank': {'best': 2, 'worst': 2},
     'metrics': {'primary': {'value': 0.35, 'low': 0.35, 'high': 0.35}},
-    'submission_id': '1f',
-    'submitted_at': '2026-03-04T05:06:07Z',
-    'replay': {'url': 'https://replays.example/r/token/', 'data_url': 'https://replays.example/r/token/r.json'},
+    'submission': {
+        'id': '1f',
+        'submitted_at': '2026-03-04T05:06:07Z',
+        'replay': {'url': 'https://replays.example/r/token/', 'data_url': 'https://replays.example/r/token/r.json'},
+    },
 }
 
 
@@ -512,11 +515,25 @@ def test_a_team_row_reads_every_field_a_site_shows():
     assert (row.display_name, row.entrant) == ('demo', '0ddba7')
     assert row.rank == RankRange(best=2, worst=2)
     assert row.metrics[PRIMARY_METRIC] == Estimate(value=0.35, low=0.35, high=0.35)
-    assert row.submission_id == SUB
-    assert row.submitted_at == AT
-    assert row.replay is not None
-    assert row.replay.data_url == 'https://replays.example/r/token/r.json'
+    assert row.submission is not None
+    assert (row.submission.id, row.submission.submitted_at) == (SUB, AT)
+    assert row.submission.replay is not None
+    assert row.submission.replay.data_url == 'https://replays.example/r/token/r.json'
     assert row.baseline is None
+
+
+def test_a_team_row_whose_replay_is_not_built_still_names_its_submission():
+    wire = {**TEAM_ROW_WIRE, 'submission': {'id': '1f', 'submitted_at': '2026-03-04T05:06:07Z'}}
+    row = LeaderboardRow.model_validate_json(json.dumps(wire))
+    assert row.submission == TeamSubmission(id=SUB, submitted_at=AT)
+
+
+@pytest.mark.parametrize('dropped', ['id', 'submitted_at'])
+def test_a_submission_needs_its_id_and_its_time(dropped: str):
+    submission = {'id': '1f', 'submitted_at': '2026-03-04T05:06:07Z'}
+    del submission[dropped]
+    with pytest.raises(ValidationError):
+        LeaderboardRow.model_validate({**TEAM_ROW_WIRE, 'submission': submission})
 
 
 def test_a_team_baseline_row_reads_its_publisher_and_its_model():
@@ -555,8 +572,7 @@ def test_a_model_row_reads_its_family_its_checkpoint_and_its_ranges():
     assert row.rank == RankRange(best=1, worst=3)
     assert row.metrics['score'].low < row.metrics['score'].value < row.metrics['score'].high
     assert row.episodes == 120
-    assert row.submission_id is None
-    assert row.replay is None
+    assert row.submission is None
 
 
 def test_a_reference_model_row_needs_no_publisher():

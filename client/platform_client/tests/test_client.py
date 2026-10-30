@@ -810,8 +810,7 @@ def test_get_leaderboard_names_the_slug_and_parses_the_rows():
                     'display_name': 'demo',
                     'rank': {'best': 1, 'worst': 1},
                     'metrics': {'primary': {'value': 0.75, 'low': 0.75, 'high': 0.75}},
-                    'submission_id': '1f',
-                    'submitted_at': AT,
+                    'submission': {'id': '1f', 'submitted_at': AT},
                 }
             ],
         },
@@ -821,6 +820,8 @@ def test_get_leaderboard_names_the_slug_and_parses_the_rows():
 
     assert isinstance(response, LeaderboardResponse)
     assert response.rows[0].metrics[PRIMARY_METRIC].value == 0.75
+    assert response.rows[0].submission is not None
+    assert response.rows[0].submission.id == SubmissionId(0x1F)
     assert response.version is None
     assert gateway.request().url.path == routes.LEADERBOARDS_GET
     assert dict(gateway.request().url.params) == {'leaderboard': 'example-org/example-board'}
