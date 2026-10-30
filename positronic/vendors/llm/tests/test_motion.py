@@ -92,7 +92,7 @@ def test_rotation_clamps_shortest_arc_independently_of_translation(quaternion_si
 
 
 def test_each_waypoint_is_clamped_from_the_previous_clamped_waypoint():
-    motion = Motion()
+    motion = Motion(**SHORT_BOUNDS)
     path = [Waypoint(x=x, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0) for x in (0.2, 0.02)]
     bounded, trajectory = motion.trajectory(geom.Transform3D([0, 0, 0]), 0, path)
     assert [waypoint.x for waypoint in bounded] == pytest.approx([0.05, 0.02])

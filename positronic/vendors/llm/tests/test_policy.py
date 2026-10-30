@@ -448,7 +448,8 @@ def test_late_resume_emits_final_command_before_requesting_next_decision(model):
 def test_a_path_plays_every_waypoint_before_the_next_decision(model):
     requests, replies = model
     replies.extend([move(0.04, 0.0), finish()])
-    with execution(LLMPolicy(Endpoint('test'), Motion())) as (run, runtime, clock):
+    motion = Motion(linear_speed=0.05)
+    with execution(LLMPolicy(Endpoint('test'), motion)) as (run, runtime, clock):
         step = complete(run, runtime, clock, observation())
         xs = []
         while step.commands or len(requests) == 1:
@@ -461,4 +462,4 @@ def test_a_path_plays_every_waypoint_before_the_next_decision(model):
     assert max(xs) == pytest.approx(0.04)
     assert xs[-1] == pytest.approx(0)
     assert [waypoint['x'] for waypoint in accepted['waypoints']] == [0.04, 0.0]
-    assert accepted['duration_s'] == pytest.approx(0.08 / Motion().linear_speed + 1 / Motion().fps)
+    assert accepted['duration_s'] == pytest.approx(0.08 / motion.linear_speed + 1 / motion.fps)
