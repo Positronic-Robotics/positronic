@@ -1121,6 +1121,28 @@ def test_a_run_records_no_frames_for_a_server_that_states_none(runtime):
     assert roboarm_keys.EE_FRAMES not in runtime.metadata_snapshot()
 
 
+def _v3_policy_framing_each_pose(times):
+    """A v3 server whose declared stack runs ``times`` frame codecs for the same poses ahead of the schedule."""
+    frame = ChangeEEFrame(EEFrame(site=GRIPPER_SITE)).to_spec()
+    stack = spec.sequence(*[frame] * times, spec.component('chunked_schedule', version=2, fps=10))
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack})
+    session.protocol_version = protocol.ProtocolVersion.V3
+    return policy, session
+
+
+def test_a_v3_stack_that_frames_a_pose_twice_fails_as_a_policy_command_error_before_inference(runtime):
+    policy, session = _v3_policy_framing_each_pose(2)
+    with pytest.raises(PolicyCommandError, match='cannot compose'):
+        runtime.start(policy)
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
+def test_a_v3_stack_that_frames_a_pose_once_records_its_frame(runtime):
+    policy, _ = _v3_policy_framing_each_pose(1)
+    assert _recorded_frames(policy, runtime)[keys.EE_POSE] == GRIPPER_SITE
+
+
 def test_a_frame_codec_around_a_server_that_states_none_states_the_frames_for_it():
     """A server that knows nothing of ``ee_frames`` reads poses at a frame the client side states for it."""
     policy, session = _mock_remote_policy(CHUNKED_STACK)

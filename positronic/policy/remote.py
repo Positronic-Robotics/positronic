@@ -82,17 +82,6 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
     return stack
 
 
-def _require_robot_commands(step: Step) -> None:
-    """Raise ``PolicyCommandError`` when a robot command channel of ``step`` holds no command object."""
-    for name, value in step.commands.items():
-        if keys.is_robot_command(name) and not isinstance(value, command.CommandType):
-            raise PolicyCommandError(
-                f'{name} carries a {type(value).__name__}, not a command. A protocol v3 server answers the output of '
-                'its model, and the client stack that it declares decodes that output into commands, for example '
-                f'with {JointPositionAction.WIRE_NAME}. Only a v1 or v2 server can answer a command as a plain mapping.'
-            )
-
-
 logger = logging.getLogger(__name__)
 
 # FOOTGUN: the session close waits for the server to acknowledge the end of the session, for up to the infer
@@ -174,13 +163,30 @@ class RemotePolicy(Policy):
         """Return once the server has loaded its model. Opens no session."""
         self._client.wait_for_server()
 
+    @staticmethod
+    def _require_robot_commands(step: Step) -> None:
+        """Raise ``PolicyCommandError`` when a robot command channel of ``step`` holds no command object."""
+        for name, value in step.commands.items():
+            if keys.is_robot_command(name) and not isinstance(value, command.CommandType):
+                raise PolicyCommandError(
+                    f'{name} carries a {type(value).__name__}, not a command. A protocol v3 server answers the output '
+                    'of its model, and the client stack that it declares decodes that output into commands, for '
+                    f'example with {JointPositionAction.WIRE_NAME}. Only a v1 or v2 server can answer a command as a '
+                    'plain mapping.'
+                )
+
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
         connection_lock = Lock()
         try:
             server_meta = dict(session.metadata)
             stack = declared_stack(server_meta, session.protocol_version)
-            client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+            try:
+                client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+            except Exception as e:
+                raise PolicyCommandError(
+                    f'The client stack that the server declares states metadata that this client cannot compose: {e!r}'
+                ) from e
             # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
             # by pose signal.
             frames = _server_frames(
@@ -216,7 +222,7 @@ class RemotePolicy(Policy):
                             f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
                         ) from e
                     if isinstance(step, Step):
-                        _require_robot_commands(step)
+                        self._require_robot_commands(step)
                     obs = yield step
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.
