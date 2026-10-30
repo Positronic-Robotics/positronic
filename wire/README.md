@@ -9,7 +9,7 @@ install `grpcio` and `websockets` independently.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire[websocket,grpc]==0.12.0"
+uv add "positronic-wire[websocket,grpc]==0.12.1"
 uv add "positronic-wire[websocket,grpc] @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -38,10 +38,11 @@ client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, `ProbeUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
 | `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, and `connected_socket(host, port, timeout)`, a TCP connect whose timeout covers the name lookup and every address |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
+| `positronic_wire.modal` | `ModalClientWire` and `ModalClientConnection`, a websocket session over TLS on a Modal Server with sticky sessions, and the facts of the Modal session API it calls: `START_PATH`, `TERMINATE_PATH`, `SESSION_HEADER`, `IDLE_TIMEOUT_HEADER`, `IDEMPOTENCY_KEY_HEADER`, `TIMESTAMP_HEADER`, `SESSION_TOKEN_HEADER`, `IDLE_TIMEOUT`, `START_REQUEST_TIMEOUT`, `START_DEADLINE`, `TERMINATE_TIMEOUT`, `MAX_ANSWER_BYTES` |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every installed member by its `NAME`, and `client_wire(name)` |
 
 [`positronic_model_server`](../model_server/README.md) owns the server transports:
@@ -56,7 +57,7 @@ encoding. `positronic-wire` does not depend on either server package.
 ## The client interface
 
 A caller selects a wire by `NAME`: `websocket`, `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls`,
-`roboarena`. A wire dials an address of its `ADDRESS` type, and `DEFAULT_PORT` names the port a URL
+`roboarena`, `modal_websocket_tls`. A wire dials an address of its `ADDRESS` type, and `DEFAULT_PORT` names the port a URL
 leaves out on the members that carry one.
 
 - `session_url(address)` — the session as this wire names it, for a log and for an error. The
@@ -72,7 +73,7 @@ leaves out on the members that carry one.
   a session. It carries the same `headers` as `dial`, so an edge that authenticates on them lets the
   probe through to the server behind it: the probe wakes what a session would reach. `None` when a
   server answers; a `Refusal` says why none did, in the terms `dial` uses, `FORBIDDEN` among them for
-  a credential the edge refused. The websocket wire asks the host's root for an upgrade, which the
+  a credential the edge refused. A wire that carries no probe raises `ProbeUnsupported`. The websocket wire asks the host's root for an upgrade, which the
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
   which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
   frame the server announces itself with.
@@ -91,7 +92,7 @@ Importing the core registry without either extra produces an empty registry. Bro
 installed transport surface as errors.
 
 **Each wire declares the address it dials, and takes no other.** `ClientWire.ADDRESS` names that
-type, and every verb above takes it. `websocket`, `websocket_tls`, `grpc` and `grpc_tls` take a
+type, and every verb above takes it. `websocket`, `websocket_tls`, `modal_websocket_tls`, `grpc` and `grpc_tls` take a
 `HostPortAddress` — `host`, `port`, `path` (`SESSION_PATH`), `query`, as written.
 `websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. `roboarena` takes a
 `RoboarenaAddress` — `host` and `port`. A record that names an endpoint carries the wire's name and
@@ -122,6 +123,34 @@ in the terms the websocket members already read.
 Typing carries the split: a wire handed the other wire's address is a type error at the call site.
 `registry.client_wire(name)` answers by name and cannot, so `InferenceClient` checks `ADDRESS` once,
 before it dials, and names both in the refusal.
+
+## A Modal Server with sticky sessions
+
+`modal_websocket_tls` dials a Modal Server with `@modal.sessioned`, whose URL ends in `.modal.direct`. The edge
+of such a server answers 401 to every request without a session token. A session start places one session on one
+container and waits until a container takes it, so one session starts one container. Every request with the token
+reaches that container.
+
+The wire is the one member that holds state: the Modal sessions of this process, per server. The registry holds
+one instance, so the warm-up, the keepalives and the sessions of one process on one address share them.
+
+- `dial` takes a session for the connection, and dials `websocket_tls` with `Modal-Authorization: Bearer <token>`.
+  The session is the one of a dropped connection on the address, then the spare, then a new start. A start runs in
+  its own thread, and a dial waits for it up to `open_timeout`. While the start still waits for a container, the
+  dial raises `COLD`, and the next dial waits for the same start. The edge answers a start that waits past its own
+  limit with a 5xx, and the start continues under the same idempotency key, so it places one session.
+- A close ends the connection's session, so its container takes the next one. A connection that the server dropped
+  keeps its session for `IDLE_TIMEOUT`, so a reconnect reaches the same container. A session that ended answers a
+  dial with 404, and the dial then waits for a new session.
+- `keepalive` carries the token of a session that a connection holds, or of the spare. Where there is none, it
+  starts the spare, and raises `COLD` until a container takes it. On a cold app this wakes the container that the
+  next dial takes. Only the process that manages the endpoint calls it, so no other process
+  starts a container.
+- `probe` raises `ProbeUnsupported`, because a probe on such a server also starts a session. A caller that waits
+  for a server asks `keepalive` instead, as `InferenceClient.wait_for_server` does.
+- The start and the terminate carry the caller's headers, which hold the endpoint's proxy credentials, and go to
+  `https://<host>[:port]` of the address alone: the wire follows no redirect. The wire ends every session it holds
+  when the process exits. A session that a terminate does not reach ends at its idle timeout.
 
 ## Whether a policy server is up
 

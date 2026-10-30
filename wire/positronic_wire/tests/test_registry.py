@@ -9,7 +9,7 @@ from pathlib import Path
 
 import positronic_wire
 import pytest
-from positronic_wire import grpc, registry, roboarena, websocket, wire
+from positronic_wire import grpc, modal, registry, roboarena, websocket, wire
 
 
 # rules-allow: hardcoded-keys — the names are spelled as a caller types them, so the test pins them; reading
@@ -22,6 +22,7 @@ def test_every_member_is_registered_under_its_own_name():
         'grpc': registry.CLIENT_WIRES['grpc'],
         'grpc_tls': registry.CLIENT_WIRES['grpc_tls'],
         'roboarena': registry.CLIENT_WIRES['roboarena'],
+        'modal_websocket_tls': registry.CLIENT_WIRES['modal_websocket_tls'],
     }
     for name, client_wire in registry.CLIENT_WIRES.items():
         assert client_wire.NAME == name
@@ -37,6 +38,7 @@ def test_every_member_is_registered_under_its_own_name():
         ('grpc', grpc.GrpcClientWire),
         ('grpc_tls', grpc.GrpcTlsClientWire),
         ('roboarena', roboarena.RoboarenaClientWire),
+        ('modal_websocket_tls', modal.ModalClientWire),
     ],
 )
 def test_a_name_selects_its_member(name, kind):
@@ -44,7 +46,8 @@ def test_a_name_selects_its_member(name, kind):
 
 
 def test_a_name_no_wire_carries_is_refused_naming_every_wire():
-    with pytest.raises(ValueError, match='websocket, websocket_tls, websocket_unix, roboarena, grpc, grpc_tls'):
+    every_wire = 'websocket, websocket_tls, websocket_unix, roboarena, modal_websocket_tls, grpc, grpc_tls'
+    with pytest.raises(ValueError, match=every_wire):
         registry.client_wire('ws')
 
 

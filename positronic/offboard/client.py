@@ -340,11 +340,17 @@ class InferenceClient:
         """Return once a server answers on the address, without opening a session.
 
         Retries a cold server as ``new_session`` does, until the connect deadline. Raises ``wire.ConnectRefused``
-        when the wire refuses the server and no retry clears it.
+        when the wire refuses the server and no retry clears it. On a wire that carries no probe, a keepalive that
+        returns is the answer.
         """
 
         def probe() -> None:
-            if (refusal := self._wire.probe(self._address, self.headers, self.open_timeout)) is not None:
+            try:
+                refusal = self._wire.probe(self._address, self.headers, self.open_timeout)
+            except wire.ProbeUnsupported:
+                self._wire.keepalive(self._address, self.headers, self.open_timeout)
+                return
+            if refusal is not None:
                 raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
 
         self._retry(time.monotonic() + self.connect_deadline, probe)

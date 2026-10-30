@@ -457,7 +457,7 @@ answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal.
 exception of the WebSocket or gRPC library.
 
 `wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`
-does.
+does. On a wire that raises `wire.ProbeUnsupported` (`modal_websocket_tls`), it asks `keepalive` instead.
 
 A session recovers a connection that drops before the server's first answer. A later drop raises
 `wire.PeerDisconnected`.

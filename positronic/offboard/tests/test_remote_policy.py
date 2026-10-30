@@ -89,7 +89,7 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     ) -> wire.Refusal | None:
         return None
 
-    def keepalive(self, address, headers, timeout):
+    def keepalive(self, address, headers, timeout) -> int | None:
         raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
@@ -515,6 +515,31 @@ class TestWaitForServer:
 
         assert refused.value.refusal is wire.Refusal.FINAL
         assert fake.probes == 1
+
+    class _KeptAliveWire(_FakeWire):
+        """A wire that carries no probe, and answers each keepalive from ``answers``: a refusal raises."""
+
+        def __init__(self, *answers: wire.Refusal | None):
+            super().__init__()
+            self._answers = list(answers)
+            self.keepalives = 0
+
+        def probe(self, address, headers, open_timeout):
+            raise wire.ProbeUnsupported('this wire carries no probe')
+
+        def keepalive(self, address, headers, timeout):
+            self.keepalives += 1
+            if (refusal := self._answers.pop(0)) is not None:
+                raise wire.ConnectRefused(refusal, 'refused')
+            return 60
+
+    def test_a_wire_without_a_probe_is_kept_alive_until_the_server_answers(self):
+        fake = self._KeptAliveWire(wire.Refusal.COLD, None)
+        with patch('positronic.offboard.client.time.sleep'):
+            InferenceClient(fake, _ADDRESS).wait_for_server()
+
+        assert fake.keepalives == 2
+        assert fake.dials == []
 
 
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
