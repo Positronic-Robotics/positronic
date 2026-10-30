@@ -34,12 +34,12 @@ IDLE_TIMEOUT_HEADER = 'x-modal-server-session-idle-timeout'
 IDEMPOTENCY_KEY_HEADER = 'x-idempotency-key'
 TIMESTAMP_HEADER = 'x-modal-timestamp'
 SESSION_TOKEN_HEADER = 'x-modal-server-session-token'
-# A session ends this long after its last request, an open websocket included. Short, so a session that no
-# connection takes frees its container soon.
+# The default seconds a session lives after its last request, an open websocket included. Short, so a session that
+# no connection takes frees its container soon.
 IDLE_TIMEOUT = 120
 # The edge answers a start that waited this long with a 5xx; the start then continues under its key.
 START_REQUEST_TIMEOUT = 330.0
-# The most wall-clock time one start may take, its continues included, before the next dial starts another.
+# The default most wall-clock time one start may take, its continues included, before the next dial starts another.
 START_DEADLINE = 900.0
 TERMINATE_TIMEOUT = 60.0
 # The most of an answer to a session call that the client reads: a token in a JSON object fits in it many times.
@@ -57,28 +57,6 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
 
 
 _SESSION_CALLS = urllib.request.build_opener(_RefuseRedirects)
-
-
-def _session_token(answer: bytes) -> str:
-    """The token in the answer to a session start.
-
-    Raises ``wire.ConnectRefused`` with ``FINAL`` where the answer carries none. The token goes into a header, so it
-    is one run of visible ASCII characters.
-    """
-    try:
-        token = json.loads(answer)['token']
-    except (ValueError, LookupError, TypeError, RecursionError) as e:
-        raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start without a token') from e
-    if not isinstance(token, str) or not token or not all('!' <= c <= '~' for c in token):
-        raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start with a token no header holds')
-    return token
-
-
-def _refusal(failed: OSError | HTTPException) -> wire.Refusal:
-    """What a session call that got no HTTP answer says about the edge: ``FINAL`` for a host with no address and for
-    a certificate that does not verify, ``SILENT`` for the rest."""
-    reason = failed.reason if isinstance(failed, urllib.error.URLError) else failed
-    return refusal_of(reason) if isinstance(reason, OSError) else wire.Refusal.SILENT
 
 
 @dataclasses.dataclass
@@ -143,7 +121,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
     its own limit with a 5xx, and the start continues under the same idempotency key, so it places one session.
 
     A normal close ends the connection's session, so its container takes the next one. A dropped connection keeps
-    its session for ``IDLE_TIMEOUT``, so a reconnect reaches the same container. ``keepalive`` carries the token
+    its session for ``idle_timeout``, so a reconnect reaches the same container. ``keepalive`` carries the token
     of a held session or of the spare, and starts the spare when there is none: on a cold app that wakes the
     container the next dial takes. ``probe`` raises ``wire.ProbeUnsupported``. The wire ends every session it holds
     when the process exits.
@@ -156,15 +134,22 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
     ADDRESS = wire.HostPortAddress
     DEFAULT_PORT = 443
 
-    def __init__(self, inner: wire.ClientWire[wire.HostPortAddress]):
+    def __init__(
+        self,
+        inner: wire.ClientWire[wire.HostPortAddress],
+        idle_timeout: int = IDLE_TIMEOUT,
+        start_deadline: float = START_DEADLINE,
+    ):
         self._inner = inner
+        self._idle_timeout = idle_timeout
+        self._start_deadline = start_deadline
         self._endpoints: dict[wire.HostPortAddress, _Endpoint] = {}
         self._changed = threading.Condition()
         atexit.register(self.end_all)
 
-    def __reduce__(self) -> tuple[type['ModalClientWire'], tuple[wire.ClientWire[wire.HostPortAddress]]]:
+    def __reduce__(self) -> tuple[type['ModalClientWire'], tuple[wire.ClientWire[wire.HostPortAddress], int, float]]:
         # The sessions belong to this process, and a lock does not pickle.
-        return ModalClientWire, (self._inner,)
+        return ModalClientWire, (self._inner, self._idle_timeout, self._start_deadline)
 
     def session_url(self, address: wire.HostPortAddress) -> str:
         return self._inner.session_url(address)
@@ -271,7 +256,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         with self._changed:
             endpoint.held.pop(token, None)
             if dropped:
-                timer = threading.Timer(IDLE_TIMEOUT, self._end_parked, (endpoint, token))
+                timer = threading.Timer(self._idle_timeout, self._end_parked, (endpoint, token))
                 timer.daemon = True
                 endpoint.parked[token] = timer
                 timer.start()
@@ -293,9 +278,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 return
         self._terminate(endpoint, token)
 
-    @staticmethod
-    def _call_headers(token: str) -> dict[str, str]:
-        return {SESSION_HEADER: f'Bearer {token}', IDLE_TIMEOUT_HEADER: str(IDLE_TIMEOUT)}
+    def _call_headers(self, token: str) -> dict[str, str]:
+        return {SESSION_HEADER: f'Bearer {token}', IDLE_TIMEOUT_HEADER: str(self._idle_timeout)}
 
     def _wait_for_spare(self, endpoint: _Endpoint, deadline: float, *, take: bool) -> str:
         """The spare's token, which this starts where no start runs, waiting up to the ``time.monotonic()`` instant
@@ -327,7 +311,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
 
     def _start(self, endpoint: _Endpoint) -> None:
         """Start a session for the spare. Runs in its own thread, and continues the start under one key until a
-        container takes it or ``START_DEADLINE`` passes."""
+        container takes it or ``start_deadline`` passes."""
         token: str | None = None
         failure: wire.ConnectRefused | None = None
         try:
@@ -351,10 +335,32 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         if extra is not None:
             self._terminate(endpoint, extra)
 
+    @staticmethod
+    def _session_token(answer: bytes) -> str:
+        """The token in the answer to a session start.
+
+        Raises ``wire.ConnectRefused`` with ``FINAL`` where the answer carries none. The token goes into a header, so it
+        is one run of visible ASCII characters.
+        """
+        try:
+            token = json.loads(answer)['token']
+        except (ValueError, LookupError, TypeError, RecursionError) as e:
+            raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start without a token') from e
+        if not isinstance(token, str) or not token or not all('!' <= c <= '~' for c in token):
+            raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start with a token no header holds')
+        return token
+
+    @staticmethod
+    def _refusal(failed: OSError | HTTPException) -> wire.Refusal:
+        """What a session call that got no HTTP answer says about the edge: ``FINAL`` for a host with no address and for
+        a certificate that does not verify, ``SILENT`` for the rest."""
+        reason = failed.reason if isinstance(failed, urllib.error.URLError) else failed
+        return refusal_of(reason) if isinstance(reason, OSError) else wire.Refusal.SILENT
+
     def _start_session(self, endpoint: _Endpoint) -> str:
         """The token of a new session. A 5xx and a lost answer continue the start under the same key."""
         key, stamp = str(uuid.uuid4()), str(time.time())
-        deadline = time.monotonic() + START_DEADLINE
+        deadline = time.monotonic() + self._start_deadline
         lost: Exception | None = None
         while True:
             left = deadline - time.monotonic()
@@ -364,12 +370,14 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 ) from lost
             headers = {
                 **(endpoint.headers or {}),
-                IDLE_TIMEOUT_HEADER: str(IDLE_TIMEOUT),
+                IDLE_TIMEOUT_HEADER: str(self._idle_timeout),
                 IDEMPOTENCY_KEY_HEADER: key,
                 TIMESTAMP_HEADER: stamp,
             }
             try:
-                return _session_token(self._post(endpoint.root + START_PATH, headers, min(left, START_REQUEST_TIMEOUT)))
+                return self._session_token(
+                    self._post(endpoint.root + START_PATH, headers, min(left, START_REQUEST_TIMEOUT))
+                )
             except urllib.error.HTTPError as refused:
                 if refused.code < HTTPStatus.INTERNAL_SERVER_ERROR:
                     forbidden = refused.code in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN)
@@ -379,7 +387,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                     ) from None
                 lost = refused
             except (OSError, HTTPException) as failed:
-                if _refusal(failed) is wire.Refusal.FINAL:
+                if self._refusal(failed) is wire.Refusal.FINAL:
                     raise wire.ConnectRefused(
                         wire.Refusal.FINAL, f'The Modal session start on {endpoint.root} failed: {failed}'
                     ) from failed

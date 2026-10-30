@@ -1,6 +1,7 @@
 """The client side of a Modal Server with sticky sessions."""
 
 import atexit
+import email.message
 import http.client
 import json
 import pickle
@@ -39,7 +40,7 @@ class FakeEdge:
         assert url.endswith(modal.START_PATH)
         self.starts.append({**headers, 'url': url})
         if self.refuse:
-            raise urllib.error.HTTPError(url, self.refuse.pop(0), 'refused', None, None)  # type: ignore[arg-type]
+            raise urllib.error.HTTPError(url, self.refuse.pop(0), 'refused', email.message.Message(), None)
         self.container_free.wait()
         self._issued += 1
         return json.dumps({'token': f'token-{self._issued}'}).encode()
@@ -269,6 +270,19 @@ def test_a_dropped_session_no_dial_takes_ends_after_the_idle_timeout(modal_wire,
     assert edge.ended == ['token-1']
     modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
     assert inner.dialled == ['token-1', 'token-2']
+
+
+def test_a_wire_given_an_idle_timeout_starts_and_parks_its_sessions_with_it(edge, inner, monkeypatch):
+    monkeypatch.setattr(FakeTimer, 'made', [])
+    monkeypatch.setattr('positronic_wire.modal.threading.Timer', FakeTimer)
+    client_wire = modal.ModalClientWire(inner, idle_timeout=30)
+    atexit.unregister(client_wire.end_all)
+
+    _drop(client_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
+
+    assert edge.starts[0][modal.IDLE_TIMEOUT_HEADER] == '30'
+    assert FakeTimer.made[0].interval == 30
+    client_wire.end_all()
 
 
 def test_a_dropped_session_a_dial_took_is_not_ended_by_its_timer(modal_wire, edge, monkeypatch):
