@@ -29,7 +29,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
 from positronic.policy.codecs import ChangeEEFrame, Codec
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.utils import flatten_dict, frozen_view
+from positronic.utils import flatten_dict, frozen_view, merge_dicts
 
 # Harness wake-up intervals on the world's clock.
 POLL_PERIOD_SEC = 0.1
@@ -209,8 +209,7 @@ class Harness(pimm.ControlSystem):
         statics: dict[str, dict[str, Any]] = {}
         for joint_signal, receiver in self.arm_meta_in.items():
             if (msg := receiver.read()) is not None:
-                for key, value in msg.data.items():
-                    statics.setdefault(key, {})[joint_signal] = value
+                merge_dicts(statics, {key: {joint_signal: value} for key, value in msg.data.items()})
         return statics
 
     def _pose_handshake(self, policy: Policy, runtime: Executor) -> tuple[frozenset[str], Codec | None]:
