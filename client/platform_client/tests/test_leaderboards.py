@@ -321,8 +321,17 @@ MODEL_A_CARD = ModelCard(
         CardLine(
             field='licence',
             facts=[
-                CardFact(text='v1: research only', source='https://labs.example/v1/LICENSE'),
-                CardFact(text='v2: open', source='https://labs.example/v2/LICENSE', href='https://x.example'),
+                CardFact(
+                    text='research only',
+                    source='https://labs.example/v1/LICENSE',
+                    checkpoint=CheckpointRef('model-a-v1'),
+                ),
+                CardFact(
+                    text='open',
+                    source='https://labs.example/v2/LICENSE',
+                    href='https://x.example',
+                    checkpoint=CheckpointRef('model-a-v2'),
+                ),
             ],
         ),
     ],
@@ -489,7 +498,7 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     ProgressPanel: {'task', 'episodes', 'bands', 'edges', 'mean_credit', 'mean_steps_done', 'mean_steps_done_at_end'},
     RowProgress: {'horizon_s', 'panels'},
     LeaderboardProgressResponse: {'leaderboard', 'version', 'rows'},
-    CardFact: {'text', 'source', 'href'},
+    CardFact: {'text', 'source', 'href', 'checkpoint'},
     CardLine: {'field', 'facts'},
     RunStep: {'label', 'command', 'source'},
     RunCommands: {'steps', 'checkpoint'},
@@ -1037,6 +1046,7 @@ CHECKS = {
     ),
     'the top edge holds every episode': (PANEL, unchanged, put('edges', 2, value=[4.0, 4.0, 3.0])),
     'the edges stack': (PANEL, put('edges', 1, 2, value=4.0), put('edges', 1, 2, value=4.5)),
+    'the stack starts at zero': (PANEL, put('edges', 0, 1, value=0.0), put('edges', 0, 1, value=0.5)),
     'an edge not negative': (PANEL, unchanged, put('edges', 0, 0, value=-0.1)),
     'a mean of steps not negative': (
         STEPS_PANEL,
@@ -1054,6 +1064,40 @@ CHECKS = {
         put('horizon_s', value=1),
     ),
     'each card line once': (MODEL_A_CARD, unchanged, put('lines', 1, 'field', value='maker')),
+    'a line keeps a fact about the family apart': (
+        MODEL_A_CARD.lines[1],
+        unchanged,
+        put('facts', 0, 'checkpoint', value=None),
+    ),
+    'a line holds one fact about the family': (
+        MODEL_A_CARD.lines[0],
+        unchanged,
+        put('facts', value=[{'text': 'Example Labs', 'source': 'https://labs.example/'}] * 2),
+    ),
+    'a line names each checkpoint once': (
+        MODEL_A_CARD.lines[1],
+        unchanged,
+        put('facts', 1, 'checkpoint', value='model-a-v1'),
+    ),
+    'a card fact names a checkpoint of the family': (
+        FAMILY,
+        put('card', 'lines', 1, 'facts', 0, 'checkpoint', value='model-a-v1'),
+        put('card', 'lines', 1, 'facts', 0, 'checkpoint', value='model-a-v9'),
+    ),
+    'a run guide names a checkpoint of the family': (
+        MODELS_RESPONSE.models[1],
+        unchanged,
+        put('card', 'run_guide', 'checkpoint', value='model-a-v1'),
+    ),
+    'the commands name their checkpoint in a family of several': (
+        FAMILY,
+        both(
+            put('checkpoints', value=[{'id': 'model-a-v2', 'display_name': 'Model A v2'}]),
+            put('card', 'lines', 1, 'facts', value=[{'text': 'open', 'source': 'https://labs.example/v2/LICENSE'}]),
+            put('card', 'run_commands', 'checkpoint', value=None),
+        ),
+        put('card', 'run_commands', 'checkpoint', value=None),
+    ),
     'no two checkpoints of a family share an id': (FAMILY, unchanged, put('checkpoints', 0, 'id', value='model-a-v2')),
     'the commands run a checkpoint of the family': (
         FAMILY,

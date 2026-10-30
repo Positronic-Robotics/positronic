@@ -683,6 +683,14 @@ class ProgressPanel(_Wire):
                 raise ValueError(f'at second {second}, the bands hold {held} of {self.episodes} episodes')
             if abs(stack[-1] - self.episodes) > _FLOAT_SLACK:
                 raise ValueError(f'at second {second}, the top edge is {stack[-1]} of {self.episodes} episodes')
+        return self
+
+    @model_validator(mode='after')
+    def _the_edges_stack_up_from_zero(self) -> Self:
+        for second in range(self.seconds):
+            stack = [edge[second] for edge in self.edges]
+            if abs(stack[0]) > _FLOAT_SLACK:
+                raise ValueError(f'at second {second}, a stack that starts at {stack[0]}')
             if any(upper < lower - _FLOAT_SLACK for lower, upper in zip(stack, stack[1:], strict=False)):
                 raise ValueError(f'at second {second}, an edge below the edge under it: {stack}')
         return self
@@ -714,18 +722,33 @@ class LeaderboardProgressResponse(_LeaderboardPart):
 
 
 class CardFact(_Wire):
-    """One fact of a model card. `source` is the URL or path that the text is from, and a page links `href`."""
+    """One fact of a model card. `source` is the URL or path that the text is from, and a page links `href`.
+
+    `checkpoint` names the checkpoint of the family that the fact is about. It is absent on a fact about the family.
+    """
 
     text: str
     source: str
     href: str | None = None
+    checkpoint: CheckpointRef | None = None
 
 
 class CardLine(_Wire):
-    """One line of a model card. `field` names the line, and `facts` holds one fact, or one for each checkpoint."""
+    """One line of a model card. `field` names the line.
+
+    `facts` holds one fact about the family, or facts that each name a checkpoint of the family.
+    """
 
     field: str = Field(min_length=1)
     facts: list[CardFact] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _one_fact_about_the_family_or_one_for_each_named_checkpoint(self) -> Self:
+        checkpoints = [fact.checkpoint for fact in self.facts]
+        if None in checkpoints and len(checkpoints) > 1:
+            raise ValueError(f'line {self.field!r} holds a fact about the family beside other facts')
+        _refuse_repeats(checkpoints, f'facts of line {self.field!r}')
+        return self
 
 
 class RunStep(_Wire):
@@ -739,7 +762,7 @@ class RunStep(_Wire):
 class RunCommands(_Wire):
     """The commands that run a checkpoint, in the order a reader runs them.
 
-    `checkpoint` names the checkpoint that the commands run, where the card covers more than one.
+    `checkpoint` names the checkpoint that the commands run. It is absent only on a family with one checkpoint.
     """
 
     steps: list[RunStep] = Field(min_length=1)
@@ -798,6 +821,26 @@ class ModelFamily(_Wire):
         if commands is not None and commands.checkpoint is not None:
             if commands.checkpoint not in {checkpoint.id for checkpoint in self.checkpoints}:
                 raise ValueError(f'the commands of family {self.id!r} run another checkpoint: {commands.checkpoint!r}')
+        return self
+
+    @model_validator(mode='after')
+    def _the_commands_name_their_checkpoint_in_a_family_of_several(self) -> Self:
+        commands = self.card.run_commands if self.card is not None else None
+        if commands is not None and commands.checkpoint is None and len(self.checkpoints) > 1:
+            raise ValueError(f'the commands of family {self.id!r} name none of its {len(self.checkpoints)} checkpoints')
+        return self
+
+    @model_validator(mode='after')
+    def _each_card_fact_names_a_checkpoint_of_the_family(self) -> Self:
+        if self.card is None:
+            return self
+        facts = [fact for line in self.card.lines for fact in line.facts]
+        if self.card.run_guide is not None:
+            facts.append(self.card.run_guide)
+        known = {checkpoint.id for checkpoint in self.checkpoints}
+        for fact in facts:
+            if fact.checkpoint is not None and fact.checkpoint not in known:
+                raise ValueError(f'a fact of family {self.id!r} names another checkpoint: {fact.checkpoint!r}')
         return self
 
 
