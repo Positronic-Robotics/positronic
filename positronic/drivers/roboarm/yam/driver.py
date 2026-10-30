@@ -167,11 +167,12 @@ class _Kinematics:
         self, target: geom.Transform3D, current_q: np.ndarray, lower: np.ndarray, upper: np.ndarray
     ) -> np.ndarray | None:
         """Multi-start LM IK: the live posture first, then the reach postures toward the target's azimuth.
-        Solutions are wrapped and clamped into ``[lower, upper]``, then FK-verified before acceptance."""
+        Each start's last answer is wrapped and clamped into ``[lower, upper]``, then FK-verified before acceptance."""
         for start in (current_q, *self._reach_postures(*target.translation[:2])):
             self._data.qpos[:] = 0.0
             self._data.qpos[self._qpos_ids] = start
-            qpos, _, success = qpos_from_site_pose(
+            # The FK check below accepts or refuses the answer: the solver reports success only below an error of 1e-14.
+            qpos, _, _ = qpos_from_site_pose(
                 self._model,
                 self._data,
                 self._site_id,
@@ -180,12 +181,10 @@ class _Kinematics:
                 target.rotation.as_quat,
                 rot_weight=0.5,
             )
-            if not success:
-                continue
             q = qpos[self._qpos_ids].copy()
             # A revolute joint at q ± 2π is the same pose; wrap out-of-range entries back in when they fit.
-            q = np.where(q > upper, q - 2 * np.pi, q)
-            q = np.where(q < lower, q + 2 * np.pi, q)
+            q = np.where((q > upper) & (q - 2 * np.pi >= lower), q - 2 * np.pi, q)
+            q = np.where((q < lower) & (q + 2 * np.pi <= upper), q + 2 * np.pi, q)
             q = np.clip(q, lower, upper)
             reached = self.fk(q)
             rot_err = (reached.rotation.inv * target.rotation).angle
