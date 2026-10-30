@@ -24,7 +24,7 @@ from pydantic import (
 )
 from pydantic_core import core_schema
 
-# What a definition holds in the place of the time limit, in seconds.
+# A definition holds this placeholder in the place of the time limit, in seconds.
 TIME_LIMIT_PLACEHOLDER = '{seconds}'
 
 
@@ -206,7 +206,7 @@ class TimeLimit(_Wire):
 class LeaderboardDescriptor(_Wire):
     """The facts of a leaderboard, and the words that its pages use.
 
-    `eval` is the eval that a simulated leaderboard ranks. The rows rank on the metric that `ranked_by` names.
+    A simulated leaderboard ranks `eval`. The rows rank on the metric that `ranked_by` names.
     `outcomes` lists the outcome groups in the order a page offers them. A `frozen` leaderboard takes no new episodes.
     """
 
@@ -260,7 +260,7 @@ class TagPosition(_Wire):
 
 
 class LeaderboardSummary(_Wire):
-    """One leaderboard of `leaderboards.list`. `leaderboard` is the slug that the other routes take.
+    """One leaderboard of `leaderboards.list`. The other routes take `leaderboard` as the slug.
 
     `method` names the method that computes the rows from the episodes, such as the best submission of each team.
     """
@@ -320,9 +320,9 @@ class TeamSubmission(_Wire):
 class LeaderboardRow(_Wire):
     """One row of a leaderboard: a model family, or a team.
 
-    `key` identifies the row. The platform gives each team a stable key that no other team shares. `display_name` is
-    what the row shows, and two rows can show the same name. `tag` is the tag of the user that a team row stands for.
-    It is the same on every leaderboard, so a user finds their own row by it.
+    `key` identifies the row. The platform gives each team a stable key that no other team shares. The row shows
+    `display_name`, and two rows can show the same name. A team row stands for one user, and `tag` holds the tag of
+    that user. The tag is the same on every leaderboard, so a user finds their own row by it.
 
     A row that measures a model names its family, and the checkpoints whose episodes it counts. `submission` is
     absent on a row whose numbers come from more than one submission, such as a model row.
@@ -396,8 +396,8 @@ class LeaderboardCounts(_Wire):
 class EpisodeMedia(_Wire):
     """Where the recordings of one episode play back.
 
-    `video` is the video that a phone plays, `replay` is the data of the 3D replay, and `cameras` holds the video of
-    each camera by its name. The links resolve when the route answers, and a link can stop working later, so keep
+    A phone plays `video`, the 3D replay reads its data from `replay`, and `cameras` holds the video of each camera
+    by its name. The links resolve when the route answers, and a link can stop working later, so keep
     the numbers of a version and read its links again.
     """
 
@@ -428,7 +428,7 @@ class LeaderboardResponse(LeaderboardSummary):
     """`leaderboards.get` — one leaderboard and its rows, in the order that the leaderboard shows them.
 
     The routes of its parts take `version`. `version` is absent on a leaderboard that has no versions, and such a
-    leaderboard has no parts. `computed_at` is when the numbers were computed.
+    leaderboard has no parts. The platform computed the numbers at `computed_at`.
     """
 
     version: LeaderboardVersionId | None = None
@@ -514,8 +514,8 @@ class EstimateSeries(_Wire):
 class RowCharts(_Wire):
     """The curves of one row.
 
-    `series` holds the series of each metric by its key. `density` is how fast the ranked metric rises at each time
-    limit, in the unit of that metric per second. `rank` holds the places of the row at each time limit.
+    `series` holds the series of each metric by its key. `density` measures the rise of the ranked metric at each
+    time limit, in the unit of that metric per second. `rank` holds the places of the row at each time limit.
     """
 
     episodes: int = Field(ge=0)
@@ -569,10 +569,10 @@ class EpisodeColumn(_Wire):
 class LeaderboardEpisode(_Wire):
     """One episode of the episode list.
 
-    `outcome` is the key of the outcome group of the episode, and `result` is the text that the list shows for it.
-    `steps` and `steps_done` count the steps of the task and the steps that the episode did. `furthest_stage` names
-    how far the episode got in the step that it stopped in. `credit` is the percent of the task that the episode did,
-    and `pace` is its value in the pace column. `media` is absent where no recording of the episode plays back.
+    `outcome` names the outcome group of the episode by its key, and the list shows `result` for it. `steps` and
+    `steps_done` count the steps of the task and the steps that the episode did. `furthest_stage` names how far the
+    episode got in the step that it stopped in. The episode did `credit` percent of the task, and the pace column
+    shows `pace`. `media` is absent where no recording of the episode plays back.
     """
 
     id: EpisodeId
@@ -770,7 +770,7 @@ class RunCommands(_Wire):
 
 
 class ModelCard(_Wire):
-    """What a model family is. A card gives the commands that run the model, or a guide to them, or neither."""
+    """A card gives the commands that run the model, or a guide to them, or neither."""
 
     lines: list[CardLine] = Field(default_factory=list)
     run_commands: RunCommands | None = None
