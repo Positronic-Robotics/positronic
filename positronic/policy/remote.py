@@ -125,100 +125,6 @@ def _log_late_close_failure(closed: Future[None]) -> None:
         logger.error('The session close failed after the run continued: %r', failure)
 
 
-class _ReportingAnswer(Answer[T]):
-    """``answer``, reporting its result to ``on_read`` at the first read."""
-
-    def __init__(self, answer: Answer[T], on_read: cabc.Callable[[T], None]) -> None:
-        self._answer = answer
-        self._on_read = on_read
-        self._reported = False
-
-    def done(self) -> bool:
-        return self._answer.done()
-
-    def result(self) -> T:
-        result = self._answer.result()
-        if not self._reported:
-            self._reported = True
-            self._on_read(result)
-        return result
-
-    def cancel(self) -> None:
-        self._answer.cancel()
-
-
-class _ReportingRuntime(Runtime):
-    """``inner``, with each answer reporting its result to ``on_read`` at the first read, and each submit to
-    ``on_submit`` before the call starts."""
-
-    def __init__(
-        self, inner: Runtime, on_read: cabc.Callable[[Any], None], on_submit: cabc.Callable[[], None] | None = None
-    ) -> None:
-        self._inner = inner
-        self._on_read = on_read
-        self._on_submit = on_submit
-
-    def set_metadata(self, name: str, value: Any) -> None:
-        self._inner.set_metadata(name, value)
-
-    @property
-    def time_ns(self) -> int:
-        return self._inner.time_ns
-
-    @property
-    def tick(self) -> int:
-        return self._inner.tick
-
-    def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
-        if self._on_submit is not None:
-            self._on_submit()
-        return _ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read)
-
-
-def _recorded(factory: ComponentFactory, built: list[Any]) -> ComponentFactory:
-    """``factory``, recording each component it builds in ``built``, in build order."""
-
-    def build(**args: Any) -> Any:
-        component = factory(**args)
-        built.append(component)
-        return component
-
-    return build
-
-
-def _transform_row(transforms: cabc.Sequence[TransformImages], images: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """The frames of one row, transformed as the declared stack transforms them, in its order."""
-    for transform in transforms:
-        images = transform.transform_frames(images)
-    return images
-
-
-class _PassImages(EncodeImages):
-    """A declared ``encode_images`` in a streaming session: it leaves the frames as arrays, so that the frame
-    streamer compares the stack with its rows and encodes the frames the request carries itself, at the declared
-    quality."""
-
-    @property
-    def quality(self) -> int:
-        return self._quality
-
-    def encode(self, data: dict) -> dict:
-        return data
-
-
-class _StreamerHooks:
-    """The calls that the components of a streaming session's stack make on its frame streamer, which is built after
-    them."""
-
-    def __init__(self) -> None:
-        self.streamer: FrameStreamer | None = None
-
-    def replan(self, now_ns: int) -> None:
-        if self.streamer is None:
-            raise RuntimeError('The schedule replans before its frame streamer exists')
-        self.streamer.on_replan(now_ns)
-
-
 def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
     """The frame of each pose signal that a server states in its metadata or through its client stack."""
     # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
@@ -268,6 +174,54 @@ class RemotePolicy(Policy):
         """Return once the server has loaded its model. Opens no session."""
         self._client.wait_for_server()
 
+    class _ReportingAnswer(Answer[T]):
+        """``answer``, reporting its result to ``on_read`` at the first read."""
+
+        def __init__(self, answer: Answer[T], on_read: cabc.Callable[[T], None]) -> None:
+            self._answer = answer
+            self._on_read = on_read
+            self._reported = False
+
+        def done(self) -> bool:
+            return self._answer.done()
+
+        def result(self) -> T:
+            result = self._answer.result()
+            if not self._reported:
+                self._reported = True
+                self._on_read(result)
+            return result
+
+        def cancel(self) -> None:
+            self._answer.cancel()
+
+    class _ReportingRuntime(Runtime):
+        """``inner``, with each answer reporting its result to ``on_read`` at the first read, and each submit to
+        ``on_submit`` before the call starts."""
+
+        def __init__(
+            self, inner: Runtime, on_read: cabc.Callable[[Any], None], on_submit: cabc.Callable[[], None] | None = None
+        ) -> None:
+            self._inner = inner
+            self._on_read = on_read
+            self._on_submit = on_submit
+
+        def set_metadata(self, name: str, value: Any) -> None:
+            self._inner.set_metadata(name, value)
+
+        @property
+        def time_ns(self) -> int:
+            return self._inner.time_ns
+
+        @property
+        def tick(self) -> int:
+            return self._inner.tick
+
+        def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+            if self._on_submit is not None:
+                self._on_submit()
+            return RemotePolicy._ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read)
+
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
         connection_lock = Lock()
@@ -292,7 +246,7 @@ class RemotePolicy(Policy):
             for name, value in episode_meta.items():
                 runtime.set_metadata(name, value)
             policy_runtime = (
-                runtime if streamer is None else _ReportingRuntime(runtime, streamer.on_answer, streamer.on_submit)
+                runtime if streamer is None else self._ReportingRuntime(runtime, streamer.on_answer, streamer.on_submit)
             )
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
@@ -327,6 +281,50 @@ class RemotePolicy(Policy):
             with connection_lock:
                 _close_within_bound(session)
 
+    @staticmethod
+    def _recorded(factory: ComponentFactory, built: list[Any]) -> ComponentFactory:
+        """``factory``, recording each component it builds in ``built``, in build order."""
+
+        def build(**args: Any) -> Any:
+            component = factory(**args)
+            built.append(component)
+            return component
+
+        return build
+
+    @staticmethod
+    def _transform_row(
+        transforms: cabc.Sequence[TransformImages], images: dict[str, np.ndarray]
+    ) -> dict[str, np.ndarray]:
+        """The frames of one row, transformed as the declared stack transforms them, in its order."""
+        for transform in transforms:
+            images = transform.transform_frames(images)
+        return images
+
+    class _PassImages(EncodeImages):
+        """A declared ``encode_images`` in a streaming session: it leaves the frames as arrays, so that the frame
+        streamer compares the stack with its rows and encodes the frames the request carries itself, at the declared
+        quality."""
+
+        @property
+        def quality(self) -> int:
+            return self._quality
+
+        def encode(self, data: dict) -> dict:
+            return data
+
+    class _StreamerHooks:
+        """The calls that the components of a streaming session's stack make on its frame streamer, which is built after
+        them."""
+
+        def __init__(self) -> None:
+            self.streamer: FrameStreamer | None = None
+
+        def replan(self, now_ns: int) -> None:
+            if self.streamer is None:
+                raise RuntimeError('The schedule replans before its frame streamer exists')
+            self.streamer.on_replan(now_ns)
+
     def _stack_and_streamer(
         self, session: InferenceSession, compress_images: bool, connection_lock: Lock, runtime: Runtime
     ) -> tuple[Processor, FrameStreamer | None, int]:
@@ -346,15 +344,17 @@ class RemotePolicy(Policy):
         temporal: list[TemporalStack] = []
         transforms: list[TransformImages] = []
         schedules: list[ChunkedSchedule] = []
-        encodes: list[_PassImages] = []
-        hooks = _StreamerHooks()
+        encodes: list[RemotePolicy._PassImages] = []
+        hooks = self._StreamerHooks()
         overrides: dict[ComponentFactory, ComponentFactory] = {
-            TemporalStack.from_spec_args: _recorded(TemporalStack.from_spec_args, temporal),
-            TransformImages.from_spec_args: _recorded(partial(TransformImages.from_spec_args, cache=cache), transforms),
-            ChunkedSchedule.from_spec_args: _recorded(
+            TemporalStack.from_spec_args: self._recorded(TemporalStack.from_spec_args, temporal),
+            TransformImages.from_spec_args: self._recorded(
+                partial(TransformImages.from_spec_args, cache=cache), transforms
+            ),
+            ChunkedSchedule.from_spec_args: self._recorded(
                 partial(ChunkedSchedule.from_spec_args, on_replan=hooks.replan), schedules
             ),
-            EncodeImages.from_spec_args: _recorded(_PassImages.from_spec_args, encodes),
+            EncodeImages.from_spec_args: self._recorded(self._PassImages.from_spec_args, encodes),
         }
         stack = declared_stack(meta, version, overrides)
         if len(temporal) != 1 or not streams_stack(temporal[0].keys, temporal[0].offsets_sec):
@@ -381,7 +381,7 @@ class RemotePolicy(Policy):
             horizon_sec=stack_meta.get(policy_keys.ACTION_HORIZON_SEC),
             # The schedule's own estimate of its lead, fed the same delays: one estimate per session, as per episode.
             lead=schedules[0].inference_lead.run().update if len(schedules) == 1 else None,
-            resize=partial(_transform_row, transforms) if transforms else None,
+            resize=partial(self._transform_row, transforms) if transforms else None,
             jpeg_quality=quality,
         )
         hooks.streamer = streamer

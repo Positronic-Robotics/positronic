@@ -68,7 +68,7 @@ from positronic.policy.processors import (
     PauseOnUnavailable,
     TemporalStack,
 )
-from positronic.policy.remote import RemotePolicy, _ReportingRuntime, prepare_obs, round_trip
+from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.policy.tests.test_harness import legacy_point_warnings, run_robot_rollout
@@ -1690,7 +1690,7 @@ def test_a_server_decodes_each_message_of_a_streamed_session_off_its_event_loop(
 
 def test_an_answer_reports_its_result_once_at_its_first_read(runtime):
     reads = []
-    answer = _ReportingRuntime(runtime, reads.append).submit(lambda: [1, 2, 3])
+    answer = RemotePolicy._ReportingRuntime(runtime, reads.append).submit(lambda: [1, 2, 3])
     assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
     assert answer.done()
     assert reads == []
