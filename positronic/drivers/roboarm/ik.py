@@ -227,8 +227,9 @@ def qpos_from_site_pose(
     """Levenberg-Marquardt IK for a site's 6-DoF pose, searched in place on ``data``.
 
     Warm-starts from ``data.qpos`` and perturbs only ``dof_indices`` until site ``site_id``
-    reaches ``target_pos``/``target_quat``. Returns ``(qpos, err_norm, success)`` where ``qpos``
-    is the (mutated) ``data.qpos`` view.
+    reaches ``target_pos``/``target_quat``. Returns ``(qpos, err_norm, success)``: ``qpos`` is the
+    ``data.qpos`` view, set to the iterate with the lowest ``err_norm``. A search for a target out of
+    reach never converges, and its last iterate there changes with the rounding of the start.
     """
     dof_indices = np.asarray(dof_indices)
     jac = np.empty((6, model.nv))
@@ -244,9 +245,9 @@ def qpos_from_site_pose(
     site_xpos = data.site_xpos[site_id]
     site_xmat = data.site_xmat[site_id]
 
-    err_norm = 0.0
-    success = False
-    for _ in range(max_steps):
+    best_qpos = data.qpos.copy()
+    best_err = np.inf
+    for step in range(max_steps + 1):
         err_pos[:] = target_pos - site_xpos
         err_norm = np.linalg.norm(err_pos)
         mj.mju_mat2Quat(site_xquat, site_xmat)
@@ -254,9 +255,11 @@ def qpos_from_site_pose(
         mj.mju_mulQuat(err_rot_quat, target_quat, neg_site_xquat)
         mj.mju_quat2Vel(err_rot, err_rot_quat, 1.0)
         err_norm += np.linalg.norm(err_rot) * rot_weight
+        if err_norm < best_err:
+            best_err = err_norm
+            best_qpos[:] = data.qpos
 
-        if err_norm < tol:
-            success = True
+        if err_norm < tol or step == max_steps:
             break
 
         mj.mj_jacSite(model, data, jac_pos, jac_rot, site_id)
@@ -273,7 +276,10 @@ def qpos_from_site_pose(
         mj.mj_integratePos(model, data.qpos, update_nv, 1.0)
         mj.mj_fwdPosition(model, data)
 
-    return data.qpos, err_norm, success
+    if not np.array_equal(data.qpos, best_qpos):
+        data.qpos[:] = best_qpos
+        mj.mj_fwdPosition(model, data)
+    return data.qpos, best_err, bool(best_err < tol)
 
 
 class _SolverBase:
