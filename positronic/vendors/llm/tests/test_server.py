@@ -106,6 +106,22 @@ def test_a_move_answers_with_its_trajectory_after_one_held_period(model, make_mo
     assert policy_keys.END not in str(chunk)
 
 
+def test_a_path_answers_one_part_per_call_and_asks_the_model_only_after_the_last(model, tmp_path):
+    requests, replies = model
+    replies.extend([move(0.04, 0.0), finish()])
+    llm_model = LLMModel(LLMPolicy(Endpoint('test'), Motion(linear_speed=0.05)), tmp_path, 360.0)
+    first = llm_model(observation(), session_id='a')
+    second = llm_model(observation(), session_id='a')
+    assert len(requests) == 1
+    assert first[0] == {}
+    assert first[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
+    assert second[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0)
+    assert len(first) - 1 == len(second) == round(0.04 / 0.05 * Motion().fps)
+    assert llm_model(observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
+    assert len(requests) == 2
+    llm_model.close()
+
+
 @pytest.mark.parametrize('tool,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
 def test_a_finish_answers_with_its_end_and_every_later_call_repeats_it_without_a_request(model, make_model, tool, end):
     requests, replies = model

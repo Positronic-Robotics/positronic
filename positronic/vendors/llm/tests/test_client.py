@@ -68,16 +68,20 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
                                     'id': 'call_1',
                                     'type': 'function',
                                     'function': {
-                                        'name': 'move_to' if len(requests) == 1 else 'done',
+                                        'name': 'move_path' if len(requests) == 1 else 'done',
                                         'arguments': json.dumps(
                                             {
-                                                'x': 0.01,
-                                                'y': 0,
-                                                'z': 0,
-                                                'roll': 0,
-                                                'pitch': 0,
-                                                'yaw': 0,
-                                                'gripper': 0,
+                                                'waypoints': [
+                                                    {
+                                                        'x': 0.01,
+                                                        'y': 0,
+                                                        'z': 0,
+                                                        'roll': 0,
+                                                        'pitch': 0,
+                                                        'yaw': 0,
+                                                        'gripper': 0,
+                                                    }
+                                                ],
                                                 'note': 'approach',
                                             }
                                             if len(requests) == 1
@@ -119,7 +123,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert requests[0].headers['authorization'] == 'Bearer test-secret-do-not-record'
     body = json.loads(requests[0].content)
     assert 'data:image/png;base64,' in str(body['messages'])
-    assert {tool['function']['name'] for tool in body['tools']} == {'move_to', 'done', 'give_up'}
+    assert {tool['function']['name'] for tool in body['tools']} == {'move_path', 'done', 'give_up'}
     assert meta[policy_keys.STOP_REASON] == 'done'
     recorded = json.dumps(meta)
     assert 'test-secret-do-not-record' not in recorded
@@ -270,7 +274,7 @@ def test_request_after_a_rejected_tool_call_keeps_the_cache_point_of_the_request
 ):
     pytest.importorskip(sdk)
     finished = {'reason': 'finished', 'hindsight': 'check the image'}
-    requests = serve(monkeypatch, [reply('move_to', {'x': 'invalid'}), reply('done', finished)])
+    requests = serve(monkeypatch, [reply('move_path', {'waypoints': 'invalid'}), reply('done', finished)])
     monkeypatch.setenv(key, 'test-secret-do-not-record')
     with execution(llm(model=f'{provider}:test-model', cache_breakpoints=True)) as (active, rt, clock):
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE

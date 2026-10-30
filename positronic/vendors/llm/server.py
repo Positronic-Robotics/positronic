@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import time
+from collections import deque
 from contextlib import ExitStack
 from functools import partial
 from pathlib import Path
@@ -31,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 class _Session:
-    """One session's model client, conversation and episode values, and how it ended: a decided end or a failure."""
+    """One session's model client, conversation and episode values, the parts of its path still to answer, and how it
+    ended: a decided end or a failure."""
 
     def __init__(self, policy: LLMPolicy):
         self._resources = ExitStack()
@@ -40,6 +42,7 @@ class _Session:
         if self.client.api_key_fingerprint is not None:
             self.metadata[policy_keys.API_KEY_FINGERPRINT] = self.client.api_key_fingerprint
         self.conversation = Conversation(policy, self.metadata.__setitem__)
+        self.pending: deque[list[dict[str, Any]]] = deque()
         self.end: PolicyEnd | None = None
         self.failure: Exception | None = None
 
@@ -50,8 +53,9 @@ class _Session:
 class LLMModel(Model):
     """The conversations of one LLM policy, one per session, each over its own model client.
 
-    Each call is one decision about its observation. A move answers with its trajectory. An end answers with an
-    element that carries ``END``, and so does every later call of that session. A decision that raises, or that
+    A call answers the next part of the session's path: a segment or a gripper hold. A call with no part left makes
+    one decision about its observation. An end answers with an element that carries ``END``, and so does every later
+    call of that session. A decision that raises, or that
     passes ``decision_timeout`` seconds before its next model call, fails the session, and every later call of the
     session raises. A session writes ``<sessions_dir>/<session_id>.json`` when it ends or fails and when it closes.
     The file holds the policy meta and the values the conversation writes, as the episode of a local run records them.
@@ -67,7 +71,7 @@ class LLMModel(Model):
         self._decision_timeout = decision_timeout
         self._sessions: dict[str, _Session] = {}
 
-    def _decide(self, session: _Session, obs: Obs) -> list[dict[str, Any]] | PolicyEnd:
+    def _decide(self, session: _Session, obs: Obs) -> list[list[dict[str, Any]]] | PolicyEnd:
         conversation = session.conversation
         deadline = time.monotonic() + self._decision_timeout
         follow_up = False
@@ -92,6 +96,8 @@ class LLMModel(Model):
         if session.failure is not None:
             raise RuntimeError(f'This session failed in an earlier decision: {session.failure!r}')
         if session.end is None:
+            if session.pending:
+                return session.pending.popleft()
             try:
                 decided = self._decide(session, obs)
             except Exception as failure:
@@ -100,9 +106,14 @@ class LLMModel(Model):
                 self._settle(session_id, session)
                 raise
             if not isinstance(decided, PolicyEnd):
-                # `ChunkedSchedule` plays the first element when it reads the answer. The move's `duration_s`
-                # counts one period before the first waypoint, so an empty element holds that period.
-                return [{}, *decided]
+                # A late round of `ChunkedSchedule` combines its overdue commands. With no inference lead, it asks for
+                # the next chunk only in the round that plays the last command of this one. So one part per answer
+                # keeps each waypoint and each gripper hold.
+                first, *rest = decided
+                session.pending.extend(rest)
+                # `ChunkedSchedule` plays the first element when it reads the answer. The path's `duration_s`
+                # counts one period before the first command, so an empty element holds that period.
+                return [{}, *first]
             session.end = decided
             self._settle(session_id, session)
         return [{policy_keys.END: session.end.value}]

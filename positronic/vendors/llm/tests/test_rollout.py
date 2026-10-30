@@ -13,7 +13,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 
 import pimm
 from pimm.time import RECEIVED_WORLD
-from positronic import geom, keys
+from positronic import keys
 from positronic.cfg import analysis
 from positronic.cli.eval.run import TaskDriver, run_world
 from positronic.dataset.episode import Episode
@@ -29,8 +29,8 @@ from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
-from positronic.vendors.llm.motion import Motion, MoveTo
-from positronic.vendors.llm.policy import LLMPolicy
+from positronic.vendors.llm.motion import Motion
+from positronic.vendors.llm.policy import LLMPolicy, Tool
 from positronic.vendors.llm.server import LLMModel, deployment
 
 
@@ -86,15 +86,19 @@ def script_move_then_end(monkeypatch, distance: float, ending: str) -> list[dict
             roll, pitch, yaw = state['roll_pitch_yaw_rad']
             return ModelResponse([
                 ToolCallPart(
-                    'move_to',
+                    Tool.MOVE_PATH.value,
                     {
-                        'x': x + distance,
-                        'y': y,
-                        'z': z,
-                        'roll': roll,
-                        'pitch': pitch,
-                        'yaw': yaw,
-                        'gripper': 0.2,
+                        'waypoints': [
+                            {
+                                'x': x + distance,
+                                'y': y,
+                                'z': z,
+                                'roll': roll,
+                                'pitch': pitch,
+                                'yaw': yaw,
+                                'gripper': 0.2,
+                            }
+                        ],
                         'note': 'Small move.',
                     },
                     tool_call_id='move',
@@ -166,7 +170,7 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
             before[policy_keys.OBS_TIME_NS],
             after[policy_keys.OBS_TIME_NS],
         ]
-        assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
+        assert [e['tools'][0]['name'] for e in responses] == [Tool.MOVE_PATH.value, ending]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]
         # The run returns at the decision after the move, long before the time limit.
@@ -213,11 +217,6 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
     sessions_dir.mkdir()
     with served(LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)), sessions_dir) as policy:
         run_world(arm_with_wrist_camera(), TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(dataset_dir)))
-    motion = Motion()
-    _, trajectory = motion.trajectory(
-        geom.Transform3D.identity, MoveTo(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0.2, note='Small move.')
-    )
-    move_sec = (len(trajectory) + 1) / motion.fps
     dataset = LocalDataset(dataset_dir)
     assert len(dataset) == 2
     assert len(states) == 4
@@ -233,6 +232,7 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
         assert record[policy_keys.STOP_REASON] == ending
         assert record[policy_keys.HINDSIGHT] == 'Small move observed.'
         assert [e['call'] for e in record[policy_keys.TRANSCRIPT] if e['event'] == 'request'] == [1, 2]
+        move_sec = next(e['duration_s'] for e in record[policy_keys.TRANSCRIPT] if 'duration_s' in e)
         before, after = states[index * 2 : index * 2 + 2]
         assert 'previous_target' not in before
         target_x = before['position_m'][0] + 0.01
