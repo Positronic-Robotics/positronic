@@ -26,7 +26,7 @@ from positronic.offboard.client import (
     InferenceClient,
     InferenceSession,
 )
-from positronic.offboard.frame_stream import FrameCodec, FrameStreamer, declared_codecs
+from positronic.offboard.frame_stream import FrameCodec, FrameStreamer, declared_codecs, streams_stack
 from positronic.policy import keys as policy_keys
 
 from .base import Answer, Policy, PolicyRun, Processor, Runtime, Step
@@ -251,9 +251,10 @@ class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
     ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout`` and ``connect_deadline``
-    bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality of images sent to a server
-    that asks for compressed images. ``frame_stream`` names the codec (``jpeg`` or ``h264``) of a frame stream
-    (``positronic.offboard.frame_stream``), for a server that declares one.
+    bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality of images sent to a server that
+    asks for compressed images. ``frame_stream`` names the codec (``jpeg`` or ``h264``) of a frame stream
+    (``positronic.offboard.frame_stream``), for a server that declares one for a temporal stack that the stream carries;
+    otherwise requests go in full.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -450,8 +451,11 @@ class RemotePolicy(Policy):
             EncodeImages.from_spec_args: _recorded(_PassImages.from_spec_args, encodes),
         }
         stack = declared_stack(meta, version, overrides)
-        if len(temporal) != 1:
-            raise ValueError('A frame stream needs one temporal_stack in the declared local stack')
+        if len(temporal) != 1 or not streams_stack(temporal[0].keys, temporal[0].offsets_sec):
+            logger.warning(
+                'The declared stack holds no temporal stack that a frame stream carries; requests go in full'
+            )
+            return declared_stack(meta, version), None, self._jpeg_quality
         (stacked,) = temporal
         quality = encodes[0].quality if encodes else self._jpeg_quality
         stack_meta = stack.meta()
