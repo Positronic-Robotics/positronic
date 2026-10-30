@@ -1,3 +1,4 @@
+import math
 import random
 from dataclasses import replace
 from typing import Any
@@ -13,6 +14,11 @@ def unset():
     """No eval. It lives in this package so a relative ``--eval=.sim.positronic.stack_cubes`` resolves
     against it, and it instantiates to None so ``run`` can act on the absence."""
     return None
+
+
+def require_finite_positive(arg: str, value: float | None) -> None:
+    if value is not None and (not math.isfinite(value) or value <= 0):
+        raise ValueError(f'--eval.{arg} must be finite and positive, got {value}')
 
 
 def spec(**selection) -> dict[str, Any]:

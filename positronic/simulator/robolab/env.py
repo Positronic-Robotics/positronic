@@ -38,6 +38,7 @@ The progress is what RoboLab's subtask recorder already tracks, so the record ad
 
 import argparse
 import json
+import math
 import os
 import tempfile
 from collections.abc import Callable
@@ -107,6 +108,7 @@ from isaaclab.utils.math import (  # noqa: E402
 )
 
 import robolab.constants  # noqa: E402
+from robolab.core.environments.config import parse_env_cfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.core.environments.factory import get_envs  # noqa: E402
 from robolab.core.environments.runtime import create_env  # noqa: E402
 
@@ -144,11 +146,11 @@ def _load_robot_meta() -> dict[str, Any]:
 class RobolabEnv(EnvProtocol):
     """A RoboLab task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
-    Built from the reset token's key (RoboLab env name, instruction variant) and cached; ``reset`` rebuilds
-    when the key changes and re-randomizes the scene through RoboLab's own reset events, or restores an exact
-    recorded state when the token carries one (demo replay). ``step`` maps each slot's forwarded command into
-    its row of the 8-dim jointpos action and reports, per slot, ``done`` (episode over) and ``success`` (the
-    task's success termination fired).
+    Built from the reset token's key (RoboLab env name, instruction variant, episode length) and cached;
+    ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's own reset events, or
+    restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
+    forwarded command into its row of the 8-dim jointpos action and reports, per slot, ``done`` (episode over)
+    and ``success`` (the task's success termination fired).
 
     ``num_envs`` scene clones share one task, one sim and one ``env.step``; the whole batch reruns the same
     task on every reset, since RoboLab clones a single registered env.
@@ -239,9 +241,13 @@ class RobolabEnv(EnvProtocol):
             raise ValueError(
                 f'RoboLab does not hold {unknown}; a task is a name, a list of names, or one of {sorted(categories)}'
             )
-        return [{'name': name, 'episode_length_s': benchmark[name]['episode_length_s']} for name in names]
+        return [
+            {keys.RECORD_NAME: name, keys.RECORD_EPISODE_LENGTH_S: benchmark[name]['episode_length_s']}
+            for name in names
+        ]
 
-    def _build(self, task: str, instruction_type: str) -> None:
+    def _build(self, task: str, instruction_type: str, episode_length_s: float | None) -> None:
+        self._key = None  # a build that raises leaves no cached env for the next reset to reuse
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
         if task not in self._registered:
@@ -253,8 +259,27 @@ class RobolabEnv(EnvProtocol):
             auto_register_droid_envs(task=[task], cameras=presets[args.cameras])
             self._registered.add(task)
         env_name = get_envs(task=task)[0]
+        scene: Any = env_name
+        if episode_length_s is not None:
+            # ``create_env`` parses a named scene with these arguments and builds its registered entry point,
+            # ``RobolabEnv``, from the cfg; a parsed cfg goes to the same class, with the episode length replaced.
+            scene = parse_env_cfg(
+                env_name,
+                device=args.device,
+                seed=0,
+                num_envs=self._num_envs,
+                env_spacing=None,
+                eye=None,
+                lookat=None,
+                use_fabric=True,
+            )
+            scene.episode_length_s = episode_length_s
+            # RoboLab takes a time-out within two control steps for a physics artifact and resets the clone in
+            # place, so such an episode never ends.
+            if math.ceil(episode_length_s / (scene.sim.dt * scene.decimation)) <= 2:
+                raise ValueError(f'an episode of {episode_length_s} s is too short for RoboLab to end it')
         self._env, self._env_cfg = create_env(
-            env_name, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
+            scene, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
         )
         self._control_dt = self._env_cfg.sim.dt * self._env_cfg.decimation
         # The sim context's physics ``step`` and ``render`` are the two native phases inside ``env.step``;
@@ -300,7 +325,7 @@ class RobolabEnv(EnvProtocol):
 
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
-        key = (token['task'], token['instruction_type'])
+        key = (token[keys.TOKEN_TASK], token[keys.TOKEN_INSTRUCTION_TYPE], token.get(keys.TOKEN_EPISODE_LENGTH_S))
         if key != self._key:
             self._build(*key)
             self._key = key
@@ -314,7 +339,7 @@ class RobolabEnv(EnvProtocol):
         # placed scene into the sensors (robolab/eval/episode.py).
         self._env.reset()
         obs, _extras = self._env.reset()
-        state = token.get('state')
+        state = token.get(keys.TOKEN_STATE)
         if state is not None:
             # Exact-state replay (a demo's own scene). RoboLab records states env-origin relative
             # (``scene.get_state(is_relative=True)``), so restore them the same way. The recorded entries

@@ -1,10 +1,9 @@
 import logging
-import math
 import random
 
 import configuronic as cfn
 
-from positronic.cfg.eval import number_trials, spec
+from positronic.cfg.eval import number_trials, require_finite_positive, spec
 from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
@@ -22,11 +21,6 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     if not bench or not index.isdigit():
         raise ValueError(f'an episode path is <benchmark path>/<episode index>, not {path!r}')
     return mapping.BenchmarkPath.parse(bench), int(index)
-
-
-def _require_finite_positive(arg: str, value: float | None) -> None:
-    if value is not None and (not math.isfinite(value) or value <= 0):
-        raise ValueError(f'--eval.{arg} must be finite and positive, got {value}')
 
 
 @cfn.config(
@@ -79,8 +73,8 @@ def benchmarks(
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
-    _require_finite_positive('timeout', timeout)
-    _require_finite_positive('horizon_sec', horizon_sec)
+    require_finite_positive('timeout', timeout)
+    require_finite_positive('horizon_sec', horizon_sec)
     if episode_paths is not None and not episode_paths:
         raise ValueError('--eval.episode_paths must name at least one episode')
     pins = None if episode_paths is None else [_parse_episode_path(path) for path in episode_paths]

@@ -26,6 +26,7 @@ _GUARDED = {
     eval_keys.EMBODIMENT,
     eval_keys.TIMEOUT,
     robolab_keys.EPISODE_LENGTH,
+    robolab_keys.EPISODE_LENGTH_OVERRIDE,
     eval_keys.SEED,
     eval_keys.TRIAL_INDEX,
     eval_keys.TRIAL_COUNT,

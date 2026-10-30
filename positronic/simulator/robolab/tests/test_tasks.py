@@ -45,11 +45,28 @@ def asked(monkeypatch) -> list[Any]:
 def test_the_adapter_names_a_task_the_way_the_reset_token_does():
     adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
 
-    params = adapter.task_params([{'name': 'AnimalsInBinTask', 'episode_length_s': 90.0}])
+    params = adapter.task_params([
+        {robolab_keys.RECORD_NAME: 'AnimalsInBinTask', robolab_keys.RECORD_EPISODE_LENGTH_S: 90.0}
+    ])
 
     assert params == [{eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.EPISODE_LENGTH: 90.0}]
     token = adapter.reset_token({**params[0], robolab_keys.INSTRUCTION_TYPE: 'vague'})
-    assert token == {'task': 'AnimalsInBinTask', 'instruction_type': 'vague'}
+    assert token == {robolab_keys.TOKEN_TASK: 'AnimalsInBinTask', robolab_keys.TOKEN_INSTRUCTION_TYPE: 'vague'}
+
+
+def test_the_reset_token_carries_an_episode_length_only_when_one_replaces_the_budget():
+    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+    params = {eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.INSTRUCTION_TYPE: 'default'}
+
+    budget = adapter.reset_token({**params, robolab_keys.EPISODE_LENGTH: 90.0})
+    override = adapter.reset_token({
+        **params,
+        robolab_keys.EPISODE_LENGTH: 90.0,
+        robolab_keys.EPISODE_LENGTH_OVERRIDE: 240.0,
+    })
+
+    assert robolab_keys.TOKEN_EPISODE_LENGTH_S not in budget
+    assert override[robolab_keys.TOKEN_EPISODE_LENGTH_S] == 240.0
 
 
 def test_the_env_answers_which_tasks_the_sweep_runs(asked):
@@ -138,3 +155,27 @@ def test_the_env_writes_the_scene_state_in_the_layout_that_a_labeler_reads():
     assert robolab_keys.GT_STATE_PROGRESS == GT_STATE_PROGRESS
     recorded = dict(expand_suffixed(GT_STATE_SIGNAL, _GT_STATE))
     assert f'{GT_STATE_SIGNAL}.{GT_STATE_OBJECTS}.banana.{GT_STATE_POSE}' in recorded
+
+
+def test_a_horizon_reaches_the_reset_token_and_the_deadline_follows_it(asked):
+    trials = list(robolab_cfg.benchmark.override(horizon_sec=240.0).instantiate().tasks())
+    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+
+    scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
+    assert [scene[robolab_keys.EPISODE_LENGTH] for scene in scenes] == [50.0, 300.0]
+    assert [scene[robolab_keys.EPISODE_LENGTH_OVERRIDE] for scene in scenes] == [240.0, 240.0]
+    assert [adapter.reset_token(scene)[robolab_keys.TOKEN_EPISODE_LENGTH_S] for scene in scenes] == [240.0, 240.0]
+    assert [trial.timeout_sec for trial in trials] == [250.0, 250.0]
+
+
+def test_a_pinned_timeout_stays_the_deadline_under_a_horizon(asked):
+    trials = list(robolab_cfg.benchmark.override(horizon_sec=240.0, timeout=12.0).instantiate().tasks())
+
+    assert [trial.timeout_sec for trial in trials] == [12.0, 12.0]
+
+
+@pytest.mark.parametrize('arg', ['horizon_sec', 'timeout'])
+@pytest.mark.parametrize('value', [0.0, -5.0, float('inf'), float('nan')])
+def test_a_horizon_and_a_timeout_must_be_finite_and_positive(arg, value):
+    with pytest.raises(ValueError, match=arg):
+        robolab_cfg.benchmark.override(**{arg: value}).instantiate()

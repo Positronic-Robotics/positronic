@@ -28,13 +28,24 @@ class RobolabAdapter(WireCommandAdapter):
 
     def task_params(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
-            {eval_keys.TASK: record['name'], robolab_keys.EPISODE_LENGTH: record['episode_length_s']}
+            {
+                eval_keys.TASK: record[robolab_keys.RECORD_NAME],
+                robolab_keys.EPISODE_LENGTH: record[robolab_keys.RECORD_EPISODE_LENGTH_S],
+            }
             for record in records
         ]
 
     def _reset_token(self, params: dict[str, Any]) -> Any:
         # No seed rides the token: RoboLab's eval path has no seed hook, so a recorded seed would only mislead.
-        return {'task': params[eval_keys.TASK], 'instruction_type': params[robolab_keys.INSTRUCTION_TYPE]}
+        return {
+            robolab_keys.TOKEN_TASK: params[eval_keys.TASK],
+            robolab_keys.TOKEN_INSTRUCTION_TYPE: params[robolab_keys.INSTRUCTION_TYPE],
+            **(
+                {robolab_keys.TOKEN_EPISODE_LENGTH_S: params[robolab_keys.EPISODE_LENGTH_OVERRIDE]}
+                if robolab_keys.EPISODE_LENGTH_OVERRIDE in params
+                else {}
+            ),
+        }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         # The env reports the eef pose in the control frame IK drives; ``eef_quat`` is scalar-first (wxyz),
