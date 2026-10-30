@@ -396,7 +396,7 @@ def test_motion_uses_delivery_pose_and_waits_for_final_period_before_observing(
 ):
     requests, replies = model
     replies.extend([move(requested_x), finish()])
-    with execution(LLMPolicy(Endpoint('test'), Motion())) as (run, runtime, clock):
+    with execution(LLMPolicy(Endpoint('test'), Motion(max_translation=0.05))) as (run, runtime, clock):
         assert run.send(observation()) == Step({}, 0)
         runtime.wait(5)
         clock.advance_to_ns(5_000_000_000)

@@ -82,9 +82,9 @@ Defaults are experimental bounds for supervised testing:
 
 | Setting | Default |
 | --- | --- |
-| `motion.max_translation` | 0.05 m per move |
-| `motion.max_rotation` | 0.3491 rad (20°) per move |
-| `motion.linear_speed` | 0.05 m/s |
+| `motion.max_translation` | 0.4 m per move |
+| `motion.max_rotation` | 1.5708 rad (90°) per move |
+| `motion.linear_speed` | 0.15 m/s |
 | `motion.angular_speed` | 0.5236 rad/s (30°/s) |
 | `motion.fps` | 25 waypoints/s |
 | `timeout` | 120 seconds per model invocation, including retries |

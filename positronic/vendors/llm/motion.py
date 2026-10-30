@@ -35,9 +35,9 @@ class MoveTo(BaseModel):
 class Motion:
     """Bounds on one requested move and the speed of its sampled reference."""
 
-    max_translation: float = 0.05
-    max_rotation: float = math.radians(20)
-    linear_speed: float = 0.05
+    max_translation: float = 0.4
+    max_rotation: float = math.radians(90)
+    linear_speed: float = 0.15
     angular_speed: float = math.radians(30)
     fps: float = 25.0
 

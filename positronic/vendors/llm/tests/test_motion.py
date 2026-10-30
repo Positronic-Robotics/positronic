@@ -8,13 +8,16 @@ from scipy.spatial.transform import Rotation
 from positronic import geom, keys
 from positronic.vendors.llm.motion import Motion, MoveTo
 
+# The cases below are written around these bounds, not around the defaults.
+SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'linear_speed': 0.05}
+
 
 @pytest.mark.parametrize('quaternion_sign', [1, -1])
 def test_motion_uses_short_rotation_path_and_respects_speed(quaternion_sign):
     start = geom.Transform3D([0, 0, 0], geom.Rotation.from_euler([0, 0, math.radians(179)]))
     start.rotation = geom.Rotation.from_quat(quaternion_sign * start.rotation.as_quat)
     target = MoveTo(x=0.05, y=0, z=0, roll=0, pitch=0, yaw=math.radians(-179), gripper=0.7, note='approach')
-    motion = Motion()
+    motion = Motion(**SHORT_BOUNDS)
     bounded, trajectory = motion.trajectory(start, target)
     assert bounded == target
     previous, previous_time = start, 0
@@ -40,7 +43,7 @@ def test_translation_clamps_distance_preserving_direction(offset):
     x, y, z = start.translation + offset
     target = MoveTo(x=x, y=y, z=z, roll=0, pitch=0, yaw=0, gripper=0.7, note='approach')
     original = target.model_dump()
-    motion = Motion()
+    motion = Motion(**SHORT_BOUNDS)
     bounded, trajectory = motion.trajectory(start, target)
     offset = np.asarray(offset)
     distance = math.hypot(*offset)
@@ -72,7 +75,7 @@ def test_rotation_clamps_shortest_arc_independently_of_translation(quaternion_si
     start.rotation = geom.Rotation.from_quat(quaternion_sign * start.rotation.as_quat)
     roll, pitch, yaw = requested.as_euler('xyz')
     target = MoveTo(x=0.2, y=0, z=0, roll=roll, pitch=pitch, yaw=yaw, gripper=0.3, note='turn')
-    motion = Motion()
+    motion = Motion(**SHORT_BOUNDS)
     bounded, trajectory = motion.trajectory(start, target)
     relative = initial.inv() * requested
     fraction = min(1, motion.max_rotation / relative.magnitude()) if relative.magnitude() > 0 else 1
@@ -107,12 +110,12 @@ def test_invalid_motion_configuration_fails(change):
 @pytest.mark.parametrize('change', [{'fps': 0.1}, {'max_translation': 0.5}, {'max_translation': 0.45, 'fps': 1.25}])
 def test_motion_duration_bound_includes_sampling_and_expiry(change):
     with pytest.raises(ValueError, match='10 second trajectory'):
-        Motion(**change)
+        Motion(**SHORT_BOUNDS | change)
 
 
 @pytest.mark.parametrize(('fps', 'max_translation'), [(0.2, 0.05), (2, 0.475)])
 def test_motion_can_expire_at_duration_bound(fps, max_translation):
-    motion = Motion(max_translation=max_translation, fps=fps)
+    motion = Motion(**SHORT_BOUNDS | {'max_translation': max_translation, 'fps': fps})
     start = geom.Transform3D([0, 0, 0])
     target = MoveTo(x=max_translation, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0, note='approach')
     _, trajectory = motion.trajectory(start, target)
