@@ -158,16 +158,19 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             token = next((t for t, parked in reversed(endpoint.parked.items()) if parked.address == address), None)
             if token is not None:
                 endpoint.parked.pop(token).timer.cancel()
+                keep = partial(self._park, endpoint, address)
             else:
                 token, endpoint.spare = endpoint.spare, None
+                keep = partial(self._keep_as_spare, endpoint)
         if token is not None:
             try:
-                return self._dial_on(endpoint, address, token, deadline)
+                return self._dial_on(endpoint, address, token, deadline, keep)
             except wire.ConnectRefused as refused:
                 if refused.refusal is not wire.Refusal.FINAL:
                     raise
                 _logger.info('The Modal session this dial took has ended (%s); waiting for a new one', refused)
-        return self._dial_on(endpoint, address, self._wait_for_spare(endpoint, deadline, take=True), deadline)
+        token = self._wait_for_spare(endpoint, deadline, take=True)
+        return self._dial_on(endpoint, address, token, deadline, partial(self._keep_as_spare, endpoint))
 
     def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
         """The keepalive of ``inner`` on a Modal session's container.
@@ -227,16 +230,22 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             return endpoint
 
     def _dial_on(
-        self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str, deadline: float
+        self,
+        endpoint: _Endpoint,
+        address: wire.HostPortAddress,
+        token: str,
+        deadline: float,
+        keep: Callable[[str], None],
     ) -> ModalClientConnection:
-        """``inner``'s dial with ``token``. A ``FINAL`` refusal ends the session; any other failure keeps it."""
+        """``inner``'s dial with ``token``. A ``FINAL`` refusal ends the session; ``keep`` takes it back after any
+        other failure."""
         try:
             conn = self._inner.dial(address, {SESSION_HEADER: f'Bearer {token}'}, max(0.0, deadline - time.monotonic()))
         except BaseException as failed:
             if isinstance(failed, wire.ConnectRefused) and failed.refusal is wire.Refusal.FINAL:
                 self._terminate(endpoint, token)
             else:
-                self._keep_as_spare(endpoint, token)
+                keep(token)
             raise
         with self._changed:
             endpoint.held[token] = None
@@ -246,13 +255,18 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         """Park the session of a dropped connection on ``address``, and end that of a closed one."""
         with self._changed:
             endpoint.held.pop(token, None)
-            if dropped:
-                timer = threading.Timer(self._idle_timeout, self._end_parked, (endpoint, token))
-                timer.daemon = True
-                endpoint.parked[token] = _Parked(address, timer)
-                timer.start()
-                return
-        self._terminate(endpoint, token)
+        if dropped:
+            self._park(endpoint, address, token)
+        else:
+            self._terminate(endpoint, token)
+
+    def _park(self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str) -> None:
+        """Keep ``token`` for the next dial on ``address``, until ``idle_timeout`` passes."""
+        timer = threading.Timer(self._idle_timeout, self._end_parked, (endpoint, token))
+        timer.daemon = True
+        with self._changed:
+            endpoint.parked[token] = _Parked(address, timer)
+        timer.start()
 
     def _end_parked(self, endpoint: _Endpoint, token: str) -> None:
         with self._changed:

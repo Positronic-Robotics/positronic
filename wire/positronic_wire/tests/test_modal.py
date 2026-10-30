@@ -241,6 +241,19 @@ def test_a_dropped_session_waits_for_a_dial_on_its_own_address(modal_wire, edge,
     assert inner.dialled == ['token-1', 'token-2', 'token-1']
 
 
+def test_a_reconnect_refused_for_a_while_keeps_its_session_for_its_own_address(modal_wire, edge, inner):
+    other_query = wire.HostPortAddress(_ADDRESS.host, _ADDRESS.port, wire.SESSION_PATH, 'fps=10')
+    _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
+    inner.refusals = [wire.Refusal.COLD]
+    with pytest.raises(wire.ConnectRefused):
+        modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+
+    modal_wire.dial(other_query, _CREDENTIALS, 5.0)
+    modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+
+    assert inner.dialled == ['token-1', 'token-1', 'token-2', 'token-1']
+
+
 def test_sessions_under_other_credentials_are_kept_apart(modal_wire, edge, inner):
     other_credentials = {'Modal-Key': 'OTHER', 'Modal-Secret': 'OTHER'}
     modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
