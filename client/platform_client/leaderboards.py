@@ -798,7 +798,8 @@ class ModelFamily(_Wire):
 
     A page shows `short_name` where the display name does not fit. A `baseline` family is a reference on every
     leaderboard, such as a person or teleoperation. On each leaderboard, the `baseline` of a row decides whether that
-    row is a reference. `former_display_names` holds the names that the family had before.
+    row is a reference. A family that stands for a person or for teleoperation lists no checkpoint.
+    `former_display_names` holds the names that the family had before.
     """
 
     id: ModelFamilyRef
@@ -818,6 +819,8 @@ class ModelFamily(_Wire):
     @model_validator(mode='after')
     def _the_commands_run_a_checkpoint_of_the_family(self) -> Self:
         commands = self.card.run_commands if self.card is not None else None
+        if commands is not None and not self.checkpoints:
+            raise ValueError(f'commands for family {self.id!r}, which lists no checkpoint to run')
         if commands is not None and commands.checkpoint is not None:
             if commands.checkpoint not in {checkpoint.id for checkpoint in self.checkpoints}:
                 raise ValueError(f'the commands of family {self.id!r} run another checkpoint: {commands.checkpoint!r}')

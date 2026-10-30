@@ -1089,6 +1089,26 @@ CHECKS = {
         unchanged,
         put('card', 'run_guide', 'checkpoint', value='model-a-v1'),
     ),
+    'the commands run a checkpoint of a family that lists one': (
+        MODELS_RESPONSE.models[1],
+        both(
+            put('checkpoints', value=[{'id': 'person-v1', 'display_name': 'Person v1'}]),
+            put(
+                'card',
+                value={
+                    'run_commands': {
+                        'steps': [{'label': 'Run', 'command': 'run', 'source': 'https://code.example/run.md'}]
+                    }
+                },
+            ),
+        ),
+        put(
+            'card',
+            value={
+                'run_commands': {'steps': [{'label': 'Run', 'command': 'run', 'source': 'https://code.example/run.md'}]}
+            },
+        ),
+    ),
     'the commands name their checkpoint in a family of several': (
         FAMILY,
         both(
