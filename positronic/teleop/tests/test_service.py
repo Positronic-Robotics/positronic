@@ -707,7 +707,7 @@ def test_each_frame_reply_has_a_target_from_the_first(service, socket_path, conn
 def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
-        _drive(run, 0.2)
+        _drive_until(run, lambda _: service.state().cameras == (keys.EXTERIOR_IMAGE,))
         stored = service.camera_image(keys.EXTERIOR_IMAGE)
         before = stored.copy()
         service.view()
@@ -881,7 +881,9 @@ def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkey
 def test_every_end_of_a_session_leaves_no_trial_in_the_service(service, socket_path, runtime, ending):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
-        _drive(run, 0.2)
+        # The service keeps a trial whose session ends after one frame, so the run makes two moves first.
+        _drive_until(run, _is_move)
+        _drive_until(run, _is_move)
         assert service.state().task == OBS[keys.TASK] and service.state().cameras == (keys.EXTERIOR_IMAGE,)
         if ending == 'give_up':
             headset.buttons = _buttons(stick=1.0)
