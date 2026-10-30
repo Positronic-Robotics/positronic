@@ -326,7 +326,7 @@ def test_the_yam_driver_solves_a_pose_at_gripper_to_joints_that_reach_it(q):
     assert (reached.rotation.inv * target.rotation).angle < 1e-2
 
 
-def test_the_bundled_yam_urdf_has_the_joint_range_of_the_yam_driver():
+def test_the_bundled_yam_urdf_has_the_joint_range_of_the_yam_mjcf():
     urdf = bundled_yam_model()[roboarm_keys.URDF]
     compiled = _prepare_spec(urdf).compile()
     kinematics = yam._Kinematics()
