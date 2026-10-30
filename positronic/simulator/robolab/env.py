@@ -26,13 +26,12 @@ clone is a slot of the env server, driven by a client of its own. RoboLab freeze
 rather than re-rolling it, and zeroes its action, so a batch runs until its slowest clone ends and every clone
 reports the verdict it froze on.
 
-Every frame also carries the ``gt_state`` (``keys.GT_STATE``) of each slot. It holds three things for each object
-in the task's contact list, except the table:
+Every frame also carries the ``gt_state`` (``keys.GT_STATE``) of each slot. It holds:
 
-- the pose of the object, with the position in the frame of the slot's scene clone and the rotation in the world
-  frame, as for the eef;
-- whether RoboLab's gripper contact sensor touches the object;
-- RoboLab's own progress through each condition chain of the current subtask.
+- for each object in the task's contact list, except the table, the pose of the object. The position is in the frame
+  of the slot's scene clone and the rotation is in the world frame, as for the eef;
+- for each of those objects, whether RoboLab's gripper contact sensor touches it;
+- for each condition chain of the current subtask, RoboLab's own progress through the chain.
 
 The progress is what RoboLab's subtask recorder already tracks, so the record adds no condition checks.
 """
@@ -504,8 +503,8 @@ class RobolabEnv(EnvProtocol):
     def _progress(self, slot: int) -> dict[str, bool]:
         """Per condition of each chain in the slot's current subtask, whether RoboLab counts it done.
 
-        RoboLab replaces a subtask's chain machine in the step that completes the subtask, so the frame of that step
-        also reports the machine it replaced, where the last condition is done. Empty for a task without subtasks.
+        RoboLab replaces a subtask's chain machine in the step that completes the subtask. So the frame of that step
+        also reports the machine that RoboLab replaced. Empty for a task without subtasks.
         """
         if self._subtask_recorder is None:
             return {}

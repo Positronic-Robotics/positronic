@@ -53,8 +53,10 @@ SUBTASK_SCORE_INDEX = 3
 # sensor touches the object. On the DROID rig that sensor is the left inner finger of the Robotiq 2F-85, at 0.1 N.
 # The value is False on the frame of a reset;
 # `<GT_STATE_SIGNAL>.<GT_STATE_PROGRESS>.<subtask>.<group>.<index>.<condition>`, True when RoboLab counts the
-# condition at that index of the group's chain in that subtask as done. A subtask's signals have samples while it
-# is the current subtask, and on the step that completes it.
+# condition at that index of the group's chain in that subtask as done. `<subtask>` is the 0-based index of the
+# subtask. It equals the count at `SUBTASK_COMPLETED_INDEX` while the subtask is current. `<group>` is RoboLab's
+# name for the chain, often an object name. A subtask's signals have samples while it is the current subtask, and
+# on the step that completes it.
 GT_STATE_SIGNAL = 'gt_state'
 GT_STATE_OBJECTS = 'objects'
 GT_STATE_POSE = 'pose'

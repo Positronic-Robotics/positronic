@@ -167,7 +167,10 @@ def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
 
 
 def _check_gt_state_is_the_clones_own(env: RobolabEnv, obs: dict, slot: int) -> None:
-    """Each object's ``gt_state`` pose is the pose that RoboLab reads for this clone alone."""
+    """Each object's ``gt_state`` pose is the pose that RoboLab reads for this clone alone.
+
+    A slot that reports another clone's poses fails this only where the clones' scenes differ.
+    """
     for name in env._objects:
         pos, quat = env._world.get_pose(name, is_relative=True, env_id=slot)
         own = torch.cat([pos, quat]).cpu().numpy()
@@ -370,11 +373,15 @@ def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
     banana.write_root_pose_to_sim(pose, env_ids=clone_1)
     banana.write_root_velocity_to_sim(torch.zeros(1, 6, device=rl_env.device), env_ids=clone_1)
 
+    # The last condition of BananaInBowlTask's one chain. RoboLab replaces the chain machine in the step that holds it.
+    placed = f'.{keys.GT_STATE_PROGRESS}.0.banana.1.object_in_container'
     best_score = 0.0
+    placed_seen = False
     frames = []
     for _ in range(_HOLD_STEPS):
         frames = env.step(holds)[protocol.SLOTS]
         best_score = max(best_score, float(frames[1][protocol.FRAME_OBS][keys.SUBTASK][3]))
+        placed_seen |= frames[1][protocol.FRAME_OBS][keys.GT_STATE].get(placed) is True
         assert frames[0][protocol.FRAME_DONE] and not frames[0][protocol.FRAME_SUCCESS], 'clone 0 left its time-out'
         running = [slot for slot in range(2, env.num_slots) if frames[slot][protocol.FRAME_DONE]]
         assert not running, f'clones {running} ended, but only clones 0 and 1 had a reason to'
@@ -385,8 +392,12 @@ def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
         float(np.linalg.norm(state[banana_pose][:2] - state[bowl_pose][:2]))
         for state in (frame[protocol.FRAME_OBS][keys.GT_STATE] for frame in frames)
     ]
-    assert gaps[1] < 0.05 < min(gaps[:1] + gaps[2:]), f'only clone 1 has its banana in its bowl; xy gaps {gaps}'
+    assert gaps[1] < 0.5 * min(gaps[:1] + gaps[2:]), f'only clone 1 has its banana in its bowl; xy gaps {gaps}'
+    for slot, frame in enumerate(frames):
+        _check_gt_state_is_the_clones_own(env, frame[protocol.FRAME_OBS], slot)
+    assert placed_seen, f'clone 1 placed its banana, but no frame showed {placed} as done'
     print(f'  batch: OK (clone 0 ended first; clone 1 reached subtask score {best_score:.2f} after it)')
+    print('  batch: OK (gt_state shows the condition that completes the subtask; each clone reports its own poses)')
 
 
 def _first_clone(state: Any) -> Any:
@@ -445,7 +456,6 @@ def _check_batch(num_envs: int) -> None:
         nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
         assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
         _check_gt_state(env, frame[protocol.FRAME_OBS], reset=False)
-        _check_gt_state_is_the_clones_own(env, frame[protocol.FRAME_OBS], slot)
     print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')
     _check_a_clone_that_ends_first(env)
     _check_a_recorded_state_reaches_every_clone(env)
