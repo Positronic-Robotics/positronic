@@ -25,7 +25,6 @@ class Marker(ControlSystem):
         self.directory = pathlib.Path(directory)
 
     def run(self, should_stop, clock):
-        # Write aside, then rename: the test reads the file as soon as it exists.
         written = self.directory / f'{CHILD_PID_FILE}.tmp'
         written.write_text(str(os.getpid()))
         written.replace(self.directory / CHILD_PID_FILE)
