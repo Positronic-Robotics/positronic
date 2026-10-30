@@ -1886,7 +1886,8 @@ def test_a_chunked_stream_fed_by_its_temporal_stack_sends_the_bytes_of_the_strea
     fed = _run_on_mock_session(
         _stream_meta(_RESIZE), 26, frame_stream=frame_stream, replies=replies, frame=_noise_frame
     )
-    monkeypatch.setattr(RemotePolicy, '_ROWS_PASS_THROUGH', frozenset())  # the stream before the feed
+    # No component passes StackRows on, so the stack gives arrays and the stream compares their pixels.
+    monkeypatch.setattr(RemotePolicy, '_ROWS_PASS_THROUGH', frozenset())
     compared = _run_on_mock_session(
         _stream_meta(_RESIZE), 26, frame_stream=frame_stream, replies=replies, frame=_noise_frame
     )
