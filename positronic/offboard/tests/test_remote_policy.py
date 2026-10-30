@@ -1461,6 +1461,14 @@ def test_a_run_keeps_the_dropped_session_when_the_reopened_one_never_answers(run
         run.close()
 
 
+def test_a_streamed_run_records_the_jpeg_quality_its_requests_carry(runtime):
+    meta = _stream_meta({'name': 'encode_images', 'args': {'quality': 75}})
+    policy, session = _mock_remote_policy(meta, frame_stream='jpeg')
+    session.protocol_version = protocol.ProtocolVersion.V1
+    runtime.start(policy).close()
+    assert runtime.metadata_snapshot()[policy_keys.JPEG_QUALITY] == 75
+
+
 def _frames_meta(meta):
     return {name: frame.site for name, frame in parse_ee_frames(meta[roboarm_keys.EE_FRAMES]).items()}
 

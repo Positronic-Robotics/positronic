@@ -314,15 +314,21 @@ class RemotePolicy(Policy):
         if run is not None:
             run.close()
 
+    @staticmethod
     def _episode_meta(
-        self, server_meta: dict[str, Any], client_meta: dict[str, Any], frames: dict[str, Any], session_id: str | None
+        server_meta: dict[str, Any],
+        client_meta: dict[str, Any],
+        frames: dict[str, Any],
+        jpeg_quality: int,
+        session_id: str | None,
     ) -> dict[str, Any]:
-        """The values that a run records in the episode metadata before its first yield."""
+        """The values that a run records in the episode metadata before its first yield. ``jpeg_quality`` is that of
+        the images its requests carry."""
         episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
         if frames:
             episode_meta[roboarm_keys.EE_FRAMES] = frames
         if server_meta.get(policy_keys.COMPRESS_IMAGES):
-            episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
+            episode_meta[policy_keys.JPEG_QUALITY] = jpeg_quality
         if session_id is not None:
             episode_meta[policy_keys.SESSION_ID] = session_id
         return episode_meta
@@ -376,7 +382,9 @@ class RemotePolicy(Policy):
             except Exception as e:
                 raise PolicyCommandError(f'This client cannot use the metadata that the server states: {e!r}') from e
             recorded_session_id = session.session_id
-            for name, value in self._episode_meta(server_meta, client_meta, frames, recorded_session_id).items():
+            for name, value in self._episode_meta(
+                server_meta, client_meta, frames, quality, recorded_session_id
+            ).items():
                 runtime.set_metadata(name, value)
             answered_session_id = recorded_session_id
 
