@@ -205,7 +205,7 @@ class Harness(pimm.ControlSystem):
         return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value | self._arm_statics()
 
     def _arm_statics(self) -> dict[str, dict[str, Any]]:
-        """The arm meta that each arm has emitted, as ``{key: {joint signal: value}}``."""
+        """The meta that each arm has emitted, in the shape ``Embodiment.arm_meta_sources`` states."""
         statics: dict[str, dict[str, Any]] = {}
         for joint_signal, receiver in self.arm_meta_in.items():
             if (msg := receiver.read()) is not None:

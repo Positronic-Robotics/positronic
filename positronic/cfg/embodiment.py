@@ -123,7 +123,7 @@ def yam_bimanual(
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
     signal that drives it. ``gravity_comp_factor[side]`` is that arm's i2rt gravity compensation; None keeps
-    i2rt's own factors on both arms. Each arm's meta carries the factors its chain reports, keyed the same way.
+    i2rt's own factors on both arms. Each arm's meta carries the factors its chain reports.
     """
     from positronic import geom
     from positronic.drivers.roboarm.yam import driver as yam_driver
