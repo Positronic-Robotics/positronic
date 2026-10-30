@@ -275,7 +275,7 @@ class RemotePolicy(Policy):
             if frames:
                 episode_meta[roboarm_keys.EE_FRAMES] = frames
             if server_meta.get(policy_keys.COMPRESS_IMAGES):
-                episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
+                episode_meta[policy_keys.JPEG_QUALITY] = quality
             for name, value in episode_meta.items():
                 runtime.set_metadata(name, value)
             policy_runtime = (
