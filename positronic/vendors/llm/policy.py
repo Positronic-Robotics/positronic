@@ -13,6 +13,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import (
     BinaryContent,
+    CachePoint,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -113,7 +114,7 @@ class _Observation:
         return state
 
     def frames(self, cameras: list[str], image_size: int) -> ModelRequest:
-        """One image prompt, tagged by observation until its PNG payloads are pruned."""
+        """One image prompt with the labelled frames of the selected cameras."""
         content: list[str | BinaryContent] = []
         for camera in cameras:
             image = Image.fromarray(self.images[camera])
@@ -124,7 +125,7 @@ class _Observation:
                 f'Camera {camera}, observation {self.time_ns} ns:',
                 BinaryContent(data.getvalue(), media_type='image/png'),
             ])
-        return ModelRequest([UserPromptPart(content)], metadata={policy_keys.OBS_TIME_NS: self.time_ns})
+        return ModelRequest([UserPromptPart(content)])
 
 
 _SCHEMAS: dict[Tool, type[BaseModel]] = {
@@ -145,6 +146,8 @@ class LLMPolicy(Policy):
             self._transcript: list[dict[str, Any]] = []
             self._runtime.set_metadata(policy_keys.TRANSCRIPT, self._transcript)
             self._messages: list[ModelMessage] = []
+            self._frames: list[list[int]] = []  # per observation, the indices of its frame messages
+            self._anchor: int | None = None  # the newest frame message that holds stubs
             self._obs: _Observation | None = None
             self._pictures: list[str] = []
             self._revealed: set[str] = set()
@@ -190,9 +193,24 @@ class LLMPolicy(Policy):
             state = self._obs.state(self._target)
             self._record({'event': 'observation', **state})
             self._messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
+            self._frames.append([])
+            if len(self._frames) > self._policy.image_horizon:
+                self._stub(self._frames[-self._policy.image_horizon - 1])
             self._pictures = list(self._obs.images) if self._policy.images is Images.ALWAYS else []
             self._revealed = set(self._pictures)
             self._failures = 0
+
+        def _stub(self, indices: list[int]) -> None:
+            for index in indices:
+                message = self._messages[index]
+                assert isinstance(message, ModelRequest)
+                (part,) = message.parts
+                assert isinstance(part, UserPromptPart) and not isinstance(part.content, str)
+                content = [
+                    '[older camera frame omitted]' if isinstance(item, BinaryContent) else item for item in part.content
+                ]
+                self._messages[index] = replace(message, parts=[replace(part, content=content)])
+                self._anchor = index
 
         def _select_cameras(self, requested: list[str]) -> list[str]:
             assert self._obs is not None
@@ -258,35 +276,24 @@ class LLMPolicy(Policy):
             self._failures = 0
             return (calls[0], data) if data is not None else None
 
-        def _prune_images(self) -> None:
-            observations = list(
-                dict.fromkeys(
-                    message.metadata[policy_keys.OBS_TIME_NS]
-                    for message in self._messages
-                    if isinstance(message, ModelRequest) and message.metadata is not None
-                )
-            )
-            retained = set(observations[-self._policy.image_horizon :])
-            for index, message in enumerate(self._messages):
-                if (
-                    not isinstance(message, ModelRequest)
-                    or message.metadata is None
-                    or message.metadata[policy_keys.OBS_TIME_NS] in retained
-                ):
-                    continue
-                (part,) = message.parts
-                assert isinstance(part, UserPromptPart) and not isinstance(part.content, str)
-                content = [
-                    '[older camera frame omitted]' if isinstance(item, BinaryContent) else item for item in part.content
-                ]
-                self._messages[index] = replace(message, parts=[replace(part, content=content)], metadata=None)
+        @staticmethod
+        def _ends_with_prompt(message: ModelMessage) -> bool:
+            return isinstance(message, ModelRequest) and isinstance(message.parts[-1], UserPromptPart)
+
+        @staticmethod
+        def _with_cache_point(message: ModelMessage) -> ModelMessage:
+            assert isinstance(message, ModelRequest)
+            *parts, part = message.parts
+            assert isinstance(part, UserPromptPart)
+            content = [part.content] if isinstance(part.content, str) else part.content
+            return replace(message, parts=[*parts, replace(part, content=[*content, CachePoint()])])
 
         def _request_messages(self) -> list[ModelMessage]:
             assert self._obs is not None
             if self._pictures:
+                self._frames[-1].append(len(self._messages))
                 self._messages.append(self._obs.frames(self._pictures, self._policy.image_size))
                 self._pictures = []
-                self._prune_images()
             self._calls += 1
             self._record({
                 'event': 'request',
@@ -294,7 +301,17 @@ class LLMPolicy(Policy):
                 'cameras': sorted(self._revealed),
                 policy_keys.OBS_TIME_NS: self._obs.time_ns,
             })
-            return list(self._messages)
+            # A provider caches a prompt only up to a cache point or to the end of a request. The stored history
+            # changes only where a frame message ages out, so the newest stubbed one marks the stable prefix.
+            # Only a user prompt can hold a cache point: OpenAI and Bedrock map a prompt that holds only a cache point
+            # to an empty message or an error. So when a request ends in tool results, the newest prompt holds it.
+            # Cache points go on the outgoing copy only: stored ones would pass the provider's limit.
+            messages = list(self._messages)
+            if self._anchor is not None:
+                messages[self._anchor] = self._with_cache_point(messages[self._anchor])
+            end = next(i for i in reversed(range(len(messages))) if self._ends_with_prompt(messages[i]))
+            messages[end] = self._with_cache_point(messages[end])
+            return messages
 
         def _accept(
             self, call: ToolCallPart, data: MoveTo | Finish, obs: Mapping[str, Any], time_ns: int
@@ -335,12 +352,12 @@ class LLMPolicy(Policy):
         images: Images = Images.ALWAYS,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         image_size: int = 640,
-        image_horizon: int = 2,
+        image_horizon: int = 3,
         max_calls: int = 100,
         max_invalid: int = 3,
     ):
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
-            raise ValueError('Image size, history horizon, call budget and invalid-reply limit must be positive')
+            raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
             raise ValueError('camera_keys must name at least one camera, without duplicates')
         self.endpoint, self.motion, self.images = endpoint, motion, images
@@ -361,6 +378,7 @@ class LLMPolicy(Policy):
             policy_keys.TYPE: policy_keys.LLM_TYPE,
             policy_keys.MODEL: self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
+            'cache_breakpoints': self.endpoint.cache_breakpoints,
             'motion': asdict(self.motion),
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
@@ -421,9 +439,10 @@ class LLMPolicy(Policy):
     images=Images.ALWAYS.value,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     image_size=640,
-    image_horizon=2,
+    image_horizon=3,
     max_calls=100,
     max_invalid=3,
+    cache_breakpoints=False,
 )
 def llm(
     model: str | Model,
@@ -436,10 +455,11 @@ def llm(
     image_horizon: int,
     max_calls: int,
     max_invalid: int,
+    cache_breakpoints: bool,
 ) -> Policy:
     """Direct API policy with trajectory scheduling on the rig."""
     return LLMPolicy(
-        Endpoint(model, timeout=timeout, settings=settings),
+        Endpoint(model, timeout=timeout, settings=settings, cache_breakpoints=cache_breakpoints),
         motion,
         images=Images(images),
         camera_keys=tuple(camera_keys),

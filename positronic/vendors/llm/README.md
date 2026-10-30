@@ -89,10 +89,10 @@ Defaults are experimental bounds for supervised testing:
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
 | `image_size` | 640 pixels on the longest edge; aspect ratio preserved |
-| `image_horizon` | Most recent 2 observations containing images |
+| `image_horizon` | Frames of the most recent 3 observations |
 | `images` | `always` |
 
-Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. Older images are removed from stored and outgoing history while text, tool results, and native reasoning metadata remain.
+Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. The history keeps the frames of the last `image_horizon` observations. When an observation leaves that window, its frames change to the text `[older camera frame omitted]`, once. Each request carries a cache point after the newest changed frame message and one at its end. A request that ends in tool results has its end point on the newest user prompt instead. Pydantic AI sends a cache point to Anthropic as `cache_control`. With `--policy.cache_breakpoints=True`, an `openai-responses:` model gets each cache point as `prompt_cache_breakpoint` on the block before it. Only the GPT-5.6 family and later accept it: an earlier model answers with HTTP 400, so the flag is off by default. Without the breakpoint, Azure OpenAI reads no cache after a frame changes. A configured `OpenAIResponsesModel` drops cache points, so with the flag the policy refuses it. Configure a `BreakpointResponsesModel` from `positronic.vendors.llm.responses` instead. Azure OpenAI refuses a request with more than 50 images.
 
 Translation is linear and rotation follows the shortest spherical interpolation. A returned move starts from the latest measured pose. Oversized translation and rotation are clamped independently to the per-move limits, preserving the translation direction and shortest rotation path. The processor waits one sampling period after the final command before requesting the next decision. The tool result and recorded acceptance contain the bounded target, whether it was clamped, and the trajectory duration including that final period. The next observation reports that target alongside the measured state; scheduling a target does not confirm arrival. Malformed tool arguments still require correction. The driver performs inverse kinematics and enforces its own joint constraints. These bounds are not collision detection or contact-force limits.
 
@@ -114,7 +114,7 @@ After validating the task in simulation, use the same policy with `positronic-in
 
 ```bash
 uv run --extra llm pytest positronic/vendors/llm/tests
-uv run --extra llm-openai pytest positronic/vendors/llm/tests
+uv run --extra llm-openai --extra llm-anthropic pytest positronic/vendors/llm/tests
 ```
 
-The core suite uses Pydantic AI's in-process test model without provider SDKs. One mocked OpenAI-compatible HTTP integration test checks endpoint configuration, images, tools, and client cleanup; it skips when the OpenAI SDK is absent. Policy tests cover history retention, deadlines, errors, motion, budgets, and recording, including the full harness with a deterministic robot. Provider-specific serialization and SDK retries are handled by Pydantic AI. Tests need no API credentials or hardware.
+The core suite uses Pydantic AI's in-process test model without provider SDKs. Mocked OpenAI and Anthropic HTTP tests check endpoint configuration, images, tools, cache points, and client cleanup; each skips when its provider SDK is absent. Policy tests cover history retention, deadlines, errors, motion, budgets, and recording, including the full harness with a deterministic robot. Provider-specific serialization and SDK retries are handled by Pydantic AI. Tests need no API credentials or hardware.
