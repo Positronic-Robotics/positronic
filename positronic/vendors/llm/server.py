@@ -50,7 +50,7 @@ class _Session:
 class LLMModel(Model):
     """The conversations of one LLM policy, one per session, each over its own model client.
 
-    Each call is one decision about its observation. A move answers with its trajectory. An end answers with an
+    Each call is one decision about its observation. A path answers with its commands. An end answers with an
     element that carries ``END``, and so does every later call of that session. A decision that raises, or that
     passes ``decision_timeout`` seconds before its next model call, fails the session, and every later call of the
     session raises. A session writes ``<sessions_dir>/<session_id>.json`` when it ends or fails and when it closes.
@@ -67,7 +67,7 @@ class LLMModel(Model):
         self._decision_timeout = decision_timeout
         self._sessions: dict[str, _Session] = {}
 
-    def _decide(self, session: _Session, obs: Obs) -> list[dict[str, Any]] | PolicyEnd:
+    def _decide(self, session: _Session, obs: Obs) -> list[list[dict[str, Any]]] | PolicyEnd:
         conversation = session.conversation
         deadline = time.monotonic() + self._decision_timeout
         follow_up = False
@@ -100,9 +100,12 @@ class LLMModel(Model):
                 self._settle(session_id, session)
                 raise
             if not isinstance(decided, PolicyEnd):
-                # `ChunkedSchedule` plays the first element when it reads the answer. The move's `duration_s`
-                # counts one period before the first waypoint, so an empty element holds that period.
-                return [{}, *decided]
+                # `ChunkedSchedule` plays the first element when it reads the answer. The path's `duration_s`
+                # counts one period before the first command, so an empty element holds that period.
+                # TODO: `ChunkedSchedule` combines overdue commands across the parts of a path, so a late round can
+                # skip a waypoint or a gripper hold that `LLMPolicy.run` plays. Keeping them needs a schedule that
+                # knows where a chunk's parts end.
+                return [{}, *(command for part in decided for command in part)]
             session.end = decided
             self._settle(session_id, session)
         return [{policy_keys.END: session.end.value}]

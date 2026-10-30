@@ -46,13 +46,10 @@ def observation(x=0.0):
     }
 
 
-def move(x: float | str = 0.01):
+def move(*xs: float | str):
+    waypoints = [{'x': x, 'y': 0, 'z': 0, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 0} for x in xs or (0.01,)]
     return ModelResponse([
-        ToolCallPart(
-            'move_to',
-            {'x': x, 'y': 0, 'z': 0, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 0, 'note': 'Approach the cube.'},
-            tool_call_id='move',
-        )
+        ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': waypoints, 'note': 'Approach the cube.'}, tool_call_id='move')
     ])
 
 
@@ -264,7 +261,8 @@ def test_follow_up_needs_another_tick_and_uses_the_frozen_observation(model, rep
     [
         move('invalid'),
         ModelResponse([TextPart('I will move.')]),
-        ModelResponse([ToolCallPart('move_to', '{broken')]),
+        ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, '{broken')]),
+        move(*[0.01] * 6),
         ModelResponse([ToolCallPart('done', {}), ToolCallPart('give_up', {})]),
         ModelResponse([ToolCallPart('run_code', {'code': 'print(1)'})]),
         ModelResponse([ToolCallPart('done', {'reason': 'x', 'hindsight': 'x'})], finish_reason='length'),
@@ -332,7 +330,7 @@ def test_unavailable_arm_does_not_pause_inference_or_commands(model, status):
         command = run.send(obs).commands[keys.ROBOT_COMMAND]
         assert 0.02 < command.pose.translation[0] <= 0.04
         accepted = [e for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'accepted']
-        assert accepted[0]['target']['x'] == 0.04
+        assert accepted[0]['waypoints'][-1]['x'] == 0.04
     assert len(requests) == 1
 
 
@@ -403,7 +401,7 @@ def test_motion_uses_delivery_pose_and_waits_for_final_period_before_observing(
         step = run.send(observation(x=current_x))
         assert step == Step({}, 5_040_000_000)
         accepted = [e for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'accepted'][0]
-        assert accepted['target']['x'] == pytest.approx(expected_x)
+        assert accepted['waypoints'][-1]['x'] == pytest.approx(expected_x)
         assert accepted['clamped'] is (requested_x != expected_x)
         end_ns = 5_000_000_000 + round(accepted['duration_s'] * 1e9)
         clock.advance_to_ns(end_ns - 40_000_000)
@@ -427,10 +425,10 @@ def test_motion_uses_delivery_pose_and_waits_for_final_period_before_observing(
         if isinstance(part, ToolReturnPart)
     )
     content = result.model_response_object()
-    assert content['target'] == accepted['target']
+    assert content['waypoints'] == accepted['waypoints']
     assert content['duration_s'] == accepted['duration_s']
     state = [e for e in events if e['event'] == 'observation'][-1]
-    assert state['previous_target'] == accepted['target']
+    assert state['previous_target'] == accepted['waypoints'][-1]
     assert state['remaining_translation_m'] == pytest.approx([0, 0, 0])
 
 
@@ -445,3 +443,36 @@ def test_late_resume_emits_final_command_before_requesting_next_decision(model):
         assert len(requests) == 1
         assert complete(run, runtime, clock, observation(x=0.01)) is PolicyEnd.COMPLETE
         assert len(requests) == 2
+
+
+def test_a_late_step_does_not_combine_commands_past_a_waypoint(model):
+    requests, replies = model
+    replies.extend([move(0.04, 0.0), finish()])
+    with execution(LLMPolicy(Endpoint('test'), Motion(linear_speed=0.05))) as (run, runtime, clock):
+        complete(run, runtime, clock, observation())
+        clock.advance_to_ns(10_000_000_000)
+        step = run.send(observation())
+        assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
+        step = run.send(observation())
+        assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0)
+        assert len(requests) == 1
+
+
+def test_a_path_plays_every_waypoint_before_the_next_decision(model):
+    requests, replies = model
+    replies.extend([move(0.04, 0.0), finish()])
+    motion = Motion(linear_speed=0.05)
+    with execution(LLMPolicy(Endpoint('test'), motion)) as (run, runtime, clock):
+        step = complete(run, runtime, clock, observation())
+        xs = []
+        while step.commands or len(requests) == 1:
+            xs.extend([step.commands[keys.ROBOT_COMMAND].pose.translation[0]] if step.commands else [])
+            clock.advance_to_ns(step.resume_at_ns)
+            step = run.send(observation())
+            assert runtime.wait(5).status is not WaitStatus.TIMED_OUT
+        assert len(requests) == 2
+        accepted = [e for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'accepted'][0]
+    assert max(xs) == pytest.approx(0.04)
+    assert xs[-1] == pytest.approx(0)
+    assert [waypoint['x'] for waypoint in accepted['waypoints']] == [0.04, 0.0]
+    assert accepted['duration_s'] == pytest.approx(0.08 / motion.linear_speed + 1 / motion.fps)

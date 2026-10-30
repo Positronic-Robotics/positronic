@@ -7,6 +7,7 @@ gives the reply to ``respond`` until it returns a decision. ``accept`` turns tha
 """
 
 import io
+import itertools
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
@@ -40,7 +41,7 @@ from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import flatten_dict
 
 from .client import Endpoint
-from .motion import Motion, MoveTo
+from .motion import Motion, MovePath, Waypoint
 
 
 class Images(StrEnum):
@@ -49,7 +50,7 @@ class Images(StrEnum):
 
 
 class Tool(StrEnum):
-    MOVE_TO = 'move_to'
+    MOVE_PATH = 'move_path'
     REVEAL_FRAMES = 'reveal_frames'
     DONE = 'done'
     GIVE_UP = 'give_up'
@@ -104,7 +105,7 @@ class _Observation:
             images[name] = frame
         return cls(pose, grip, str(obs[keys.TASK]), time_ns, images)
 
-    def state(self, target: MoveTo | None) -> dict[str, Any]:
+    def state(self, target: Waypoint | None) -> dict[str, Any]:
         state = {
             'task': self.task,
             policy_keys.OBS_TIME_NS: self.time_ns,
@@ -135,7 +136,7 @@ class _Observation:
 
 
 _SCHEMAS: dict[Tool, type[BaseModel]] = {
-    Tool.MOVE_TO: MoveTo,
+    Tool.MOVE_PATH: MovePath,
     Tool.REVEAL_FRAMES: RevealFrames,
     Tool.DONE: Finish,
     Tool.GIVE_UP: Finish,
@@ -161,7 +162,7 @@ class Conversation:
         self._revealed: set[str] = set()
         self._failures = 0
         self._calls = 0
-        self._target: MoveTo | None = None
+        self._target: Waypoint | None = None
 
     def _record(self, event: dict[str, Any]) -> None:
         self._transcript.append(event)
@@ -173,10 +174,14 @@ class Conversation:
             'Use absolute hand targets in the coordinate frame of the measured pose. '
             'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
             'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
-            'Moves play before the next observation; actual arrival must be checked from the measured state. '
-            'Oversized moves are clamped from the latest measured pose: translation keeps its direction and '
-            'rotation follows the shortest turn, each limited independently. '
-            'The tool result reports the clamped target; check it before planning the next move. '
+            'A path plays its waypoints in order before the next observation; '
+            'actual arrival must be checked from the measured state. '
+            'Oversized segments are clamped from the previous clamped waypoint, and the first from the latest '
+            'measured pose: translation keeps its direction and rotation follows the shortest turn, each limited '
+            'independently. A waypoint sets its gripper at the start of its segment. When a waypoint changes the '
+            'gripper, the hand holds still at it for grip_hold seconds. '
+            'The tool result reports the clamped waypoints; check them before planning the next path. '
+            'Put several waypoints in one path when the next motions do not depend on what you will see. '
             'Camera frames remain fixed during a decision. '
             f'{Tool.REVEAL_FRAMES.value} only reveals a frame; it does not move a camera. '
             'A note should briefly describe what you see and why you chose the motion. '
@@ -228,11 +233,13 @@ class Conversation:
             raise ValueError('Choose available cameras not already revealed in this observation')
         return cameras
 
-    def _tool(self, call: ToolCallPart) -> MoveTo | Finish | None:
+    def _tool(self, call: ToolCallPart) -> MovePath | Finish | None:
         tool = Tool(call.tool_name)
         data = _SCHEMAS[tool].model_validate_json(call.args_as_json_str())
         match data:
-            case MoveTo() | Finish():
+            case MovePath() if len(data.waypoints) > self._policy.motion.max_waypoints:
+                raise ValueError(f'A path has at most {self._policy.motion.max_waypoints} waypoints')
+            case MovePath() | Finish():
                 return data
             case RevealFrames():
                 if self._policy.images is not Images.ON_DEMAND:
@@ -252,7 +259,7 @@ class Conversation:
             ModelRequest(parts if parts else [UserPromptPart(f'Rejected: {error}. Make one tool call.')])
         )
 
-    def respond(self, response: ModelResponse) -> tuple[ToolCallPart, MoveTo | Finish] | None:
+    def respond(self, response: ModelResponse) -> tuple[ToolCallPart, MovePath | Finish] | None:
         """The decision in ``response``, or ``None`` when the model must be asked again about the same observation."""
         self._record({
             'event': 'response',
@@ -341,9 +348,10 @@ class Conversation:
         return messages
 
     def accept(
-        self, call: ToolCallPart, data: MoveTo | Finish, obs: Mapping[str, Any], time_ns: int
-    ) -> list[dict] | PolicyEnd:
-        """The trajectory of a move from the pose in ``obs``, or the ``PolicyEnd`` of a finish."""
+        self, call: ToolCallPart, data: MovePath | Finish, obs: Mapping[str, Any], time_ns: int
+    ) -> list[list[dict]] | PolicyEnd:
+        """The commands of each segment and gripper hold of a path from the pose in ``obs``, or the ``PolicyEnd`` of
+        a finish."""
         self._obs = None
         if isinstance(data, Finish):
             self._messages.append(
@@ -359,16 +367,18 @@ class Conversation:
             self._set_metadata(policy_keys.HINDSIGHT, data.hindsight)
             return PolicyEnd.COMPLETE if call.tool_name == Tool.DONE else PolicyEnd.GIVE_UP
         start = _Observation.measured_pose(obs)
-        self._target, trajectory = self._policy.motion.trajectory(start, data)
+        grip = float(obs[keys.GRIP]) if self._target is None else self._target.gripper
+        waypoints, parts = self._policy.motion.trajectory(start, grip, data.waypoints)
+        self._target = waypoints[-1]
         result = {
-            'target': self._target.model_dump(),
-            'clamped': self._target != data,
-            'duration_s': (len(trajectory) + 1) / self._policy.motion.fps,
-            'feedback': 'Target scheduled. Check the next measured observation for actual arrival.',
+            'waypoints': [waypoint.model_dump() for waypoint in waypoints],
+            'clamped': waypoints != data.waypoints,
+            'duration_s': (sum(map(len, parts)) + 1) / self._policy.motion.fps,
+            'feedback': 'Path scheduled. Check the next measured observation for actual arrival.',
         }
         self._messages.append(ModelRequest([ToolReturnPart(call.tool_name, result, tool_call_id=call.tool_call_id)]))
         self._record({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
-        return trajectory
+        return parts
 
 
 class LLMPolicy(Policy):
@@ -436,9 +446,13 @@ class LLMPolicy(Policy):
                 decision = conversation.respond(answer.result())
                 if decision is None:
                     continue
-                chunk = conversation.accept(*decision, obs, runtime.time_ns)
-                if isinstance(chunk, PolicyEnd):
-                    return chunk
+                parts = conversation.accept(*decision, obs, runtime.time_ns)
+                if isinstance(parts, PolicyEnd):
+                    return parts
+                chunk = [command for part in parts for command in part]
+                # A late step combines overdue commands, but never past the end of a part: each waypoint and
+                # each gripper hold reaches the robot.
+                part_ends = set(itertools.accumulate(map(len, parts)))
                 started_ns, index = runtime.time_ns, 0
                 end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
                 while index < len(chunk) or runtime.time_ns < end_ns:
@@ -448,6 +462,8 @@ class LLMPolicy(Policy):
                         commands.update(chunk[index])
                         index += 1
                         due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
+                        if index in part_ends:
+                            break
                     obs = yield Step(commands, due_ns)
 
 
