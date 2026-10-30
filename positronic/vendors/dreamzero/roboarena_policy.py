@@ -13,7 +13,6 @@ from contextlib import closing
 from threading import Lock
 from typing import Any
 
-import configuronic as cfn
 import numpy as np
 from positronic_wire import roboarena as roboarena_wire
 
@@ -202,6 +201,3 @@ class RoboarenaPolicy(Policy):
         finally:
             with connection_lock:
                 client.close()
-
-
-remote = cfn.Config(RoboarenaPolicy, address=cfn.Config(roboarena_wire.RoboarenaAddress, host='localhost', port=8000))
