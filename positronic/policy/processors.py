@@ -264,6 +264,7 @@ class ChunkedSchedule(Policy):
     ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
     immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
     until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
+    ``on_replan`` (a streaming session's frame streamer, not part of the spec) gets the time of each such reset.
     """
 
     WIRE_NAME = 'chunked_schedule'
@@ -342,6 +343,7 @@ class ChunkedSchedule(Policy):
         record_stats: bool = True,
         inference_lead: DurationEstimate | None = None,
         replan_on_error: bool = True,
+        on_replan: Callable[[int], None] | None = None,
     ) -> None:
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
@@ -352,6 +354,7 @@ class ChunkedSchedule(Policy):
         self._record_stats = record_stats
         self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
         self._replan_on_error = replan_on_error
+        self._on_replan = on_replan
 
     @property
     def inference_lead(self) -> DurationEstimate:
@@ -396,6 +399,8 @@ class ChunkedSchedule(Policy):
                     trajectory.clear()
                     end_ns = call_ns = now_ns
                     planned, recovering = 0, True
+                    if self._on_replan is not None:
+                        self._on_replan(now_ns)
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
                     answer, called_at_ns = runtime.submit(infer, obs), now_ns

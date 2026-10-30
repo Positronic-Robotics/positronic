@@ -1341,11 +1341,12 @@ def _run_v1(
     frame_stream: str | None,
     replies: list | None = None,
     version: protocol.ProtocolVersion = protocol.ProtocolVersion.V1,
+    extra: Mapping[int, dict] | None = None,
 ) -> MagicMock:
     """Run a ``RemotePolicy`` on a mocked protocol v1 session, one tick every 0.1 s, and return the session.
 
     Each reply is a chunk or an exception; without ``replies`` every call answers a chunk of 5 rows. ``version``
-    is the session's protocol version.
+    is the session's protocol version, and ``extra`` adds fields to the observation of a tick index.
     """
     policy, session = _mock_remote_policy(meta, frame_stream=frame_stream)
     session.protocol_version = version
@@ -1368,7 +1369,7 @@ def _run_v1(
         for index in range(ticks):
             now[0] = index * 100_000_000
             tick_ended.clear()
-            run.send({'image': _stream_frame(index)})
+            run.send({'image': _stream_frame(index), **(extra or {}).get(index, {})})
             tick_ended.set()
             runtime.wait(timeout_sec=5)
     finally:
@@ -1463,6 +1464,26 @@ def test_a_frame_stream_targets_the_request_that_the_inference_lead_brings_forwa
     ]
     second = session.infer.call_args_list[1].args[0]['image']
     assert (second[b'call'], second[b'rows']) == (1, [2, 1])
+
+
+def test_a_replan_after_an_arm_error_streams_the_rows_of_the_call_that_the_schedule_plans_next():
+    temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
+    meta = _stream_meta(ChunkedSchedule(fps=10.0, inference_lead=ConstantDuration(0.3)).to_spec())
+    meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
+    error = {5: {keys.ROBOT_STATUS: RobotStatus.ERROR.value}}
+    session = _run_v1(meta, 9, frame_stream='jpeg', version=protocol.ProtocolVersion.V2, extra=error)
+
+    # Calls at 0.0 s and 0.3 s; the answer read at 0.4 s plans its chunk from 0.6 s to 1.1 s. The error at 0.5 s
+    # clears that plan and calls at once. Its answer, read at 0.6 s, starts its chunk then, so the next call goes at
+    # 0.8 s with the rows of 0.55 s and 0.65 s: ticks 5 and 6.
+    rows = [call.args[0][ROW] for call in session.send_message.call_args_list]
+    images = [serialization.deserialise(serialization.serialise(row['images']))['image'] for row in rows]
+    assert [(row['call'], row['back'], _frame_index(image)) for row, image in zip(rows, images, strict=True)][-2:] == [
+        (3, 2, 5),
+        (3, 1, 6),
+    ]
+    fourth = session.infer.call_args_list[3].args[0]['image']
+    assert (fourth[b'call'], fourth[b'rows']) == (3, [2, 1])
 
 
 def test_a_frame_miss_sends_the_request_again_in_full(caplog):

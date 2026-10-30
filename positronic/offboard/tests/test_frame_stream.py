@@ -284,6 +284,21 @@ def test_the_lead_estimate_follows_the_delay_from_the_submit_to_the_read():
         assert _rows(sent) == [(1, 2, 9), (1, 1, 10)]
 
 
+def test_a_replan_starts_the_next_chunk_when_its_answer_is_read():
+    with _streamer(lead=ConstantDuration(0.3).run().update) as (streamer, clock, sent):
+        _tick(streamer, clock, *range(11))
+        streamer.on_answer([{}] * 5)  # read at 1.0 s: the chunk runs to 1.5 s
+        _tick(streamer, clock, 11, 12)
+        streamer.request({KEY: np.stack([_frame(9), _frame(10), _frame(12)])})  # the call at 1.2 s
+        streamer.on_replan(1_250_000_000)  # an arm error at 1.25 s clears the plan
+        _tick(streamer, clock, 13)
+        # Read at 1.3 s: the chunk runs from 1.3 s, not from 1.5 s, and the next request goes at 1.5 s.
+        streamer.on_answer([{}] * 5)
+        _tick(streamer, clock, 14)
+        streamer.flush()
+        assert _rows(sent)[2:] == [(2, 2, 12), (2, 1, 13)]
+
+
 def test_an_answer_whose_next_request_is_due_at_once_plans_no_rows():
     with _streamer() as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))

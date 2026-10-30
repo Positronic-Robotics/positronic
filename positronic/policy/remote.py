@@ -206,6 +206,19 @@ class _PassImages(EncodeImages):
         return data
 
 
+class _StreamerHooks:
+    """The calls that the components of a streaming session's stack make on its frame streamer, which is built after
+    them."""
+
+    def __init__(self) -> None:
+        self.streamer: FrameStreamer | None = None
+
+    def replan(self, now_ns: int) -> None:
+        if self.streamer is None:
+            raise RuntimeError('The schedule replans before its frame streamer exists')
+        self.streamer.on_replan(now_ns)
+
+
 def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
     """The frame of each pose signal that a server states in its metadata or through its client stack."""
     # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
@@ -334,10 +347,13 @@ class RemotePolicy(Policy):
         transforms: list[TransformImages] = []
         schedules: list[ChunkedSchedule] = []
         encodes: list[_PassImages] = []
+        hooks = _StreamerHooks()
         overrides: dict[ComponentFactory, ComponentFactory] = {
             TemporalStack.from_spec_args: _recorded(TemporalStack.from_spec_args, temporal),
             TransformImages.from_spec_args: _recorded(partial(TransformImages.from_spec_args, cache=cache), transforms),
-            ChunkedSchedule.from_spec_args: _recorded(ChunkedSchedule.from_spec_args, schedules),
+            ChunkedSchedule.from_spec_args: _recorded(
+                partial(ChunkedSchedule.from_spec_args, on_replan=hooks.replan), schedules
+            ),
             EncodeImages.from_spec_args: _recorded(_PassImages.from_spec_args, encodes),
         }
         stack = declared_stack(meta, version, overrides)
@@ -368,4 +384,5 @@ class RemotePolicy(Policy):
             resize=partial(_transform_row, transforms) if transforms else None,
             jpeg_quality=quality,
         )
+        hooks.streamer = streamer
         return stack, streamer, quality
