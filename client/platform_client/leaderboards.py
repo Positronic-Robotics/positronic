@@ -6,12 +6,22 @@ A field that a later leaderboard can give a new value is an open string, so this
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from typing import Annotated, Self
 
 from platform_client.ids import LeaderboardVersionId, SubmissionId
 from platform_client.responses import DataBackedReplayLink
 from positronic_evals.evals import EvalRef
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, GetCoreSchemaHandler, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetCoreSchemaHandler,
+    NonNegativeFloat,
+    NonNegativeInt,
+    model_validator,
+)
 from pydantic_core import core_schema
 
 # What a definition holds in the place of the time limit, in seconds.
@@ -22,6 +32,22 @@ class _Wire(BaseModel):
     """A model of this module. JSON carries no NaN and no infinity, so a float field refuses them."""
 
     model_config = ConfigDict(allow_inf_nan=False)
+
+
+# How far two computed floats can differ and still be one value, as a sum of shares or a stack of edges.
+_FLOAT_SLACK = 1e-9
+
+
+def _refuse_repeats(keys: Iterable[object], what: str) -> None:
+    keys = list(keys)
+    if len(set(keys)) != len(keys):
+        raise ValueError(f'two {what} share a key: {keys}')
+
+
+def _refuse_other_lengths(vectors: dict[str, Sequence[object]], length: int, what: str) -> None:
+    for name, vector in vectors.items():
+        if len(vector) != length:
+            raise ValueError(f'{what}: {name} holds {len(vector)} values, and the axis holds {length}')
 
 
 class _Name(str):
@@ -170,6 +196,12 @@ class TimeLimit(_Wire):
     max_s: int = Field(ge=1)
     axis: str | None = None
 
+    @model_validator(mode='after')
+    def _the_default_is_within_the_max(self) -> Self:
+        if self.default_s > self.max_s:
+            raise ValueError(f'a default time limit of {self.default_s} s past the maximum of {self.max_s} s')
+        return self
+
 
 class LeaderboardDescriptor(_Wire):
     """The facts of a leaderboard, and the words that its pages use.
@@ -197,16 +229,12 @@ class LeaderboardDescriptor(_Wire):
 
     @model_validator(mode='after')
     def _no_two_metrics_share_a_key(self) -> Self:
-        keys = [metric.key for metric in self.metrics]
-        if len(set(keys)) != len(keys):
-            raise ValueError(f'two metrics share a key: {keys}')
+        _refuse_repeats((metric.key for metric in self.metrics), 'metrics')
         return self
 
     @model_validator(mode='after')
     def _no_two_outcome_groups_share_a_key(self) -> Self:
-        keys = [outcome.key for outcome in self.outcomes]
-        if len(set(keys)) != len(keys):
-            raise ValueError(f'two outcome groups share a key: {keys}')
+        _refuse_repeats((outcome.key for outcome in self.outcomes), 'outcome groups')
         return self
 
     @model_validator(mode='after')
@@ -244,12 +272,34 @@ class LeaderboardSummary(_Wire):
     descriptor: LeaderboardDescriptor
     caveats: list[Caveat] = Field(default_factory=list)
 
+    @model_validator(mode='after')
+    def _one_place_in_each_tag(self) -> Self:
+        _refuse_repeats((place.tag for place in self.tags), 'tag places')
+        return self
+
 
 class LeaderboardListResponse(_Wire):
     """`leaderboards.list` — the leaderboards of one tag, in the order of their positions in it."""
 
     tag: LeaderboardTag
     leaderboards: list[LeaderboardSummary] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _no_two_leaderboards_share_a_slug(self) -> Self:
+        _refuse_repeats((summary.leaderboard for summary in self.leaderboards), 'leaderboards')
+        return self
+
+    @model_validator(mode='after')
+    def _each_leaderboard_has_a_place_in_the_tag_after_the_one_before(self) -> Self:
+        places: list[int] = []
+        for summary in self.leaderboards:
+            place = next((p.position for p in summary.tags if p.tag == self.tag), None)
+            if place is None:
+                raise ValueError(f'leaderboard {summary.leaderboard!r} has no place in tag {self.tag!r}')
+            places.append(place)
+        if any(later <= earlier for earlier, later in zip(places, places[1:], strict=False)):
+            raise ValueError(f'the leaderboards of tag {self.tag!r} are not in the order of their places: {places}')
+        return self
 
 
 # rules-allow: earn-its-place — a reference row can name no publisher, and the rankings `BaselineMark` needs one
@@ -302,12 +352,29 @@ class LeaderboardRow(_Wire):
             raise ValueError('a row has a rank when it is not a baseline, and only then')
         return self
 
+    @model_validator(mode='after')
+    def _each_checkpoint_once(self) -> Self:
+        _refuse_repeats(self.checkpoints, 'checkpoints')
+        return self
+
+    @model_validator(mode='after')
+    def _the_outcome_shares_add_up_to_at_most_one(self) -> Self:
+        if sum(self.outcome_shares.values()) > 1 + _FLOAT_SLACK:
+            raise ValueError(f'outcome shares that add up to more than 1: {self.outcome_shares}')
+        return self
+
 
 class PairVerdict(_Wire):
     """Whether the leaderboard tells two rows apart."""
 
     rows: tuple[RowKey, RowKey]
     separated: bool
+
+    @model_validator(mode='after')
+    def _a_pair_is_two_rows(self) -> Self:
+        if self.rows[0] == self.rows[1]:
+            raise ValueError(f'a pair of row {self.rows[0]!r} with itself')
+        return self
 
 
 class LeaderboardTask(_Wire):
@@ -350,6 +417,12 @@ class Highlight(_Wire):
     end_s: float | None = None
     media: EpisodeMedia | None = None
 
+    @model_validator(mode='after')
+    def _the_clip_ends_after_it_starts(self) -> Self:
+        if self.end_s is not None and self.end_s <= self.start_s:
+            raise ValueError(f'a clip that ends at {self.end_s} s, not after its start at {self.start_s} s')
+        return self
+
 
 class LeaderboardResponse(LeaderboardSummary):
     """`leaderboards.get` — one leaderboard and its rows, in the order that the leaderboard shows them.
@@ -365,6 +438,47 @@ class LeaderboardResponse(LeaderboardSummary):
     tasks: list[LeaderboardTask] = Field(default_factory=list)
     counts: LeaderboardCounts | None = None
     highlights: list[Highlight] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _no_two_rows_or_tasks_share_a_key(self) -> Self:
+        _refuse_repeats((row.key for row in self.rows), 'rows')
+        _refuse_repeats((task.id for task in self.tasks), 'tasks')
+        return self
+
+    @model_validator(mode='after')
+    def _a_row_names_only_the_metrics_and_outcome_groups_of_the_descriptor(self) -> Self:
+        metrics = {metric.key for metric in self.descriptor.metrics}
+        outcomes = {outcome.key for outcome in self.descriptor.outcomes}
+        for row in self.rows:
+            if not set(row.metrics) <= metrics or not set(row.outcome_shares) <= outcomes:
+                raise ValueError(f'row {row.key!r} names a metric or an outcome group that the descriptor has not')
+        return self
+
+    @model_validator(mode='after')
+    def _the_pairs_and_highlights_name_rows_and_tasks_of_the_leaderboard(self) -> Self:
+        rows = {row.key for row in self.rows}
+        tasks = {task.id for task in self.tasks}
+        for pair in self.pairs:
+            if not set(pair.rows) <= rows:
+                raise ValueError(f'a pair names a row that the leaderboard has not: {pair.rows}')
+        for highlight in self.highlights:
+            if highlight.row not in rows or highlight.task not in tasks:
+                raise ValueError(f'highlight {highlight.episode!r} names a row or a task that the leaderboard has not')
+        return self
+
+    @model_validator(mode='after')
+    def _no_place_is_past_the_ranked_rows(self) -> Self:
+        ranked = sum(row.rank is not None for row in self.rows)
+        for row in self.rows:
+            if row.rank is not None and row.rank.worst > ranked:
+                raise ValueError(f'row {row.key!r} takes place {row.rank.worst} of {ranked} ranked rows')
+        return self
+
+    @model_validator(mode='after')
+    def _the_counts_hold_no_more_tasks_than_the_list(self) -> Self:
+        if self.counts is not None and self.counts.tasks > len(self.tasks):
+            raise ValueError(f'counts name {self.counts.tasks} tasks, and the list holds {len(self.tasks)}')
+        return self
 
 
 class _LeaderboardPart(_Wire):
@@ -383,7 +497,18 @@ class EstimateSeries(_Wire):
     value: list[float | None]
     low: list[float | None]
     high: list[float | None]
-    margin: list[float | None]
+    margin: list[NonNegativeFloat | None]
+
+    @model_validator(mode='after')
+    def _each_limit_has_a_whole_estimate_or_none(self) -> Self:
+        _refuse_other_lengths({'low': self.low, 'high': self.high, 'margin': self.margin}, len(self.value), 'a series')
+        for at in zip(self.value, self.low, self.high, self.margin, strict=True):
+            if None in at and at != (None, None, None, None):
+                raise ValueError(f'a limit with part of an estimate: {at}')
+            _, low, high, _ = at
+            if low is not None and high is not None and low > high:
+                raise ValueError(f'a range from {low} down to {high}')
+        return self
 
 
 class RowCharts(_Wire):
@@ -395,8 +520,8 @@ class RowCharts(_Wire):
 
     episodes: int = Field(ge=0)
     series: dict[MetricKey, EstimateSeries] = Field(default_factory=dict)
-    density: list[float] = Field(default_factory=list)
-    rank: list[RankRange | None] = Field(default_factory=list)
+    density: list[float]
+    rank: list[RankRange | None]
 
 
 class LeaderboardChartsResponse(_LeaderboardPart):
@@ -407,9 +532,30 @@ class LeaderboardChartsResponse(_LeaderboardPart):
     """
 
     task: LeaderboardTaskId | None = None
-    windows: list[float]
+    windows: list[NonNegativeFloat]
     rows: dict[RowKey, RowCharts] = Field(default_factory=dict)
     pairs: list[PairVerdict] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _the_windows_rise(self) -> Self:
+        if any(later <= earlier for earlier, later in zip(self.windows, self.windows[1:], strict=False)):
+            raise ValueError(f'windows that do not rise: {self.windows}')
+        return self
+
+    @model_validator(mode='after')
+    def _each_row_has_a_value_at_each_window(self) -> Self:
+        for key, charts in self.rows.items():
+            vectors: dict[str, Sequence[object]] = {'density': charts.density, 'rank': charts.rank}
+            vectors.update({f'series {metric}': series.value for metric, series in charts.series.items()})
+            _refuse_other_lengths(vectors, len(self.windows), f'row {key!r}')
+        return self
+
+    @model_validator(mode='after')
+    def _the_pairs_name_rows_of_the_chart(self) -> Self:
+        for pair in self.pairs:
+            if not set(pair.rows) <= set(self.rows):
+                raise ValueError(f'a pair names a row that the chart has not: {pair.rows}')
+        return self
 
 
 class EpisodeColumn(_Wire):
@@ -435,15 +581,22 @@ class LeaderboardEpisode(_Wire):
     task: LeaderboardTaskId
     outcome: OutcomeKey
     result: str
-    steps: int | None = Field(default=None, ge=0)
+    steps: int | None = Field(default=None, ge=1)
     steps_done: int | None = Field(default=None, ge=0)
     furthest_stage: str | None = None
     credit: Percent | None = None
-    pace: float | None = None
+    pace: float | None = Field(default=None, ge=0)
     seconds_to_success: float | None = Field(default=None, ge=0)
     duration_s: float | None = Field(default=None, ge=0)
     recorded_at: AwareDatetime | None = None
     media: EpisodeMedia | None = None
+
+    @model_validator(mode='after')
+    def _the_success_comes_within_the_episode(self) -> Self:
+        if self.seconds_to_success is not None and self.duration_s is not None:
+            if self.seconds_to_success > self.duration_s:
+                raise ValueError(f'a success at {self.seconds_to_success} s in an episode of {self.duration_s} s')
+        return self
 
 
 class LeaderboardEpisodesResponse(_LeaderboardPart):
@@ -458,6 +611,11 @@ class LeaderboardEpisodesResponse(_LeaderboardPart):
     difficulty: EpisodeColumn | None = None
     episodes: list[LeaderboardEpisode] = Field(default_factory=list)
 
+    @model_validator(mode='after')
+    def _no_two_episodes_share_an_id(self) -> Self:
+        _refuse_repeats((episode.id for episode in self.episodes), 'episodes')
+        return self
+
 
 class ProgressBand(_Wire):
     """The count of episodes in one band at each second, before smoothing.
@@ -468,7 +626,7 @@ class ProgressBand(_Wire):
 
     outcome: OutcomeKey | None = None
     steps_done: int | None = Field(default=None, ge=0)
-    episodes: list[int]
+    episodes: list[NonNegativeInt]
 
     @model_validator(mode='after')
     def _one_band_key(self) -> Self:
@@ -486,12 +644,48 @@ class ProgressPanel(_Wire):
     """
 
     task: LeaderboardTaskId | None = None
-    episodes: int = Field(ge=0)
-    bands: list[ProgressBand]
-    edges: list[list[float]]
-    mean_credit: list[Percent]
-    mean_steps_done: list[float] | None = None
-    mean_steps_done_at_end: float | None = None
+    episodes: int = Field(ge=1)
+    bands: list[ProgressBand] = Field(min_length=1)
+    edges: list[list[NonNegativeFloat]]
+    mean_credit: list[Percent] = Field(min_length=1)
+    mean_steps_done: list[NonNegativeFloat] | None = None
+    mean_steps_done_at_end: NonNegativeFloat | None = None
+
+    @property
+    def seconds(self) -> int:
+        """The count of seconds that each series of the panel covers."""
+        return len(self.mean_credit)
+
+    @model_validator(mode='after')
+    def _the_bands_name_one_kind_of_key_each_once(self) -> Self:
+        if len({band.outcome is None for band in self.bands}) > 1:
+            raise ValueError('a panel with bands of outcome groups and bands of step counts')
+        _refuse_repeats(((band.outcome, band.steps_done) for band in self.bands), 'bands')
+        return self
+
+    @model_validator(mode='after')
+    def _each_series_has_a_value_at_each_second(self) -> Self:
+        if len(self.edges) != len(self.bands) + 1:
+            raise ValueError(f'{len(self.edges)} edges around {len(self.bands)} bands')
+        vectors: dict[str, Sequence[object]] = {f'band {i}': band.episodes for i, band in enumerate(self.bands)}
+        vectors.update({f'edge {i}': edge for i, edge in enumerate(self.edges)})
+        if self.mean_steps_done is not None:
+            vectors['mean_steps_done'] = self.mean_steps_done
+        _refuse_other_lengths(vectors, self.seconds, 'a panel')
+        return self
+
+    @model_validator(mode='after')
+    def _the_bands_hold_each_episode_once_at_each_second(self) -> Self:
+        for second in range(self.seconds):
+            held = sum(band.episodes[second] for band in self.bands)
+            stack = [edge[second] for edge in self.edges]
+            if held != self.episodes:
+                raise ValueError(f'at second {second}, the bands hold {held} of {self.episodes} episodes')
+            if abs(stack[-1] - self.episodes) > _FLOAT_SLACK:
+                raise ValueError(f'at second {second}, the top edge is {stack[-1]} of {self.episodes} episodes')
+            if any(upper < lower - _FLOAT_SLACK for lower, upper in zip(stack, stack[1:], strict=False)):
+                raise ValueError(f'at second {second}, an edge below the edge under it: {stack}')
+        return self
 
 
 class RowProgress(_Wire):
@@ -499,6 +693,18 @@ class RowProgress(_Wire):
 
     horizon_s: int = Field(ge=0)
     panels: list[ProgressPanel] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _no_two_panels_share_a_task(self) -> Self:
+        _refuse_repeats((panel.task for panel in self.panels), 'panels')
+        return self
+
+    @model_validator(mode='after')
+    def _no_panel_runs_past_the_horizon(self) -> Self:
+        for panel in self.panels:
+            if panel.seconds > self.horizon_s + 1:
+                raise ValueError(f'a panel of {panel.seconds} seconds past a horizon at {self.horizon_s} s')
+        return self
 
 
 class LeaderboardProgressResponse(_LeaderboardPart):
@@ -553,6 +759,11 @@ class ModelCard(_Wire):
             raise ValueError('a card gives at most one of the commands and a guide to them')
         return self
 
+    @model_validator(mode='after')
+    def _each_line_once(self) -> Self:
+        _refuse_repeats((line.field for line in self.lines), 'card lines')
+        return self
+
 
 class ModelCheckpoint(_Wire):
     id: CheckpointRef
@@ -576,8 +787,26 @@ class ModelFamily(_Wire):
     card: ModelCard | None = None
     former_display_names: list[str] = Field(default_factory=list)
 
+    @model_validator(mode='after')
+    def _no_two_checkpoints_share_an_id(self) -> Self:
+        _refuse_repeats((checkpoint.id for checkpoint in self.checkpoints), 'checkpoints')
+        return self
+
+    @model_validator(mode='after')
+    def _the_commands_run_a_checkpoint_of_the_family(self) -> Self:
+        commands = self.card.run_commands if self.card is not None else None
+        if commands is not None and commands.checkpoint is not None:
+            if commands.checkpoint not in {checkpoint.id for checkpoint in self.checkpoints}:
+                raise ValueError(f'the commands of family {self.id!r} run another checkpoint: {commands.checkpoint!r}')
+        return self
+
 
 class LeaderboardModelsResponse(_Wire):
     """`leaderboards.models` — the model families that a leaderboard row can name, in a stable order."""
 
     models: list[ModelFamily] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _no_two_families_share_an_id(self) -> Self:
+        _refuse_repeats((family.id for family in self.models), 'model families')
+        return self

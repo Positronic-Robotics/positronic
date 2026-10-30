@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from platform_client import leaderboards
@@ -162,6 +164,14 @@ MODEL_ROW = LeaderboardRow(
     outcome_shares={DONE: 0.4, HALFWAY: 0.35, STOPPED: 0.25},
     caveats=[Caveat(kind='example_caveat', text='Read the numbers with this note.')],
 )
+MODEL_B_ROW = LeaderboardRow(
+    key=RowKey('model-b'),
+    display_name='Model B',
+    model=ModelFamilyRef('model-b'),
+    rank=RankRange(best=1, worst=2),
+    metrics={SCORE: Estimate(value=38.5, low=31.0, high=45.0)},
+    episodes=100,
+)
 MODEL_BASELINE_ROW = LeaderboardRow(
     key=RowKey('reference-person'),
     display_name='Reference person',
@@ -179,7 +189,7 @@ MODEL_LEADERBOARD = LeaderboardResponse(
     descriptor=MODEL_DESCRIPTOR,
     version=VERSION,
     computed_at=AT,
-    rows=[MODEL_BASELINE_ROW, MODEL_ROW],
+    rows=[MODEL_BASELINE_ROW, MODEL_ROW, MODEL_B_ROW],
     pairs=[PairVerdict(rows=(RowKey('model-a'), RowKey('model-b')), separated=False)],
     tasks=[
         LeaderboardTask(id=STACK, label='Stack the cubes', difficulty='Easy'),
@@ -212,7 +222,13 @@ CHARTS = LeaderboardChartsResponse(
             series={SCORE: SERIES, SPEED: SERIES},
             density=[0.0, 1.5, 0.75],
             rank=[None, RankRange(best=1, worst=2), RankRange(best=1, worst=1)],
-        )
+        ),
+        RowKey('model-b'): RowCharts(
+            episodes=10,
+            series={SCORE: SERIES},
+            density=[0.0, 1.0, 0.5],
+            rank=[None, RankRange(best=1, worst=2), RankRange(best=2, worst=2)],
+        ),
     },
     pairs=[PairVerdict(rows=(RowKey('model-a'), RowKey('model-b')), separated=True)],
 )
@@ -299,6 +315,19 @@ RUN_COMMANDS = RunCommands(
     ],
     checkpoint=CheckpointRef('model-a-v2'),
 )
+MODEL_A_CARD = ModelCard(
+    lines=[
+        CardLine(field='maker', facts=[CardFact(text='Example Labs', source='https://labs.example/')]),
+        CardLine(
+            field='licence',
+            facts=[
+                CardFact(text='v1: research only', source='https://labs.example/v1/LICENSE'),
+                CardFact(text='v2: open', source='https://labs.example/v2/LICENSE', href='https://x.example'),
+            ],
+        ),
+    ],
+    run_commands=RUN_COMMANDS,
+)
 MODELS_RESPONSE = LeaderboardModelsResponse(
     models=[
         ModelFamily(
@@ -310,21 +339,7 @@ MODELS_RESPONSE = LeaderboardModelsResponse(
                 ModelCheckpoint(id=CheckpointRef('model-a-v1'), display_name='Model A v1'),
                 ModelCheckpoint(id=CheckpointRef('model-a-v2'), display_name='Model A v2'),
             ],
-            card=ModelCard(
-                lines=[
-                    CardLine(field='maker', facts=[CardFact(text='Example Labs', source='https://labs.example/')]),
-                    CardLine(
-                        field='licence',
-                        facts=[
-                            CardFact(text='v1: research only', source='https://labs.example/v1/LICENSE'),
-                            CardFact(
-                                text='v2: open', source='https://labs.example/v2/LICENSE', href='https://x.example'
-                            ),
-                        ],
-                    ),
-                ],
-                run_commands=RUN_COMMANDS,
-            ),
+            card=MODEL_A_CARD,
             former_display_names=['Example Model A'],
         ),
         ModelFamily(
@@ -350,7 +365,13 @@ MODELS: list[BaseModel] = [
                 descriptor=MODEL_DESCRIPTOR,
                 caveats=[Caveat(kind='frozen_source', text='A fixed set of episodes.')],
             ),
-            LeaderboardSummary(leaderboard=BOARD, title='Example teams', method='m', descriptor=TEAM_DESCRIPTOR),
+            LeaderboardSummary(
+                leaderboard=LeaderboardRef('example-teams'),
+                title='Example teams',
+                method='m',
+                tags=[TagPosition(tag=TAG, position=1)],
+                descriptor=TEAM_DESCRIPTOR,
+            ),
         ],
     ),
     MODEL_LEADERBOARD,
@@ -774,7 +795,7 @@ def test_a_list_of_floats_refuses_a_value_json_cannot_carry(value: float):
     with pytest.raises(ValidationError):
         EstimateSeries(value=[1.0, value], low=[1.0, 1.0], high=[1.0, 1.0], margin=[0.0, 0.0])
     with pytest.raises(ValidationError):
-        RowCharts(episodes=1, density=[value])
+        RowCharts(episodes=1, density=[value], rank=[None])
 
 
 def test_every_model_of_the_module_refuses_nan_and_infinity():
@@ -825,7 +846,16 @@ def test_a_text_that_is_not_given_reads_as_none():
             0.0,
             100.0,
         ),
-        (lambda share: ProgressPanel(episodes=1, bands=[], edges=[], mean_credit=[50.0, share]), 0.0, 100.0),
+        (
+            lambda share: ProgressPanel(
+                episodes=1,
+                bands=[ProgressBand(outcome=DONE, episodes=[1, 1])],
+                edges=[[0.0, 0.0], [1.0, 1.0]],
+                mean_credit=[50.0, share],
+            ),
+            0.0,
+            100.0,
+        ),
     ],
     ids=['step_score', 'outcome_shares', 'episode credit', 'mean_credit'],
 )
@@ -844,3 +874,203 @@ def test_a_descriptor_checks_each_rule_with_its_own_validator():
         '_no_two_outcome_groups_share_a_key',
         '_the_rows_rank_on_one_of_the_metrics',
     }
+
+
+def put(*path: str | int, value: object) -> Callable[[Any], None]:
+    """An edit that sets the value at `path` in a wire form."""
+
+    def edit(wire: Any) -> None:
+        for step in path[:-1]:
+            wire = wire[step]
+        wire[path[-1]] = value
+
+    return edit
+
+
+def drop(*path: str | int) -> Callable[[Any], None]:
+    """An edit that removes the key at `path` from a wire form."""
+
+    def edit(wire: Any) -> None:
+        for step in path[:-1]:
+            wire = wire[step]
+        del wire[path[-1]]
+
+    return edit
+
+
+def unchanged(wire: Any) -> None:
+    del wire
+
+
+def both(*edits: Callable[[Any], None]) -> Callable[[Any], None]:
+    """An edit that applies each of `edits`, in order."""
+
+    def edit(wire: Any) -> None:
+        for one in edits:
+            one(wire)
+
+    return edit
+
+
+PANEL = PROGRESS.rows[RowKey('model-a')].panels[0]
+STEPS_PANEL = PROGRESS.rows[RowKey('model-b')].panels[0]
+FAMILY = MODELS_RESPONSE.models[0]
+LIST = LeaderboardListResponse.model_validate(MODELS[1].model_dump(mode='json'))
+SUMMARY = LIST.leaderboards[0]
+
+# Each check: the model, a valid fixture, an edit that keeps it just valid, and one that makes it just invalid.
+CHECKS = {
+    'default time limit within the max': (
+        TimeLimit(default_s=100, max_s=120),
+        put('default_s', value=120),
+        put('default_s', value=121),
+    ),
+    'clip ends after its start': (MODEL_LEADERBOARD.highlights[0], put('end_s', value=3.01), put('end_s', value=3.0)),
+    'clip end before zero': (MODEL_LEADERBOARD.highlights[0], put('end_s', value=3.01), put('end_s', value=-1.0)),
+    'chart density at each window': (CHARTS, unchanged, put('rows', 'model-a', 'density', value=[0.0, 1.5])),
+    'chart rank at each window': (CHARTS, unchanged, put('rows', 'model-a', 'rank', value=[None, None])),
+    'chart series at each window': (
+        CHARTS,
+        unchanged,
+        put('rows', 'model-a', 'series', 'score', value={'value': [1.0], 'low': [1.0], 'high': [1.0], 'margin': [0.0]}),
+    ),
+    'chart row needs its density': (CHARTS, unchanged, drop('rows', 'model-a', 'density')),
+    'band count not negative': (PANEL.bands[0], put('episodes', value=[0, 0, 0]), put('episodes', value=[0, -1, 0])),
+    'one place in each tag': (
+        SUMMARY,
+        put('tags', 1, 'position', value=0),
+        put('tags', 1, 'tag', value='example.site'),
+    ),
+    'no two listed leaderboards share a slug': (
+        LIST,
+        unchanged,
+        put('leaderboards', 1, 'leaderboard', value='example-board'),
+    ),
+    'each listed leaderboard has a place in the tag': (LIST, unchanged, put('leaderboards', 1, 'tags', value=[])),
+    'listed leaderboards in the order of their places': (
+        LIST,
+        put('leaderboards', 1, 'tags', 0, 'position', value=1),
+        put('leaderboards', 1, 'tags', 0, 'position', value=0),
+    ),
+    'each checkpoint of a row once': (
+        MODEL_ROW,
+        put('checkpoints', value=['model-a-v1', 'model-a-v2']),
+        put('checkpoints', value=['model-a-v2', 'model-a-v2']),
+    ),
+    'outcome shares add up to at most one': (
+        MODEL_ROW,
+        put('outcome_shares', 'stopped', value=0.25),
+        put('outcome_shares', 'stopped', value=0.26),
+    ),
+    'a pair is two rows': (
+        PairVerdict(rows=(RowKey('a'), RowKey('b')), separated=True),
+        unchanged,
+        put('rows', value=['a', 'a']),
+    ),
+    'no two rows share a key': (MODEL_LEADERBOARD, unchanged, put('rows', 2, 'key', value='model-a')),
+    'no two tasks share an id': (MODEL_LEADERBOARD, unchanged, put('tasks', 1, 'id', value='stack-the-cubes')),
+    'a row names a metric of the descriptor': (
+        MODEL_LEADERBOARD,
+        unchanged,
+        put('rows', 1, 'metrics', 'other', value={'value': 1.0, 'low': 1.0, 'high': 1.0}),
+    ),
+    'a row names an outcome group of the descriptor': (
+        MODEL_LEADERBOARD,
+        unchanged,
+        put('rows', 1, 'outcome_shares', value={'other': 0.5}),
+    ),
+    'a pair names rows of the leaderboard': (
+        MODEL_LEADERBOARD,
+        unchanged,
+        put('pairs', 0, 'rows', value=['model-a', 'model-z']),
+    ),
+    'a highlight names a row of the leaderboard': (
+        MODEL_LEADERBOARD,
+        unchanged,
+        put('highlights', 0, 'row', value='model-z'),
+    ),
+    'a highlight names a task of the leaderboard': (
+        MODEL_LEADERBOARD,
+        unchanged,
+        put('highlights', 0, 'task', value='other-task'),
+    ),
+    'no place past the ranked rows': (
+        MODEL_LEADERBOARD,
+        put('rows', 1, 'rank', value={'best': 2, 'worst': 2}),
+        put('rows', 1, 'rank', value={'best': 1, 'worst': 3}),
+    ),
+    'counts hold no more tasks than the list': (
+        MODEL_LEADERBOARD,
+        put('counts', 'tasks', value=2),
+        put('counts', 'tasks', value=3),
+    ),
+    'series of one length': (SERIES, unchanged, put('low', value=[None, 5.0])),
+    'series limit with a whole estimate or none': (SERIES, unchanged, put('low', 1, value=None)),
+    'series range in order': (SERIES, put('low', 2, value=26.0), put('low', 2, value=26.5)),
+    'series margin not negative': (SERIES, put('margin', 1, value=0.0), put('margin', 1, value=-0.1)),
+    'windows rise': (CHARTS, put('windows', value=[0.0, 1.0, 1.5]), put('windows', value=[0.0, 1.0, 1.0])),
+    'windows not negative': (CHARTS, put('windows', 0, value=0.0), put('windows', 0, value=-0.5)),
+    'a chart pair names rows of the chart': (CHARTS, unchanged, put('pairs', 0, 'rows', value=['model-a', 'model-z'])),
+    'an episode task has a step': (EPISODE, put('steps', value=1), put('steps', value=0)),
+    'an episode pace not negative': (EPISODE, put('pace', value=0.0), put('pace', value=-0.1)),
+    'a success within its episode': (
+        EPISODE,
+        put('seconds_to_success', value=100.0),
+        put('seconds_to_success', value=100.5),
+    ),
+    'no two episodes share an id': (EPISODES, unchanged, put('episodes', 1, 'id', value='1f/3')),
+    'a panel has an episode': (PANEL, unchanged, put('episodes', value=0)),
+    'a panel has a band': (PANEL, unchanged, put('bands', value=[])),
+    'a panel has a second': (PANEL, unchanged, put('mean_credit', value=[])),
+    'a panel bands one kind of key': (
+        PANEL,
+        unchanged,
+        put('bands', 1, value={'steps_done': 0, 'episodes': [4, 3, 2]}),
+    ),
+    'a panel names each band once': (PANEL, unchanged, put('bands', 1, 'outcome', value='done')),
+    'one edge more than the bands': (PANEL, unchanged, put('edges', value=[[0.0, 0.0, 0.0], [0.0, 1.0, 2.0]])),
+    'each panel series at each second': (PANEL, unchanged, put('mean_credit', value=[0.0, 25.0])),
+    'the bands hold each episode once': (
+        PANEL,
+        both(put('bands', 0, 'episodes', value=[1, 1, 2]), put('bands', 1, 'episodes', value=[3, 3, 2])),
+        put('bands', 0, 'episodes', value=[0, 1, 3]),
+    ),
+    'the top edge holds every episode': (PANEL, unchanged, put('edges', 2, value=[4.0, 4.0, 3.0])),
+    'the edges stack': (PANEL, put('edges', 1, 2, value=4.0), put('edges', 1, 2, value=4.5)),
+    'an edge not negative': (PANEL, unchanged, put('edges', 0, 0, value=-0.1)),
+    'a mean of steps not negative': (
+        STEPS_PANEL,
+        put('mean_steps_done', 0, value=0.0),
+        put('mean_steps_done', 0, value=-0.1),
+    ),
+    'no two panels share a task': (
+        PROGRESS.rows[RowKey('model-b')],
+        unchanged,
+        put('panels', value=[STEPS_PANEL.model_dump(mode='json')] * 2),
+    ),
+    'no panel past the horizon': (
+        PROGRESS.rows[RowKey('model-b')],
+        put('horizon_s', value=2),
+        put('horizon_s', value=1),
+    ),
+    'each card line once': (MODEL_A_CARD, unchanged, put('lines', 1, 'field', value='maker')),
+    'no two checkpoints of a family share an id': (FAMILY, unchanged, put('checkpoints', 0, 'id', value='model-a-v2')),
+    'the commands run a checkpoint of the family': (
+        FAMILY,
+        put('card', 'run_commands', 'checkpoint', value='model-a-v1'),
+        put('card', 'run_commands', 'checkpoint', value='model-a-v9'),
+    ),
+    'no two families share an id': (MODELS_RESPONSE, unchanged, put('models', 1, 'id', value='model-a')),
+}
+
+
+@pytest.mark.parametrize(('model', 'valid', 'invalid'), CHECKS.values(), ids=CHECKS.keys())
+def test_a_value_just_inside_a_check_passes_and_one_just_outside_it_is_refused(
+    model: BaseModel, valid: Callable[[Any], None], invalid: Callable[[Any], None]
+):
+    kept, refused = (json.loads(model.model_dump_json()) for _ in range(2))
+    valid(kept)
+    invalid(refused)
+    type(model).model_validate(kept)
+    with pytest.raises(ValidationError):
+        type(model).model_validate(refused)
