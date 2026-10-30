@@ -1,6 +1,6 @@
 # Direct API robot policy
 
-`LLMPolicy` runs on the rig and calls a public model API on a worker thread. There is no Positronic inference server. Pydantic AI selects the provider and manages its client, native messages, and SDK defaults; the policy owns the conversation, tools, and validation. The runner owns episode boundaries.
+`LLMPolicy` runs on the rig and calls a public model API on a worker thread. The same policy can also run behind an inference server; see [Serve as an endpoint](#serve-as-an-endpoint). Pydantic AI selects the provider and manages its client, native messages, and SDK defaults; the policy owns the conversation, tools, and validation. The runner owns episode boundaries.
 
 ## Run in simulation
 
@@ -107,6 +107,31 @@ Events contain the system prompt and tool schemas, measured observations, call n
 The processor records responses when it consumes them. The recorded snapshot contains events available when the episode finishes; an unconsumed response is absent even if its API call has completed. Later responses and generator cleanup do not modify it. Failed or aborted episodes need not retain a transcript.
 
 Only one model invocation can be in flight. The processor continues consuming replies and playing commands while the robot reports an unavailable status. Playback combines overdue waypoints into the latest command. API failures propagate. Follow-up invocations start only when the control loop resumes the processor. An ended episode starts no further invocations, and a late response cannot command motion. The runtime waits for the current invocation, including SDK retries within its timeout, before closing the generator.
+
+## Serve as an endpoint
+
+`positronic.vendors.llm.server` serves the policy over the [offboard protocol](../../offboard/README.md). One process serves one model, and the API key comes from the server's environment. Each session opens its own model client at its first call, and closes it when the session ends or fails. So with `ANTHROPIC_API_KEYS` set, each session uses one key from the list at random, as each local episode does. `--policy.*` takes the same flags as the local config:
+
+```bash
+uv run --locked --extra llm-anthropic python -m positronic.vendors.llm.server \
+  --policy.model=anthropic:claude-opus-5-5 --policy.motion.max_translation=0.02
+```
+
+The server listens on port 8000 and takes the wire flags of `positronic.offboard.server.serve`. A client connects as to any other server:
+
+```bash
+uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes --eval.timeout=300 \
+  --policy=.remote --policy.address.host=<server> --policy.address.port=8000 \
+  --policy.infer_timeout=600 --output_dir=~/datasets/llm-policy/remote
+```
+
+Each session has its own conversation, and the end of the session drops it. One inference call is one decision, and it includes all corrections and pictures. A decision makes at most `max_invalid` API calls with `images=always`, and `(cameras + 1) × max_invalid` with `images=on_demand`, each up to `timeout` seconds. `--decision_timeout` (360 s by default) stops a decision before its next call, so one decision takes at most `decision_timeout + timeout` seconds: 480 s by default. Set the client's `--policy.infer_timeout` above that: 600 s here. The server sees a dropped client only when it sends the answer, so a reconnect during a decision waits for the dropped decision first, up to twice that bound. A decision that raises or passes its deadline fails the session, and every later call of that session fails. A move answers with its trajectory. The client plays it at `motion.fps` with the local cadence, and then asks for the next decision. A move starts from the pose in the request, not from the pose when the answer arrives. `done`, `give_up` and call-budget exhaustion answer with the `end` field, and the episode records `eval.policy_end`.
+
+The server runs one call at a time, so concurrent episodes wait for each other. Declare a platform endpoint for it with `max_concurrent_sessions: 1`, and start one server process for each parallel episode. The server runs no warmup inference, because each call to the provider is paid.
+
+### Find the transcript of a remote episode
+
+The episode records the model configuration under `inference.policy.server`, and the session ID under `inference.policy.session_id`. The server writes the rest of what a local episode records to `<sessions_dir>/<session_id>.json` on the server host: the policy meta, `stop_reason`, `hindsight`, `transcript` with the token usage of each response, `session_id`, and `api_key_fingerprint` when the session used a key from `ANTHROPIC_API_KEYS`. `--sessions_dir` is `llm_sessions` under the server's working directory by default, and the server logs the absolute path when it starts. It writes the file when the session decides its end or fails, and again when the session closes. So a session that the client ends by a timeout or a disconnect also has a file, without `stop_reason`. A connection that drops before its first answer reconnects under a new session ID, and the dropped session keeps a file of its own. The episode records the new ID once the new session has answered; an episode that ends first, or whose new session fails, records the dropped ID. The server stamps each observation with its own monotonic clock, so the `obs_time_ns` values in a remote transcript do not match the times of the recorded signals.
 
 ## Supervised hardware
 

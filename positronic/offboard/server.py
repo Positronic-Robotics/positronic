@@ -74,6 +74,11 @@ class _ServedTiming:
             return function(obs)
 
 
+def _error_text(error: Exception) -> str:
+    """The error a client reads: the type names an exception whose text is empty, such as a bare ``TimeoutError``."""
+    return f'{type(error).__name__}: {error}'
+
+
 class PolicyServer:
     """Serve one model through a policy deployment: a declared client processor stack and a server codec.
 
@@ -194,7 +199,7 @@ class PolicyServer:
                 raise
             except Exception as e:
                 logger.error(f'Error processing message: {e}', exc_info=True)
-                await conn.send(serialise({protocol.ERROR: str(e)}))
+                await conn.send(serialise({protocol.ERROR: _error_text(e)}))
 
     async def _serve_session(self, conn: server_wire.ServerConnection):
         logger.info(f'Connected to {conn.peer}')
@@ -238,8 +243,10 @@ class PolicyServer:
         except Exception as e:
             logger.error(f'Failed session: {e}', exc_info=True)
             try:
-                await conn.send(serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: str(e)}))
-                await conn.refuse(str(e))
+                await conn.send(
+                    serialise({protocol.STATUS: protocol.ServerStatus.ERROR, protocol.ERROR: _error_text(e)})
+                )
+                await conn.refuse(_error_text(e))
             except wire.PeerDisconnected:
                 logger.debug('The client was gone before the error reached it', exc_info=True)
             except Exception:
@@ -345,6 +352,23 @@ def socket_at(uds: str) -> websocket_wire.ServedUnixSocket:
     return websocket_wire.ServedUnixSocket(Path(uds))
 
 
+def serve_model(
+    build_model: Callable[[], Model],
+    pipeline: cfn.Config | PolicyDeployment,
+    wires: Sequence[server_wire.Wire],
+    idle_timeout_min: float | None,
+) -> None:
+    """Serve ``build_model`` through ``pipeline`` on every wire in ``wires``, until the server stops.
+
+    The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
+    Unset serves open.
+    """
+    server = PolicyServer(
+        build_model, pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV)
+    )
+    server.serve(wires)
+
+
 @cfn.config(websocket=websocket, grpc=None, idle_timeout_min=None)
 def serve(
     model: cfn.Config,
@@ -353,8 +377,8 @@ def serve(
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
 ):
-    """The CLI entry point every vendor server exposes: bind ``model`` and ``pipeline``, and the commands are
-    configs of this.
+    """The CLI entry point of a vendor server that binds a ``model`` config and a ``pipeline`` config; the
+    commands are configs of this.
 
     ``model`` names the one checkpoint the server loads: ``--model.checkpoints_dir=...`` for LeRobot and
     OpenPI, ``--model.model_source=...`` for GR00T. ``pipeline`` is the rig-side stack and the server codec.
@@ -365,8 +389,6 @@ def serve(
         --websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/p.sock
         --grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001
 
-    The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
-    Unset serves open.
+    The bearer token comes from ``AUTH_TOKEN_ENV``, as ``serve_model`` reads it.
     """
-    server = PolicyServer(model, pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV))
-    server.serve([w for w in (websocket, grpc) if w is not None])
+    serve_model(model, pipeline, [w for w in (websocket, grpc) if w is not None], idle_timeout_min)
