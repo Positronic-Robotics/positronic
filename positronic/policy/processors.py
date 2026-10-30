@@ -626,6 +626,7 @@ class InferenceSchedule(Policy):
     episode metadata; recovery intent is retained until a call can carry it.
     Replanning ignores predictions from earlier calls while letting those calls finish.
     Each accepted call carries a per-run ``call_id`` and unreported completions in ``call_timings``.
+    ``on_replan`` (a streaming session's frame streamer, not part of the spec) gets the time of each replan.
     """
 
     WIRE_NAME = 'inference_schedule'
@@ -639,6 +640,7 @@ class InferenceSchedule(Policy):
         merge: TrajectoryMerge,
         latency_estimate: DurationEstimate,
         obs_time_key: str = policy_keys.OBS_TIME_NS,
+        on_replan: Callable[[int], None] | None = None,
     ) -> None:
         check_finite_positive(fps, 'fps')
         self._fps = fps
@@ -646,6 +648,7 @@ class InferenceSchedule(Policy):
         self._merge = merge
         self._latency_estimate = latency_estimate
         self._obs_time_key = obs_time_key
+        self._on_replan = on_replan
 
     @property
     def latency_estimate(self) -> DurationEstimate:
@@ -732,6 +735,8 @@ class InferenceSchedule(Policy):
                     previous = None
                     timing.request_now(now_ns)
                     replan = True
+                    if self._on_replan is not None:
+                        self._on_replan(now_ns)
                 sample_time_ns: int = obs.get(self._obs_time_key, now_ns)
 
                 if (call := calls.pop_ready()) is not None:

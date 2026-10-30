@@ -27,7 +27,8 @@ at the request time ``T``, the latest control tick at or before ``T + offset`` f
 ``ChunkedSchedule`` starts a chunk when it reads the answer, or when the previous chunk ends if that is
 later, and sends the next request at the first tick at or after the chunk's end less its inference lead:
 the start plus ``len(chunk) / fps``, less the lead estimate, which follows the delays from each submit to
-the read of its answer. The streamer predicts ``T`` from the same times and keeps its own copy of the
+the read of its answer. A replan after an arm error ends the previous chunk at once, and the schedule
+reports it (``on_replan``). The streamer predicts ``T`` from the same times and keeps its own copy of the
 ticks. It plans the rows when the schedule reads the answer. A timer sends each row when its target time
 has passed, so the last row reaches the server before the request; a row whose target has passed at the
 plan goes at once. An answer whose next request is due at once, such as an empty chunk, plans no rows.
@@ -240,9 +241,9 @@ class FrameStreamer:
 
     ``keys``, ``offsets_sec`` and ``pad_start`` are those of the declared ``TemporalStack``. ``resize``
     sizes the frames as the declared stack does. ``fps`` and ``horizon_sec`` are those of the schedule, and
-    ``lead`` gives its inference lead from the delay of an answer (``DurationEstimateRun.update``; None: no lead).
-    ``send`` puts one message on the session's connection, under the lock of the connection. ``clock`` is
-    the episode clock in nanoseconds.
+    ``lead`` gives its inference lead from the delay of an answer (``DurationEstimateRun.update``; None: no lead),
+    and ``on_replan`` takes its replans. ``send`` puts one message on the session's connection, under the lock of
+    the connection. ``clock`` is the episode clock in nanoseconds.
     """
 
     def __init__(
@@ -311,6 +312,13 @@ class FrameStreamer:
     def on_submit(self) -> None:
         """Record the time the schedule submits a call."""
         self._submitted_at = self._clock() / 1e9
+
+    def on_replan(self, now_ns: int) -> None:
+        """Record that the schedule cleared its plan at ``now_ns`` (``ChunkedSchedule``'s ``on_replan``): the next
+        chunk starts when the schedule reads its answer, and the rows planned for the call it dropped do not go out."""
+        with self._lock:
+            self._targets = []
+        self._chunk_end = now_ns / 1e9
 
     def on_answer(self, chunk: cabc.Sized) -> None:
         """Plan the rows of the next request when the schedule reads ``chunk``."""
