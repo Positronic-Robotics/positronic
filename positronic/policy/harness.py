@@ -318,7 +318,7 @@ class Harness(pimm.ControlSystem):
             name for name, command in commands.items() if isinstance(command, CartesianPosition | CartesianDelta)
         )
         if posed:
-            raise ValueError(
+            raise PolicyCommandError(
                 f'The policy states no {EE_FRAMES}, so it speaks joints only, and it sends a pose command on {posed}. '
                 'State the frame of each pose that the policy reads or commands.'
             )

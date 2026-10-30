@@ -1889,7 +1889,7 @@ POSE_COMMANDS = [
 def test_a_policy_that_states_no_frames_fails_at_its_first_pose_command(command):
     policy = StubPolicy(command=command)
     commands = []
-    with pytest.raises(ValueError, match=roboarm_keys.EE_FRAMES):
+    with pytest.raises(PolicyCommandError, match=roboarm_keys.EE_FRAMES):
         run_robot_rollout(policy, commands=commands).result()
     assert len(policy.observations) == 1
     assert commands == []

@@ -131,6 +131,7 @@ Anything richer — a foot pedal, a rig UI — is a driver of its own rather tha
 - `RemotePolicy`, when that stack, or its check of a step, raises a `KeyError`, `TypeError`, `ValueError`, `IndexError` or `AttributeError` on an answer or an observation. Example: a v3 answer whose command channel name is bytes.
 - `RemotePolicy`, when a step from that stack puts no command object at a robot command channel.
 - The harness, when a step names a channel that the embodiment does not take.
+- The harness, when a policy that states no `ee_frames` sends a pose command.
 
 An error that the policy itself raises reaches the caller unchanged, and so does a server's error answer, a timeout or a lost connection.
 
