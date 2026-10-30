@@ -42,7 +42,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.video import LibavEncoder
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy import Policy, PolicyRun, Runtime, Step
+from positronic.policy import Policy, PolicyRun, Processor, Runtime, Step
 from positronic.policy.harness import Rollout
 from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 from positronic.simulator.molmo_spaces import keys as molmo_keys
@@ -57,7 +57,7 @@ def test_timed_sweep_rejects_real_embodiment(tmp_path):
     """``--timing`` with a real embodiment anywhere in the sweep fails up front: everything under the bound
     tracer enters the report, so a real eval's spans and wall time would silently corrupt it."""
     with pytest.raises(CommandFailed, match='all-simulated') as exc:
-        main(policy=object(), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
+        main(policy=Mock(spec=Processor), evals=[_eval(True), _eval(False)], output_dir=tmp_path, timing=True)
     assert exc.value.fault is Fault.USAGE
 
 
@@ -464,7 +464,7 @@ def test_a_real_droid_trial_homes_the_arm_with_no_control_law():
 def test_timed_sweep_needs_an_output_dir():
     """There is nowhere to write the sidecars without one, so the sweep is rejected before it spends anything."""
     with pytest.raises(CommandFailed, match='output_dir') as exc:
-        main(policy=object(), evals=[_eval(True)], timing=True)
+        main(policy=Mock(spec=Processor), evals=[_eval(True)], timing=True)
     assert exc.value.fault is Fault.USAGE
 
 

@@ -206,7 +206,7 @@ def _episode_paths(dataset_dir: Path) -> set[Path]:
 
 
 def main(
-    policy,
+    policy: Policy,
     *,
     evals: list[Eval],
     output_dir: str | Path | None = None,
