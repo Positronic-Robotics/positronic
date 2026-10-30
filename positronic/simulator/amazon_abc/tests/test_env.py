@@ -147,10 +147,10 @@ def env(server_modules: types.ModuleType) -> Any:
     return server_modules.AbcEnv()
 
 
-@pytest.fixture
-def yambox_env(server_modules: types.ModuleType) -> Any:
+@pytest.fixture(params=['yambox', 'abc_zed'])
+def fitted_env(request, server_modules: types.ModuleType) -> tuple[str, Any]:
     fits = sys.modules['camera_fit']
-    return server_modules.AbcEnv(fits.camera_fit_from_env({fits.CAMERA_FIT_ENV: 'yambox'}))
+    return request.param, server_modules.AbcEnv(fits.camera_fit_from_env({fits.CAMERA_FIT_ENV: request.param}))
 
 
 def _camera(scene: _FakeScene, name: str) -> tuple[np.ndarray, np.ndarray, float]:
@@ -192,10 +192,11 @@ def _camera_ids(scene: _FakeScene) -> list[tuple[str, int]]:
     return [(n, mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_CAMERA, n)) for n in ('top', 'left', 'right')]
 
 
-def test_the_yambox_fit_places_the_top_camera_from_the_arm_mounts_and_renders_the_frame_again(yambox_env, scene):
-    frame = yambox_env.reset(_TOKEN)
+def test_a_fit_places_the_top_camera_from_the_arm_mounts_and_renders_the_frame_again(fitted_env, scene):
+    name, env = fitted_env
+    frame = env.reset(_TOKEN)
 
-    top = sys.modules['camera_fit'].CAMERA_FITS['yambox'].top
+    top = sys.modules['camera_fit'].CAMERA_FITS[name].top
     position, rotation, fovy = _camera(scene, 'top')
     # The fake scene's arm mounts stand at y = +-0.3 on the world axes, so their midpoint is the origin.
     np.testing.assert_allclose(position, top.offset, atol=1e-9)
@@ -207,13 +208,14 @@ def test_the_yambox_fit_places_the_top_camera_from_the_arm_mounts_and_renders_th
     assert frame[protocol.SLOTS]
 
 
-def test_the_yambox_fit_turns_each_wrist_camera_from_abcs_pose_and_keeps_it_on_its_body(yambox_env, scene):
+def test_a_fit_turns_each_wrist_camera_from_abcs_pose_and_keeps_it_on_its_body(fitted_env, scene):
+    name, env = fitted_env
     mujoco.mj_kinematics(scene.model, scene.data)
     mujoco.mj_camlight(scene.model, scene.data)
     stock = {arm: _camera(scene, arm) for arm in ('left', 'right')}
-    yambox_env.reset(_TOKEN)
+    env.reset(_TOKEN)
 
-    fit = sys.modules['camera_fit'].CAMERA_FITS['yambox']
+    fit = sys.modules['camera_fit'].CAMERA_FITS[name]
     for arm, wrist in fit.wrists.items():
         position, rotation, fovy = _camera(scene, arm)
         stock_position, stock_rotation, _ = stock[arm]

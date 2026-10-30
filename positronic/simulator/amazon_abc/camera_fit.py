@@ -46,6 +46,12 @@ class CameraFit:
 # factory calibration (the ZED X top camera and both ZED X One wrist cameras).
 _YAMBOX_FOVY_DEG = 78.5
 
+# The ZED-X stations of the ABC-130k dataset: vertical fields of view from the median factory calibration of 18
+# episodes (top fy about 731 px, wrists fy about 719 px, at 1920x1200). The wrist pixels are not square (fx about
+# 671 px), so a 16:10 render at this fovy sees about 106 deg across, against their 110 deg.
+_ABC_ZED_TOP_FOVY_DEG = 78.8
+_ABC_ZED_WRIST_FOVY_DEG = 79.7
+
 CAMERA_FITS: dict[str, CameraFit] = {
     # The yambox YAM rig. The top pose overlaps the dark arm parts at the start pose with three recorded first frames,
     # and points the table's long edges at their vanishing point in those frames. The wrist poses point the table's
@@ -63,7 +69,23 @@ CAMERA_FITS: dict[str, CameraFit] = {
                 offset=(0.007, -0.011, -0.020), rotation_deg=(31.375, 9.5, 9.75), fovy_deg=_YAMBOX_FOVY_DEG
             ),
         },
-    )
+    ),
+    # The ZED-X stations of the ABC-130k dataset. The top pose is the left eye of the stereo top camera: it overlaps
+    # the arms at their recorded first joints in nine first frames from six stations. The wrist poses overlap the
+    # open fingers common to 18 first frames. Render at 16:10 to match their 1920x1200 frames.
+    'abc_zed': CameraFit(
+        top=TopCamera(
+            offset=(-0.120, 0.053, 0.878), yaw_deg=0.75, pitch_deg=48.5, roll_deg=-2.06, fovy_deg=_ABC_ZED_TOP_FOVY_DEG
+        ),
+        wrists={
+            'left': WristCamera(
+                offset=(0.0, 0.019, -0.061), rotation_deg=(1.375, 1.375, -0.125), fovy_deg=_ABC_ZED_WRIST_FOVY_DEG
+            ),
+            'right': WristCamera(
+                offset=(-0.005, 0.019, -0.060), rotation_deg=(0.375, -3.5, 0.0), fovy_deg=_ABC_ZED_WRIST_FOVY_DEG
+            ),
+        },
+    ),
 }
 
 
