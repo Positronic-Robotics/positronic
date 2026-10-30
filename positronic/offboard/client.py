@@ -343,7 +343,14 @@ class InferenceClient:
 
         Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
         """
-        return self._connect(self.connect_deadline, reopen=lambda: self._connect(self.reconnect_deadline, reopen=None))
+        # A reconnect holds the arm still, so even its first dial waits no longer than the reconnect deadline.
+        return self._connect(
+            self.connect_deadline,
+            self.open_timeout,
+            reopen=lambda: self._connect(
+                self.reconnect_deadline, min(self.open_timeout, self.reconnect_deadline), reopen=None
+            ),
+        )
 
     def wait_for_server(self) -> None:
         """Return once a server answers on the address, without opening a session.
@@ -362,22 +369,27 @@ class InferenceClient:
             if refusal is not None:
                 raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
 
-        self._retry(time.monotonic() + self.connect_deadline, probe)
+        self._retry(time.monotonic() + self.connect_deadline, probe, self.open_timeout)
 
-    def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
-        """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock."""
+    def _connect(
+        self, deadline_sec: float, first_open_timeout: float, reopen: Callable[[], InferenceSession] | None
+    ) -> InferenceSession:
+        """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock. The first dial waits
+        ``first_open_timeout`` at most."""
         deadline = time.monotonic() + deadline_sec
-        return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout))
+        return self._retry(
+            deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout), first_open_timeout
+        )
 
-    def _retry(self, deadline: float, attempt: Callable[[float], T]) -> T:
+    def _retry(self, deadline: float, attempt: Callable[[float], T], first_open_timeout: float) -> T:
         """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``.
 
-        ``attempt`` takes the seconds its dial may wait. The first attempt gets the whole ``open_timeout``, and a
-        retry gets ``open_timeout`` or the time left, whichever is shorter.
+        ``attempt`` takes the seconds its dial may wait. The first attempt gets ``first_open_timeout``, and a retry
+        gets ``open_timeout`` or the time left, whichever is shorter.
         """
         backoff = 1.0
         retries = ConnectRetries()
-        open_timeout = self.open_timeout
+        open_timeout = first_open_timeout
         while True:
             try:
                 return attempt(open_timeout)

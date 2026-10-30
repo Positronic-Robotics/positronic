@@ -493,6 +493,18 @@ class TestADroppedConnectionReconnects:
 
         assert len(fake.dials) == 3
 
+    def test_a_reconnect_dials_no_longer_than_the_reconnect_deadline(self):
+        """A long open timeout serves a cold first connect. A reconnect holds the arm still, so its dial stops at
+        the reconnect deadline."""
+        fake = _FakeWire(
+            _connection(_ready('first'), wire.PeerDisconnected('dropped')),
+            _connection(_ready('second'), _answer({'action_data': [1]})),
+        )
+        session = InferenceClient(fake, _ADDRESS, open_timeout=900.0, reconnect_deadline=45.0).new_session()
+
+        assert session.infer({'image': 'test'}) == {'action_data': [1]}
+        assert [open_timeout for _, _, open_timeout in fake.dials] == [900.0, 45.0]
+
     def test_the_reconnect_deadline_bounds_a_handshake_that_never_reaches_ready(self):
         """A server that sends status updates while it loads keeps the arm waiting only for the deadline."""
         clock = [0.0]
