@@ -15,7 +15,6 @@ Changes from the source:
 
 - The `collision` elements are removed, and the mesh files they name are not copied.
 - Each mesh `filename` is the file name only, without `package://assets/`.
-- The limits of `joint2` and `joint6` are the MJCF ranges, which the driver enforces: `[0, 3.66519]` and
-  `[-2.0944, 2.0944]`.
+- The limits of `joint2` and `joint6` are the MJCF ranges: `[0, 3.66519]` and `[-2.0944, 2.0944]`.
 
 The meshes are copied without change.

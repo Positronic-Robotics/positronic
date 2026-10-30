@@ -35,6 +35,17 @@ MAX_STREAMED_STEP = yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S / yam._CONTROL_HZ
 OPEN, CLOSED = 0.0, 1.0
 _GRIP_TOL = 0.05
 STATION_GRAVITY_COMP = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]
+# The joint ranges of the i2rt YAM arm model, and the limits an i2rt chain reports: those ranges widened by
+# 0.15 rad (i2rt get_robot.py:196).
+I2RT_YAM_RANGES = np.array([
+    [-2.61799, 3.14159],
+    [-8.88178e-16, 3.66519],
+    [0.0, 3.14159],
+    [-1.69297, 1.5708],
+    [-1.5708, 1.5708],
+    [-2.0944, 2.0944],
+])
+I2RT_YAM_LIMITS = I2RT_YAM_RANGES + np.array([-0.15, 0.15])
 
 
 class FakeYam(yam._FakeYam):
@@ -50,6 +61,7 @@ class FakeYam(yam._FakeYam):
         self.gives_back = 1.0
         self.floats_at = np.zeros(6)
         self.stops = np.zeros(2)
+        self.joint_limits = I2RT_YAM_LIMITS.copy()
         self.stuck = False
         self.targets = []
         self.released_at = []
@@ -125,7 +137,7 @@ class Watched:
 
 
 class Rig:
-    def __init__(self, park_tuning=DEFAULT_TUNING, move_tuning=yam.MOVE_SETTLE, watch=None):
+    def __init__(self, park_tuning=DEFAULT_TUNING, move_tuning=yam.MOVE_SETTLE, watch=None, park_after_idle_s=1.0):
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
@@ -142,7 +154,7 @@ class Rig:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
             connect=lambda channel, sim, gravity_comp_factor: ports['vendor'],
-            park_after_idle_s=1.0,
+            park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
         )
@@ -603,7 +615,7 @@ def test_a_blocking_move_never_corrects_past_a_joint_limit(world, rig):
         answer.result()
     assert answered.value.kind is FaultKind.ARM
     assert isinstance(answered.value.__cause__, TimeoutError)
-    assert min(target[1] for target in rig.vendor.targets[sent:]) >= 0.0
+    assert min(target[1] for target in rig.vendor.targets[sent:]) >= I2RT_YAM_RANGES[1, 0] - 1e-12
 
 
 def test_a_streamed_target_one_tick_of_travel_away_reaches_the_chain_unchanged_and_uncorrected(rig):
@@ -686,36 +698,40 @@ def test_a_streamed_target_past_the_joint_range_stops_at_the_limit(rig, past_the
     sent = len(rig.vendor.targets)
     rig.commands.push(past_the_range)
     rig.tick(0.9)
-    kinematics = yam._Kinematics()
     asked = _asked(rig)[sent:]
-    assert np.all((asked >= kinematics.lower) & (asked <= kinematics.upper))
-    assert asked[-1][3] == kinematics.upper[3]
-    assert asked[-1][5] == kinematics.lower[5]
+    assert np.all((asked >= I2RT_YAM_RANGES[:, 0] - 1e-12) & (asked <= I2RT_YAM_RANGES[:, 1] + 1e-12))
+    assert asked[-1][3] == pytest.approx(I2RT_YAM_RANGES[3, 1])
+    assert asked[-1][5] == pytest.approx(I2RT_YAM_RANGES[5, 0])
 
 
-# The joint limits an i2rt YAM chain reports: its arm XML range widened by 0.15 rad (i2rt get_robot.py:196).
-I2RT_YAM_LIMITS = np.array([
-    [-2.61799, 3.14159],
-    [-8.88178e-16, 3.66519],
-    [0.0, 3.14159],
-    [-1.69297, 1.5708],
-    [-1.5708, 1.5708],
-    [-2.0944, 2.0944],
-]) + np.array([-0.15, 0.15])
+def test_the_joint_range_is_the_range_of_the_i2rt_arm_model():
+    rig = Rig(park_after_idle_s=10.0)
+    rig.raise_arm()
+    for side, past in ((0, I2RT_YAM_RANGES[:, 0] - 0.5), (1, I2RT_YAM_RANGES[:, 1] + 0.5)):
+        rig.commands.push(command.JointPosition(past))
+        rig.tick(2.0)
+        np.testing.assert_allclose(_asked(rig)[-1], I2RT_YAM_RANGES[:, side], atol=1e-12)
+    rig.loop.close()
+
+
+def test_a_cartesian_target_that_needs_joint_4_past_the_mjcf_range_reaches_the_chain(rig):
+    rig.raise_arm()
+    wrist_down = RAISED.copy()
+    wrist_down[3] = -1.62  # past the -1.5708 of the MJCF, inside the -1.69297 of the i2rt arm model
+    rig.commands.push(command.CartesianPosition(yam._Kinematics().fk(wrist_down)))
+    rig.tick(0.9)
+    np.testing.assert_allclose(_asked(rig)[-1], wrist_down, atol=1e-6)
+
+
 # i2rt halts the chain when a joint reads this far past its limits (i2rt motor_chain_robot.py:254).
 I2RT_HALT_PAST_LIMIT_RAD = 0.1
 JOINT3 = 2
 
 
-def _on_an_i2rt_chain(rig) -> None:
-    rig.vendor.joint_limits = I2RT_YAM_LIMITS.copy()
-
-
 def test_a_streamed_target_past_the_chain_limit_stops_short_of_where_the_chain_halts(rig):
-    _on_an_i2rt_chain(rig)
     rig.raise_arm()
     folded = RAISED.copy()
-    folded[JOINT3] = 3.6  # inside the model's range, past the chain's
+    folded[JOINT3] = 3.6  # past the chain's range
     sent = len(rig.vendor.targets)
     rig.commands.push(command.JointPosition(folded))
     rig.tick(0.9)
@@ -725,8 +741,7 @@ def test_a_streamed_target_past_the_chain_limit_stops_short_of_where_the_chain_h
     assert asked[-1][JOINT3] == pytest.approx(I2RT_YAM_LIMITS[JOINT3, 1] - yam._Arm._CHAIN_LIMIT_MARGIN_RAD)
 
 
-def test_a_streamed_target_inside_the_model_and_the_chain_limits_reaches_the_chain_unchanged(rig):
-    _on_an_i2rt_chain(rig)
+def test_a_streamed_target_inside_the_chain_limits_reaches_the_chain_unchanged(rig):
     rig.raise_arm()
     folded = RAISED.copy()
     folded[JOINT3] = 3.0
@@ -736,7 +751,6 @@ def test_a_streamed_target_inside_the_model_and_the_chain_limits_reaches_the_cha
 
 
 def test_a_blocking_move_past_the_chain_limit_never_sends_a_target_past_it(world, rig):
-    _on_an_i2rt_chain(rig)
     rig.raise_arm()
     folded = RAISED.copy()
     folded[JOINT3] = 3.6

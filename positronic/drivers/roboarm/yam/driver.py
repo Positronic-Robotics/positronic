@@ -235,11 +235,11 @@ class _Arm(DriverRun[command.CommandType]):
 
     @functools.cached_property
     def _joint_range(self) -> tuple[np.ndarray, np.ndarray]:
-        """The model's joint range inside the limits the chain reports, less ``_CHAIN_LIMIT_MARGIN_RAD``."""
+        """The limits the chain reports, less ``_CHAIN_LIMIT_MARGIN_RAD``."""
         with _chain_call():
             limits = np.asarray(self.vendor.get_robot_info()[_JOINT_LIMITS], dtype=np.float64)
         margin = self._CHAIN_LIMIT_MARGIN_RAD
-        return np.maximum(self._kin.lower, limits[:, 0] + margin), np.minimum(self._kin.upper, limits[:, 1] - margin)
+        return limits[:, 0] + margin, limits[:, 1] - margin
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
