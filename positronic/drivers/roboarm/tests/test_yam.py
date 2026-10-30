@@ -39,7 +39,7 @@ DEFAULT_TUNING = yam.PARK_SETTLE
 MAX_STREAMED_STEP = yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S / yam._CONTROL_HZ
 OPEN, CLOSED = 0.0, 1.0
 _GRIP_TOL = 0.05
-STATION_GRAVITY_COMP = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0]
+STATION_GRAVITY_COMP = [1.0, 1.20, 1.25, 1.26, 1.38, 1.0]
 # The joint ranges of the i2rt YAM arm model, and the limits an i2rt chain reports: those ranges widened by
 # 0.15 rad (i2rt get_robot.py:196).
 I2RT_YAM_RANGES = np.array([
