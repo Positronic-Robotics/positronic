@@ -12,7 +12,7 @@ from typing import Annotated
 
 from platform_client.boards import BoardRef
 from platform_client.ids import LeaderboardVersionId, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
-from platform_client.leaderboards import LeaderboardRef, LeaderboardTag
+from platform_client.leaderboards import LeaderboardRef, LeaderboardTag, LeaderboardTaskId
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from pydantic import AfterValidator, BaseModel, Field
 
@@ -105,7 +105,7 @@ class LeaderboardQuery(BaseModel):
 class LeaderboardPartQuery(BaseModel):
     """`leaderboards.episodes` and `leaderboards.progress` — one part of a leaderboard at `version`.
 
-    With no `version`, the platform answers from the published version.
+    With no `version`, the platform answers from the published version. A leaderboard with no versions has no parts.
     """
 
     model_config = INPUT_MODEL_CONFIG
@@ -117,7 +117,7 @@ class LeaderboardPartQuery(BaseModel):
 class LeaderboardChartsQuery(LeaderboardPartQuery):
     """`leaderboards.charts` — the charts over one `task`, or over every task where it is None."""
 
-    task: str | None = Field(default=None, min_length=1)
+    task: LeaderboardTaskId | None = None
 
 
 class SubmissionListQuery(BaseModel):

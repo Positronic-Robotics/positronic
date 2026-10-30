@@ -81,7 +81,7 @@ class SubmissionId(Id64):
 
 
 class LeaderboardVersionId(Id64):
-    """One version of a leaderboard. A published version does not change."""
+    """One version of a leaderboard. The numbers of a published version do not change."""
 
     __slots__ = ()
 

@@ -66,6 +66,7 @@ from platform_client.leaderboards import (
     LeaderboardRef,
     LeaderboardResponse,
     LeaderboardTag,
+    LeaderboardTaskId,
 )
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
@@ -806,7 +807,8 @@ def test_get_leaderboard_names_the_slug_and_parses_the_rows():
             'computed_at': AT,
             'rows': [
                 {
-                    'entrant': '0ddba7',
+                    'key': 'team-1f',
+                    'tag': '0ddba7',
                     'display_name': 'demo',
                     'rank': {'best': 1, 'worst': 1},
                     'metrics': {'primary': {'value': 0.75, 'low': 0.75, 'high': 0.75}},
@@ -831,7 +833,7 @@ def test_the_charts_of_a_task_name_the_version_and_the_task():
     gateway = Gateway(200, {**LEADERBOARD_PART, 'task': 'stack-the-cubes', 'windows': [0.0, 1.0]})
 
     response = make_client(gateway).leaderboard_charts(
-        LeaderboardRef('example-board'), version=LeaderboardVersionId(0x2A), task='stack-the-cubes'
+        LeaderboardRef('example-board'), version=LeaderboardVersionId(0x2A), task=LeaderboardTaskId('stack-the-cubes')
     )
 
     assert isinstance(response, LeaderboardChartsResponse)

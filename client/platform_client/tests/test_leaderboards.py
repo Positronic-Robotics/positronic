@@ -10,14 +10,12 @@ from platform_client import leaderboards
 from platform_client.ids import LeaderboardVersionId, SubmissionId
 from platform_client.leaderboards import (
     PRIMARY_METRIC,
+    TIME_LIMIT_PLACEHOLDER,
     Baseline,
     CardFact,
     CardLine,
     Caveat,
     CheckpointRef,
-    EntrantCharts,
-    EntrantId,
-    EntrantProgress,
     EpisodeColumn,
     EpisodeId,
     EpisodeMedia,
@@ -38,6 +36,7 @@ from platform_client.leaderboards import (
     LeaderboardSummary,
     LeaderboardTag,
     LeaderboardTask,
+    LeaderboardTaskId,
     Link,
     Metric,
     ModelCard,
@@ -49,6 +48,9 @@ from platform_client.leaderboards import (
     ProgressBand,
     ProgressPanel,
     RankRange,
+    RowCharts,
+    RowKey,
+    RowProgress,
     RunCommands,
     RunStep,
     TagPosition,
@@ -70,6 +72,8 @@ SUB = SubmissionId(0x1F)
 VERSION = LeaderboardVersionId(0x2A)
 BOARD = LeaderboardRef('example-board')
 TAG = LeaderboardTag('example.site')
+STACK = LeaderboardTaskId('stack-the-cubes')
+TOWEL = LeaderboardTaskId('fold-the-towel')
 REPLAY = DataBackedReplayLink(url='https://replays.example/r/token/', data_url='https://replays.example/r/token/r.json')
 MEDIA = EpisodeMedia(
     video='https://media.example/s/token/0/phone.mp4',
@@ -83,15 +87,17 @@ TEAM_DESCRIPTOR = LeaderboardDescriptor(
     ranked_by=PRIMARY_METRIC,
 )
 TEAM_ROW = LeaderboardRow(
-    entrant=EntrantId('0ddba7'),
+    key=RowKey('team-1f'),
     display_name='demo',
+    tag='0ddba7',
     rank=RankRange(best=1, worst=1),
     metrics={PRIMARY_METRIC: Estimate(value=0.75, low=0.75, high=0.75)},
     submission=TeamSubmission(id=SUB, submitted_at=AT, replay=REPLAY),
 )
 TEAM_BASELINE_ROW = LeaderboardRow(
-    entrant=EntrantId('9c41de'),
+    key=RowKey('team-a0'),
     display_name='reference',
+    tag='9c41de',
     model=ModelFamilyRef('reference-model'),
     rank=None,
     baseline=Baseline(publisher='Example Labs'),
@@ -100,7 +106,7 @@ TEAM_BASELINE_ROW = LeaderboardRow(
 )
 TEAM_LEADERBOARD = LeaderboardResponse(
     leaderboard=BOARD,
-    title='Example qualifier',
+    title='Example teams',
     method='example_best_run',
     tags=[TagPosition(tag=TAG, position=1)],
     descriptor=TEAM_DESCRIPTOR,
@@ -123,7 +129,7 @@ MODEL_DESCRIPTOR = LeaderboardDescriptor(
             name='Score',
             unit='% done',
             decimals=1,
-            definition='Percent of the task done within {seconds} s.',
+            definition=f'Percent of the task done within {TIME_LIMIT_PLACEHOLDER} s.',
             row_definition='Percent of the task done, over every task.',
         ),
         Metric(
@@ -132,25 +138,25 @@ MODEL_DESCRIPTOR = LeaderboardDescriptor(
     ],
     ranked_by='score',
     outcomes=[
-        OutcomeGroup(name='Done', credit=1.0),
-        OutcomeGroup(name='Halfway', credit=0.3),
-        OutcomeGroup(name='Stopped', credit=0.0),
+        OutcomeGroup(key='done', name='Done', step_score=1.0),
+        OutcomeGroup(key='halfway', name='Halfway', step_score=0.3),
+        OutcomeGroup(key='stopped', name='Stopped', step_score=0.0),
     ],
     time_limit=TimeLimit(default_s=100, max_s=120, axis='Seconds'),
 )
 MODEL_ROW = LeaderboardRow(
-    entrant=EntrantId('model-a'),
+    key=RowKey('model-a'),
     display_name='Model A',
     model=ModelFamilyRef('model-a'),
     checkpoints=[CheckpointRef('model-a-v2')],
     rank=RankRange(best=1, worst=2),
     metrics={'score': Estimate(value=41.25, low=35.0, high=47.875), 'speed': Estimate(value=1.92, low=1.61, high=2.3)},
     episodes=120,
-    outcome_shares={'Done': 0.4, 'Halfway': 0.35, 'Stopped': 0.25},
+    outcome_shares={'done': 0.4, 'halfway': 0.35, 'stopped': 0.25},
     caveats=[Caveat(kind='example_caveat', text='Read the numbers with this note.')],
 )
 MODEL_BASELINE_ROW = LeaderboardRow(
-    entrant=EntrantId('reference-person'),
+    key=RowKey('reference-person'),
     display_name='Reference person',
     model=ModelFamilyRef('reference-person'),
     rank=None,
@@ -167,17 +173,17 @@ MODEL_LEADERBOARD = LeaderboardResponse(
     version=VERSION,
     computed_at=AT,
     rows=[MODEL_BASELINE_ROW, MODEL_ROW],
-    pairs=[PairVerdict(entrants=(EntrantId('model-a'), EntrantId('model-b')), separated=False)],
+    pairs=[PairVerdict(rows=(RowKey('model-a'), RowKey('model-b')), separated=False)],
     tasks=[
-        LeaderboardTask(id='stack-the-cubes', label='Stack the cubes', difficulty='Easy'),
-        LeaderboardTask(id='fold-the-towel', label='Fold the towel', counted=False),
+        LeaderboardTask(id=STACK, label='Stack the cubes', difficulty='Easy'),
+        LeaderboardTask(id=TOWEL, label='Fold the towel', counted=False),
     ],
     counts=LeaderboardCounts(tasks=2, episodes=140),
     highlights=[
         Highlight(
             episode=EpisodeId('1f/3'),
-            entrant=EntrantId('model-a'),
-            task='stack-the-cubes',
+            row=RowKey('model-a'),
+            task=STACK,
             caption='Done in 42 s',
             start_s=3.0,
             end_s=23.0,
@@ -191,24 +197,24 @@ SERIES = EstimateSeries(
 CHARTS = LeaderboardChartsResponse(
     leaderboard=BOARD,
     version=VERSION,
-    task='stack-the-cubes',
+    task=STACK,
     windows=[0.0, 1.0, 2.0],
-    entrants={
-        EntrantId('model-a'): EntrantCharts(
+    rows={
+        RowKey('model-a'): RowCharts(
             episodes=12,
             series={'score': SERIES, 'speed': SERIES},
             density=[0.0, 1.5, 0.75],
             rank=[None, RankRange(best=1, worst=2), RankRange(best=1, worst=1)],
         )
     },
-    pairs=[PairVerdict(entrants=(EntrantId('model-a'), EntrantId('model-b')), separated=True)],
+    pairs=[PairVerdict(rows=(RowKey('model-a'), RowKey('model-b')), separated=True)],
 )
 EPISODE = LeaderboardEpisode(
     id=EpisodeId('1f/3'),
-    entrant=EntrantId('model-a'),
+    row=RowKey('model-a'),
     checkpoint=CheckpointRef('model-a-v2'),
-    task='stack-the-cubes',
-    outcome='Halfway',
+    task=STACK,
+    outcome='halfway',
     result='Halfway',
     steps=2,
     steps_done=1,
@@ -230,9 +236,9 @@ EPISODES = LeaderboardEpisodesResponse(
         EPISODE,
         LeaderboardEpisode(
             id=EpisodeId('2a/0'),
-            entrant=EntrantId('model-b'),
-            task='Example object',
-            outcome='Partway',
+            row=RowKey('model-b'),
+            task=TOWEL,
+            outcome='halfway',
             result='3/5',
             steps=5,
             steps_done=3,
@@ -243,26 +249,26 @@ EPISODES = LeaderboardEpisodesResponse(
 PROGRESS = LeaderboardProgressResponse(
     leaderboard=BOARD,
     version=VERSION,
-    entrants={
-        EntrantId('model-a'): EntrantProgress(
+    rows={
+        RowKey('model-a'): RowProgress(
             horizon_s=2,
             panels=[
                 ProgressPanel(
                     episodes=4,
                     bands=[
-                        ProgressBand(outcome='Done', episodes=[0, 1, 2]),
-                        ProgressBand(outcome='Stopped', episodes=[4, 3, 2]),
+                        ProgressBand(outcome='done', episodes=[0, 1, 2]),
+                        ProgressBand(outcome='stopped', episodes=[4, 3, 2]),
                     ],
                     edges=[[0.0, 0.0, 0.0], [0.0, 1.0, 2.0], [4.0, 4.0, 4.0]],
                     mean_credit=[0.0, 25.0, 50.0],
                 )
             ],
         ),
-        EntrantId('model-b'): EntrantProgress(
+        RowKey('model-b'): RowProgress(
             horizon_s=2,
             panels=[
                 ProgressPanel(
-                    task='Example object',
+                    task=TOWEL,
                     episodes=2,
                     bands=[
                         ProgressBand(steps_done=1, episodes=[0, 1, 2]),
@@ -337,7 +343,7 @@ MODELS: list[BaseModel] = [
                 descriptor=MODEL_DESCRIPTOR,
                 caveats=[Caveat(kind='frozen_source', text='A fixed set of episodes.')],
             ),
-            LeaderboardSummary(leaderboard=BOARD, title='Example qualifier', method='m', descriptor=TEAM_DESCRIPTOR),
+            LeaderboardSummary(leaderboard=BOARD, title='Example teams', method='m', descriptor=TEAM_DESCRIPTOR),
         ],
     ),
     MODEL_LEADERBOARD,
@@ -350,7 +356,7 @@ MODELS: list[BaseModel] = [
     LeaderboardQuery(leaderboard=BOARD),
     LeaderboardPartQuery(leaderboard=BOARD),
     LeaderboardPartQuery(leaderboard=BOARD, version=VERSION),
-    LeaderboardChartsQuery(leaderboard=BOARD, version=VERSION, task='stack-the-cubes'),
+    LeaderboardChartsQuery(leaderboard=BOARD, version=VERSION, task=STACK),
 ]
 
 
@@ -370,7 +376,7 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     RankRange: {'best', 'worst'},
     Link: {'text', 'url'},
     Metric: {'key', 'name', 'unit', 'decimals', 'definition', 'row_definition', 'axis_max'},
-    OutcomeGroup: {'name', 'credit'},
+    OutcomeGroup: {'key', 'name', 'step_score'},
     TimeLimit: {'default_s', 'max_s', 'axis'},
     LeaderboardDescriptor: {
         'eval',
@@ -395,8 +401,9 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     LeaderboardListResponse: {'tag', 'leaderboards'},
     Baseline: {'publisher'},
     LeaderboardRow: {
-        'entrant',
+        'key',
         'display_name',
+        'tag',
         'model',
         'checkpoints',
         'rank',
@@ -408,11 +415,11 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
         'caveats',
     },
     TeamSubmission: {'id', 'submitted_at', 'replay'},
-    PairVerdict: {'entrants', 'separated'},
+    PairVerdict: {'rows', 'separated'},
     LeaderboardTask: {'id', 'label', 'counted', 'difficulty'},
     LeaderboardCounts: {'tasks', 'episodes'},
     EpisodeMedia: {'video', 'replay', 'cameras'},
-    Highlight: {'episode', 'entrant', 'task', 'caption', 'start_s', 'end_s', 'media'},
+    Highlight: {'episode', 'row', 'task', 'caption', 'start_s', 'end_s', 'media'},
     LeaderboardResponse: {
         'leaderboard',
         'title',
@@ -429,12 +436,12 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
         'highlights',
     },
     EstimateSeries: {'value', 'low', 'high', 'margin'},
-    EntrantCharts: {'episodes', 'series', 'density', 'rank'},
-    LeaderboardChartsResponse: {'leaderboard', 'version', 'task', 'windows', 'entrants', 'pairs'},
+    RowCharts: {'episodes', 'series', 'density', 'rank'},
+    LeaderboardChartsResponse: {'leaderboard', 'version', 'task', 'windows', 'rows', 'pairs'},
     EpisodeColumn: {'name', 'description', 'decimals'},
     LeaderboardEpisode: {
         'id',
-        'entrant',
+        'row',
         'checkpoint',
         'task',
         'outcome',
@@ -452,8 +459,8 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     LeaderboardEpisodesResponse: {'leaderboard', 'version', 'result', 'pace', 'credit', 'difficulty', 'episodes'},
     ProgressBand: {'outcome', 'steps_done', 'episodes'},
     ProgressPanel: {'task', 'episodes', 'bands', 'edges', 'mean_credit', 'mean_steps_done', 'mean_steps_done_at_end'},
-    EntrantProgress: {'horizon_s', 'panels'},
-    LeaderboardProgressResponse: {'leaderboard', 'version', 'entrants'},
+    RowProgress: {'horizon_s', 'panels'},
+    LeaderboardProgressResponse: {'leaderboard', 'version', 'rows'},
     CardFact: {'text', 'source', 'href'},
     CardLine: {'field', 'facts'},
     RunStep: {'label', 'command', 'source'},
@@ -495,10 +502,10 @@ def test_every_model_of_the_module_has_its_wire_fields_pinned():
     assert declared <= set(WIRE_FIELDS)
 
 
-# A team row as the wire carries it. A site reads the name, the entrant, the rank, the score, the submission, the time,
-# the replay and the publisher of a baseline.
+# A team row as the wire carries it.
 TEAM_ROW_WIRE = {
-    'entrant': '0ddba7',
+    'key': 'team-1f',
+    'tag': '0ddba7',
     'display_name': 'demo',
     'rank': {'best': 2, 'worst': 2},
     'metrics': {'primary': {'value': 0.35, 'low': 0.35, 'high': 0.35}},
@@ -512,7 +519,7 @@ TEAM_ROW_WIRE = {
 
 def test_a_team_row_reads_every_field_a_site_shows():
     row = LeaderboardRow.model_validate_json(json.dumps(TEAM_ROW_WIRE))
-    assert (row.display_name, row.entrant) == ('demo', '0ddba7')
+    assert (row.display_name, row.key, row.tag) == ('demo', 'team-1f', '0ddba7')
     assert row.rank == RankRange(best=2, worst=2)
     assert row.metrics[PRIMARY_METRIC] == Estimate(value=0.35, low=0.35, high=0.35)
     assert row.submission is not None
@@ -548,10 +555,9 @@ def test_a_team_row_with_no_score_is_kept():
     assert PRIMARY_METRIC not in row.metrics
 
 
-# A model row as the wire carries it: a family, the checkpoint the leaderboard measured, a range on each metric and a
-# range of places.
+# A model row as the wire carries it.
 MODEL_ROW_WIRE = {
-    'entrant': 'model-a',
+    'key': 'model-a',
     'display_name': 'Model A',
     'model': 'model-a',
     'checkpoints': ['model-a-v2'],
@@ -561,7 +567,7 @@ MODEL_ROW_WIRE = {
         'speed': {'value': 1.92, 'low': 1.61, 'high': 2.3},
     },
     'episodes': 120,
-    'outcome_shares': {'Done': 0.4, 'Halfway': 0.35, 'Stopped': 0.25},
+    'outcome_shares': {'done': 0.4, 'halfway': 0.35, 'stopped': 0.25},
 }
 
 
@@ -603,7 +609,7 @@ SUMMARY_WIRE = {
         'robot': 'A robot this client has no name for',
         'metrics': [{'key': 'widgets', 'name': 'Widgets', 'unit': 'widgets per hour', 'decimals': 0}],
         'ranked_by': 'widgets',
-        'outcomes': [{'name': 'A new outcome group'}],
+        'outcomes': [{'key': 'a_new_group', 'name': 'A new outcome group'}],
     },
     'caveats': [{'kind': 'a_caveat_kind_this_client_has_no_name_for', 'text': 'Read with care.'}],
 }
@@ -670,7 +676,7 @@ def test_places_run_from_the_best_to_the_worst():
 
 
 @pytest.mark.parametrize(
-    'band', [{'episodes': [1]}, {'outcome': 'Done', 'steps_done': 1, 'episodes': [1]}], ids=['neither key', 'both keys']
+    'band', [{'episodes': [1]}, {'outcome': 'done', 'steps_done': 1, 'episodes': [1]}], ids=['neither key', 'both keys']
 )
 def test_a_progress_band_names_exactly_one_key(band: dict):
     with pytest.raises(ValidationError, match='exactly one of an outcome group and a count of steps'):
@@ -693,7 +699,7 @@ def test_a_card_line_holds_at_least_one_fact():
 
 
 @pytest.mark.parametrize(
-    'name_type', [LeaderboardRef, LeaderboardTag, ModelFamilyRef, CheckpointRef, EntrantId, EpisodeId]
+    'name_type', [LeaderboardRef, LeaderboardTag, ModelFamilyRef, CheckpointRef, RowKey, LeaderboardTaskId, EpisodeId]
 )
 @pytest.mark.parametrize('value', ['', '   ', 'two words'])
 def test_a_name_that_could_never_be_one_is_refused(name_type: type[str], value: str):
@@ -703,11 +709,12 @@ def test_a_name_that_could_never_be_one_is_refused(name_type: type[str], value: 
 
 def test_a_name_arrives_as_its_own_type():
     row = LeaderboardRow.model_validate(MODEL_ROW_WIRE)
-    assert isinstance(row.entrant, EntrantId)
+    assert isinstance(row.key, RowKey)
     assert isinstance(row.model, ModelFamilyRef)
     assert isinstance(row.checkpoints[0], CheckpointRef)
     charts = LeaderboardChartsResponse.model_validate_json(CHARTS.model_dump_json())
-    assert all(isinstance(entrant, EntrantId) for entrant in charts.entrants)
+    assert all(isinstance(key, RowKey) for key in charts.rows)
+    assert isinstance(charts.task, LeaderboardTaskId)
 
 
 def test_a_leaderboard_with_no_versions_reads_with_no_version():
@@ -734,3 +741,47 @@ def test_a_part_names_the_version_it_comes_from():
 def test_a_charts_query_refuses_an_empty_task():
     with pytest.raises(ValidationError):
         LeaderboardChartsQuery.model_validate({'leaderboard': 'example-board', 'task': ''})
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), float('-inf')], ids=['nan', 'inf', '-inf'])
+def test_an_estimate_refuses_a_value_json_cannot_carry(value: float):
+    with pytest.raises(ValidationError):
+        Estimate(value=value, low=0.0, high=1.0)
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf')], ids=['nan', 'inf'])
+def test_a_list_of_floats_refuses_a_value_json_cannot_carry(value: float):
+    with pytest.raises(ValidationError):
+        EstimateSeries(value=[1.0, value], low=[1.0, 1.0], high=[1.0, 1.0], margin=[0.0, 0.0])
+    with pytest.raises(ValidationError):
+        RowCharts(episodes=1, density=[value])
+
+
+def test_every_model_of_the_module_refuses_nan_and_infinity():
+    declared = [
+        member
+        for member in vars(leaderboards).values()
+        if isinstance(member, type) and issubclass(member, BaseModel) and member.__module__ == leaderboards.__name__
+    ]
+    assert declared
+    for model in declared:
+        assert model.model_config.get('allow_inf_nan') is False, model.__name__
+
+
+def test_a_descriptor_refuses_two_outcome_groups_with_one_key():
+    group = {'key': 'done', 'name': 'Done'}
+    with pytest.raises(ValidationError, match='two outcome groups share a key'):
+        LeaderboardDescriptor.model_validate({**SUMMARY_WIRE['descriptor'], 'outcomes': [group, group]})
+
+
+def test_an_outcome_group_needs_its_key():
+    with pytest.raises(ValidationError):
+        OutcomeGroup.model_validate({'name': 'Done'})
+
+
+def test_a_text_that_is_not_given_reads_as_none():
+    descriptor = LeaderboardDescriptor.model_validate(SUMMARY_WIRE['descriptor'])
+    metric = descriptor.metrics[0]
+    assert (descriptor.short_name, descriptor.summary, metric.definition) == (None, None, None)
+    assert EpisodeColumn(name='Result').description is None
+    assert TimeLimit(default_s=10, max_s=10).axis is None

@@ -11,11 +11,20 @@ from typing import Self
 from platform_client.ids import LeaderboardVersionId, SubmissionId
 from platform_client.responses import DataBackedReplayLink
 from positronic_evals.evals import EvalRef
-from pydantic import AwareDatetime, BaseModel, Field, GetCoreSchemaHandler, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, GetCoreSchemaHandler, model_validator
 from pydantic_core import core_schema
 
 # The metric key of a leaderboard that ranks one score of each row, such as the primary score of an eval.
 PRIMARY_METRIC = 'primary'
+
+# What a definition holds in the place of the time limit, in seconds.
+TIME_LIMIT_PLACEHOLDER = '{seconds}'
+
+
+class _Wire(BaseModel):
+    """A model of this module. JSON carries no NaN and no infinity, so a float field refuses them."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
 
 class _Name(str):
@@ -57,8 +66,14 @@ class CheckpointRef(_Name):
     __slots__ = ()
 
 
-class EntrantId(_Name):
-    """The id of a row on its leaderboard. It is the same in every version, and the other parts name a row by it."""
+class RowKey(_Name):
+    """The key of a row on its leaderboard. It is the same in every version, and the other parts name a row by it."""
+
+    __slots__ = ()
+
+
+class LeaderboardTaskId(_Name):
+    """The id of a task that `LeaderboardResponse.tasks` lists, as its `LeaderboardTask.id`."""
 
     __slots__ = ()
 
@@ -69,7 +84,7 @@ class EpisodeId(_Name):
     __slots__ = ()
 
 
-class Estimate(BaseModel):
+class Estimate(_Wire):
     """A value and its range. A value with no range has a `low` and a `high` equal to it."""
 
     value: float
@@ -83,7 +98,7 @@ class Estimate(BaseModel):
         return self
 
 
-class RankRange(BaseModel):
+class RankRange(_Wire):
     """The places a row can take, from `best` to `worst`. Rows that the leaderboard cannot tell apart share places."""
 
     best: int = Field(ge=1)
@@ -96,44 +111,49 @@ class RankRange(BaseModel):
         return self
 
 
-class Link(BaseModel):
+class Link(_Wire):
     text: str
     url: str
 
 
-class Metric(BaseModel):
-    """One number of a row.
+class Metric(_Wire):
+    """One number of a row, in `unit`.
 
     `key` names the metric in the `metrics` of a row and in the series of a chart. `definition` states what the
-    metric counts, with `{seconds}` for the time limit. `row_definition` states what the value of a row counts, where
-    that value is not the value at the default time limit. A chart axis of the metric ends at `axis_max`.
+    metric counts, with `TIME_LIMIT_PLACEHOLDER` for the time limit. `row_definition` states what the value of a row
+    counts, where that value is not the value at the default time limit. A chart axis of the metric ends at `axis_max`.
     """
 
     key: str = Field(min_length=1)
     name: str
-    unit: str = ''
+    unit: str | None = None
     decimals: int = Field(ge=0)
-    definition: str = ''
+    definition: str | None = None
     row_definition: str | None = None
     axis_max: float | None = None
 
 
-class OutcomeGroup(BaseModel):
-    """One group that the result of an episode falls in. `credit` is the score of one step in the group, if any."""
+class OutcomeGroup(_Wire):
+    """One group that the result of an episode falls in.
 
+    `key` names the group in the outcome shares of a row, in an episode and in a progress band. `step_score` is the
+    score of one step in the group, as a fraction from 0 to 1, where the leaderboard scores steps.
+    """
+
+    key: str = Field(min_length=1)
     name: str
-    credit: float | None = None
+    step_score: float | None = None
 
 
-class TimeLimit(BaseModel):
+class TimeLimit(_Wire):
     """The time limits of a leaderboard, in seconds. A page opens at `default_s`, and `axis` names the time axis."""
 
     default_s: int = Field(ge=1)
     max_s: int = Field(ge=1)
-    axis: str = ''
+    axis: str | None = None
 
 
-class LeaderboardDescriptor(BaseModel):
+class LeaderboardDescriptor(_Wire):
     """The facts of a leaderboard, and the words that its pages use.
 
     `eval` is the eval that a simulated leaderboard ranks. The rows rank on the metric that `ranked_by` names.
@@ -141,10 +161,10 @@ class LeaderboardDescriptor(BaseModel):
     """
 
     eval: EvalRef | None = None
-    short_name: str = ''
+    short_name: str | None = None
     robot: str | None = None
     release: str | None = None
-    summary: str = ''
+    summary: str | None = None
     setup: Link | None = None
     task_noun: str = 'tasks'
     episode_noun: str = 'episodes'
@@ -162,27 +182,33 @@ class LeaderboardDescriptor(BaseModel):
         keys = [metric.key for metric in self.metrics]
         if len(set(keys)) != len(keys):
             raise ValueError(f'two metrics share a key: {keys}')
+        outcome_keys = [outcome.key for outcome in self.outcomes]
+        if len(set(outcome_keys)) != len(outcome_keys):
+            raise ValueError(f'two outcome groups share a key: {outcome_keys}')
         if self.ranked_by not in keys:
             raise ValueError(f'ranked_by names {self.ranked_by!r}, which is not one of the metrics {keys}')
         return self
 
 
-class Caveat(BaseModel):
+class Caveat(_Wire):
     """A note that a reader needs to read the numbers correctly. `text` is for a human."""
 
     kind: str = Field(min_length=1)
     text: str
 
 
-class TagPosition(BaseModel):
+class TagPosition(_Wire):
     """The place of a leaderboard in one tag."""
 
     tag: LeaderboardTag
     position: int = Field(ge=0)
 
 
-class LeaderboardSummary(BaseModel):
-    """One leaderboard of `leaderboards.list`. `leaderboard` is the slug that the other routes take."""
+class LeaderboardSummary(_Wire):
+    """One leaderboard of `leaderboards.list`. `leaderboard` is the slug that the other routes take.
+
+    `method` names the method that computes the rows from the episodes, such as the best submission of each team.
+    """
 
     leaderboard: LeaderboardRef
     title: str
@@ -192,7 +218,7 @@ class LeaderboardSummary(BaseModel):
     caveats: list[Caveat] = Field(default_factory=list)
 
 
-class LeaderboardListResponse(BaseModel):
+class LeaderboardListResponse(_Wire):
     """`leaderboards.list` — the leaderboards of one tag, in the order of their positions in it."""
 
     tag: LeaderboardTag
@@ -200,13 +226,13 @@ class LeaderboardListResponse(BaseModel):
 
 
 # rules-allow: earn-its-place — a reference row can name no publisher, and the rankings `BaselineMark` needs one
-class Baseline(BaseModel):
+class Baseline(_Wire):
     """The mark of a reference row. `publisher` names the organization that released its model, where one did."""
 
     publisher: str | None = Field(default=None, min_length=1)
 
 
-class TeamSubmission(BaseModel):
+class TeamSubmission(_Wire):
     """The one submission that the numbers of a team row come from. `replay` is absent until its page is built."""
 
     id: SubmissionId
@@ -214,18 +240,26 @@ class TeamSubmission(BaseModel):
     replay: DataBackedReplayLink | None = None
 
 
-class LeaderboardRow(BaseModel):
+class LeaderboardRow(_Wire):
     """One row of a leaderboard: a model family, or a team.
 
-    `entrant` identifies the row. `display_name` is what the row shows, and two rows can show the same name. A row
-    that measures a model names its family, and the checkpoints whose episodes it counts. A team row names the
-    `submission` that its numbers come from. `metrics` holds a value for each metric that the row has a value for.
-    `episodes` counts the episodes that its numbers read, where the leaderboard counts them, and `outcome_shares`
-    gives the share of those episodes in each outcome group. A `baseline` row has no `rank`.
+    `key` identifies the row. The platform gives each team a stable key that no other team shares. `display_name` is
+    what the row shows, and two rows can show the same name. `tag` is the tag of the user that a team row stands for.
+    It is the same on every leaderboard, so a user finds their own row by it.
+
+    A row that measures a model names its family, and the checkpoints whose episodes it counts. A team row names the
+    `submission` that its numbers come from. `submission` is absent on a row whose numbers come from more than one
+    submission, such as a model row.
+
+    `metrics` holds a value for each metric that the row has a value for. `episodes` counts the episodes that its
+    numbers read, where the leaderboard counts them. `outcome_shares` gives the share of those episodes in each outcome
+    group, by the key of the group, as a fraction from 0 to 1. A `baseline` row is a reference on this leaderboard and
+    has no `rank`, whatever the `baseline` of its model family is.
     """
 
-    entrant: EntrantId
+    key: RowKey
     display_name: str
+    tag: str | None = None
     model: ModelFamilyRef | None = None
     checkpoints: list[CheckpointRef] = Field(default_factory=list)
     rank: RankRange | None
@@ -243,34 +277,35 @@ class LeaderboardRow(BaseModel):
         return self
 
 
-class PairVerdict(BaseModel):
+class PairVerdict(_Wire):
     """Whether the leaderboard tells two rows apart."""
 
-    entrants: tuple[EntrantId, EntrantId]
+    rows: tuple[RowKey, RowKey]
     separated: bool
 
 
-class LeaderboardTask(BaseModel):
+class LeaderboardTask(_Wire):
     """One task that the episodes of a leaderboard ran. The numbers leave out a task that is not `counted`."""
 
-    id: str = Field(min_length=1)
+    id: LeaderboardTaskId
     label: str
     counted: bool = True
     difficulty: str | None = None
 
 
-class LeaderboardCounts(BaseModel):
+class LeaderboardCounts(_Wire):
     """What the episode list holds for the rows that are not baselines: the tasks they ran, and their episodes."""
 
     tasks: int = Field(ge=0)
     episodes: int = Field(ge=0)
 
 
-class EpisodeMedia(BaseModel):
+class EpisodeMedia(_Wire):
     """Where the recordings of one episode play back.
 
     `video` is the video that a phone plays, `replay` is the data of the 3D replay, and `cameras` holds the video of
-    each camera by its name.
+    each camera by its name. The links resolve when the route answers, and a link can stop working later, so keep
+    the numbers of a version and read its links again.
     """
 
     video: str | None = None
@@ -278,12 +313,15 @@ class EpisodeMedia(BaseModel):
     cameras: dict[str, str] = Field(default_factory=dict)
 
 
-class Highlight(BaseModel):
-    """A clip of one episode that the top of a page plays, from `start_s` to `end_s`, or to the end of the episode."""
+class Highlight(_Wire):
+    """A clip of one episode that the top of a page plays, from `start_s` to `end_s`, or to the end of the episode.
+
+    Its `media` resolves as `EpisodeMedia` states.
+    """
 
     episode: EpisodeId
-    entrant: EntrantId
-    task: str
+    row: RowKey
+    task: LeaderboardTaskId
     caption: str
     start_s: float = Field(default=0.0, ge=0)
     end_s: float | None = None
@@ -293,8 +331,8 @@ class Highlight(BaseModel):
 class LeaderboardResponse(LeaderboardSummary):
     """`leaderboards.get` — one leaderboard and its rows, in the order that the leaderboard shows them.
 
-    The routes of its parts take `version`, which is absent on a leaderboard that has no versions. `computed_at` is
-    when the numbers were computed.
+    The routes of its parts take `version`. `version` is absent on a leaderboard that has no versions, and such a
+    leaderboard has no parts. `computed_at` is when the numbers were computed.
     """
 
     version: LeaderboardVersionId | None = None
@@ -306,14 +344,14 @@ class LeaderboardResponse(LeaderboardSummary):
     highlights: list[Highlight] = Field(default_factory=list)
 
 
-class _LeaderboardPart(BaseModel):
+class _LeaderboardPart(_Wire):
     """The leaderboard version that a part comes from."""
 
     leaderboard: LeaderboardRef
     version: LeaderboardVersionId
 
 
-class EstimateSeries(BaseModel):
+class EstimateSeries(_Wire):
     """One metric at each time limit of a chart, with its range. A value is None at a limit where it has none.
 
     Each value is rounded to the decimals of the metric. `margin` is half the range, rounded from the unrounded ends.
@@ -325,11 +363,11 @@ class EstimateSeries(BaseModel):
     margin: list[float | None]
 
 
-class EntrantCharts(BaseModel):
+class RowCharts(_Wire):
     """The curves of one row.
 
     `series` holds the series of each metric by its key. `density` is how fast the ranked metric rises at each time
-    limit, in percentage points per second. `rank` holds the places of the row at each time limit.
+    limit, in the unit of that metric per second. `rank` holds the places of the row at each time limit.
     """
 
     episodes: int = Field(ge=0)
@@ -345,33 +383,34 @@ class LeaderboardChartsResponse(_LeaderboardPart):
     in `pairs`.
     """
 
-    task: str | None = None
+    task: LeaderboardTaskId | None = None
     windows: list[float]
-    entrants: dict[EntrantId, EntrantCharts] = Field(default_factory=dict)
+    rows: dict[RowKey, RowCharts] = Field(default_factory=dict)
     pairs: list[PairVerdict] = Field(default_factory=list)
 
 
-class EpisodeColumn(BaseModel):
+class EpisodeColumn(_Wire):
     """One column of the episode list: its name, the text that explains it, and the decimals of its values."""
 
     name: str
-    description: str = ''
+    description: str | None = None
     decimals: int | None = Field(default=None, ge=0)
 
 
-class LeaderboardEpisode(BaseModel):
+class LeaderboardEpisode(_Wire):
     """One episode of the episode list.
 
-    `outcome` is the outcome group of the episode, and `result` is the text that the list shows for it. `steps` and
-    `steps_done` count the steps of the task and the steps that the episode did. `furthest_stage` names how far the
-    episode got in the step that it stopped in. `credit` is the percent of the task that the episode did, and `pace`
-    is its value in the pace column. `media` is absent where no recording of the episode plays back.
+    `outcome` is the key of the outcome group of the episode, and `result` is the text that the list shows for it.
+    `steps` and `steps_done` count the steps of the task and the steps that the episode did. `furthest_stage` names
+    how far the episode got in the step that it stopped in. `credit` is the percent of the task that the episode did,
+    from 0 to 100, and `pace` is its value in the pace column. `media` is absent where no recording of the episode
+    plays back.
     """
 
     id: EpisodeId
-    entrant: EntrantId
+    row: RowKey
     checkpoint: CheckpointRef | None = None
-    task: str
+    task: LeaderboardTaskId
     outcome: str
     result: str
     steps: int | None = Field(default=None, ge=0)
@@ -398,11 +437,11 @@ class LeaderboardEpisodesResponse(_LeaderboardPart):
     episodes: list[LeaderboardEpisode] = Field(default_factory=list)
 
 
-class ProgressBand(BaseModel):
+class ProgressBand(_Wire):
     """The count of episodes in one band at each second, before smoothing.
 
-    A band holds the episodes of one outcome group, or the episodes that did one count of steps. Exactly one of
-    `outcome` and `steps_done` is set.
+    A band holds the episodes of one outcome group, by the key of the group, or the episodes that did one count of
+    steps. Exactly one of `outcome` and `steps_done` is set.
     """
 
     outcome: str | None = None
@@ -416,15 +455,16 @@ class ProgressBand(BaseModel):
         return self
 
 
-class ProgressPanel(BaseModel):
+class ProgressPanel(_Wire):
     """How far the episodes of a row on one task had got at each second, or on every task where `task` is None.
 
     `edges` holds the smoothed count of episodes below each band, then of all episodes: band `i` runs from edge `i`
-    to edge `i + 1`. `mean_credit` is the smoothed mean percent of the task done. Where the bands count steps,
-    `mean_steps_done` is the mean count at each second and `mean_steps_done_at_end` is the mean at the episode end.
+    to edge `i + 1`. `mean_credit` is the smoothed mean percent of the task done, from 0 to 100. Where the bands
+    count steps, `mean_steps_done` is the mean count at each second and `mean_steps_done_at_end` is the mean at the
+    episode end.
     """
 
-    task: str | None = None
+    task: LeaderboardTaskId | None = None
     episodes: int = Field(ge=0)
     bands: list[ProgressBand]
     edges: list[list[float]]
@@ -433,7 +473,7 @@ class ProgressPanel(BaseModel):
     mean_steps_done_at_end: float | None = None
 
 
-class EntrantProgress(BaseModel):
+class RowProgress(_Wire):
     """The progress panels of one row. All panels share one time axis, from 0 to `horizon_s`."""
 
     horizon_s: int = Field(ge=0)
@@ -443,10 +483,10 @@ class EntrantProgress(BaseModel):
 class LeaderboardProgressResponse(_LeaderboardPart):
     """`leaderboards.progress` — the progress panels of each row that has episodes."""
 
-    entrants: dict[EntrantId, EntrantProgress] = Field(default_factory=dict)
+    rows: dict[RowKey, RowProgress] = Field(default_factory=dict)
 
 
-class CardFact(BaseModel):
+class CardFact(_Wire):
     """One fact of a model card. `source` is the URL or path that the text is from, and a page links `href`."""
 
     text: str
@@ -454,14 +494,14 @@ class CardFact(BaseModel):
     href: str | None = None
 
 
-class CardLine(BaseModel):
+class CardLine(_Wire):
     """One line of a model card. `field` names the line, and `facts` holds one fact, or one for each checkpoint."""
 
     field: str = Field(min_length=1)
     facts: list[CardFact] = Field(min_length=1)
 
 
-class RunStep(BaseModel):
+class RunStep(_Wire):
     """One command that a reader runs, under the `label` that names the step, with the `source` it is from."""
 
     label: str
@@ -469,7 +509,7 @@ class RunStep(BaseModel):
     source: str
 
 
-class RunCommands(BaseModel):
+class RunCommands(_Wire):
     """The commands that run a checkpoint, in the order a reader runs them.
 
     `checkpoint` names the checkpoint that the commands run, where the card covers more than one.
@@ -479,7 +519,7 @@ class RunCommands(BaseModel):
     checkpoint: CheckpointRef | None = None
 
 
-class ModelCard(BaseModel):
+class ModelCard(_Wire):
     """What a model family is. A card gives the commands that run the model, or a guide to them, or neither."""
 
     lines: list[CardLine] = Field(default_factory=list)
@@ -493,16 +533,17 @@ class ModelCard(BaseModel):
         return self
 
 
-class ModelCheckpoint(BaseModel):
+class ModelCheckpoint(_Wire):
     id: CheckpointRef
     display_name: str
 
 
-class ModelFamily(BaseModel):
+class ModelFamily(_Wire):
     """One model family of `leaderboards.models`.
 
-    A page shows `short_name` where the display name does not fit. A `baseline` family is a reference and takes no
-    rank. `former_display_names` holds the names that the family had before.
+    A page shows `short_name` where the display name does not fit. A `baseline` family is a reference on every
+    leaderboard, such as a person or teleoperation. On each leaderboard, the `baseline` of a row decides whether that
+    row is a reference. `former_display_names` holds the names that the family had before.
     """
 
     id: ModelFamilyRef
@@ -515,7 +556,7 @@ class ModelFamily(BaseModel):
     former_display_names: list[str] = Field(default_factory=list)
 
 
-class LeaderboardModelsResponse(BaseModel):
+class LeaderboardModelsResponse(_Wire):
     """`leaderboards.models` — the model families that a leaderboard row can name, in a stable order."""
 
     models: list[ModelFamily] = Field(default_factory=list)

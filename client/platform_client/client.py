@@ -38,6 +38,7 @@ from platform_client.leaderboards import (
     LeaderboardRef,
     LeaderboardResponse,
     LeaderboardTag,
+    LeaderboardTaskId,
 )
 from platform_client.requests import (
     DEFAULT_PURCHASE_PAGE_SIZE,
@@ -298,12 +299,19 @@ class PlatformClient:
         return self._get(routes.LEADERBOARDS_LIST, LeaderboardListResponse, query=query, auth=Auth.NONE)
 
     def get_leaderboard(self, leaderboard: LeaderboardRef) -> LeaderboardResponse:
-        """One leaderboard and its rows. The parts of the same version take the `version` it answers."""
+        """One leaderboard and its rows. The parts of the same version take the `version` it answers.
+
+        A leaderboard that answers no `version` has no parts.
+        """
         query = LeaderboardQuery(leaderboard=leaderboard)
         return self._get(routes.LEADERBOARDS_GET, LeaderboardResponse, query=query, auth=Auth.NONE)
 
     def leaderboard_charts(
-        self, leaderboard: LeaderboardRef, *, version: LeaderboardVersionId | None = None, task: str | None = None
+        self,
+        leaderboard: LeaderboardRef,
+        *,
+        version: LeaderboardVersionId | None = None,
+        task: LeaderboardTaskId | None = None,
     ) -> LeaderboardChartsResponse:
         """The charts over one task, or over every task. Without `version`, they come from the published version."""
         query = LeaderboardChartsQuery(leaderboard=leaderboard, version=version, task=task)
@@ -312,12 +320,14 @@ class PlatformClient:
     def leaderboard_episodes(
         self, leaderboard: LeaderboardRef, *, version: LeaderboardVersionId | None = None
     ) -> LeaderboardEpisodesResponse:
+        """Every episode that the leaderboard lists. Without `version`, they come from the published version."""
         query = LeaderboardPartQuery(leaderboard=leaderboard, version=version)
         return self._get(routes.LEADERBOARDS_EPISODES, LeaderboardEpisodesResponse, query=query, auth=Auth.NONE)
 
     def leaderboard_progress(
         self, leaderboard: LeaderboardRef, *, version: LeaderboardVersionId | None = None
     ) -> LeaderboardProgressResponse:
+        """The progress panels of each row. Without `version`, they come from the published version."""
         query = LeaderboardPartQuery(leaderboard=leaderboard, version=version)
         return self._get(routes.LEADERBOARDS_PROGRESS, LeaderboardProgressResponse, query=query, auth=Auth.NONE)
 
