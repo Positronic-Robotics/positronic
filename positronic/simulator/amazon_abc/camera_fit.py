@@ -1,22 +1,17 @@
-"""The camera views of ABC's scene: the ZED-X view by default, and ABC's own D405 cameras as an option.
+"""The ZED-X view of ABC's scene: a camera fit to the ZED-X stations of the ABC-130k dataset.
 
-The ZED-X view moves the ``top`` camera relative to the arm mounts and each wrist camera relative to ABC's own wrist
-camera, and gives each camera a vertical field of view.
+Runs in ABC's own interpreter, beside ``env.py``. The fit moves the ``top`` camera relative to the arm mounts and each
+wrist camera relative to ABC's own wrist camera, and gives each camera a vertical field of view.
 """
 
 import dataclasses
-import enum
 from collections.abc import Mapping
 
+import mapping
 import mujoco
 import numpy as np
 
 TOP_CAMERA = 'top'
-
-
-class CameraView(enum.StrEnum):
-    ZED_X = 'zed_x'  # the cameras of ``ZED_X_FIT``
-    D405 = 'd405'  # ABC's own cameras, which match the RealSense D405 stations of the ABC-130k dataset
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,15 +49,16 @@ _ZED_X_WRIST_FOVY_DEG = 79.7
 # The top pose is the left eye of the stereo top camera: it overlaps the arms at their recorded first joints in nine
 # first frames from six stations. The wrist poses overlap the open fingers common to 18 first frames. Render at 16:10
 # to match their 1920x1200 frames.
+_LEFT, _RIGHT = mapping.ARMS
 ZED_X_FIT = CameraFit(
     top=TopCamera(
         offset=(-0.120, 0.053, 0.878), yaw_deg=0.75, pitch_deg=48.5, roll_deg=-2.06, fovy_deg=_ZED_X_TOP_FOVY_DEG
     ),
     wrists={
-        'left': WristCamera(
+        _LEFT: WristCamera(
             offset=(0.0, 0.019, -0.061), rotation_deg=(1.375, 1.375, -0.125), fovy_deg=_ZED_X_WRIST_FOVY_DEG
         ),
-        'right': WristCamera(
+        _RIGHT: WristCamera(
             offset=(-0.005, 0.019, -0.060), rotation_deg=(0.375, -3.5, 0.0), fovy_deg=_ZED_X_WRIST_FOVY_DEG
         ),
     },

@@ -4,8 +4,8 @@ from eval_vocabulary.episode import ABC_TASK_EVAL_SIGNAL
 from positronic.cfg.eval import build_tasks, spec
 from positronic.drivers.roboarm.models import bundled_yam_model
 from positronic.eval import Eval, Task
-from positronic.simulator.amazon_abc import camera_fit, mapping
 from positronic.simulator.amazon_abc import keys as abc_keys
+from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.amazon_abc.launcher import serve_abc
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
@@ -15,7 +15,7 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
     camera_dict=CAMERAS,
     camera_height=260,
     camera_width=416,
-    camera_view=camera_fit.CameraView.ZED_X,
+    camera_view=mapping.CameraView.ZED_X,
     # ABC's actions are 34 ms apart. One more period lets the last action's verdict arrive before the deadline.
     timeout=(mapping.ABC_EVAL_STEPS + 1) * 0.034,
     seed=None,
@@ -26,9 +26,9 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     """An ABC eval on the bimanual i2rt YAM.
 
     ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
-    ``camera_view`` is a ``camera_fit.CameraView`` or its value.
+    ``camera_view`` is a ``mapping.CameraView`` or its value.
     """
-    view = camera_fit.CameraView(camera_view)
+    view = mapping.CameraView(camera_view)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(mapping.task_names(task)))
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()

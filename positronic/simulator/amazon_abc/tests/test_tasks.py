@@ -17,8 +17,8 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_GRASP_SITE_FRAME
 from positronic.eval import keys as eval_keys
-from positronic.simulator.amazon_abc import camera_fit, mapping
 from positronic.simulator.amazon_abc import keys as abc_keys
+from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
@@ -47,7 +47,7 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
         **params[0],
         abc_keys.CAMERA_HEIGHT: 168,
         abc_keys.CAMERA_WIDTH: 224,
-        abc_keys.CAMERA_VIEW: camera_fit.CameraView.D405.value,
+        abc_keys.CAMERA_VIEW: mapping.CameraView.D405.value,
         eval_keys.SEED: 7,
     })
     assert token == {
@@ -55,7 +55,7 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
         mapping.TOKEN_SEED: 7,
         mapping.TOKEN_CAMERA_HEIGHT: 168,
         mapping.TOKEN_CAMERA_WIDTH: 224,
-        mapping.TOKEN_CAMERA_VIEW: camera_fit.CameraView.D405.value,
+        mapping.TOKEN_CAMERA_VIEW: mapping.CameraView.D405.value,
     }
 
 
@@ -70,7 +70,7 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
     scene = trials[0].prepare_args[eval_keys.SCENE]
     assert scene[eval_keys.TASK] == 'put_plastic_bottles_in_bin'
     assert (scene[abc_keys.CAMERA_HEIGHT], scene[abc_keys.CAMERA_WIDTH]) == (260, 416)
-    assert scene[abc_keys.CAMERA_VIEW] == camera_fit.CameraView.ZED_X.value
+    assert scene[abc_keys.CAMERA_VIEW] == mapping.CameraView.ZED_X.value
     assert [t.meta[eval_keys.SEED] for t in trials] == [3, 4, 3, 4]
 
 

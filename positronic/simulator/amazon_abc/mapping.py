@@ -3,6 +3,7 @@
 This module must work in an isolated interpreter without Positronic installed.
 """
 
+import enum
 from collections.abc import Sequence
 from typing import Any
 
@@ -23,6 +24,14 @@ TOKEN_SEED = 'seed'
 TOKEN_CAMERA_HEIGHT = 'camera_height'
 TOKEN_CAMERA_WIDTH = 'camera_width'
 TOKEN_CAMERA_VIEW = 'camera_view'
+
+
+class CameraView(enum.StrEnum):
+    """The cameras an ABC scene renders from."""
+
+    ZED_X = 'zed_x'  # a fit to the ZED-X stations of the ABC-130k dataset
+    D405 = 'd405'  # ABC's own cameras, which match the RealSense D405 stations of the ABC-130k dataset
+
 
 META_TASK = 'task'
 

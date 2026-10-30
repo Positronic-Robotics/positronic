@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from positronic.eval import keys as eval_keys
-from positronic.simulator.amazon_abc import camera_fit, mapping
+from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.tests.mujoco_chain import hinge_chain_xml
@@ -25,7 +25,7 @@ _TOKEN = {
     mapping.TOKEN_TASK: 'put_plastic_bottles_in_bin',
     mapping.TOKEN_CAMERA_HEIGHT: 4,
     mapping.TOKEN_CAMERA_WIDTH: 6,
-    mapping.TOKEN_CAMERA_VIEW: camera_fit.CameraView.ZED_X.value,
+    mapping.TOKEN_CAMERA_VIEW: mapping.CameraView.ZED_X.value,
 }
 
 
@@ -143,6 +143,11 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
     return _load('abc_env', _ABC_DIR / 'env.py').AbcEnv()
 
 
+def _zed_x_fit() -> Any:
+    """The ZED-X fit of the ``camera_fit`` module that the ``env`` fixture loads."""
+    return sys.modules['camera_fit'].ZED_X_FIT
+
+
 def _camera(scene: _FakeScene, name: str) -> tuple[np.ndarray, np.ndarray, float]:
     camera = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
     rotation = scene.data.cam_xmat[camera].reshape(3, 3).copy()
@@ -173,7 +178,7 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
 
 def test_the_d405_view_keeps_abcs_own_cameras(env, scene):
     stock = {name: (scene.model.cam_pos[c].copy(), scene.model.cam_quat[c].copy()) for name, c in _camera_ids(scene)}
-    env.reset({**_TOKEN, mapping.TOKEN_CAMERA_VIEW: camera_fit.CameraView.D405.value})
+    env.reset({**_TOKEN, mapping.TOKEN_CAMERA_VIEW: mapping.CameraView.D405.value})
 
     for name, c in _camera_ids(scene):
         np.testing.assert_array_equal(scene.model.cam_pos[c], stock[name][0])
@@ -185,7 +190,7 @@ def test_the_d405_view_keeps_abcs_own_cameras(env, scene):
 def test_the_zed_x_view_places_the_top_camera_from_the_arm_mounts_and_renders_the_frame_again(env, scene):
     frame = env.reset(_TOKEN)
 
-    top = camera_fit.ZED_X_FIT.top
+    top = _zed_x_fit().top
     position, rotation, fovy = _camera(scene, 'top')
     # The fake scene's arm mounts stand at y = +-0.3 on the world axes, so their midpoint is the origin.
     np.testing.assert_allclose(position, top.offset, atol=1e-9)
@@ -203,7 +208,7 @@ def test_the_zed_x_view_turns_each_wrist_camera_from_abcs_pose_and_keeps_it_on_i
     stock = {arm: _camera(scene, arm) for arm in ('left', 'right')}
     env.reset(_TOKEN)
 
-    for arm, wrist in camera_fit.ZED_X_FIT.wrists.items():
+    for arm, wrist in _zed_x_fit().wrists.items():
         position, rotation, fovy = _camera(scene, arm)
         stock_position, stock_rotation, _ = stock[arm]
         np.testing.assert_allclose(stock_rotation.T @ (position - stock_position), wrist.offset, atol=1e-9)

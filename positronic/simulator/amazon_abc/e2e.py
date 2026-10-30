@@ -13,8 +13,8 @@ import pimm
 from positronic import geom, keys
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import keys as eval_keys
-from positronic.simulator.amazon_abc import camera_fit, mapping
 from positronic.simulator.amazon_abc import keys as abc_keys
+from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.amazon_abc.launcher import serve_abc
 from positronic.simulator.env_server import protocol
@@ -87,7 +87,7 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--camera-height', type=int, default=260)
     parser.add_argument('--camera-width', type=int, default=416)
-    parser.add_argument('--camera-view', type=camera_fit.CameraView, default=camera_fit.CameraView.ZED_X)
+    parser.add_argument('--camera-view', type=mapping.CameraView, default=mapping.CameraView.ZED_X)
     args = parser.parse_args()
 
     adapter = AbcAdapter(CAMERAS)
