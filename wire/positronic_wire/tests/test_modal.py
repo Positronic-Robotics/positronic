@@ -43,7 +43,7 @@ class FakeEdge:
             raise urllib.error.HTTPError(url, self.refuse.pop(0), 'refused', email.message.Message(), None)
         self.container_free.wait()
         self._issued += 1
-        return json.dumps({'token': f'token-{self._issued}'}).encode()
+        return json.dumps({modal.START_ANSWER_TOKEN: f'token-{self._issued}'}).encode()
 
 
 class FakeConnection(wire.ClientConnection):

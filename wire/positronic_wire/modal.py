@@ -34,6 +34,8 @@ IDLE_TIMEOUT_HEADER = 'x-modal-server-session-idle-timeout'
 IDEMPOTENCY_KEY_HEADER = 'x-idempotency-key'
 TIMESTAMP_HEADER = 'x-modal-timestamp'
 SESSION_TOKEN_HEADER = 'x-modal-server-session-token'
+# The key of the token in the JSON answer to a session start.
+START_ANSWER_TOKEN = 'token'
 # The default seconds a session lives after its last request, an open websocket included. Short, so a session that
 # no connection takes frees its container soon.
 IDLE_TIMEOUT = 120
@@ -330,7 +332,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         is one run of visible ASCII characters.
         """
         try:
-            token = json.loads(answer)['token']
+            token = json.loads(answer)[START_ANSWER_TOKEN]
         except (ValueError, LookupError, TypeError, RecursionError) as e:
             raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start without a token') from e
         if not isinstance(token, str) or not token or not all('!' <= c <= '~' for c in token):
