@@ -453,8 +453,32 @@ def test_a_late_step_does_not_combine_commands_past_a_waypoint(model):
         clock.advance_to_ns(10_000_000_000)
         step = run.send(observation())
         assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
+        assert step.resume_at_ns == 10_040_000_000
+        clock.advance_to_ns(20_000_000_000)
         step = run.send(observation())
         assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0)
+        assert len(requests) == 1
+
+
+def test_a_gripper_hold_after_a_late_step_lasts_its_full_duration(model):
+    requests, replies = model
+    waypoints = [{'x': x, 'y': 0, 'z': 0, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 1} for x in (0.04, 0.0)]
+    replies.extend([
+        ModelResponse([
+            ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': waypoints, 'note': 'Grasp.'}, tool_call_id='m')
+        ]),
+        finish(),
+    ])
+    motion = Motion(linear_speed=0.05)
+    with execution(LLMPolicy(Endpoint('test'), motion)) as (run, runtime, clock):
+        complete(run, runtime, clock, observation())
+        clock.advance_to_ns(10_000_000_000)
+        assert run.send(observation()).commands[keys.TARGET_GRIP] == 1
+        clock.advance_to_ns(10_040_000_000)
+        assert run.send(observation()).commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
+        clock.advance_to_ns(10_040_000_000 + round(motion.grip_hold * 1e9 / 2))
+        step = run.send(observation())
+        assert step.commands[keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
         assert len(requests) == 1
 
 

@@ -452,7 +452,7 @@ class LLMPolicy(Policy):
                 chunk = [command for part in parts for command in part]
                 # A late step combines overdue commands, but never past the end of a part: each waypoint and
                 # each gripper hold reaches the robot.
-                part_ends = set(itertools.accumulate(map(len, parts)))
+                part_ends = set(itertools.accumulate(map(len, parts[:-1])))
                 started_ns, index = runtime.time_ns, 0
                 end_ns = started_ns + round((len(chunk) + 1) / self.motion.fps * 1e9)
                 while index < len(chunk) or runtime.time_ns < end_ns:
@@ -461,9 +461,13 @@ class LLMPolicy(Policy):
                     while index < len(chunk) and runtime.time_ns >= due_ns:
                         commands.update(chunk[index])
                         index += 1
-                        due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
                         if index in part_ends:
+                            # A late part end delays the rest of the path, so each later part keeps its duration.
+                            started_ns += runtime.time_ns - due_ns
+                            end_ns += runtime.time_ns - due_ns
+                            due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
                             break
+                        due_ns = started_ns + round((index + 1) / self.motion.fps * 1e9)
                     obs = yield Step(commands, due_ns)
 
 
