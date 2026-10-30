@@ -16,7 +16,11 @@ from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 
 _LEFT, _RIGHT = mapping.ARMS
-CAMERAS = {keys.EXTERIOR_IMAGE: 'top', keys.WRIST_LEFT_IMAGE: _LEFT, keys.WRIST_RIGHT_IMAGE: _RIGHT}
+CAMERAS = {
+    keys.EXTERIOR_IMAGE: mapping.TOP_CAMERA,
+    keys.WRIST_LEFT_IMAGE: mapping.WRIST_CAMERA.format(arm=_LEFT),
+    keys.WRIST_RIGHT_IMAGE: mapping.WRIST_CAMERA.format(arm=_RIGHT),
+}
 
 
 class AbcAdapter(WireCommandAdapter):
@@ -33,6 +37,7 @@ class AbcAdapter(WireCommandAdapter):
             mapping.TOKEN_SEED: params.get(eval_keys.SEED),
             mapping.TOKEN_CAMERA_HEIGHT: params[abc_keys.CAMERA_HEIGHT],
             mapping.TOKEN_CAMERA_WIDTH: params[abc_keys.CAMERA_WIDTH],
+            mapping.TOKEN_CAMERA_VIEW: params[abc_keys.CAMERA_VIEW],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
