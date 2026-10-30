@@ -4,7 +4,7 @@ import configuronic as cfn
 from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
 
 from positronic import keys
-from positronic.cfg.eval import number_trials, spec
+from positronic.cfg.eval import number_trials, require_finite_positive, spec
 from positronic.eval import Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.robolab import keys as robolab_keys
@@ -26,9 +26,14 @@ def _camera_dict(cameras: str) -> dict[str, str]:
 
 
 @cfn.config(
-    cameras=robolab_keys.WRIST_LEFT_RIGHT, instruction_type='default', trial_count=1, timeout=None, env_server=None
+    cameras=robolab_keys.WRIST_LEFT_RIGHT,
+    instruction_type='default',
+    trial_count=1,
+    timeout=None,
+    horizon_sec=None,
+    env_server=None,
 )
-def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_server):
+def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, cameras, env_server):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: tabletop manipulation
@@ -45,17 +50,22 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
     ``cameras`` names the set the run renders, one of ``keys.CAMERA_SETS``: both exteriors and the wrist, or
     one exterior and the wrist. RoboLab bakes the set into the registered task, so a run holds one set.
 
+    ``horizon_sec`` replaces the episode length of every task of the run, and the default deadline follows it. A
+    run with it is not comparable with RoboLab's own scores.
+
     ``env_server`` is the ``host:port`` of a RoboLab env server that already runs, which this eval shares with
-    other evals: each drives one clone of its scene. The server's camera set must be ``cameras``. Without it,
-    the eval launches a server of its own.
+    other evals: each drives one clone of its scene. The server's camera set must be ``cameras``, and every eval
+    that shares it must set the same ``horizon_sec``. Without it, the eval launches a server of its own.
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
-    drives it over the socket and the task name + instruction type ride each trial's reset token. There is no
-    per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none. The eval records two
-    privileged signals and never gives them to the policy. ``subtask`` is the env's live subtask progress
-    ``[status, completed, total, score]``. ``gt_state`` is the scene state: object poses, gripper contacts and
-    progress per condition chain.
+    drives it over the socket and the task name, instruction type and episode length override ride each trial's
+    reset token. There is no per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none.
+    The eval records two privileged signals and never gives them to the policy. ``subtask`` is the env's live
+    subtask progress ``[status, completed, total, score]``. ``gt_state`` is the scene state: object poses, gripper
+    contacts and progress per condition chain.
     """
+    require_finite_positive('timeout', timeout)
+    require_finite_positive('horizon_sec', horizon_sec)
     camera_dict = _camera_dict(cameras)
     if env_server is None:
         serve = serve_robolab(cameras)
@@ -70,9 +80,12 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
     def tasks() -> list[Task]:
         trials = []
         for params in proxy.tasks(spec(task=task)):
-            # RoboLab truncates an episode at its own budget, so the deadline sits above it and the env's verdict
-            # ends a trial.
-            deadline = timeout if timeout is not None else params[robolab_keys.EPISODE_LENGTH] + 10.0
+            if horizon_sec is not None:
+                params = {**params, robolab_keys.EPISODE_LENGTH_OVERRIDE: horizon_sec}
+            # RoboLab truncates an episode at its length, so the deadline sits above it and the env's verdict ends a
+            # trial.
+            length = params[robolab_keys.EPISODE_LENGTH] if horizon_sec is None else horizon_sec
+            deadline = timeout if timeout is not None else length + 10.0
             # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
             trial = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=deadline)
             trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]

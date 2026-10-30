@@ -19,6 +19,8 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   reported but not fatal;
 - ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
   target tracks end-to-end;
+- the episode length: a token's length rebuilds the scene with only ``episode_length_s`` changed, and a token
+  without one rebuilds the scene with RoboLab's budget;
 - with ``--num-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
   command, a clone with no command holds, a clone still makes subtask progress after another clone ends its
   episode, and a one-scene recorded state restores into every clone.
@@ -50,7 +52,7 @@ from robolab.core.sensors.contact_sensor_utils import (  # pyright: ignore[repor
 )
 from robolab.robots.droid import EEF_OFFSET_ROT
 
-_TOKEN = {'task': 'BananaInBowlTask', 'instruction_type': 'default'}
+_TOKEN = {keys.TOKEN_TASK: 'BananaInBowlTask', keys.TOKEN_INSTRUCTION_TYPE: 'default'}
 _HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 _HOLD_STEPS = 30
 _SETTLE_STEPS = 10
@@ -411,13 +413,32 @@ def _first_clone(state: Any) -> Any:
 def _check_a_recorded_state_reaches_every_clone(env: RobolabEnv) -> None:
     """A reset with a one-scene recorded state restores that state into every clone."""
     recorded = _first_clone(env._env.scene.get_state(is_relative=True))
-    out = env.reset({**_TOKEN, 'state': recorded})
+    out = env.reset({**_TOKEN, keys.TOKEN_STATE: recorded})
     for frame in out[protocol.SLOTS]:
         _check_gt_state(env, frame[protocol.FRAME_OBS], reset=True)
     joints = env._env.scene.get_state(is_relative=True)['articulation']['robot']['joint_position'].cpu().numpy()
     err = float(np.max(np.abs(joints - recorded['articulation']['robot']['joint_position'])))
     assert err < 1e-5, f'a recorded state reached the clones {err:.6f} rad off its joints'
     print(f'  batch: OK (a recorded state restores into all {env.num_slots} clones)')
+
+
+def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
+    """A token's episode length rebuilds the scene with only that length changed, and a token without one rebuilds
+    the scene with RoboLab's budget."""
+    length_s = 240.0
+    env.reset(_TOKEN)
+    budget, named = env._env.max_episode_length, env._env_cfg.to_dict()
+    env.reset({**_TOKEN, keys.TOKEN_EPISODE_LENGTH_S: length_s})
+    assert env._control_dt is not None  # the reset above built the env
+    expected = math.ceil(length_s / env._control_dt)
+    assert env._env.max_episode_length == expected, f'{env._env.max_episode_length} steps, {expected} asked for'
+    parsed = env._env_cfg.to_dict()
+    # A cfg holds ``functools.partial`` terms, which compare by identity even between two builds of one scene.
+    changed = sorted(key for key in named.keys() | parsed.keys() if repr(named.get(key)) != repr(parsed.get(key)))
+    assert changed == ['episode_length_s'], f'the parsed scene differs from the named scene in {changed}'
+    env.reset(_TOKEN)
+    assert env._env.max_episode_length == budget, f'{env._env.max_episode_length} steps after a reset to the budget'
+    print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
 def _check_batch(num_envs: int) -> None:
@@ -474,6 +495,7 @@ def main() -> None:
     _check_flange_to_eef(env)
     failures = _run_cartesian_cases(env)
     _check_cartesian_delta(env)
+    _check_an_episode_length_replaces_the_budget(env)
     env.close()
     if args.num_envs > 1:
         _check_batch(args.num_envs)

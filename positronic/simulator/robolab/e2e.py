@@ -72,7 +72,11 @@ def _gt_state_events(state: dict) -> set[str]:
 def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dict, task: str) -> tuple[bool, set[str]]:
     """Replay one demo; return whether it ended in success, and the kinds of event its ``gt_state`` showed."""
     # Exact-state reset: the token carries the task plus the demo's own recorded initial scene state.
-    out = conn.reset({'task': task, 'instruction_type': 'default', 'state': initial_state})
+    out = conn.reset({
+        robolab_keys.TOKEN_TASK: task,
+        robolab_keys.TOKEN_INSTRUCTION_TYPE: 'default',
+        robolab_keys.TOKEN_STATE: initial_state,
+    })
     stale = _gt_state_events(out[protocol.FRAME_OBS][robolab_keys.GT_STATE])
     assert not stale, f'the reset frame shows {sorted(stale)}, so it holds the prior demo'
     seen: set[str] = set()
