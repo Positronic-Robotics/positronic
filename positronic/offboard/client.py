@@ -45,19 +45,25 @@ SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
 
 
-# A Modal sticky session ends this long after its last in-flight request, an open websocket included. Short, so a
-# session whose dial never came frees its container soon.
-MODAL_SESSION_IDLE_TIMEOUT = 120
-MODAL_SESSION_START_PATH = '/_modal/sessions/start'
-MODAL_SESSION_TERMINATE_PATH = '/_modal/sessions/terminate'
-MODAL_SESSION_HEADER = 'Modal-Authorization'
-# A session's idle timeout, on its start. A keepalive carries it too: the edge forwards the session id to the
-# container and not the timeout, and the server reports the session's idle timeout when it knows it.
-MODAL_SESSION_IDLE_TIMEOUT_HEADER = 'x-modal-server-session-idle-timeout'
-# Modal's edge answers a session start that waited this long with a 5xx; the start then continues under its key.
-_MODAL_START_REQUEST_TIMEOUT = 330.0
-# The most of an answer to a session call that the client reads: a token in a JSON object fits in it many times.
-_MAX_MODAL_ANSWER_BYTES = 16 * 1024
+class MODAL:
+    """The paths, headers and limits of the Modal sticky session API."""
+
+    # A session ends this long after its last in-flight request, an open websocket included. Short, so a session
+    # whose dial never came frees its container soon.
+    IDLE_TIMEOUT = 120
+    START_PATH = '/_modal/sessions/start'
+    TERMINATE_PATH = '/_modal/sessions/terminate'
+    SESSION_HEADER = 'Modal-Authorization'
+    # A session's idle timeout, on its start. A keepalive carries it too: the edge forwards the session id to the
+    # container and not the timeout, and the server reports the session's idle timeout when it knows it.
+    IDLE_TIMEOUT_HEADER = 'x-modal-server-session-idle-timeout'
+    IDEMPOTENCY_KEY_HEADER = 'x-idempotency-key'
+    TIMESTAMP_HEADER = 'x-modal-timestamp'
+    SESSION_TOKEN_HEADER = 'x-modal-server-session-token'
+    # The edge answers a session start that waited this long with a 5xx; the start then continues under its key.
+    START_REQUEST_TIMEOUT = 330.0
+    # The most of an answer to a session call that the client reads: a token in a JSON object fits in it many times.
+    MAX_ANSWER_BYTES = 16 * 1024
 
 
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
@@ -102,7 +108,7 @@ class ModalSessions:
     pickled copy holds none of them.
     """
 
-    def __init__(self, base_url: str, idle_timeout: int = MODAL_SESSION_IDLE_TIMEOUT):
+    def __init__(self, base_url: str, idle_timeout: int = MODAL.IDLE_TIMEOUT):
         self._base_url = base_url.rstrip('/')
         self.idle_timeout = idle_timeout
         # A call outside a session can run beside a session, so a lock guards the held sessions, and a second one
@@ -125,7 +131,7 @@ class ModalSessions:
         ``urllib.error.HTTPError``."""
         request = urllib.request.Request(self._base_url + path, data=b'', method='POST', headers=dict(headers))
         with _SESSION_CALLS.open(request, timeout=timeout) as answer:
-            return answer.read(_MAX_MODAL_ANSWER_BYTES)
+            return answer.read(MODAL.MAX_ANSWER_BYTES)
 
     def start(self, headers: Mapping[str, str] | None, deadline: float) -> str:
         """The token of a new session. Raises `wire.ConnectRefused` when the edge refuses the start, and
@@ -137,13 +143,13 @@ class ModalSessions:
                 raise TimeoutError(f'No Modal session started by the deadline ({self._base_url})')
             start_headers = {
                 **(headers or {}),
-                MODAL_SESSION_IDLE_TIMEOUT_HEADER: str(self.idle_timeout),
-                'x-idempotency-key': key,
-                'x-modal-timestamp': stamp,
+                MODAL.IDLE_TIMEOUT_HEADER: str(self.idle_timeout),
+                MODAL.IDEMPOTENCY_KEY_HEADER: key,
+                MODAL.TIMESTAMP_HEADER: stamp,
             }
             try:
                 return _session_token(
-                    self._post(MODAL_SESSION_START_PATH, start_headers, min(left, _MODAL_START_REQUEST_TIMEOUT))
+                    self._post(MODAL.START_PATH, start_headers, min(left, MODAL.START_REQUEST_TIMEOUT))
                 )
             except urllib.error.HTTPError as refused:
                 if refused.code < 500:
@@ -161,7 +167,7 @@ class ModalSessions:
         A session that this call does not end ends at its idle timeout, so a failure is logged and not raised.
         """
         try:
-            self._post(MODAL_SESSION_TERMINATE_PATH, {**(headers or {}), 'x-modal-server-session-token': token}, 60)
+            self._post(MODAL.TERMINATE_PATH, {**(headers or {}), MODAL.SESSION_TOKEN_HEADER: token}, 60)
         except urllib.error.HTTPError as answer:
             if answer.code != 404:
                 logger.error('Modal session terminate answered %s; the session ends at its idle timeout', answer.code)
@@ -217,7 +223,7 @@ class ModalSessions:
 
     def call_headers(self, token: str) -> dict[str, str]:
         """The headers of a call outside a session on the session ``token`` names."""
-        return {MODAL_SESSION_HEADER: f'Bearer {token}', MODAL_SESSION_IDLE_TIMEOUT_HEADER: str(self.idle_timeout)}
+        return {MODAL.SESSION_HEADER: f'Bearer {token}', MODAL.IDLE_TIMEOUT_HEADER: str(self.idle_timeout)}
 
     def _counted_start(self, headers: Mapping[str, str] | None, deadline: float, *, spare: bool) -> str:
         """``start``, counted as in flight so that a call meanwhile waits for its token. The token is held (as the
@@ -576,7 +582,7 @@ class InferenceClient:
                 open_timeout = max(0.0, min(open_timeout, ready_by - time.monotonic()))
             else:
                 sessions.hold(token)
-            headers = {MODAL_SESSION_HEADER: f'Bearer {token}'}
+            headers = {MODAL.SESSION_HEADER: f'Bearer {token}'}
             on_close = partial(sessions.end, self.headers, token)
 
         try:
