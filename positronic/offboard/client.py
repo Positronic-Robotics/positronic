@@ -227,6 +227,10 @@ class InferenceSession:
         if self._frames is not None and reopened._frames is None:
             reopened.close()
             raise wire.PeerDisconnected('The session this one reconnected to has no frame ring')
+        # The run records the image transport of the session it opened, so a ring cannot appear here either.
+        if self._frames is None and reopened._frames is not None:
+            reopened._frames.close()
+            reopened._frames = None
         with self._send_lock:
             if not self._closing:
                 # A ring is handed over under one session id, so the new session's ring replaces this one's.
