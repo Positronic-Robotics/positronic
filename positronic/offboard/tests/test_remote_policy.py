@@ -1392,6 +1392,34 @@ def test_a_legacy_command_mapping_with_no_positions_fails_as_a_policy_command_er
         run.close()
 
 
+def test_a_v3_answer_whose_command_channel_name_is_bytes_fails_as_a_policy_command_error(runtime):
+    policy, session = _mock_remote_policy(CHUNKED_STACK, infer_return=[{keys.ROBOT_COMMAND.encode(): [0.0] * 7}])
+    session.protocol_version = protocol.ProtocolVersion.V3
+    run = runtime.start(policy)
+    try:
+        with pytest.raises(PolicyCommandError) as raised:
+            run.send({})
+            runtime.wait(timeout_sec=5)
+            run.send({})
+        assert isinstance(raised.value.__cause__, TypeError)
+    finally:
+        runtime.close()
+        run.close()
+
+
+@pytest.mark.parametrize(
+    'metadata',
+    [[offboard_keys.LOCAL_STACK], {**CHUNKED_STACK, policy_keys.COMPRESS_IMAGES: np.array([True, False])}],
+    ids=['not-a-mapping', 'compress-flag-with-no-truth-value'],
+)
+def test_server_metadata_this_client_cannot_read_fails_as_a_policy_command_error_before_inference(runtime, metadata):
+    policy, session = _mock_remote_policy(metadata)
+    with pytest.raises(PolicyCommandError, match='metadata that the server states'):
+        runtime.start(policy)
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
 @pytest.mark.parametrize(
     'failure', [RuntimeError('Server error: model failed'), wire.PeerDisconnected('closed'), TimeoutError('stalled')]
 )

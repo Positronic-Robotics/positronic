@@ -179,27 +179,28 @@ class RemotePolicy(Policy):
         session = self._client.new_session()
         connection_lock = Lock()
         try:
-            server_meta = dict(session.metadata)
-            stack = declared_stack(server_meta, session.protocol_version)
             try:
+                server_meta = dict(session.metadata)
+                stack = declared_stack(server_meta, session.protocol_version)
                 client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.
                 frames = _server_frames(
                     server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
                 )
+                server_compresses_images = bool(server_meta.get(policy_keys.COMPRESS_IMAGES))
+            except PolicyCommandError:
+                raise
             except Exception as e:
                 raise PolicyCommandError(f'This client cannot use the metadata that the server states: {e!r}') from e
             episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
             if frames:
                 episode_meta[roboarm_keys.EE_FRAMES] = frames
-            if server_meta.get(policy_keys.COMPRESS_IMAGES):
+            if server_compresses_images:
                 episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
             for name, value in episode_meta.items():
                 runtime.set_metadata(name, value)
-            compress_images = session.protocol_version is not ProtocolVersion.V3 and bool(
-                server_meta.get(policy_keys.COMPRESS_IMAGES)
-            )
+            compress_images = session.protocol_version is not ProtocolVersion.V3 and server_compresses_images
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
                 with connection_lock:
@@ -210,17 +211,17 @@ class RemotePolicy(Policy):
                 while True:
                     try:
                         step = run.send(obs)
+                        if isinstance(step, Step):
+                            self._require_robot_commands(step)
                     except StopIteration as end:
                         return end.value
                     except PolicyCommandError:
                         raise
-                    # A data error from the declared stack is the policy's; a transport error is not one of these.
+                    # A data error from the declared stack or its step is the policy's; a transport error is not one.
                     except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
                         raise PolicyCommandError(
                             f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
                         ) from e
-                    if isinstance(step, Step):
-                        self._require_robot_commands(step)
                     obs = yield step
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.
