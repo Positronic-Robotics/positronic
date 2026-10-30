@@ -13,6 +13,5 @@ GRIPPER = 'gripper'
 # policy that reads poses state it.
 EE_FRAMES = 'ee_frames'
 
-# The factor by which an arm's controller scales the gravity torque of each joint, as the controller reports it.
-# An arm states it on its arm meta, and an episode carries it keyed by the joint signal of the arm.
+# The gravity torque factor per joint that an arm's controller reports, keyed in an episode by its joint signal.
 GRAVITY_COMP_FACTOR = 'gravity_comp_factor'
