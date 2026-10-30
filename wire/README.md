@@ -127,30 +127,19 @@ before it dials, and names both in the refusal.
 ## A Modal Server with sticky sessions
 
 `modal_websocket_tls` dials a Modal Server with `@modal.sessioned`, whose URL ends in `.modal.direct`. The edge
-of such a server answers 401 to every request without a session token. A session start places one session on one
-container and waits until a container takes it, so one session starts one container. Every request with the token
-reaches that container.
+of such a server answers 401 to every request without a session token, and a session start places one session on
+one container. Only this wire holds state: the Modal sessions of this process, per server, which the registry's one
+instance shares between the keepalives and the sessions of the process. `ModalClientWire` states how it starts,
+parks and ends them.
 
-The wire is the one member that holds state: the Modal sessions of this process, per server. The registry holds
-one instance, so the warm-up, the keepalives and the sessions of one process on one address share them.
-
-- `dial` takes a session for the connection, and dials `websocket_tls` with `Modal-Authorization: Bearer <token>`.
-  The session is the one of a dropped connection on the address, then the spare, then a new start. A start runs in
-  its own thread, and a dial waits for it up to `open_timeout`. While the start still waits for a container, the
-  dial raises `COLD`, and the next dial waits for the same start. The edge answers a start that waits past its own
-  limit with a 5xx, and the start continues under the same idempotency key, so it places one session.
-- A close ends the connection's session, so its container takes the next one. A connection that the server dropped
-  keeps its session for `IDLE_TIMEOUT`, so a reconnect reaches the same container. A session that ended answers a
-  dial with 404, and the dial then waits for a new session.
-- `keepalive` carries the token of a session that a connection holds, or of the spare. Where there is none, it
-  starts the spare, and raises `COLD` until a container takes it. On a cold app this wakes the container that the
-  next dial takes. Only the process that manages the endpoint calls it, so no other process
-  starts a container.
-- `probe` raises `ProbeUnsupported`, because a probe on such a server also starts a session. A caller that waits
-  for a server asks `keepalive` instead, as `InferenceClient.wait_for_server` does.
-- The start and the terminate carry the caller's headers, which hold the endpoint's proxy credentials, and go to
-  `https://<host>[:port]` of the address alone: the wire follows no redirect. The wire ends every session it holds
-  when the process exits. A session that a terminate does not reach ends at its idle timeout.
+- The caller's headers carry the endpoint's proxy credentials. The wire sends them only on its own session calls,
+  to `https://<host>[:port]` of the address.
+- `dial` and `keepalive` raise `COLD` while a cold app starts a container, and the next call waits for the same
+  start. A caller retries them as it retries any `COLD`.
+- `keepalive` starts a session when the wire holds none, and so a container. Only the process that manages the
+  endpoint calls it.
+- `probe` raises `ProbeUnsupported`. A caller that waits for a server asks `keepalive` instead, as
+  `InferenceClient.wait_for_server` does.
 
 ## Whether a policy server is up
 

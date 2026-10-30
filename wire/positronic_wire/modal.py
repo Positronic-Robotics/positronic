@@ -1,8 +1,7 @@
 """The client side of a Modal Server with sticky sessions (``@app.server`` with ``@modal.sessioned``).
 
 The edge of such a server answers 401 to every request without a session token. A session start places one
-session on one container: on a free container, on a container that Modal starts for it, or on the next container
-that frees. Every request that carries the token reaches that container.
+session on one container, and every request that carries its token reaches that container.
 """
 
 import atexit
