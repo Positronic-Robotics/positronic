@@ -5523,10 +5523,14 @@ sdist = { url = "https://files.pythonhosted.org/packages/f0/8d/03dcd20105d000975
 [[package]]
 name = "pos3"
 version = "0.5.0"
-source = { git = "https://github.com/Positronic-Robotics/pos3.git?rev=ddebabd2f3c2c207f47012804be0ebbb7c913cbd#ddebabd2f3c2c207f47012804be0ebbb7c913cbd" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
     { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ed/a9/6db19d9bd19a529bd019f4cf51b865569432cfa11dc8c32eb1907360c5c7/pos3-0.5.0.tar.gz", hash = "sha256:98c7a0cb12678497f04b44ec3b02824e0adbc3d02cd4fb4af9a5b06aa4dcde60", size = 54933, upload-time = "2026-10-30T12:19:19.195Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/ab/df4ff398ec9b30ff54b27072ca77140358901610cd57317f2e524a5aa7cf/pos3-0.5.0-py3-none-any.whl", hash = "sha256:97b6764107a1129cacc1f73bb62edfff6ba48af0cdcf3f3f23c9dd09afae3161", size = 31324, upload-time = "2026-10-30T12:19:18.075Z" },
 ]
 
 [[package]]
@@ -5708,7 +5712,7 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'molmoact2'" },
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
-    { name = "pos3", git = "https://github.com/Positronic-Robotics/pos3.git?rev=ddebabd2f3c2c207f47012804be0ebbb7c913cbd" },
+    { name = "pos3", specifier = ">=0.5.0" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-anthropic'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-google'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
