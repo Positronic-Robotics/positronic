@@ -25,7 +25,10 @@ class Marker(ControlSystem):
         self.directory = pathlib.Path(directory)
 
     def run(self, should_stop, clock):
-        (self.directory / CHILD_PID_FILE).write_text(str(os.getpid()))
+        # The test polls for the file, so it must appear with its content: write aside, then rename.
+        written = self.directory / f'{CHILD_PID_FILE}.tmp'
+        written.write_text(str(os.getpid()))
+        written.replace(self.directory / CHILD_PID_FILE)
         while not should_stop.value:
             yield Sleep(0.01)
         (self.directory / SHUT_DOWN_FILE).write_text('')
