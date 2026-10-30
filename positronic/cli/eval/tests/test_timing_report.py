@@ -2,6 +2,7 @@ import json
 import re
 
 import pos3
+import pyarrow as pa
 import pytest
 
 from positronic.cli import _internal_main
@@ -19,6 +20,7 @@ from positronic.simulator.env_server.telemetry import ENV_PROCESS
 from positronic.telemetry import (
     ATTR_PROCESS_NAME,
     ATTR_RUN_ID,
+    COMPRESSED_SPANS_SUFFIX,
     GPU_INDEX,
     GPU_MEM_USED_B,
     GPU_PROC_MEM_B,
@@ -113,6 +115,18 @@ def _fixture(telemetry_dir):
         },
     ]
     (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+
+def test_a_zstd_span_file_reads_as_the_plain_file_it_holds(tmp_path):
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    _fixture(telemetry_dir)
+    plain = _read_spans_dir(telemetry_dir)
+    harness = telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}'
+    frame = pa.Codec('zstd', compression_level=3).compress(harness.read_bytes(), asbytes=True)
+    (telemetry_dir / f'{HARNESS_PROCESS}{COMPRESSED_SPANS_SUFFIX}').write_bytes(frame)
+    harness.unlink()
+
+    assert sorted(_read_spans_dir(telemetry_dir)) == sorted(plain)
 
 
 @pytest.mark.parametrize('nested_inference', [False, True])

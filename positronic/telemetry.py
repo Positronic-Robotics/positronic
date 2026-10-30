@@ -29,6 +29,7 @@ recording run warns.
 """
 
 import functools
+import io
 import json
 import logging
 import os
@@ -41,8 +42,9 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import IO, TYPE_CHECKING, Any, NamedTuple
 
+import pyarrow as pa
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.trace import Span
@@ -75,6 +77,8 @@ _MISSING_EXTRA = (
 # The subdirectory under a run's output dir where every process's sidecars live. The eval CLI writer, a
 # launched env server (via the env-var it is handed) and the offline reduce all resolve to this same dir.
 TELEMETRY_SUBDIR = 'telemetry'
+# A span file compressed as one zstd frame.
+COMPRESSED_SPANS_SUFFIX = f'{SPANS_SUFFIX}.zst'
 
 # The machine-load sample's field names, and the suffix of the file holding one such sample per line. Owned
 # here because ``StatsSampler`` writes them; the reduce, their only reader, imports them.
@@ -403,10 +407,16 @@ def _decode_attrs(attributes: list[dict[str, Any]]) -> dict[str, Any]:
     return {attr['key']: _decode_value(attr['value']) for attr in attributes}
 
 
+def _open_spans(path: Path) -> IO[str]:
+    if not path.name.endswith(COMPRESSED_SPANS_SUFFIX):
+        return open(path)
+    return io.TextIOWrapper(pa.input_stream(str(path), compression='zstd'))
+
+
 def read_spans(path: Path | str) -> Iterator[SpanRec]:
-    """Parse the OTLP/JSON-lines spans file, yielding each span. A truncated final line (crash mid-write) is
-    tolerated: an unparseable line is skipped rather than raising."""
-    with open(path) as file:
+    """Parse the OTLP/JSON-lines spans file, plain or `*.spans.jsonl.zst`, yielding each span. A truncated final
+    line (crash mid-write) is tolerated: an unparseable line is skipped rather than raising."""
+    with _open_spans(Path(path)) as file:
         for line in file:
             line = line.strip()
             if not line:
