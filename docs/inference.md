@@ -127,7 +127,7 @@ Anything richer — a foot pedal, a rig UI — is a driver of its own rather tha
 **The client raises a `PolicyCommandError` for a policy's stack or answer that it cannot use.** The error is `positronic.policy.PolicyCommandError`, a subclass of `ValueError`, and the error that refused the policy's data is its cause. It comes from:
 
 - `Codec.wrap`, when a codec raises any error on a command that the policy returns.
-- `RemotePolicy`, when it cannot build the client stack that the server declares.
+- `RemotePolicy`, when it cannot build the client stack that the server declares, or cannot use the metadata that the server states: a v3 stack whose metadata does not compose, or two different frames for one pose.
 - `RemotePolicy`, when that stack raises a `KeyError`, `TypeError`, `ValueError`, `IndexError` or `AttributeError` on an answer or an observation.
 - `RemotePolicy`, when a step from that stack puts no command object at a robot command channel.
 - The harness, when a step names a channel that the embodiment does not take.

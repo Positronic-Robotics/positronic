@@ -1121,21 +1121,40 @@ def test_a_run_records_no_frames_for_a_server_that_states_none(runtime):
     assert roboarm_keys.EE_FRAMES not in runtime.metadata_snapshot()
 
 
-def _v3_policy_framing_each_pose(times):
-    """A v3 server whose declared stack runs ``times`` frame codecs for the same poses ahead of the schedule."""
+def _v3_policy_framing_each_pose(times, server_meta=None):
+    """A v3 server whose declared stack runs ``times`` frame codecs for the same poses ahead of the schedule.
+
+    ``server_meta`` adds entries to the server's own metadata.
+    """
     frame = ChangeEEFrame(EEFrame(site=GRIPPER_SITE)).to_spec()
     stack = spec.sequence(*[frame] * times, spec.component('chunked_schedule', version=2, fps=10))
-    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack})
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack, **(server_meta or {})})
     session.protocol_version = protocol.ProtocolVersion.V3
     return policy, session
 
 
-def test_a_v3_stack_that_frames_a_pose_twice_fails_as_a_policy_command_error_before_inference(runtime):
-    policy, session = _v3_policy_framing_each_pose(2)
-    with pytest.raises(PolicyCommandError, match='cannot compose'):
+@pytest.mark.parametrize(
+    'times, server_meta',
+    [
+        (2, None),
+        (1, ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE, offset=FRANKA_HAND_FRAME)})),
+        (1, {roboarm_keys.EE_FRAMES: GRIPPER_SITE}),
+    ],
+    ids=['two-codecs-for-one-pose', 'metadata-and-stack-disagree', 'frames-not-a-mapping'],
+)
+def test_server_metadata_this_client_cannot_use_fails_as_a_policy_command_error_before_inference(
+    runtime, times, server_meta
+):
+    policy, session = _v3_policy_framing_each_pose(times, server_meta)
+    with pytest.raises(PolicyCommandError, match='metadata that the server states'):
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+def test_a_server_whose_metadata_repeats_the_frame_of_its_stack_records_that_frame(runtime):
+    policy, _ = _v3_policy_framing_each_pose(1, ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}))
+    assert _recorded_frames(policy, runtime)[keys.EE_POSE] == GRIPPER_SITE
 
 
 def test_a_v3_stack_that_frames_a_pose_once_records_its_frame(runtime):

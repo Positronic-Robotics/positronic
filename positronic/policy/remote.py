@@ -183,15 +183,13 @@ class RemotePolicy(Policy):
             stack = declared_stack(server_meta, session.protocol_version)
             try:
                 client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+                # Either side of the server's deployment may state the frames, so the run records both as one entry
+                # keyed by pose signal.
+                frames = _server_frames(
+                    server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
+                )
             except Exception as e:
-                raise PolicyCommandError(
-                    f'The client stack that the server declares states metadata that this client cannot compose: {e!r}'
-                ) from e
-            # Either side of the server's deployment may state the frames, so the run records both as one entry keyed
-            # by pose signal.
-            frames = _server_frames(
-                server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
-            )
+                raise PolicyCommandError(f'This client cannot use the metadata that the server states: {e!r}') from e
             episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
             if frames:
                 episode_meta[roboarm_keys.EE_FRAMES] = frames
