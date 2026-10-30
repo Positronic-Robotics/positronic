@@ -1468,6 +1468,11 @@ def test_a_frame_miss_sends_the_request_again_in_full(caplog):
     assert 'does not have the streamed rows' in caplog.text
 
 
+def _history_stack_spec() -> dict:
+    """A temporal stack of ``image`` whose offsets stop before the current frame."""
+    return {'name': 'temporal_stack', 'args': {'keys': ['image'], 'offsets_sec': [-0.25, -0.15]}}
+
+
 @pytest.mark.parametrize(
     'frame_stream, meta',
     [
@@ -1477,6 +1482,16 @@ def test_a_frame_miss_sends_the_request_again_in_full(caplog):
             'h264', _stream_meta(frame_stream={'version': 1, 'codecs': ['jpeg']}), id='the-server-declares-other-codecs'
         ),
         pytest.param('jpeg', _stream_meta(**{policy_keys.COMPRESS_IMAGES: False}), id='the-server-takes-raw-images'),
+        pytest.param(
+            'jpeg',
+            _stream_meta(**{offboard_keys.LOCAL_STACK: {'seq': [{'name': 'stop_on_fault'}]}}),
+            id='the-stack-holds-no-temporal-stack',
+        ),
+        pytest.param(
+            'jpeg',
+            _stream_meta(**{offboard_keys.LOCAL_STACK: {'seq': [_history_stack_spec()]}}),
+            id='the-stack-holds-no-current-frame',
+        ),
     ],
 )
 def test_requests_go_in_full_unless_the_policy_asks_for_a_frame_stream_the_session_offers(frame_stream, meta, caplog):
@@ -1519,17 +1534,6 @@ def test_only_a_session_that_streams_frames_caches_its_resizes(monkeypatch, fram
         assert second[b'rows'] == [2, 1]  # the rows went out sized as the stack sizes its frames
 
 
-def test_a_frame_stream_needs_a_declared_temporal_stack(runtime):
-    meta = _stream_meta()
-    meta[offboard_keys.LOCAL_STACK] = {'seq': [{'name': 'stop_on_fault'}]}
-    policy, session = _mock_remote_policy(meta, frame_stream='jpeg')
-    session.protocol_version = protocol.ProtocolVersion.V1
-    with pytest.raises(ValueError, match='temporal_stack'):
-        runtime.start(policy)
-    session.infer.assert_not_called()
-    session.close.assert_called_once()
-
-
 def _streamed_stack(*parts: Policy | Codec) -> Sequential:
     """A client stack that stacks ``image`` at 0.1 s ticks for a frame stream."""
     return Sequential(TemporalStack(('image',), (-0.25, -0.15, 0.0)), *parts)
@@ -1541,6 +1545,21 @@ def _streamed_stack(*parts: Policy | Codec) -> Sequential:
         pytest.param(_streamed_stack(ChunkedSchedule(fps=10)), True, True, id='a-temporal-stack'),
         pytest.param(_streamed_stack(ChunkedSchedule(fps=10)), False, False, id='raw-images'),
         pytest.param(ChunkedSchedule(fps=10), True, False, id='no-temporal-stack'),
+        pytest.param(
+            Sequential(TemporalStack(('image',), (-0.25, -0.15)), ChunkedSchedule(fps=10)),
+            True,
+            False,
+            id='no-current-frame',
+        ),
+        pytest.param(
+            Sequential(
+                TemporalStack(('image',), tuple(-0.01 * i for i in range(StreamedRows.MAX_BACK + 1, -1, -1))),
+                ChunkedSchedule(fps=10),
+            ),
+            True,
+            False,
+            id='more-rows-than-a-stream-carries',
+        ),
     ],
 )
 def test_a_server_declares_a_frame_stream_for_a_client_that_stacks_compressed_frames(

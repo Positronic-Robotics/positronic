@@ -24,7 +24,7 @@ from positronic_wire import wire
 from positronic import telemetry
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import FRAME_MISS
-from positronic.offboard.frame_stream import DECLARATION, FRAME_STREAM, ROW, RowsMissing, StreamedRows
+from positronic.offboard.frame_stream import DECLARATION, FRAME_STREAM, ROW, RowsMissing, StreamedRows, streams_stack
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
@@ -78,18 +78,12 @@ class _ServedTiming:
             return function(obs)
 
 
-def _takes_frame_stream(pipeline: PolicyDeployment) -> bool:
-    """Whether a session of ``pipeline`` takes a frame stream: its client compresses images, and its client stack
-    holds the one temporal stack that the stream's rows come from."""
-    parts = unnest_seq(pipeline.local.to_spec())
-    return pipeline.compress_images and sum(part.get(spec.NAME) == TemporalStack.WIRE_NAME for part in parts) == 1
-
-
 class PolicyServer:
     """Serve one model through a policy deployment: a declared client processor stack and a server codec.
 
-    A deployment whose client compresses images and stacks frames with a ``TemporalStack`` takes a frame stream
-    (``positronic.offboard.frame_stream``): its handshake declares one, and each session keeps its rows.
+    A deployment whose client compresses images and stacks frames with one ``TemporalStack`` that ends at the current
+    frame takes a frame stream (``positronic.offboard.frame_stream``): its handshake declares one, and each session
+    keeps its rows.
 
     ``build_model`` runs once, when ``serve`` starts, and its model serves every session. It returns the model
     warmed, with ``server_utils.warmup``: a client reads any keepalive answer as ready. A config-launched
@@ -228,6 +222,17 @@ class PolicyServer:
                 logger.error(f'Error processing message: {e}', exc_info=True)
                 await conn.send(serialise({protocol.ERROR: str(e)}))
 
+    @staticmethod
+    def _takes_frame_stream(pipeline: PolicyDeployment) -> bool:
+        """Whether a session of ``pipeline`` takes a frame stream: its client compresses images, and its client stack
+        holds one temporal stack, whose rows the stream carries."""
+        parts = unnest_seq(pipeline.local.to_spec())
+        stacks = [part for part in parts if part.get(spec.NAME) == TemporalStack.WIRE_NAME]
+        if not (pipeline.compress_images and len(stacks) == 1):
+            return False
+        stacked = TemporalStack.from_spec_args(**stacks[0].get(spec.ARGS, {}))
+        return streams_stack(stacked.keys, stacked.offsets_sec)
+
     async def _serve_session(self, conn: server_wire.ServerConnection):
         logger.info(f'Connected to {conn.peer}')
 
@@ -246,7 +251,7 @@ class PolicyServer:
                 policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
                 policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
             }
-            if _takes_frame_stream(pipeline):
+            if self._takes_frame_stream(pipeline):
                 meta[FRAME_STREAM] = DECLARATION
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)

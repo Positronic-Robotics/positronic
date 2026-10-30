@@ -74,6 +74,17 @@ def declared_codecs(meta: cabc.Mapping[str, Any]) -> frozenset[FrameCodec]:
     return frozenset(codec for codec in FrameCodec if codec.value in declaration.get('codecs', ()))
 
 
+def streams_stack(keys: cabc.Sequence[str], offsets_sec: cabc.Sequence[float]) -> bool:
+    """Whether a frame stream carries the rows of a ``TemporalStack`` of ``keys`` at ``offsets_sec``: its last offset
+    is the current frame, and its rows and keys fit the bounds of ``StreamedRows``."""
+    return (
+        bool(offsets_sec)
+        and offsets_sec[-1] == 0.0
+        and len(offsets_sec) - 1 <= StreamedRows.MAX_BACK
+        and len(keys) <= StreamedRows.MAX_IMAGES
+    )
+
+
 class _VideoEncoder:
     """One H.264 stream for one camera: one access unit for each frame, with no frame delay."""
 
