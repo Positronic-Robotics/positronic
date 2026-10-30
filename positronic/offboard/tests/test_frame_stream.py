@@ -357,6 +357,17 @@ def test_a_server_decodes_each_h264_unit_in_order_also_the_tail_of_a_request_it_
     np.testing.assert_allclose(rows.resolve(request)[KEY], np.stack(frames[3:]), atol=6)
 
 
+@pytest.mark.parametrize('fps', [0.4, 0.5, 2.5, 29.97])
+def test_an_h264_stream_of_any_positive_rate_carries_each_frame(fps):
+    encoder = _VideoEncoder(24, 16, crf=18, fps=fps)
+    frames = [_gradient(i) for i in range(3)]
+    rows = StreamedRows()
+    rows.add(_row(1, 2, encoder.encode(frames[0])))
+    rows.add(_row(1, 1, encoder.encode(frames[1])))
+    request = _wire({KEY: {REF: True, b'call': 1, b'rows': [2, 1], b'tail': encoder.encode(frames[2])}})
+    np.testing.assert_allclose(rows.resolve(request)[KEY], np.stack(frames), atol=6)
+
+
 def test_a_server_decodes_an_h264_frame_of_odd_sides_to_its_declared_shape():
     encoder = _VideoEncoder(23, 15, crf=18, fps=10.0)
     rows = StreamedRows()
