@@ -6,16 +6,13 @@ A field that a later leaderboard can give a new value is an open string, so this
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Annotated, Self
 
 from platform_client.ids import LeaderboardVersionId, SubmissionId
 from platform_client.responses import DataBackedReplayLink
 from positronic_evals.evals import EvalRef
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, GetCoreSchemaHandler, model_validator
 from pydantic_core import core_schema
-
-# The metric key of a leaderboard that ranks one score of each row, such as the primary score of an eval.
-PRIMARY_METRIC = 'primary'
 
 # What a definition holds in the place of the time limit, in seconds.
 TIME_LIMIT_PLACEHOLDER = '{seconds}'
@@ -64,6 +61,27 @@ class CheckpointRef(_Name):
     """The id of one checkpoint of a model family."""
 
     __slots__ = ()
+
+
+class MetricKey(_Name):
+    """The key of a metric in the descriptor of its leaderboard, as its `Metric.key`."""
+
+    __slots__ = ()
+
+
+class OutcomeKey(_Name):
+    """The key of an outcome group in the descriptor of its leaderboard, as its `OutcomeGroup.key`."""
+
+    __slots__ = ()
+
+
+# The metric key of a leaderboard that ranks one score of each row, such as the primary score of an eval.
+PRIMARY_METRIC = MetricKey('primary')
+
+# A share, from 0 to 1.
+Fraction = Annotated[float, Field(ge=0, le=1)]
+# A share, from 0 to 100.
+Percent = Annotated[float, Field(ge=0, le=100)]
 
 
 class RowKey(_Name):
@@ -124,7 +142,7 @@ class Metric(_Wire):
     counts, where that value is not the value at the default time limit. A chart axis of the metric ends at `axis_max`.
     """
 
-    key: str = Field(min_length=1)
+    key: MetricKey
     name: str
     unit: str | None = None
     decimals: int = Field(ge=0)
@@ -137,12 +155,12 @@ class OutcomeGroup(_Wire):
     """One group that the result of an episode falls in.
 
     `key` names the group in the outcome shares of a row, in an episode and in a progress band. `step_score` is the
-    score of one step in the group, as a fraction from 0 to 1, where the leaderboard scores steps.
+    score of one step in the group, where the leaderboard scores steps.
     """
 
-    key: str = Field(min_length=1)
+    key: OutcomeKey
     name: str
-    step_score: float | None = None
+    step_score: Fraction | None = None
 
 
 class TimeLimit(_Wire):
@@ -172,19 +190,28 @@ class LeaderboardDescriptor(_Wire):
     # What the test that tells two rows apart compares, as a verdict names it.
     compared_by: str | None = None
     metrics: list[Metric] = Field(min_length=1)
-    ranked_by: str
+    ranked_by: MetricKey
     outcomes: list[OutcomeGroup] = Field(default_factory=list)
     time_limit: TimeLimit | None = None
     frozen: bool = False
 
     @model_validator(mode='after')
-    def _the_rows_rank_on_one_of_the_metrics(self) -> Self:
+    def _no_two_metrics_share_a_key(self) -> Self:
         keys = [metric.key for metric in self.metrics]
         if len(set(keys)) != len(keys):
             raise ValueError(f'two metrics share a key: {keys}')
-        outcome_keys = [outcome.key for outcome in self.outcomes]
-        if len(set(outcome_keys)) != len(outcome_keys):
-            raise ValueError(f'two outcome groups share a key: {outcome_keys}')
+        return self
+
+    @model_validator(mode='after')
+    def _no_two_outcome_groups_share_a_key(self) -> Self:
+        keys = [outcome.key for outcome in self.outcomes]
+        if len(set(keys)) != len(keys):
+            raise ValueError(f'two outcome groups share a key: {keys}')
+        return self
+
+    @model_validator(mode='after')
+    def _the_rows_rank_on_one_of_the_metrics(self) -> Self:
+        keys = [metric.key for metric in self.metrics]
         if self.ranked_by not in keys:
             raise ValueError(f'ranked_by names {self.ranked_by!r}, which is not one of the metrics {keys}')
         return self
@@ -233,7 +260,7 @@ class Baseline(_Wire):
 
 
 class TeamSubmission(_Wire):
-    """The one submission that the numbers of a team row come from. `replay` is absent until its page is built."""
+    """The submission that the numbers of a team row come from. `replay` is absent until its page is built."""
 
     id: SubmissionId
     submitted_at: AwareDatetime
@@ -247,13 +274,12 @@ class LeaderboardRow(_Wire):
     what the row shows, and two rows can show the same name. `tag` is the tag of the user that a team row stands for.
     It is the same on every leaderboard, so a user finds their own row by it.
 
-    A row that measures a model names its family, and the checkpoints whose episodes it counts. A team row names the
-    `submission` that its numbers come from. `submission` is absent on a row whose numbers come from more than one
-    submission, such as a model row.
+    A row that measures a model names its family, and the checkpoints whose episodes it counts. `submission` is
+    absent on a row whose numbers come from more than one submission, such as a model row.
 
     `metrics` holds a value for each metric that the row has a value for. `episodes` counts the episodes that its
     numbers read, where the leaderboard counts them. `outcome_shares` gives the share of those episodes in each outcome
-    group, by the key of the group, as a fraction from 0 to 1. A `baseline` row is a reference on this leaderboard and
+    group, by the key of the group. A `baseline` row is a reference on this leaderboard and
     has no `rank`, whatever the `baseline` of its model family is.
     """
 
@@ -264,9 +290,9 @@ class LeaderboardRow(_Wire):
     checkpoints: list[CheckpointRef] = Field(default_factory=list)
     rank: RankRange | None
     baseline: Baseline | None = None
-    metrics: dict[str, Estimate] = Field(default_factory=dict)
+    metrics: dict[MetricKey, Estimate] = Field(default_factory=dict)
     episodes: int | None = Field(default=None, ge=0)
-    outcome_shares: dict[str, float] = Field(default_factory=dict)
+    outcome_shares: dict[OutcomeKey, Fraction] = Field(default_factory=dict)
     submission: TeamSubmission | None = None
     caveats: list[Caveat] = Field(default_factory=list)
 
@@ -314,10 +340,7 @@ class EpisodeMedia(_Wire):
 
 
 class Highlight(_Wire):
-    """A clip of one episode that the top of a page plays, from `start_s` to `end_s`, or to the end of the episode.
-
-    Its `media` resolves as `EpisodeMedia` states.
-    """
+    """A clip of one episode that the top of a page plays, from `start_s` to `end_s`, or to the end of the episode."""
 
     episode: EpisodeId
     row: RowKey
@@ -371,7 +394,7 @@ class RowCharts(_Wire):
     """
 
     episodes: int = Field(ge=0)
-    series: dict[str, EstimateSeries] = Field(default_factory=dict)
+    series: dict[MetricKey, EstimateSeries] = Field(default_factory=dict)
     density: list[float] = Field(default_factory=list)
     rank: list[RankRange | None] = Field(default_factory=list)
 
@@ -403,20 +426,19 @@ class LeaderboardEpisode(_Wire):
     `outcome` is the key of the outcome group of the episode, and `result` is the text that the list shows for it.
     `steps` and `steps_done` count the steps of the task and the steps that the episode did. `furthest_stage` names
     how far the episode got in the step that it stopped in. `credit` is the percent of the task that the episode did,
-    from 0 to 100, and `pace` is its value in the pace column. `media` is absent where no recording of the episode
-    plays back.
+    and `pace` is its value in the pace column. `media` is absent where no recording of the episode plays back.
     """
 
     id: EpisodeId
     row: RowKey
     checkpoint: CheckpointRef | None = None
     task: LeaderboardTaskId
-    outcome: str
+    outcome: OutcomeKey
     result: str
     steps: int | None = Field(default=None, ge=0)
     steps_done: int | None = Field(default=None, ge=0)
     furthest_stage: str | None = None
-    credit: float | None = None
+    credit: Percent | None = None
     pace: float | None = None
     seconds_to_success: float | None = Field(default=None, ge=0)
     duration_s: float | None = Field(default=None, ge=0)
@@ -444,7 +466,7 @@ class ProgressBand(_Wire):
     steps. Exactly one of `outcome` and `steps_done` is set.
     """
 
-    outcome: str | None = None
+    outcome: OutcomeKey | None = None
     steps_done: int | None = Field(default=None, ge=0)
     episodes: list[int]
 
@@ -459,16 +481,15 @@ class ProgressPanel(_Wire):
     """How far the episodes of a row on one task had got at each second, or on every task where `task` is None.
 
     `edges` holds the smoothed count of episodes below each band, then of all episodes: band `i` runs from edge `i`
-    to edge `i + 1`. `mean_credit` is the smoothed mean percent of the task done, from 0 to 100. Where the bands
-    count steps, `mean_steps_done` is the mean count at each second and `mean_steps_done_at_end` is the mean at the
-    episode end.
+    to edge `i + 1`. `mean_credit` is the smoothed mean percent of the task done. Where the bands count steps,
+    `mean_steps_done` is the mean count at each second and `mean_steps_done_at_end` is the mean at the episode end.
     """
 
     task: LeaderboardTaskId | None = None
     episodes: int = Field(ge=0)
     bands: list[ProgressBand]
     edges: list[list[float]]
-    mean_credit: list[float]
+    mean_credit: list[Percent]
     mean_steps_done: list[float] | None = None
     mean_steps_done_at_end: float | None = None
 

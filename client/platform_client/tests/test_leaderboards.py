@@ -39,11 +39,13 @@ from platform_client.leaderboards import (
     LeaderboardTaskId,
     Link,
     Metric,
+    MetricKey,
     ModelCard,
     ModelCheckpoint,
     ModelFamily,
     ModelFamilyRef,
     OutcomeGroup,
+    OutcomeKey,
     PairVerdict,
     ProgressBand,
     ProgressPanel,
@@ -74,6 +76,11 @@ BOARD = LeaderboardRef('example-board')
 TAG = LeaderboardTag('example.site')
 STACK = LeaderboardTaskId('stack-the-cubes')
 TOWEL = LeaderboardTaskId('fold-the-towel')
+SCORE = MetricKey('score')
+SPEED = MetricKey('speed')
+DONE = OutcomeKey('done')
+HALFWAY = OutcomeKey('halfway')
+STOPPED = OutcomeKey('stopped')
 REPLAY = DataBackedReplayLink(url='https://replays.example/r/token/', data_url='https://replays.example/r/token/r.json')
 MEDIA = EpisodeMedia(
     video='https://media.example/s/token/0/phone.mp4',
@@ -125,7 +132,7 @@ MODEL_DESCRIPTOR = LeaderboardDescriptor(
     compared_by='their scores on each task',
     metrics=[
         Metric(
-            key='score',
+            key=SCORE,
             name='Score',
             unit='% done',
             decimals=1,
@@ -133,14 +140,14 @@ MODEL_DESCRIPTOR = LeaderboardDescriptor(
             row_definition='Percent of the task done, over every task.',
         ),
         Metric(
-            key='speed', name='Speed', unit='tasks per minute', decimals=2, definition='Tasks per minute.', axis_max=5.0
+            key=SPEED, name='Speed', unit='tasks per minute', decimals=2, definition='Tasks per minute.', axis_max=5.0
         ),
     ],
-    ranked_by='score',
+    ranked_by=SCORE,
     outcomes=[
-        OutcomeGroup(key='done', name='Done', step_score=1.0),
-        OutcomeGroup(key='halfway', name='Halfway', step_score=0.3),
-        OutcomeGroup(key='stopped', name='Stopped', step_score=0.0),
+        OutcomeGroup(key=DONE, name='Done', step_score=1.0),
+        OutcomeGroup(key=HALFWAY, name='Halfway', step_score=0.3),
+        OutcomeGroup(key=STOPPED, name='Stopped', step_score=0.0),
     ],
     time_limit=TimeLimit(default_s=100, max_s=120, axis='Seconds'),
 )
@@ -150,9 +157,9 @@ MODEL_ROW = LeaderboardRow(
     model=ModelFamilyRef('model-a'),
     checkpoints=[CheckpointRef('model-a-v2')],
     rank=RankRange(best=1, worst=2),
-    metrics={'score': Estimate(value=41.25, low=35.0, high=47.875), 'speed': Estimate(value=1.92, low=1.61, high=2.3)},
+    metrics={SCORE: Estimate(value=41.25, low=35.0, high=47.875), SPEED: Estimate(value=1.92, low=1.61, high=2.3)},
     episodes=120,
-    outcome_shares={'done': 0.4, 'halfway': 0.35, 'stopped': 0.25},
+    outcome_shares={DONE: 0.4, HALFWAY: 0.35, STOPPED: 0.25},
     caveats=[Caveat(kind='example_caveat', text='Read the numbers with this note.')],
 )
 MODEL_BASELINE_ROW = LeaderboardRow(
@@ -161,7 +168,7 @@ MODEL_BASELINE_ROW = LeaderboardRow(
     model=ModelFamilyRef('reference-person'),
     rank=None,
     baseline=Baseline(),
-    metrics={'score': Estimate(value=97.5, low=95.0, high=99.0)},
+    metrics={SCORE: Estimate(value=97.5, low=95.0, high=99.0)},
     episodes=20,
 )
 MODEL_LEADERBOARD = LeaderboardResponse(
@@ -202,7 +209,7 @@ CHARTS = LeaderboardChartsResponse(
     rows={
         RowKey('model-a'): RowCharts(
             episodes=12,
-            series={'score': SERIES, 'speed': SERIES},
+            series={SCORE: SERIES, SPEED: SERIES},
             density=[0.0, 1.5, 0.75],
             rank=[None, RankRange(best=1, worst=2), RankRange(best=1, worst=1)],
         )
@@ -214,7 +221,7 @@ EPISODE = LeaderboardEpisode(
     row=RowKey('model-a'),
     checkpoint=CheckpointRef('model-a-v2'),
     task=STACK,
-    outcome='halfway',
+    outcome=HALFWAY,
     result='Halfway',
     steps=2,
     steps_done=1,
@@ -238,7 +245,7 @@ EPISODES = LeaderboardEpisodesResponse(
             id=EpisodeId('2a/0'),
             row=RowKey('model-b'),
             task=TOWEL,
-            outcome='halfway',
+            outcome=HALFWAY,
             result='3/5',
             steps=5,
             steps_done=3,
@@ -256,8 +263,8 @@ PROGRESS = LeaderboardProgressResponse(
                 ProgressPanel(
                     episodes=4,
                     bands=[
-                        ProgressBand(outcome='done', episodes=[0, 1, 2]),
-                        ProgressBand(outcome='stopped', episodes=[4, 3, 2]),
+                        ProgressBand(outcome=DONE, episodes=[0, 1, 2]),
+                        ProgressBand(outcome=STOPPED, episodes=[4, 3, 2]),
                     ],
                     edges=[[0.0, 0.0, 0.0], [0.0, 1.0, 2.0], [4.0, 4.0, 4.0]],
                     mean_credit=[0.0, 25.0, 50.0],
@@ -576,7 +583,9 @@ def test_a_model_row_reads_its_family_its_checkpoint_and_its_ranges():
     assert row.model == ModelFamilyRef('model-a')
     assert row.checkpoints == [CheckpointRef('model-a-v2')]
     assert row.rank == RankRange(best=1, worst=3)
-    assert row.metrics['score'].low < row.metrics['score'].value < row.metrics['score'].high
+    assert row.metrics[SCORE].low < row.metrics[SCORE].value < row.metrics[SCORE].high
+    assert all(isinstance(key, MetricKey) for key in row.metrics)
+    assert all(isinstance(key, OutcomeKey) for key in row.outcome_shares)
     assert row.episodes == 120
     assert row.submission is None
 
@@ -699,7 +708,18 @@ def test_a_card_line_holds_at_least_one_fact():
 
 
 @pytest.mark.parametrize(
-    'name_type', [LeaderboardRef, LeaderboardTag, ModelFamilyRef, CheckpointRef, RowKey, LeaderboardTaskId, EpisodeId]
+    'name_type',
+    [
+        LeaderboardRef,
+        LeaderboardTag,
+        ModelFamilyRef,
+        CheckpointRef,
+        MetricKey,
+        OutcomeKey,
+        RowKey,
+        LeaderboardTaskId,
+        EpisodeId,
+    ],
 )
 @pytest.mark.parametrize('value', ['', '   ', 'two words'])
 def test_a_name_that_could_never_be_one_is_refused(name_type: type[str], value: str):
@@ -785,3 +805,42 @@ def test_a_text_that_is_not_given_reads_as_none():
     assert (descriptor.short_name, descriptor.summary, metric.definition) == (None, None, None)
     assert EpisodeColumn(name='Result').description is None
     assert TimeLimit(default_s=10, max_s=10).axis is None
+
+
+@pytest.mark.parametrize(
+    ('build', 'low', 'high'),
+    [
+        (lambda share: OutcomeGroup(key=DONE, name='Done', step_score=share), 0.0, 1.0),
+        (
+            lambda share: LeaderboardRow(
+                key=RowKey('model-a'), display_name='A', rank=None, baseline=Baseline(), outcome_shares={DONE: share}
+            ),
+            0.0,
+            1.0,
+        ),
+        (
+            lambda share: LeaderboardEpisode(
+                id=EpisodeId('1f/0'), row=RowKey('model-a'), task=STACK, outcome=DONE, result='Done', credit=share
+            ),
+            0.0,
+            100.0,
+        ),
+        (lambda share: ProgressPanel(episodes=1, bands=[], edges=[], mean_credit=[50.0, share]), 0.0, 100.0),
+    ],
+    ids=['step_score', 'outcome_shares', 'episode credit', 'mean_credit'],
+)
+def test_a_share_is_kept_inside_its_scale_and_refused_outside(build, low: float, high: float):
+    build(low)
+    build(high)
+    for outside in (low - 0.01, high + 0.01):
+        with pytest.raises(ValidationError):
+            build(outside)
+
+
+def test_a_descriptor_checks_each_rule_with_its_own_validator():
+    validators = set(LeaderboardDescriptor.__pydantic_decorators__.model_validators)
+    assert validators == {
+        '_no_two_metrics_share_a_key',
+        '_no_two_outcome_groups_share_a_key',
+        '_the_rows_rank_on_one_of_the_metrics',
+    }

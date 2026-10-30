@@ -105,7 +105,7 @@ class LeaderboardQuery(BaseModel):
 class LeaderboardPartQuery(BaseModel):
     """`leaderboards.episodes` and `leaderboards.progress` — one part of a leaderboard at `version`.
 
-    With no `version`, the platform answers from the published version. A leaderboard with no versions has no parts.
+    With no `version`, the platform answers from the published version.
     """
 
     model_config = INPUT_MODEL_CONFIG
