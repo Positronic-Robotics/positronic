@@ -22,7 +22,7 @@ from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import yam as yam_package
 from positronic.drivers.roboarm.ik import ee_frames
-from positronic.drivers.roboarm.models import GRIPPER_SITE, bundled_yam_model
+from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.eval import Embodiment
@@ -759,6 +759,63 @@ def test_the_park_holds_its_correction_past_the_joint_range(rig):
     held = _asked(rig)[sent:]
     assert np.all(held[:, 2] < yam._Kinematics().lower[2])
     assert all(np.array_equal(asked, held[0]) for asked in held)
+
+
+def _solver_answers(monkeypatch, posture: np.ndarray, *, success: bool) -> None:
+    """Make the LM solver answer ``posture`` from every start, and report ``success``."""
+
+    def solve(model, data, *_args, **_kwargs):
+        data.qpos[[model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES]] = posture
+        return data.qpos, 0.0, success
+
+    monkeypatch.setattr(yam, 'qpos_from_site_pose', solve)
+
+
+# Reaching forward and down. At this joint-3 angle, links 2 and 3 are on one line (MJCF joint-4 offset 0.245, 0.06).
+STRETCHED = np.array([0.0, 2.9, np.pi - np.arctan2(0.06, 0.245), -0.6, 0.0, 0.0])
+
+
+def _past_full_stretch(kinematics, distance_m: float) -> geom.Transform3D:
+    """The pose at ``STRETCHED``, ``distance_m`` farther from the arm base."""
+    pose = kinematics.fk(STRETCHED)
+    away = pose.translation / np.linalg.norm(pose.translation)
+    return geom.Transform3D(pose.translation + distance_m * away, pose.rotation)
+
+
+def test_ik_takes_an_answer_the_solver_reports_as_failed_when_it_is_inside_the_tolerance(monkeypatch):
+    kinematics = yam._Kinematics()
+    # Past reach, the last answer of the real solver changes with rounding, so the test sets it.
+    _solver_answers(monkeypatch, STRETCHED, success=False)
+    target = _past_full_stretch(kinematics, yam._IK_POS_TOL / 2)
+    np.testing.assert_array_equal(kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper), STRETCHED)
+
+
+def test_ik_refuses_a_target_farther_past_full_stretch_than_the_tolerance():
+    kinematics = yam._Kinematics()
+    target = _past_full_stretch(kinematics, 5 * yam._IK_POS_TOL)
+    assert kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper) is None
+
+
+def test_ik_clamps_a_joint_just_below_its_range_to_its_lower_limit(monkeypatch):
+    kinematics = yam._Kinematics()
+    asked = RAISED.copy()
+    asked[3] = kinematics.lower[3] - 0.002
+    _solver_answers(monkeypatch, asked, success=True)
+    held = asked.copy()
+    held[3] = kinematics.lower[3]
+    np.testing.assert_array_equal(kinematics.ik(kinematics.fk(asked), RAISED, kinematics.lower, kinematics.upper), held)
+
+
+def test_ik_wraps_a_joint_a_full_turn_below_its_range_back_into_it(monkeypatch):
+    kinematics = yam._Kinematics()
+    inside = RAISED.copy()
+    inside[0] = 2.98  # a full turn below is past joint 1's lower limit, and the turn fits its range
+    a_turn_below = inside.copy()
+    a_turn_below[0] -= 2 * np.pi
+    _solver_answers(monkeypatch, a_turn_below, success=True)
+    solution = kinematics.ik(kinematics.fk(inside), RAISED, kinematics.lower, kinematics.upper)
+    assert solution is not None
+    np.testing.assert_allclose(solution, inside)
 
 
 @pytest.mark.parametrize('positions', [[np.nan, 1.047, 1.047, 0.0, 0.0, 0.0], [0.5]])
