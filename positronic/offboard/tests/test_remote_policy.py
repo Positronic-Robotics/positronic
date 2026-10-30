@@ -1334,7 +1334,7 @@ def _frame_index(image: np.ndarray) -> int:
     return round(float(image.mean()) / 10)
 
 
-def _run_v1(
+def _run_on_mock_session(
     meta: dict,
     ticks: int,
     *,
@@ -1343,7 +1343,7 @@ def _run_v1(
     version: protocol.ProtocolVersion = protocol.ProtocolVersion.V1,
     extra: Mapping[int, dict] | None = None,
 ) -> MagicMock:
-    """Run a ``RemotePolicy`` on a mocked protocol v1 session, one tick every 0.1 s, and return the session.
+    """Run a ``RemotePolicy`` on a mocked session, one tick every 0.1 s, and return the session.
 
     Each reply is a chunk or an exception; without ``replies`` every call answers a chunk of 5 rows. ``version``
     is the session's protocol version, and ``extra`` adds fields to the observation of a tick index.
@@ -1396,7 +1396,7 @@ def test_an_unknown_frame_stream_codec_is_refused():
 def test_a_frame_stream_sends_the_rows_of_the_next_request_and_the_request_refers_to_them(
     parts, ticks, streamed, stacked
 ):
-    session = _run_v1(_stream_meta(*parts), ticks, frame_stream='jpeg')
+    session = _run_on_mock_session(_stream_meta(*parts), ticks, frame_stream='jpeg')
 
     rows = [call.args[0][ROW] for call in session.send_message.call_args_list]
     assert [(row['call'], row['back']) for row in rows] == [(1, 2), (1, 1)]
@@ -1417,7 +1417,9 @@ def test_a_declared_encode_images_leaves_the_stack_for_the_frame_stream_to_refer
         monkeypatch.setattr(
             module, 'encode_jpeg', lambda image, q=90, *a, _e=encode: qualities.append(q) or _e(image, q)
         )
-    session = _run_v1(_stream_meta({'name': 'encode_images', 'args': {'quality': 75}}), 8, frame_stream='jpeg')
+    session = _run_on_mock_session(
+        _stream_meta({'name': 'encode_images', 'args': {'quality': 75}}), 8, frame_stream='jpeg'
+    )
 
     rows = [call.args[0][ROW] for call in session.send_message.call_args_list]
     assert [(row['call'], row['back']) for row in rows] == [(1, 2), (1, 1)]
@@ -1430,12 +1432,12 @@ def test_a_declared_encode_images_leaves_the_stack_for_the_frame_stream_to_refer
 
 
 def test_a_protocol_v2_session_streams_the_rows_as_a_v1_session_does():
-    v1 = _run_v1(_stream_meta(), 8, frame_stream='jpeg')
+    v1 = _run_on_mock_session(_stream_meta(), 8, frame_stream='jpeg')
     temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
     # A protocol v2 stack names its versions and declares its schedule.
     meta = _stream_meta(ChunkedSchedule(fps=10.0).to_spec())
     meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
-    v2 = _run_v1(meta, 8, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
+    v2 = _run_on_mock_session(meta, 8, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
 
     def rows(session: MagicMock) -> list[dict]:
         return [
@@ -1452,7 +1454,7 @@ def test_a_frame_stream_targets_the_request_that_the_inference_lead_brings_forwa
     temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
     meta = _stream_meta(ChunkedSchedule(fps=10.0, inference_lead=ConstantDuration(0.2)).to_spec())
     meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
-    session = _run_v1(meta, 6, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
+    session = _run_on_mock_session(meta, 6, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
 
     # Read at 0.1 s, 5 rows at 10 per second, a lead of 0.2 s: the next request goes at 0.4 s, its rows at 0.15 s
     # and 0.25 s.
@@ -1471,7 +1473,7 @@ def test_a_replan_after_an_arm_error_streams_the_rows_of_the_call_that_the_sched
     meta = _stream_meta(ChunkedSchedule(fps=10.0, inference_lead=ConstantDuration(0.3)).to_spec())
     meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
     error = {5: {keys.ROBOT_STATUS: RobotStatus.ERROR.value}}
-    session = _run_v1(meta, 9, frame_stream='jpeg', version=protocol.ProtocolVersion.V2, extra=error)
+    session = _run_on_mock_session(meta, 9, frame_stream='jpeg', version=protocol.ProtocolVersion.V2, extra=error)
 
     # Calls at 0.0 s and 0.3 s; the answer read at 0.4 s plans its chunk from 0.6 s to 1.1 s. The error at 0.5 s
     # clears that plan and calls at once. Its answer, read at 0.6 s, starts its chunk then, so the next call goes at
@@ -1489,7 +1491,9 @@ def test_a_replan_after_an_arm_error_streams_the_rows_of_the_call_that_the_sched
 def test_a_frame_miss_sends_the_request_again_in_full(caplog):
     chunk = [{'value': i} for i in range(5)]
     with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
-        session = _run_v1(_stream_meta(), 7, frame_stream='jpeg', replies=[chunk, FrameMiss([['image', 2]]), chunk])
+        session = _run_on_mock_session(
+            _stream_meta(), 7, frame_stream='jpeg', replies=[chunk, FrameMiss([['image', 2]]), chunk]
+        )
 
     requests = [call.args[0]['image'] for call in session.infer.call_args_list]
     assert len(requests) == 3
@@ -1527,7 +1531,7 @@ def _history_stack_spec() -> dict:
 )
 def test_requests_go_in_full_unless_the_policy_asks_for_a_frame_stream_the_session_offers(frame_stream, meta, caplog):
     with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
-        session = _run_v1(meta, 8, frame_stream=frame_stream)
+        session = _run_on_mock_session(meta, 8, frame_stream=frame_stream)
 
     session.send_message.assert_not_called()
     requests = [call.args[0]['image'] for call in session.infer.call_args_list]
@@ -1555,7 +1559,7 @@ def test_only_a_session_that_streams_frames_caches_its_resizes(monkeypatch, fram
         sizes.append(len(cache._entries))
 
     monkeypatch.setattr(ResizeCache, 'put', put_and_count)
-    session = _run_v1(_stream_meta(resize), 8, frame_stream=frame_stream)
+    session = _run_on_mock_session(_stream_meta(resize), 8, frame_stream=frame_stream)
 
     first = serialization.deserialise(serialization.serialise(session.infer.call_args_list[0].args[0]['image']))
     assert first.shape == (3, 4, 6, 3)  # the declared stack resizes either way
