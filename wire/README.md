@@ -128,8 +128,8 @@ before it dials, and names both in the refusal.
 
 `modal_websocket_tls` dials a Modal Server with `@modal.sessioned`, whose URL ends in `.modal.direct`. The edge
 of such a server answers 401 to every request without a session token, and a session start places one session on
-one container. Only this wire holds state: the Modal sessions of this process, per server, which the registry's one
-instance shares between the keepalives and the sessions of the process. `ModalClientWire` states how it starts,
+one container. Only this wire holds state: the Modal sessions of this process, per server and credentials, which the
+registry's one instance shares between the keepalives and the sessions of the process. `ModalClientWire` states how it starts,
 parks and ends them.
 
 - The caller's headers carry the endpoint's proxy credentials. The wire sends them only on its own session calls,

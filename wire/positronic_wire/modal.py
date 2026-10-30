@@ -1,8 +1,4 @@
-"""The client side of a Modal Server with sticky sessions (``@app.server`` with ``@modal.sessioned``).
-
-The edge of such a server answers 401 to every request without a session token. A session start places one
-session on one container, and every request that carries its token reaches that container.
-"""
+"""The client side of a Modal Server with sticky sessions (``@app.server`` with ``@modal.sessioned``)."""
 
 import atexit
 import dataclasses
@@ -17,7 +13,7 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from http import HTTPStatus
 from http.client import HTTPException, HTTPMessage
-from typing import IO
+from typing import IO, NamedTuple
 
 from positronic_wire import wire
 from positronic_wire.websocket import refusal_of
@@ -27,8 +23,7 @@ _logger = logging.getLogger(__name__)
 START_PATH = '/_modal/sessions/start'
 TERMINATE_PATH = '/_modal/sessions/terminate'
 SESSION_HEADER = 'Modal-Authorization'
-# A session's idle timeout, on its start. A call outside a session carries it too: the edge forwards the session
-# id to the container and not the timeout, and the server reports the session's idle timeout when it knows it.
+# A session's idle timeout. A call outside a session carries it too: the edge forwards only the session id.
 IDLE_TIMEOUT_HEADER = 'x-modal-server-session-idle-timeout'
 IDEMPOTENCY_KEY_HEADER = 'x-idempotency-key'
 TIMESTAMP_HEADER = 'x-modal-timestamp'
@@ -47,19 +42,26 @@ TERMINATE_TIMEOUT = 60.0
 MAX_ANSWER_BYTES = 16 * 1024
 
 
+class _Parked(NamedTuple):
+    """A dropped connection's session: the full address it dialled, and the timer that ends it."""
+
+    address: wire.HostPortAddress
+    timer: threading.Timer
+
+
 @dataclasses.dataclass
 class _Endpoint:
     """The Modal sessions this process holds on one endpoint."""
 
     root: str
-    # The credentials of the last call. A start and a terminate carry them; a request in a session carries a token.
+    # The credentials every start and terminate on this endpoint carries; a request in a session carries a token.
     headers: Mapping[str, str] | None
     # The sessions that open connections hold, oldest first.
     held: dict[str, None] = dataclasses.field(default_factory=dict)
     # A session that no connection holds. The next dial takes it.
     spare: str | None = None
-    # The sessions of connections that dropped, each until the next dial takes it or its timer ends it.
-    parked: dict[str, threading.Timer] = dataclasses.field(default_factory=dict)
+    # The sessions of connections that dropped, each until the next dial on its address takes it or its timer ends it.
+    parked: dict[str, _Parked] = dataclasses.field(default_factory=dict)
     starting: bool = False
     # Why the last start placed no session. The next wait for a start raises it.
     start_failure: wire.ConnectRefused | None = None
@@ -114,8 +116,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
     container the next dial takes. ``probe`` raises ``wire.ProbeUnsupported``. The wire ends every session it holds
     when the process exits.
 
-    The registry holds one instance, so the calls of one process on one address share these sessions. A pickled
-    wire holds none of them.
+    A pickled wire holds none of these sessions.
     """
 
     NAME = 'modal_websocket_tls'
@@ -131,7 +132,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         self._inner = inner
         self._idle_timeout = idle_timeout
         self._start_deadline = start_deadline
-        self._endpoints: dict[wire.HostPortAddress, _Endpoint] = {}
+        # Keyed by the server and the credentials, so a session never serves another caller's credentials.
+        self._endpoints: dict[tuple[wire.HostPortAddress, frozenset[tuple[str, str]]], _Endpoint] = {}
         self._changed = threading.Condition()
         atexit.register(self.end_all)
 
@@ -153,9 +155,9 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         deadline = time.monotonic() + open_timeout
         endpoint = self._endpoint(address, headers)
         with self._changed:
-            token = next(reversed(endpoint.parked), None)
+            token = next((t for t, parked in reversed(endpoint.parked.items()) if parked.address == address), None)
             if token is not None:
-                endpoint.parked.pop(token).cancel()
+                endpoint.parked.pop(token).timer.cancel()
             else:
                 token, endpoint.spare = endpoint.spare, None
         if token is not None:
@@ -195,8 +197,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
     def probe(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """Raises ``wire.ProbeUnsupported``. A probe on a Modal Server would start a session, and so a container,
-        that only the process that manages the endpoint may start: it uses ``keepalive``."""
+        """Raises ``wire.ProbeUnsupported``."""
         raise wire.ProbeUnsupported(f'{self.NAME} carries no probe; ask keepalive whether the server is up')
 
     def end_all(self) -> None:
@@ -204,8 +205,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         with self._changed:
             ending = []
             for endpoint in self._endpoints.values():
-                for timer in endpoint.parked.values():
-                    timer.cancel()
+                for parked in endpoint.parked.values():
+                    parked.timer.cancel()
                 tokens = [*endpoint.held, *endpoint.parked, *([endpoint.spare] if endpoint.spare else [])]
                 ending += [(endpoint, token) for token in tokens]
                 endpoint.held, endpoint.parked, endpoint.spare = {}, {}, None
@@ -213,14 +214,16 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             self._terminate(endpoint, token)
 
     def _endpoint(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None) -> _Endpoint:
-        """The sessions on ``address``'s server, which now start and end with ``headers``."""
+        """The sessions on ``address``'s server under the credentials ``headers``."""
         root = address.at_root()
+        key = (root, frozenset((headers or {}).items()))
         with self._changed:
-            endpoint = self._endpoints.get(root)
+            endpoint = self._endpoints.get(key)
             if endpoint is None:
-                endpoint = _Endpoint(f'https://{wire.netloc(root, self.DEFAULT_PORT)}', headers)
-                self._endpoints[root] = endpoint
-            endpoint.headers = dict(headers) if headers else None
+                endpoint = _Endpoint(
+                    f'https://{wire.netloc(root, self.DEFAULT_PORT)}', dict(headers) if headers else None
+                )
+                self._endpoints[key] = endpoint
             return endpoint
 
     def _dial_on(
@@ -237,16 +240,16 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             raise
         with self._changed:
             endpoint.held[token] = None
-        return ModalClientConnection(conn, partial(self._release, endpoint, token))
+        return ModalClientConnection(conn, partial(self._release, endpoint, address, token))
 
-    def _release(self, endpoint: _Endpoint, token: str, dropped: bool) -> None:
-        """Park the session of a dropped connection, and end that of a closed one."""
+    def _release(self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str, dropped: bool) -> None:
+        """Park the session of a dropped connection on ``address``, and end that of a closed one."""
         with self._changed:
             endpoint.held.pop(token, None)
             if dropped:
                 timer = threading.Timer(self._idle_timeout, self._end_parked, (endpoint, token))
                 timer.daemon = True
-                endpoint.parked[token] = timer
+                endpoint.parked[token] = _Parked(address, timer)
                 timer.start()
                 return
         self._terminate(endpoint, token)
@@ -367,7 +370,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                     self._post(endpoint.root + START_PATH, headers, min(left, START_REQUEST_TIMEOUT))
                 )
             except urllib.error.HTTPError as refused:
-                if refused.code < HTTPStatus.INTERNAL_SERVER_ERROR:
+                # The edge answers a start it rate-limits with 429, and the start continues as after a 5xx.
+                if refused.code < HTTPStatus.INTERNAL_SERVER_ERROR and refused.code != HTTPStatus.TOO_MANY_REQUESTS:
                     forbidden = refused.code in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN)
                     raise wire.ConnectRefused(
                         wire.Refusal.FORBIDDEN if forbidden else wire.Refusal.FINAL,

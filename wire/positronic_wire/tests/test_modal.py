@@ -179,9 +179,12 @@ def test_a_dial_raises_cold_while_the_start_waits_and_the_next_dial_continues_th
     assert inner.dialled == ['token-1']
 
 
-def test_a_start_the_edge_answers_with_a_5xx_continues_under_the_same_key(modal_wire, edge, monkeypatch):
+@pytest.mark.parametrize('status', [HTTPStatus.GATEWAY_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS])
+def test_a_start_the_edge_answers_with_a_5xx_or_a_429_continues_under_the_same_key(
+    modal_wire, edge, monkeypatch, status
+):
     monkeypatch.setattr('positronic_wire.modal.time.sleep', lambda seconds: None)
-    edge.refuse = [HTTPStatus.GATEWAY_TIMEOUT]
+    edge.refuse = [status]
 
     modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
@@ -226,6 +229,28 @@ def test_a_reconnect_after_a_drop_dials_the_same_session(modal_wire, edge, inner
     assert inner.dialled == ['token-1', 'token-1']
     assert len(edge.starts) == 1
     assert edge.ended == []
+
+
+def test_a_dropped_session_waits_for_a_dial_on_its_own_address(modal_wire, edge, inner):
+    other_query = wire.HostPortAddress(_ADDRESS.host, _ADDRESS.port, wire.SESSION_PATH, 'fps=10')
+    _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
+
+    modal_wire.dial(other_query, _CREDENTIALS, 5.0)
+    modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+
+    assert inner.dialled == ['token-1', 'token-2', 'token-1']
+
+
+def test_sessions_under_other_credentials_are_kept_apart(modal_wire, edge, inner):
+    other_credentials = {'Modal-Key': 'OTHER', 'Modal-Secret': 'OTHER'}
+    modal_wire.keepalive(_ADDRESS, _CREDENTIALS, 5.0)
+
+    conn = modal_wire.dial(_ADDRESS, other_credentials, 5.0)
+    conn.close()
+
+    assert inner.dialled == ['token-2']
+    assert [start['Modal-Key'] for start in edge.starts] == ['KEY', 'OTHER']
+    assert edge.ended == ['token-2']
 
 
 def test_a_timed_out_connection_is_not_a_drop_and_ends_its_session(modal_wire, edge):
