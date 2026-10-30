@@ -182,9 +182,10 @@ class PolicyServer:
             self._last_activity = time.monotonic()
             timing = _ServedTiming()
             with timing.phase(protocol.TIMING_DECODE):
-                request = deserialise(message)
+                # Off the event loop, which serves every session: the deserialiser decodes the JPEG frames.
+                request = await asyncio.to_thread(deserialise, message)
                 if rows is not None and ROW in request:
-                    # Off the event loop, and in arrival order: each camera's H.264 units are one stream.
+                    # In arrival order: each camera's H.264 units are one stream.
                     await asyncio.to_thread(rows.add, request[ROW])
                     continue
                 if request[protocol.SESSION_ID] != session_id:

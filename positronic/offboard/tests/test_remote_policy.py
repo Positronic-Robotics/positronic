@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import http.server
 import json
@@ -41,6 +42,7 @@ from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import frame_stream as frame_stream_module
 from positronic.offboard import protocol as legacy_protocol
+from positronic.offboard import server as server_module
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
@@ -1639,6 +1641,30 @@ def test_a_served_frame_stream_gives_the_model_the_observations_of_full_requests
         np.testing.assert_allclose(got, expected, atol=atol)
     # Calls 1, 3 and 4 refer to both rows; call 2 misses them and goes again in full.
     assert resolved == [[], [2], [2], [], [2], [2]]
+
+
+def _has_running_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+@pytest.mark.timeout(60)
+def test_a_server_decodes_each_message_of_a_streamed_session_off_its_event_loop(served, monkeypatch):
+    on_loop: list[bool] = []
+    decode = server_module.deserialise
+
+    def recording(message):
+        on_loop.append(_has_running_loop())
+        return decode(message)
+
+    monkeypatch.setattr(server_module, 'deserialise', recording)
+    address, model, _ = served(local=_streamed_stack(ChunkedSchedule(fps=10)))
+    _served_run(address, 'jpeg', 8)
+    assert len(model.observations) >= 2
+    assert on_loop and not any(on_loop)
 
 
 def test_an_answer_reports_its_result_once_at_its_first_read(runtime):
