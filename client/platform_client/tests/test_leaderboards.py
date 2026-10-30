@@ -60,6 +60,7 @@ from platform_client.leaderboards import (
     TagPosition,
     TeamSubmission,
     TimeLimit,
+    UserTag,
 )
 from platform_client.requests import (
     LeaderboardChartsQuery,
@@ -98,7 +99,7 @@ TEAM_DESCRIPTOR = LeaderboardDescriptor(
 TEAM_ROW = LeaderboardRow(
     key=RowKey('team-1f'),
     display_name='demo',
-    tag='0ddba7',
+    user_tag=UserTag('0ddba7'),
     rank=RankRange(best=1, worst=1),
     metrics={PRIMARY_METRIC: Estimate(value=0.75, low=0.75, high=0.75)},
     submission=TeamSubmission(id=SUB, submitted_at=AT, replay=REPLAY),
@@ -106,7 +107,7 @@ TEAM_ROW = LeaderboardRow(
 TEAM_BASELINE_ROW = LeaderboardRow(
     key=RowKey('team-a0'),
     display_name='reference',
-    tag='9c41de',
+    user_tag=UserTag('9c41de'),
     model=ModelFamilyRef('reference-model'),
     rank=None,
     baseline=Baseline(publisher='Example Labs'),
@@ -440,7 +441,7 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     LeaderboardRow: {
         'key',
         'display_name',
-        'tag',
+        'user_tag',
         'model',
         'checkpoints',
         'rank',
@@ -542,7 +543,7 @@ def test_every_model_of_the_module_has_its_wire_fields_pinned():
 # A team row as the wire carries it.
 TEAM_ROW_WIRE = {
     'key': 'team-1f',
-    'tag': '0ddba7',
+    'user_tag': '0ddba7',
     'display_name': 'demo',
     'rank': {'best': 2, 'worst': 2},
     'metrics': {'primary': {'value': 0.35, 'low': 0.35, 'high': 0.35}},
@@ -556,7 +557,8 @@ TEAM_ROW_WIRE = {
 
 def test_a_team_row_reads_every_field_a_site_shows():
     row = LeaderboardRow.model_validate_json(json.dumps(TEAM_ROW_WIRE))
-    assert (row.display_name, row.key, row.tag) == ('demo', 'team-1f', '0ddba7')
+    assert (row.display_name, row.key, row.user_tag) == ('demo', 'team-1f', '0ddba7')
+    assert isinstance(row.user_tag, UserTag)
     assert row.rank == RankRange(best=2, worst=2)
     assert row.metrics[PRIMARY_METRIC] == Estimate(value=0.35, low=0.35, high=0.35)
     assert row.submission is not None
@@ -747,6 +749,7 @@ def test_a_card_line_holds_at_least_one_fact():
         MetricKey,
         OutcomeKey,
         RowKey,
+        UserTag,
         LeaderboardTaskId,
         EpisodeId,
     ],
@@ -874,15 +877,6 @@ def test_a_share_is_kept_inside_its_scale_and_refused_outside(build, low: float,
     for outside in (low - 0.01, high + 0.01):
         with pytest.raises(ValidationError):
             build(outside)
-
-
-def test_a_descriptor_checks_each_rule_with_its_own_validator():
-    validators = set(LeaderboardDescriptor.__pydantic_decorators__.model_validators)
-    assert validators == {
-        '_no_two_metrics_share_a_key',
-        '_no_two_outcome_groups_share_a_key',
-        '_the_rows_rank_on_one_of_the_metrics',
-    }
 
 
 def put(*path: str | int, value: object) -> Callable[[Any], None]:
@@ -1138,3 +1132,9 @@ def test_a_value_just_inside_a_check_passes_and_one_just_outside_it_is_refused(
     type(model).model_validate(kept)
     with pytest.raises(ValidationError):
         type(model).model_validate(refused)
+
+
+def test_a_repeat_names_only_the_key_that_repeats():
+    metrics = [{'key': key, 'name': key, 'decimals': 0} for key in ('kept', 'twice', 'twice')]
+    with pytest.raises(ValidationError, match=r"two metrics share a key: \['twice'\]"):
+        LeaderboardDescriptor.model_validate({'metrics': metrics, 'ranked_by': 'kept'})

@@ -6,6 +6,7 @@ A field that a later leaderboard can give a new value is an open string, so this
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from typing import Annotated, Self
 
@@ -39,9 +40,9 @@ _FLOAT_SLACK = 1e-9
 
 
 def _refuse_repeats(keys: Iterable[object], what: str) -> None:
-    keys = list(keys)
-    if len(set(keys)) != len(keys):
-        raise ValueError(f'two {what} share a key: {keys}')
+    repeated = [key for key, count in Counter(keys).items() if count > 1]
+    if repeated:
+        raise ValueError(f'two {what} share a key: {repeated}')
 
 
 def _refuse_other_lengths(vectors: dict[str, Sequence[object]], length: int, what: str) -> None:
@@ -108,6 +109,12 @@ PRIMARY_METRIC = MetricKey('primary')
 Fraction = Annotated[float, Field(ge=0, le=1)]
 # A share, from 0 to 100.
 Percent = Annotated[float, Field(ge=0, le=100)]
+
+
+class UserTag(_Name):
+    """The tag of a user. It is the same on every leaderboard, so a user finds their own row by it."""
+
+    __slots__ = ()
 
 
 class RowKey(_Name):
@@ -321,21 +328,21 @@ class LeaderboardRow(_Wire):
     """One row of a leaderboard: a model family, or a team.
 
     `key` identifies the row. The platform gives each team a stable key that no other team shares. The row shows
-    `display_name`, and two rows can show the same name. A team row stands for one user, and `tag` holds the tag of
-    that user. The tag is the same on every leaderboard, so a user finds their own row by it.
+    `display_name`, and two rows can show the same name. A team row stands for one user, and `user_tag` holds the
+    tag of that user.
 
     A row that measures a model names its family, and the checkpoints whose episodes it counts. `submission` is
     absent on a row whose numbers come from more than one submission, such as a model row.
 
     `metrics` holds a value for each metric that the row has a value for. `episodes` counts the episodes that its
     numbers read, where the leaderboard counts them. `outcome_shares` gives the share of those episodes in each outcome
-    group, by the key of the group. A `baseline` row is a reference on this leaderboard and
-    has no `rank`, whatever the `baseline` of its model family is.
+    group, by the key of the group, and the shares are not rounded. A `baseline` row is a reference on this
+    leaderboard and has no `rank`, whatever the `baseline` of its model family is.
     """
 
     key: RowKey
     display_name: str
-    tag: str | None = None
+    user_tag: UserTag | None = None
     model: ModelFamilyRef | None = None
     checkpoints: list[CheckpointRef] = Field(default_factory=list)
     rank: RankRange | None
@@ -514,8 +521,8 @@ class EstimateSeries(_Wire):
 class RowCharts(_Wire):
     """The curves of one row.
 
-    `series` holds the series of each metric by its key. `density` measures the rise of the ranked metric at each
-    time limit, in the unit of that metric per second. `rank` holds the places of the row at each time limit.
+    `series` holds the series of each metric by its key. `density` gives how fast the row gains on what the
+    leaderboard counts at each time limit, per second. `rank` holds the places of the row at each time limit.
     """
 
     episodes: int = Field(ge=0)
@@ -572,7 +579,8 @@ class LeaderboardEpisode(_Wire):
     `outcome` names the outcome group of the episode by its key, and the list shows `result` for it. `steps` and
     `steps_done` count the steps of the task and the steps that the episode did. `furthest_stage` names how far the
     episode got in the step that it stopped in. The episode did `credit` percent of the task, and the pace column
-    shows `pace`. `media` is absent where no recording of the episode plays back.
+    shows `pace`. `seconds_to_success` and `duration_s` count from the first sample of the try, with no cap. `media`
+    is absent where no recording of the episode plays back.
     """
 
     id: EpisodeId

@@ -808,7 +808,7 @@ def test_get_leaderboard_names_the_slug_and_parses_the_rows():
             'rows': [
                 {
                     'key': 'team-1f',
-                    'tag': '0ddba7',
+                    'user_tag': '0ddba7',
                     'display_name': 'demo',
                     'rank': {'best': 1, 'worst': 1},
                     'metrics': {'primary': {'value': 0.75, 'low': 0.75, 'high': 0.75}},
