@@ -28,7 +28,17 @@ from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
 from platform_client.identity_providers import longest_register_timeout
-from platform_client.ids import ApiKey, OrgSlug, PurchaseId, SubmissionId
+from platform_client.ids import ApiKey, LeaderboardVersionId, OrgSlug, PurchaseId, SubmissionId
+from platform_client.leaderboards import (
+    LeaderboardChartsResponse,
+    LeaderboardEpisodesResponse,
+    LeaderboardListResponse,
+    LeaderboardModelsResponse,
+    LeaderboardProgressResponse,
+    LeaderboardRef,
+    LeaderboardResponse,
+    LeaderboardTag,
+)
 from platform_client.requests import (
     DEFAULT_PURCHASE_PAGE_SIZE,
     BillingOrgQuery,
@@ -36,6 +46,10 @@ from platform_client.requests import (
     BillingPurchaseGetQuery,
     BillingPurchaseListQuery,
     CancelRequest,
+    LeaderboardChartsQuery,
+    LeaderboardListQuery,
+    LeaderboardPartQuery,
+    LeaderboardQuery,
     RankingsQuery,
     RegisterRequest,
     SubmissionArtifactsQuery,
@@ -277,6 +291,39 @@ class PlatformClient:
     def list_boards(self) -> BoardListResponse:
         """The boards this caller can read: the public ones, plus their tenant's once a key is set."""
         return self._get(routes.RANKINGS_LIST, BoardListResponse, auth=Auth.OPTIONAL)
+
+    def list_leaderboards(self, tag: LeaderboardTag) -> LeaderboardListResponse:
+        """The leaderboards of one tag, in the order of their positions in it."""
+        query = LeaderboardListQuery(tag=tag)
+        return self._get(routes.LEADERBOARDS_LIST, LeaderboardListResponse, query=query, auth=Auth.NONE)
+
+    def get_leaderboard(self, leaderboard: LeaderboardRef) -> LeaderboardResponse:
+        """One leaderboard and its rows. The parts of the same version take the `version` it answers."""
+        query = LeaderboardQuery(leaderboard=leaderboard)
+        return self._get(routes.LEADERBOARDS_GET, LeaderboardResponse, query=query, auth=Auth.NONE)
+
+    def leaderboard_charts(
+        self, leaderboard: LeaderboardRef, *, version: LeaderboardVersionId | None = None, task: str | None = None
+    ) -> LeaderboardChartsResponse:
+        """The charts over one task, or over every task. Without `version`, they come from the published version."""
+        query = LeaderboardChartsQuery(leaderboard=leaderboard, version=version, task=task)
+        return self._get(routes.LEADERBOARDS_CHARTS, LeaderboardChartsResponse, query=query, auth=Auth.NONE)
+
+    def leaderboard_episodes(
+        self, leaderboard: LeaderboardRef, *, version: LeaderboardVersionId | None = None
+    ) -> LeaderboardEpisodesResponse:
+        query = LeaderboardPartQuery(leaderboard=leaderboard, version=version)
+        return self._get(routes.LEADERBOARDS_EPISODES, LeaderboardEpisodesResponse, query=query, auth=Auth.NONE)
+
+    def leaderboard_progress(
+        self, leaderboard: LeaderboardRef, *, version: LeaderboardVersionId | None = None
+    ) -> LeaderboardProgressResponse:
+        query = LeaderboardPartQuery(leaderboard=leaderboard, version=version)
+        return self._get(routes.LEADERBOARDS_PROGRESS, LeaderboardProgressResponse, query=query, auth=Auth.NONE)
+
+    def leaderboard_models(self) -> LeaderboardModelsResponse:
+        """The model families that a leaderboard row can name."""
+        return self._get(routes.LEADERBOARDS_MODELS, LeaderboardModelsResponse, auth=Auth.NONE)
 
     def catalog_evals(self) -> EvalListResponse:
         """The evals a plan names, for this key's grant. The catalogue expands one into its tasks."""
