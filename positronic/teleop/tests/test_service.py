@@ -881,7 +881,7 @@ def test_a_notice_program_that_is_missing_is_logged_and_the_next_one_runs(monkey
 def test_every_end_of_a_session_leaves_no_trial_in_the_service(service, socket_path, runtime, ending):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
-        # The service keeps a trial whose session ends after one frame, so the run makes two moves first.
+        # The run makes two moves: the service keeps a trial whose session ends after one frame.
         _drive_until(run, _is_move)
         _drive_until(run, _is_move)
         assert service.state().task == OBS[keys.TASK] and service.state().cameras == (keys.EXTERIOR_IMAGE,)
