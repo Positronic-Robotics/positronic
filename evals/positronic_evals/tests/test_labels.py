@@ -24,6 +24,8 @@ from eval_vocabulary.episode import (
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    GT_STATE_PROGRESS,
+    GT_STATE_SIGNAL,
     LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
@@ -528,6 +530,14 @@ def test_a_signal_other_than_a_mark_with_one_sample_does_not_start_the_try_but_c
     _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: _at(0.0, 0.02, 9.0)})
     _write_clocked_signal(tmp_path, 'robot_command.joints', {HARNESS_WORLD: _at(12.0)})
     assert recorded_try_window(tmp_path) == _window(0.0, 12.0)
+
+
+def test_a_signal_whose_name_holds_the_progress_channel_further_in_is_not_a_mark(tmp_path: Path):
+    _write_clocked_signal(
+        tmp_path, f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.0.cube.0.grabbed', {HARNESS_WORLD: _at(-3.0)}
+    )
+    _write_clocked_signal(tmp_path, 'grip', {HARNESS_WORLD: _at(0.0, 0.02, 9.0)})
+    assert recorded_try_window(tmp_path) == _window(0.0, 9.0)
 
 
 def test_a_signal_on_none_of_the_reading_timelines_places_nothing(tmp_path: Path):

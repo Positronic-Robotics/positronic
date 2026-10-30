@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import uvicorn
-from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
+from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN, TIMELINE_METADATA_KEY
 from fastapi.testclient import TestClient
 from positronic_model_server.serialization import deserialize
 
@@ -21,7 +21,7 @@ from positronic.dataset.edits import EditedEpisode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
-from positronic.dataset.signal import TIMELINE_METADATA_KEY, TIMELINES_KEY, SupportsEncodedRepresentation
+from positronic.dataset.signal import TIMELINES_KEY, SupportsEncodedRepresentation
 from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.utilities.migrate_remote import migrate_dataset, migrate_remote_dataset
 from positronic.dataset.vector import RECORDED_TIME

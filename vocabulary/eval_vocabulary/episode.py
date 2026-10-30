@@ -36,11 +36,11 @@ SEED = 'eval.seed'
 SIGNAL_FILE_SUFFIX = '.parquet'
 # Each sample's time on the timeline `<name>`, in nanoseconds, is in the column `<TIMESTAMP_COLUMN_PREFIX><name>`.
 TIMESTAMP_COLUMN_PREFIX = 'ts.'
-# The one time column of a signal file in the format before named timelines, on the world clock.
+# The one time column of a signal file in the format before named timelines.
 LEGACY_TIME_COLUMN = 'timestamp'
 # The one time column of a video frames index in the format before named timelines.
 LEGACY_FRAMES_TIME_COLUMN = 'ts_ns'
-# The schema metadata key that names the timeline of that one time column. A file without it is on `recorded`.
+# The schema metadata key that names the timeline of either legacy time column. A file without it is on `recorded`.
 TIMELINE_METADATA_KEY = b'positronic.timeline'
 # The column of a signal file that holds each sample's value.
 VALUE_COLUMN = 'value'

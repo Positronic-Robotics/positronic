@@ -18,7 +18,7 @@ import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 import rerun_bindings
 from eval_vocabulary.episode import LEGACY_TIME_COLUMN
-from eval_vocabulary.progress import STATE_SIGNAL
+from eval_vocabulary.progress import PROGRESS_CHANNEL, STATE_SIGNAL
 from rerun.urdf import UrdfTree
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
@@ -204,7 +204,7 @@ def test_notice_names_every_unplotted_signal_and_its_width():
 
 _STATES = ['floating', 'floating', 'reaching', 'contact', 'reaching', 'reaching', 'at-target']
 _STATE_LEGEND = '0 floating, 1 reaching, 2 contact, 3 at-target'
-_DELIVERED = f'{STATE_SIGNAL.partition(".")[0]}.delivered'
+_DELIVERED = f'{PROGRESS_CHANNEL}.delivered'
 
 
 def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:

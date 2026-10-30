@@ -22,7 +22,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 import rerun_bindings
 from av.video.stream import VideoStream
-from eval_vocabulary.progress import STATE_SIGNAL
+from eval_vocabulary.progress import PROGRESS_CHANNEL
 from eval_vocabulary.timeline import RECORDING_TIMELINE_ORDER
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
@@ -541,8 +541,6 @@ def _arm_cells(
     return [(rrb.Tabs(*tabs), max(len(cells) for cells in columns.values()))] if tabs else []
 
 
-# The channel of an operator's progress marks.
-_PROGRESS_CHANNEL = STATE_SIGNAL.partition('.')[0]
 # The default replay's width: the views, then the charts.
 _DEFAULT_SPLIT_SHARES = (3, 1)
 
@@ -550,7 +548,7 @@ _DEFAULT_SPLIT_SHARES = (3, 1)
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
     charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
     names = sorted([*signals.numerics, *signals.texts])
-    progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == _PROGRESS_CHANNEL]}
+    progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == PROGRESS_CHANNEL]}
     column = [*_arm_cells(charts_by_arm, signals, ep), *((cell, 1) for cell in _chart_cells(progress, signals, ep))]
     placed = {signal for charts in [*charts_by_arm.values(), progress] for signal in _charted(charts, signals)}
     other = _other_cell(signals, placed)

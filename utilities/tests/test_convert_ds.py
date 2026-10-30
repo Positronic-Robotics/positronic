@@ -1,11 +1,10 @@
 import numpy as np
 import pyarrow.parquet as pq
 import pytest
-from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
+from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN, LEGACY_TIME_COLUMN, TIMELINE_METADATA_KEY
 
 from positronic.dataset import Time
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
-from positronic.dataset.signal import TIMELINE_METADATA_KEY
 from positronic.dataset.transforms import Elementwise, TransformedDataset
 from positronic.dataset.transforms.episode import Derive
 from positronic.dataset.vector import RECORDED_TIME
@@ -25,7 +24,7 @@ def test_conversion_preserves_exposed_timelines(tmp_path, data, timeline, legacy
     if legacy:
         for path in source_root.rglob('*.parquet'):
             table = pq.read_table(path)
-            main_column = LEGACY_FRAMES_TIME_COLUMN if path.name.endswith('.frames.parquet') else 'timestamp'
+            main_column = LEGACY_FRAMES_TIME_COLUMN if path.name.endswith('.frames.parquet') else LEGACY_TIME_COLUMN
             table = table.rename_columns([
                 main_column if name == f'ts.{timeline}' else 'ts_ns.wall' if name == 'ts.wall' else name
                 for name in table.column_names

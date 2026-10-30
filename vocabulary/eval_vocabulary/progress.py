@@ -9,11 +9,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from enum import StrEnum
 
+# An operator's marks as the arm works: one `<PROGRESS_CHANNEL>.<mark>` signal for each kind of mark.
+PROGRESS_CHANNEL = 'progress'
 # The signal a marked episode carries the state codes in.
-STATE_SIGNAL = 'progress.state'
-# The channel of the marks that an annotator makes on a recorded episode: one `<ANNOTATION_CHANNEL>.<mark>` signal
-# for each mark.
+STATE_SIGNAL = f'{PROGRESS_CHANNEL}.state'
+# An annotator's marks on a recorded episode: one `<ANNOTATION_CHANNEL>.<mark>` signal for each kind of mark.
 ANNOTATION_CHANNEL = 'data_annotation'
+# The channels whose signals are the marks that a person makes.
+MARK_CHANNELS = (PROGRESS_CHANNEL, ANNOTATION_CHANNEL)
 
 
 class Stage(StrEnum):
