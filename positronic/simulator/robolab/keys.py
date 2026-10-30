@@ -11,6 +11,13 @@ INSTRUCTION_TYPE = 'robolab.instruction_type'
 
 # [status, completed, total, score] for the task's subtask chain, beside the arm fields of ``protocol``.
 SUBTASK = 'subtask'
+# The scene state, as a flat dict from a suffix to its value. The env server cannot import ``eval_vocabulary``. So
+# the words below restate the layout of ``eval_vocabulary.episode.GT_STATE_SIGNAL``, and a test keeps them the same.
+GT_STATE = 'gt_state'
+GT_STATE_OBJECTS = 'objects'
+GT_STATE_POSE = 'pose'
+GT_STATE_GRIPPER_CONTACT = 'gripper_contact'
+GT_STATE_PROGRESS = 'progress'
 
 # The cameras RoboLab renders, named as the env's ``image_obs`` group names them.
 OVER_SHOULDER_LEFT_CAMERA = 'over_shoulder_left_camera'

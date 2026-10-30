@@ -2799,14 +2799,6 @@
                 "code": "reportMissingImports",
                 "range": {
                     "startColumn": 5,
-                    "endColumn": 33,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportMissingImports",
-                "range": {
-                    "startColumn": 5,
                     "endColumn": 64,
                     "lineCount": 1
                 }

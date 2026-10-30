@@ -1,7 +1,7 @@
 from contextlib import nullcontext
 
 import configuronic as cfn
-from eval_vocabulary.episode import SUBTASK_SIGNAL
+from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
 
 from positronic import keys
 from positronic.cfg.eval import number_trials, spec
@@ -51,9 +51,10 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name + instruction type ride each trial's reset token. There is no
-    per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none. The env's live
-    subtask progress ``[status, completed, total, score]`` is the privileged ground truth (recorded, never
-    fed to the policy).
+    per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none. The eval records two
+    privileged signals and never gives them to the policy. ``subtask`` is the env's live subtask progress
+    ``[status, completed, total, score]``. ``gt_state`` is the scene state: object poses, gripper contacts and
+    progress per condition chain.
     """
     camera_dict = _camera_dict(cameras)
     if env_server is None:
@@ -77,7 +78,11 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, cameras, env_ser
             trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
         return number_trials(trials)
 
-    return Eval(embodiment, tasks, privileged={SUBTASK_SIGNAL: proxy.privileged[robolab_keys.SUBTASK]}, done=proxy.done)
+    privileged = {
+        SUBTASK_SIGNAL: proxy.privileged[robolab_keys.SUBTASK],
+        GT_STATE_SIGNAL: proxy.privileged[robolab_keys.GT_STATE],
+    }
+    return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
 
 
 # Every task the benchmark holds, in one run.
