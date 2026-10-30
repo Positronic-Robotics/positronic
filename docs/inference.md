@@ -79,7 +79,18 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
-**A Modal Server with sticky sessions takes `modal_websocket_tls`.** Its URL ends in `.modal.direct`, and its edge refuses every request without a Modal session token. The wire starts a Modal session with the header file's proxy credentials, dials with the session's token, and ends the session when the connection closes, so one session uses one container. The wire's [README](../wire/README.md#a-modal-server-with-sticky-sessions) states how it waits for a cold start and how a reconnect reaches the same container.
+**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default) and `--policy.connect_deadline` the retries until the server answers (900 s). No retry waits past the deadline. Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` as long as the cold start, up to the `connect_deadline`: one dial then waits through it.
+
+```bash
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+  --policy=.file_authed_remote \
+  --policy.wire=websocket_tls --policy.address.host=<endpoint-managed-host> --policy.address.port=443 \
+  --policy.headers.path=~/.config/endpoint/headers.json \
+  --policy.open_timeout=900 \
+  --output_dir=~/datasets/inference_logs/exp_v1
+```
+
+**A Modal Server with sticky sessions takes `modal_websocket_tls`.** Its URL ends in `.modal.direct`, and its edge refuses every request without a Modal session token. The wire starts a Modal session with the header file's proxy credentials, dials with the session's token, and ends the session when the connection closes, so one session uses one container. The wire's [README](../wire/README.md#a-modal-server-with-sticky-sessions) states how it waits for a cold start and how a reconnect reaches the same container. It needs no long `open_timeout`.
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
