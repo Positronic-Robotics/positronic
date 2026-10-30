@@ -333,11 +333,11 @@ LM_ROT_WEIGHT = 0.5
 
 def _yam_lm_search(start: np.ndarray, target: geom.Transform3D) -> tuple[np.ndarray, float, bool]:
     """``qpos_from_site_pose`` on the YAM MJCF at ``GRIPPER_SITE`` from joints ``start``, with its YAM joints."""
-    model = mj.MjModel.from_xml_path(YAM_MJCF_PATH)  # pyright: ignore[reportAttributeAccessIssue]
-    data = mj.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
+    model = mj.MjModel.from_xml_path(YAM_MJCF_PATH)
+    data = mj.MjData(model)
     qpos_ids = [model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES]
     dof_ids = [model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES]
-    site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, GRIPPER_SITE)  # pyright: ignore[reportAttributeAccessIssue]
+    site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, GRIPPER_SITE)
     data.qpos[qpos_ids] = start
     qpos, err, success = qpos_from_site_pose(
         model, data, site_id, dof_ids, target.translation, target.rotation.as_quat, rot_weight=LM_ROT_WEIGHT

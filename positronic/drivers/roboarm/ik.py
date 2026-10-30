@@ -228,8 +228,8 @@ def qpos_from_site_pose(
 
     Warm-starts from ``data.qpos`` and perturbs only ``dof_indices`` until site ``site_id``
     reaches ``target_pos``/``target_quat``. Returns ``(qpos, err_norm, success)``: ``qpos`` is the
-    ``data.qpos`` view, set to the iterate with the lowest ``err_norm``. A search for a target out of
-    reach never converges, and its last iterate there changes with the rounding of the start.
+    ``data.qpos`` view, set to the iterate with the lowest ``err_norm``, and ``success`` is whether
+    that ``err_norm`` is below ``tol``.
     """
     dof_indices = np.asarray(dof_indices)
     jac = np.empty((6, model.nv))
