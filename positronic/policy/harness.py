@@ -20,16 +20,14 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
-from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ee_frames, frame_transform
 from positronic.drivers.roboarm.keys import EE_FRAMES, URDF
 from positronic.drivers.roboarm.models import EE_LINK, EEFrame
 from positronic.eval import Embodiment, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun, Step
+from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
 from positronic.policy.codecs import ChangeEEFrame, Codec, PolicyCommandError
-from positronic.policy.codecs.action import JointPositionAction
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.utils import flatten_dict, frozen_view
 
@@ -414,6 +412,10 @@ class Harness(pimm.ControlSystem):
                 finally:
                     step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (time.perf_counter_ns() - policy_started_ns) / 1e6
                 assert step is not None, 'a policy must yield a Step for each observation'
+                if unknown := sorted(step.commands.keys() - self._embodiment.commands.keys()):
+                    raise PolicyCommandError(
+                        f'The step names {unknown}, and the embodiment takes only {sorted(self._embodiment.commands)}'
+                    )
                 emit_started_ns = time.perf_counter_ns()
                 self._telemetry.step()
                 messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
@@ -536,31 +538,6 @@ class Harness(pimm.ControlSystem):
             self._sample()
         return payload
 
-    @staticmethod
-    def _commands_checked(run: PolicyRun, channels: frozenset[str]) -> PolicyRun:
-        """``run``, refusing a step that names a channel outside ``channels`` or carries no command object at a robot
-        command channel. Prime it before the first observation."""
-        obs = yield
-        while True:
-            try:
-                step = run.send(obs)
-            except StopIteration as end:
-                return end.value
-            if isinstance(step, Step):
-                if unknown := sorted(step.commands.keys() - channels):
-                    raise PolicyCommandError(
-                        f'The step names {unknown}, and the embodiment takes only {sorted(channels)}'
-                    )
-                for name, value in step.commands.items():
-                    if keys.is_robot_command(name) and not isinstance(value, command.CommandType):
-                        raise PolicyCommandError(
-                            f'{name} carries a {type(value).__name__}, not a command. A protocol v3 server answers the '
-                            'output of its model, and the client stack that it declares decodes that output into '
-                            f'commands, for example with {JointPositionAction.WIRE_NAME}. Only a v1 or v2 server can '
-                            'answer a command as a plain mapping.'
-                        )
-            obs = yield step
-
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
     ) -> pimm.Run[dict[str, Any] | None]:
@@ -579,10 +556,8 @@ class Harness(pimm.ControlSystem):
         try:
             policy_run = runtime.start(rollout.policy)
             withheld_poses, pose_codec = self._pose_handshake(rollout.policy, runtime)
-            checked = self._commands_checked(policy_run, frozenset(self._embodiment.commands))
-            next(checked)
-            # Closing ``policy_run`` is enough: the check and the codec run hold no resource of their own.
-            stepped_run = checked if pose_codec is None else pose_codec.wrap(checked)
+            # Closing ``policy_run`` is enough: the codec run holds no resource of its own.
+            stepped_run = policy_run if pose_codec is None else pose_codec.wrap(policy_run)
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())

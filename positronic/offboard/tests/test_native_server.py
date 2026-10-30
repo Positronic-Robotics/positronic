@@ -10,11 +10,13 @@ from positronic_model_server import grpc_wire, keys, protocol, serialization, se
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_wire import grpc, websocket, wire
 
+from positronic import keys as obs_keys
+from positronic.drivers.roboarm import command
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import EncodeImages
-from positronic.policy.executor import Executor
+from positronic.policy.codecs import EncodeImages, PolicyCommandError
+from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.spec import from_spec
@@ -122,6 +124,58 @@ def test_remote_policy_derives_client_metadata_without_changing_the_server_repor
         assert metadata[ACTION_FPS] == 20
         assert f'{policy_keys.SERVER}.{ACTION_FPS}' not in metadata
         assert metadata[f'{policy_keys.SERVER}.{keys.EFFECTIVE_PARAMS}.fps'] == 20
+
+
+# The seven joint targets of one action, as a native model answers them.
+JOINT_TARGET = [0.0, -0.3, 0.0, -2.2, 0.0, 2.0, 0.8]
+
+
+def answering(answer, description):
+    """A model whose every session answers ``answer`` and declares ``description`` as its client stack."""
+
+    class AnswerSession(Session):
+        def infer(self, observation):
+            return answer
+
+    class AnswerModel(Model):
+        def prepare_session(self, params):
+            return AnswerSession(description)
+
+    return AnswerModel
+
+
+def first_step(client, address):
+    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    run = runtime.start(RemotePolicy(client.NAME, address))
+    try:
+        run.send({})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        return run.send({})
+    finally:
+        runtime.close()
+        run.close()
+
+
+def test_a_v3_command_mapping_that_the_declared_stack_does_not_decode_fails_as_a_policy_command_error(serving):
+    answer = [{obs_keys.ROBOT_COMMAND: {'type': 'joint_pos', 'positions': JOINT_TARGET}, obs_keys.TARGET_GRIP: 0.0}]
+    with serving(answering(answer, spec.component('chunked_schedule', version=2, fps=20))) as endpoint:
+        with pytest.raises(PolicyCommandError, match=f'{obs_keys.ROBOT_COMMAND} carries a dict, not a command'):
+            first_step(*endpoint)
+
+
+def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a_command(serving):
+    answer = [{obs_keys.ROBOT_COMMAND: JOINT_TARGET, obs_keys.TARGET_GRIP: 0.0}]
+    description = spec.sequence(
+        spec.component('chunked_schedule', version=2, fps=20),
+        spec.parallel(
+            spec.component('rename_observation_fields', mapping={}),
+            spec.component('joint_position_action', joints_key=obs_keys.ROBOT_COMMAND, grip_key=obs_keys.TARGET_GRIP),
+        ),
+    )
+    with serving(answering(answer, description)) as endpoint:
+        step = first_step(*endpoint)
+    assert step is not None
+    assert isinstance(step.commands[obs_keys.ROBOT_COMMAND], command.JointPosition)
 
 
 def test_legacy_protocol_catalog_does_not_advertise_v3():

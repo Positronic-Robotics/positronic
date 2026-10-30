@@ -14,13 +14,15 @@ from positronic_model_server.tree import map_leaves
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
 
-from positronic import telemetry, telemetry_keys
+from positronic import keys, telemetry, telemetry_keys
+from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 
-from .base import Policy, PolicyRun, Processor, Runtime
+from .base import Policy, PolicyRun, Processor, Runtime, Step
 from .codecs import PolicyCommandError
+from .codecs.action import JointPositionAction
 from .compatibility import from_v1_spec
 from .spec import from_spec
 
@@ -78,6 +80,17 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
     if not isinstance(stack, Processor):
         raise PolicyCommandError('The declared client stack must be a processor')
     return stack
+
+
+def _require_robot_commands(step: Step) -> None:
+    """Raise ``PolicyCommandError`` when a robot command channel of ``step`` holds no command object."""
+    for name, value in step.commands.items():
+        if keys.is_robot_command(name) and not isinstance(value, command.CommandType):
+            raise PolicyCommandError(
+                f'{name} carries a {type(value).__name__}, not a command. A protocol v3 server answers the output of '
+                'its model, and the client stack that it declares decodes that output into commands, for example '
+                f'with {JointPositionAction.WIRE_NAME}. Only a v1 or v2 server can answer a command as a plain mapping.'
+            )
 
 
 logger = logging.getLogger(__name__)
@@ -202,6 +215,8 @@ class RemotePolicy(Policy):
                         raise PolicyCommandError(
                             f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
                         ) from e
+                    if isinstance(step, Step):
+                        _require_robot_commands(step)
                     obs = yield step
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.

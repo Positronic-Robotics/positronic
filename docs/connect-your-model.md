@@ -324,7 +324,7 @@ description = sequence(
 # Session.infer returns [{"robot_command": [7 joint positions], "target_grip": grip}, ...]
 ```
 
-The harness refuses a mapping at `robot_command` with a `PolicyCommandError`.
+The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
 
 ## See Also
 

@@ -1944,23 +1944,6 @@ def test_a_policy_that_states_frames_sees_no_other_signal_the_rig_states_as_a_po
     assert keys.EE_POSE in policy.observations[0]
 
 
-# The plain mapping that a server sends for a joint target: protocol v3 does not make a command of it.
-JOINT_TARGET_MAPPING = {'type': 'joint_pos', 'positions': [0.0, -0.3, 0.0, -2.2, 0.0, 2.0, 0.8]}
-
-
-@pytest.mark.parametrize(
-    'policy, robot_meta',
-    [
-        (StubPolicy(JOINT_TARGET_MAPPING), bundled_franka_model()),
-        (FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, JOINT_TARGET_MAPPING), None),
-    ],
-    ids=['legacy-point', 'stated-frame'],
-)
-def test_a_mapping_at_the_robot_command_fails_the_episode_as_a_policy_command_error(policy, robot_meta):
-    with pytest.raises(PolicyCommandError, match=f'{keys.ROBOT_COMMAND} carries a dict, not a command'):
-        run_robot_rollout(policy, robot_meta=robot_meta).result()
-
-
 class ExtraChannelPolicy(StubPolicy):
     """A ``StubPolicy`` whose step also names ``channel``."""
 

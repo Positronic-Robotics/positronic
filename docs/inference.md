@@ -129,7 +129,8 @@ Anything richer — a foot pedal, a rig UI — is a driver of its own rather tha
 - `Codec.wrap`, when a codec raises any error on a command that the policy returns.
 - `RemotePolicy`, when it cannot build the client stack that the server declares.
 - `RemotePolicy`, when that stack raises a `KeyError`, `TypeError`, `ValueError`, `IndexError` or `AttributeError` on an answer or an observation.
-- The harness, when a step names a channel that the embodiment does not take, or puts no command object at a robot command channel.
+- `RemotePolicy`, when a step from that stack puts no command object at a robot command channel.
+- The harness, when a step names a channel that the embodiment does not take.
 
 An error that the policy itself raises reaches the caller unchanged, and so does a server's error answer, a timeout or a lost connection.
 
