@@ -84,6 +84,7 @@ H264_FRAME = b'__h264_frame__'
 FRAME_STREAM = 'frame_stream'
 # A call this much before the predicted time still snaps: the streamer reads the clock a little after the
 # schedule's own read of it.
+# rules-allow: installation-constant — a bound on one round's clock-read delay; a longer delay only costs a snap
 SNAP_EARLY_SEC = 0.005
 
 
