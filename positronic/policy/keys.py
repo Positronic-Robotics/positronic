@@ -22,6 +22,8 @@ POSITRONIC_VERSION = 'positronic_version'
 # The name of the endpoint that served the episode.
 LABEL = 'label'
 SERVER = 'server'
+# The server-issued ID of the session that served the episode.
+SESSION_ID = 'session_id'
 TRANSCRIPT = 'transcript'
 STOP_REASON = 'stop_reason'
 HINDSIGHT = 'hindsight'

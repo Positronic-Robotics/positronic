@@ -138,7 +138,8 @@ class RemotePolicy(Policy):
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
     codecs run. ``meta`` holds only the client's own values. Each run records the server's values in the episode
-    metadata before its first yield, with the frames that the server and its declared stack state as ``EE_FRAMES``.
+    metadata before its first yield, with the frames that the server and its declared stack state as ``EE_FRAMES``,
+    and the ID of the session that serves the episode as ``SESSION_ID``.
     ``wait_for_server`` waits for the server without a session.
     """
 
@@ -198,13 +199,21 @@ class RemotePolicy(Policy):
                 episode_meta[roboarm_keys.EE_FRAMES] = frames
             if server_compresses_images:
                 episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
+            recorded_session_id = session.session_id
+            if recorded_session_id is not None:
+                episode_meta[policy_keys.SESSION_ID] = recorded_session_id
             for name, value in episode_meta.items():
                 runtime.set_metadata(name, value)
             compress_images = session.protocol_version is not ProtocolVersion.V3 and server_compresses_images
 
+            answered_session_id = recorded_session_id
+
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
+                nonlocal answered_session_id
                 with connection_lock:
-                    return round_trip(session, obs, compress_images, self._jpeg_quality)
+                    answer = round_trip(session, obs, compress_images, self._jpeg_quality)
+                    answered_session_id = session.session_id
+                    return answer
 
             with closing(runtime.start(stack, infer)) as run:
                 obs = yield
@@ -222,6 +231,12 @@ class RemotePolicy(Policy):
                         raise PolicyCommandError(
                             f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
                         ) from e
+                    finally:
+                        # A connection that drops before its first answer reopens under a new session ID. The episode
+                        # names that session once it answered, so the ID it records has a session that served it.
+                        if answered_session_id != recorded_session_id:
+                            recorded_session_id = answered_session_id
+                            runtime.set_metadata(policy_keys.SESSION_ID, recorded_session_id)
                     obs = yield step
         finally:
             # Generator failure can reach cleanup while inference still owns the connection.

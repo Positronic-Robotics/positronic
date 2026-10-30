@@ -1,12 +1,20 @@
 import json
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pytest
+from positronic_model_server import server_wire, websocket_wire
+from positronic_wire import wire
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
 import pimm
 from pimm.time import RECEIVED_WORLD
-from positronic import keys
+from positronic import geom, keys
+from positronic.cfg import analysis
 from positronic.cli.eval.run import TaskDriver, run_world
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -14,13 +22,16 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
+from positronic.offboard.server import PolicyServer
 from positronic.policy import PolicyEnd
 from positronic.policy import keys as policy_keys
 from positronic.policy.processors import PauseOnUnavailable
+from positronic.policy.remote import RemotePolicy
 from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
-from positronic.vendors.llm.motion import Motion
+from positronic.vendors.llm.motion import Motion, MoveTo
 from positronic.vendors.llm.policy import LLMPolicy
+from positronic.vendors.llm.server import LLMModel, deployment
 
 
 class Arm(pimm.ControlSystem):
@@ -56,11 +67,8 @@ class Camera(pimm.ControlSystem):
             yield pimm.Sleep(0.05)
 
 
-@pytest.mark.timeout(30)
-@pytest.mark.parametrize('ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
-@pytest.mark.parametrize('charge', [False, True])
-@pytest.mark.parametrize('distance', [0.01, 0.2])
-def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_path, ending, end, charge, distance):
+def script_move_then_end(monkeypatch, distance: float, ending: str) -> list[dict]:
+    """Make the model move by ``distance`` along x and then call ``ending``; return the states it was shown."""
     states = []
 
     def request(endpoint, runner, model, messages, tools):
@@ -99,8 +107,12 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
         ])
 
     monkeypatch.setattr(Endpoint, 'request', request)
+    return states
+
+
+def arm_with_wrist_camera() -> Embodiment:
     robot, camera = Arm(), Camera()
-    embodiment = Embodiment(
+    return Embodiment(
         descriptor='test arm',
         observations={
             keys.ROBOT_STATE: Observation(robot.state, Serializers.robot_state),
@@ -117,6 +129,15 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
         control_systems=(robot, camera),
         simulated=True,
     )
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize('ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
+@pytest.mark.parametrize('charge', [False, True])
+@pytest.mark.parametrize('distance', [0.01, 0.2])
+def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_path, ending, end, charge, distance):
+    states = script_move_then_end(monkeypatch, distance, ending)
+    embodiment = arm_with_wrist_camera()
     policy = Sequential(PauseOnUnavailable(), LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)))
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     run_world(embodiment, TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(tmp_path)))
@@ -161,3 +182,63 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
         final_pose = list(episode[keys.EE_POSE].values())[-1]
         assert final_pose[0] == pytest.approx(target_x)
         assert len(episode[keys.EE_POSE]) > 1
+
+
+@contextmanager
+def served(policy: LLMPolicy, sessions_dir: Path) -> Iterator[RemotePolicy]:
+    """A remote policy whose server serves ``policy`` on a free localhost port and writes its sessions there."""
+    server = PolicyServer(partial(LLMModel, policy, sessions_dir, 60.0), deployment(policy))
+    ws = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
+    ready = threading.Event()
+    thread = threading.Thread(target=server.serve, args=([ws], ready.set), daemon=True)
+    thread.start()
+    try:
+        assert ready.wait(10)
+        address = ws.served_address
+        assert isinstance(address, server_wire.ServedHostPort)
+        yield RemotePolicy('websocket', wire.HostPortAddress('localhost', address.port, wire.SESSION_PATH, ''))
+    finally:
+        server.shutdown()
+        thread.join(10)
+        assert not thread.is_alive()
+
+
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize('ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
+@pytest.mark.parametrize('charge', [False, True])
+def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch, tmp_path, ending, end, charge):
+    states = script_move_then_end(monkeypatch, 0.01, ending)
+    task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
+    sessions_dir, dataset_dir = tmp_path / 'sessions', tmp_path / 'dataset'
+    sessions_dir.mkdir()
+    with served(LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)), sessions_dir) as policy:
+        run_world(arm_with_wrist_camera(), TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(dataset_dir)))
+    motion = Motion()
+    _, trajectory = motion.trajectory(
+        geom.Transform3D.identity, MoveTo(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=0.2, note='Small move.')
+    )
+    move_sec = (len(trajectory) + 1) / motion.fps
+    dataset = LocalDataset(dataset_dir)
+    assert len(dataset) == 2
+    assert len(states) == 4
+    for index, episode in enumerate(dataset):
+        assert isinstance(episode, Episode)
+        assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+        assert episode[eval_keys.POLICY_END] == end
+        assert episode[f'{policy_keys.SERVER_META}.{policy_keys.TYPE}'] == policy_keys.LLM_TYPE
+        assert episode[f'{policy_keys.SERVER_META}.{policy_keys.MODEL}'] == 'test'
+        assert analysis.model(episode) == 'test'
+        session_id = episode[f'{policy_keys.POLICY_META}.{policy_keys.SESSION_ID}']
+        record = json.loads((sessions_dir / f'{session_id}.json').read_text())
+        assert record[policy_keys.STOP_REASON] == ending
+        assert record[policy_keys.HINDSIGHT] == 'Small move observed.'
+        assert [e['call'] for e in record[policy_keys.TRANSCRIPT] if e['event'] == 'request'] == [1, 2]
+        before, after = states[index * 2 : index * 2 + 2]
+        assert 'previous_target' not in before
+        target_x = before['position_m'][0] + 0.01
+        assert after['position_m'][0] == pytest.approx(target_x, abs=1e-7)
+        assert after['gripper'] == pytest.approx(0.2)
+        assert list(episode[keys.EE_POSE].values())[-1][0] == pytest.approx(target_x)
+        # The client plays the move at the local cadence, so the episode lasts as long as the local one does.
+        first, last = episode.bounds(RECEIVED_WORLD)
+        assert move_sec <= (last - first) / 1e9 <= move_sec + 0.1
