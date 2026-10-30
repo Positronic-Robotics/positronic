@@ -1,12 +1,16 @@
 """Direct model invocations with a deadline covering SDK retries."""
 
 import asyncio
+import hashlib
 import math
+import os
+import secrets
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import copy_context
 from functools import partial
+from typing import NamedTuple
 from urllib.parse import urlsplit
 
 from pydantic_ai.direct import model_request
@@ -16,6 +20,29 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
 from positronic import telemetry, telemetry_keys
+
+
+class Client(NamedTuple):
+    """An open model client: its request function, and the fingerprint of the API key it uses, if one was drawn."""
+
+    request: Callable[[list[ModelMessage], list[ToolDefinition]], ModelResponse]
+    api_key_fingerprint: str | None
+
+
+# The environment variable that holds the comma-separated pool of Anthropic API keys.
+ANTHROPIC_API_KEYS_ENV = 'ANTHROPIC_API_KEYS'
+
+
+def draw_anthropic_key() -> str | None:
+    """A random key from the comma-separated ``ANTHROPIC_API_KEYS`` pool, or ``None`` when the variable is unset."""
+    pool = os.environ.get(ANTHROPIC_API_KEYS_ENV)
+    if pool is None:
+        return None
+    keys = [key.strip() for key in pool.split(',')]
+    if not all(keys):
+        raise ValueError(f'{ANTHROPIC_API_KEYS_ENV} must list API keys separated by commas, without blank entries')
+    # A system draw: no seed that a sim or a library sets makes every episode take the same key.
+    return secrets.choice(keys)
 
 
 class Endpoint:
@@ -56,23 +83,34 @@ class Endpoint:
     def model_id(self) -> str:
         return self.model.model_id if isinstance(self.model, Model) else self.model
 
-    def _infer_model(self) -> Model:
-        """The model `infer_model` builds, or an OpenAI Responses model that keeps cache points as breakpoints."""
-        model = self.model
-        if isinstance(model, str) and self.cache_breakpoints:
-            kind, name = parse_model_id(model)
-            if kind == 'openai-responses':
-                # The OpenAI SDK comes with the optional `llm-openai` extra.
-                from .responses import BreakpointResponsesModel  # noqa: PLC0415
+    def _infer_model(self) -> tuple[Model, str | None]:
+        """The model `infer_model` builds, with the fingerprint of the API key drawn for it, if any.
 
-                return BreakpointResponsesModel(name, provider=kind)
-        return infer_model(model)
+        An `openai-responses:` model keeps cache points as breakpoints when the endpoint asks for them.
+        """
+        model = self.model
+        if isinstance(model, Model):
+            return model, None
+        kind, name = parse_model_id(model)
+        if kind == 'openai-responses' and self.cache_breakpoints:
+            # The OpenAI SDK comes with the optional `llm-openai` extra.
+            from .responses import BreakpointResponsesModel  # noqa: PLC0415
+
+            return BreakpointResponsesModel(name, provider=kind), None
+        if kind == 'anthropic' and (key := draw_anthropic_key()) is not None:
+            # The Anthropic SDK comes with the optional `llm-anthropic` extra.
+            from pydantic_ai.models.anthropic import AnthropicModel  # noqa: PLC0415
+            from pydantic_ai.providers.anthropic import AnthropicProvider  # noqa: PLC0415
+
+            fingerprint = hashlib.sha256(key.encode()).hexdigest()[:8]
+            return AnthropicModel(name, provider=AnthropicProvider(api_key=key)), fingerprint
+        return infer_model(model), None
 
     @contextmanager
-    def open(self) -> Iterator[Callable[[list[ModelMessage], list[ToolDefinition]], ModelResponse]]:
+    def open(self) -> Iterator[Client]:
         """Own one model client and event loop until all requests have finished."""
         with asyncio.Runner() as runner:
-            model = self._infer_model()
+            model, fingerprint = self._infer_model()
             runner.run(model.__aenter__())
             try:
                 if model.base_url is not None:
@@ -86,7 +124,7 @@ class Endpoint:
                         or url.fragment
                     ):
                         raise ValueError('base_url must be an HTTP(S) URL without credentials or query parameters')
-                yield partial(self.request, runner, model)
+                yield Client(partial(self.request, runner, model), fingerprint)
             finally:
                 runner.run(model.__aexit__(None, None, None))
 

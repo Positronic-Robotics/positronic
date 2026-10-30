@@ -25,10 +25,12 @@ Use `--charge_inference_time=True` to count API latency against simulated trial 
 | Model prefix | Install extra | Credential environment variable |
 | --- | --- | --- |
 | `openai-responses:` or `openai-chat:` | `llm-openai` | `OPENAI_API_KEY` |
-| `anthropic:` | `llm-anthropic` | `ANTHROPIC_API_KEY` |
+| `anthropic:` | `llm-anthropic` | `ANTHROPIC_API_KEY`, or a pool in `ANTHROPIC_API_KEYS` |
 | `google:` | `llm-google` | `GOOGLE_API_KEY` (also accepts `GEMINI_API_KEY`) |
 
 The `llm` extra installs the Pydantic AI core and Pillow for image encoding. Each provider extra adds only that provider's SDK dependencies. Other [Pydantic AI providers](https://ai.pydantic.dev/models/overview/) work without policy changes when their dependencies are installed. Choose a model that supports images and function calls; incompatible models raise errors.
+
+To spread `anthropic:` episodes over the keys of different organizations, set `ANTHROPIC_API_KEYS` to a comma-separated list of keys. Each episode uses one key from the list at random; a model name with no prefix that pydantic-ai reads as Anthropic, such as `claude-sonnet-4-5`, uses the list too. When the variable is set, `ANTHROPIC_API_KEY` has no effect on `anthropic:` models. A list that is empty or has a blank entry stops the episode with an error. The pool does not apply to a `gateway/anthropic:` model, which uses the gateway key, or to a configured `Model`, which uses its own provider. Do not put keys in arguments or config values: the episode records those.
 
 Use provider environment variables for supported endpoint overrides, such as `OPENAI_BASE_URL` for an OpenAI-compatible service. For further customization, a Python config can pass an already configured Pydantic AI `Model` to `llm(model=...)`. For example:
 
@@ -98,7 +100,7 @@ Translation is linear and rotation follows the shortest spherical interpolation.
 
 ## Recordings and lifecycle
 
-Each episode buffers a compact transcript. With `--output_dir`, the episode recorder saves the event list as `inference.policy.transcript` in the episode's `static.json` when the episode finishes. Model configuration, stop reason, and hindsight are stored alongside it in the policy metadata. Endpoint URLs are not recorded. Without an output directory, the transcript remains in memory.
+Each episode buffers a compact transcript. With `--output_dir`, the episode recorder saves the event list as `inference.policy.transcript` in the episode's `static.json` when the episode finishes. Model configuration, stop reason, and hindsight are stored alongside it in the policy metadata. An episode that used a key from `ANTHROPIC_API_KEYS` records `inference.policy.api_key_fingerprint`: the first 8 hex digits of the SHA-256 of that key. To split cost by organization, compare it with the fingerprint of each key: `printf %s "$KEY" | sha256sum | cut -c1-8`. The key itself is not recorded. Endpoint URLs are not recorded. Without an output directory, the transcript remains in memory.
 
 Events contain the system prompt and tool schemas, measured observations, call numbers, tool replies and text, SDK token usage, rejections, and accepted decisions. Camera names and observation timestamps refer to the recorded image signals. Images, repeated conversation history, raw HTTP bodies, and provider reasoning signatures are excluded from the transcript. The model's live conversation retains the images and native reasoning metadata needed for subsequent API calls.
 

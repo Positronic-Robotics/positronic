@@ -25,6 +25,8 @@ SERVER = 'server'
 TRANSCRIPT = 'transcript'
 STOP_REASON = 'stop_reason'
 HINDSIGHT = 'hindsight'
+# The SHA-256 prefix of the API key that an episode drew from a key pool.
+API_KEY_FINGERPRINT = 'api_key_fingerprint'
 
 # The reserved field of a result element that holds the ``PolicyEnd`` that ends the run.
 END = 'end'
