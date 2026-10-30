@@ -54,9 +54,8 @@ logger = logging.getLogger(__name__)
 ROW = '__stream_row__'
 REF = b'__stream_rows__'
 H264_FRAME = b'__h264_frame__'
-# The handshake key, and what a server that serves ``StreamedRows`` declares under it.
+# The handshake key.
 FRAME_STREAM = 'frame_stream'
-DECLARATION = {'version': 1, 'codecs': ['jpeg', 'h264']}
 
 
 class FrameCodec(Enum):
@@ -64,6 +63,10 @@ class FrameCodec(Enum):
 
     JPEG = 'jpeg'
     H264 = 'h264'
+
+
+# What a server that serves ``StreamedRows`` declares under ``FRAME_STREAM``.
+DECLARATION = {'version': 1, 'codecs': [codec.value for codec in FrameCodec]}
 
 
 def declared_codecs(meta: cabc.Mapping[str, Any]) -> frozenset[FrameCodec]:
