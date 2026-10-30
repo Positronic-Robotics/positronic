@@ -578,6 +578,11 @@ class FrameStreamer:
                 continue
             self._dispatch_due(self._clock() / 1e9)
 
+    @staticmethod
+    def _rows_from(stack: np.ndarray | StackRows, start: int) -> np.ndarray:
+        """The rows of ``stack`` from ``start`` on, sized and stacked."""
+        return stack.stack(start) if isinstance(stack, StackRows) else stack[start:]
+
     def _refer(self, key: str, stack: np.ndarray | StackRows, snap: bool = False) -> dict[bytes, Any]:
         """The request value of one stack: its oldest rows that equal the streamed rows, then the other frames.
 
@@ -594,12 +599,12 @@ class FrameStreamer:
                 break
             rows.append(back)
         if self._codec is FrameCodec.H264 and len(rows) == n - 1:
-            tail = self._encode(key, _rows_from(stack, n - 1)[0])
+            tail = self._encode(key, self._rows_from(stack, n - 1)[0])
         elif self._codec is FrameCodec.H264:
             rows = []  # an H.264 stream cannot carry an inline frame out of order
-            tail = encode_jpeg(_rows_from(stack, 0), self._quality)
+            tail = encode_jpeg(self._rows_from(stack, 0), self._quality)
         else:
-            tail = encode_jpeg(_rows_from(stack, len(rows)), self._quality)
+            tail = encode_jpeg(self._rows_from(stack, len(rows)), self._quality)
         return {REF: True, b'call': self.call, b'rows': rows, b'tail': tail}
 
     def _streamed_as(self, row: np.ndarray, back: int, stack: np.ndarray | StackRows, index: int, snap: bool) -> bool:
@@ -645,8 +650,3 @@ class FrameStreamer:
             if call == self.call:
                 self._streamed[back] = sized
                 self._streamed_entries[back] = entry
-
-
-def _rows_from(stack: np.ndarray | StackRows, start: int) -> np.ndarray:
-    """The rows of ``stack`` from ``start`` on, sized and stacked."""
-    return stack.stack(start) if isinstance(stack, StackRows) else stack[start:]
