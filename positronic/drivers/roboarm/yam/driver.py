@@ -30,6 +30,7 @@ from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus
 from positronic.utils import package_assets_path
 
 from .. import RobotStatus, State, command
+from .. import keys as roboarm_keys
 from ..ik import qpos_from_site_pose
 from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
@@ -50,6 +51,7 @@ _CONTROL_HZ = 100
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 _JOINT_LIMITS = 'joint_limits'  # the arm's (lower, upper) per joint in the vendor's get_robot_info()
+_GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the chain runs, in get_robot_info()
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 
 
@@ -233,12 +235,22 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_at = 0.0
 
     @functools.cached_property
+    def _robot_info(self) -> dict[str, Any]:
+        with _chain_call():
+            return self.vendor.get_robot_info()
+
+    @functools.cached_property
     def _joint_range(self) -> tuple[np.ndarray, np.ndarray]:
         """The limits the chain reports, less ``_CHAIN_LIMIT_MARGIN_RAD``."""
-        with _chain_call():
-            limits = np.asarray(self.vendor.get_robot_info()[_JOINT_LIMITS], dtype=np.float64)
+        limits = np.asarray(self._robot_info[_JOINT_LIMITS], dtype=np.float64)
         margin = self._CHAIN_LIMIT_MARGIN_RAD
         return limits[:, 0] + margin, limits[:, 1] - margin
+
+    def arm_meta(self) -> dict[str, Any]:
+        """The settings that the chain reports it runs this arm with."""
+        return {
+            roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(self._robot_info[_GRAVITY_COMP_FACTOR], np.float64).tolist()
+        }
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
@@ -680,6 +692,7 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[YamState](self)
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
+        self.arm_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
         # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
         # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
@@ -759,6 +772,7 @@ class Robot(pimm.ControlSystem):
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 self.robot_meta.emit(meta)
+                self.arm_meta.emit(arm.arm_meta())
                 joints, grip, missed = yield from arm.go_to_start()
                 self._answer_ready(asked, missed)
                 asked = []
@@ -927,12 +941,13 @@ class _FakeYam:
         self._vel = np.zeros(7)
         self.last_command: np.ndarray | None = None
         self.joint_limits = np.array([[-np.inf, np.inf]] * 6)  # the limits it reports; the echo has none
+        self.gravity_comp_factor = np.ones(7)  # the factors it reports; the echo models no gravity
 
     def num_dofs(self) -> int:
         return 7
 
     def get_robot_info(self) -> dict[str, Any]:
-        return {_JOINT_LIMITS: self.joint_limits.copy()}
+        return {_JOINT_LIMITS: self.joint_limits.copy(), _GRAVITY_COMP_FACTOR: self.gravity_comp_factor.copy()}
 
     def get_observations(self) -> dict[str, np.ndarray]:
         return {

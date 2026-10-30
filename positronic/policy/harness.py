@@ -155,6 +155,7 @@ class Harness(pimm.ControlSystem):
         self.manual_command = pimm.ControlSystemReceiver(self)
         self.deadline_ns = pimm.ControlSystemEmitter[int | None](self)
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
+        self.arm_meta_in = pimm.ReceiverDict(self, names=embodiment.arm_meta_sources)
         self.done = pimm.DefaultingReceiver[dict](self, default={})
 
     def _yield(self, delay_sec: float = POLL_PERIOD_SEC) -> pimm.Command:
@@ -201,7 +202,16 @@ class Harness(pimm.ControlSystem):
         yield from self._wait(should_stop, pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()]))
 
     def _statics(self) -> dict[str, Any]:
-        return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
+        return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value | self._arm_statics()
+
+    def _arm_statics(self) -> dict[str, dict[str, Any]]:
+        """The arm meta that each arm has emitted, as ``{key: {joint signal: value}}``."""
+        statics: dict[str, dict[str, Any]] = {}
+        for joint_signal, receiver in self.arm_meta_in.items():
+            if (msg := receiver.read()) is not None:
+                for key, value in msg.data.items():
+                    statics.setdefault(key, {})[joint_signal] = value
+        return statics
 
     def _pose_handshake(self, policy: Policy, runtime: Executor) -> tuple[frozenset[str], Codec | None]:
         """The rig's pose signals that ``policy`` does not observe, and the codec that the harness puts around the

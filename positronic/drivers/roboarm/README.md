@@ -68,6 +68,10 @@ Each model names that old point `end_effector`. `test_ik.py` pins each constant 
 5. For `CartesianDelta`, compose through `CartesianDelta.apply`, which applies the command's own `frame`
    before anchoring on the measured pose.
 
+An arm whose controller runs settings of its own, such as a gravity compensation factor per joint, emits the values
+that the controller reports. The embodiment names that emitter in `arm_meta_sources`, keyed by the arm's joint signal,
+and the harness records each key as `{key: {joint signal: value}}`. YAM records `gravity_comp_factor` this way.
+
 A remote benchmark env that measures somewhere else is wrapped, not excused: give `WireCommandAdapter` an
 `env_control_frame` — the transform from `gripper` to what the env uses — and it converts both paths
 (`RobolabAdapter`).

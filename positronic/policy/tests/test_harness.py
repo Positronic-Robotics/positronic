@@ -2140,6 +2140,49 @@ def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose
     assert static[eval_keys.POSE_SIGNALS] == expected_pose_signals
 
 
+def test_episode_statics_carry_the_meta_of_each_arm_keyed_by_its_joint_signal():
+    left, right, silent = (f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in ('left', 'right', 'third'))
+    with pimm.World(virtual_time=True) as world:
+        device = Passive()
+        state_out = pimm.ControlSystemEmitter(device)
+        arm_meta = {signal: pimm.ControlSystemEmitter(device) for signal in (left, right, silent)}
+        embodiment = Embodiment(
+            descriptor='robot',
+            observations={keys.ROBOT_STATE: Observation(state_out, Serializers.robot_state)},
+            commands={
+                keys.ROBOT_COMMAND: Command(pimm.FakeReceiver(device), Serializers.robot_command),
+                keys.TARGET_GRIP: Command(pimm.FakeReceiver(device), None),
+            },
+            prepare_handlers={},
+            static_meta=dict(ROBOT_STATIC_META),
+            meta_source=None,
+            arm_meta_sources=arm_meta,
+            simulated=True,
+        )
+        dataset = MemoryDataset()
+        harness = Harness(embodiment)
+        wire.wire_embodiment(world, harness, embodiment)
+        caller = world.pair(harness.perform_task)
+        done = world.pair(harness.done)
+        loop = world.start([harness, device])
+        try:
+            state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
+            arm_meta[left].emit({roboarm_keys.GRAVITY_COMP_FACTOR: [1.0, 1.1, 1.4]})
+            arm_meta[right].emit({roboarm_keys.GRAVITY_COMP_FACTOR: [1.0, 1.2, 1.3]})
+            policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+            answer = caller(Rollout(Task('move', None), policy, dataset))
+            next(loop)
+            done.emit({eval_keys.SUCCESS: True})
+            while not answer.done():
+                next(loop)
+            assert answer.result()[eval_keys.TERMINATED] is True
+        finally:
+            world.request_stop()
+            list(loop)
+    static = dataset.episodes[-1].static
+    assert static[roboarm_keys.GRAVITY_COMP_FACTOR] == {left: [1.0, 1.1, 1.4], right: [1.0, 1.2, 1.3]}
+
+
 def test_real_sleep_stops_at_episode_deadline(episode_harness):
     h = episode_harness
     h.harness._embodiment = replace(h.embodiment, simulated=False)

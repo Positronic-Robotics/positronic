@@ -81,6 +81,9 @@ class Embodiment:
     prepare_handlers: dict[str, pimm.calls.ControlSystemHandler[Any, None]]
     static_meta: dict[str, Any]
     meta_source: pimm.ControlSystemEmitter | None
+    # One emitter per arm, keyed by the joint signal of the arm. Each key that an arm emits goes into the episode
+    # statics as ``{key: {joint signal: value}}``, in the shape of ``MOUNTS``.
+    arm_meta_sources: dict[str, pimm.ControlSystemEmitter] = field(default_factory=dict)
     # One handler per device that can hold an error, called with no argument before each episode and before
     # ``prepare_handlers``. A handler named like an observation is also called between episodes while that observation
     # carries a ``pimm.SignalError``. A device answers once it gives valid data, or with the error it cannot clear.

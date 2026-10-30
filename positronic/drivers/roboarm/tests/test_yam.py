@@ -5,6 +5,7 @@ import sys
 import types
 from collections.abc import Callable, Iterator
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -14,8 +15,9 @@ import pimm
 import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom, keys
+from positronic import geom, keys, wire
 from positronic.cfg.eval.real import yam as yam_eval
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -24,8 +26,10 @@ from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
-from positronic.eval import Embodiment
+from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
+from positronic.policy.base import Policy, PolicyRun, Step
+from positronic.policy.harness import Harness, Rollout
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.zeros(6)
@@ -46,6 +50,7 @@ I2RT_YAM_RANGES = np.array([
     [-2.0944, 2.0944],
 ])
 I2RT_YAM_LIMITS = I2RT_YAM_RANGES + np.array([-0.15, 0.15])
+I2RT_GRAVITY_COMP = [1.0, 1.1, 1.1, 1.2, 1.0, 1.0]  # i2rt's own factors for the YAM arm
 
 
 class FakeYam(yam._FakeYam):
@@ -90,8 +95,9 @@ class Site(Enum):
 
     CHAIN_READ = ('vendor', 'get_observations')
     CHAIN_COMMAND = ('vendor', 'command_joint_pos')
-    LIMITS_READ = ('vendor', 'get_robot_info')
+    INFO_READ = ('vendor', 'get_robot_info')
     META_EMIT = ('robot_meta', '_emit')
+    ARM_META_EMIT = ('arm_meta', '_emit')
     STATE_EMIT = ('state', '_emit')
     GRIP_EMIT = ('grip', '_emit')
     COMMANDS_READ = ('commands', 'read')
@@ -149,7 +155,8 @@ class Rig:
             'state': self.states,
         }
         self.grips = RecordingEmitter()
-        ports |= {'grip': self.grips, 'robot_meta': RecordingEmitter()}
+        self.arm_metas = RecordingEmitter()
+        ports |= {'grip': self.grips, 'robot_meta': RecordingEmitter(), 'arm_meta': self.arm_metas}
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
@@ -164,6 +171,7 @@ class Rig:
         self.driver.state._bind(ports['state'], clock=self.clock)
         self.driver.grip._bind(ports['grip'], clock=self.clock)
         self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
+        self.driver.arm_meta._bind(ports['arm_meta'], clock=self.clock)
         self.stop = StopFlag()
         self.loop = self.driver.run(self.stop, self.clock)
 
@@ -1287,14 +1295,14 @@ def test_every_call_the_driver_makes_while_the_motors_are_on_is_a_site(world):
 
 
 CHAIN_SITES = [Site.CHAIN_READ, Site.CHAIN_COMMAND]
-ONCE_PER_CHAIN_SITES = [Site.LIMITS_READ]  # read once, by the start move
+ONCE_PER_CHAIN_SITES = [Site.INFO_READ]  # read once, as the chain opens
 
 
 @pytest.mark.parametrize('site', [site for site in Site if site not in CHAIN_SITES + ONCE_PER_CHAIN_SITES])
 def test_a_fault_at_a_site_off_the_chain_parks_releases_and_is_raised_again(site):
     watch = Watch(site)
     rig = Rig(watch=watch)
-    if site is not Site.META_EMIT:  # the metadata goes out once, as the run starts
+    if site not in (Site.META_EMIT, Site.ARM_META_EMIT):  # the metadata goes out once, as the run starts
         rig.raise_arm()
     watch.armed = True
     rig.tick()  # the fault lands in the run, before anything asks the driver to stop
@@ -1352,8 +1360,8 @@ def test_a_chain_fault_parks_releases_and_puts_an_error_on_the_state_and_the_gri
     rig.finish()
 
 
-def test_a_chain_whose_limits_cannot_be_read_parks_releases_and_holds_the_arm_as_lost():
-    watch = Watch(Site.LIMITS_READ)
+def test_a_chain_whose_robot_info_cannot_be_read_parks_releases_and_holds_the_arm_as_lost():
+    watch = Watch(Site.INFO_READ)
     watch.armed = True
     rig = Rig(watch=watch)
     rig.tick(10)
@@ -1762,11 +1770,17 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
 
 @pytest.fixture
 def chains(monkeypatch) -> dict[str, yam._FakeYam]:
-    """The fake chain each driver opens, keyed by its CAN channel."""
+    """The fake chain each driver opens, keyed by its CAN channel. As i2rt does, it reports the gravity compensation
+    that the driver passed, or i2rt's own if the driver passed none, and 1.0 for the gripper motor."""
     opened: dict[str, yam._FakeYam] = {}
-    monkeypatch.setattr(
-        'i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: opened.setdefault(channel, yam._FakeYam())
-    )
+
+    def get_yam_robot(channel, gravity_comp_factor, **_):
+        chain = opened.setdefault(channel, yam._FakeYam())
+        arm = I2RT_GRAVITY_COMP if gravity_comp_factor is None else gravity_comp_factor
+        chain.gravity_comp_factor = np.append(arm, 1.0)
+        return chain
+
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     return opened
 
 
@@ -1830,6 +1844,53 @@ def test_a_single_arm_trial_starts_with_the_gripper_open_after_a_trial_that_clos
     assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)
 
 
+class _Idle(Policy):
+    """Commands nothing, so an episode runs until the test ends it."""
+
+    def __init__(self):
+        self.observed = False
+
+    def run(self, runtime) -> PolicyRun:
+        yield
+        while True:
+            self.observed = True
+            yield Step({}, runtime.time_ns + 100_000_000)
+
+
+def _record_an_episode(rig: Embodiment, root: Path) -> dict[str, Any]:
+    """Run one episode of ``_Idle`` on ``rig``, record it under ``root``, and return the statics it recorded."""
+    harness, policy = Harness(rig), _Idle()
+    with pimm.World(virtual_time=True) as world:
+        wire.wire_embodiment(world, harness, rig)
+        perform = world.pair(harness.perform_task)
+        done = world.pair(harness.done)
+        loop = world.start([harness, *rig.control_systems])
+        answer = perform(Rollout(Task('idle', None), policy, LocalDatasetWriter(root)))
+        _run_until(loop, lambda: policy.observed)
+        done.emit({eval_keys.SUCCESS: True})
+        _run_until(loop, answer.done)
+        assert answer.result()[eval_keys.TERMINATED]
+    return LocalDataset(root)[0].static
+
+
+@pytest.mark.parametrize(
+    'rig, recorded',
+    [
+        (
+            embodiment_cfg.yam_bimanual_yambox.override(cameras={}),
+            {
+                f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}': [*STATION_GRAVITY_COMP, 1.0]
+                for side in keys.BIMANUAL_ARMS
+            },
+        ),
+        (embodiment_cfg.yam, {keys.JOINTS: [*I2RT_GRAVITY_COMP, 1.0]}),
+    ],
+    ids=['yambox', 'one-arm'],
+)
+def test_an_episode_records_the_gravity_compensation_that_each_chain_runs(chains, tmp_path, rig, recorded):
+    assert _record_an_episode(rig.instantiate(), tmp_path)[roboarm_keys.GRAVITY_COMP_FACTOR] == recorded
+
+
 def _opened_with(**kwargs) -> dict:
     """Start a ``Robot`` built with ``kwargs`` and return what it asked its vendor factory for."""
     seen = {}
@@ -1850,6 +1911,12 @@ def test_a_station_hands_its_gravity_compensation_to_the_chain():
     where it is sent. The factors a station measured are no use to it unless the driver passes them on."""
     passed = _opened_with(gravity_comp_factor=STATION_GRAVITY_COMP)['gravity_comp_factor']
     np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+
+
+def test_the_arm_meta_carries_the_gravity_compensation_that_the_chain_reports(rig):
+    rig.vendor.gravity_comp_factor = np.array([*STATION_GRAVITY_COMP, 1.0])
+    rig.ready()
+    assert _last(rig.arm_metas) == {roboarm_keys.GRAVITY_COMP_FACTOR: [*STATION_GRAVITY_COMP, 1.0]}
 
 
 def test_a_station_that_measured_none_leaves_the_vendor_its_own():

@@ -77,6 +77,7 @@ def yam(robot_arm, cameras):
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
         static_meta=dict(ROBOT_STATIC_META),
         meta_source=robot_arm.robot_meta,
+        arm_meta_sources={keys.JOINTS: robot_arm.arm_meta},
         ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
         control_systems=(*cameras.values(), robot_arm),
         simulated=False,
@@ -122,7 +123,7 @@ def yam_bimanual(
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
     signal that drives it. ``gravity_comp_factor[side]`` is that arm's i2rt gravity compensation; None keeps
-    i2rt's own factors on both arms.
+    i2rt's own factors on both arms. Each arm's meta carries the factors its chain reports, keyed the same way.
     """
     from positronic import geom
     from positronic.drivers.roboarm.yam import driver as yam_driver
@@ -166,8 +167,9 @@ def yam_bimanual(
             **{f'{eval_keys.GRIPPER}.{s}': arm.sync_grip for s, arm in arms.items()},
         },
         static_meta=static_meta,
-        # Both drivers emit the identical per-arm meta; record one copy.
+        # Both drivers emit the identical model; record one copy.
         meta_source=arms[keys.LEFT_ARM].robot_meta,
+        arm_meta_sources={sig: arms[side].arm_meta for side, sig in joint_signals.items()},
         ready_handlers={
             **{f'{eval_keys.ARM}.{s}': arm.ready for s, arm in arms.items()},
             **{name: cam.ready for name, cam in cameras.items()},
