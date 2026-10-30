@@ -373,6 +373,8 @@ def test_a_server_decodes_an_h264_frame_of_odd_sides_to_its_declared_shape():
         ({'call': 1, 'back': 1, 'images': {str(i): None for i in range(StreamedRows.MAX_IMAGES + 1)}}, 'images'),
         ({'call': 1, 'back': 1, 'images': {KEY: 'pixels'}}, 'JPEG frame or an H.264 unit'),
         ({'call': 1, 'back': 1, 'images': {KEY: {H264_FRAME: True, b'data': b'', b'shape': [0, 4, 3]}}}, 'outside'),
+        # A JPEG frame, as the message decodes it.
+        ({'call': 1, 'back': 1, 'images': {KEY: np.zeros((StreamedRows.MAX_SIDE + 1, 4, 3), np.uint8)}}, 'outside'),
     ],
 )
 def test_a_server_refuses_a_malformed_row(row, match):

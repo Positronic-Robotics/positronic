@@ -117,6 +117,12 @@ class _VideoEncoder:
         return {H264_FRAME: True, b'data': data, b'shape': [h, w, 3]}
 
 
+def _check_sides(codec: FrameCodec, h: int, w: int) -> None:
+    """Refuse a streamed frame whose sides are outside ``StreamedRows.MAX_SIDE``."""
+    if not (1 <= h <= StreamedRows.MAX_SIDE and 1 <= w <= StreamedRows.MAX_SIDE):
+        raise ValueError(f'A streamed {codec.value} frame of {h} x {w} is outside {StreamedRows.MAX_SIDE} px')
+
+
 class _VideoDecoder:
     """One camera's H.264 stream on the server: each access unit decodes to its frame, with no frame delay."""
 
@@ -125,8 +131,7 @@ class _VideoDecoder:
 
     def decode(self, unit: cabc.Mapping[bytes, Any]) -> np.ndarray:
         h, w, *_ = (int(n) for n in unit[b'shape'])
-        if not (1 <= h <= StreamedRows.MAX_SIDE and 1 <= w <= StreamedRows.MAX_SIDE):
-            raise ValueError(f'An H.264 frame of {h} x {w} is outside {StreamedRows.MAX_SIDE} px')
+        _check_sides(FrameCodec.H264, h, w)
         frames = self._ctx.decode(av.Packet(bytes(unit[b'data'])))
         if len(frames) != 1:
             raise ValueError(f'An H.264 unit decoded to {len(frames)} frames, not one')
@@ -215,6 +220,7 @@ class StreamedRows:
                 decoder = self._video[key] = _VideoDecoder()
             return decoder.decode(value)
         if isinstance(value, np.ndarray) and value.ndim == 3 and value.shape[-1] == 3:
+            _check_sides(FrameCodec.JPEG, *value.shape[:2])
             return value  # a JPEG frame, decoded with the message
         raise ValueError(f'{key}: a streamed frame must be a JPEG frame or an H.264 unit')
 
