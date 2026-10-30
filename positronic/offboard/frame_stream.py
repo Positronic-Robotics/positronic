@@ -92,8 +92,10 @@ class _VideoEncoder:
         self._ctx = av.CodecContext.create('libx264', 'w')
         self._ctx.width, self._ctx.height = width + width % 2, height + height % 2
         self._ctx.pix_fmt = 'yuv420p'
-        self._ctx.time_base = Fraction(1, round(fps))
-        self._ctx.framerate = Fraction(round(fps), 1)
+        # libav takes the rate as a ratio; a rounded rate would be 0 below 0.5 Hz.
+        rate = max(Fraction(fps).limit_denominator(1001), Fraction(1, 1001))
+        self._ctx.time_base = 1 / rate
+        self._ctx.framerate = rate
         self._ctx.options = {
             'preset': 'veryfast',
             'tune': 'zerolatency',
