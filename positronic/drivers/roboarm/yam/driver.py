@@ -167,7 +167,7 @@ class _Kinematics:
         self, target: geom.Transform3D, current_q: np.ndarray, lower: np.ndarray, upper: np.ndarray
     ) -> np.ndarray | None:
         """Multi-start LM IK: the live posture first, then the reach postures toward the target's azimuth.
-        Each start's last answer is wrapped and clamped into ``[lower, upper]``, then FK-verified before acceptance."""
+        Each start's best answer is wrapped and clamped into ``[lower, upper]``, then FK-verified before acceptance."""
         for start in (current_q, *self._reach_postures(*target.translation[:2])):
             self._data.qpos[:] = 0.0
             self._data.qpos[self._qpos_ids] = start

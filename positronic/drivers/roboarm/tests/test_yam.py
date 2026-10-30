@@ -789,7 +789,7 @@ def _solver_answers(monkeypatch, posture: np.ndarray, *, success: bool) -> None:
 STRETCHED = np.array([0.0, 2.9, np.pi - np.arctan2(0.06, 0.245), -0.6, 0.0, 0.0])
 
 
-def _past_full_stretch(kinematics, distance_m: float) -> geom.Transform3D:
+def past_full_stretch(kinematics, distance_m: float) -> geom.Transform3D:
     """The pose at ``STRETCHED``, ``distance_m`` farther from the arm base."""
     pose = kinematics.fk(STRETCHED)
     away = pose.translation / np.linalg.norm(pose.translation)
@@ -798,15 +798,21 @@ def _past_full_stretch(kinematics, distance_m: float) -> geom.Transform3D:
 
 def test_ik_takes_an_answer_the_solver_reports_as_failed_when_it_is_inside_the_tolerance(monkeypatch):
     kinematics = yam._Kinematics()
-    # Past reach, the last answer of the real solver changes with rounding, so the test sets it.
     _solver_answers(monkeypatch, STRETCHED, success=False)
-    target = _past_full_stretch(kinematics, yam._IK_POS_TOL / 2)
+    target = past_full_stretch(kinematics, yam._IK_POS_TOL / 2)
     np.testing.assert_array_equal(kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper), STRETCHED)
+
+
+def test_ik_accepts_a_target_past_full_stretch_inside_the_tolerance_from_every_nearly_equal_start():
+    kinematics = yam._Kinematics()
+    target = past_full_stretch(kinematics, 0.8 * yam._IK_POS_TOL)
+    for k in range(20):
+        assert kinematics.ik(target, STRETCHED + k * 1e-12, kinematics.lower, kinematics.upper) is not None
 
 
 def test_ik_refuses_a_target_farther_past_full_stretch_than_the_tolerance():
     kinematics = yam._Kinematics()
-    target = _past_full_stretch(kinematics, 5 * yam._IK_POS_TOL)
+    target = past_full_stretch(kinematics, 5 * yam._IK_POS_TOL)
     assert kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper) is None
 
 
