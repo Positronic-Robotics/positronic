@@ -347,6 +347,11 @@ class TestTheWire:
 
         assert dial.call_args.kwargs['additional_headers'] == headers
 
+    def test_the_config_dials_the_named_server_with_no_token_by_default(self):
+        policy = roboarena_policy.remote.override(**{'address.host': 'gpu-host', 'address.port': 8001}).instantiate()
+
+        assert (policy._address, policy._headers) == (RoboarenaAddress('gpu-host', 8001), None)
+
     def test_each_episode_builds_its_stack_from_the_config_its_own_connection_announced(self, monkeypatch):
         """A server restarted between two episodes may announce another resolution."""
         second = announced(**{wire.RESOLUTION: [144, 256]})
