@@ -9,7 +9,7 @@ install `grpcio` and `websockets` independently.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire[websocket,grpc]==0.13.0"
+uv add "positronic-wire[websocket,grpc]==0.12.1"
 uv add "positronic-wire[websocket,grpc] @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 

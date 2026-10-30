@@ -9,12 +9,12 @@ dependencies = [
     "msgpack>=1",
     "numpy>=1.26",
     "pillow>=10",
-    "positronic-wire==0.13.0",
+    "positronic-wire==0.12.1",
 ]
 
 [project.optional-dependencies]
-websocket = ["positronic-wire[websocket]==0.13.0", "uvicorn>=0.35"]
-grpc = ["positronic-wire[grpc]==0.13.0"]
+websocket = ["positronic-wire[websocket]==0.12.1", "uvicorn>=0.35"]
+grpc = ["positronic-wire[grpc]==0.12.1"]
 
 [build-system]
 requires = ["hatchling"]
