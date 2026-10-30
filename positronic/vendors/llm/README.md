@@ -59,18 +59,18 @@ Provider-specific behavior follows the library defaults. The example explicitly 
 
 ## Control contract
 
-The default config runs `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a move, or end the episode. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target and remaining translation/gripper error.
+The default config runs `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a path, or end the episode. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target and remaining translation/gripper error.
 
 Only the task instruction, measured hand pose/gripper, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
 
 | Tool | Arguments / effect |
 | --- | --- |
-| `move_to` | Absolute `x`, `y`, `z`, `roll`, `pitch`, `yaw`, `gripper`, and a short `note` |
+| `move_path` | `waypoints`, each with absolute `x`, `y`, `z`, `roll`, `pitch`, `yaw` and `gripper`, and a short `note` |
 | `done` | `reason` and `hindsight`; end the episode with `PolicyEnd.COMPLETE` |
 | `give_up` | `reason` and `hindsight`; end the episode with `PolicyEnd.GIVE_UP` |
 | `reveal_frames` | `cameras` and `note`; reveal selected frames in `images=on_demand` mode |
 
-The model must return exactly one tool call. Malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Oversized moves are clamped and accepted with the bounded target in the tool result. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion ends the episode with `PolicyEnd.GIVE_UP`.
+The model must return exactly one tool call. Malformed arguments, unavailable tools, and multiple calls receive explicit correction feedback. Oversized segments are clamped and accepted with the bounded waypoints in the tool result. A path with more than `motion.max_waypoints` waypoints receives correction feedback. Three consecutive invalid replies raise an error. SDK retry defaults apply, and terminal API errors propagate. The overall timeout covers the invocation and its retry waits. The episode has a budget of 100 model invocations, including pictures and corrections; individual network attempts within an invocation do not consume additional budget. Exhaustion ends the episode with `PolicyEnd.GIVE_UP`.
 
 After `done`, `give_up`, or call-budget exhaustion, the run returns its `PolicyEnd`, and the harness ends the episode at once. The episode records `eval.ended_by = policy` and `eval.policy_end`. The `PolicyEnd` is the claim of the model, not a verdict. Each new episode gets a fresh conversation.
 
@@ -82,11 +82,13 @@ Defaults are experimental bounds for supervised testing:
 
 | Setting | Default |
 | --- | --- |
-| `motion.max_translation` | 0.4 m per move |
-| `motion.max_rotation` | 1.5708 rad (90°) per move |
+| `motion.max_translation` | 0.4 m per segment |
+| `motion.max_rotation` | 1.5708 rad (90°) per segment |
 | `motion.linear_speed` | 0.15 m/s |
 | `motion.angular_speed` | 0.5236 rad/s (30°/s) |
-| `motion.fps` | 25 waypoints/s |
+| `motion.fps` | 25 commands/s |
+| `motion.grip_hold` | 0.5 s still at a waypoint that changes the gripper |
+| `motion.max_waypoints` | 5 per path |
 | `timeout` | 120 seconds per model invocation, including retries |
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
@@ -96,7 +98,7 @@ Defaults are experimental bounds for supervised testing:
 
 Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. The history keeps the frames of the last `image_horizon` observations. When an observation leaves that window, its frames change to the text `[older camera frame omitted]`, once. Each request carries a cache point after the newest changed frame message and one at its end. A request that ends in tool results has its end point on the newest user prompt instead. Pydantic AI sends a cache point to Anthropic as `cache_control`. With `--policy.cache_breakpoints=True`, an `openai-responses:` model gets each cache point as `prompt_cache_breakpoint` on the block before it. Only the GPT-5.6 family and later accept it: an earlier model answers with HTTP 400, so the flag is off by default. Without the breakpoint, Azure OpenAI reads no cache after a frame changes. A configured `OpenAIResponsesModel` drops cache points, so with the flag the policy refuses it. Configure a `BreakpointResponsesModel` from `positronic.vendors.llm.responses` instead. Azure OpenAI refuses a request with more than 50 images.
 
-Translation is linear and rotation follows the shortest spherical interpolation. A returned move starts from the latest measured pose. Oversized translation and rotation are clamped independently to the per-move limits, preserving the translation direction and shortest rotation path. The processor waits one sampling period after the final command before requesting the next decision. The tool result and recorded acceptance contain the bounded target, whether it was clamped, and the trajectory duration including that final period. The next observation reports that target alongside the measured state; scheduling a target does not confirm arrival. Malformed tool arguments still require correction. The driver performs inverse kinematics and enforces its own joint constraints. These bounds are not collision detection or contact-force limits.
+A path plays its waypoints in order, with no observation between them. Translation is linear and rotation follows the shortest spherical interpolation. The first segment starts from the latest measured pose, and each later segment from the previous bounded waypoint. Oversized translation and rotation are clamped independently to the per-segment limits, preserving the translation direction and shortest rotation path. A waypoint sets its gripper at the start of its segment. When the gripper changes, the hand holds still at the waypoint for `motion.grip_hold`. The processor waits one sampling period after the final command before requesting the next decision. The tool result and recorded acceptance contain the bounded waypoints, whether any was clamped, and the trajectory duration including that final period. The next observation reports the final waypoint as `previous_target` alongside the measured state; scheduling a path does not confirm arrival. Malformed tool arguments still require correction. The driver performs inverse kinematics and enforces its own joint constraints. These bounds are not collision detection or contact-force limits.
 
 ## Recordings and lifecycle
 

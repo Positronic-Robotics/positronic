@@ -34,7 +34,7 @@ from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import flatten_dict
 
 from .client import Endpoint
-from .motion import Motion, MoveTo
+from .motion import Motion, MovePath, Waypoint
 
 
 class Images(StrEnum):
@@ -43,7 +43,7 @@ class Images(StrEnum):
 
 
 class Tool(StrEnum):
-    MOVE_TO = 'move_to'
+    MOVE_PATH = 'move_path'
     REVEAL_FRAMES = 'reveal_frames'
     DONE = 'done'
     GIVE_UP = 'give_up'
@@ -98,7 +98,7 @@ class _Observation:
             images[name] = frame
         return cls(pose, grip, str(obs[keys.TASK]), time_ns, images)
 
-    def state(self, target: MoveTo | None) -> dict[str, Any]:
+    def state(self, target: Waypoint | None) -> dict[str, Any]:
         state = {
             'task': self.task,
             policy_keys.OBS_TIME_NS: self.time_ns,
@@ -129,7 +129,7 @@ class _Observation:
 
 
 _SCHEMAS: dict[Tool, type[BaseModel]] = {
-    Tool.MOVE_TO: MoveTo,
+    Tool.MOVE_PATH: MovePath,
     Tool.REVEAL_FRAMES: RevealFrames,
     Tool.DONE: Finish,
     Tool.GIVE_UP: Finish,
@@ -153,7 +153,7 @@ class LLMPolicy(Policy):
             self._revealed: set[str] = set()
             self._failures = 0
             self._calls = 0
-            self._target: MoveTo | None = None
+            self._target: Waypoint | None = None
 
         def _record(self, event: dict[str, Any]) -> None:
             self._transcript.append(event)
@@ -165,10 +165,14 @@ class LLMPolicy(Policy):
                 'Use absolute hand targets in the coordinate frame of the measured pose. '
                 'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
                 'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
-                'Moves play before the next observation; actual arrival must be checked from the measured state. '
-                'Oversized moves are clamped from the latest measured pose: translation keeps its direction and '
-                'rotation follows the shortest turn, each limited independently. '
-                'The tool result reports the clamped target; check it before planning the next move. '
+                'A path plays its waypoints in order before the next observation; '
+                'actual arrival must be checked from the measured state. '
+                'Oversized segments are clamped from the previous clamped waypoint, and the first from the latest '
+                'measured pose: translation keeps its direction and rotation follows the shortest turn, each limited '
+                'independently. A waypoint sets its gripper at the start of its segment. When a waypoint changes the '
+                'gripper, the hand holds still at it for grip_hold seconds. '
+                'The tool result reports the clamped waypoints; check them before planning the next path. '
+                'Put several waypoints in one path when the next motions do not depend on what you will see. '
                 'Camera frames remain fixed during a decision. '
                 f'{Tool.REVEAL_FRAMES.value} only reveals a frame; it does not move a camera. '
                 'A note should briefly describe what you see and why you chose the motion. '
@@ -220,11 +224,13 @@ class LLMPolicy(Policy):
                 raise ValueError('Choose available cameras not already revealed in this observation')
             return cameras
 
-        def _tool(self, call: ToolCallPart) -> MoveTo | Finish | None:
+        def _tool(self, call: ToolCallPart) -> MovePath | Finish | None:
             tool = Tool(call.tool_name)
             data = _SCHEMAS[tool].model_validate_json(call.args_as_json_str())
             match data:
-                case MoveTo() | Finish():
+                case MovePath() if len(data.waypoints) > self._policy.motion.max_waypoints:
+                    raise ValueError(f'A path has at most {self._policy.motion.max_waypoints} waypoints')
+                case MovePath() | Finish():
                     return data
                 case RevealFrames():
                     if self._policy.images is not Images.ON_DEMAND:
@@ -246,7 +252,7 @@ class LLMPolicy(Policy):
                 ModelRequest(parts if parts else [UserPromptPart(f'Rejected: {error}. Make one tool call.')])
             )
 
-        def _respond(self, response: ModelResponse) -> tuple[ToolCallPart, MoveTo | Finish] | None:
+        def _respond(self, response: ModelResponse) -> tuple[ToolCallPart, MovePath | Finish] | None:
             self._record({
                 'event': 'response',
                 'call': self._calls,
@@ -314,7 +320,7 @@ class LLMPolicy(Policy):
             return messages
 
         def _accept(
-            self, call: ToolCallPart, data: MoveTo | Finish, obs: Mapping[str, Any], time_ns: int
+            self, call: ToolCallPart, data: MovePath | Finish, obs: Mapping[str, Any], time_ns: int
         ) -> list[dict]:
             self._obs = None
             if isinstance(data, Finish):
@@ -331,12 +337,14 @@ class LLMPolicy(Policy):
                 })
                 return []
             start = _Observation.measured_pose(obs)
-            self._target, trajectory = self._policy.motion.trajectory(start, data)
+            grip = float(obs[keys.GRIP]) if self._target is None else self._target.gripper
+            waypoints, trajectory = self._policy.motion.trajectory(start, grip, data.waypoints)
+            self._target = waypoints[-1]
             result = {
-                'target': self._target.model_dump(),
-                'clamped': self._target != data,
+                'waypoints': [waypoint.model_dump() for waypoint in waypoints],
+                'clamped': waypoints != data.waypoints,
                 'duration_s': (len(trajectory) + 1) / self._policy.motion.fps,
-                'feedback': 'Target scheduled. Check the next measured observation for actual arrival.',
+                'feedback': 'Path scheduled. Check the next measured observation for actual arrival.',
             }
             self._messages.append(
                 ModelRequest([ToolReturnPart(call.tool_name, result, tool_call_id=call.tool_call_id)])

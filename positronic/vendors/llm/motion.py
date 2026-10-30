@@ -1,4 +1,4 @@
-"""Absolute hand targets and their bounded Cartesian trajectories."""
+"""Absolute hand waypoints and their bounded Cartesian trajectories."""
 
 import math
 from dataclasses import dataclass
@@ -13,8 +13,8 @@ from positronic.drivers.roboarm.command import CartesianPosition
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 
 
-class MoveTo(BaseModel):
-    """Move the hand to an absolute pose, in metres and radians, and set the gripper (0=open, 1=closed)."""
+class Waypoint(BaseModel):
+    """An absolute hand pose, in metres and radians, and the gripper (0=open, 1=closed) set on the way to it."""
 
     model_config = ConfigDict(extra='forbid', strict=True)
     x: Finite
@@ -24,22 +24,31 @@ class MoveTo(BaseModel):
     pitch: Finite
     yaw: Finite
     gripper: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
-    note: Annotated[str, Field(min_length=1)]
 
     @property
     def pose(self) -> geom.Transform3D:
         return geom.Transform3D([self.x, self.y, self.z], geom.Rotation.from_euler([self.roll, self.pitch, self.yaw]))
 
 
+class MovePath(BaseModel):
+    """Move the hand through absolute waypoints in order, without an observation between them."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+    waypoints: Annotated[list[Waypoint], Field(min_length=1)]
+    note: Annotated[str, Field(min_length=1)]
+
+
 @dataclass(frozen=True)
 class Motion:
-    """Bounds on one requested move and the speed of its sampled reference."""
+    """Bounds on one requested path and the speed of its sampled reference."""
 
     max_translation: float = 0.4
     max_rotation: float = math.radians(90)
     linear_speed: float = 0.15
     angular_speed: float = math.radians(30)
     fps: float = 25.0
+    grip_hold: float = 0.5
+    max_waypoints: int = 5
 
     def __post_init__(self):
         for name, value in vars(self).items():
@@ -49,7 +58,7 @@ class Motion:
         if duration > 10 or math.ceil(duration * self.fps) / self.fps + 1 / self.fps > 10:
             raise ValueError('Motion limits must fit within a 10 second trajectory')
 
-    def _clamp(self, start: geom.Transform3D, target: MoveTo) -> MoveTo:
+    def _clamp(self, start: geom.Transform3D, target: Waypoint) -> Waypoint:
         end = target.pose
         offset = end.translation - start.translation
         distance = math.hypot(*offset)
@@ -62,20 +71,31 @@ class Motion:
             bounded.roll, bounded.pitch, bounded.yaw = rotation.as_euler
         return bounded
 
-    def trajectory(self, start: geom.Transform3D, target: MoveTo) -> tuple[MoveTo, list[dict]]:
-        """Return the clamped target and its trajectory from the measured starting pose."""
-        target = self._clamp(start, target)
+    def _segment(self, start: geom.Transform3D, target: Waypoint) -> list[dict]:
         end = target.pose
         distance = math.hypot(*(end.translation - start.translation))
         angle = (end.rotation * start.rotation.inv).angle
         duration = max(distance / self.linear_speed, angle / self.angular_speed, 1 / self.fps)
         steps = math.ceil(duration * self.fps)
-        fractions = np.arange(1, steps + 1) / steps
-        trajectory = [
+        return [
             {
                 keys.ROBOT_COMMAND: CartesianPosition(start.interpolate(end, float(fraction))),
                 keys.TARGET_GRIP: target.gripper,
             }
-            for fraction in fractions
+            for fraction in np.arange(1, steps + 1) / steps
         ]
-        return target, trajectory
+
+    def trajectory(
+        self, start: geom.Transform3D, grip: float, path: list[Waypoint]
+    ) -> tuple[list[Waypoint], list[dict]]:
+        """Return the clamped waypoints and their trajectory from the measured pose and the gripper in force."""
+        bounded, trajectory = [], []
+        for waypoint in path:
+            target = self._clamp(start, waypoint)
+            trajectory.extend(self._segment(start, target))
+            if target.gripper != grip:
+                hold = {keys.ROBOT_COMMAND: CartesianPosition(target.pose), keys.TARGET_GRIP: target.gripper}
+                trajectory.extend([hold] * math.ceil(self.grip_hold * self.fps))
+            bounded.append(target)
+            start, grip = target.pose, target.gripper
+        return bounded, trajectory

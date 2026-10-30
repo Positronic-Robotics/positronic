@@ -20,7 +20,7 @@ from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import LLMPolicy
+from positronic.vendors.llm.policy import LLMPolicy, Tool
 
 
 class Arm(pimm.ControlSystem):
@@ -78,15 +78,19 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
             roll, pitch, yaw = state['roll_pitch_yaw_rad']
             return ModelResponse([
                 ToolCallPart(
-                    'move_to',
+                    Tool.MOVE_PATH.value,
                     {
-                        'x': x + distance,
-                        'y': y,
-                        'z': z,
-                        'roll': roll,
-                        'pitch': pitch,
-                        'yaw': yaw,
-                        'gripper': 0.2,
+                        'waypoints': [
+                            {
+                                'x': x + distance,
+                                'y': y,
+                                'z': z,
+                                'roll': roll,
+                                'pitch': pitch,
+                                'yaw': yaw,
+                                'gripper': 0.2,
+                            }
+                        ],
                         'note': 'Small move.',
                     },
                     tool_call_id='move',
@@ -145,7 +149,7 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
             before[policy_keys.OBS_TIME_NS],
             after[policy_keys.OBS_TIME_NS],
         ]
-        assert [e['tools'][0]['name'] for e in responses] == ['move_to', ending]
+        assert [e['tools'][0]['name'] for e in responses] == [Tool.MOVE_PATH.value, ending]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]
         # The run returns at the decision after the move, long before the time limit.
