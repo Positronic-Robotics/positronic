@@ -29,6 +29,7 @@ from positronic.eval import Embodiment, Eval, Task
 from positronic.policy import Policy, RemotePolicy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR
+from positronic.utils.credentials import CredentialInRunMetadata
 from positronic.utils.git import get_package_git_state
 
 logger = logging.getLogger(__name__)
@@ -52,10 +53,15 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     if output_dir is None:
         os.environ.pop(ENV_TELEMETRY_DIR, None)
         return None
+    metadata = utils.run_metadata(patterns=['*.py', '*.toml'])
+    try:
+        utils.check_run_metadata(metadata)  # before the sync, so a refused run downloads and uploads nothing
+    except CredentialInRunMetadata as exc:
+        raise CommandFailed(str(exc), Fault.USAGE) from exc
     local_dir = sync_recording_dir(str(output_dir))
     try:
         local_dir.mkdir(parents=True, exist_ok=True)
-        utils.save_run_metadata(local_dir, patterns=['*.py', '*.toml'])
+        utils.write_run_metadata(local_dir, metadata)
     except OSError as exc:
         if not _is_on_the_path_to(exc.filename, local_dir):
             raise

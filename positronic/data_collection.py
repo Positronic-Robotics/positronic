@@ -276,8 +276,10 @@ def main(
         static_meta.update(wire.ROBOT_STATIC_META)
     output_path = None
     if output_dir is not None:
+        metadata = utils.run_metadata(patterns=['*.py', '*.toml'])
+        utils.check_run_metadata(metadata)  # before the sync, so a refused run downloads and uploads nothing
         output_path = sync_recording_dir(output_dir)
-        utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
+        utils.write_run_metadata(output_path, metadata)
     data_collection = DataCollectionController(
         operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
     )
@@ -345,8 +347,10 @@ def main_sim(
 
     output_path = None
     if output_dir is not None:
+        metadata = utils.run_metadata(patterns=['*.py', '*.toml'])
+        utils.check_run_metadata(metadata)  # before the sync, so a refused run downloads and uploads nothing
         output_path = sync_recording_dir(output_dir)
-        utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
+        utils.write_run_metadata(output_path, metadata)
     data_collection = DataCollectionController(
         operator_position.value,
         sim.initial_joints,
