@@ -31,7 +31,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Obs, Policy, PolicyEnd, PolicyRun
 from positronic.policy.codecs import ChangeEEFrame, Codec
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.utils import flatten_dict, frozen_view
+from positronic.utils import flatten_dict, frozen_view, merge_dicts
 
 # Harness wake-up intervals on the world's clock.
 POLL_PERIOD_SEC = 0.1
@@ -166,6 +166,7 @@ class Harness(pimm.ControlSystem):
         self.manual_command = pimm.ControlSystemReceiver(self)
         self.deadline_ns = pimm.ControlSystemEmitter[int | None](self)
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
+        self.arm_meta_in = pimm.ReceiverDict(self, names=embodiment.arm_meta_sources)
         self.done = pimm.DefaultingReceiver[dict](self, default={})
 
     def _yield(self, delay_sec: float = POLL_PERIOD_SEC) -> pimm.Command:
@@ -212,7 +213,15 @@ class Harness(pimm.ControlSystem):
         yield from self._wait(should_stop, pimm.calls.all_of([self.prepare[name](arg) for name, arg in args.items()]))
 
     def _statics(self) -> dict[str, Any]:
-        return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value
+        return self._embodiment.static_meta | self._static_meta | self.robot_meta_in.value | self._arm_statics()
+
+    def _arm_statics(self) -> dict[str, dict[str, Any]]:
+        """The meta that each arm has emitted, in the shape ``Embodiment.arm_meta_sources`` states."""
+        statics: dict[str, dict[str, Any]] = {}
+        for joint_signal, receiver in self.arm_meta_in.items():
+            if (msg := receiver.read()) is not None:
+                merge_dicts(statics, {key: {joint_signal: value} for key, value in msg.data.items()})
+        return statics
 
     def _pose_handshake(self, policy: Policy, runtime: Executor) -> tuple[frozenset[str], Codec | None]:
         """The rig's pose signals that ``policy`` does not observe, and the codec that the harness puts around the
