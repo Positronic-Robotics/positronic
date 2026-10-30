@@ -34,6 +34,7 @@ from eval_vocabulary.episode import (
     SUCCESS,
     TASK,
     TERMINATED,
+    TIMELINE_METADATA_KEY,
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
@@ -543,6 +544,27 @@ def test_each_signal_is_read_on_harness_world_then_received_world_then_recorded(
     _write_clocked_signal(tmp_path, 'target_grip', {RECORDED_TIME: _at(30.0, 50.0), RECEIVED_WORLD: _at(20.0, 40.0)})
     _write_clocked_signal(tmp_path, 'robot_state.q', {RECORDED_TIME: _at(0.0, 0.01, 45.0)})
     assert recorded_try_window(tmp_path) == _window(-1.0, 45.0)
+
+
+@pytest.mark.parametrize(
+    ('declared', 'start_s', 'end_s'),
+    [
+        (RECEIVED_WORLD.encode(), -5.0, 20.0),
+        (EMITTED_WORLD.encode(), 0.0, 12.0),
+        (b'world', 0.0, 12.0),
+        (None, -5.0, 20.0),
+    ],
+    ids=['received-world', 'emitted-world', 'world', 'undeclared'],
+)
+def test_an_older_signal_is_read_on_the_timeline_its_file_declares_and_else_on_recorded(
+    tmp_path: Path, declared: bytes | None, start_s: float, end_s: float
+):
+    _write_signal(tmp_path, STATE_SIGNAL, _at(0.0, 12.0))
+    grip = pa.table({LEGACY_TIME_COLUMN: _at(-5.0, -4.98, 20.0)})
+    if declared is not None:
+        grip = grip.replace_schema_metadata({TIMELINE_METADATA_KEY: declared})
+    pq.write_table(grip, tmp_path / f'grip{SIGNAL_FILE_SUFFIX}')
+    assert recorded_try_window(tmp_path) == _window(start_s, end_s)
 
 
 def test_an_older_recording_places_its_try_by_its_signals_and_its_video_frames(tmp_path: Path):

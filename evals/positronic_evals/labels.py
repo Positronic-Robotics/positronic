@@ -34,6 +34,7 @@ from eval_vocabulary.episode import (
     SUCCESS,
     TASK,
     TERMINATED,
+    TIMELINE_METADATA_KEY,
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
@@ -458,16 +459,18 @@ _LEGACY_TIME_COLUMNS = (LEGACY_TIME_COLUMN, LEGACY_FRAMES_TIME_COLUMN)
 def _recording_time_column(signal: Path) -> str | None:
     """The column of `signal` on the timeline that `recording_timeline` picks from those it carries, or None.
 
-    A file in the format before named timelines carries its one time column on `RECORDED_TIME`. ArrowInvalid when the
-    file does not parse.
+    A file in the format before named timelines carries its one time column on the timeline that its metadata names,
+    else on `RECORDED_TIME`. ArrowInvalid when the file does not parse.
     """
-    names = pq.read_schema(signal).names
+    schema = pq.read_schema(signal)
+    names = schema.names
     timelines = {
         name.removeprefix(TIMESTAMP_COLUMN_PREFIX): name for name in names if name.startswith(TIMESTAMP_COLUMN_PREFIX)
     }
     if not timelines:
         legacy = next((name for name in _LEGACY_TIME_COLUMNS if name in names), None)
-        timelines = {RECORDED_TIME: legacy} if legacy is not None else {}
+        declared = (schema.metadata or {}).get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
+        timelines = {declared: legacy} if legacy is not None else {}
     return timelines.get(recording_timeline(timelines))
 
 
@@ -502,10 +505,7 @@ class TryWindow(NamedTuple):
 def recorded_try_window(episode: Path) -> TryWindow | None:
     """The world times of the first and the last sample of the try that `episode` records.
 
-    The start is the earliest first sample of any signal. Where a signal other than a mark opens with a held reading,
-    its next sample counts in its place. The end is the latest last sample of any signal. Each signal is read on the
-    timeline that `recording_timeline` picks, and a signal that carries none of `RECORDING_TIMELINE_ORDER` places
-    nothing. None when no signal places a start, or a signal file does not parse.
+    None when no signal places the start of the try, or a signal file does not parse.
     """
     starts, ends = [], []
     for signal in sorted(episode.glob(f'*{SIGNAL_FILE_SUFFIX}')):
