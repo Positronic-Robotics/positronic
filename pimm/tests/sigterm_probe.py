@@ -25,9 +25,9 @@ class Marker(ControlSystem):
         self.directory = pathlib.Path(directory)
 
     def run(self, should_stop, clock):
-        written = self.directory / f'{CHILD_PID_FILE}.tmp'
-        written.write_text(str(os.getpid()))
-        written.replace(self.directory / CHILD_PID_FILE)
+        temporary_pid_file = self.directory / f'{CHILD_PID_FILE}.tmp'
+        temporary_pid_file.write_text(str(os.getpid()))
+        temporary_pid_file.replace(self.directory / CHILD_PID_FILE)
         while not should_stop.value:
             yield Sleep(0.01)
         (self.directory / SHUT_DOWN_FILE).write_text('')
