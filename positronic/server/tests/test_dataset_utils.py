@@ -40,6 +40,7 @@ from positronic.server.dataset_utils import (
     ReplayLayout,
     _build_blueprint,
     _collect_signal_groups,
+    _compute_eye_controls,
     _decimation_indices,
     _mp4_reduced_to,
     _size_capped_to,
@@ -58,6 +59,44 @@ def _episode(ep_dir, widths: dict[str, int], static: dict[str, Any] | None = Non
         for name, value in (static or {}).items():
             writer.set_static(name, value)
     return DiskEpisode(ep_dir)
+
+
+def _reaching_episode(ep_dir, path: np.ndarray) -> DiskEpisode:
+    with DiskEpisodeWriter(ep_dir) as writer:
+        for i, position in enumerate(path):
+            writer.append(keys.EE_POSE, np.r_[position, 0, 0, 0, 1].astype(np.float32), Time(**{RECORDED_TIME: i}))
+        writer.set_static(eval_keys.POSE_SIGNALS, [keys.EE_POSE])
+    return DiskEpisode(ep_dir)
+
+
+def _eye(ep: DiskEpisode) -> tuple[np.ndarray, np.ndarray]:
+    eye = _compute_eye_controls(_collect_signal_groups(ep), ep)
+    assert eye is not None and eye.position is not None and eye.look_target is not None
+    return (
+        np.array(eye.position.as_arrow_array().to_pylist()[0]),
+        np.array(eye.look_target.as_arrow_array().to_pylist()[0]),
+    )
+
+
+@pytest.mark.parametrize('forward', [(1.0, 0.0), (0.0, 1.0), (-0.6, 0.8)])
+def test_the_3d_view_looks_across_a_straight_reach_from_a_raised_side(tmp_path, forward):
+    forward3 = np.array([*forward, 0.0])
+    path = [forward3 * (0.3 + 0.05 * i) + [0.0, 0.0, 0.4 - 0.03 * i] for i in range(10)]
+    position, target = _eye(_reaching_episode(tmp_path / 'ep', np.array(path)))
+
+    offset = (position - target) / np.linalg.norm(position - target)
+    horizontal = offset * [1.0, 1.0, 0.0]
+    assert np.degrees(np.arcsin(offset[2])) == pytest.approx(30.0)
+    angle_to_reach = np.degrees(np.arccos(horizontal @ forward3 / np.linalg.norm(horizontal)))
+    assert angle_to_reach == pytest.approx(45.0)
+    assert np.cross(forward3, horizontal)[2] < 0  # on the robot's right
+
+
+def test_the_3d_view_looks_at_the_middle_of_the_poses_and_the_base(tmp_path):
+    path = np.array([[0.4, 0.2, 0.1], [0.6, -0.2, 0.5], [0.5, 0.0, 0.3]])
+    _, target = _eye(_reaching_episode(tmp_path / 'ep', path))
+
+    assert target == pytest.approx([0.3, 0.0, 0.25])
 
 
 def test_narrow_signals_are_plotted(tmp_path):
