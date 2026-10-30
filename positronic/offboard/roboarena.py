@@ -1,6 +1,7 @@
 """A client for a roboarena server: the msgpack frames, over the `roboarena` wire that carries them."""
 
 import logging
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -8,7 +9,7 @@ from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
-from positronic.offboard.client import ConnectOutcome, ConnectRetries
+from positronic.offboard.client import DEFAULT_CONNECT_DEADLINE, ConnectOutcome, ConnectRetries, retry_cold
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,15 @@ class RoboarenaClient:
         if refusal is not None and self._probe_retries.take(refusal) is ConnectOutcome.SURFACE:
             raise wire.ConnectRefused(refusal, f'{self.url} refused the connection')
         return refusal
+
+    def wait_for_server(self, deadline_s: float = DEFAULT_CONNECT_DEADLINE) -> None:
+        """Return once the server answers a probe, retrying a cold server for ``deadline_s``. Opens no connection."""
+
+        def probe() -> None:
+            if (refusal := self._wire.probe(self._address, self._headers, READY_PROBE_TIMEOUT_S)) is not None:
+                raise wire.ConnectRefused(refusal, f'{self.url} refused the probe: {refusal.value}')
+
+        retry_cold(time.monotonic() + deadline_s, probe, self.url)
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
         """The action chunk the server answers ``observation`` with."""

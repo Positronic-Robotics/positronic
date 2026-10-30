@@ -178,6 +178,10 @@ class RoboarenaPolicy(Policy):
         self._address = address
         self._headers = headers
 
+    def wait_for_server(self) -> None:
+        """Return once the server has loaded its model. Opens no connection."""
+        RoboarenaClient(self._address.host, self._address.port, self._headers).wait_for_server()
+
     def run(self, runtime: Runtime) -> PolicyRun:
         client = RoboarenaClient(self._address.host, self._address.port, self._headers)
         # Held by each inference, so a failure that closes the episode waits for the one in flight.

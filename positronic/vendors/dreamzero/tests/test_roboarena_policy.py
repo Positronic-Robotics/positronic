@@ -347,6 +347,16 @@ class TestTheWire:
 
         assert dial.call_args.kwargs['additional_headers'] == headers
 
+    def test_waiting_for_the_server_probes_the_policy_s_address_with_its_headers(self):
+        headers = {'Authorization': 'Bearer run-token'}
+        policy = roboarena_policy.RoboarenaPolicy(ADDRESS, headers)
+
+        with patch.object(roboarena_policy, 'RoboarenaClient') as client:
+            policy.wait_for_server()
+
+        client.assert_called_once_with('a-server-host', 8000, headers)
+        client.return_value.wait_for_server.assert_called_once_with()
+
     def test_each_episode_builds_its_stack_from_the_config_its_own_connection_announced(self, monkeypatch):
         """A server restarted between two episodes may announce another resolution."""
         second = announced(**{wire.RESOLUTION: [144, 256]})

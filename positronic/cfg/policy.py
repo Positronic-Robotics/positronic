@@ -45,8 +45,8 @@ def socket_address(uds: str, query: str) -> UnixSocketAddress:
 
 remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
 
-# A roboarena server with no positronic server in front, dialled as the rig's console dials one. The caller names the
-# endpoint, and `--policy.headers=@positronic.cfg.policy.bearer_headers` dials a server that checks a token.
+# A roboarena server with no positronic server in front. The caller names the endpoint, and
+# `--policy.headers=@positronic.cfg.policy.bearer_headers` dials a server that checks a token.
 roboarena = cfn.Config(RoboarenaPolicy, address=cfn.Config(RoboarenaAddress, host='localhost', port=8000), headers=None)
 
 # A person, through the teleop service on this machine: an ordinary remote policy on the socket of the service. A frame

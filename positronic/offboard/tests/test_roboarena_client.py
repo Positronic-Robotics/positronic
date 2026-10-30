@@ -239,3 +239,37 @@ def test_a_backend_not_up_yet_stays_not_ready_past_the_forbidden_attempts(refusa
         client_wire.probe.return_value = refusal
         for _ in range(ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 1):
             assert client.probe() is refusal
+
+
+def test_waiting_for_the_server_retries_a_cold_server_until_it_answers():
+    headers = {'Authorization': 'Bearer run-token'}
+    client = roboarena.RoboarenaClient('a-partner-host', 8000, headers)
+
+    with patch.object(client, '_wire') as client_wire, patch('positronic.offboard.client.time.sleep'):
+        client_wire.probe.side_effect = [wire.Refusal.COLD, wire.Refusal.SILENT, None]
+        client.wait_for_server()
+
+    assert client_wire.probe.call_count == 3
+    assert client_wire.probe.call_args.args[1:] == (headers, roboarena.READY_PROBE_TIMEOUT_S)
+    client_wire.dial.assert_not_called()
+
+
+def test_waiting_for_the_server_raises_a_final_refusal_at_once():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire, patch('positronic.offboard.client.time.sleep') as sleep:
+        client_wire.probe.return_value = wire.Refusal.FINAL
+        with pytest.raises(wire.ConnectRefused) as refused:
+            client.wait_for_server()
+
+    assert refused.value.refusal is wire.Refusal.FINAL
+    sleep.assert_not_called()
+
+
+def test_waiting_for_a_server_that_stays_cold_ends_at_the_deadline():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire, patch('positronic.offboard.client.time.sleep'):
+        client_wire.probe.return_value = wire.Refusal.COLD
+        with pytest.raises(TimeoutError, match='cold'):
+            client.wait_for_server(deadline_s=0.0)

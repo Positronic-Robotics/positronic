@@ -280,6 +280,27 @@ class ConnectRetries:
 T = TypeVar('T')
 
 
+def retry_cold(deadline: float, attempt: Callable[[], T], url: str) -> T:
+    """``attempt``, retried while the server at ``url`` is cold, until the ``time.monotonic()`` instant ``deadline``."""
+    backoff = 1.0
+    retries = ConnectRetries()
+    while True:
+        try:
+            return attempt()
+        except wire.ConnectRefused as e:
+            refusal, not_ready = e.refusal, e
+        # A status handshake the server did not finish: a backend that is not ready.
+        except (TimeoutError, wire.PeerDisconnected) as e:
+            refusal, not_ready = wire.Refusal.COLD, e
+        if retries.take(refusal) is ConnectOutcome.SURFACE:
+            raise not_ready
+        logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
+        time.sleep(max(0.0, min(backoff, deadline - time.monotonic())))
+        backoff = min(backoff * 2, 30.0)
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f'{not_ready} (connecting to {url})') from not_ready
+
+
 class InferenceClient:
     """The connection to one inference server: a wire, a session address, and the settings each session opens with.
 
@@ -347,32 +368,12 @@ class InferenceClient:
             if (refusal := self._wire.probe(self._address, self.headers, self.open_timeout)) is not None:
                 raise wire.ConnectRefused(refusal, f'{self.session_url} refused the probe: {refusal.value}')
 
-        self._retry(time.monotonic() + self.connect_deadline, probe)
+        retry_cold(time.monotonic() + self.connect_deadline, probe, self.session_url)
 
     def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
         """A session on the server, retrying a cold backend for ``deadline_sec`` of wall clock."""
         deadline = time.monotonic() + deadline_sec
-        return self._retry(deadline, lambda: self._open_session(deadline, reopen))
-
-    def _retry(self, deadline: float, attempt: Callable[[], T]) -> T:
-        """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``."""
-        backoff = 1.0
-        retries = ConnectRetries()
-        while True:
-            try:
-                return attempt()
-            except wire.ConnectRefused as e:
-                refusal, not_ready = e.refusal, e
-            # A status handshake the server did not finish: a backend that is not ready.
-            except (TimeoutError, wire.PeerDisconnected) as e:
-                refusal, not_ready = wire.Refusal.COLD, e
-            if retries.take(refusal) is ConnectOutcome.SURFACE:
-                raise not_ready
-            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
-            time.sleep(max(0.0, min(backoff, deadline - time.monotonic())))
-            backoff = min(backoff * 2, 30.0)
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
+        return retry_cold(deadline, lambda: self._open_session(deadline, reopen), self.session_url)
 
     def keepalive(self) -> int | None:
         """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after
