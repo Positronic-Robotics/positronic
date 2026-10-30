@@ -5,6 +5,7 @@ from pathlib import Path
 import configuronic as cfn
 from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server.protocol import AUTH_HEADER, bearer
+from positronic_wire.roboarena import RoboarenaAddress
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
 from positronic import keys
@@ -12,6 +13,7 @@ from positronic.policy import RemotePolicy
 from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import DEFAULT_PORT, default_socket_path, session_query
 from positronic.utils import nebius
+from positronic.vendors.dreamzero.roboarena_policy import RoboarenaPolicy
 
 
 @cfn.config()
@@ -42,6 +44,10 @@ def socket_address(uds: str, query: str) -> UnixSocketAddress:
 
 
 remote = cfn.Config(RemotePolicy, wire='websocket', address=network_address)
+
+# A roboarena server with no positronic server in front, dialled as the rig's console dials one. The caller names the
+# endpoint, and `--policy.headers=@positronic.cfg.policy.bearer_headers` dials a server that checks a token.
+roboarena = cfn.Config(RoboarenaPolicy, address=cfn.Config(RoboarenaAddress, host='localhost', port=8000), headers=None)
 
 # A person, through the teleop service on this machine: an ordinary remote policy on the socket of the service. A frame
 # waits at most the silence limit of the service, so a short infer timeout bounds it.

@@ -215,7 +215,8 @@ protocol details in the [Inference Guide](../../../docs/inference.md).
   aligns the chunk schedule with the AR frame-stack window
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
 - **A roboarena server with no Positronic server in front**: `roboarena_policy.RoboarenaPolicy(address, headers)` dials
-  the server on the `roboarena` wire and runs the `droid_3cam` codec on the robot side.
+  the server on the `roboarena` wire and runs the `droid_3cam` codec on the robot side. In `positronic eval run` it is
+  `--policy=@positronic.cfg.policy.roboarena --policy.address.host=<host> --policy.address.port=<port>`.
 - **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
   configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.
 
