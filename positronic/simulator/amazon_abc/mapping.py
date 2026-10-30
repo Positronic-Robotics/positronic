@@ -15,6 +15,9 @@ ARM_JOINTS = 6
 # The site each arm is measured and driven at: the YAM's ``grasp_site``, ``YAM_GRASP_SITE_FRAME`` from ``GRIPPER_SITE``.
 CONTROL_SITE = '{arm}_grasp_site'
 JOINT = '{arm}_joint{index}'
+# ABC's camera names.
+TOP_CAMERA = 'top'
+WRIST_CAMERA = '{arm}'
 
 SELECT_TASKS = 'tasks'
 TASK_NAME = 'name'

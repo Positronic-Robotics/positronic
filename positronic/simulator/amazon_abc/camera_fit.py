@@ -11,8 +11,6 @@ import mapping
 import mujoco
 import numpy as np
 
-TOP_CAMERA = 'top'
-
 
 @dataclasses.dataclass(frozen=True)
 class TopCamera:
@@ -82,39 +80,28 @@ def top_camera_axes(camera: TopCamera) -> np.ndarray:
     return _rotation(2, camera.yaw_deg) @ axes @ _rotation(2, camera.roll_deg)
 
 
-class CameraPlacer:
-    """Places a fit's cameras in one compiled scene; ABC recompiles the scene at each reset, so place after each."""
-
-    def __init__(self, fit: CameraFit, model):
-        self._fit = fit
-        self._top = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, TOP_CAMERA)
-        # ABC names each wrist camera after its arm.
-        self._wrists = {arm: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, arm) for arm in fit.wrists}
-        # ABC's own wrist poses, which a wrist fit is relative to; read before any placement moves them.
-        self._abc_wrists = {arm: (model.cam_pos[c].copy(), model.cam_quat[c].copy()) for arm, c in self._wrists.items()}
-
-    def place(self, model, data, mount_body_ids: list[int]) -> None:
-        mujoco.mj_kinematics(model, data)
-        mount_rot = data.xmat[mount_body_ids[0]].reshape(3, 3)
-        mounts = np.mean([data.xpos[body] for body in mount_body_ids], axis=0)
-        top = self._fit.top
-        body = model.cam_bodyid[self._top]
-        body_pos, body_rot = data.xpos[body], data.xmat[body].reshape(3, 3)
-        model.cam_pos[self._top] = body_rot.T @ (mounts + mount_rot @ np.asarray(top.offset) - body_pos)
-        mujoco.mju_mat2Quat(
-            model.cam_quat[self._top], np.ascontiguousarray(body_rot.T @ mount_rot @ top_camera_axes(top)).reshape(9)
-        )
-        model.cam_fovy[self._top] = top.fovy_deg
-        for arm, camera in self._wrists.items():
-            wrist = self._fit.wrists[arm]
-            abc_pos, abc_quat = self._abc_wrists[arm]
-            abc_rot = np.empty(9)
-            mujoco.mju_quat2Mat(abc_rot, abc_quat)
-            abc_rot = abc_rot.reshape(3, 3)
-            turn = np.linalg.multi_dot([_rotation(axis, angle) for axis, angle in enumerate(wrist.rotation_deg)])
-            model.cam_pos[camera] = abc_pos + abc_rot @ np.asarray(wrist.offset)
-            mujoco.mju_mat2Quat(model.cam_quat[camera], np.ascontiguousarray(abc_rot @ turn).reshape(9))
-            model.cam_fovy[camera] = wrist.fovy_deg
-        # The renderer reads camera poses from ``data``, which only mj_camlight writes.
-        mujoco.mj_comPos(model, data)
-        mujoco.mj_camlight(model, data)
+def place_cameras(fit: CameraFit, model, data, mount_body_ids: list[int]) -> None:
+    """Place ``fit``'s cameras in a scene that ABC has just compiled, so its wrist cameras are still at ABC's poses."""
+    mujoco.mj_kinematics(model, data)
+    mount_rot = data.xmat[mount_body_ids[0]].reshape(3, 3)
+    mounts = np.mean([data.xpos[body] for body in mount_body_ids], axis=0)
+    top = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, mapping.TOP_CAMERA)
+    body = model.cam_bodyid[top]
+    body_pos, body_rot = data.xpos[body], data.xmat[body].reshape(3, 3)
+    model.cam_pos[top] = body_rot.T @ (mounts + mount_rot @ np.asarray(fit.top.offset) - body_pos)
+    mujoco.mju_mat2Quat(
+        model.cam_quat[top], np.ascontiguousarray(body_rot.T @ mount_rot @ top_camera_axes(fit.top)).reshape(9)
+    )
+    model.cam_fovy[top] = fit.top.fovy_deg
+    for arm, wrist in fit.wrists.items():
+        camera = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, mapping.WRIST_CAMERA.format(arm=arm))
+        abc_rot = np.empty(9)
+        mujoco.mju_quat2Mat(abc_rot, model.cam_quat[camera])
+        abc_rot = abc_rot.reshape(3, 3)
+        turn = np.linalg.multi_dot([_rotation(axis, angle) for axis, angle in enumerate(wrist.rotation_deg)])
+        model.cam_pos[camera] = model.cam_pos[camera] + abc_rot @ np.asarray(wrist.offset)
+        mujoco.mju_mat2Quat(model.cam_quat[camera], np.ascontiguousarray(abc_rot @ turn).reshape(9))
+        model.cam_fovy[camera] = wrist.fovy_deg
+    # The renderer reads camera poses from ``data``, which only mj_camlight writes.
+    mujoco.mj_comPos(model, data)
+    mujoco.mj_camlight(model, data)

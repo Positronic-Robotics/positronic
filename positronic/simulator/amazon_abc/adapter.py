@@ -16,7 +16,11 @@ from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 
 _LEFT, _RIGHT = mapping.ARMS
-CAMERAS = {keys.EXTERIOR_IMAGE: 'top', keys.WRIST_LEFT_IMAGE: _LEFT, keys.WRIST_RIGHT_IMAGE: _RIGHT}
+CAMERAS = {
+    keys.EXTERIOR_IMAGE: mapping.TOP_CAMERA,
+    keys.WRIST_LEFT_IMAGE: mapping.WRIST_CAMERA.format(arm=_LEFT),
+    keys.WRIST_RIGHT_IMAGE: mapping.WRIST_CAMERA.format(arm=_RIGHT),
+}
 
 
 class AbcAdapter(WireCommandAdapter):
