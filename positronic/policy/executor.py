@@ -5,7 +5,7 @@ import contextvars
 import logging
 import time
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -22,13 +22,43 @@ T = TypeVar('T')
 class _UnchargedAnswer(Answer[T]):
     """A function's result, readable as soon as its worker finishes."""
 
-    def __init__(self, call: Future[T]) -> None:
-        self.call = call
+    def __init__(self, pool: ThreadPoolExecutor, function: Callable[[], T], *, charge_time: bool = True) -> None:
+        self._charge_time = charge_time
+        self._submitted_wall_ns = time.monotonic_ns()
+        self._elapsed_ns = 0
+        self._execution_ns = 0
         self.result_read = False
         self.completion_reported = False
+        self.call = pool.submit(self._run, function)
+
+    def _run(self, function: Callable[[], T]) -> T:
+        started_ns = time.monotonic_ns()
+        try:
+            return function()
+        finally:
+            finished_ns = time.monotonic_ns()
+            if self._charge_time:
+                self._elapsed_ns = finished_ns - self._submitted_wall_ns
+                self._execution_ns = finished_ns - started_ns
 
     def done(self) -> bool:
         return self.call.done()
+
+    def _require_duration(self) -> None:
+        if not self.done():
+            raise NotAnswered('The call has not answered on the episode clock')
+        if self.call.cancelled():
+            raise CancelledError()
+
+    @property
+    def elapsed_sec(self) -> float:
+        self._require_duration()
+        return self._elapsed_ns / 1e9
+
+    @property
+    def execution_sec(self) -> float:
+        self._require_duration()
+        return self._execution_ns / 1e9
 
     def result(self) -> T:
         if not self.done():
@@ -51,23 +81,14 @@ class _ChargedAnswer(_UnchargedAnswer[T]):
     def __init__(self, pool: ThreadPoolExecutor, clock: Callable[[], int], function: Callable[[], T]) -> None:
         self._clock = clock
         self._submitted_ns = clock()
-        self._submitted_wall_ns = time.monotonic_ns()
-        self._ready_at_ns: int | None = None
-        super().__init__(pool.submit(self._run, function))
-
-    def _run(self, function: Callable[[], T]) -> T:
-        try:
-            return function()
-        finally:
-            self._ready_at_ns = self._submitted_ns + time.monotonic_ns() - self._submitted_wall_ns
+        super().__init__(pool, function)
 
     def done(self) -> bool:
         if not self.call.done():
             return False
         if self.call.cancelled():
             return True
-        assert self._ready_at_ns is not None, 'a finished function has a visibility timestamp'
-        return self._clock() >= self._ready_at_ns
+        return self._clock() >= self._submitted_ns + self._elapsed_ns
 
     def _delay_sec(self, until_ns: int) -> float:
         if self.call.done():
@@ -139,6 +160,9 @@ class Executor(Runtime):
         """Whether any submitted call still has an unreported completion."""
         return any(not answer.completion_reported for answer in self._answers)
 
+    def has_ready_answers(self) -> bool:
+        return any(not answer.result_read and not answer.call.cancelled() and answer.done() for answer in self._answers)
+
     def take_completed(self) -> tuple[Answer[Any], ...]:
         """Consume each completion once, when its answer becomes visible on the episode clock.
 
@@ -167,7 +191,7 @@ class Executor(Runtime):
         answer = (
             _ChargedAnswer(self._pool, self._clock, work)
             if self._simulated and self._charge_inference_time
-            else _UnchargedAnswer(self._pool.submit(work))
+            else _UnchargedAnswer(self._pool, work, charge_time=not self._simulated)
         )
         self._answers.add(answer)
         return answer
