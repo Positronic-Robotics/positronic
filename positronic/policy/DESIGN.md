@@ -232,6 +232,8 @@ real latency.
 - Submission returns an answer handle. The run can check it without waiting
   when it next has control. Reading a result before it is available on the
   episode clock raises an error.
+- `runtime.has_ready_answers()` checks for completed, unread answers anywhere
+  in the processor stack.
 - If a call raises — for example, on a lost connection or a value that does
   not serialize — reading its result raises the failure. A call that never
   finishes can leave its handle pending indefinitely.
@@ -401,6 +403,14 @@ a step for each observation, or return its `PolicyEnd`.
 class Answer(ABC, Generic[T]):
     def done(self) -> bool: ...
 
+    # Seconds from submission to completion, including queueing.
+    @property
+    def elapsed_sec(self) -> float: ...
+
+    # Seconds from callable start to completion, excluding queueing.
+    @property
+    def execution_sec(self) -> float: ...
+
     # Returns the result, re-raises the failure, or raises NotAnswered before done().
     def result(self) -> T: ...
 
@@ -428,6 +438,8 @@ class Runtime(ABC):
     def submit(
         self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
     ) -> Answer[T]: ...
+
+    def has_ready_answers(self) -> bool: ...
 ```
 
 ### Processors and policies

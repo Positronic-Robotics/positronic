@@ -19,7 +19,7 @@ from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, Policy, PolicyEnd, Step
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -51,7 +51,7 @@ from positronic.policy.codecs.observation import (
     StateObservationCodec,
 )
 from positronic.policy.compatibility import ObservationCodecV1
-from positronic.policy.executor import Executor, _UnchargedAnswer
+from positronic.policy.executor import Executor
 from positronic.policy.keys import END, RTC
 from positronic.policy.processors import (
     ChunkedSchedule,
@@ -148,10 +148,47 @@ def test_temporal_history_carries_the_last_sample_before_each_offset(execution):
         run.close()
 
 
+class _FutureAnswer(Answer):
+    """An externally completed call measured on the test's controlled clock."""
+
+    def __init__(self, future, runtime):
+        self._future = future
+        self._elapsed_sec = 0.0
+        submitted_ns = runtime.time_ns
+
+        def completed(_):
+            self._elapsed_sec = (runtime.time_ns - submitted_ns) / 1e9
+
+        future.add_done_callback(completed)
+
+    def done(self):
+        return self._future.done()
+
+    @property
+    def elapsed_sec(self):
+        if not self.done():
+            raise NotAnswered()
+        return self._elapsed_sec
+
+    @property
+    def execution_sec(self):
+        return self.elapsed_sec
+
+    def result(self):
+        if not self.done():
+            raise NotAnswered()
+        return self._future.result()
+
+    def cancel(self):
+        self._future.cancel()
+
+
 def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, monkeypatch):
     runtime, clock = execution
     requests = []
-    monkeypatch.setattr(runtime, 'submit', lambda function, obs: requests.append(obs) or _UnchargedAnswer(Future()))
+    monkeypatch.setattr(
+        runtime, 'submit', lambda function, obs: requests.append(obs) or _FutureAnswer(Future(), runtime)
+    )
     stacks = []
     stack = np.stack
     monkeypatch.setattr(np, 'stack', lambda arrays: stacks.append(1) or stack(arrays))
@@ -179,7 +216,7 @@ def execution(monkeypatch):
         def submit(function, *args, **kwargs):
             future = Future()
             future.set_result(function(*args, **kwargs))
-            return _UnchargedAnswer(future)
+            return _FutureAnswer(future, runtime)
 
         monkeypatch.setattr(runtime, 'submit', submit)
         try:
@@ -192,7 +229,7 @@ def test_ready_answer_emits_without_an_initial_yield(execution, monkeypatch):
     runtime, _ = execution
     future = Future()
     future.set_result([{MOTOR: 1}])
-    monkeypatch.setattr(runtime, 'submit', lambda *args: _UnchargedAnswer(future))
+    monkeypatch.setattr(runtime, 'submit', lambda *args: _FutureAnswer(future, runtime))
     run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [])
     assert run.send({}) == Step({MOTOR: 1}, 100_000_000)
     run.close()
@@ -201,7 +238,7 @@ def test_ready_answer_emits_without_an_initial_yield(execution, monkeypatch):
 def test_pending_inference_is_not_resubmitted_on_each_tick(execution, monkeypatch):
     runtime, clock = execution
     future = Future()
-    submit = Mock(return_value=_UnchargedAnswer(future))
+    submit = Mock(return_value=_FutureAnswer(future, runtime))
     monkeypatch.setattr(runtime, 'submit', submit)
     run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [])
     try:
@@ -369,7 +406,7 @@ class SlowModel:
         self.calls.append((self._runtime.time_ns, [c.get(MOTOR) for c in prefix]))
         self.prefixes.append(list(prefix))
         self._pending = Future()
-        return _UnchargedAnswer(self._pending)
+        return _FutureAnswer(self._pending, self._runtime)
 
     def answer(self, name, length=10):
         self.answer_with([{MOTOR: f'{name}{i}'} for i in range(length)])
@@ -522,7 +559,7 @@ def test_errors_replace_a_prefetched_chunk_before_its_playback_starts(execution)
 def test_a_failed_request_before_the_error_still_raises(execution, monkeypatch):
     runtime, _ = execution
     future = Future()
-    monkeypatch.setattr(runtime, 'submit', Mock(return_value=_UnchargedAnswer(future)))
+    monkeypatch.setattr(runtime, 'submit', Mock(return_value=_FutureAnswer(future, runtime)))
     run = runtime.start(ChunkedSchedule(fps=10), Mock())
     run.send({})
     future.set_exception(RuntimeError('inference failed'))
@@ -591,6 +628,7 @@ def test_a_fast_answer_is_asked_for_its_delay_before_the_chunk_ends(execution, m
     rig = Rig(runtime, clock, ChunkedSchedule(fps=10, inference_lead=DelayEstimate.mean(last=1, max_sec=0.1)))
     try:
         rig.tick(0)
+        clock.advance_to_ns(50_000_000)
         model.answer('a', length=3)
         assert rig.tick(50_000_000) == Step({MOTOR: 'a0'}, 150_000_000)
         assert rig.tick(250_000_000) == Step({MOTOR: 'a2'}, 300_000_000)
@@ -637,12 +675,13 @@ def test_an_early_answer_keeps_a_late_final_waypoint_and_observes_the_previous_o
         if pending is None:
             pending = Future()
             pending.set_result([{MOTOR: f'b{i}'} for i in range(3)])
-        return _UnchargedAnswer(pending)
+        return _FutureAnswer(pending, runtime)
 
     monkeypatch.setattr(runtime, 'submit', submit)
     rig = Rig(runtime, clock, ChunkedSchedule(fps=10, inference_lead=DelayEstimate.mean(last=1, max_sec=0.1)))
     try:
         rig.tick(0)
+        clock.advance_to_ns(100_000_000)
         first.set_result([{MOTOR: f'a{i}'} for i in range(3)])
         for now_ns in (200_000_000, 300_000_000, 450_000_000, 500_000_000, 600_000_000, 700_000_000):
             rig.tick(now_ns)
@@ -1340,6 +1379,17 @@ class _EndingModel:
 class _DueAnswer(Answer):
     def __init__(self, runtime, value, due_ns):
         self._runtime, self._value, self._due_ns = runtime, value, due_ns
+        self._elapsed_sec = (due_ns - runtime.time_ns) / 1e9
+
+    @property
+    def elapsed_sec(self):
+        if not self.done():
+            raise NotAnswered()
+        return self._elapsed_sec
+
+    @property
+    def execution_sec(self):
+        return self.elapsed_sec
 
     def done(self):
         return self._runtime.time_ns >= self._due_ns
@@ -1520,8 +1570,8 @@ def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(executi
     run = runtime.start(schedule, Mock())
     try:
         run.send({})
-        model.answer('old')
         clock.advance_to_ns(100_000_000)
+        model.answer('old')
         run.send({})
         clock.advance_to_ns(600_000_000)
         run.send({})
@@ -1535,6 +1585,38 @@ def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(executi
         assert model.requests[0][RTC.ESTIMATED_LATENCY_SEC] == 0.0
         assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.2
         assert [action[MOTOR] for action in second[RTC.PREFIX_ACTIONS]] == [f'old{i}' for i in range(5, 10)]
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('rtc', [False, True])
+def test_late_answer_reads_do_not_inflate_duration_estimates(execution, monkeypatch, rtc):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    estimate = DelayEstimate.mean(last=1, max_sec=1.0)
+    schedule = (
+        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=estimate)
+        if rtc
+        else ChunkedSchedule(fps=10, inference_lead=estimate)
+    )
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({})
+        clock.advance_to_ns(100_000_000)
+        model.answer('old')
+        clock.advance_to_ns(300_000_000)
+        run.send({})
+        next_call_ns = 500_000_000 if rtc else 1_200_000_000
+        clock.advance_to_ns(next_call_ns - 1)
+        run.send({})
+        assert len(model.calls) == 1
+        clock.advance_to_ns(next_call_ns)
+        run.send({})
+        assert [time_ns for time_ns, _ in model.calls] == [0, next_call_ns]
+        if rtc:
+            assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
+            assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.1
     finally:
         run.close()
 
@@ -1572,7 +1654,7 @@ def test_rtc_keeps_camera_history_lazy_until_inference(execution, monkeypatch):
 
     def submit(function, observation):
         submitted.append(observation)
-        return _UnchargedAnswer(Future())
+        return _FutureAnswer(Future(), runtime)
 
     monkeypatch.setattr(runtime, 'submit', submit)
     stack = Mock(wraps=np.stack)

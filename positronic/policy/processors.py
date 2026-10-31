@@ -128,7 +128,7 @@ class DurationEstimateRun(ABC):
 
     @abstractmethod
     def update(self, delay_sec: float) -> float:
-        """Record a delay from submission to reading the answer, and return the updated estimate."""
+        """Record a completed call's elapsed duration and return the updated estimate."""
 
 
 class DurationEstimate(ABC):
@@ -377,7 +377,6 @@ class ChunkedSchedule(Policy):
         trajectory: deque[ChunkedSchedule._Waypoint] = deque()
         end_ns = 0
         call_ns = 0
-        called_at_ns = 0
         lead = self._inference_lead.run()
         stats = self._Stats(runtime) if self._record_stats else None
 
@@ -394,10 +393,11 @@ class ChunkedSchedule(Policy):
                     planned, recovering = 0, True
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
-                    answer, called_at_ns = runtime.submit(infer, obs), now_ns
+                    answer = runtime.submit(infer, obs)
                 if answer is not None and answer.done():
-                    chunk, answer = answer.result(), None
-                    lead_sec = lead.update((now_ns - called_at_ns) / 1e9)
+                    chunk = answer.result()
+                    lead_sec = lead.update(answer.elapsed_sec)
+                    answer = None
                     start_ns = max(now_ns, end_ns)
                     waypoints, end_ns = self._plan_chunk(chunk, start_ns)
                     call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
@@ -407,7 +407,7 @@ class ChunkedSchedule(Policy):
                     # A call due at the start of the new chunk goes out in this round, not one round later. A round
                     # that has already called once sends no second call with the same observation.
                     if not submitted and now_ns >= call_ns:
-                        answer, called_at_ns = runtime.submit(infer, obs), now_ns
+                        answer = runtime.submit(infer, obs)
 
                 commands: dict[str, Any] = {}
                 due_ns = None
@@ -561,11 +561,12 @@ class RTCSchedule(Policy):
             while True:
                 now_ns = runtime.time_ns
                 if answer is not None and answer.done():
-                    measured_sec = (now_ns - called_at_ns) / 1e9
+                    actions = answer.result()
+                    measured_sec = answer.elapsed_sec
                     expected_sec = duration.update(measured_sec)
                     # The first chunk counts from its answer: the robot did not move while it waited.
                     start_ns = now_ns if chunk is None else called_at_ns
-                    chunk = _TimedChunk(answer.result(), start_ns, self._fps, now_ns)
+                    chunk = _TimedChunk(actions, start_ns, self._fps, now_ns)
                     answer = None
                     next_call_ns = start_ns + self._call_after_ns
 

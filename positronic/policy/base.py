@@ -30,6 +30,16 @@ class Answer(ABC, Generic[T]):
     @abstractmethod
     def done(self) -> bool: ...
 
+    @property
+    @abstractmethod
+    def elapsed_sec(self) -> float:
+        """Submission to completion, including queueing; zero in uncharged simulation."""
+
+    @property
+    @abstractmethod
+    def execution_sec(self) -> float:
+        """Callable start to completion, excluding runtime queueing; zero in uncharged simulation."""
+
     @abstractmethod
     def result(self) -> T:
         """What the function returned. Raises what the function raised, or ``NotAnswered`` before it answers."""
@@ -129,6 +139,10 @@ class Runtime(ABC):
 
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
+
+    @abstractmethod
+    def has_ready_answers(self) -> bool:
+        """Whether any non-cancelled call is ready and its result has not been read."""
 
 
 class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
