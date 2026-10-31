@@ -57,8 +57,9 @@ class Codec:
     ) -> cabc.Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         """Encode inputs and decode outputs around a callable or a primed processor run.
 
-        Steps retain their wake-up time; only nonempty commands are decoded. Any error from the decode becomes a
-        ``PolicyCommandError``. The caller owns the wrapped dependency, including closing it when it is a generator.
+        Steps retain their wake-up time and auxiliary outputs; commands are decoded even when empty.
+        A decode error becomes a ``PolicyCommandError``. The caller owns the wrapped dependency,
+        including closing it when it is a generator.
         """
         if isinstance(function, cabc.Generator):
             run = self._wrap_run(function)
@@ -73,11 +74,11 @@ class Codec:
         def call(obs: Obs) -> Any:
             encoded = encode(dict(obs))
             result = function(encoded)
-            if result is None or (isinstance(result, Step) and not result.commands):
+            if result is None:
                 return result
             try:
                 if isinstance(result, Step):
-                    return Step(self.decode(dict(result.commands)), result.resume_at_ns)
+                    return Step(self.decode(dict(result.commands)), result.resume_at_ns, outputs=result.outputs)
                 return self.decode(result)
             except PolicyCommandError:
                 raise

@@ -115,7 +115,7 @@ class EndOnField(Policy):
             if step is not None and END in step.commands:
                 commands = dict(step.commands)
                 end = PolicyEnd(commands.pop(END))
-                yield Step(commands, runtime.time_ns)
+                yield Step(commands, runtime.time_ns, outputs=step.outputs)
                 return end
             obs = yield step
 

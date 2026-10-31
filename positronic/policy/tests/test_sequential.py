@@ -147,6 +147,7 @@ def test_sequential_rejects_two_frame_conversions(translation):
 
 def test_mixed_sequence_preserves_order_step_timing_and_empty_commands(tmp_path):
     events = []
+    outputs = {'sample': object()}
     caller_thread = threading.get_ident()
 
     class TraceCodec(Codec):
@@ -161,7 +162,7 @@ def test_mixed_sequence_preserves_order_step_timing_and_empty_commands(tmp_path)
 
         def _decode_single(self, data):
             events.append(f'{self.name}.decode')
-            return {'value': data['value'] + self.factor}
+            return {name: value + self.factor for name, value in data.items()}
 
         @property
         def meta(self):
@@ -173,7 +174,7 @@ def test_mixed_sequence_preserves_order_step_timing_and_empty_commands(tmp_path)
             try:
                 while True:
                     events.append('processor')
-                    obs = yield Step(infer(obs) if not obs.get('skip') else {}, 123)
+                    obs = yield Step(infer(obs) if not obs.get('skip') else {}, 123, outputs=outputs)
             finally:
                 events.append('processor.close')
 
@@ -187,12 +188,12 @@ def test_mixed_sequence_preserves_order_step_timing_and_empty_commands(tmp_path)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'mixed-stack'):
         run = runtime.start(stack, infer)
         try:
-            assert run.send({'value': 1}) == Step({'value': 11}, 123)
+            assert run.send({'value': 1}) == Step({'value': 11}, 123, outputs=outputs)
             assert events == ['outer.encode', 'processor', 'inner.encode', 'infer', 'inner.decode', 'outer.decode']
             with telemetry.span('between_calls'):
                 events.clear()
-            assert run.send({'value': 1, 'skip': True}) == Step({}, 123)
-            assert events == ['outer.encode', 'processor']
+            assert run.send({'value': 1, 'skip': True}) == Step({}, 123, outputs=outputs)
+            assert events == ['outer.encode', 'processor', 'outer.decode']
         finally:
             runtime.close()
             run.close()
