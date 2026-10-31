@@ -8,11 +8,12 @@ the robot model's in ``drivers.roboarm.keys``, and so on. A key that a labeler a
 dependency-free ``eval_vocabulary``, and a keys module imports from that package only.
 """
 
+from eval_vocabulary.episode import EE_POSE_SUFFIX as EE_POSE_SUFFIX
+from eval_vocabulary.episode import ROBOT_STATE as ROBOT_STATE
 from eval_vocabulary.episode import TASK as TASK
 
 JOINTS_SUFFIX = '.q'
 JOINT_VEL_SUFFIX = '.dq'
-EE_POSE_SUFFIX = '.ee_pose'
 EE_WRENCH_SUFFIX = '.ee_wrench'
 POSE_SUFFIX = '.pose'
 STATUS_SUFFIX = '.status'
@@ -64,9 +65,8 @@ LEFT_ARM, RIGHT_ARM = 'left', 'right'
 BIMANUAL_ARMS = (LEFT_ARM, RIGHT_ARM)
 
 
-# The arm's state channel, and the signals a recorded state unfolds into. As on the command side, the
-# suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
-ROBOT_STATE = 'robot_state'
+# The signals a recorded state unfolds into, on the ``ROBOT_STATE`` channel that ``eval_vocabulary`` names. As on the
+# command side, the suffixes are ``Serializers.robot_state``'s, so the names derive from the channel.
 JOINTS = f'{ROBOT_STATE}{JOINTS_SUFFIX}'
 JOINT_VEL = f'{ROBOT_STATE}{JOINT_VEL_SUFFIX}'
 EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'
