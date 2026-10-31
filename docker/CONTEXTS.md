@@ -24,6 +24,8 @@ build on `positro/openpi-base` and `positro/gr00t-base`, `molmoact2-droid` on a 
 image with uv, and `flux3-action` and `cosmos3-nano` build the vendor stack themselves. CI
 publishes each one; `make build-serve-<name>` builds it. See
 [Submit a policy image](../docs/submit-a-policy-image.md).
+`Dockerfile.serve-molmoact2-starter` adds `positronic/vendors/molmoact2/starter.py` to a pinned
+`positro/molmoact2-droid`, for a participant to edit and build. CI does not publish it.
 
 `positro/openpi-base` is the openpi fork at the commit `OPENPI_REF` in the Makefile names. CI builds it
 when Docker Hub has no image of that commit (`docker-openpi-base.yaml`).

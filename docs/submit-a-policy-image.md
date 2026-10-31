@@ -35,6 +35,11 @@ image: run the checks in [Test the image before you submit](#test-the-image-befo
 Read the digest of a published image with `docker/read_image_digest.sh positro/<image>:main`, and
 pin it.
 
+To change the behaviour of MolmoAct2 by hand, with no model of your own, start from
+[`docker/Dockerfile.serve-molmoact2-starter`](../docker/Dockerfile.serve-molmoact2-starter): it adds one Python
+file to `positro/molmoact2-droid`
+([Edit the starter policy](nebius-competition.md#edit-the-starter-policy)).
+
 The header of each recipe gives its build command. The comments in each recipe say where a
 checkpoint of your own goes and how the server is pointed at it. Loading GR00T needs about 15 GB of CPU RAM
 before anything reaches the GPU.
