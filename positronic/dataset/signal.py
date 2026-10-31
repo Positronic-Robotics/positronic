@@ -7,12 +7,12 @@ from functools import cached_property
 from typing import Any, Generic, Protocol, TypeAlias, TypeVar, final, overload, runtime_checkable
 
 import numpy as np
+from eval_vocabulary.episode import TIMELINE_METADATA_KEY as TIMELINE_METADATA_KEY
 
 from positronic.utils.lazy import LazySequence
 
 from .time import Time, TimeBounds, TimeGrid, validate_queries, validate_timelines
 
-TIMELINE_METADATA_KEY = b'positronic.timeline'
 TIMELINES_KEY = 'timelines'
 
 

@@ -22,6 +22,7 @@ from eval_vocabulary.episode import (
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
     SIGNAL_FILE_SUFFIX,
@@ -33,11 +34,13 @@ from eval_vocabulary.episode import (
     SUCCESS,
     TASK,
     TERMINATED,
+    TIMELINE_METADATA_KEY,
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
 )
-from eval_vocabulary.timeline import EMITTED_WORLD
+from eval_vocabulary.progress import MARK_CHANNELS
+from eval_vocabulary.timeline import EMITTED_WORLD, RECORDED_TIME, recording_timeline
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -418,27 +421,39 @@ def _world_time_column(signal: Path) -> str | None:
     return next((name for name in (_WORLD_TIME_COLUMN, LEGACY_TIME_COLUMN) if name in names), None)
 
 
+def _signal_times(
+    episode: Path, time_column: Callable[[Path], str | None]
+) -> list[tuple[Path, pa.ChunkedArray]] | None:
+    """Each signal of `episode` with a sample in the column that `time_column` picks, with the times in that column.
+
+    None when a signal file does not parse.
+    """
+    read = []
+    for signal in sorted(episode.glob(f'*{SIGNAL_FILE_SUFFIX}')):
+        try:
+            column = time_column(signal)
+            if column is None:
+                continue
+            times = pq.read_table(signal, columns=[column]).column(column)
+        except pa.ArrowInvalid:
+            # One damaged upload leaves the other episodes read, so this is logged, not raised.
+            log.error('%s does not parse; this episode is not read', signal)
+            return None
+        if len(times):
+            read.append((signal, times))
+    return read
+
+
 def recorded_span(episode: Path) -> tuple[int, int] | None:
     """The world times of the first and the last sample of the episode's signals, in nanoseconds.
 
     The last can fall up to one control step after the end of the trial.
     None when no signal file holds a world time, or one does not parse.
     """
-    firsts, lasts = [], []
-    for signal in sorted(episode.glob(f'*{SIGNAL_FILE_SUFFIX}')):
-        try:
-            column = _world_time_column(signal)
-            if column is None:
-                continue
-            times = pq.read_table(signal, columns=[column]).column(column)
-        except pa.ArrowInvalid:
-            # One damaged upload leaves the other episodes labelled, so this is logged, not raised.
-            log.error('%s does not parse; this episode has no label', signal)
-            return None
-        if len(times):
-            firsts.append(times[0].as_py())
-            lasts.append(times[-1].as_py())
-    if not lasts:
+    read = _signal_times(episode, _world_time_column)
+    if read is None:
+        return None
+    if not read:
         log.error(
             '%s holds no sample in a %r or a %r column; this episode has no label',
             episode,
@@ -446,7 +461,72 @@ def recorded_span(episode: Path) -> tuple[int, int] | None:
             LEGACY_TIME_COLUMN,
         )
         return None
-    return min(firsts), max(lasts)
+    return min(times[0].as_py() for _, times in read), max(times[-1].as_py() for _, times in read)
+
+
+# The one time column of a file in the format before named timelines: a signal's, then a video frames index's.
+_LEGACY_TIME_COLUMNS = (LEGACY_TIME_COLUMN, LEGACY_FRAMES_TIME_COLUMN)
+
+
+def _recording_time_column(signal: Path) -> str | None:
+    """The column of `signal` on the timeline that `recording_timeline` picks from those it carries, or None.
+
+    A file in the format before named timelines carries its one time column on the timeline that its metadata names,
+    else on `RECORDED_TIME`. ArrowInvalid when the file does not parse.
+    """
+    schema = pq.read_schema(signal)
+    names = schema.names
+    timelines = {
+        name.removeprefix(TIMESTAMP_COLUMN_PREFIX): name for name in names if name.startswith(TIMESTAMP_COLUMN_PREFIX)
+    }
+    if not timelines:
+        legacy = next((name for name in _LEGACY_TIME_COLUMNS if name in names), None)
+        declared = (schema.metadata or {}).get(TIMELINE_METADATA_KEY, RECORDED_TIME.encode()).decode()
+        timelines = {declared: legacy} if legacy is not None else {}
+    return timelines.get(recording_timeline(timelines))
+
+
+# The signals of the marks that a person makes. A mark is written when it is made, so it is never a held reading.
+_MARK_SIGNAL_PREFIXES = tuple(f'{channel}.' for channel in MARK_CHANNELS)
+# A first sample that the next sample of its signal follows by more than this is a held reading. A held reading
+# arrived before the try, and a recording can carry it at its arrival time.
+_HELD_READING_GAP_NS = 1_000_000_000
+
+
+def _time_that_starts_the_try(signal: Path, times: pa.ChunkedArray) -> int | None:
+    """The world time of the first sample of `signal`, or of its second where the first is a held reading.
+
+    None for a signal other than a mark with one sample.
+    """
+    first = times[0].as_py()
+    if signal.stem.startswith(_MARK_SIGNAL_PREFIXES):
+        return first
+    if len(times) < 2:
+        return None
+    second = times[1].as_py()
+    return first if second - first <= _HELD_READING_GAP_NS else second
+
+
+class TryWindow(NamedTuple):
+    """The world times of the first and the last sample of a try, in nanoseconds."""
+
+    start_ns: int
+    end_ns: int
+
+
+def recorded_try_window(episode: Path) -> TryWindow | None:
+    """The world times of the first and the last sample of the try that `episode` records.
+
+    None when no signal places the start of the try, or a signal file does not parse.
+    """
+    read = _signal_times(episode, _recording_time_column)
+    if read is None:
+        return None
+    starts = [start for signal, times in read if (start := _time_that_starts_the_try(signal, times)) is not None]
+    if not starts:
+        log.error('%s holds no signal that places the start of its try; this episode has no try window', episode)
+        return None
+    return TryWindow(min(starts), max(times[-1].as_py() for _, times in read))
 
 
 # The end event of each outcome that one states. `out_of_time` has none.

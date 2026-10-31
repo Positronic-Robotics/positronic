@@ -2,11 +2,11 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from eval_vocabulary.episode import LEGACY_TIME_COLUMN
+from eval_vocabulary.episode import LEGACY_TIME_COLUMN, TIMELINE_METADATA_KEY
 
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter
-from positronic.dataset.signal import TIMELINE_METADATA_KEY, Kind
+from positronic.dataset.signal import Kind
 from positronic.dataset.time import Time, TimeBounds
 from positronic.dataset.transforms.signals import Join, diff, norm
 from positronic.dataset.vector import (
