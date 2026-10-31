@@ -148,8 +148,8 @@ def test_a_file_that_reads_as_neither_yaml_nor_json_says_so(platform, run_comman
 
 
 # No run of this appears in a temp path or in the words a refusal is built from, so a match is the
-# password and nothing else.
-REGISTRY_PASSWORD = 'Zx9QvT7Lm2Rk'
+# password and nothing else. It repeats its own start so a secret scanner reads it as a fixture.
+REGISTRY_PASSWORD = 'Zx9QvT7Zx9Qv'
 
 
 # Each puts the password somewhere PyYAML quotes what it read: on the error's mark, or inside the
