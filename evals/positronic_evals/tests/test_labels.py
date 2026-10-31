@@ -25,6 +25,7 @@ from eval_vocabulary.episode import (
     EE_POSE_SUFFIX,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    GT_STATE_GRABBED,
     GT_STATE_GRIPPER_CONTACT,
     GT_STATE_OBJECTS,
     GT_STATE_POSE,
@@ -820,9 +821,9 @@ def test_a_robolab_label_marks_each_stage_of_each_subtask_at_its_first_frame(tmp
             'banana': [False, True, False, False, False, False, True, False],
         },
         progress={
-            '0.rubiks_cube.0.object_grabbed': [False, False, False, True, True],
+            f'0.rubiks_cube.0.{GT_STATE_GRABBED}': [False, False, False, True, True],
             '0.rubiks_cube.1.object_in_container': [False, False, False, False, True],
-            '1.banana.0.object_grabbed': [False] * 4 + [False, False, False, True],
+            f'1.banana.0.{GT_STATE_GRABBED}': [False] * 4 + [False, False, False, True],
             '1.banana.1.object_in_container': [False] * 8,
         },
     )
@@ -844,9 +845,9 @@ def test_a_robolab_label_marks_a_chain_at_its_target_before_its_subtask_ends_and
         contacts={'banana': [False, True, True, True, True], 'banana_01': [False] * 5},
         progress={
             # One banana's chain ends at 1.0 s, and the other's ends the subtask at 1.5 s.
-            '0.banana.0.object_grabbed': [False, True, True, True],
+            f'0.banana.0.{GT_STATE_GRABBED}': [False, True, True, True],
             '0.banana.1.object_in_container': [False, False, True, True],
-            '0.banana_01.0.object_grabbed': [False, False, False, True],
+            f'0.banana_01.0.{GT_STATE_GRABBED}': [False, False, False, True],
             '0.banana_01.1.object_in_container': [False, False, False, True],
         },
     )
@@ -889,7 +890,10 @@ def test_a_robolab_mark_on_the_frame_that_starts_a_subtask_falls_in_that_subtask
         ee=[_FAR, _BANANA_AT, _FAR],
         poses={'rubiks_cube': [_pose(_CUBE_AT)] * 3, 'banana': [_pose(_BANANA_AT)] * 3},
         contacts={},
-        progress={'0.rubiks_cube.0.object_grabbed': [False], '1.banana.0.object_grabbed': [False, False, False]},
+        progress={
+            f'0.rubiks_cube.0.{GT_STATE_GRABBED}': [False],
+            f'1.banana.0.{GT_STATE_GRABBED}': [False, False, False],
+        },
         subtask_ns=subtask_ns,
         scene_ns=scene_ns,
     )
@@ -907,14 +911,14 @@ def test_a_robolab_group_can_hold_a_dot_and_a_misnamed_progress_signal_is_logged
         poses={},
         contacts={},
         progress={
-            '0.banana.v2.0.object_grabbed': [False, True],
+            f'0.banana.v2.0.{GT_STATE_GRABBED}': [False, True],
             '0.banana.v2.1.object_in_container': [False, False],
-            'x.banana.0.object_grabbed': [True, True],
+            f'x.banana.0.{GT_STATE_GRABBED}': [True, True],
         },
     )
     with caplog.at_level(logging.ERROR, logger=labels.__name__):
         assert _stage_marks(robolab_label(episode)) == [(0, {Stage.control: 0.5})]
-    assert 'x.banana.0.object_grabbed' in caplog.records[0].getMessage()
+    assert f'x.banana.0.{GT_STATE_GRABBED}' in caplog.records[0].getMessage()
 
 
 def test_a_robolab_scene_signal_with_no_values_is_logged_and_gives_no_stage(
@@ -922,9 +926,16 @@ def test_a_robolab_scene_signal_with_no_values_is_logged_and_gives_no_stage(
 ):
     (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BANANA, SUCCESS: False, TERMINATED: True})
     _write_pick_episode(
-        episode, completed=[0, 0], ee=[_FAR, _FAR], poses={}, contacts={}, progress={'0.banana.0.object_grabbed': []}
+        episode,
+        completed=[0, 0],
+        ee=[_FAR, _FAR],
+        poses={},
+        contacts={},
+        progress={f'0.banana.0.{GT_STATE_GRABBED}': []},
     )
-    _write_timed_signal(episode, f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.0.banana.0.object_grabbed', [0, 500_000_000])
+    _write_timed_signal(
+        episode, f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.0.banana.0.{GT_STATE_GRABBED}', [0, 500_000_000]
+    )
     with caplog.at_level(logging.ERROR, logger=labels.__name__):
         assert _stage_marks(robolab_label(episode)) == [(0, {})]
     assert VALUE_COLUMN in caplog.records[0].getMessage()
