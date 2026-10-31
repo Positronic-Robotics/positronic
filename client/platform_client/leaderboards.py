@@ -297,13 +297,15 @@ class LeaderboardListResponse(_Wire):
         return self
 
     @model_validator(mode='after')
-    def _each_leaderboard_has_a_place_in_the_tag_after_the_one_before(self) -> Self:
-        places: list[int] = []
+    def _each_leaderboard_has_a_place_in_the_tag(self) -> Self:
         for summary in self.leaderboards:
-            place = next((p.position for p in summary.tags if p.tag == self.tag), None)
-            if place is None:
+            if all(place.tag != self.tag for place in summary.tags):
                 raise ValueError(f'leaderboard {summary.leaderboard!r} has no place in tag {self.tag!r}')
-            places.append(place)
+        return self
+
+    @model_validator(mode='after')
+    def _the_leaderboards_follow_their_places_in_the_tag(self) -> Self:
+        places = [place.position for summary in self.leaderboards for place in summary.tags if place.tag == self.tag]
         if any(later <= earlier for earlier, later in zip(places, places[1:], strict=False)):
             raise ValueError(f'the leaderboards of tag {self.tag!r} are not in the order of their places: {places}')
         return self
@@ -447,30 +449,53 @@ class LeaderboardResponse(LeaderboardSummary):
     highlights: list[Highlight] = Field(default_factory=list)
 
     @model_validator(mode='after')
-    def _no_two_rows_or_tasks_share_a_key(self) -> Self:
+    def _no_two_rows_share_a_key(self) -> Self:
         _refuse_repeats((row.key for row in self.rows), 'rows')
+        return self
+
+    @model_validator(mode='after')
+    def _no_two_tasks_share_an_id(self) -> Self:
         _refuse_repeats((task.id for task in self.tasks), 'tasks')
         return self
 
     @model_validator(mode='after')
-    def _a_row_names_only_the_metrics_and_outcome_groups_of_the_descriptor(self) -> Self:
+    def _a_row_names_only_metrics_of_the_descriptor(self) -> Self:
         metrics = {metric.key for metric in self.descriptor.metrics}
-        outcomes = {outcome.key for outcome in self.descriptor.outcomes}
         for row in self.rows:
-            if not set(row.metrics) <= metrics or not set(row.outcome_shares) <= outcomes:
-                raise ValueError(f'row {row.key!r} names a metric or an outcome group that the descriptor has not')
+            if not set(row.metrics) <= metrics:
+                raise ValueError(f'row {row.key!r} names a metric that the descriptor has not: {sorted(row.metrics)}')
         return self
 
     @model_validator(mode='after')
-    def _the_pairs_and_highlights_name_rows_and_tasks_of_the_leaderboard(self) -> Self:
+    def _a_row_names_only_outcome_groups_of_the_descriptor(self) -> Self:
+        outcomes = {outcome.key for outcome in self.descriptor.outcomes}
+        for row in self.rows:
+            if not set(row.outcome_shares) <= outcomes:
+                raise ValueError(f'row {row.key!r} names an outcome group that the descriptor has not')
+        return self
+
+    @model_validator(mode='after')
+    def _the_pairs_name_rows_of_the_leaderboard(self) -> Self:
         rows = {row.key for row in self.rows}
-        tasks = {task.id for task in self.tasks}
         for pair in self.pairs:
             if not set(pair.rows) <= rows:
                 raise ValueError(f'a pair names a row that the leaderboard has not: {pair.rows}')
+        return self
+
+    @model_validator(mode='after')
+    def _each_highlight_names_a_row_of_the_leaderboard(self) -> Self:
+        rows = {row.key for row in self.rows}
         for highlight in self.highlights:
-            if highlight.row not in rows or highlight.task not in tasks:
-                raise ValueError(f'highlight {highlight.episode!r} names a row or a task that the leaderboard has not')
+            if highlight.row not in rows:
+                raise ValueError(f'highlight {highlight.episode!r} names a row that the leaderboard has not')
+        return self
+
+    @model_validator(mode='after')
+    def _each_highlight_names_a_task_of_the_leaderboard(self) -> Self:
+        tasks = {task.id for task in self.tasks}
+        for highlight in self.highlights:
+            if highlight.task not in tasks:
+                raise ValueError(f'highlight {highlight.episode!r} names a task that the leaderboard has not')
         return self
 
     @model_validator(mode='after')
@@ -507,12 +532,20 @@ class EstimateSeries(_Wire):
     margin: list[NonNegativeFloat | None]
 
     @model_validator(mode='after')
-    def _each_limit_has_a_whole_estimate_or_none(self) -> Self:
+    def _the_parts_of_the_series_have_one_length(self) -> Self:
         _refuse_other_lengths({'low': self.low, 'high': self.high, 'margin': self.margin}, len(self.value), 'a series')
+        return self
+
+    @model_validator(mode='after')
+    def _each_limit_has_a_whole_estimate_or_none(self) -> Self:
         for at in zip(self.value, self.low, self.high, self.margin, strict=True):
             if None in at and at != (None, None, None, None):
                 raise ValueError(f'a limit with part of an estimate: {at}')
-            _, low, high, _ = at
+        return self
+
+    @model_validator(mode='after')
+    def _each_range_is_in_order(self) -> Self:
+        for low, high in zip(self.low, self.high, strict=True):
             if low is not None and high is not None and low > high:
                 raise ValueError(f'a range from {low} down to {high}')
         return self
@@ -637,7 +670,7 @@ class ProgressBand(_Wire):
     episodes: list[NonNegativeInt]
 
     @model_validator(mode='after')
-    def _one_band_key(self) -> Self:
+    def _the_band_names_exactly_one_key(self) -> Self:
         if (self.outcome is None) == (self.steps_done is None):
             raise ValueError('a band names exactly one of an outcome group and a count of steps')
         return self
@@ -665,16 +698,24 @@ class ProgressPanel(_Wire):
         return len(self.mean_credit)
 
     @model_validator(mode='after')
-    def _the_bands_name_one_kind_of_key_each_once(self) -> Self:
+    def _the_bands_name_one_kind_of_key(self) -> Self:
         if len({band.outcome is None for band in self.bands}) > 1:
             raise ValueError('a panel with bands of outcome groups and bands of step counts')
+        return self
+
+    @model_validator(mode='after')
+    def _no_two_bands_share_a_key(self) -> Self:
         _refuse_repeats(((band.outcome, band.steps_done) for band in self.bands), 'bands')
         return self
 
     @model_validator(mode='after')
-    def _each_series_has_a_value_at_each_second(self) -> Self:
+    def _one_more_edge_than_bands(self) -> Self:
         if len(self.edges) != len(self.bands) + 1:
             raise ValueError(f'{len(self.edges)} edges around {len(self.bands)} bands')
+        return self
+
+    @model_validator(mode='after')
+    def _each_series_has_a_value_at_each_second(self) -> Self:
         vectors: dict[str, Sequence[object]] = {f'band {i}': band.episodes for i, band in enumerate(self.bands)}
         vectors.update({f'edge {i}': edge for i, edge in enumerate(self.edges)})
         if self.mean_steps_done is not None:
@@ -686,19 +727,28 @@ class ProgressPanel(_Wire):
     def _the_bands_hold_each_episode_once_at_each_second(self) -> Self:
         for second in range(self.seconds):
             held = sum(band.episodes[second] for band in self.bands)
-            stack = [edge[second] for edge in self.edges]
             if held != self.episodes:
                 raise ValueError(f'at second {second}, the bands hold {held} of {self.episodes} episodes')
-            if abs(stack[-1] - self.episodes) > _FLOAT_SLACK:
-                raise ValueError(f'at second {second}, the top edge is {stack[-1]} of {self.episodes} episodes')
         return self
 
     @model_validator(mode='after')
-    def _the_edges_stack_up_from_zero(self) -> Self:
+    def _the_top_edge_counts_every_episode(self) -> Self:
+        for second, top in enumerate(self.edges[-1]):
+            if abs(top - self.episodes) > _FLOAT_SLACK:
+                raise ValueError(f'at second {second}, the top edge is {top} of {self.episodes} episodes')
+        return self
+
+    @model_validator(mode='after')
+    def _the_stack_starts_at_zero(self) -> Self:
+        for second, bottom in enumerate(self.edges[0]):
+            if abs(bottom) > _FLOAT_SLACK:
+                raise ValueError(f'at second {second}, a stack that starts at {bottom}')
+        return self
+
+    @model_validator(mode='after')
+    def _each_edge_is_at_or_above_the_edge_under_it(self) -> Self:
         for second in range(self.seconds):
             stack = [edge[second] for edge in self.edges]
-            if abs(stack[0]) > _FLOAT_SLACK:
-                raise ValueError(f'at second {second}, a stack that starts at {stack[0]}')
             if any(upper < lower - _FLOAT_SLACK for lower, upper in zip(stack, stack[1:], strict=False)):
                 raise ValueError(f'at second {second}, an edge below the edge under it: {stack}')
         return self
@@ -751,11 +801,15 @@ class CardLine(_Wire):
     facts: list[CardFact] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _one_fact_about_the_family_or_one_for_each_named_checkpoint(self) -> Self:
-        checkpoints = [fact.checkpoint for fact in self.facts]
-        if None in checkpoints and len(checkpoints) > 1:
+    def _a_fact_about_the_family_stands_alone(self) -> Self:
+        if len(self.facts) > 1 and any(fact.checkpoint is None for fact in self.facts):
             raise ValueError(f'line {self.field!r} holds a fact about the family beside other facts')
-        _refuse_repeats(checkpoints, f'facts of line {self.field!r}')
+        return self
+
+    @model_validator(mode='after')
+    def _each_checkpoint_has_one_fact(self) -> Self:
+        named = (fact.checkpoint for fact in self.facts if fact.checkpoint is not None)
+        _refuse_repeats(named, f'facts of line {self.field!r}')
         return self
 
 
@@ -785,13 +839,13 @@ class ModelCard(_Wire):
     run_guide: CardFact | None = None
 
     @model_validator(mode='after')
-    def _one_way_to_run_the_model(self) -> Self:
+    def _at_most_one_way_to_run_the_model(self) -> Self:
         if self.run_commands is not None and self.run_guide is not None:
             raise ValueError('a card gives at most one of the commands and a guide to them')
         return self
 
     @model_validator(mode='after')
-    def _each_line_once(self) -> Self:
+    def _no_two_lines_share_a_field(self) -> Self:
         _refuse_repeats((line.field for line in self.lines), 'card lines')
         return self
 
@@ -825,10 +879,15 @@ class ModelFamily(_Wire):
         return self
 
     @model_validator(mode='after')
-    def _the_commands_run_a_checkpoint_of_the_family(self) -> Self:
+    def _the_commands_have_a_checkpoint_to_run(self) -> Self:
         commands = self.card.run_commands if self.card is not None else None
         if commands is not None and not self.checkpoints:
             raise ValueError(f'commands for family {self.id!r}, which lists no checkpoint to run')
+        return self
+
+    @model_validator(mode='after')
+    def _the_commands_run_a_checkpoint_of_the_family(self) -> Self:
+        commands = self.card.run_commands if self.card is not None else None
         if commands is not None and commands.checkpoint is not None:
             if commands.checkpoint not in {checkpoint.id for checkpoint in self.checkpoints}:
                 raise ValueError(f'the commands of family {self.id!r} run another checkpoint: {commands.checkpoint!r}')
