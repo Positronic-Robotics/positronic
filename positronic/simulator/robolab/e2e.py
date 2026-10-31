@@ -22,6 +22,7 @@ box (the env server bootstraps the Isaac Lab stack via ``uv run --project`` on t
 import argparse
 
 import numpy as np
+from eval_vocabulary.episode import GT_STATE_GRABBED
 
 from positronic.cfg.eval import spec
 from positronic.eval import keys as eval_keys
@@ -36,8 +37,6 @@ from positronic.simulator.robolab.launcher import serve_robolab
 _HOLD_TAIL_STEPS = 10
 # The exact-state reset must land the arm on the demo's opening joint configuration.
 _RESET_DRIFT_TOL = 0.05  # rad
-# The condition that opens each pick chain of RoboLab's tasks (``robolab.core.task.conditionals``).
-_GRABBED = 'object_grabbed'
 
 
 def _load_fixture(path: str) -> list[tuple[np.ndarray, dict]]:
@@ -64,8 +63,12 @@ def _gt_state_events(state: dict) -> set[str]:
     for key, value in state.items():
         if value is True and key.endswith(f'.{robolab_keys.GT_STATE_GRIPPER_CONTACT}'):
             events.add(robolab_keys.GT_STATE_GRIPPER_CONTACT)
-        if value is True and key.startswith(f'.{robolab_keys.GT_STATE_PROGRESS}.') and key.endswith(f'.{_GRABBED}'):
-            events.add(_GRABBED)
+        if (
+            value is True
+            and key.startswith(f'.{robolab_keys.GT_STATE_PROGRESS}.')
+            and key.endswith(f'.{GT_STATE_GRABBED}')
+        ):
+            events.add(GT_STATE_GRABBED)
     return events
 
 
@@ -121,7 +124,7 @@ def run_replay(fixture_path: str, *, task: str) -> float:
                 print(f'  episode {i}: {"success" if ok else "FAIL"} ({len(actions)} steps)')
         finally:
             conn.close()
-    missing = {robolab_keys.GT_STATE_GRIPPER_CONTACT, _GRABBED} - seen
+    missing = {robolab_keys.GT_STATE_GRIPPER_CONTACT, GT_STATE_GRABBED} - seen
     assert not missing, f'the demos grasp, but gt_state never showed {sorted(missing)}'
     return successes / len(episodes)
 

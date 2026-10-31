@@ -12,7 +12,6 @@ import math
 from bisect import bisect_right
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from enum import IntEnum, unique
-from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Any, ClassVar, Literal, NamedTuple, NewType, Self
@@ -25,6 +24,7 @@ from eval_vocabulary.episode import (
     EE_POSE_SUFFIX,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    GT_STATE_GRABBED,
     GT_STATE_GRIPPER_CONTACT,
     GT_STATE_OBJECTS,
     GT_STATE_POSE,
@@ -645,7 +645,12 @@ def _timed_values(signal: Path) -> list[tuple[int, Any]]:
     column = _world_time_column(signal) if signal.is_file() else None
     if column is None:
         return []
-    table = pq.read_table(signal, columns=[column, VALUE_COLUMN])
+    try:
+        table = pq.read_table(signal, columns=[column, VALUE_COLUMN])
+    except pa.ArrowInvalid:
+        # One damaged upload leaves the other signals read, so this is logged, not raised.
+        log.error('%s holds no %s column; it counts as not recorded', signal, VALUE_COLUMN)
+        return []
     return list(zip(table.column(column).to_pylist(), table.column(VALUE_COLUMN).to_pylist(), strict=True))
 
 
@@ -692,34 +697,43 @@ def _scene_state(episode: Path) -> _SceneState:
             if field in fields:
                 fields[field][item] = _timed_values(signal)
         elif name.startswith(progress):
-            subtask, group, index, condition = name.removeprefix(progress).split('.')
-            state.progress[_Condition(int(subtask), group, int(index), condition)] = _timed_values(signal)
+            condition = _parsed_condition(name.removeprefix(progress))
+            if condition is None:
+                # One misnamed signal leaves the episode's other stages labelled, so this is logged, not raised.
+                log.error('%s names no condition as <subtask>.<group>.<index>.<condition>; it gives no stage', signal)
+                continue
+            state.progress[condition] = _timed_values(signal)
     return state
 
 
-# The condition that opens each pick chain of RoboLab's tasks. The arm controls the object while it holds.
-_GRABBED = 'object_grabbed'
-# The arm reaches an object when its end effector comes this near to the object's origin.
-_REACH_M = 0.10
-# The samples of one recorded frame differ by microseconds of world time, and its frames are 1/15 s apart.
-_SAME_FRAME_NS = 10_000_000
+def _parsed_condition(name: str) -> _Condition | None:
+    """The condition that a progress signal's `<subtask>.<group>.<index>.<condition>` names. A group can hold dots."""
+    subtask, _, rest = name.partition('.')
+    group, index, condition = (rest.rsplit('.', 2) + ['', '', ''])[:3]
+    if not (subtask.isdigit() and index.isdigit() and group and condition):
+        return None
+    return _Condition(int(subtask), group, int(index), condition)
 
 
 class _Series:
     """The samples of one signal, in time order, read by the frame they fall in."""
 
+    # The signals of one recorded frame share a world time, or differ by microseconds when the env emits them one
+    # after another. The frames are 1/15 s apart.
+    _SAME_FRAME_NS = 10_000_000
+
     def __init__(self, samples: Sequence[tuple[int, Any]]):
         self._times = [time_ns for time_ns, _ in samples]
         self._values = [value for _, value in samples]
 
-    def at(self, time_ns: int) -> Any:
-        """The value of the last sample in the frame at `time_ns` or before it, or None."""
-        index = bisect_right(self._times, time_ns + _SAME_FRAME_NS) - 1
-        return self._values[index] if index >= 0 else None
+    def sample_at(self, time_ns: int) -> tuple[int, Any] | None:
+        """The time and the value of the last sample in the frame at `time_ns` or before it, or None."""
+        index = bisect_right(self._times, time_ns + self._SAME_FRAME_NS) - 1
+        return (self._times[index], self._values[index]) if index >= 0 else None
 
 
 class _Mark(NamedTuple):
-    """A sample where the arm is at `stage` in `subtask`."""
+    """The frame where the arm is at `stage` in `subtask`, at the time of the frame's `subtask` sample."""
 
     subtask: int
     stage: Stage
@@ -728,6 +742,9 @@ class _Mark(NamedTuple):
 
 class _StageReader:
     """Reads the stage marks of one RoboLab episode from its `gt_state`, `subtask` and end effector signals."""
+
+    # The arm reaches an object when its end effector comes this near to the object's origin.
+    _REACH_M = 0.10
 
     def __init__(self, episode: Path, subtasks: list[_SubtaskSample]):
         self._state = _scene_state(episode)
@@ -746,58 +763,54 @@ class _StageReader:
         for subtask, groups in self._objects.items():
             self._objects[subtask] = (groups & everything) or everything
 
-    def subtask_at(self, time_ns: int) -> int:
-        completed = self._counts.at(time_ns)
-        return completed if isinstance(completed, int) else 0
+    def frame_at(self, time_ns: int) -> tuple[int, int]:
+        """The current subtask at `time_ns`, and the time of its frame's `subtask` sample, where attempts split."""
+        sample = self._counts.sample_at(time_ns)
+        return (sample[1], sample[0]) if sample is not None else (0, time_ns)
 
-    def objects_of(self, subtask: int) -> set[str]:
-        return self._objects.get(subtask, set())
+    def marks(self) -> Iterator[_Mark]:
+        yield from self._condition_marks()
+        yield from self._contact_marks()
+        yield from self._reach_marks()
 
-    def condition_marks(self) -> Iterator[_Mark]:
+    def _condition_marks(self) -> Iterator[_Mark]:
         for condition, samples in self._state.progress.items():
             last = condition.position == self._chain_ends[(condition.subtask, condition.group)]
             for time_ns, done in samples:
-                if done is True and condition.name == _GRABBED:
-                    yield _Mark(condition.subtask, Stage.control, time_ns)
-                if done is True and last:
-                    yield _Mark(condition.subtask, Stage.at_target, time_ns)
+                subtask, frame_ns = self.frame_at(time_ns)
+                if done is not True or subtask != condition.subtask:
+                    continue
+                if condition.name == GT_STATE_GRABBED:
+                    yield _Mark(subtask, Stage.control, frame_ns)
+                if last:
+                    yield _Mark(subtask, Stage.at_target, frame_ns)
 
-    def contact_marks(self) -> Iterator[_Mark]:
+    def _contact_marks(self) -> Iterator[_Mark]:
         for item, samples in self._state.contacts.items():
             for time_ns, touching in samples:
-                subtask = self.subtask_at(time_ns)
-                if touching is True and item in self.objects_of(subtask):
-                    yield _Mark(subtask, Stage.contact, time_ns)
+                subtask, frame_ns = self.frame_at(time_ns)
+                if touching is True and item in self._objects.get(subtask, ()):
+                    yield _Mark(subtask, Stage.contact, frame_ns)
 
-    def reach_marks(self) -> Iterator[_Mark]:
+    def _reach_marks(self) -> Iterator[_Mark]:
         for item, samples in self._state.poses.items():
             for time_ns, pose in samples:
-                subtask = self.subtask_at(time_ns)
-                if item not in self.objects_of(subtask):
+                subtask, frame_ns = self.frame_at(time_ns)
+                effector = self._ee.sample_at(time_ns)
+                if item not in self._objects.get(subtask, ()) or effector is None:
                     continue
-                effector = self._ee.at(time_ns)
-                if isinstance(effector, list) and isinstance(pose, list):
-                    if math.dist(effector[:3], pose[:3]) <= _REACH_M:
-                        yield _Mark(subtask, Stage.reaching, time_ns)
+                if isinstance(effector[1], list) and isinstance(pose, list):
+                    if math.dist(effector[1][:3], pose[:3]) <= self._REACH_M:
+                        yield _Mark(subtask, Stage.reaching, frame_ns)
 
 
 def _robolab_stages(episode: Path, start_ns: int, subtasks: list[_SubtaskSample]) -> list[StageReached]:
-    """The first mark of each stage in each subtask, from the episode's `gt_state` signals.
-
-    A mark counts in a subtask only while that subtask is the current one. Reaching: the end effector comes within
-    `_REACH_M` of an object of the subtask (`_StageReader._objects`). Contact: the gripper touches one. Control:
-    an `object_grabbed` is done. At target: the last condition of a chain is done before the subtask is.
-    """
-    reader = _StageReader(episode, subtasks)
+    """The first mark of each stage in each subtask, from the episode's `gt_state` signals."""
     first: dict[tuple[int, Stage], int] = {}
-    for mark in chain(reader.condition_marks(), reader.contact_marks(), reader.reach_marks()):
+    for mark in _StageReader(episode, subtasks).marks():
         key = (mark.subtask, mark.stage)
-        if reader.subtask_at(mark.time_ns) == mark.subtask and mark.time_ns < first.get(key, mark.time_ns + 1):
-            first[key] = mark.time_ns
-    return [
-        StageReached(seconds=(time_ns - start_ns) / 1e9, stage=stage)
-        for (_subtask, stage), time_ns in sorted(first.items(), key=lambda entry: (entry[1], entry[0][1]))
-    ]
+        first[key] = min(first.get(key, mark.time_ns), mark.time_ns)
+    return [StageReached(seconds=(time_ns - start_ns) / 1e9, stage=stage) for (_, stage), time_ns in first.items()]
 
 
 def robolab_label(episode: Path) -> Label | None:
@@ -821,7 +834,7 @@ def robolab_label(episode: Path) -> Label | None:
             seconds = (sample.time_ns - trial.start_ns) / 1e9
             events.append(SubtaskAchieved(seconds=seconds, achieved=achieved, score=sample.score))
     events += _robolab_stages(episode, trial.start_ns, samples)
-    events.sort(key=lambda event: event.seconds)
+    events.sort(key=lambda event: (event.seconds, isinstance(event, StageReached)))
     return Label(
         uid=trial.uid,
         task=trial.task,
