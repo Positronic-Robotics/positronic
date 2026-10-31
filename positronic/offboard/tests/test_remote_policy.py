@@ -400,6 +400,19 @@ class TestADroppedConnectionReconnects:
         assert legacy_protocol.deserialise(reopened.send.call_args.args[0])[protocol.SESSION_ID] == 'second'
         assert session.session_id == 'second'
 
+    def test_a_drop_before_the_first_answer_closes_the_dropped_connection_before_it_dials_again(self):
+        # A Modal wire parks the dropped connection's session on close, and the next dial takes it.
+        dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+        reopened = _connection(_ready('second'), _answer({'action_data': [1]}))
+        fake = _FakeWire(dropped, reopened)
+        dials_at_close: list[int] = []
+        dropped.close.side_effect = lambda: dials_at_close.append(len(fake.dials))
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        session.infer({'image': 'test'})
+
+        assert dials_at_close == [1]
+
     @pytest.mark.parametrize('version', list(protocol.ProtocolVersion))
     def test_numpy_metadata_survives_a_reconnect_and_reordered_mapping(self, version):
         stats = {'mean': np.array([1.0, 2.0]), 'scale': np.float32(0.5)}
