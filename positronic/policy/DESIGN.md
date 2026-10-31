@@ -232,8 +232,6 @@ real latency.
 - Submission returns an answer handle. The run can check it without waiting
   when it next has control. Reading a result before it is available on the
   episode clock raises an error.
-- A ready answer exposes `elapsed_sec` from submission to callable completion,
-  and `execution_sec` from callable start to completion.
 - `runtime.has_ready_answers()` checks for completed, unread answers anywhere
   in the processor stack.
 - If a call raises — for example, on a lost connection or a value that does
@@ -405,9 +403,11 @@ a step for each observation, or return its `PolicyEnd`.
 class Answer(ABC, Generic[T]):
     def done(self) -> bool: ...
 
+    # Seconds from submission to completion, including queueing.
     @property
     def elapsed_sec(self) -> float: ...
 
+    # Seconds from callable start to completion, excluding queueing.
     @property
     def execution_sec(self) -> float: ...
 
