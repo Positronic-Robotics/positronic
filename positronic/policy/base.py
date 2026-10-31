@@ -33,19 +33,12 @@ class Answer(ABC, Generic[T]):
     @property
     @abstractmethod
     def elapsed_sec(self) -> float:
-        """Submission to completion, including queueing; zero in uncharged simulation.
-
-        Raises ``NotAnswered`` before readiness and ``CancelledError`` for cancelled work.
-        Reading a duration does not consume the answer or re-raise a callable's failure.
-        """
+        """Submission to completion, including queueing; zero in uncharged simulation."""
 
     @property
     @abstractmethod
     def execution_sec(self) -> float:
-        """Callable start to completion, excluding runtime queueing; zero in uncharged simulation.
-
-        Has the same availability and consumption rules as ``elapsed_sec``.
-        """
+        """Callable start to completion, excluding runtime queueing; zero in uncharged simulation."""
 
     @abstractmethod
     def result(self) -> T:
@@ -149,10 +142,7 @@ class Runtime(ABC):
 
     @abstractmethod
     def has_ready_answers(self) -> bool:
-        """Whether any non-cancelled call is ready and its result has not been read.
-
-        Includes failures and all processor branches. Checking does not consume an answer.
-        """
+        """Whether any non-cancelled call is ready and its result has not been read."""
 
 
 class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
