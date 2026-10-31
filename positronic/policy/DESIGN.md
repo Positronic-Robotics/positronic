@@ -399,10 +399,8 @@ After that, sending an input returns its next output. A policy run must yield
 a step for each observation, or return its `PolicyEnd`.
 
 `Step.commands` contains robot commands; `Step.outputs` carries auxiliary results
-for surrounding processors. Codecs around a processor decode its commands, including
-empty commands, and preserve its outputs and requested wake-up time. A step with
-no robot commands can still carry outputs. Each step has its own empty outputs
-mapping unless one is supplied.
+for surrounding processors. Codecs decode commands, including empty ones, while
+preserving outputs and the requested wake-up time.
 
 ### Answers
 
