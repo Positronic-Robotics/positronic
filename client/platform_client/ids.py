@@ -80,6 +80,12 @@ class SubmissionId(Id64):
     __slots__ = ()
 
 
+class LeaderboardVersionId(Id64):
+    """One version of a leaderboard. The numbers of a published version do not change."""
+
+    __slots__ = ()
+
+
 # A client-supplied dedup token, opaque to the platform: whatever the caller sends, echoed by nothing.
 # Two submissions under one key are one transaction — the second returns the first, and is not charged.
 TransactionKey = NewType('TransactionKey', str)

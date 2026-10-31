@@ -11,7 +11,8 @@ import unicodedata
 from typing import Annotated
 
 from platform_client.boards import BoardRef
-from platform_client.ids import OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
+from platform_client.ids import LeaderboardVersionId, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
+from platform_client.leaderboards import LeaderboardRef, LeaderboardTag, LeaderboardTaskId
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from pydantic import AfterValidator, BaseModel, Field
 
@@ -83,6 +84,40 @@ class RankingsQuery(BaseModel):
     model_config = INPUT_MODEL_CONFIG
 
     board: BoardRef
+
+
+class LeaderboardListQuery(BaseModel):
+    """`leaderboards.list` — the leaderboards of one tag."""
+
+    model_config = INPUT_MODEL_CONFIG
+
+    tag: LeaderboardTag
+
+
+class LeaderboardQuery(BaseModel):
+    """`leaderboards.get` — one leaderboard by slug."""
+
+    model_config = INPUT_MODEL_CONFIG
+
+    leaderboard: LeaderboardRef
+
+
+class LeaderboardPartQuery(BaseModel):
+    """`leaderboards.episodes` and `leaderboards.progress` — one part of a leaderboard at `version`.
+
+    With no `version`, the platform answers from the published version.
+    """
+
+    model_config = INPUT_MODEL_CONFIG
+
+    leaderboard: LeaderboardRef
+    version: LeaderboardVersionId | None = None
+
+
+class LeaderboardChartsQuery(LeaderboardPartQuery):
+    """`leaderboards.charts` — the charts over one `task`, or over every task where it is None."""
+
+    task: LeaderboardTaskId | None = None
 
 
 class SubmissionListQuery(BaseModel):

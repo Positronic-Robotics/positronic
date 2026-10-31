@@ -20,6 +20,13 @@ SUBMISSIONS_CANCEL = f'{API_PREFIX}/submissions.cancel'
 SUBMISSIONS_ARTIFACTS = f'{API_PREFIX}/submissions.artifacts'
 RANKINGS_GET = f'{API_PREFIX}/rankings.get'
 RANKINGS_LIST = f'{API_PREFIX}/rankings.list'
+# The published leaderboards. Every one of these routes needs no key.
+LEADERBOARDS_LIST = f'{API_PREFIX}/leaderboards.list'
+LEADERBOARDS_GET = f'{API_PREFIX}/leaderboards.get'
+LEADERBOARDS_CHARTS = f'{API_PREFIX}/leaderboards.charts'
+LEADERBOARDS_EPISODES = f'{API_PREFIX}/leaderboards.episodes'
+LEADERBOARDS_PROGRESS = f'{API_PREFIX}/leaderboards.progress'
+LEADERBOARDS_MODELS = f'{API_PREFIX}/leaderboards.models'
 # What the platform offers the caller: the evals a plan may name, and the tasks it may compose.
 CATALOG_EVALS = f'{API_PREFIX}/catalog.evals'
 CATALOG_TASKS = f'{API_PREFIX}/catalog.tasks'
