@@ -19,7 +19,7 @@ import positronic.cfg.webxr
 from pimm.logging import init_logging
 from positronic import geom, keys, utils, wire
 from positronic.dataset.dataset import DatasetFactory
-from positronic.dataset.local_dataset import LocalDatasetWriter
+from positronic.dataset.local_dataset import LocalDatasetWriter, sync_recording_dir
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import roboarm
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
@@ -276,7 +276,7 @@ def main(
         static_meta.update(wire.ROBOT_STATIC_META)
     output_path = None
     if output_dir is not None:
-        output_path = pos3.sync(output_dir, sync_on_error=True)
+        output_path = sync_recording_dir(output_dir)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
         operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
@@ -345,7 +345,7 @@ def main_sim(
 
     output_path = None
     if output_dir is not None:
-        output_path = pos3.sync(output_dir, sync_on_error=True)
+        output_path = sync_recording_dir(output_dir)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
         operator_position.value,
