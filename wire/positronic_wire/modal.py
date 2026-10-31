@@ -262,16 +262,19 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
 
     def _park(self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str) -> None:
         """Keep ``token`` for the next dial on ``address``, until ``idle_timeout`` passes."""
-        timer = threading.Timer(self._idle_timeout, self._end_parked, (endpoint, token))
+        timer = threading.Timer(self._idle_timeout, lambda: self._end_parked(endpoint, token, timer))
         timer.daemon = True
         with self._changed:
             endpoint.parked[token] = _Parked(address, timer)
         timer.start()
 
-    def _end_parked(self, endpoint: _Endpoint, token: str) -> None:
+    def _end_parked(self, endpoint: _Endpoint, token: str, timer: threading.Timer) -> None:
+        """End ``token`` where ``timer`` guards its current park."""
         with self._changed:
-            if endpoint.parked.pop(token, None) is None:
+            parked = endpoint.parked.get(token)
+            if parked is None or parked.timer is not timer:
                 return
+            del endpoint.parked[token]
         self._terminate(endpoint, token)
 
     def _keep_as_spare(self, endpoint: _Endpoint, token: str) -> None:
