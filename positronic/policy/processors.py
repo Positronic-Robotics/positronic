@@ -20,6 +20,7 @@ from collections import ChainMap, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from functools import partial
 from math import isfinite
 from statistics import fmean
 from sys import maxsize
@@ -44,8 +45,10 @@ from positronic.policy.base import (
     ReturnT,
     Runtime,
     Step,
+    Trajectory,
 )
 from positronic.policy.keys import ACTION_FPS, END
+from positronic.utils.lazy import LazyDict
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -222,63 +225,73 @@ class DelayEstimate(DurationEstimate):
         return cls(cls.Statistic.MAX, last, max_sec)
 
 
-class ChunkedSchedule(Policy):
-    """Request action chunks asynchronously and emit their commands at a fixed cadence.
+class TrajectoryPlayer(Policy):
+    """Play timed trajectories from a child, advancing it only when due or an answer is ready."""
 
-        step                0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
-        observation T0      ^
-        inference           |--------|
-        answer                       ^
-        old chunk                    o0 o1 o2 o3 o4 o5 o6 o7 o8 o9
-        inference_lead                              |--------------|
-        observation T1                              ^
-        inference                                   |--------|
-        answer                                               ^
-        answer waits                                         |-----|
-        old chunk ends                                             ^
-        new chunk                                                  n0 n1 n2 n3 n4
-        robot executes      -- -- -- o0 o1 o2 o3 o4 o5 o6 o7 o8 o9 n0 n1 n2 n3 n4
+    WIRE_NAME = 'trajectory_player'
+    WIRE_VERSION = 1
 
-    The drawing uses ``fps=10`` and ``inference_lead=ConstantDuration(0.5)``. Each step is
-    100 ms. The old chunk starts at step 3 and ends at step 13, after o9's full period.
-    The next request starts five periods before that end, at step 8. Its answer arrives
-    at step 11 and waits until step 13: all old actions run, then the new chunk starts at n0.
-    If the answer arrives after the old chunk ends, the last target stays in force until
-    the answer is read. A zero lead starts the next request at step 13 instead.
-
-    ``infer`` returns an ordered sequence of command sets and must not mutate episode state. The first
-    command is due when the completed answer is read; regular playback waits for the previous chunk to end.
-    Subsequent commands are spaced by ``1 / fps``. A chunk of K commands covers K periods, including the
-    final command's execution period. ``horizon_sec`` limits that duration and discards commands at or
-    beyond the horizon.
-
-    At most one call is pending. ``inference_lead`` estimates how many seconds before a chunk ends to
-    request the next one, bounded by the chunk's duration. The default is zero: request at the end. A lead of the
-    whole chunk requests the next one in the round that reads the answer.
-    The first request starts immediately. Later deadlines use the delays of completed calls in this
-    episode. An early answer waits behind the remaining commands; the new chunk starts from its first
-    action. The observation is read at the request, before commands emitted in that same round.
-    With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
-    episode metadata.
-
-    ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
-    immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
-    until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
-    """
-
-    WIRE_NAME = 'chunked_schedule'
-    WIRE_VERSION = 3
-    FPS_ARG = 'fps'
-    HORIZON_SEC_ARG = 'horizon_sec'
-    RECORD_STATS_ARG = 'record_stats'
-    INFERENCE_LEAD_ARG = 'inference_lead'
-    REPLAN_ON_ERROR_ARG = 'replan_on_error'
+    def __init__(
+        self,
+        *,
+        trajectory_key: str = policy_keys.TRAJECTORY,
+        plan_key: str | None = None,
+        record_stats: bool = True,
+        replan_on_error: bool = False,
+    ) -> None:
+        self._trajectory_key = trajectory_key
+        self._plan_key = plan_key
+        self._record_stats = record_stats
+        self._replan_on_error = replan_on_error
 
     @dataclass(frozen=True)
     class _Waypoint:
         commands: Commands
         due_ns: int
         starts_chunk: bool
+
+    @classmethod
+    def _waypoints(cls, trajectory: Trajectory) -> list[_Waypoint]:
+        fps = trajectory[policy_keys.TRAJECTORY_FPS]
+        start_ns = trajectory[policy_keys.TRAJECTORY_START_NS]
+        end_ns = trajectory[policy_keys.TRAJECTORY_END_NS]
+        commands = trajectory[policy_keys.TRAJECTORY_COMMANDS]
+        if not isfinite(fps) or fps <= 0:
+            raise ValueError('fps must be finite and positive')
+        if end_ns < start_ns or end_ns > start_ns + round(len(commands) * (1 / fps) * 1e9):
+            raise ValueError('end_ns must lie within the trajectory duration')
+        return [
+            cls._Waypoint(command, start_ns + round(i * (1 / fps) * 1e9), starts_chunk=i == 0)
+            for i, command in enumerate(commands)
+            if start_ns + round(i * (1 / fps) * 1e9) < end_ns
+        ]
+
+    @classmethod
+    def _install(cls, update: Trajectory, waypoints: deque[_Waypoint], plan: list[Trajectory], now_ns: int) -> int:
+        incoming = cls._waypoints(update)
+        planned = len(incoming)
+        start_ns = update[policy_keys.TRAJECTORY_START_NS]
+        # A replacement due now supersedes old commands that have not yet been emitted.
+        preserved = [point for point in waypoints if now_ns < start_ns and point.due_ns < start_ns]
+        waypoints.clear()
+        waypoints.extend(preserved)
+        if update[policy_keys.TRAJECTORY_END_NS] > now_ns:
+            running = max(
+                next((i for i, point in enumerate(incoming[1:], 1) if point.due_ns > now_ns), len(incoming)) - 1, 0
+            )
+            selected = incoming[running:]
+            if running and selected:
+                first = selected[0]
+                selected[0] = cls._Waypoint(first.commands, first.due_ns, starts_chunk=True)
+            waypoints.extend(selected)
+        retained: list[Trajectory] = []
+        for part in plan:
+            if part[policy_keys.TRAJECTORY_START_NS] < start_ns and part[policy_keys.TRAJECTORY_END_NS] > now_ns:
+                clipped = part.copy()
+                clipped[policy_keys.TRAJECTORY_END_NS] = min(part[policy_keys.TRAJECTORY_END_NS], start_ns)
+                retained.append(clipped)
+        plan[:] = [*retained, update]
+        return planned
 
     class _Stats:
         """How the schedule played its waypoints.
@@ -335,6 +348,126 @@ class ChunkedSchedule(Policy):
             high = min(low + 1, len(values) - 1)
             return values[low] + (values[high] - values[low]) * (position - low)
 
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        waypoints: deque[TrajectoryPlayer._Waypoint] = deque()
+        plan: list[Trajectory] = []
+        child_due_ns = 0
+        recovering = False
+        stats = self._Stats(runtime) if self._record_stats else None
+        obs = yield
+        while True:
+            now_ns = runtime.time_ns
+            planned = None
+            statuses = (RobotStatus(obs[name]) for name in obs if _is_robot_status(name))
+            if self._replan_on_error and not recovering and RobotStatus.ERROR in statuses:
+                waypoints.clear()
+                plan.clear()
+                child_due_ns = now_ns
+                planned, recovering = 0, True
+            child_commands: Commands = {}
+            outputs: dict[str, Any] = {}
+            if now_ns >= child_due_ns or runtime.has_ready_answers():
+                context = [part for part in plan if part[policy_keys.TRAJECTORY_END_NS] > now_ns]
+                child_obs = (
+                    obs
+                    if self._plan_key is None
+                    else LazyDict(
+                        {self._plan_key: context},
+                        {name: partial(obs.__getitem__, name) for name in obs if name != self._plan_key},
+                    )
+                )
+                try:
+                    step = inner.send(child_obs)
+                except StopIteration as end:
+                    return end.value
+                if step is None:
+                    raise TypeError('TrajectoryPlayer requires its child to yield a Step')
+                child_due_ns = step.resume_at_ns
+                child_commands = step.commands
+                outputs = dict(step.outputs)
+                update: Trajectory | None = outputs.pop(self._trajectory_key, None)
+                if update is not None:
+                    planned = self._install(update, waypoints, plan, now_ns)
+            commands: dict[str, Any] = {}
+            due_ns = None
+            starts_chunk = False
+            while waypoints and waypoints[0].due_ns <= now_ns:
+                point = waypoints.popleft()
+                due_ns = point.due_ns
+                starts_chunk |= point.starts_chunk
+                commands.update(point.commands)
+            commands.update(child_commands)
+            recovering = recovering and not commands
+            if stats is not None:
+                stats.count_round(planned, due_ns, now_ns, queued=len(waypoints), starts_chunk=starts_chunk)
+            resume_at_ns = min(child_due_ns, waypoints[0].due_ns) if waypoints else child_due_ns
+            obs = yield Step(commands, resume_at_ns, outputs=outputs)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {
+                'trajectory_key': self._trajectory_key,
+                'plan_key': self._plan_key,
+                'record_stats': self._record_stats,
+                'replan_on_error': self._replan_on_error,
+            },
+        }
+
+
+class ChunkedSchedule(Policy):
+    """Request action chunks asynchronously and emit their commands at a fixed cadence.
+
+        step                0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
+        observation T0      ^
+        inference           |--------|
+        answer                       ^
+        old chunk                    o0 o1 o2 o3 o4 o5 o6 o7 o8 o9
+        inference_lead                              |--------------|
+        observation T1                              ^
+        inference                                   |--------|
+        answer                                               ^
+        answer waits                                         |-----|
+        old chunk ends                                             ^
+        new chunk                                                  n0 n1 n2 n3 n4
+        robot executes      -- -- -- o0 o1 o2 o3 o4 o5 o6 o7 o8 o9 n0 n1 n2 n3 n4
+
+    The drawing uses ``fps=10`` and ``inference_lead=ConstantDuration(0.5)``. Each step is
+    100 ms. The old chunk starts at step 3 and ends at step 13, after o9's full period.
+    The next request starts five periods before that end, at step 8. Its answer arrives
+    at step 11 and waits until step 13: all old actions run, then the new chunk starts at n0.
+    If the answer arrives after the old chunk ends, the last target stays in force until
+    the answer is read. A zero lead starts the next request at step 13 instead.
+
+    ``infer`` returns command sets or ``None`` to leave playback unchanged, and must not mutate episode state. The first
+    command is due when the completed answer is read; regular playback waits for the previous chunk to end.
+    Subsequent commands are spaced by ``1 / fps``. A chunk of K commands covers K periods, including the
+    final command's execution period. ``horizon_sec`` limits that duration and discards commands at or
+    beyond the horizon.
+
+    At most one call is pending. ``inference_lead`` estimates how many seconds before a chunk ends to
+    request the next one, bounded by the chunk's duration. The default is zero: request at the end. A lead of the
+    whole chunk requests the next one in the round that reads the answer.
+    The first request starts immediately. Later deadlines use the delays of completed calls in this
+    episode. An early answer waits behind the remaining commands; the new chunk starts from its first
+    action. The observation is read at the request, before commands emitted in that same round.
+    With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
+    episode metadata.
+
+    ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
+    immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
+    until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
+    """
+
+    WIRE_NAME = 'chunked_schedule'
+    WIRE_VERSION = 3
+    FPS_ARG = 'fps'
+    HORIZON_SEC_ARG = 'horizon_sec'
+    RECORD_STATS_ARG = 'record_stats'
+    INFERENCE_LEAD_ARG = 'inference_lead'
+    REPLAN_ON_ERROR_ARG = 'replan_on_error'
+
     def __init__(
         self,
         fps: float,
@@ -359,70 +492,61 @@ class ChunkedSchedule(Policy):
             raise ValueError('inference_lead must return a finite, nonnegative duration')
         return end_ns - round(min(lead_sec * 1e9, end_ns - start_ns))
 
-    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[_Waypoint], int]:
-        period_sec = 1 / self._fps
-        duration_sec = len(chunk) * period_sec
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> Trajectory:
+        duration_sec = len(chunk) * (1 / self._fps)
         if self._horizon_sec is not None:
             duration_sec = min(duration_sec, self._horizon_sec)
-        waypoints = [
-            self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
-            for i, waypoint in enumerate(chunk)
-            if i * period_sec < duration_sec
-        ]
-        return waypoints, start_ns + round(duration_sec * 1e9)
+        return Trajectory(commands=chunk, start_ns=start_ns, end_ns=start_ns + round(duration_sec * 1e9), fps=self._fps)
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
-        answer: Answer[Sequence[Commands]] | None = None
-        recovering = False
-        trajectory: deque[ChunkedSchedule._Waypoint] = deque()
-        end_ns = 0
-        call_ns = 0
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
+        child = self._predict(runtime, infer)
+        next(child)
+        player = TrajectoryPlayer(
+            plan_key=policy_keys.PLAN, record_stats=self._record_stats, replan_on_error=self._replan_on_error
+        )
+        try:
+            return (yield from player.run(runtime, child))
+        finally:
+            child.close()
+
+    def _predict(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
+        answer: Answer[Sequence[Commands] | None] | None = None
         lead = self._inference_lead.run()
-        stats = self._Stats(runtime) if self._record_stats else None
-
+        lead_sec = 0.0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
-                planned = None
-                statuses = (RobotStatus(obs[name]) for name in obs if _is_robot_status(name))
-                needs_recovery = self._replan_on_error and not recovering and RobotStatus.ERROR in statuses
-                if needs_recovery:
-                    trajectory.clear()
-                    end_ns = call_ns = now_ns
-                    planned, recovering = 0, True
+                plan: Sequence[Trajectory] = obs[policy_keys.PLAN]
+                end_ns = plan[-1][policy_keys.TRAJECTORY_END_NS] if plan else now_ns
+                call_ns = (
+                    self._next_call_ns(plan[-1][policy_keys.TRAJECTORY_START_NS], end_ns, lead_sec)
+                    if plan and plan[-1][policy_keys.TRAJECTORY_COMMANDS]
+                    else now_ns
+                )
+                inference_obs = LazyDict(
+                    {}, {name: partial(obs.__getitem__, name) for name in obs if name != policy_keys.PLAN}
+                )
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
-                    answer = runtime.submit(infer, obs)
+                    answer = runtime.submit(infer, inference_obs)
+                outputs: dict[str, Any] = {}
                 if answer is not None and answer.done():
                     chunk = answer.result()
                     lead_sec = lead.update(answer.elapsed_sec)
                     answer = None
-                    start_ns = max(now_ns, end_ns)
-                    waypoints, end_ns = self._plan_chunk(chunk, start_ns)
-                    call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
-                    # A regular early answer waits behind the commands that are still due.
-                    trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
-                    planned = len(waypoints)
-                    # A call due at the start of the new chunk goes out in this round, not one round later. A round
-                    # that has already called once sends no second call with the same observation.
+                    if chunk is not None:
+                        start_ns = max(now_ns, end_ns)
+                        trajectory = self._plan_chunk(chunk, start_ns)
+                        outputs[policy_keys.TRAJECTORY] = trajectory
+                        call_ns = (
+                            self._next_call_ns(start_ns, trajectory[policy_keys.TRAJECTORY_END_NS], lead_sec)
+                            if chunk
+                            else now_ns
+                        )
                     if not submitted and now_ns >= call_ns:
-                        answer = runtime.submit(infer, obs)
-
-                commands: dict[str, Any] = {}
-                due_ns = None
-                starts_chunk = False
-                while trajectory and trajectory[0].due_ns <= now_ns:
-                    waypoint = trajectory.popleft()
-                    due_ns = waypoint.due_ns
-                    starts_chunk |= waypoint.starts_chunk
-                    commands.update(waypoint.commands)
-                recovering = recovering and not commands
-                if stats is not None:
-                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
-                resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
-                # Pending inference asks for the earliest allowed poll; action cadence is independent.
-                obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
+                        answer = runtime.submit(infer, inference_obs)
+                obs = yield Step({}, now_ns if answer is not None else call_ns, outputs=outputs)
         finally:
             if answer is not None:
                 answer.cancel()

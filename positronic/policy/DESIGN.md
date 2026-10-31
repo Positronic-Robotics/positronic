@@ -402,6 +402,24 @@ a step for each observation, or return its `PolicyEnd`.
 for surrounding processors. Codecs decode commands, including empty ones, while
 preserving outputs and the requested wake-up time.
 
+### Trajectory playback
+
+`TrajectoryPlayer` consumes timed command sequences from `Step.outputs[TRAJECTORY]`.
+A `Trajectory` is a typed dictionary with `commands`, `start_ns`, `fps` and `end_ns`;
+action `i` is due at `start_ns + round(i * 1e9 / fps)`. The end can shorten the
+final action's period. Existing response codecs and serialization handle this data.
+
+A new trajectory replaces the plan from its start time, skipping elapsed actions.
+`None` leaves playback unchanged; an empty trajectory removes the future plan.
+
+The player wakes for the next waypoint or child deadline. Waypoints alone do not
+advance the child; a ready answer does. With `plan_key` set, child observations also
+contain the installed source segments that have not ended, with replacement boundaries
+clipping their end times. Source commands and start times retain their original indexing.
+
+`ChunkedSchedule` chooses inference times and publishes trajectories; the player
+owns playback, statistics and error recovery.
+
 ### Answers
 
 ```python
