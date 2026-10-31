@@ -620,7 +620,10 @@ class StatsSampler:
                 cached = self._proc_cache[proc.pid]
                 cpu_pct += cached.cpu_percent(interval=None)
                 rss += cached.memory_info().rss
-            except psutil.Error:
+            except psutil.NoSuchProcess:
+                self._proc_cache.pop(proc.pid, None)
+            except psutil.Error as error:
+                logger.error('telemetry: dropping pid %d from the process-tree sample: %r', proc.pid, error)
                 self._proc_cache.pop(proc.pid, None)
         return pids, cpu_pct, rss
 
