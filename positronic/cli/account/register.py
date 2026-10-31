@@ -19,7 +19,7 @@ from platform_client.device_flow import (
     sign_in_flow,
 )
 from platform_client.identity_providers import REQUEST_TIMEOUT
-from platform_client.requests import RegisterRequest
+from platform_client.requests import RegisterRequest, team_name
 from platform_client.responses import RegisterResponse
 
 from positronic.cli.account.gateway import CREDENTIAL_ENV, CommandFailed, Fault, gateway, refusing_bad_input
@@ -80,6 +80,11 @@ def register(
     # the request model sees these values, so these refusals come first.
     if alias is not None and not isinstance(alias, str):
         raise CommandFailed(f'alias is text; quote one that reads as a number: \'"{alias}"\'', Fault.USAGE)
+    if alias is not None:
+        try:
+            team_name(alias)
+        except ValueError as exc:
+            raise CommandFailed(f'alias: {exc}', Fault.USAGE) from exc
     # `--plaintext_http=false` arrives as a string, which would open the gate it means to keep shut.
     for name, value in (('rotate', rotate), ('plaintext_http', plaintext_http)):
         if not isinstance(value, bool):

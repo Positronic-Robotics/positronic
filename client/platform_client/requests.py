@@ -7,12 +7,32 @@ would change what the submission means. `submissions.create` takes an `EvalPlan`
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Annotated
 
 from platform_client.boards import BoardRef
 from platform_client.ids import OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
 from platform_client.model_config import INPUT_MODEL_CONFIG
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
+
+TEAM_NAME_MAX_CHARACTERS = 64
+TEAM_NAME_RULE = (
+    f'a team name has 1 to {TEAM_NAME_MAX_CHARACTERS} characters after the spaces at its ends are removed, '
+    'and no control or text-direction characters'
+)
+# The Unicode Bidi_Control property. Other format characters (Cf) stay: emoji and some scripts need the
+# zero-width joiners.
+_BIDI_CONTROLS = frozenset('\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069')
+
+
+def team_name(alias: str) -> str:
+    """The alias without the spaces at its ends. Raise `ValueError` on one that breaks `TEAM_NAME_RULE`."""
+    name = alias.strip()
+    if not 1 <= len(name) <= TEAM_NAME_MAX_CHARACTERS or any(
+        unicodedata.category(character) == 'Cc' or character in _BIDI_CONTROLS for character in name
+    ):
+        raise ValueError(TEAM_NAME_RULE)
+    return name
 
 
 class RegisterRequest(BaseModel):
@@ -21,7 +41,7 @@ class RegisterRequest(BaseModel):
     model_config = INPUT_MODEL_CONFIG
 
     credential: str
-    alias: str | None = None
+    alias: Annotated[str, AfterValidator(team_name)] | None = None
     rotate: bool = False
 
 
