@@ -24,7 +24,7 @@ from functools import partial
 from math import isfinite
 from statistics import fmean
 from sys import maxsize
-from typing import Any, Self, TypeVar
+from typing import Any, Self, TypeVar, cast
 
 import numpy as np
 from positronic_model_server.spec import ARGS, NAME, VERSION
@@ -70,10 +70,10 @@ MILLISECOND_NS = 10**6
 
 
 class PauseOnUnavailable(Policy):
-    """Withhold commands and child calls while any arm is unavailable.
+    """Withhold commands and calls to the inner run while any arm is unavailable.
 
     An unavailable arm causes an empty command set and a status check one millisecond later. Once every
-    arm is available, calls resume on the same child policy, retaining queued commands and pending answers.
+    arm is available, calls resume on the same inner policy, retaining queued commands and pending answers.
 
     TODO(#789): Define plan invalidation and recovery after robot unavailability.
     """
@@ -226,20 +226,35 @@ class DelayEstimate(DurationEstimate):
 
 
 class TrajectoryPlayer(Policy):
-    """Play timed trajectories from a child, advancing it only when due or an answer is ready."""
+    """Play an inner run's timed trajectories independently of its inference cadence.
+
+    The inner run yields a ``Step`` with a ``Trajectory`` as its commands. The player emits
+    due commands and advances the inner run at its requested deadline or when any runtime answer
+    is ready. A waypoint deadline alone does not advance the inner run.
+
+    A new trajectory replaces the plan from its start time, skipping elapsed actions.
+    Empty step commands keep the plan; a trajectory with no commands removes its future
+    from that start time. Auxiliary outputs pass through unchanged.
+
+    Args:
+        plan_key: Observation field through which the inner run receives the installed trajectory
+            segments that have not ended, in time order. Commands and start times retain their
+            original indexing; end times are clipped where another trajectory replaces them.
+            This includes future segments and the currently active segment, not just unplayed
+            commands. ``None`` omits this context.
+        record_stats: Record scheduled, emitted and dropped waypoint counts, command lateness,
+            and gaps between emissions in episode metadata.
+        replan_on_error: Clear the plan on an arm's ``ERROR`` status and advance the inner run
+            immediately. Pending calls from the inner run are not cancelled. Further resets are suppressed
+            until commands are emitted; ``False`` leaves playback unchanged by arm errors.
+    """
 
     WIRE_NAME = 'trajectory_player'
     WIRE_VERSION = 1
 
     def __init__(
-        self,
-        *,
-        trajectory_key: str = policy_keys.TRAJECTORY,
-        plan_key: str | None = None,
-        record_stats: bool = True,
-        replan_on_error: bool = False,
+        self, *, plan_key: str | None = None, record_stats: bool = True, replan_on_error: bool = False
     ) -> None:
-        self._trajectory_key = trajectory_key
         self._plan_key = plan_key
         self._record_stats = record_stats
         self._replan_on_error = replan_on_error
@@ -252,10 +267,10 @@ class TrajectoryPlayer(Policy):
 
     @classmethod
     def _waypoints(cls, trajectory: Trajectory) -> list[_Waypoint]:
-        fps = trajectory[policy_keys.TRAJECTORY_FPS]
-        start_ns = trajectory[policy_keys.TRAJECTORY_START_NS]
-        end_ns = trajectory[policy_keys.TRAJECTORY_END_NS]
-        commands = trajectory[policy_keys.TRAJECTORY_COMMANDS]
+        fps = trajectory[policy_keys.TRAJECTORY.FPS]
+        start_ns = trajectory[policy_keys.TRAJECTORY.START_NS]
+        end_ns = trajectory[policy_keys.TRAJECTORY.END_NS]
+        commands = trajectory[policy_keys.TRAJECTORY.COMMANDS]
         if not isfinite(fps) or fps <= 0:
             raise ValueError('fps must be finite and positive')
         if end_ns < start_ns or end_ns > start_ns + round(len(commands) * (1 / fps) * 1e9):
@@ -270,12 +285,12 @@ class TrajectoryPlayer(Policy):
     def _install(cls, update: Trajectory, waypoints: deque[_Waypoint], plan: list[Trajectory], now_ns: int) -> int:
         incoming = cls._waypoints(update)
         planned = len(incoming)
-        start_ns = update[policy_keys.TRAJECTORY_START_NS]
+        start_ns = update[policy_keys.TRAJECTORY.START_NS]
         # A replacement due now supersedes old commands that have not yet been emitted.
         preserved = [point for point in waypoints if now_ns < start_ns and point.due_ns < start_ns]
         waypoints.clear()
         waypoints.extend(preserved)
-        if update[policy_keys.TRAJECTORY_END_NS] > now_ns:
+        if update[policy_keys.TRAJECTORY.END_NS] > now_ns:
             running = max(
                 next((i for i, point in enumerate(incoming[1:], 1) if point.due_ns > now_ns), len(incoming)) - 1, 0
             )
@@ -286,9 +301,9 @@ class TrajectoryPlayer(Policy):
             waypoints.extend(selected)
         retained: list[Trajectory] = []
         for part in plan:
-            if part[policy_keys.TRAJECTORY_START_NS] < start_ns and part[policy_keys.TRAJECTORY_END_NS] > now_ns:
+            if part[policy_keys.TRAJECTORY.START_NS] < start_ns and part[policy_keys.TRAJECTORY.END_NS] > now_ns:
                 clipped = part.copy()
-                clipped[policy_keys.TRAJECTORY_END_NS] = min(part[policy_keys.TRAJECTORY_END_NS], start_ns)
+                clipped[policy_keys.TRAJECTORY.END_NS] = min(part[policy_keys.TRAJECTORY.END_NS], start_ns)
                 retained.append(clipped)
         plan[:] = [*retained, update]
         return planned
@@ -351,7 +366,7 @@ class TrajectoryPlayer(Policy):
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         waypoints: deque[TrajectoryPlayer._Waypoint] = deque()
         plan: list[Trajectory] = []
-        child_due_ns = 0
+        inner_due_ns = 0
         recovering = False
         stats = self._Stats(runtime) if self._record_stats else None
         obs = yield
@@ -362,13 +377,12 @@ class TrajectoryPlayer(Policy):
             if self._replan_on_error and not recovering and RobotStatus.ERROR in statuses:
                 waypoints.clear()
                 plan.clear()
-                child_due_ns = now_ns
+                inner_due_ns = now_ns
                 planned, recovering = 0, True
-            child_commands: Commands = {}
-            outputs: dict[str, Any] = {}
-            if now_ns >= child_due_ns or runtime.has_ready_answers():
-                context = [part for part in plan if part[policy_keys.TRAJECTORY_END_NS] > now_ns]
-                child_obs = (
+            outputs: Mapping[str, Any] = {}
+            if now_ns >= inner_due_ns or runtime.has_ready_answers():
+                context = [part for part in plan if part[policy_keys.TRAJECTORY.END_NS] > now_ns]
+                inner_obs = (
                     obs
                     if self._plan_key is None
                     else LazyDict(
@@ -377,17 +391,15 @@ class TrajectoryPlayer(Policy):
                     )
                 )
                 try:
-                    step = inner.send(child_obs)
+                    step = inner.send(inner_obs)
                 except StopIteration as end:
                     return end.value
                 if step is None:
-                    raise TypeError('TrajectoryPlayer requires its child to yield a Step')
-                child_due_ns = step.resume_at_ns
-                child_commands = step.commands
-                outputs = dict(step.outputs)
-                update: Trajectory | None = outputs.pop(self._trajectory_key, None)
-                if update is not None:
-                    planned = self._install(update, waypoints, plan, now_ns)
+                    raise TypeError('TrajectoryPlayer requires its inner run to yield a Step')
+                inner_due_ns = step.resume_at_ns
+                outputs = step.outputs
+                if step.commands:
+                    planned = self._install(cast(Trajectory, step.commands), waypoints, plan, now_ns)
             commands: dict[str, Any] = {}
             due_ns = None
             starts_chunk = False
@@ -396,11 +408,10 @@ class TrajectoryPlayer(Policy):
                 due_ns = point.due_ns
                 starts_chunk |= point.starts_chunk
                 commands.update(point.commands)
-            commands.update(child_commands)
             recovering = recovering and not commands
             if stats is not None:
                 stats.count_round(planned, due_ns, now_ns, queued=len(waypoints), starts_chunk=starts_chunk)
-            resume_at_ns = min(child_due_ns, waypoints[0].due_ns) if waypoints else child_due_ns
+            resume_at_ns = min(inner_due_ns, waypoints[0].due_ns) if waypoints else inner_due_ns
             obs = yield Step(commands, resume_at_ns, outputs=outputs)
 
     def to_spec(self) -> dict[str, Any]:
@@ -408,7 +419,6 @@ class TrajectoryPlayer(Policy):
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
             ARGS: {
-                'trajectory_key': self._trajectory_key,
                 'plan_key': self._plan_key,
                 'record_stats': self._record_stats,
                 'replan_on_error': self._replan_on_error,
@@ -499,15 +509,15 @@ class ChunkedSchedule(Policy):
         return Trajectory(commands=chunk, start_ns=start_ns, end_ns=start_ns + round(duration_sec * 1e9), fps=self._fps)
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
-        child = self._predict(runtime, infer)
-        next(child)
+        inner = self._predict(runtime, infer)
+        next(inner)
         player = TrajectoryPlayer(
             plan_key=policy_keys.PLAN, record_stats=self._record_stats, replan_on_error=self._replan_on_error
         )
         try:
-            return (yield from player.run(runtime, child))
+            return (yield from player.run(runtime, inner))
         finally:
-            child.close()
+            inner.close()
 
     def _predict(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         answer: Answer[Sequence[Commands] | None] | None = None
@@ -518,10 +528,10 @@ class ChunkedSchedule(Policy):
             while True:
                 now_ns = runtime.time_ns
                 plan: Sequence[Trajectory] = obs[policy_keys.PLAN]
-                end_ns = plan[-1][policy_keys.TRAJECTORY_END_NS] if plan else now_ns
+                end_ns = plan[-1][policy_keys.TRAJECTORY.END_NS] if plan else now_ns
                 call_ns = (
-                    self._next_call_ns(plan[-1][policy_keys.TRAJECTORY_START_NS], end_ns, lead_sec)
-                    if plan and plan[-1][policy_keys.TRAJECTORY_COMMANDS]
+                    self._next_call_ns(plan[-1][policy_keys.TRAJECTORY.START_NS], end_ns, lead_sec)
+                    if plan and plan[-1][policy_keys.TRAJECTORY.COMMANDS]
                     else now_ns
                 )
                 inference_obs = LazyDict(
@@ -530,7 +540,7 @@ class ChunkedSchedule(Policy):
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
                     answer = runtime.submit(infer, inference_obs)
-                outputs: dict[str, Any] = {}
+                commands: Commands = {}
                 if answer is not None and answer.done():
                     chunk = answer.result()
                     lead_sec = lead.update(answer.elapsed_sec)
@@ -538,15 +548,15 @@ class ChunkedSchedule(Policy):
                     if chunk is not None:
                         start_ns = max(now_ns, end_ns)
                         trajectory = self._plan_chunk(chunk, start_ns)
-                        outputs[policy_keys.TRAJECTORY] = trajectory
+                        commands = trajectory
                         call_ns = (
-                            self._next_call_ns(start_ns, trajectory[policy_keys.TRAJECTORY_END_NS], lead_sec)
+                            self._next_call_ns(start_ns, trajectory[policy_keys.TRAJECTORY.END_NS], lead_sec)
                             if chunk
                             else now_ns
                         )
                     if not submitted and now_ns >= call_ns:
                         answer = runtime.submit(infer, inference_obs)
-                obs = yield Step({}, now_ns if answer is not None else call_ns, outputs=outputs)
+                obs = yield Step(commands, now_ns if answer is not None else call_ns)
         finally:
             if answer is not None:
                 answer.cancel()

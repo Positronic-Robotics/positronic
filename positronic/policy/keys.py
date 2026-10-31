@@ -40,12 +40,16 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 
 OBS_TIME_NS = 'obs_time_ns'
 
-TRAJECTORY = 'trajectory'
 PLAN = 'plan'
-TRAJECTORY_COMMANDS: Final = 'commands'
-TRAJECTORY_START_NS: Final = 'start_ns'
-TRAJECTORY_END_NS: Final = 'end_ns'
-TRAJECTORY_FPS: Final = 'fps'
+
+
+class TRAJECTORY:
+    """Fields of a timed command sequence."""
+
+    COMMANDS: Final = 'commands'
+    START_NS: Final = 'start_ns'
+    END_NS: Final = 'end_ns'
+    FPS: Final = 'fps'
 
 
 class RTC:

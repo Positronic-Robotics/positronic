@@ -64,7 +64,7 @@ class Trajectory(TypedDict):
 
 @dataclass
 class Step:
-    """Commands to emit now, auxiliary outputs, and the next requested call time.
+    """Commands for the outer processor, auxiliary outputs, and the next requested call time.
 
     Any submitted call becoming ready may resume the policy sooner, including at the same clock time.
     """

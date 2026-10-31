@@ -218,7 +218,7 @@ class ChunkFromV1Answer(Codec):
 
 def _unnest_seq(node: dict[str, Any]) -> list[dict[str, Any]]:
     if SEQ in node:
-        return [part for child in node[SEQ] for part in _unnest_seq(child)]
+        return [part for entry in node[SEQ] for part in _unnest_seq(entry)]
     return [node]
 
 

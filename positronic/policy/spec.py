@@ -109,14 +109,14 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
 
     def build(node: dict[str, Any]) -> Processor | Codec:
         if SEQ in node:
-            parts = [build(child) for child in node[SEQ]]
+            parts = [build(entry) for entry in node[SEQ]]
             if not parts:
                 raise ValueError('A sequential spec must contain at least one component')
             if all(isinstance(part, Codec) for part in parts):
                 return reduce(or_, cast(list[Codec], parts))
             return Sequential(parts[0], *parts[1:])
         if PAR in node:
-            parts = [build(child) for child in node[PAR]]
+            parts = [build(entry) for entry in node[PAR]]
             if not parts or not all(isinstance(part, Codec) for part in parts):
                 raise ValueError('Parallel specs require at least one codec')
             return reduce(and_, cast(list[Codec], parts))
