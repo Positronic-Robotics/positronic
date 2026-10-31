@@ -452,13 +452,27 @@ action = session.infer(observation)
 `keepalive()` resets the server's idle timer and returns `alive_seconds`. It raises
 `wire.KeepaliveUnsupported` on a server without the call.
 
-`new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays
-cold. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says what the server
-answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session` raises no
-exception of the WebSocket or gRPC library.
+`new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays cold.
+The first dial gets the whole `open_timeout`, so `connect_deadline=0` is one attempt. Each retry gets
+`open_timeout` or the time left, whichever is shorter, so no retry waits past the deadline. An edge that holds
+a dial while it starts a backend wants `open_timeout` as long as the cold start, so one dial waits through it;
+`RemotePolicy` takes both. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says
+what the server answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session`
+raises no exception of the WebSocket or gRPC library.
 
 `wait_for_server()` returns once a server answers a probe, and opens no session. It retries as `new_session`
 does.
+
+`InferenceClient(..., modal_sessions=True)` serves a Modal Server with sticky sessions (`ModalSessions`): each
+session starts a Modal session first and dials with its token, a reconnect dials the same session, a dial on a
+session that ended (404) starts a new one, and close ends it (`positronic.cfg.policy.modal_remote`;
+`modal_remote_legacy` is the long dial for a Modal web endpoint without sessions). The start is one blocking
+request, never abandoned: a start the edge answers with a 5xx after its own limit continues under the same
+idempotency key, so it places one session. The start and the dial fit in one `connect_deadline`. The session
+calls go to the endpoint alone: the client follows no redirect, since the calls carry the endpoint's
+credentials. The edge refuses a request without a session token, so `keepalive()` and `wait_for_server()`
+carry one too: the token of a session the client has open, or of a spare session the call starts. That start
+waits for a container, so it wakes a cold app, and the next `new_session` dials the spare.
 
 A session recovers a connection that drops before the server's first answer. A later drop raises
 `wire.PeerDisconnected`.

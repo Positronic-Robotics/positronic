@@ -8,6 +8,7 @@ from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 
 from positronic import keys
+from positronic.offboard.client import DEFAULT_CONNECT_DEADLINE
 from positronic.policy import RemotePolicy
 from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import DEFAULT_PORT, default_socket_path, session_query
@@ -107,6 +108,18 @@ def file_headers(path: str) -> dict[str, str]:
 authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=bearer_headers)
 nebius_remote = cfn.Config(RemotePolicy, address=network_address, headers=nebius_bearer_headers)
 file_authed_remote = cfn.Config(RemotePolicy, address=network_address, headers=file_headers)
+
+# A Modal Server with sticky sessions: each session starts a Modal session, which waits for its container, and
+# dials with the session token. `modal_remote_legacy` is for a Modal web endpoint without sessions. Its edge queues a
+# websocket upgrade while it starts a container, and starts a container for every upgrade the client gave up on,
+# so one dial waits as long as the connect deadline.
+modal_remote_legacy = file_authed_remote.override(
+    wire='websocket_tls',
+    address=network_address.override(port=443),
+    open_timeout=DEFAULT_CONNECT_DEADLINE,
+    connect_deadline=DEFAULT_CONNECT_DEADLINE,
+)
+modal_remote = modal_remote_legacy.override(modal_sessions=True)
 
 # A person, through a teleop service on another machine: `--policy.address.host` names it. The token in `AUTH_TOKEN_ENV`
 # is the token of the service, and `--policy.headers=None` dials a service with no token.
