@@ -850,9 +850,17 @@ def test_a_robolab_label_marks_a_chain_at_its_target_before_its_subtask_ends_and
             '0.banana_01.1.object_in_container': [False, False, False, True],
         },
     )
-    assert _stage_marks(robolab_label(episode)) == [
+    given = robolab_label(episode)
+    assert _stage_marks(given) == [
         (0, {Stage.reaching: 0.0, Stage.contact: 0.5, Stage.control: 0.5, Stage.at_target: 1.0}),
         (1, {}),
+    ]
+    assert given is not None
+    assert [event.stage for event in given.events if isinstance(event, StageReached)] == [
+        Stage.reaching,
+        Stage.contact,
+        Stage.control,
+        Stage.at_target,
     ]
 
 

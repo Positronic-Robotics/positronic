@@ -640,17 +640,16 @@ class _SubtaskSample(NamedTuple):
 def _timed_values(signal: Path) -> list[tuple[int, Any]]:
     """Each sample of `signal`, which `recorded_span` has parsed, as its world time and its value.
 
-    Empty when the episode does not record the signal.
+    Empty when the episode does not record the signal, or the signal holds no values.
     """
     column = _world_time_column(signal) if signal.is_file() else None
     if column is None:
         return []
-    try:
-        table = pq.read_table(signal, columns=[column, VALUE_COLUMN])
-    except pa.ArrowInvalid:
+    if VALUE_COLUMN not in pq.read_schema(signal).names:
         # One damaged upload leaves the other signals read, so this is logged, not raised.
         log.error('%s holds no %s column; it counts as not recorded', signal, VALUE_COLUMN)
         return []
+    table = pq.read_table(signal, columns=[column, VALUE_COLUMN])
     return list(zip(table.column(column).to_pylist(), table.column(VALUE_COLUMN).to_pylist(), strict=True))
 
 
@@ -684,6 +683,15 @@ class _SceneState(NamedTuple):
     progress: dict[_Condition, list[tuple[int, Any]]]
 
 
+def _parsed_condition(name: str) -> _Condition | None:
+    """The condition that a progress signal's `<subtask>.<group>.<index>.<condition>` names. A group can hold dots."""
+    subtask, _, rest = name.partition('.')
+    group, index, condition = (rest.rsplit('.', 2) + ['', '', ''])[:3]
+    if not (subtask.isdecimal() and index.isdecimal() and group and condition):
+        return None
+    return _Condition(int(subtask), group, int(index), condition)
+
+
 def _scene_state(episode: Path) -> _SceneState:
     """The `gt_state` signals that `episode` records. A field that this labeler does not read is left out."""
     objects = f'{GT_STATE_SIGNAL}.{GT_STATE_OBJECTS}.'
@@ -706,13 +714,11 @@ def _scene_state(episode: Path) -> _SceneState:
     return state
 
 
-def _parsed_condition(name: str) -> _Condition | None:
-    """The condition that a progress signal's `<subtask>.<group>.<index>.<condition>` names. A group can hold dots."""
-    subtask, _, rest = name.partition('.')
-    group, index, condition = (rest.rsplit('.', 2) + ['', '', ''])[:3]
-    if not (subtask.isdigit() and index.isdigit() and group and condition):
-        return None
-    return _Condition(int(subtask), group, int(index), condition)
+class _Sample(NamedTuple):
+    """One sample of a signal: its world time and its value."""
+
+    time_ns: int
+    value: Any
 
 
 class _Series:
@@ -726,10 +732,10 @@ class _Series:
         self._times = [time_ns for time_ns, _ in samples]
         self._values = [value for _, value in samples]
 
-    def sample_at(self, time_ns: int) -> tuple[int, Any] | None:
-        """The time and the value of the last sample in the frame at `time_ns` or before it, or None."""
+    def sample_at(self, time_ns: int) -> _Sample | None:
+        """The last sample in the frame at `time_ns` or before it, or None."""
         index = bisect_right(self._times, time_ns + self._SAME_FRAME_NS) - 1
-        return (self._times[index], self._values[index]) if index >= 0 else None
+        return _Sample(self._times[index], self._values[index]) if index >= 0 else None
 
 
 class _Mark(NamedTuple):
@@ -766,7 +772,7 @@ class _StageReader:
     def frame_at(self, time_ns: int) -> tuple[int, int]:
         """The current subtask at `time_ns`, and the time of its frame's `subtask` sample, where attempts split."""
         sample = self._counts.sample_at(time_ns)
-        return (sample[1], sample[0]) if sample is not None else (0, time_ns)
+        return (sample.value, sample.time_ns) if sample is not None else (0, time_ns)
 
     def marks(self) -> Iterator[_Mark]:
         yield from self._condition_marks()
@@ -799,8 +805,8 @@ class _StageReader:
                 effector = self._ee.sample_at(time_ns)
                 if item not in self._objects.get(subtask, ()) or effector is None:
                     continue
-                if isinstance(effector[1], list) and isinstance(pose, list):
-                    if math.dist(effector[1][:3], pose[:3]) <= self._REACH_M:
+                if isinstance(effector.value, list) and isinstance(pose, list):
+                    if math.dist(effector.value[:3], pose[:3]) <= self._REACH_M:
                         yield _Mark(subtask, Stage.reaching, frame_ns)
 
 
@@ -810,7 +816,8 @@ def _robolab_stages(episode: Path, start_ns: int, subtasks: list[_SubtaskSample]
     for mark in _StageReader(episode, subtasks).marks():
         key = (mark.subtask, mark.stage)
         first[key] = min(first.get(key, mark.time_ns), mark.time_ns)
-    return [StageReached(seconds=(time_ns - start_ns) / 1e9, stage=stage) for (_, stage), time_ns in first.items()]
+    ordered = sorted(first.items(), key=lambda entry: (entry[1], entry[0][1]))
+    return [StageReached(seconds=(time_ns - start_ns) / 1e9, stage=stage) for (_, stage), time_ns in ordered]
 
 
 def robolab_label(episode: Path) -> Label | None:
