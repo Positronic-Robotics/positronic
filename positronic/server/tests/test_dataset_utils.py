@@ -748,6 +748,22 @@ def test_a_dict_names_each_line_by_its_key_and_a_list_by_its_signal(tmp_path):
     assert _line_names(listed) == {f'/signals/{keys.TARGET_GRIP}': [keys.TARGET_GRIP]}
 
 
+def test_joint_commands_and_joint_deltas_name_their_values_by_joint(tmp_path):
+    static = {eval_keys.JOINT_SIGNALS: [keys.JOINTS], roboarm_keys.JOINT_NAMES: ['j1', 'j2']}
+    widths = {keys.JOINTS: 2, keys.JOINT_VEL: 2, keys.TARGET_JOINTS: 2, keys.TARGET_JOINT_DELTAS: 2}
+    ep = _episode(tmp_path / 'ep', widths, static)
+    signals = _collect_signal_groups(ep)
+
+    assert {key: dataset_utils._value_names(key, signals, ep) for key in widths} == dict.fromkeys(widths, ['j1', 'j2'])
+
+
+def test_a_joint_delta_signal_with_another_width_than_the_arm_keeps_value_indices(tmp_path):
+    static = {eval_keys.JOINT_SIGNALS: [keys.JOINTS], roboarm_keys.JOINT_NAMES: ['j1', 'j2']}
+    ep = _episode(tmp_path / 'ep', {keys.JOINTS: 2, keys.TARGET_JOINT_DELTAS: 3}, static)
+
+    assert dataset_utils._value_names(keys.TARGET_JOINT_DELTAS, _collect_signal_groups(ep), ep) is None
+
+
 def test_the_arm_charts_plot_the_motion_signals_of_each_kind_of_arm_command():
     one_of_each_kind = (
         command.CartesianPosition(geom.Transform3D.identity),
