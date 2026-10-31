@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from positronic_model_server import serialization
 from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, parallel, sequence
 
 import pimm
@@ -18,8 +19,9 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step, Trajectory
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -63,6 +65,7 @@ from positronic.policy.processors import (
     PauseOnUnavailable,
     RTCSchedule,
     TemporalStack,
+    TrajectoryPlayer,
 )
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Deprecation, Version
@@ -415,6 +418,243 @@ class SlowModel:
         assert self._pending is not None
         self._pending.set_result(actions)
         self._pending = None
+
+
+def _trajectory(values, start_ns=0, *, fps=10, end_ns=None):
+    return Trajectory(
+        commands=[{MOTOR: value} for value in values],
+        start_ns=start_ns,
+        end_ns=start_ns + round(len(values) * 1e9 / fps) if end_ns is None else end_ns,
+        fps=fps,
+    )
+
+
+def test_player_waypoint_wakeups_do_not_advance_the_child(execution):
+    runtime, clock = execution
+    child = Mock(
+        send=Mock(
+            return_value=Step({}, 500_000_000, outputs={policy_keys.TRAJECTORY: _trajectory([0, 1, 2]), 'sample': 42})
+        )
+    )
+    run = runtime.start(TrajectoryPlayer(), child)
+    try:
+        assert run.send({}) == Step({MOTOR: 0}, 100_000_000, outputs={'sample': 42})
+        for now, commands, deadline in [
+            (50_000_000, {}, 100_000_000),
+            (100_000_000, {MOTOR: 1}, 200_000_000),
+            (200_000_000, {MOTOR: 2}, 500_000_000),
+            (300_000_000, {}, 500_000_000),
+        ]:
+            clock.advance_to_ns(now)
+            assert run.send({}) == Step(commands, deadline)
+        child.send.assert_called_once_with({})
+        clock.advance_to_ns(500_000_000)
+        child.send.return_value = Step({}, 600_000_000)
+        assert run.send({}) == Step({}, 600_000_000)
+        assert child.send.call_count == 2
+    finally:
+        run.close()
+    child.close.assert_not_called()
+
+
+def test_player_checks_global_readiness_once_without_spinning(execution, monkeypatch):
+    runtime, clock = execution
+    child = Mock(send=Mock(return_value=Step({}, 500_000_000)))
+    run = runtime.start(TrajectoryPlayer(), child)
+    try:
+        run.send({})
+        clock.advance_to_ns(50_000_000)
+        monkeypatch.setattr(runtime, 'has_ready_answers', lambda: True)
+        child.send.return_value = Step({}, 500_000_000, outputs={policy_keys.TRAJECTORY: _trajectory([7], 50_000_000)})
+        assert run.send({}) == Step({MOTOR: 7}, 500_000_000)
+        assert child.send.call_count == 2
+    finally:
+        run.close()
+
+
+def test_player_preserves_earlier_commands_when_a_future_update_replaces_the_tail(execution):
+    runtime, clock = execution
+    first = _trajectory(['a0', 'a1', 'a2', 'a3'])
+    second = _trajectory(['b0', 'b1'], 200_000_000, fps=20)
+    child = Mock(
+        send=Mock(
+            side_effect=[
+                Step({}, 50_000_000, outputs={policy_keys.TRAJECTORY: first}),
+                Step({}, 250_000_000, outputs={policy_keys.TRAJECTORY: second}),
+                Step({}, 1_000_000_000),
+            ]
+        )
+    )
+    run = runtime.start(TrajectoryPlayer(plan_key=policy_keys.PLAN), child)
+    try:
+        assert run.send({}).commands == {MOTOR: 'a0'}
+        clock.advance_to_ns(50_000_000)
+        assert run.send({}).commands == {}
+        clock.advance_to_ns(100_000_000)
+        assert run.send({}).commands == {MOTOR: 'a1'}
+        clock.advance_to_ns(200_000_000)
+        assert run.send({}).commands == {MOTOR: 'b0'}
+        clock.advance_to_ns(250_000_000)
+        assert run.send({}) == Step({MOTOR: 'b1'}, 1_000_000_000)
+        assert child.send.call_args.args[0][policy_keys.PLAN] == [second]
+        assert first[policy_keys.TRAJECTORY_END_NS] == 400_000_000
+        assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 2
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('start_ns, expected', [(100_000_000, {MOTOR: 'b2'}), (0, {})])
+def test_player_skips_elapsed_actions_and_does_not_replay_expired_updates(execution, start_ns, expected):
+    runtime, clock = execution
+    child = Mock(
+        send=Mock(
+            side_effect=[
+                Step({}, 350_000_000, outputs={policy_keys.TRAJECTORY: _trajectory(['a0', 'a1', 'a2', 'a3'])}),
+                Step({}, 1_000_000_000, outputs={policy_keys.TRAJECTORY: _trajectory(['b0', 'b1', 'b2'], start_ns)}),
+            ]
+        )
+    )
+    run = runtime.start(TrajectoryPlayer(), child)
+    try:
+        run.send({})
+        clock.advance_to_ns(350_000_000)
+        assert run.send({}) == Step(expected, 1_000_000_000)
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('update', [None, _trajectory([], 200_000_000)])
+def test_player_distinguishes_no_update_from_removing_the_future_plan(execution, update):
+    runtime, clock = execution
+    child = Mock(
+        send=Mock(
+            side_effect=[
+                Step({}, 50_000_000, outputs={policy_keys.TRAJECTORY: _trajectory([0, 1, 2])}),
+                Step({}, 1_000_000_000, outputs={policy_keys.TRAJECTORY: update}),
+            ]
+        )
+    )
+    run = runtime.start(TrajectoryPlayer(), child)
+    try:
+        run.send({})
+        clock.advance_to_ns(50_000_000)
+        run.send({})
+        clock.advance_to_ns(100_000_000)
+        assert run.send({}).commands == {MOTOR: 1}
+        clock.advance_to_ns(200_000_000)
+        assert run.send({}) == Step({MOTOR: 2} if update is None else {}, 1_000_000_000)
+    finally:
+        run.close()
+
+
+def test_player_context_keeps_source_timing_and_clips_replaced_segments(execution):
+    runtime, clock = execution
+    first = _trajectory([0, 1, 2, 3])
+    second = _trajectory([4, 5], 250_000_000)
+    child = Mock(
+        send=Mock(
+            side_effect=[
+                Step({}, 50_000_000, outputs={'prediction': first}),
+                Step({}, 100_000_000, outputs={'prediction': second}),
+                Step({}, 1_000_000_000),
+            ]
+        )
+    )
+    player = TrajectoryPlayer(trajectory_key='prediction', plan_key='remaining', record_stats=False)
+    run = runtime.start(spec.from_spec(player.to_spec()), child)
+    try:
+        run.send({POSITION: 42})
+        assert child.send.call_args.args[0]['remaining'] == []
+        clock.advance_to_ns(50_000_000)
+        run.send({POSITION: 43})
+        clock.advance_to_ns(100_000_000)
+        run.send({POSITION: 44})
+        context = child.send.call_args.args[0]
+        assert context[POSITION] == 44
+        assert context['remaining'] == [{**first, policy_keys.TRAJECTORY_END_NS: 250_000_000}, second]
+        assert first[policy_keys.TRAJECTORY_END_NS] == 400_000_000
+        assert runtime.metadata_snapshot() == {}
+    finally:
+        run.close()
+
+
+def test_player_forwards_child_commands_and_returns_its_end(execution):
+    runtime, _ = execution
+    child = Mock(send=Mock(side_effect=[Step({MOTOR: 42}, 0), StopIteration(PolicyEnd.COMPLETE)]))
+    run = runtime.start(TrajectoryPlayer(), child)
+    assert run.send({}) == Step({MOTOR: 42}, 0)
+    with pytest.raises(StopIteration) as end:
+        run.send({})
+    assert end.value.value is PolicyEnd.COMPLETE
+
+
+@pytest.mark.parametrize('fps, end_ns', [(0, 0), (float('nan'), 0), (10, -1), (10, 200_000_000)])
+def test_player_rejects_invalid_trajectory_timing(execution, fps, end_ns):
+    runtime, _ = execution
+    update = Trajectory(commands=[{MOTOR: 1}], start_ns=0, end_ns=end_ns, fps=fps)
+    child = Mock(send=Mock(return_value=Step({}, 0, outputs={policy_keys.TRAJECTORY: update})))
+    run = runtime.start(TrajectoryPlayer(), child)
+    with pytest.raises(ValueError):
+        run.send({})
+
+
+def test_chunked_history_only_answer_preserves_playback_and_updates_duration(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    estimate_run = Mock(update=Mock(return_value=0.1))
+    estimate = Mock(run=Mock(return_value=estimate_run))
+    run = runtime.start(ChunkedSchedule(fps=10, inference_lead=estimate), Mock())
+    try:
+        run.send({})
+        model.answer('a', length=3)
+        run.send({})
+        clock.advance_to_ns(200_000_000)
+        assert run.send({}).commands == {MOTOR: 'a2'}
+        clock.advance_to_ns(250_000_000)
+        model.answer_with(None)
+        assert run.send({}).commands == {}
+        assert estimate_run.update.call_args.args[0] == pytest.approx(0.05)
+        assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.SCHEDULED}'] == 3
+    finally:
+        run.close()
+
+
+def test_existing_codecs_decode_wire_arrays_and_timing_for_the_player(execution):
+    runtime, clock = execution
+    commands = (
+        PackFields(decode_layout={policy_keys.TRAJECTORY_COMMANDS: []})
+        | JointPositionAction('joints', 'grip', num_joints=2)
+        | SplitActionChunk()
+        | PackFields(decode_layout={'joints': ['joints'], 'grip': ['grip']})
+    )
+    timing_keys = (policy_keys.TRAJECTORY_START_NS, policy_keys.TRAJECTORY_END_NS, policy_keys.TRAJECTORY_FPS)
+    codec = spec.from_spec((commands & PackFields(decode_layout={key: [key] for key in timing_keys})).to_spec())
+    assert isinstance(codec, Codec)
+    response = {
+        'joints': np.array([[1, 2], [3, 4]]),
+        'grip': np.array([0.1, 0.2]),
+        policy_keys.TRAJECTORY_START_NS: 50_000_000,
+        policy_keys.TRAJECTORY_END_NS: 250_000_000,
+        policy_keys.TRAJECTORY_FPS: 10,
+    }
+    decoded = codec.decode(serialization.deserialise(serialization.serialise(response)))
+    child = Mock(send=Mock(return_value=Step({}, 1_000_000_000, outputs={policy_keys.TRAJECTORY: decoded})))
+    run = runtime.start(TrajectoryPlayer(), child)
+    try:
+        assert run.send({}) == Step({}, 50_000_000)
+        clock.advance_to_ns(50_000_000)
+        first = run.send({})
+        np.testing.assert_array_equal(first.commands[keys.ROBOT_COMMAND].positions, [1, 2])
+        assert first.commands[keys.TARGET_GRIP] == 0.1
+        clock.advance_to_ns(150_000_000)
+        second = run.send({})
+        np.testing.assert_array_equal(second.commands[keys.ROBOT_COMMAND].positions, [3, 4])
+        assert second.commands[keys.TARGET_GRIP] == 0.2
+        assert second.resume_at_ns == 1_000_000_000
+    finally:
+        run.close()
+    assert codec.wrap(lambda obs: None)({}) is None
 
 
 class Rig:
@@ -1215,6 +1455,7 @@ def test_invalid_stack_specs_are_rejected(node, error):
 
 def test_wire_names_match_the_registered_components():
     instances = {
+        'trajectory_player': TrajectoryPlayer(),
         'chunked_schedule': ChunkedSchedule(fps=10),
         'encode_images': EncodeImages([['camera']]),
         'stop_on_fault': PauseOnUnavailable(),
