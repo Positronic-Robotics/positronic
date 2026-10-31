@@ -366,7 +366,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         return refusal_of(reason) if isinstance(reason, OSError) else wire.Refusal.SILENT
 
     def _start_session(self, endpoint: _Endpoint) -> str:
-        """The token of a new session. A 5xx and a lost answer continue the start under the same key."""
+        """The token of a new session. A 5xx, a 429 and a lost answer continue the start under the same key."""
         key, stamp = str(uuid.uuid4()), str(time.time())
         deadline = time.monotonic() + self._start_deadline
         lost: Exception | None = None
