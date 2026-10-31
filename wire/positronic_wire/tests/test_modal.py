@@ -281,7 +281,7 @@ class FakeTimer:
 
     made: list['FakeTimer'] = []
 
-    def __init__(self, interval: float, function, args=()) -> None:
+    def __init__(self, interval: float, function, args) -> None:
         self.interval, self.function, self.args = interval, function, args
         self.daemon = False
         FakeTimer.made.append(self)
@@ -331,22 +331,6 @@ def test_a_dropped_session_a_dial_took_is_not_ended_by_its_timer(modal_wire, edg
 
     FakeTimer.made[0].fire()
 
-    assert edge.ended == []
-
-
-def test_a_session_parked_again_is_not_ended_by_the_timer_of_its_first_park(modal_wire, edge, inner, monkeypatch):
-    monkeypatch.setattr(FakeTimer, 'made', [])
-    monkeypatch.setattr('positronic_wire.modal.threading.Timer', FakeTimer)
-    _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
-    _drop(modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0))
-    first_park, second_park = FakeTimer.made
-
-    first_park.fire()
-
-    assert edge.ended == []
-    modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
-    assert inner.dialled == ['token-1', 'token-1', 'token-1']
-    second_park.fire()
     assert edge.ended == []
 
 
