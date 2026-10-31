@@ -466,6 +466,31 @@ def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
     sampler._nvml.shutdown()
 
 
+class _ExitedProc:
+    """A child that exited after the tree listing: every read raises."""
+
+    pid = 4_000_001
+
+    def cpu_percent(self, interval=None):
+        raise psutil.NoSuchProcess(self.pid)
+
+    def memory_info(self):
+        raise psutil.NoSuchProcess(self.pid)
+
+
+def test_stats_sample_drops_a_child_that_exits_before_its_first_read(tmp_path, monkeypatch):
+    """A child can exit between the tree listing and its first CPU read. The sample keeps the rest of the tree."""
+    _install_fake_nvml(monkeypatch)
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    monkeypatch.setattr(sampler._self, 'children', lambda recursive=False: [_ExitedProc()])
+
+    sample = sampler._sample()
+
+    assert sample[telemetry.STAT_RSS_PROC_B] > 0
+    assert _ExitedProc.pid not in sampler._proc_cache
+    sampler._nvml.shutdown()
+
+
 def test_stats_sample_without_gpu(tmp_path, monkeypatch):
     def _raise():
         raise pynvml.NVMLError(pynvml.NVML_ERROR_DRIVER_NOT_LOADED)

@@ -613,11 +613,11 @@ class StatsSampler:
         cpu_pct = 0.0
         rss = 0
         for proc in processes:
-            if proc.pid not in self._proc_cache:
-                self._proc_cache[proc.pid] = proc
-                proc.cpu_percent(interval=None)  # prime; the first read is meaningless
-            cached = self._proc_cache[proc.pid]
             try:
+                if proc.pid not in self._proc_cache:
+                    self._proc_cache[proc.pid] = proc
+                    proc.cpu_percent(interval=None)  # prime; the first read is meaningless
+                cached = self._proc_cache[proc.pid]
                 cpu_pct += cached.cpu_percent(interval=None)
                 rss += cached.memory_info().rss
             except psutil.Error:
