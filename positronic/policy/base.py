@@ -7,7 +7,7 @@ from collections.abc import Callable, Generator, Mapping
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, Self
 
-from attr import dataclass
+from attr import dataclass, field
 from eval_vocabulary.episode import PolicyEnd
 from typing_extensions import TypeAliasType, TypeVar
 
@@ -55,7 +55,7 @@ Commands = Mapping[str, Any]
 
 @dataclass
 class Step:
-    """Commands to emit now and the next requested call time.
+    """Commands to emit now, auxiliary outputs, and the next requested call time.
 
     Any submitted call becoming ready may resume the policy sooner, including at the same clock time.
     """
@@ -63,6 +63,7 @@ class Step:
     # TODO: Allow selecting which answers can wake the policy early, alongside its time deadline.
     commands: Commands
     resume_at_ns: int
+    outputs: Mapping[str, Any] = field(factory=dict)
 
 
 P = ParamSpec('P')

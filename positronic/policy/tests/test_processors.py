@@ -1446,6 +1446,27 @@ def test_end_on_field_sends_the_other_commands_and_returns_at_the_next_observati
         run.close()
 
 
+def test_end_on_field_preserves_auxiliary_outputs_on_the_final_step(execution):
+    runtime, _ = execution
+    outputs = {'sample': object()}
+
+    def inner():
+        yield
+        yield Step(_ending(42), 123, outputs=outputs)
+
+    child = inner()
+    next(child)
+    run = runtime.start(EndOnField(), child)
+    try:
+        assert run.send({}) == Step({MOTOR: 42}, runtime.time_ns, outputs=outputs)
+        with pytest.raises(StopIteration) as end:
+            run.send({})
+        assert end.value.value is PolicyEnd.COMPLETE
+    finally:
+        run.close()
+        child.close()
+
+
 def test_a_schedule_passes_end_up_as_a_command(execution):
     runtime, clock = execution
     run = runtime.start(ChunkedSchedule(fps=10), lambda obs: [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}])

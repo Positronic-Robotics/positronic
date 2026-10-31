@@ -244,19 +244,46 @@ class _DoublingCodec(Codec):
         return {name: 2 * value for name, value in data.items()}
 
 
-def test_a_wrapped_run_keeps_the_wake_up_time_and_returns_what_its_run_returned():
+@pytest.mark.parametrize('commands', [{}, {'value': 1}])
+def test_a_wrapped_run_preserves_outputs_and_timing_while_decoding_commands(commands):
+    outputs = {'sample': object()}
+
     def run():
         yield
-        yield Step({'value': 1}, 123)
+        yield Step(commands, 123, outputs=outputs)
         return PolicyEnd.GIVE_UP
 
     inner = run()
     next(inner)
     wrapped = _DoublingCodec().wrap(inner)
-    assert wrapped.send({}) == Step({'value': 2}, 123)
+    step = wrapped.send({})
+    assert isinstance(step, Step)
+    assert step == Step({name: value * 2 for name, value in commands.items()}, 123, outputs=outputs)
+    assert step.outputs is outputs
     with pytest.raises(StopIteration) as end:
         wrapped.send({})
     assert end.value.value is PolicyEnd.GIVE_UP
+
+
+def test_steps_have_independent_default_outputs():
+    first, second = Step({}, 0), Step({}, 0)
+    assert first.outputs == second.outputs == {}
+    assert first.outputs is not second.outputs
+
+
+def test_a_codec_can_produce_commands_from_an_empty_step(monkeypatch):
+    outputs = {'sample': object()}
+    codec = _DoublingCodec()
+    decoded = []
+
+    def decode(commands):
+        decoded.append(commands)
+        return {'value': 42}
+
+    monkeypatch.setattr(codec, 'decode', decode)
+    wrapped = codec.wrap(lambda obs: Step({}, 123, outputs=outputs))
+    assert wrapped({}) == Step({'value': 42}, 123, outputs=outputs)
+    assert decoded == [{}]
 
 
 def _joints_codec() -> AbsoluteJointsAction:

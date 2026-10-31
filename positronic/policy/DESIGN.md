@@ -377,6 +377,7 @@ Commands = Mapping[str, Any]
 class Step:
     commands: Commands
     resume_at_ns: int
+    outputs: Mapping[str, Any] = field(factory=dict)
 
 
 class PolicyEnd(StrEnum):
@@ -396,6 +397,10 @@ PolicyRun = ProcessorRun[Obs, Step, PolicyEnd]
 The runtime primes a generator to its first yield, which must be `None`.
 After that, sending an input returns its next output. A policy run must yield
 a step for each observation, or return its `PolicyEnd`.
+
+`Step.commands` contains robot commands; `Step.outputs` carries auxiliary results
+for surrounding processors. Codecs decode commands, including empty ones, while
+preserving outputs and the requested wake-up time.
 
 ### Answers
 
