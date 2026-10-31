@@ -45,6 +45,11 @@ TIMELINE_METADATA_KEY = b'positronic.timeline'
 # The column of a signal file that holds each sample's value.
 VALUE_COLUMN = 'value'
 
+# The arm's measured state. A recorded state unfolds into one signal per field, `<ROBOT_STATE><suffix>`. The field at
+# `EE_POSE_SUFFIX` is the [x, y, z, qw, qx, qy, qz] of the end effector.
+ROBOT_STATE = 'robot_state'
+EE_POSE_SUFFIX = '.ee_pose'
+
 # RoboLab's progress at each step, as the vector [status, completed, total, score], with the score from 0 to 1.
 SUBTASK_SIGNAL = 'subtask'
 SUBTASK_COMPLETED_INDEX = 1

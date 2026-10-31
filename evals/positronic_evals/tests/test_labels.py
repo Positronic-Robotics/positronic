@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -22,13 +22,18 @@ import pytest
 from eval_vocabulary.episode import (
     ABC_REWARD_SIGNAL,
     BENCHMARK_TASK,
+    EE_POSE_SUFFIX,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    GT_STATE_GRIPPER_CONTACT,
+    GT_STATE_OBJECTS,
+    GT_STATE_POSE,
     GT_STATE_PROGRESS,
     GT_STATE_SIGNAL,
     LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
+    ROBOT_STATE,
     SIGNAL_FILE_SUFFIX,
     STATIC_FILE,
     SUBTASK_SCORE_INDEX,
@@ -748,6 +753,126 @@ def test_a_subtask_signal_of_reset_frames_only_states_no_total(tmp_path: Path):
     given = robolab_label(episode)
     assert given is not None
     assert (given.total_subtasks, given.subtask_score) == (None, None)
+
+
+# A RoboLab frame every 0.5 s of world time; the signals of one frame differ by microseconds.
+def _write_frames(
+    episode: Path, name: str, values: Sequence[object], value_type: pa.DataType, offset_ns: int = 0
+) -> None:
+    times = [int(i * 0.5e9) + offset_ns for i in range(len(values))]
+    columns = {
+        f'{TIMESTAMP_COLUMN_PREFIX}{EMITTED_WORLD}': pa.array(times, type=pa.int64()),
+        VALUE_COLUMN: pa.array(values, type=value_type),
+    }
+    pq.write_table(pa.table(columns), episode / f'{name}{SIGNAL_FILE_SUFFIX}')
+
+
+def _write_pick_episode(
+    episode: Path,
+    completed: list[int],
+    ee: list[list[float]],
+    poses: dict[str, list[list[float]]],
+    contacts: dict[str, list[bool]],
+    progress: dict[str, list[bool]],
+) -> None:
+    """The signals of a RoboLab episode: `subtask`, the end effector, and `gt_state` with `progress` keyed by
+    `<subtask>.<group>.<index>.<condition>`. Each list holds one value per frame."""
+    subtask = [[0.0, float(done), 2.0, done / 2] for done in completed]
+    _write_frames(episode, SUBTASK_SIGNAL, subtask, pa.list_(pa.float32()), offset_ns=5_000)
+    _write_frames(episode, f'{ROBOT_STATE}{EE_POSE_SUFFIX}', ee, pa.list_(pa.float32()))
+    objects = f'{GT_STATE_SIGNAL}.{GT_STATE_OBJECTS}'
+    for item, values in poses.items():
+        _write_frames(episode, f'{objects}.{item}.{GT_STATE_POSE}', values, pa.list_(pa.float32()), 9_000)
+    for item, values in contacts.items():
+        _write_frames(episode, f'{objects}.{item}.{GT_STATE_GRIPPER_CONTACT}', values, pa.bool_(), 9_000)
+    for condition, values in progress.items():
+        _write_frames(episode, f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.{condition}', values, pa.bool_(), 9_000)
+
+
+_FAR, _CUBE_AT, _BANANA_AT = [0.0, 0.0, 0.5], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0]
+
+
+def _pose(position: list[float]) -> list[float]:
+    return [*position, 1.0, 0.0, 0.0, 0.0]
+
+
+def _stage_marks(given: Label | None) -> list[tuple[int, dict[Stage, float]]]:
+    """Each attempt's count and its first mark of each stage, to the millisecond."""
+    assert given is not None
+    return [
+        (attempt.done, {stage: round(t, 3) for stage, t in attempt.stage_seconds.items()}) for attempt in given.attempts
+    ]
+
+
+def test_a_robolab_label_marks_each_stage_of_each_subtask_at_its_first_frame(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: 'RubiksCubeThenBananaTask', SUCCESS: False, TERMINATED: True})
+    _write_pick_episode(
+        episode,
+        completed=[0, 0, 0, 0, 1, 1, 1, 1],
+        # The ee is 5 cm from the cube at 0.5 s, then 3 cm from the banana at 2.5 s.
+        ee=[_FAR, [0.5, 0.0, 0.05], [0.5, 0.0, 0.05], _FAR, _FAR, [0.0, 0.5, 0.03], _FAR, _FAR],
+        poses={'rubiks_cube': [_pose(_CUBE_AT)] * 8, 'banana': [_pose(_BANANA_AT)] * 8},
+        contacts={
+            # The banana touches the gripper in subtask 0, where it is no object of the subtask.
+            'rubiks_cube': [False, False, True, True, False, False, False, False],
+            'banana': [False, True, False, False, False, False, True, False],
+        },
+        progress={
+            '0.rubiks_cube.0.object_grabbed': [False, False, False, True, True],
+            '0.rubiks_cube.1.object_in_container': [False, False, False, False, True],
+            '1.banana.0.object_grabbed': [False] * 4 + [False, False, False, True],
+            '1.banana.1.object_in_container': [False] * 8,
+        },
+    )
+    given = robolab_label(episode)
+    assert _stage_marks(given) == [
+        (0, {Stage.reaching: 0.5, Stage.contact: 1.0, Stage.control: 1.5}),
+        (1, {Stage.reaching: 2.5, Stage.contact: 3.0, Stage.control: 3.5}),
+    ]
+    assert given is not None and given.furthest_stage is Stage.control
+
+
+def test_a_robolab_label_marks_a_chain_at_its_target_before_its_subtask_ends_and_nothing_after_the_last(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: 'BananasInBowlTask', SUCCESS: True, TERMINATED: True})
+    _write_pick_episode(
+        episode,
+        completed=[0, 0, 0, 1, 1],
+        ee=[_BANANA_AT] * 5,
+        poses={'banana': [_pose(_BANANA_AT)] * 5, 'banana_01': [_pose(_BANANA_AT)] * 5},
+        contacts={'banana': [False, True, True, True, True], 'banana_01': [False] * 5},
+        progress={
+            # One banana's chain ends at 1.0 s, and the other's ends the subtask at 1.5 s.
+            '0.banana.0.object_grabbed': [False, True, True, True],
+            '0.banana.1.object_in_container': [False, False, True, True],
+            '0.banana_01.0.object_grabbed': [False, False, False, True],
+            '0.banana_01.1.object_in_container': [False, False, False, True],
+        },
+    )
+    assert _stage_marks(robolab_label(episode)) == [
+        (0, {Stage.reaching: 0.0, Stage.contact: 0.5, Stage.control: 0.5, Stage.at_target: 1.0}),
+        (1, {}),
+    ]
+
+
+def test_a_robolab_subtask_whose_groups_name_no_object_takes_every_object_as_its_own(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: 'BlockStackingTask', SUCCESS: False, TERMINATED: True})
+    _write_pick_episode(
+        episode,
+        completed=[0, 0],
+        ee=[_FAR, _CUBE_AT],
+        poses={'red_block': [_pose(_CUBE_AT)] * 2},
+        contacts={'red_block': [False, True]},
+        progress={'0.conditions.0.stacked': [False, False]},
+    )
+    assert _stage_marks(robolab_label(episode)) == [(0, {Stage.reaching: 0.5, Stage.contact: 0.5})]
+
+
+def test_a_robolab_episode_that_records_no_scene_state_has_no_stage(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BANANA, SUCCESS: False, TERMINATED: True})
+    _write_subtask(episode, [(0.0, [0.0, 0.0, 1.0, 0.0]), (1.0, [0.0, 0.0, 1.0, 0.0])])
+    given = robolab_label(episode)
+    assert given is not None
+    assert (given.stage_seconds, given.furthest_stage) == ({}, None)
 
 
 # --- ABC
