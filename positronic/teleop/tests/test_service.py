@@ -14,7 +14,16 @@ import numpy as np
 import pos3
 import pytest
 from positronic_model_server import keys as server_keys
-from positronic_model_server.protocol import AUTH_HEADER, OBSERVATION, RESULT, SESSION_ID, STATUS, ServerStatus, bearer
+from positronic_model_server.protocol import (
+    AUTH_HEADER,
+    OBSERVATION,
+    RESULT,
+    SESSION_ID,
+    STATUS,
+    ProtocolVersion,
+    ServerStatus,
+    bearer,
+)
 from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import ServedUnixSocket
@@ -30,6 +39,8 @@ from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
@@ -39,7 +50,7 @@ from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.executor import Executor
 from positronic.policy.keys import END
 from positronic.policy.processors import ChunkedSchedule, EndOnField
-from positronic.policy.remote import RemotePolicy
+from positronic.policy.remote import RemotePolicy, declared_stack
 from positronic.teleop import command, protocol
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import VIEW_SIZE, session_query
@@ -449,6 +460,13 @@ def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_fram
     assert schedule['name'] == ChunkedSchedule.WIRE_NAME
     assert schedule['args']['inference_lead'] >= 1 / schedule['args']['fps']
     assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][2])
+
+
+def test_the_client_stack_states_the_grip_point_as_the_frame_of_the_pose_and_the_target():
+    client_stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,)))
+    stack = declared_stack({server_keys.LOCAL_STACK: client_stack}, ProtocolVersion.V3)
+    frames = ee_frames(stack.meta())
+    assert frames[keys.EE_POSE] == frames[keys.TARGET_EE_POSE] == EEFrame(site=GRIPPER_SITE)
 
 
 class _BlankRenderer:

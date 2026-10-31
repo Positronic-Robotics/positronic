@@ -24,11 +24,8 @@ A policy trained in some other end-effector frame carries the constant transform
 checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
 policy's `ee_frames` with the rig's. A remote policy gets its `ee_frames` from its server when its session opens, so
 the harness compares them then, before the first observation goes to the server. A policy observes only the poses it
-states at the rig's site. A policy that names another site is refused. A policy that states none observes each pose at
-the rig's legacy point, the point the rig reported before `gripper`, and its pose commands go back from that point. The
-legacy point is `end_effector` (`models.EE_LINK`) on a model that names it, as the FR3, the MuJoCo panda and YAM do,
-and the rig site on any other model, such as SO-101. The harness reads it from the rig's model and logs a warning for
-each such session. This fallback is transitional (#550).
+states at the rig's site. A policy that names another site is refused. A policy that states none speaks joints only: it
+observes no pose signal, and the harness fails the episode at its first pose command.
 
 `Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
 refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.
