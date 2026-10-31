@@ -64,11 +64,11 @@ socket, and as a unary call on the gRPC port.
 
 `PolicyServer(auth_token=...)` gates every route below on `Authorization: Bearer <token>`, answering
 `401` on the keepalive route, refusing the WebSocket upgrade before the session opens, and answering
-`PERMISSION_DENIED` on the gRPC wire. `serve` — the entry point every vendor CLI exposes — takes that
-token from the `AUTH_TOKEN` environment variable, so
-a secret never lands in the process arguments. No token serves open, which is the usual shape on a
-trusted LAN; an empty one is a broken secret and refuses to start. `InferenceClient(headers=...)`
-carries the header, and `positronic.cfg.policy.authed_remote` fills it in from the same variable.
+`PERMISSION_DENIED` on the gRPC wire. `serve_model`, which every vendor CLI built on `PolicyServer`
+calls, takes that token from the `AUTH_TOKEN` environment variable, so a secret never lands in the
+process arguments. No token serves open, which is the usual shape on a trusted LAN; an empty one is a
+broken secret and refuses to start. `InferenceClient(headers=...)` carries the header, and
+`positronic.cfg.policy.authed_remote` fills it in from the same variable.
 
 ### Endpoints
 
@@ -165,7 +165,8 @@ Upon connection, the server sends a ready packet with metadata:
 The client ignores all messages until it sees `status == "ready"` (status updates like `loading`/`waiting` may arrive first).
 
 The session ID belongs to this connection and is separate from model metadata. `RemotePolicy.run()`
-owns the session and includes its ID in each inference request.
+owns the session, includes its ID in each inference request, and records it in the episode as
+`inference.policy.session_id`.
 
 This metadata tells the client:
 - Which checkpoint is loaded
@@ -475,6 +476,7 @@ Vendors provide their own launch configurations and share the inference protocol
 - **OpenPI**: `positronic.vendors.openpi.server` - Serves OpenPI checkpoints with config name
 - **DreamZero**: `positronic.vendors.dreamzero.server` - Serves DreamZero checkpoints through a torchrun subprocess
 - **MolmoAct2**: `positronic.vendors.molmoact2.server` - Serves the pretrained MolmoAct2 DROID model
+- **LLM**: `positronic.vendors.llm.server` - Serves an API-backed LLM policy, one conversation per session
 
 ## See Also
 

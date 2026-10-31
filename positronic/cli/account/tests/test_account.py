@@ -23,6 +23,7 @@ from platform_client.device_flow import WORKOS_CLIENT_ID_ENV
 from platform_client.enums import BillingMode, BillingRole, ErrorCode, KeyStatus
 from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, WORKOS, timeout_after_deadline
 from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId
+from platform_client.requests import TEAM_NAME_RULE
 from platform_client.responses import MeResponse, RegisterResponse
 from pydantic import ValidationError
 
@@ -264,6 +265,19 @@ def test_a_value_of_the_wrong_kind_is_a_refusal_naming_the_field(
     with pytest.raises(CommandFailed) as raised:
         run_command(register, **{'plaintext_http': True, field: value})
     assert field in str(raised.value) and raised.value.fault is Fault.USAGE
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize('credential', ['token', None], ids=['with a credential', 'signing in'])
+def test_an_alias_that_breaks_the_team_name_rule_is_refused_before_any_request(
+    platform, workos, run_command, monkeypatch, credential
+):
+    # `workos` scripts a sign-in that a refusal must not start, and unsets the credential.
+    if credential is not None:
+        monkeypatch.setenv(gateway_module.CREDENTIAL_ENV, credential)
+    with pytest.raises(CommandFailed) as raised:
+        run_command(register, alias='Rocket\u202eTeam', plaintext_http=True)
+    assert TEAM_NAME_RULE in str(raised.value) and raised.value.fault is Fault.USAGE
     assert platform.seen is None
 
 

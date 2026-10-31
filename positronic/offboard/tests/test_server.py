@@ -430,6 +430,21 @@ def test_a_failed_inference_leaves_no_served_timing_behind(stub_server):
         session.close()
 
 
+def test_a_failed_inference_names_the_type_of_its_error(stub_server):
+    host, port, _server, policy = stub_server
+    policy.side_effect = [TimeoutError(), RuntimeError('shape mismatch')]
+    session = InferenceClient(
+        client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    ).new_session()
+    try:
+        with pytest.raises(RuntimeError, match='^Server error: TimeoutError: $'):
+            session.infer({'image': 'test'})
+        with pytest.raises(RuntimeError, match='^Server error: RuntimeError: shape mismatch$'):
+            session.infer({'image': 'test'})
+    finally:
+        session.close()
+
+
 def test_warmup_calls_the_model_without_closing_it(make_mock_model):
     policy = make_mock_model([{'action': [1, 2, 3]}], {})
     obs = {'obs': 'zeros'}

@@ -48,6 +48,7 @@ from platform_client.identity_providers import (
     max_stall_s,
 )
 from platform_client.ids import UserId
+from platform_client.requests import TEAM_NAME_RULE
 from platform_client.responses import RegisterResponse
 
 CLIENT_ID = 'Iv1.testclientid'
@@ -972,6 +973,25 @@ def test_run_registration_gates_the_url_itself():
             device_flow.run_registration('http://gateway.example', client_ids=ClientIds(), alias=None, rotate=False)
 
     assert 'in the clear' in str(raised.value)
+    assert reached == []
+
+
+def test_run_registration_refuses_an_alias_that_breaks_the_team_name_rule_before_any_sign_in():
+    reached: list[object] = []
+
+    def record(**kwargs: Any) -> httpx.Client:
+        reached.append(kwargs)
+        raise AssertionError('a refused alias must not start a sign-in')
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(httpx, 'Client', record)
+
+        with pytest.raises(SystemExit) as raised:
+            device_flow.run_registration(
+                'https://gateway.example', client_ids=ClientIds(), alias='x' * 65, rotate=False
+            )
+
+    assert TEAM_NAME_RULE in str(raised.value) and '--alias' in str(raised.value)
     assert reached == []
 
 

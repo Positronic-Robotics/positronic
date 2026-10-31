@@ -22,7 +22,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 import rerun_bindings
 from av.video.stream import VideoStream
-from eval_vocabulary.progress import STATE_SIGNAL
+from eval_vocabulary.progress import PROGRESS_CHANNEL
 from eval_vocabulary.timeline import RECORDING_TIMELINE_ORDER
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
@@ -163,30 +163,37 @@ def get_episodes_list(
     return result
 
 
+# The 3D view looks across the arm's reach from a raised side: degrees from the robot's right toward its front,
+# degrees above the floor, and distance in half-diagonals of the box around the poses and the base.
+_EYE_AZIMUTH_DEG = 45.0
+_EYE_ELEVATION_DEG = 30.0
+_EYE_DISTANCE = 3.0
+
+
 def _compute_eye_controls(signals: EpisodeSignals, ep: Episode) -> rrb.EyeControls3D | None:
-    """Compute camera view orthogonal to the best-fit plane of all pose trajectories."""
+    """A raised side view of the pose trajectories and the robot base at the origin, across the arm's reach."""
     all_positions = [
-        np.asarray(ep.signals[name].values(), dtype=np.float32)[:, :3] for name in signals.poses if ep.signals[name]
+        np.asarray(ep.signals[name].values(), dtype=np.float64)[:, :3] for name in signals.poses if ep.signals[name]
     ]
     if not all_positions:
         return None
-
     positions = np.concatenate(all_positions)
     if len(positions) < 3:
         return None
-    centroid = positions.mean(axis=0)
-    centered = positions - centroid
-    _, _, vh = np.linalg.svd(centered, full_matrices=False)
-    normal = vh[2]
 
-    # Pick the normal direction that places the robot base (origin) behind the trajectory
-    # i.e. camera on the opposite side from the base
-    if np.dot(normal, centroid) < 0:
-        normal = -normal
-
-    spread = np.linalg.norm(centered, axis=1).max()
-    camera_pos = centroid + normal * spread * 2.0
-    return rrb.EyeControls3D(position=camera_pos.tolist(), look_target=centroid.tolist())
+    with_base = np.vstack([positions, np.zeros(3)])
+    low, high = with_base.min(axis=0), with_base.max(axis=0)
+    target = (low + high) / 2
+    radius = np.linalg.norm(high - low) / 2
+    up = np.array([0.0, 0.0, 1.0])
+    reach = positions.mean(axis=0) * [1.0, 1.0, 0.0]
+    reach = reach / np.linalg.norm(reach) if np.linalg.norm(reach) > 0 else np.array([1.0, 0.0, 0.0])
+    right = np.cross(reach, up)
+    azimuth, elevation = np.radians(_EYE_AZIMUTH_DEG), np.radians(_EYE_ELEVATION_DEG)
+    direction = np.cos(elevation) * (np.cos(azimuth) * right + np.sin(azimuth) * reach) + np.sin(elevation) * up
+    return rrb.EyeControls3D(
+        position=(target + direction * radius * _EYE_DISTANCE).tolist(), look_target=target.tolist()
+    )
 
 
 _UNPLOTTED_ENTITY = '/unplotted'
@@ -534,8 +541,6 @@ def _arm_cells(
     return [(rrb.Tabs(*tabs), max(len(cells) for cells in columns.values()))] if tabs else []
 
 
-# The channel of an operator's progress marks.
-_PROGRESS_CHANNEL = STATE_SIGNAL.partition('.')[0]
 # The default replay's width: the views, then the charts.
 _DEFAULT_SPLIT_SHARES = (3, 1)
 
@@ -543,7 +548,7 @@ _DEFAULT_SPLIT_SHARES = (3, 1)
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
     charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
     names = sorted([*signals.numerics, *signals.texts])
-    progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == _PROGRESS_CHANNEL]}
+    progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == PROGRESS_CHANNEL]}
     column = [*_arm_cells(charts_by_arm, signals, ep), *((cell, 1) for cell in _chart_cells(progress, signals, ep))]
     placed = {signal for charts in [*charts_by_arm.values(), progress] for signal in _charted(charts, signals)}
     other = _other_cell(signals, placed)

@@ -15,17 +15,20 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
     camera_dict=CAMERAS,
     camera_height=260,
     camera_width=416,
+    camera_view=mapping.CameraView.ZED_X,
     # ABC's actions are 34 ms apart. One more period lets the last action's verdict arrive before the deadline.
     timeout=(mapping.ABC_EVAL_STEPS + 1) * 0.034,
     seed=None,
     task=None,
     trial_count=1,
 )
-def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_width, seed):
+def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_width, camera_view, seed):
     """An ABC eval on the bimanual i2rt YAM.
 
     ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
+    ``camera_view`` is a ``mapping.CameraView`` or its value.
     """
+    view = mapping.CameraView(camera_view)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(mapping.task_names(task)))
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
@@ -38,7 +41,12 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
 
     def tasks() -> list[Task]:
         scenes = [
-            {**params, abc_keys.CAMERA_HEIGHT: camera_height, abc_keys.CAMERA_WIDTH: camera_width}
+            {
+                **params,
+                abc_keys.CAMERA_HEIGHT: camera_height,
+                abc_keys.CAMERA_WIDTH: camera_width,
+                abc_keys.CAMERA_VIEW: view.value,
+            }
             for params in proxy.tasks(spec(**{mapping.SELECT_TASKS: task}))
         ]
         return build_tasks(task_spec, seed, trial_count, scenes)

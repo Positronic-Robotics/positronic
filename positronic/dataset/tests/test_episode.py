@@ -5,7 +5,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from eval_vocabulary.episode import LEGACY_TIME_COLUMN, TIMESTAMP_COLUMN_PREFIX
+from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN, LEGACY_TIME_COLUMN, TIMESTAMP_COLUMN_PREFIX
 
 from pimm.time import RECEIVED_WALL
 from positronic.dataset import Episode
@@ -575,7 +575,7 @@ class TestLazyMetaProperties:
         with DiskEpisodeWriter(ep_dir):
             # Write a frames parquet file directly (simulating video migration)
             timestamps = [2000, 3000, 8000]
-            table = pa.table({'ts_ns': timestamps})
+            table = pa.table({LEGACY_FRAMES_TIME_COLUMN: timestamps})
             pq.write_table(table, ep_dir / 'cam.frames.parquet')
             # Also need to create dummy video file for completeness
             (ep_dir / 'cam.mp4').write_bytes(b'dummy')

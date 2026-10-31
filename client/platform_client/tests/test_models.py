@@ -55,6 +55,7 @@ from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, Submissi
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import (
+    TEAM_NAME_RULE,
     BillingOrgQuery,
     BillingPurchaseCreateRequest,
     BillingPurchaseGetQuery,
@@ -387,6 +388,30 @@ def test_a_model_round_trips_through_its_json_form(model: BaseModel):
 @pytest.mark.parametrize('model', MODELS, ids=lambda m: type(m).__name__)
 def test_a_model_round_trips_through_a_real_json_string(model: BaseModel):
     assert type(model).model_validate_json(model.model_dump_json()) == model
+
+
+REFUSED_TEAM_NAMES = {
+    'longer than 64 characters': 'x' * 65,
+    'empty after the trim': ' \t ',
+    'a control character': 'Rocket\x07Team',
+    'a newline': 'Rocket\nTeam',
+    'a right-to-left override': 'Rocket\u202eTeam',
+    'a right-to-left mark': 'Rocket\u200f',
+    'a first-strong isolate': '\u2068Rocket',
+}
+
+
+@pytest.mark.parametrize('name', REFUSED_TEAM_NAMES.values(), ids=REFUSED_TEAM_NAMES.keys())
+def test_a_registration_refuses_an_alias_that_breaks_the_team_name_rule(name: str):
+    with pytest.raises(ValidationError) as raised:
+        RegisterRequest(credential='token', alias=name)
+
+    assert TEAM_NAME_RULE in str(raised.value)
+
+
+@pytest.mark.parametrize('name', ['x' * 64, 'Équipe Ünïcode 東京 🤖'])
+def test_a_registration_keeps_an_alias_inside_the_team_name_rule_without_the_spaces_at_its_ends(name: str):
+    assert RegisterRequest(credential='token', alias=f' {name}\t').alias == name
 
 
 def test_the_published_scores_are_a_subset_of_the_record():

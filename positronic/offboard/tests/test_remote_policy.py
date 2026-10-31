@@ -740,6 +740,7 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
         assert episode_meta['server.model_name'] == 'fixed'
         assert episode_meta['server.action_fps'] == 10
         assert episode_meta['server.action_horizon_sec'] == 0.2
+        assert episode_meta[policy_keys.SESSION_ID] == model.ended_sessions[-1]
     assert len(set(model.ended_sessions)) == 2
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
 
@@ -1164,6 +1165,54 @@ def test_a_run_records_the_jpeg_quality_only_when_images_are_compressed(runtime,
         assert meta[policy_keys.JPEG_QUALITY] == 75
     else:
         assert policy_keys.JPEG_QUALITY not in meta
+
+
+def test_a_run_records_its_session_and_the_session_a_reconnect_opens(runtime):
+    session = _mock_session(CHUNKED_STACK)
+    session.session_id = 'first'
+
+    def reconnect(obs):
+        session.session_id = 'reopened'
+        return [{'value': 42}]
+
+    session.infer.side_effect = reconnect
+    policy = RemotePolicy('websocket', _address('localhost', 0))
+    policy._client = MagicMock()
+    policy._client.new_session.return_value = session
+    run = runtime.start(policy)
+    try:
+        assert runtime.metadata_snapshot()[policy_keys.SESSION_ID] == 'first'
+        run.send({})
+        assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+        run.send({})
+        assert runtime.metadata_snapshot()[policy_keys.SESSION_ID] == 'reopened'
+    finally:
+        runtime.close()
+        run.close()
+
+
+def test_a_run_keeps_the_dropped_session_when_the_reopened_one_never_answers(runtime):
+    session = _mock_session(CHUNKED_STACK)
+    session.session_id = 'first'
+
+    def reconnect_then_fail(obs):
+        session.session_id = 'reopened'
+        raise RuntimeError('Server error: TimeoutError: ')
+
+    session.infer.side_effect = reconnect_then_fail
+    policy = RemotePolicy('websocket', _address('localhost', 0))
+    policy._client = MagicMock()
+    policy._client.new_session.return_value = session
+    run = runtime.start(policy)
+    try:
+        with pytest.raises(RuntimeError, match='Server error'):
+            run.send({})
+            runtime.wait(timeout_sec=5)
+            run.send({})
+        assert runtime.metadata_snapshot()[policy_keys.SESSION_ID] == 'first'
+    finally:
+        runtime.close()
+        run.close()
 
 
 def _frames_meta(meta):

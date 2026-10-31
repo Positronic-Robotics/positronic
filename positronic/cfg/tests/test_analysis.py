@@ -91,6 +91,15 @@ def test_an_llm_episode_shows_the_short_name_of_its_configured_model(model_id, n
     assert analysis.model(ep) == name
 
 
+def test_a_remote_llm_episode_shows_the_short_name_of_the_served_model():
+    ep = EpisodeContainer({
+        f'{policy_keys.POLICY_META}.{policy_keys.TYPE}': 'remote',
+        f'{policy_keys.SERVER_META}.{policy_keys.TYPE}': policy_keys.LLM_TYPE,
+        f'{policy_keys.SERVER_META}.{policy_keys.MODEL}': 'anthropic:claude-opus-5-5',
+    })
+    assert analysis.model(ep) == 'opus5.5'
+
+
 def test_an_unknown_llm_model_shows_its_id_without_provider_and_date():
     assert analysis.short_model_name('openai-chat:new-model-2027-01-01') == 'new-model'
 

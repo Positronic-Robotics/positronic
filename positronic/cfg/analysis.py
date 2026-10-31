@@ -75,6 +75,8 @@ def model(ep: Episode) -> str:
 
     if policy_type == 'remote':
         server_type = ep.get(f'{policy_keys.SERVER_META}.{policy_keys.TYPE}', '')
+        if server_type == policy_keys.LLM_TYPE:
+            return short_model_name(ep[f'{policy_keys.SERVER_META}.{policy_keys.MODEL}'])
         path_label = _model_label_from_path(
             server_type, ep.get(f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_PATH}', '')
         )

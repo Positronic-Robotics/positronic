@@ -14,7 +14,8 @@ from unittest.mock import Mock
 import numpy as np
 import pos3
 import pytest
-from eval_vocabulary.episode import ABC_REWARD_SIGNAL, SUBTASK_SIGNAL
+from eval_vocabulary.episode import ABC_REWARD_SIGNAL, SIGNAL_FILE_SUFFIX, SUBTASK_SIGNAL
+from eval_vocabulary.timeline import HARNESS_WORLD
 from positronic_evals.evals import MOLMO_EPISODE_INDEX_KEY, MOLMO_SCORING, PUBLIC_EVALS, EvalRef, public_eval
 from positronic_evals.labels import (
     ABC_LABELER,
@@ -24,8 +25,10 @@ from positronic_evals.labels import (
     Label,
     SubtaskAchieved,
     Success,
+    TryWindow,
     abc_max_progress,
     label,
+    recorded_try_window,
 )
 from positronic_evals.scoring import Scores, score
 
@@ -39,6 +42,7 @@ from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
 from positronic.dataset.episode import META_UID, META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic.dataset.vector import SimpleSignalWriter
 from positronic.dataset.video import LibavEncoder
 from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
@@ -356,6 +360,20 @@ def test_the_molmo_labeler_reads_the_outcome_that_positronic_records(tmp_path):
         events=(Success(seconds=4.5),),
     )
     assert score(MOLMO_SCORING, [given_label]).model_dump() == {'primary': 1.0, 'episodes': 1, 'unscored': 0}
+
+
+def test_the_try_window_reads_an_episode_that_positronic_records(tmp_path):
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    with LocalDatasetWriter(tmp_path) as writer, writer.new_episode() as episode:
+        # The first grip sample is a held reading, 400 s before the try.
+        for world_ns in (0, 400_000_000_000, 400_020_000_000, 460_000_000_000):
+            episode.append(keys.GRIP, 0.0, Time(**{HARNESS_WORLD: world_ns}))
+        for world_ns in (400_010_000_000, 400_043_000_000, 461_000_000_000):
+            episode.append(keys.EXTERIOR_IMAGE, frame, Time(**{HARNESS_WORLD: world_ns}))
+    with SimpleSignalWriter(episode.path / f'{keys.TARGET_GRIP}{SIGNAL_FILE_SUFFIX}'):
+        pass
+
+    assert recorded_try_window(episode.path) == TryWindow(400_000_000_000, 461_000_000_000)
 
 
 def test_the_robolab_labeler_reads_the_progress_that_positronic_records(tmp_path):

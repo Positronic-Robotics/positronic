@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from av.container import OutputContainer
 from av.video.stream import VideoStream
+from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 
 from .signal import IndicesLike, Kind, Signal, SignalMeta, SignalWriter
 from .time import Time, TimeBounds
@@ -338,7 +339,7 @@ class VideoSignal(Signal[np.ndarray]):
         # TODO: Profile it to find the best default threshold
         self._seek_threshold = seek_threshold or 30
 
-        self._time_index = ParquetTimeIndex(frames_index_path, 'ts_ns')
+        self._time_index = ParquetTimeIndex(frames_index_path, LEGACY_FRAMES_TIME_COLUMN)
         self._navigator: _VideoNavigator | None = None
 
     @property

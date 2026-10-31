@@ -22,6 +22,7 @@ from positronic.drivers.roboarm.ik import (
     ee_frames,
     frame_transform,
     ik_joints_from_episode,
+    qpos_from_site_pose,
 )
 from positronic.drivers.roboarm.models import (
     DROID_EE_FRAME,
@@ -42,6 +43,7 @@ from positronic.drivers.roboarm.models import (
     ee_frames_entry,
 )
 from positronic.drivers.roboarm.so101.driver import Robot as So101Robot
+from positronic.drivers.roboarm.tests.test_yam import STRETCHED, past_full_stretch
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.eval import keys as eval_keys
 from positronic.utils import package_assets_path
@@ -324,6 +326,58 @@ def test_the_yam_driver_solves_a_pose_at_gripper_to_joints_that_reach_it(q):
     reached = kinematics.fk(solved)
     np.testing.assert_allclose(reached.translation, target.translation, atol=1e-3)
     assert (reached.rotation.inv * target.rotation).angle < 1e-2
+
+
+LM_ROT_WEIGHT = 0.5
+
+
+def _yam_lm_search(start: np.ndarray, target: geom.Transform3D) -> tuple[np.ndarray, float, bool]:
+    """``qpos_from_site_pose`` on the YAM MJCF at ``GRIPPER_SITE`` from joints ``start``, with its YAM joints."""
+    model = mj.MjModel.from_xml_path(YAM_MJCF_PATH)
+    data = mj.MjData(model)
+    qpos_ids = [model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES]
+    dof_ids = [model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES]
+    site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, GRIPPER_SITE)
+    data.qpos[qpos_ids] = start
+    qpos, err, success = qpos_from_site_pose(
+        model, data, site_id, dof_ids, target.translation, target.rotation.as_quat, rot_weight=LM_ROT_WEIGHT
+    )
+    return qpos[qpos_ids].copy(), float(err), success
+
+
+def _lm_error(kinematics: yam._Kinematics, q: np.ndarray, target: geom.Transform3D) -> float:
+    """The error that the LM search measures at joints ``q``."""
+    reached = kinematics.fk(q)
+    rotation_error = (reached.rotation.inv * target.rotation).angle
+    return float(np.linalg.norm(reached.translation - target.translation) + LM_ROT_WEIGHT * rotation_error)
+
+
+def test_an_lm_search_past_the_reach_edge_answers_no_worse_than_its_start_from_nearly_equal_starts():
+    kinematics = yam._Kinematics()
+    target = past_full_stretch(kinematics, 5e-4)
+
+    errors = []
+    for k in range(20):
+        start = STRETCHED + k * 1e-12
+        solved, err, success = _yam_lm_search(start, target)
+        assert not success
+        assert err == pytest.approx(_lm_error(kinematics, solved, target), rel=1e-6)
+        assert _lm_error(kinematics, solved, target) <= _lm_error(kinematics, start, target)
+        errors.append(err)
+
+    assert max(errors) - min(errors) < 1e-5
+
+
+@pytest.mark.parametrize('q', YAM_CONFIGS[1:])
+def test_an_lm_search_that_converges_answers_the_joints_it_converged_to(q):
+    kinematics = yam._Kinematics()
+    target = kinematics.fk(q)
+
+    solved, err, success = _yam_lm_search(q + 0.2, target)
+
+    assert success
+    assert err < 1e-14
+    assert _lm_error(kinematics, solved, target) < 1e-12
 
 
 def test_the_bundled_yam_urdf_has_the_joint_range_of_the_yam_mjcf():
