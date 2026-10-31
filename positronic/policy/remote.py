@@ -6,10 +6,9 @@ from functools import partial
 from threading import Lock, Thread
 from typing import Any
 
-import numpy as np
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg, is_image
 from positronic_model_server.tree import map_leaves
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
@@ -28,7 +27,7 @@ from .spec import from_spec
 
 
 def _prepare_value(value: Any, jpeg_quality: int) -> Any:
-    if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+    if is_image(value):
         # A raw HD frame — especially a (T, H, W, 3) stack — can exceed a proxy's message cap.
         return encode_jpeg(value, jpeg_quality)
     return value
@@ -50,10 +49,12 @@ def round_trip(
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
-    Image preparation has its own span; the inference span covers only the server round trip.
+    Image preparation has its own span; the inference span covers only the server round trip. A session
+    with a frame ring sends its images raw through the ring and does not apply ``compress_images``.
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
-        prepared = prepare_obs(obs, compress_images, jpeg_quality)
+        compress = compress_images and not session.sends_frames_through_ring
+        prepared = prepare_obs(obs, compress, jpeg_quality)
     with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
         try:
             return session.infer(prepared)
@@ -133,7 +134,7 @@ class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
     ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
-    quality of images sent to a server that asks for compressed images.
+    quality of the images a session sends in the message to a server that asks for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -197,7 +198,7 @@ class RemotePolicy(Policy):
             episode_meta: dict[str, Any] = {**client_meta, policy_keys.SERVER: server_meta}
             if frames:
                 episode_meta[roboarm_keys.EE_FRAMES] = frames
-            if server_compresses_images:
+            if server_compresses_images and not session.sends_frames_through_ring:
                 episode_meta[policy_keys.JPEG_QUALITY] = self._jpeg_quality
             recorded_session_id = session.session_id
             if recorded_session_id is not None:
