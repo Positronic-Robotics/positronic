@@ -18,15 +18,17 @@ from abc import ABC, abstractmethod
 from bisect import insort
 from collections import ChainMap, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from math import isfinite
 from statistics import fmean
 from sys import maxsize
-from typing import Any, Self, TypeVar, cast
+from typing import Any, Self, TypeVar
 
 import numpy as np
+from attr import asdict
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -228,9 +230,10 @@ class DelayEstimate(DurationEstimate):
 class TrajectoryPlayer(Policy):
     """Play an inner run's timed trajectories independently of its inference cadence.
 
-    The inner run yields a ``Step`` with a ``Trajectory`` as its commands. The player emits
-    due commands and advances the inner run at its requested deadline or when any runtime answer
-    is ready. A waypoint deadline alone does not advance the inner run.
+    The inner run yields a ``Step`` whose command dictionary contains the fields of ``Trajectory``.
+    The player converts it to a ``Trajectory`` and emits due commands. It advances the inner run
+    at its requested deadline or when any runtime answer is ready. A waypoint deadline alone
+    does not advance the inner run.
 
     A new trajectory replaces the plan from its start time, skipping elapsed actions.
     Empty step commands keep the plan; a trajectory with no commands removes its future
@@ -267,30 +270,27 @@ class TrajectoryPlayer(Policy):
 
     @classmethod
     def _waypoints(cls, trajectory: Trajectory) -> list[_Waypoint]:
-        fps = trajectory[policy_keys.TRAJECTORY.FPS]
-        start_ns = trajectory[policy_keys.TRAJECTORY.START_NS]
-        end_ns = trajectory[policy_keys.TRAJECTORY.END_NS]
-        commands = trajectory[policy_keys.TRAJECTORY.COMMANDS]
-        if not isfinite(fps) or fps <= 0:
+        if not isfinite(trajectory.fps) or trajectory.fps <= 0:
             raise ValueError('fps must be finite and positive')
-        if end_ns < start_ns or end_ns > start_ns + round(len(commands) * (1 / fps) * 1e9):
+        if trajectory.end_ns < trajectory.start_ns or trajectory.end_ns > trajectory.start_ns + round(
+            len(trajectory.commands) * (1 / trajectory.fps) * 1e9
+        ):
             raise ValueError('end_ns must lie within the trajectory duration')
         return [
-            cls._Waypoint(command, start_ns + round(i * (1 / fps) * 1e9), starts_chunk=i == 0)
-            for i, command in enumerate(commands)
-            if start_ns + round(i * (1 / fps) * 1e9) < end_ns
+            cls._Waypoint(command, trajectory.start_ns + round(i * (1 / trajectory.fps) * 1e9), starts_chunk=i == 0)
+            for i, command in enumerate(trajectory.commands)
+            if trajectory.start_ns + round(i * (1 / trajectory.fps) * 1e9) < trajectory.end_ns
         ]
 
     @classmethod
     def _install(cls, update: Trajectory, waypoints: deque[_Waypoint], plan: list[Trajectory], now_ns: int) -> int:
         incoming = cls._waypoints(update)
         planned = len(incoming)
-        start_ns = update[policy_keys.TRAJECTORY.START_NS]
         # A replacement due now supersedes old commands that have not yet been emitted.
-        preserved = [point for point in waypoints if now_ns < start_ns and point.due_ns < start_ns]
+        preserved = [point for point in waypoints if now_ns < update.start_ns and point.due_ns < update.start_ns]
         waypoints.clear()
         waypoints.extend(preserved)
-        if update[policy_keys.TRAJECTORY.END_NS] > now_ns:
+        if update.end_ns > now_ns:
             running = max(
                 next((i for i, point in enumerate(incoming[1:], 1) if point.due_ns > now_ns), len(incoming)) - 1, 0
             )
@@ -301,9 +301,9 @@ class TrajectoryPlayer(Policy):
             waypoints.extend(selected)
         retained: list[Trajectory] = []
         for part in plan:
-            if part[policy_keys.TRAJECTORY.START_NS] < start_ns and part[policy_keys.TRAJECTORY.END_NS] > now_ns:
-                clipped = part.copy()
-                clipped[policy_keys.TRAJECTORY.END_NS] = min(part[policy_keys.TRAJECTORY.END_NS], start_ns)
+            if part.start_ns < update.start_ns and part.end_ns > now_ns:
+                clipped = copy(part)
+                clipped.end_ns = min(part.end_ns, update.start_ns)
                 retained.append(clipped)
         plan[:] = [*retained, update]
         return planned
@@ -341,16 +341,15 @@ class TrajectoryPlayer(Policy):
             self._write(queued)
 
         def _write(self, queued: int) -> None:
-            late_ns = self._sorted_late_ns
             values: dict[str, float] = {
                 eval_keys.SCHEDULED: self._scheduled,
-                eval_keys.EMITTED: len(late_ns),
-                eval_keys.DROPPED: self._scheduled - len(late_ns) - queued,
+                eval_keys.EMITTED: len(self._sorted_late_ns),
+                eval_keys.DROPPED: self._scheduled - len(self._sorted_late_ns) - queued,
             }
-            if late_ns:
-                values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(late_ns, 0.5) / 1e6
-                values[eval_keys.LATE_P90_MS] = self._percentile_of_sorted(late_ns, 0.9) / 1e6
-                values[eval_keys.LATE_MAX_MS] = late_ns[-1] / 1e6
+            if self._sorted_late_ns:
+                values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(self._sorted_late_ns, 0.5) / 1e6
+                values[eval_keys.LATE_P90_MS] = self._percentile_of_sorted(self._sorted_late_ns, 0.9) / 1e6
+                values[eval_keys.LATE_MAX_MS] = self._sorted_late_ns[-1] / 1e6
                 values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
             for name, value in values.items():
                 self._runtime.set_metadata(f'{eval_keys.SCHEDULE}.{name}', value)
@@ -381,7 +380,7 @@ class TrajectoryPlayer(Policy):
                 planned, recovering = 0, True
             outputs: Mapping[str, Any] = {}
             if now_ns >= inner_due_ns or runtime.has_ready_answers():
-                context = [part for part in plan if part[policy_keys.TRAJECTORY.END_NS] > now_ns]
+                context = [part for part in plan if part.end_ns > now_ns]
                 inner_obs = (
                     obs
                     if self._plan_key is None
@@ -399,7 +398,7 @@ class TrajectoryPlayer(Policy):
                 inner_due_ns = step.resume_at_ns
                 outputs = step.outputs
                 if step.commands:
-                    planned = self._install(cast(Trajectory, step.commands), waypoints, plan, now_ns)
+                    planned = self._install(Trajectory(**step.commands), waypoints, plan, now_ns)
             commands: dict[str, Any] = {}
             due_ns = None
             starts_chunk = False
@@ -528,11 +527,9 @@ class ChunkedSchedule(Policy):
             while True:
                 now_ns = runtime.time_ns
                 plan: Sequence[Trajectory] = obs[policy_keys.PLAN]
-                end_ns = plan[-1][policy_keys.TRAJECTORY.END_NS] if plan else now_ns
+                end_ns = plan[-1].end_ns if plan else now_ns
                 call_ns = (
-                    self._next_call_ns(plan[-1][policy_keys.TRAJECTORY.START_NS], end_ns, lead_sec)
-                    if plan and plan[-1][policy_keys.TRAJECTORY.COMMANDS]
-                    else now_ns
+                    self._next_call_ns(plan[-1].start_ns, end_ns, lead_sec) if plan and plan[-1].commands else now_ns
                 )
                 inference_obs = LazyDict(
                     {}, {name: partial(obs.__getitem__, name) for name in obs if name != policy_keys.PLAN}
@@ -548,12 +545,8 @@ class ChunkedSchedule(Policy):
                     if chunk is not None:
                         start_ns = max(now_ns, end_ns)
                         trajectory = self._plan_chunk(chunk, start_ns)
-                        commands = trajectory
-                        call_ns = (
-                            self._next_call_ns(start_ns, trajectory[policy_keys.TRAJECTORY.END_NS], lead_sec)
-                            if chunk
-                            else now_ns
-                        )
+                        commands = asdict(trajectory, recurse=False)
+                        call_ns = self._next_call_ns(start_ns, trajectory.end_ns, lead_sec) if chunk else now_ns
                     if not submitted and now_ns >= call_ns:
                         answer = runtime.submit(infer, inference_obs)
                 obs = yield Step(commands, now_ns if answer is not None else call_ns)

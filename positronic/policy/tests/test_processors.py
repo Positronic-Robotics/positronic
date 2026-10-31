@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from attr import asdict, fields
 from positronic_model_server import serialization
 from positronic_model_server.spec import ARGS, LATEST, NAME, VERSION, component, parallel, sequence
 
@@ -421,11 +422,14 @@ class SlowModel:
 
 
 def _trajectory(values, start_ns=0, *, fps=10, end_ns=None):
-    return Trajectory(
-        commands=[{MOTOR: value} for value in values],
-        start_ns=start_ns,
-        end_ns=start_ns + round(len(values) * 1e9 / fps) if end_ns is None else end_ns,
-        fps=fps,
+    return asdict(
+        Trajectory(
+            commands=[{MOTOR: value} for value in values],
+            start_ns=start_ns,
+            end_ns=start_ns + round(len(values) * 1e9 / fps) if end_ns is None else end_ns,
+            fps=fps,
+        ),
+        recurse=False,
     )
 
 
@@ -486,8 +490,8 @@ def test_player_preserves_earlier_commands_when_a_future_update_replaces_the_tai
         assert run.send({}).commands == {MOTOR: 'b0'}
         clock.advance_to_ns(250_000_000)
         assert run.send({}) == Step({MOTOR: 'b1'}, 1_000_000_000)
-        assert inner_run.send.call_args.args[0][policy_keys.PLAN] == [second]
-        assert first[policy_keys.TRAJECTORY.END_NS] == 400_000_000
+        assert inner_run.send.call_args.args[0][policy_keys.PLAN] == [Trajectory(**second)]
+        assert first['end_ns'] == 400_000_000
         assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 2
     finally:
         run.close()
@@ -544,12 +548,19 @@ def test_player_context_keeps_source_timing_and_clips_replaced_segments(executio
         assert inner_run.send.call_args.args[0]['remaining'] == []
         clock.advance_to_ns(50_000_000)
         run.send({POSITION: 43})
+        source = inner_run.send.call_args.args[0]['remaining'][0]
+        assert isinstance(source, Trajectory)
+        assert source.commands is first['commands']
         clock.advance_to_ns(100_000_000)
         run.send({POSITION: 44})
         context = inner_run.send.call_args.args[0]
         assert context[POSITION] == 44
-        assert context['remaining'] == [{**first, policy_keys.TRAJECTORY.END_NS: 250_000_000}, second]
-        assert first[policy_keys.TRAJECTORY.END_NS] == 400_000_000
+        assert context['remaining'] == [
+            Trajectory(**_trajectory([0, 1, 2, 3], end_ns=250_000_000)),
+            Trajectory(**second),
+        ]
+        assert first['end_ns'] == 400_000_000
+        assert source.end_ns == 400_000_000
         assert runtime.metadata_snapshot() == {}
     finally:
         run.close()
@@ -569,7 +580,7 @@ def test_player_interprets_inner_commands_and_returns_its_end(execution):
 def test_player_rejects_invalid_trajectory_timing(execution, fps, end_ns):
     runtime, _ = execution
     update = Trajectory(commands=[{MOTOR: 1}], start_ns=0, end_ns=end_ns, fps=fps)
-    inner_run = Mock(send=Mock(return_value=Step(update, 0)))
+    inner_run = Mock(send=Mock(return_value=Step(asdict(update, recurse=False), 0)))
     run = runtime.start(TrajectoryPlayer(), inner_run)
     with pytest.raises(ValueError):
         run.send({})
@@ -600,20 +611,21 @@ def test_chunked_history_only_answer_preserves_playback_and_updates_duration(exe
 def test_existing_codecs_decode_wire_arrays_and_timing_for_the_player(execution):
     runtime, clock = execution
     commands = (
-        PackFields(decode_layout={policy_keys.TRAJECTORY.COMMANDS: []})
+        PackFields(decode_layout={'commands': []})
         | JointPositionAction('joints', 'grip', num_joints=2)
         | SplitActionChunk()
         | PackFields(decode_layout={'joints': ['joints'], 'grip': ['grip']})
     )
-    timing_keys = (policy_keys.TRAJECTORY.START_NS, policy_keys.TRAJECTORY.END_NS, policy_keys.TRAJECTORY.FPS)
+    timing_keys = ('start_ns', 'end_ns', 'fps')
+    assert {field.name for field in fields(Trajectory)} == {'commands', *timing_keys}
     codec = spec.from_spec((commands & PackFields(decode_layout={key: [key] for key in timing_keys})).to_spec())
     assert isinstance(codec, Codec)
     response = {
         'joints': np.array([[1, 2], [3, 4]]),
         'grip': np.array([0.1, 0.2]),
-        policy_keys.TRAJECTORY.START_NS: 50_000_000,
-        policy_keys.TRAJECTORY.END_NS: 250_000_000,
-        policy_keys.TRAJECTORY.FPS: 10,
+        'start_ns': 50_000_000,
+        'end_ns': 250_000_000,
+        'fps': 10,
     }
     outputs = {'next_inference_ns': 1_000_000_000}
 

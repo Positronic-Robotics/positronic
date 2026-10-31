@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import partial
-from typing import Any, ClassVar, Generic, ParamSpec, Self, TypedDict
+from typing import Any, ClassVar, Generic, ParamSpec, Self
 
 from attr import dataclass, field
 from eval_vocabulary.episode import PolicyEnd
@@ -53,7 +53,8 @@ Obs = Mapping[str, Any]
 Commands = Mapping[str, Any]
 
 
-class Trajectory(TypedDict):
+@dataclass
+class Trajectory:
     """Commands spaced by ``1 / fps`` from ``start_ns``, valid until ``end_ns``."""
 
     commands: Sequence[Commands]
