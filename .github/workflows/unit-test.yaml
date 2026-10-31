@@ -146,7 +146,7 @@ jobs:
         python: ['3.11', '3.12']
         transport:
           - {extra: '', wires: ''}
-          - {extra: '[websocket]', wires: 'websocket websocket_tls websocket_unix roboarena'}
+          - {extra: '[websocket]', wires: 'websocket websocket_tls websocket_unix roboarena modal_websocket_tls'}
           - {extra: '[grpc]', wires: 'grpc grpc_tls'}
     steps:
       - uses: actions/checkout@v4

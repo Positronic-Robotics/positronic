@@ -93,6 +93,7 @@ WIRE_VALUES = {
     'grpc': 4,
     'grpc_tls': 5,
     'roboarena': 6,
+    'modal_websocket_tls': 7,
 }
 
 PLACEMENT_VALUES = {'INVALID': 0, 'left': 1, 'right': 2, 'random': 3, 'none': 4}

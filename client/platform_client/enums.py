@@ -196,6 +196,7 @@ class Wire(IntEnum):
     grpc = 4
     grpc_tls = 5
     roboarena = 6
+    modal_websocket_tls = 7
 
 
 @unique

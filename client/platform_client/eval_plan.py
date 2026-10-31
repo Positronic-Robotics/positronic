@@ -202,6 +202,7 @@ ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
     Wire.grpc: HostPortAddress,
     Wire.grpc_tls: HostPortAddress,
     Wire.roboarena: RoboarenaAddress,
+    Wire.modal_websocket_tls: HostPortAddress,
 }
 
 
