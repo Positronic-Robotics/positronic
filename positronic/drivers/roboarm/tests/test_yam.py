@@ -1839,6 +1839,24 @@ def test_a_bimanual_trial_starts_with_both_grippers_open_after_a_trial_that_clos
         assert chain.last_command is not None and chain.last_command[6] == pytest.approx(1.0)  # the chain's 1 is open
 
 
+def test_an_attended_bimanual_trial_starts_both_arms_as_a_planned_trial_does(chains):
+    trial = yam_eval.attended_trials.override(instruction='stack the cups').instantiate()()
+    (planned,) = yam_eval.bimanual.override(embodiment=None, instruction='stack the cups').instantiate().tasks()
+    assert trial.instruction == planned.instruction == 'stack the cups'
+    assert trial.timeout_sec is None  # the operator ends an attended episode
+    assert trial.meta == {}
+    assert trial.prepare_args.keys() == planned.prepare_args.keys()
+    for side in keys.BIMANUAL_ARMS:
+        arm, gripper = f'{eval_keys.ARM}.{side}', f'{eval_keys.GRIPPER}.{side}'
+        np.testing.assert_array_equal(trial.prepare_args[arm].positions, planned.prepare_args[arm].positions)
+        assert trial.prepare_args[gripper] == planned.prepare_args[gripper]
+
+    embodiment = embodiment_cfg.yam_bimanual.override(cameras={}).instantiate()
+    grips = _a_trial_after_a_closed_trial(embodiment, trial.prepare_args, [f'.{s}' for s in keys.BIMANUAL_ARMS])
+
+    assert all(g is not None and g < _GRIP_TOL for g in grips), grips
+
+
 def test_a_single_arm_trial_starts_with_the_gripper_open_after_a_trial_that_closed_it(chains):
     rig = embodiment_cfg.yam.instantiate()
     start = {eval_keys.ARM: command.JointPosition(np.asarray(roboarm_cfg.YAM_NOMINAL_JOINTS)), eval_keys.GRIPPER: OPEN}
