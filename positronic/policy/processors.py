@@ -404,7 +404,107 @@ class TrajectoryPlayer(Policy):
         }
 
 
-class ChunkedSchedule(Policy):
+class _InferenceSchedule(Policy):
+    """Submit one call at a time and publish completed predictions as trajectories."""
+
+    class Start(Enum):
+        AFTER_PREVIOUS = 'after_previous'
+        OBSERVATION = 'observation'
+
+    def __init__(
+        self,
+        fps: float,
+        *,
+        start: Start,
+        duration_estimate: DurationEstimate,
+        duration_name: str,
+        read_immediately: bool,
+        replan_key: str | None = None,
+    ) -> None:
+        check_finite_positive(fps, 'fps')
+        self._fps = fps
+        self._start = start
+        self._duration_estimate = duration_estimate
+        self._duration_name = duration_name
+        self._read_immediately = read_immediately
+        self._replan_key = replan_key
+
+    def _start_ns(self, now_ns: int, called_at_ns: int, previous_start_ns: int | None, end_ns: int) -> int:
+        if self._start is self.Start.OBSERVATION:
+            return now_ns if previous_start_ns is None else called_at_ns
+        return max(now_ns, end_ns)
+
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[Trajectory, int]:
+        trajectory = Trajectory(chunk, start_ns, self._fps)
+        return trajectory, trajectory.due_ns(len(chunk))
+
+    @abstractmethod
+    def _next_call_ns(self, trajectory: Trajectory, end_ns: int, expected_sec: float, now_ns: int) -> int: ...
+
+    def _call_obs(
+        self,
+        obs: Obs,
+        trajectory: Trajectory | None,
+        start_ns: int | None,
+        end_ns: int,
+        now_ns: int,
+        expected_sec: float,
+        measured_sec: float | None,
+    ) -> Obs:
+        return obs
+
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
+        duration = self._duration_estimate.run()
+        expected_sec = 0.0
+        measured_sec: float | None = None
+        answer: Answer[Sequence[Commands] | None] | None = None
+        start_ns: int | None = None
+        called_at_ns = end_ns = call_ns = 0
+        obs = yield
+        try:
+            while True:
+                now_ns = runtime.time_ns
+                trajectory = None
+                if self._replan_key is not None and self._replan_key in obs:
+                    if obs[self._replan_key]:
+                        call_ns = end_ns = now_ns
+                    obs = OverlayMapping(obs, remove=(self._replan_key,))
+
+                submitted = self._read_immediately and answer is None and now_ns >= call_ns
+                if submitted:
+                    called_at_ns = now_ns
+                    answer = runtime.submit(
+                        infer, self._call_obs(obs, None, start_ns, end_ns, now_ns, expected_sec, measured_sec)
+                    )
+                if answer is not None and answer.done():
+                    chunk = answer.result()
+                    measured_sec = answer.elapsed_sec
+                    expected_sec = duration.update(measured_sec)
+                    check_finite_nonnegative(expected_sec, self._duration_name)
+                    answer = None
+                    if chunk is not None:
+                        start_ns = self._start_ns(now_ns, called_at_ns, start_ns, end_ns)
+                        trajectory, end_ns = self._plan_chunk(chunk, start_ns)
+                        call_ns = self._next_call_ns(trajectory, end_ns, expected_sec, now_ns)
+
+                if not submitted and answer is None and now_ns >= call_ns:
+                    called_at_ns = now_ns
+                    answer = runtime.submit(
+                        infer, self._call_obs(obs, trajectory, start_ns, end_ns, now_ns, expected_sec, measured_sec)
+                    )
+                if trajectory is not None and now_ns >= end_ns:
+                    trajectory.commands = []
+                commands = {} if trajectory is None else asdict(trajectory, recurse=False)
+                obs = yield Step(commands, now_ns if answer is not None else call_ns)
+        finally:
+            if answer is not None:
+                answer.cancel()
+
+    def meta(self) -> dict[str, Any]:
+        return {ACTION_FPS: self._fps}
+
+
+class ChunkedSchedule(_InferenceSchedule):
     """Request action chunks asynchronously and return timed trajectories for playback.
 
         step                0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
@@ -455,16 +555,22 @@ class ChunkedSchedule(Policy):
     def __init__(
         self, fps: float, horizon_sec: float | None = None, inference_lead: DurationEstimate | None = None
     ) -> None:
-        check_finite_positive(fps, 'fps')
+        super().__init__(
+            fps,
+            start=self.Start.AFTER_PREVIOUS,
+            duration_estimate=ConstantDuration() if inference_lead is None else inference_lead,
+            duration_name=self.INFERENCE_LEAD_ARG,
+            read_immediately=True,
+            replan_key=policy_keys.REPLAN_NOW,
+        )
         if horizon_sec is not None:
             check_finite_positive(horizon_sec, 'horizon_sec')
-        self._fps = fps
         self._horizon_sec = horizon_sec
-        self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
 
-    @staticmethod
-    def _next_call_ns(start_ns: int, end_ns: int, lead_sec: float) -> int:
-        return end_ns - round(min(lead_sec * 1e9, end_ns - start_ns))
+    def _next_call_ns(self, trajectory: Trajectory, end_ns: int, expected_sec: float, now_ns: int) -> int:
+        if not trajectory.commands:
+            return now_ns
+        return end_ns - round(min(expected_sec * 1e9, end_ns - trajectory.start_ns))
 
     def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[Trajectory, int]:
         duration_sec = min(len(chunk) / self._fps, self._horizon_sec or inf)
@@ -473,41 +579,8 @@ class ChunkedSchedule(Policy):
         trajectory.commands = [command for i, command in enumerate(chunk) if trajectory.due_ns(i) < end_ns]
         return trajectory, end_ns
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
-        answer: Answer[Sequence[Commands] | None] | None = None
-        lead = self._inference_lead.run()
-        call_ns = end_ns = 0
-        obs = yield
-        try:
-            while True:
-                now_ns = runtime.time_ns
-                if obs.get(policy_keys.REPLAN_NOW, False):
-                    call_ns = end_ns = now_ns
-                if policy_keys.REPLAN_NOW in obs:
-                    obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
-                submitted = answer is None and now_ns >= call_ns
-                if submitted:
-                    answer = runtime.submit(infer, obs)
-                commands: Commands = {}
-                if answer is not None and answer.done():
-                    chunk = answer.result()
-                    lead_sec = lead.update(answer.elapsed_sec)
-                    check_finite_nonnegative(lead_sec, 'inference_lead')
-                    answer = None
-                    if chunk is not None:
-                        start_ns = max(now_ns, end_ns)
-                        trajectory, end_ns = self._plan_chunk(chunk, start_ns)
-                        commands = asdict(trajectory, recurse=False)
-                        call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if chunk else now_ns
-                    if not submitted and now_ns >= call_ns:
-                        answer = runtime.submit(infer, obs)
-                obs = yield Step(commands, now_ns if answer is not None else call_ns)
-        finally:
-            if answer is not None:
-                answer.cancel()
-
     def meta(self) -> dict[str, Any]:
-        meta = {ACTION_FPS: self._fps}
+        meta = super().meta()
         if self._horizon_sec is not None:
             meta[policy_keys.ACTION_HORIZON_SEC] = self._horizon_sec
         return meta
@@ -516,7 +589,7 @@ class ChunkedSchedule(Policy):
         args: dict[str, Any] = {self.FPS_ARG: self._fps}
         if self._horizon_sec is not None:
             args[self.HORIZON_SEC_ARG] = self._horizon_sec
-        lead = self._inference_lead.to_spec()
+        lead = self._duration_estimate.to_spec()
         if lead != 0:
             args[self.INFERENCE_LEAD_ARG] = lead
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
@@ -527,7 +600,7 @@ class ChunkedSchedule(Policy):
         return cls(**args)
 
 
-class RTCSchedule(Policy):
+class RTCSchedule(_InferenceSchedule):
     """Request overlapping trajectories for an outer ``TrajectoryPlayer`` to execute.
 
     One handover at 10 fps, with ``call_after_sec=0.5`` and inference taking 0.3 seconds::
@@ -583,28 +656,37 @@ class RTCSchedule(Policy):
     def __init__(
         self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate, *, plan_key: str = policy_keys.PLAN
     ) -> None:
-        check_finite_positive(fps, 'fps')
+        super().__init__(
+            fps,
+            start=self.Start.OBSERVATION,
+            duration_estimate=latency_estimate,
+            duration_name=self.LATENCY_ESTIMATE_ARG,
+            read_immediately=False,
+        )
         check_finite_nonnegative(call_after_sec, 'call_after_sec')
-        self._fps = fps
         self._call_after_ns = round(call_after_sec * 1e9)
-        self._latency_estimate = latency_estimate
         self._plan_key = plan_key
 
-    def _rtc_context(
+    def _next_call_ns(self, trajectory: Trajectory, end_ns: int, expected_sec: float, now_ns: int) -> int:
+        return trajectory.start_ns + self._call_after_ns
+
+    def _call_obs(
         self,
-        plan: Sequence[Waypoint],
+        obs: Obs,
+        trajectory: Trajectory | None,
         start_ns: int | None,
         end_ns: int,
         now_ns: int,
         expected_sec: float,
         measured_sec: float | None,
-    ) -> dict[str, Any]:
+    ) -> Obs:
+        plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
         if start_ns is None:
             start_ns = end_ns = now_ns
         running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
         remaining = plan[running:] if now_ns < end_ns else ()
         due_ns = remaining[0].due_ns if remaining else end_ns
-        return {
+        context = {
             policy_keys.RTC.ACTION_PREFIX: {
                 policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
                 policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
@@ -613,53 +695,13 @@ class RTCSchedule(Policy):
             policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
             policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
         }
-
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
-        duration = self._latency_estimate.run()
-        expected_sec = 0.0
-        measured_sec: float | None = None
-        answer: Answer[Sequence[Commands] | None] | None = None
-        start_ns: int | None = None
-        called_at_ns = end_ns = next_call_ns = 0
-        obs = yield
-        try:
-            while True:
-                now_ns = runtime.time_ns
-                trajectory = None
-                if answer is not None and answer.done():
-                    actions = answer.result()
-                    measured_sec = answer.elapsed_sec
-                    expected_sec = duration.update(measured_sec)
-                    check_finite_nonnegative(expected_sec, 'latency_estimate')
-                    answer = None
-                    if actions is not None:
-                        start_ns = now_ns if start_ns is None else called_at_ns
-                        trajectory = Trajectory(actions, start_ns, self._fps)
-                        end_ns = trajectory.due_ns(len(actions))
-                        next_call_ns = start_ns + self._call_after_ns
-
-                if answer is None and now_ns >= next_call_ns:
-                    plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
-                    context = self._rtc_context(plan, start_ns, end_ns, now_ns, expected_sec, measured_sec)
-                    called_at_ns = now_ns
-                    answer = runtime.submit(infer, OverlayMapping(obs, add=context, remove=(self._plan_key,)))
-
-                if trajectory is not None and now_ns >= end_ns:
-                    trajectory.commands = []
-                commands = {} if trajectory is None else asdict(trajectory, recurse=False)
-                obs = yield Step(commands, now_ns if answer is not None else next_call_ns)
-        finally:
-            if answer is not None:
-                answer.cancel()
-
-    def meta(self) -> dict[str, Any]:
-        return {ACTION_FPS: self._fps}
+        return OverlayMapping(obs, add=context, remove=(self._plan_key,))
 
     def to_spec(self) -> dict[str, Any]:
         args = {
             ChunkedSchedule.FPS_ARG: self._fps,
             self.CALL_AFTER_ARG: self._call_after_ns / 1e9,
-            self.LATENCY_ESTIMATE_ARG: self._latency_estimate.to_spec(),
+            self.LATENCY_ESTIMATE_ARG: self._duration_estimate.to_spec(),
             'plan_key': self._plan_key,
         }
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}

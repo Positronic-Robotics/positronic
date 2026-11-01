@@ -905,6 +905,57 @@ def test_a_failed_request_before_the_error_still_raises(execution, monkeypatch):
         run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
 
 
+@pytest.mark.parametrize('rtc', [False, True])
+@pytest.mark.parametrize('chunk', [None, [], [{MOTOR: 1}]])
+def test_schedulers_preserve_when_immediate_answers_are_consumed(execution, rtc, chunk):
+    runtime, _ = execution
+    estimate = Mock(spec=DurationEstimate)
+    estimate.run.return_value.update.return_value = 0.0
+    schedule = (
+        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=estimate)
+        if rtc
+        else ChunkedSchedule(fps=10, inference_lead=estimate)
+    )
+    infer = Mock(return_value=chunk)
+    run = runtime.start(schedule, infer)
+    try:
+        step = run.send({policy_keys.PLAN: []})
+        assert infer.call_count == 1
+        assert estimate.run.return_value.update.call_count == (0 if rtc else 1)
+        if rtc or chunk is None:
+            assert step.commands == {}
+        else:
+            assert Trajectory(**step.commands) == Trajectory(chunk, 0, 10)
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('rtc', [False, True])
+@pytest.mark.parametrize('fail', [False, True])
+def test_schedulers_keep_one_pending_call_and_close_it(execution, monkeypatch, rtc, fail):
+    runtime, clock = execution
+    future = Future()
+    submit = Mock(return_value=_FutureAnswer(future, runtime))
+    monkeypatch.setattr(runtime, 'submit', submit)
+    schedule = (
+        RTCSchedule(fps=10, call_after_sec=0, latency_estimate=ConstantDuration()) if rtc else ChunkedSchedule(fps=10)
+    )
+    run = runtime.start(schedule, Mock())
+    try:
+        for now_ns in (0, PERIOD_NS, 5 * PERIOD_NS):
+            clock.advance_to_ns(now_ns)
+            assert run.send({policy_keys.PLAN: []}) == Step({}, now_ns)
+        assert submit.call_count == 1
+        if fail:
+            future.set_exception(RuntimeError('inference failed'))
+            with pytest.raises(RuntimeError, match='inference failed'):
+                run.send({policy_keys.PLAN: []})
+            assert submit.call_count == 1
+    finally:
+        run.close()
+    assert future.cancelled() is not fail
+
+
 def test_chunked_schedule_returns_a_trajectory_and_passes_the_original_observation(execution):
     runtime, clock = execution
     clock.advance_to_ns(250_000_000)
