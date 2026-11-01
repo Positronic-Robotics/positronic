@@ -22,7 +22,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step, Trajectory
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -65,7 +65,9 @@ from positronic.policy.processors import (
     EndOnField,
     RTCSchedule,
     TemporalStack,
+    Trajectory,
     TrajectoryPlayer,
+    Waypoint,
 )
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Deprecation, Version
@@ -544,7 +546,8 @@ def test_player_context_is_one_remaining_plan_with_exact_replacement_times(execu
         clock.advance_to_ns(50_000_000)
         run.send({POSITION: 43})
         source = inner_run.send.call_args.args[0]['remaining'][0]
-        assert isinstance(source, TrajectoryPlayer.Waypoint)
+        assert type(source) is Waypoint
+        assert {field.name for field in fields(Waypoint)} == {'commands', 'due_ns'}
         assert source.commands is first['commands'][0]
         assert source.due_ns == 0
         clock.advance_to_ns(100_000_000)
@@ -1318,7 +1321,10 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
     estimate = estimate_factory()
     estimate.run().update(0.4)
     schedule = (
-        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=estimate)
+        Sequential(
+            TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+            RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=estimate),
+        )
         if rtc
         else Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, inference_lead=estimate))
     )
@@ -1427,7 +1433,10 @@ def _rtc(execution, monkeypatch, call_after_sec, latency_estimate):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    schedule = RTCSchedule(fps=10, call_after_sec=call_after_sec, latency_estimate=latency_estimate)
+    schedule = Sequential(
+        TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+        RTCSchedule(fps=10, call_after_sec=call_after_sec, latency_estimate=latency_estimate),
+    )
     run = runtime.start(schedule, Mock())
 
     def step(index):
@@ -1472,6 +1481,105 @@ def test_rtc_executes_nothing_between_the_old_chunk_end_and_a_slow_answer(execut
         run.close()
     assert executed == ['--', 'o0', 'o1', 'o2', 'o3', '--', '--', '--', 'n5', 'n6']
     assert model.calls == [(0, []), (3 * PERIOD_NS, ['o2', 'o3']), (8 * PERIOD_NS, [f'n{i}' for i in range(5, 10)])]
+
+
+@pytest.mark.parametrize('length', [0, 1, 3])
+def test_rtc_discards_an_answer_whose_entire_prediction_has_elapsed(execution, monkeypatch, length):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, ConstantDuration())
+    try:
+        step(0)
+        model.answer('old')
+        step(1)
+        step(3)
+        model.answer('expired', length=length)
+        assert step(6).commands == {}
+        assert step(7).commands == {}
+        prefix = model.requests[-1][RTC.ACTION_PREFIX]
+        assert prefix[RTC.PREFIX_ACTIONS] == []
+        assert prefix[RTC.CHUNK_OFFSET_SEC] == pytest.approx(length / 10)
+        assert prefix[RTC.OBSERVATION_OFFSET_SEC] == pytest.approx((length - 3) / 10)
+    finally:
+        run.close()
+
+
+def test_rtc_history_only_answer_keeps_playback_and_updates_latency(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.2, DelayEstimate.mean(last=1))
+    _, clock = execution
+    try:
+        step(0)
+        model.answer_with(None)
+        assert step(1).commands == {}
+        model.answer('old')
+        assert step(2).commands == {MOTOR: 'old0'}
+        assert step(4).commands == {MOTOR: 'old2'}
+        clock.advance_to_ns(5 * PERIOD_NS)
+        model.answer_with(None)
+        assert step(5).commands == {MOTOR: 'old3'}
+        assert model.calls == [
+            (0, []),
+            (PERIOD_NS, []),
+            (4 * PERIOD_NS, [f'old{i}' for i in range(2, 10)]),
+            (5 * PERIOD_NS, [f'old{i}' for i in range(3, 10)]),
+        ]
+        assert model.requests[-1][RTC.MEASURED_LATENCY_SEC] == pytest.approx(0.1)
+        assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(0.1)
+    finally:
+        run.close()
+
+
+def test_rtc_accepts_shared_waypoints_without_a_player(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration()), Mock())
+    try:
+        run.send({policy_keys.PLAN: []})
+        clock.advance_to_ns(100_000_000)
+        model.answer('a', length=5)
+        trajectory = Trajectory(**run.send({policy_keys.PLAN: []}).commands)
+        assert trajectory.waypoints() == [Waypoint({MOTOR: f'a{i}'}, 100_000_000 + i * PERIOD_NS) for i in range(5)]
+        clock.advance_to_ns(350_000_000)
+        plan = [Waypoint({MOTOR: 'b0'}, 300_000_000), Waypoint({MOTOR: 'b1'}, 400_000_000)]
+        run.send({policy_keys.PLAN: plan})
+        request = model.requests[-1]
+        assert request[RTC.ACTION_PREFIX] == {
+            RTC.PREFIX_ACTIONS: [{MOTOR: 'b0'}, {MOTOR: 'b1'}],
+            RTC.CHUNK_OFFSET_SEC: 0.2,
+            RTC.OBSERVATION_OFFSET_SEC: -0.05,
+        }
+        assert policy_keys.PLAN not in request
+    finally:
+        run.close()
+
+
+def test_rtc_uses_the_players_plan_and_consumes_its_configured_key(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    plan_key = 'remaining'
+    definition = Sequential(
+        TrajectoryPlayer(plan_key=plan_key, record_stats=False),
+        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration(), plan_key=plan_key),
+    )
+    run = runtime.start(spec.from_spec(definition.to_spec()), Mock())
+    try:
+        clock.advance_to_ns(1_000_000_000)
+        run.send({POSITION: 42})
+        assert model.requests[0][RTC.ACTION_PREFIX] == {
+            RTC.PREFIX_ACTIONS: [],
+            RTC.CHUNK_OFFSET_SEC: 0.0,
+            RTC.OBSERVATION_OFFSET_SEC: 0.0,
+        }
+        model.answer('old')
+        run.send({POSITION: 42})
+        clock.advance_to_ns(1_200_000_000)
+        run.send({POSITION: 43})
+        assert model.calls[-1] == (1_200_000_000, [f'old{i}' for i in range(2, 10)])
+        assert all(plan_key not in request for request in model.requests)
+        assert model.requests[-1][POSITION] == 43
+        assert runtime.metadata_snapshot() == {}
+    finally:
+        run.close()
 
 
 @pytest.mark.parametrize('estimate', [DelayEstimate.mean(), DelayEstimate.max(), ConstantDuration(0.1)])
@@ -2066,7 +2174,13 @@ def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeyp
             ),
             [0, PERIOD_NS],
         ),
-        (lambda: RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration()), [0, 2 * PERIOD_NS]),
+        (
+            lambda: Sequential(
+                TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+                RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration()),
+            ),
+            [0, 2 * PERIOD_NS],
+        ),
     ],
     ids=['chunked', 'rtc'],
 )
@@ -2107,7 +2221,10 @@ def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, 
     runtime, _ = execution
     model = _EndingModel(runtime, [_ending(i) if i == 6 else {MOTOR: i} for i in range(10)], on=on)
     _answer_after(runtime, monkeypatch, 5 * PERIOD_NS // 2)
-    schedule = RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration(0.25))
+    schedule = Sequential(
+        TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+        RTCSchedule(fps=10, call_after_sec=0.1, latency_estimate=ConstantDuration(0.25)),
+    )
     sent, ended = _play(execution, schedule, model, [i * PERIOD_NS // 2 for i in range(60)])
     assert ended is end
     assert 6 not in sent
@@ -2116,7 +2233,13 @@ def test_rtc_plays_an_end_only_from_an_element_that_it_does_not_skip(execution, 
 def test_the_rtc_prefix_carries_end_like_any_other_command(execution):
     runtime, clock = execution
     model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2), {MOTOR: 3}])
-    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0, latency_estimate=ConstantDuration(0.3)), model)
+    run = runtime.start(
+        Sequential(
+            TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+            RTCSchedule(fps=10, call_after_sec=0, latency_estimate=ConstantDuration(0.3)),
+        ),
+        model,
+    )
     try:
         run.send({})
         clock.advance_to_ns(PERIOD_NS // 2)
@@ -2130,7 +2253,10 @@ def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(executi
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    schedule = RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2))
+    schedule = Sequential(
+        TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2)),
+    )
     run = runtime.start(schedule, Mock())
     try:
         run.send({})
@@ -2160,7 +2286,10 @@ def test_late_answer_reads_do_not_inflate_duration_estimates(execution, monkeypa
     monkeypatch.setattr(runtime, 'submit', model.submit)
     estimate = DelayEstimate.mean(last=1, max_sec=1.0)
     schedule = (
-        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=estimate)
+        Sequential(
+            TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+            RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=estimate),
+        )
         if rtc
         else Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, inference_lead=estimate))
     )
@@ -2189,7 +2318,10 @@ def test_rtc_description_preserves_commands_without_a_model_codec(execution, mon
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    description = RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2)).to_spec()
+    description = Sequential(
+        TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration(0.2)),
+    ).to_spec()
     restored = spec.from_spec(description)
     assert restored.to_spec() == description
     run = runtime.start(restored, Mock())
@@ -2225,6 +2357,7 @@ def test_rtc_keeps_camera_history_lazy_until_inference(execution, monkeypatch):
     monkeypatch.setattr(np, 'stack', stack)
     schedule = Sequential(
         TemporalStack(('camera',), (-0.1, 0.0)),
+        TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
         RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration()),
     )
     run = runtime.start(schedule, Mock())

@@ -213,6 +213,16 @@ def chunked_schedule_v2(
     return chunked_schedule_v3(fps, horizon_sec, record_stats, inference_lead, replan_on_error=False)
 
 
+def rtc_schedule_v1(fps: float, call_after_sec: float, latency_estimate: float | dict[str, Any]) -> dict[str, Any]:
+    """Translate the combined RTC scheduler and player into separate components."""
+    return sequence(
+        component(TrajectoryPlayer.WIRE_NAME, version=1, plan_key=policy_keys.PLAN, record_stats=False),
+        component(
+            RTCSchedule.WIRE_NAME, version=2, fps=fps, call_after_sec=call_after_sec, latency_estimate=latency_estimate
+        ),
+    )
+
+
 class StampObservationTimes(Policy):
     """Add the control clock's ``obs_time_ns`` and the wall clock's ``wall_time_ns``, which a v1 server reads."""
 
