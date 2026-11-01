@@ -3,14 +3,13 @@
 import contextvars
 import threading
 from concurrent.futures import CancelledError
-from queue import Full
 from typing import cast
 
 import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy import executor as module
-from positronic.policy.base import NotAnswered, Policy, PolicyEnd, Step
+from positronic.policy.base import NotAnswered, Policy, PolicyEnd, QueueFull, Step
 from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 
@@ -401,12 +400,12 @@ def test_full_queue_refuses_work_and_cancellation_frees_capacity(executors, capa
     try:
         assert started.wait(timeout=1)
         queued = [runtime.submit(lambda: 42) for _ in range(capacity)]
-        with pytest.raises(Full):
+        with pytest.raises(QueueFull):
             runtime.submit(lambda: pytest.fail('Rejected work ran'))
         if queued:
             queued[0].cancel()
             replacement = runtime.submit(lambda: 43)
-            with pytest.raises(Full):
+            with pytest.raises(QueueFull):
                 runtime.submit(lambda: None)
             replacement.cancel()
     finally:

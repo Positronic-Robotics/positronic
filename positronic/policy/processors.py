@@ -470,17 +470,23 @@ class Periodic(Policy):
 
 
 class RequestTiming:
-    """Choose inference deadlines using a fixed interval or the scheduler's latency estimate."""
+    """Choose when to request inference: periodically, after a trajectory starts, or before it ends.
+
+    ``every(seconds)`` keeps a fixed rhythm from the first submission. ``after_start(seconds)`` uses
+    the returned trajectory's start; ``before_end()`` uses its end minus the estimated inference time.
+    """
 
     class Reference(Enum):
         BEFORE_END = 'before_end'
         AFTER_START = 'after_start'
-        EACH_SAMPLE = 'each_sample'
+        EVERY = 'every'
 
-    def __init__(self, reference: Reference, after_start_sec: float = 0.0) -> None:
-        check_finite_nonnegative(after_start_sec, 'after_start_sec')
+    def __init__(self, reference: Reference, seconds: float = 0.0) -> None:
+        check_finite_nonnegative(seconds, 'seconds')
         self._reference = reference
-        self.after_start_ns = round(after_start_sec * 1e9)
+        self.duration_ns = seconds * 1e9
+        if reference is self.Reference.EVERY and self.duration_ns < 1:
+            raise ValueError('request interval must be at least one nanosecond')
 
     @classmethod
     def before_end(cls) -> Self:
@@ -493,29 +499,44 @@ class RequestTiming:
         return cls(cls.Reference.AFTER_START, seconds)
 
     @classmethod
-    def each_sample(cls) -> Self:
-        """Submit each periodic sample, queueing it when an earlier call is still running."""
-        return cls(cls.Reference.EACH_SAMPLE)
+    def every(cls, seconds: float) -> Self:
+        """Request on a fixed grid from the first submission, skipping missed slots and queueing slow calls."""
+        return cls(cls.Reference.EVERY, seconds)
 
-    @property
-    def per_sample(self) -> bool:
-        return self._reference is self.Reference.EACH_SAMPLE
+    class _Run:
+        def __init__(self, strategy: 'RequestTiming') -> None:
+            self._strategy = strategy
+            self._first_call_ns: int | None = None
 
-    def next_call_ns(self, trajectory: Trajectory, estimated_latency_sec: float, now_ns: int) -> int:
-        if self.per_sample:
-            return now_ns
-        if self._reference is self.Reference.AFTER_START:
-            return trajectory.start_ns + self.after_start_ns
-        if not trajectory.commands:
-            return now_ns
-        return trajectory.end_ns - round(min(estimated_latency_sec * 1e9, trajectory.end_ns - trajectory.start_ns))
+        def next_call_ns(self, trajectory: Trajectory | None, estimated_latency_sec: float, now_ns: int) -> int | None:
+            """Return the next deadline from a prediction, or advance periodic timing from the submission time."""
+            if self._strategy._reference is RequestTiming.Reference.EVERY:
+                if self._first_call_ns is None:
+                    self._first_call_ns = now_ns
+                periods = int((now_ns - self._first_call_ns) / self._strategy.duration_ns) + 1
+                deadline_ns = self._first_call_ns + round(periods * self._strategy.duration_ns)
+                if deadline_ns <= now_ns:
+                    deadline_ns = self._first_call_ns + round((periods + 1) * self._strategy.duration_ns)
+                return deadline_ns
+            if trajectory is None:
+                return None
+            if self._strategy._reference is RequestTiming.Reference.AFTER_START:
+                return trajectory.start_ns + round(self._strategy.duration_ns)
+            if not trajectory.commands:
+                return None
+            lead_ns = min(estimated_latency_sec * 1e9, trajectory.end_ns - trajectory.start_ns)
+            return trajectory.end_ns - round(lead_ns)
+
+    def run(self) -> _Run:
+        """Create timing for one episode, anchoring periodic calls at the first submission."""
+        return self._Run(self)
 
     def to_spec(self) -> dict[str, Any]:
-        return {'reference': self._reference.value, 'after_start_sec': self.after_start_ns / 1e9}
+        return {'reference': self._reference.value, 'seconds': self.duration_ns / 1e9}
 
     @classmethod
     def from_spec(cls, spec: Mapping[str, Any]) -> Self:
-        return cls(cls.Reference(spec['reference']), spec.get('after_start_sec', 0.0))
+        return cls(cls.Reference(spec['reference']), spec.get('seconds', 0.0))
 
 
 class TrajectoryMerge:
@@ -570,10 +591,11 @@ class InferenceSchedule(Policy):
     """Schedule inference calls and publish completed predictions as trajectories.
 
     Optional observation fields ``PLAN`` and ``REPLAN_NOW`` provide playback context and request
-    immediate replanning. Both are consumed before inference; absent fields leave those features unused.
-    ``RequestTiming.each_sample()`` requires ``SAMPLE_INDEX`` and queues each new sample. Other timing
-    strategies keep at most one call outstanding. Answers are consumed in submission order, one per
-    resumption. ``OBS_TIME_NS`` retains the request's sampling time for trajectory placement.
+    replanning. Both are consumed before inference; absent fields leave those features unused.
+    ``RequestTiming.every(seconds)`` queues calls at a fixed interval. Other timing strategies keep at
+    most one call outstanding. Answers are consumed in submission order, one per resumption.
+    ``OBS_TIME_NS`` supplies the observation time for request eligibility and trajectory placement;
+    without it, the current runtime time is used.
     """
 
     WIRE_NAME = 'inference_schedule'
@@ -618,35 +640,32 @@ class InferenceSchedule(Policy):
 
     @staticmethod
     def _replan_if_needed(
-        obs: Obs, previous: Trajectory | None, call_ns: int, now_ns: int
-    ) -> tuple[Obs, Trajectory | None, int]:
+        obs: Obs, previous: Trajectory | None, call_ns: int | None, now_ns: int
+    ) -> tuple[Obs, Trajectory | None, int | None]:
         if policy_keys.REPLAN_NOW in obs:
             if obs[policy_keys.REPLAN_NOW]:
                 previous = None
-                call_ns = now_ns
+                if call_ns is not None:
+                    call_ns = now_ns
             obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
         return obs, previous, call_ns
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._latency_estimate.run()
+        timing = self._request_timing.run()
         estimated_latency_sec = 0.0
         measured_sec: float | None = None
         pending: deque[tuple[Answer[Sequence[Commands] | None], int]] = deque()
         previous: Trajectory | None = None
-        last_sample_index: int | None = None
-        call_ns = 0
+        call_ns: int | None = 0
+        fresh_observation_ns = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 update = None
                 obs, previous, call_ns = self._replan_if_needed(obs, previous, call_ns, now_ns)
-                sample_index = (
-                    obs[policy_keys.SAMPLE_INDEX]
-                    if self._request_timing.per_sample
-                    else obs.get(policy_keys.SAMPLE_INDEX)
-                )
-                sample_time_ns = obs.get(policy_keys.OBS_TIME_NS, now_ns)
+                sample_time_ns: int = obs.get(policy_keys.OBS_TIME_NS, now_ns)
 
                 if pending and pending[0][0].done():
                     answer, observation_time_ns = pending.popleft()
@@ -656,23 +675,23 @@ class InferenceSchedule(Policy):
                     if (chunk := answer.result()) is not None:
                         update = self._merge.plan(chunk, self._fps, previous, now_ns, observation_time_ns)
                         previous = update
-                        call_ns = self._request_timing.next_call_ns(previous, estimated_latency_sec, now_ns)
+                    if call_ns is None:
+                        call_ns = timing.next_call_ns(update, estimated_latency_sec, now_ns)
+                        if call_ns is None:
+                            call_ns = now_ns
 
-                if (
-                    (not pending or self._request_timing.per_sample)
-                    and sample_time_ns >= call_ns
-                    and (sample_index is None or sample_index != last_sample_index)
-                ):
+                if call_ns is not None and sample_time_ns >= max(call_ns, fresh_observation_ns):
                     answer = runtime.submit(
                         infer,
                         self._call_obs(obs, previous, update, sample_time_ns, estimated_latency_sec, measured_sec),
                     )
                     pending.append((answer, sample_time_ns))
-                    last_sample_index = sample_index
+                    fresh_observation_ns = sample_time_ns + 1 if policy_keys.OBS_TIME_NS in obs else 0
+                    call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
                 if update is not None and now_ns >= update.end_ns:
                     update = Trajectory([], update.start_ns, update.fps, update.start_ns)
                 commands = {} if update is None else asdict(update, recurse=False)
-                obs = yield Step(commands, now_ns if pending else call_ns)
+                obs = yield Step(commands, now_ns if pending or call_ns is None else max(call_ns, fresh_observation_ns))
         finally:
             for answer, _ in pending:
                 answer.cancel()
@@ -842,7 +861,7 @@ class RTCSchedule(InferenceSchedule):
     def to_spec(self) -> dict[str, Any]:
         args = {
             ChunkedSchedule.FPS_ARG: self._fps,
-            self.CALL_AFTER_ARG: self._request_timing.after_start_ns / 1e9,
+            self.CALL_AFTER_ARG: self._request_timing.duration_ns / 1e9,
             self.LATENCY_ESTIMATE_ARG: self._latency_estimate.to_spec(),
         }
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}

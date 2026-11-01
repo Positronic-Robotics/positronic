@@ -10,11 +10,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import partial
-from queue import Full
 from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
-from positronic.policy.base import Answer, NotAnswered, Runtime
+from positronic.policy.base import Answer, NotAnswered, QueueFull, Runtime
 
 P = ParamSpec('P')
 T = TypeVar('T')
@@ -121,7 +120,7 @@ class Executor(Runtime):
     functions must not mutate episode state.
 
     ``max_queue_size`` bounds waiting work in addition to ``max_workers`` execution slots.
-    ``submit`` raises ``queue.Full`` at capacity. Worker completion or cancellation frees a slot,
+    ``submit`` raises ``QueueFull`` at capacity. Worker completion or cancellation frees a slot,
     independently of answer visibility or consumption. Zero allows only the execution slots.
     """
 
@@ -195,7 +194,7 @@ class Executor(Runtime):
 
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
         if sum(not answer.call.done() for answer in self._answers) >= self._capacity:
-            raise Full('Policy execution queue is full')
+            raise QueueFull('Policy execution queue is full')
         context = contextvars.copy_context()
 
         def invoke() -> T:

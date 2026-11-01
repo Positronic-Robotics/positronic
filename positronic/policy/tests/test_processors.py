@@ -4,7 +4,6 @@ import json
 import threading
 from concurrent.futures import Future
 from datetime import date
-from queue import Full
 from sys import maxsize
 from typing import Any, cast
 from unittest.mock import Mock
@@ -24,7 +23,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, QueueFull, Step
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -105,7 +104,7 @@ def _sampled_policy(*, action_fps=50, sample_fps=10):
         Periodic(sample_fps),
         InferenceSchedule(
             action_fps,
-            request_timing=RequestTiming.each_sample(),
+            request_timing=RequestTiming.every(1 / sample_fps),
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=DelayEstimate.max(),
         ),
@@ -262,6 +261,101 @@ def test_periodic_ordinary_schedule_waits_for_a_new_sample(periodic_execution):
         run.close()
 
 
+@pytest.mark.parametrize('with_index', [False, True])
+def test_interval_requests_use_observation_time_and_keep_their_grid(periodic_execution, with_index):
+    runtime, now = periodic_execution
+    requests = []
+
+    def infer(obs):
+        requests.append(obs)
+
+    policy = InferenceSchedule(
+        50,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+    )
+    for origin in (1_000_000_000, 5_000_000_000):
+        run = runtime.start(policy, infer)
+        try:
+            for offset, next_offset in ((0, 100), (250, 300), (300, 400), (650, 700), (700, 800)):
+                now[0] = origin + offset * 1_000_000
+                obs: dict[str, Any] = {policy_keys.OBS_TIME_NS: now[0]}
+                if with_index:
+                    obs[policy_keys.SAMPLE_INDEX] = 'opaque server identifier'
+                run.send(obs)
+                assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+                count = len(requests)
+                now[0] += 250_000_000 if offset == 0 else 10_000_000
+                step = run.send(obs)
+                assert step.resume_at_ns == origin + next_offset * 1_000_000
+                assert len(requests) == count
+                assert not runtime.has_pending
+        finally:
+            run.close()
+    assert [obs[policy_keys.OBS_TIME_NS] for obs in requests] == [
+        origin + offset * 1_000_000 for origin in (1_000_000_000, 5_000_000_000) for offset in (0, 250, 300, 650, 700)
+    ]
+    if with_index:
+        assert all(obs[policy_keys.SAMPLE_INDEX] == 'opaque server identifier' for obs in requests)
+
+
+@pytest.mark.parametrize('sample_fps', [None, 20])
+def test_interval_requests_can_run_slower_than_observations(periodic_execution, sample_fps):
+    runtime, now = periodic_execution
+    requests = []
+    schedule = InferenceSchedule(
+        50,
+        request_timing=RequestTiming.every(0.2),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+    )
+    policy = schedule if sample_fps is None else Sequential(Periodic(sample_fps), schedule)
+
+    def infer(obs):
+        requests.append(obs[POSITION])
+
+    run = runtime.start(policy, infer)
+    try:
+        for tick in range(9):
+            now[0] = tick * 50_000_000
+            run.send({POSITION: tick})
+            if tick % 4 == 0:
+                assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+                run.send({POSITION: tick})
+            assert not runtime.has_pending
+        assert requests == [0, 4, 8]
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('seconds', [0, -1, float('nan'), float('inf'), 1e-12])
+def test_interval_requests_require_a_representable_positive_interval(seconds):
+    with pytest.raises(ValueError):
+        RequestTiming.every(seconds)
+
+
+@pytest.mark.parametrize('fps', [30, 60])
+def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_execution, fps):
+    runtime, now = periodic_execution
+    requests = []
+
+    def infer(obs):
+        requests.append(obs[POSITION])
+
+    run = runtime.start(_sampled_policy(sample_fps=fps), infer)
+    try:
+        for index in range(100):
+            now[0] = round(index * 1e9 / fps)
+            run.send({POSITION: index})
+            assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+            step = run.send({POSITION: index})
+            assert step.resume_at_ns == round((index + 1) * 1e9 / fps)
+        assert requests == list(range(100))
+    finally:
+        run.close()
+
+
 def test_periodic_queue_overflow_fails_and_cancels_queued_calls():
     now = [0]
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_queue_size=1)
@@ -280,7 +374,7 @@ def test_periodic_queue_overflow_fails_and_cancels_queued_calls():
         now[0] = 100_000_000
         run.send({})
         now[0] = 200_000_000
-        with pytest.raises(Full):
+        with pytest.raises(QueueFull):
             run.send({})
     finally:
         release.set()
@@ -2147,7 +2241,7 @@ def test_wire_names_match_the_registered_components():
         'periodic': Periodic(fps=10),
         'inference_schedule': InferenceSchedule(
             fps=50,
-            request_timing=RequestTiming.each_sample(),
+            request_timing=RequestTiming.every(0.1),
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=DelayEstimate.max(),
         ),

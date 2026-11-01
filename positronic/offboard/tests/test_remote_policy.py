@@ -681,7 +681,7 @@ def test_periodic_jpeg_history_and_prediction_share_one_call(served, transport):
         Periodic(10),
         InferenceSchedule(
             50,
-            request_timing=RequestTiming.each_sample(),
+            request_timing=RequestTiming.every(0.1),
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=ConstantDuration(0),
         ),

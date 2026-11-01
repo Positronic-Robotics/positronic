@@ -76,6 +76,10 @@ ProcessorRun = TypeAliasType(
 )
 
 
+class QueueFull(RuntimeError):
+    """The runtime cannot accept another call until queue capacity becomes available."""
+
+
 class Runtime(ABC):
     """What the framework offers one episode. Every episode gets its own.
 
@@ -140,7 +144,7 @@ class Runtime(ABC):
 
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
-        """Submit without waiting; raise ``queue.Full`` if the runtime's admission capacity is exhausted."""
+        """Submit without waiting; raise ``QueueFull`` if the runtime's admission capacity is exhausted."""
 
     @abstractmethod
     def has_ready_answers(self) -> bool:
