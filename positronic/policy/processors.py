@@ -55,13 +55,6 @@ from positronic.utils import check_finite_nonnegative, check_finite_positive
 from positronic.utils.lazy import LazyDict, OverlayMapping, without_keys
 
 
-# TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
-# domain types reach the border, this reads the status off the value.
-def _is_robot_status(name: str) -> bool:
-    """Whether ``name`` is an arm's status: ``robot_state.status``, or an arm's ``robot_state.{side}.status``."""
-    return name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
-
-
 class EndOnField(Policy):
     """End the run when a step of the inner run carries the reserved field ``END``.
 
@@ -317,8 +310,11 @@ class TrajectoryPlayer(Policy):
             return values[low] + (values[high] - values[low]) * (position - low)
 
     def _need_recover(self, obs: Obs) -> bool:
+        # TODO(#638): Read status from domain values when the harness preserves their types.
         return self._replan_on_error and any(
-            RobotStatus(obs[name]) is RobotStatus.ERROR for name in obs if _is_robot_status(name)
+            RobotStatus(obs[name]) is RobotStatus.ERROR
+            for name in obs
+            if name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
         )
 
     def _with_plan(self, obs: Obs, plan: deque[Waypoint], current: Waypoint | None, now_ns: int) -> Obs:
