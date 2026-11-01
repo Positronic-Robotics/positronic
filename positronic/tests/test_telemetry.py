@@ -466,6 +466,51 @@ def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
     sampler._nvml.shutdown()
 
 
+class _UnreadableProc:
+    """A child whose every read raises ``error``."""
+
+    pid = 4_000_001
+
+    def __init__(self, error: type[psutil.Error]):
+        self._error = error
+
+    def cpu_percent(self, interval=None):
+        raise self._error(self.pid)
+
+    def memory_info(self):
+        raise self._error(self.pid)
+
+
+def test_stats_sample_drops_a_child_that_exits_before_its_first_read(tmp_path, monkeypatch, caplog):
+    """A child can exit between the tree listing and its first CPU read. The sample keeps the rest of the tree."""
+    _install_fake_nvml(monkeypatch)
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    monkeypatch.setattr(sampler._self, 'children', lambda recursive=False: [_UnreadableProc(psutil.NoSuchProcess)])
+
+    with caplog.at_level(logging.ERROR, logger=telemetry.__name__):
+        sample = sampler._sample()
+
+    assert sample[telemetry.STAT_RSS_PROC_B] > 0
+    assert _UnreadableProc.pid not in sampler._proc_cache
+    assert not caplog.records
+    sampler._nvml.shutdown()
+
+
+def test_stats_sample_logs_a_child_it_may_not_read(tmp_path, monkeypatch, caplog):
+    """A child that refuses a read is left out of the sample, and the log names it."""
+    _install_fake_nvml(monkeypatch)
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    monkeypatch.setattr(sampler._self, 'children', lambda recursive=False: [_UnreadableProc(psutil.AccessDenied)])
+
+    with caplog.at_level(logging.ERROR, logger=telemetry.__name__):
+        sample = sampler._sample()
+
+    assert sample[telemetry.STAT_RSS_PROC_B] > 0
+    assert _UnreadableProc.pid not in sampler._proc_cache
+    assert str(_UnreadableProc.pid) in caplog.records[0].getMessage()
+    sampler._nvml.shutdown()
+
+
 def test_stats_sample_without_gpu(tmp_path, monkeypatch):
     def _raise():
         raise pynvml.NVMLError(pynvml.NVML_ERROR_DRIVER_NOT_LOADED)
