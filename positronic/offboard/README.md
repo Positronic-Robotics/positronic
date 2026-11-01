@@ -157,7 +157,8 @@ Upon connection, the server sends a ready packet with metadata:
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
     "local_stack": {"seq": [
-      {"name": "chunked_schedule", "version": 3, "args": {"fps": 15.0, "horizon_sec": 1.0}},
+      {"name": "trajectory_player", "version": 1, "args": {"replan_on_error": true}},
+      {"name": "chunked_schedule", "version": 4, "args": {"fps": 15.0, "horizon_sec": 1.0}},
       {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
     ]},
     "compress_images": true,

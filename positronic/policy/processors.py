@@ -8,24 +8,28 @@ Describe a local stack without creating episode state::
     from positronic.policy.sequential import Sequential
 
     definition = Sequential(
-        PauseOnUnavailable(), TemporalStack(keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)), ChunkedSchedule(fps=20)
+        TemporalStack(keys=('image',), offsets_sec=(-0.2, -0.1, 0.0)),
+        TrajectoryPlayer(replan_on_error=True),
+        ChunkedSchedule(fps=20),
     )
     episode = runtime.start(definition, infer)
     step = episode.send(obs)
 """
 
 from abc import ABC, abstractmethod
-from bisect import insort
+from bisect import bisect_right, insort
 from collections import ChainMap, deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from math import isfinite
+from functools import partial
+from math import inf
 from statistics import fmean
 from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
+from attr import asdict
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -44,54 +48,11 @@ from positronic.policy.base import (
     ReturnT,
     Runtime,
     Step,
+    Trajectory,
 )
 from positronic.policy.keys import ACTION_FPS, END
-
-
-# TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
-# domain types reach the border, this reads the status off the value.
-def _is_robot_status(name: str) -> bool:
-    """Whether ``name`` is an arm's status: ``robot_state.status``, or an arm's ``robot_state.{side}.status``."""
-    return name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
-
-
-def _arms_available(obs) -> bool:
-    """Whether every arm in the observation will take a command; one naming no arm status has none to stop for.
-
-    The wire carries a status as its number, so this is where one becomes a ``RobotStatus`` again.
-    """
-    return all(RobotStatus(v) is RobotStatus.AVAILABLE for name, v in obs.items() if _is_robot_status(name))
-
-
-MILLISECOND_NS = 10**6
-
-
-class PauseOnUnavailable(Policy):
-    """Withhold commands and child calls while any arm is unavailable.
-
-    An unavailable arm causes an empty command set and a status check one millisecond later. Once every
-    arm is available, calls resume on the same child policy, retaining queued commands and pending answers.
-
-    TODO(#789): Define plan invalidation and recovery after robot unavailability.
-    """
-
-    WIRE_NAME = 'stop_on_fault'
-    WIRE_VERSION = 2
-
-    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
-        obs = yield
-        while True:
-            if _arms_available(obs):
-                try:
-                    step = inner.send(obs)
-                except StopIteration as end:
-                    return end.value
-                obs = yield step
-            else:
-                obs = yield Step({}, runtime.time_ns + MILLISECOND_NS)
-
-    def to_spec(self) -> dict[str, Any]:
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
+from positronic.utils import check_finite_nonnegative, check_finite_positive
+from positronic.utils.lazy import LazyDict, OverlayMapping, without_keys
 
 
 class EndOnField(Policy):
@@ -163,8 +124,7 @@ class ConstantDuration(DurationEstimate):
             return self._strategy._seconds
 
     def __init__(self, seconds: float = 0.0) -> None:
-        if not isfinite(seconds) or seconds < 0:
-            raise ValueError('seconds must be finite and not negative')
+        check_finite_nonnegative(seconds, 'seconds')
         self._seconds = seconds
 
     def run(self) -> DurationEstimateRun:
@@ -199,8 +159,7 @@ class DelayEstimate(DurationEstimate):
     def __init__(self, statistic: Statistic, last: int, max_sec: float) -> None:
         if isinstance(last, bool) or not isinstance(last, int) or not 1 <= last <= maxsize:
             raise ValueError(f'last must be an integer between 1 and {maxsize}')
-        if not isfinite(max_sec) or max_sec < 0:
-            raise ValueError('max_sec must be finite and not negative')
+        check_finite_nonnegative(max_sec, 'max_sec')
         self._statistic = statistic
         self._last = last
         self._max_sec = max_sec
@@ -222,8 +181,205 @@ class DelayEstimate(DurationEstimate):
         return cls(cls.Statistic.MAX, last, max_sec)
 
 
+class TrajectoryPlayer(Policy):
+    """Play an inner run's timed trajectories independently of its inference cadence.
+
+    The inner run yields a ``Step`` whose command dictionary contains the fields of ``Trajectory``.
+    The player converts it to a ``Trajectory`` and emits due commands. It advances the inner run
+    at its requested deadline or when any runtime answer is ready. A waypoint deadline alone
+    does not advance the inner run.
+
+    A new trajectory replaces the plan from its start time, skipping elapsed actions.
+    Empty step commands keep the plan; a trajectory with no commands removes its future
+    from that start time. Auxiliary outputs pass through unchanged.
+
+    Args:
+        plan_key: Observation field containing the remaining plan as a list of ``Waypoint`` values.
+            It includes the command held now, followed by future commands. The last emitted
+            command stays in context until replaced or recovery clears it. ``None`` omits this context.
+        record_stats: Record scheduled, emitted and dropped waypoint counts, command lateness,
+            and gaps between emissions in episode metadata.
+        replan_on_error: Clear the plan on an arm's ``ERROR`` status and advance the inner run
+            immediately with ``replan_now=True``. Pending calls from the inner run are not cancelled.
+            Further resets are suppressed until commands are emitted; ``False`` leaves playback unchanged by arm errors.
+    """
+
+    WIRE_NAME = 'trajectory_player'
+    WIRE_VERSION = 1
+
+    def __init__(
+        self, *, plan_key: str | None = None, record_stats: bool = True, replan_on_error: bool = False
+    ) -> None:
+        self._plan_key = plan_key
+        self._record_stats = record_stats
+        self._replan_on_error = replan_on_error
+
+    @dataclass(frozen=True)
+    class Waypoint:
+        """Commands held from ``due_ns`` until the next waypoint; ``starts_chunk`` resets gap statistics."""
+
+        commands: Commands
+        due_ns: int
+        starts_chunk: bool
+
+    @classmethod
+    def _waypoints(cls, trajectory: Trajectory) -> list[Waypoint]:
+        return [
+            cls.Waypoint(command, trajectory.due_ns(i), starts_chunk=i == 0)
+            for i, command in enumerate(trajectory.commands)
+        ]
+
+    @classmethod
+    def _update_plan(cls, plan: deque[Waypoint], update: Trajectory, now_ns: int) -> int:
+        incoming = cls._waypoints(update)
+        planned = len(incoming)
+        if update.start_ns <= now_ns:
+            plan.clear()
+            running = max(0, bisect_right(incoming, now_ns, key=lambda point: point.due_ns) - 1)
+            incoming = incoming[running:]
+            if incoming:
+                first = incoming[0]
+                incoming[0] = cls.Waypoint(first.commands, first.due_ns, starts_chunk=True)
+        while plan and plan[-1].due_ns >= update.start_ns:
+            plan.pop()
+        plan.extend(incoming)
+        return planned
+
+    @staticmethod
+    def _remaining_plan(plan: Sequence[Waypoint], current: Waypoint | None, now_ns: int) -> list[Waypoint]:
+        running = bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1
+        if running >= 0:
+            return list(plan[running:])
+        return [current, *plan] if current is not None else list(plan)
+
+    class _Stats:
+        """How the schedule played its waypoints.
+
+        A round sends the commands of every due waypoint, and on each channel the last one wins. The due
+        waypoints before the last one count as dropped, also when one of their channels went out. The due
+        waypoints that a new chunk replaces count as dropped too.
+        """
+
+        def __init__(self, runtime: Runtime) -> None:
+            self._runtime = runtime
+            self._scheduled = 0
+            self._sorted_late_ns: list[int] = []
+            self._gap_max_ns = 0
+            self._last_emit_ns: int | None = None
+            self._round_due_ns: int | None = None
+
+        def record_waypoint(self, point: 'TrajectoryPlayer.Waypoint') -> None:
+            self._round_due_ns = point.due_ns
+            if point.starts_chunk:
+                self._last_emit_ns = None
+
+        def count_round(self, planned: int | None, now_ns: int, queued: int) -> None:
+            """Count new waypoints and the due commands emitted together at ``now_ns``."""
+            if planned is None and self._round_due_ns is None:
+                return
+            if planned is not None:
+                self._scheduled += planned
+            if self._round_due_ns is not None:
+                insort(self._sorted_late_ns, now_ns - self._round_due_ns)
+                if self._last_emit_ns is not None:
+                    self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
+                self._last_emit_ns = now_ns
+                self._round_due_ns = None
+            self._write(queued)
+
+        def _write(self, queued: int) -> None:
+            values: dict[str, float] = {
+                eval_keys.SCHEDULED: self._scheduled,
+                eval_keys.EMITTED: len(self._sorted_late_ns),
+                eval_keys.DROPPED: self._scheduled - len(self._sorted_late_ns) - queued,
+            }
+            if self._sorted_late_ns:
+                values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(self._sorted_late_ns, 0.5) / 1e6
+                values[eval_keys.LATE_P90_MS] = self._percentile_of_sorted(self._sorted_late_ns, 0.9) / 1e6
+                values[eval_keys.LATE_MAX_MS] = self._sorted_late_ns[-1] / 1e6
+                values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
+            for name, value in values.items():
+                self._runtime.set_metadata(f'{eval_keys.SCHEDULE}.{name}', value)
+
+        @staticmethod
+        def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
+            """``np.percentile``'s linear interpolation in constant time: the control thread calls it each round."""
+            position = fraction * (len(values) - 1)
+            low = int(position)
+            high = min(low + 1, len(values) - 1)
+            return values[low] + (values[high] - values[low]) * (position - low)
+
+    def _need_recover(self, obs: Obs) -> bool:
+        # TODO(#638): Read status from domain values when the harness preserves their types.
+        return self._replan_on_error and any(
+            RobotStatus(obs[name]) is RobotStatus.ERROR
+            for name in obs
+            if name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
+        )
+
+    def _with_plan(self, obs: Obs, plan: deque[Waypoint], current: Waypoint | None, now_ns: int) -> Obs:
+        if self._plan_key is None:
+            return obs
+        return OverlayMapping(
+            obs, LazyDict({}, {self._plan_key: partial(self._remaining_plan, tuple(plan), current, now_ns)})
+        )
+
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        plan: deque[TrajectoryPlayer.Waypoint] = deque()
+        current_wp: TrajectoryPlayer.Waypoint | None = None
+        inner_resume_at_ns = 0
+        recovering = False
+        stats = self._Stats(runtime) if self._record_stats else None
+        obs = yield
+        while True:
+            now_ns = runtime.time_ns
+            planned = None
+            if not recovering and self._need_recover(obs):
+                plan.clear()
+                current_wp = None
+                inner_resume_at_ns = now_ns
+                planned, recovering = 0, True
+                obs = OverlayMapping(obs, {policy_keys.REPLAN_NOW: True})
+
+            outputs: Mapping[str, Any] = {}
+            if now_ns >= inner_resume_at_ns or obs.get(policy_keys.REPLAN_NOW, False) or runtime.has_ready_answers():
+                try:
+                    step = inner.send(self._with_plan(obs, plan, current_wp, now_ns))
+                except StopIteration as end:
+                    return end.value
+                if step is None:
+                    raise TypeError('TrajectoryPlayer requires its inner run to yield a Step')
+                inner_resume_at_ns, outputs = step.resume_at_ns, step.outputs
+                if step.commands:
+                    update = Trajectory(**step.commands)
+                    planned = self._update_plan(plan, update, now_ns)
+
+            commands: dict[str, Any] = {}
+            while plan and plan[0].due_ns <= now_ns:
+                current_wp = plan.popleft()
+                commands.update(current_wp.commands)
+                if stats is not None:
+                    stats.record_waypoint(current_wp)
+            recovering = recovering and not commands
+            if stats is not None:
+                stats.count_round(planned, now_ns, queued=len(plan))
+            resume_at_ns = min(inner_resume_at_ns, plan[0].due_ns) if plan else inner_resume_at_ns
+            obs = yield Step(commands, resume_at_ns, outputs=outputs)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {
+                'plan_key': self._plan_key,
+                'record_stats': self._record_stats,
+                'replan_on_error': self._replan_on_error,
+            },
+        }
+
+
 class ChunkedSchedule(Policy):
-    """Request action chunks asynchronously and emit their commands at a fixed cadence.
+    """Request action chunks asynchronously and return timed trajectories for playback.
 
         step                0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
         observation T0      ^
@@ -246,7 +402,7 @@ class ChunkedSchedule(Policy):
     If the answer arrives after the old chunk ends, the last target stays in force until
     the answer is read. A zero lead starts the next request at step 13 instead.
 
-    ``infer`` returns an ordered sequence of command sets and must not mutate episode state. The first
+    ``infer`` returns command sets or ``None`` to leave playback unchanged, and must not mutate episode state. The first
     command is due when the completed answer is read; regular playback waits for the previous chunk to end.
     Subsequent commands are spaced by ``1 / fps``. A chunk of K commands covers K periods, including the
     final command's execution period. ``horizon_sec`` limits that duration and discards commands at or
@@ -258,171 +414,68 @@ class ChunkedSchedule(Policy):
     The first request starts immediately. Later deadlines use the delays of completed calls in this
     episode. An early answer waits behind the remaining commands; the new chunk starts from its first
     action. The observation is read at the request, before commands emitted in that same round.
-    With ``record_stats``, each round that plans or emits a waypoint writes the waypoint counters into the
-    episode metadata.
 
-    ``replan_on_error=True`` clears the remaining plan on an arm's ``ERROR`` and makes inference due
-    immediately. A pending call is kept and its answer starts playback on arrival. Further resets wait
-    until a command is emitted. Set it to ``False`` to keep regular scheduling through errors.
+    The optional observation argument ``replan_now`` defaults to ``False``. When true, inference is due
+    immediately and its answer can start immediately. An existing pending call is kept. The argument
+    is consumed before calling ``infer``.
     """
 
     WIRE_NAME = 'chunked_schedule'
-    WIRE_VERSION = 3
+    WIRE_VERSION = 4
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
-    RECORD_STATS_ARG = 'record_stats'
     INFERENCE_LEAD_ARG = 'inference_lead'
-    REPLAN_ON_ERROR_ARG = 'replan_on_error'
-
-    @dataclass(frozen=True)
-    class _Waypoint:
-        commands: Commands
-        due_ns: int
-        starts_chunk: bool
-
-    class _Stats:
-        """How the schedule played its waypoints.
-
-        A round sends the commands of every due waypoint, and on each channel the last one wins. The due
-        waypoints before the last one count as dropped, also when one of their channels went out. The due
-        waypoints that a new chunk replaces count as dropped too.
-        """
-
-        def __init__(self, runtime: Runtime) -> None:
-            self._runtime = runtime
-            self._scheduled = 0
-            self._sorted_late_ns: list[int] = []
-            self._gap_max_ns = 0
-            self._last_emit_ns: int | None = None
-
-        def count_round(
-            self, planned: int | None, due_ns: int | None, now_ns: int, queued: int, *, starts_chunk: bool
-        ) -> None:
-            """Count the ``planned`` waypoints of a new chunk and the one emitted at ``now_ns``, if any."""
-            if planned is None and due_ns is None:
-                return
-            if planned is not None:
-                self._scheduled += planned
-            if starts_chunk:
-                self._last_emit_ns = None
-            if due_ns is not None:
-                insort(self._sorted_late_ns, now_ns - due_ns)
-                if self._last_emit_ns is not None:
-                    self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
-                self._last_emit_ns = now_ns
-            self._write(queued)
-
-        def _write(self, queued: int) -> None:
-            late_ns = self._sorted_late_ns
-            values: dict[str, float] = {
-                eval_keys.SCHEDULED: self._scheduled,
-                eval_keys.EMITTED: len(late_ns),
-                eval_keys.DROPPED: self._scheduled - len(late_ns) - queued,
-            }
-            if late_ns:
-                values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(late_ns, 0.5) / 1e6
-                values[eval_keys.LATE_P90_MS] = self._percentile_of_sorted(late_ns, 0.9) / 1e6
-                values[eval_keys.LATE_MAX_MS] = late_ns[-1] / 1e6
-                values[eval_keys.GAP_MAX_MS] = self._gap_max_ns / 1e6
-            for name, value in values.items():
-                self._runtime.set_metadata(f'{eval_keys.SCHEDULE}.{name}', value)
-
-        @staticmethod
-        def _percentile_of_sorted(values: Sequence[int], fraction: float) -> float:
-            """``np.percentile``'s linear interpolation in constant time: the control thread calls it each round."""
-            position = fraction * (len(values) - 1)
-            low = int(position)
-            high = min(low + 1, len(values) - 1)
-            return values[low] + (values[high] - values[low]) * (position - low)
 
     def __init__(
-        self,
-        fps: float,
-        horizon_sec: float | None = None,
-        record_stats: bool = True,
-        inference_lead: DurationEstimate | None = None,
-        replan_on_error: bool = True,
+        self, fps: float, horizon_sec: float | None = None, inference_lead: DurationEstimate | None = None
     ) -> None:
-        if not isfinite(fps) or fps <= 0:
-            raise ValueError('fps must be finite and positive')
-        if horizon_sec is not None and (not isfinite(horizon_sec) or horizon_sec <= 0):
-            raise ValueError('horizon_sec must be finite and positive')
+        check_finite_positive(fps, 'fps')
+        if horizon_sec is not None:
+            check_finite_positive(horizon_sec, 'horizon_sec')
         self._fps = fps
         self._horizon_sec = horizon_sec
-        self._record_stats = record_stats
         self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
-        self._replan_on_error = replan_on_error
 
     @staticmethod
     def _next_call_ns(start_ns: int, end_ns: int, lead_sec: float) -> int:
-        if not isfinite(lead_sec) or lead_sec < 0:
-            raise ValueError('inference_lead must return a finite, nonnegative duration')
         return end_ns - round(min(lead_sec * 1e9, end_ns - start_ns))
 
-    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[list[_Waypoint], int]:
-        period_sec = 1 / self._fps
-        duration_sec = len(chunk) * period_sec
-        if self._horizon_sec is not None:
-            duration_sec = min(duration_sec, self._horizon_sec)
-        waypoints = [
-            self._Waypoint(waypoint, start_ns + round(i * period_sec * 1e9), starts_chunk=i == 0)
-            for i, waypoint in enumerate(chunk)
-            if i * period_sec < duration_sec
-        ]
-        return waypoints, start_ns + round(duration_sec * 1e9)
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[Trajectory, int]:
+        duration_sec = min(len(chunk) / self._fps, self._horizon_sec or inf)
+        end_ns = start_ns + round(duration_sec * 1e9)
+        trajectory = Trajectory(commands=chunk, start_ns=start_ns, fps=self._fps)
+        trajectory.commands = [command for i, command in enumerate(chunk) if trajectory.due_ns(i) < end_ns]
+        return trajectory, end_ns
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
-        answer: Answer[Sequence[Commands]] | None = None
-        recovering = False
-        trajectory: deque[ChunkedSchedule._Waypoint] = deque()
-        end_ns = 0
-        call_ns = 0
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
+        answer: Answer[Sequence[Commands] | None] | None = None
         lead = self._inference_lead.run()
-        stats = self._Stats(runtime) if self._record_stats else None
-
+        call_ns = end_ns = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
-                planned = None
-                statuses = (RobotStatus(obs[name]) for name in obs if _is_robot_status(name))
-                needs_recovery = self._replan_on_error and not recovering and RobotStatus.ERROR in statuses
-                if needs_recovery:
-                    trajectory.clear()
-                    end_ns = call_ns = now_ns
-                    planned, recovering = 0, True
+                if obs.get(policy_keys.REPLAN_NOW, False):
+                    call_ns = end_ns = now_ns
+                if policy_keys.REPLAN_NOW in obs:
+                    obs = without_keys(obs, policy_keys.REPLAN_NOW)
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
                     answer = runtime.submit(infer, obs)
+                commands: Commands = {}
                 if answer is not None and answer.done():
                     chunk = answer.result()
                     lead_sec = lead.update(answer.elapsed_sec)
+                    check_finite_nonnegative(lead_sec, 'inference_lead')
                     answer = None
-                    start_ns = max(now_ns, end_ns)
-                    waypoints, end_ns = self._plan_chunk(chunk, start_ns)
-                    call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if waypoints else now_ns
-                    # A regular early answer waits behind the commands that are still due.
-                    trajectory = deque(waypoints) if start_ns == now_ns else deque([*trajectory, *waypoints])
-                    planned = len(waypoints)
-                    # A call due at the start of the new chunk goes out in this round, not one round later. A round
-                    # that has already called once sends no second call with the same observation.
+                    if chunk is not None:
+                        start_ns = max(now_ns, end_ns)
+                        trajectory, end_ns = self._plan_chunk(chunk, start_ns)
+                        commands = asdict(trajectory, recurse=False)
+                        call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if chunk else now_ns
                     if not submitted and now_ns >= call_ns:
                         answer = runtime.submit(infer, obs)
-
-                commands: dict[str, Any] = {}
-                due_ns = None
-                starts_chunk = False
-                while trajectory and trajectory[0].due_ns <= now_ns:
-                    waypoint = trajectory.popleft()
-                    due_ns = waypoint.due_ns
-                    starts_chunk |= waypoint.starts_chunk
-                    commands.update(waypoint.commands)
-                recovering = recovering and not commands
-                if stats is not None:
-                    stats.count_round(planned, due_ns, now_ns, queued=len(trajectory), starts_chunk=starts_chunk)
-                resume_at_ns = min(trajectory[0].due_ns, call_ns) if trajectory else call_ns
-                # Pending inference asks for the earliest allowed poll; action cadence is independent.
-                obs = yield Step(commands, now_ns if answer is not None else resume_at_ns)
+                obs = yield Step(commands, now_ns if answer is not None else call_ns)
         finally:
             if answer is not None:
                 answer.cancel()
@@ -437,10 +490,6 @@ class ChunkedSchedule(Policy):
         args: dict[str, Any] = {self.FPS_ARG: self._fps}
         if self._horizon_sec is not None:
             args[self.HORIZON_SEC_ARG] = self._horizon_sec
-        if not self._record_stats:
-            args[self.RECORD_STATS_ARG] = False
-        if not self._replan_on_error:
-            args[self.REPLAN_ON_ERROR_ARG] = False
         lead = self._inference_lead.to_spec()
         if lead != 0:
             args[self.INFERENCE_LEAD_ARG] = lead
@@ -540,10 +589,8 @@ class RTCSchedule(Policy):
     LATENCY_ESTIMATE_ARG = 'latency_estimate'
 
     def __init__(self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate) -> None:
-        if not isfinite(fps) or fps <= 0:
-            raise ValueError('fps must be finite and positive')
-        if not isfinite(call_after_sec) or call_after_sec < 0:
-            raise ValueError('call_after_sec must be finite and not negative')
+        check_finite_positive(fps, 'fps')
+        check_finite_nonnegative(call_after_sec, 'call_after_sec')
         self._fps = fps
         self._call_after_ns = round(call_after_sec * 1e9)
         self._latency_estimate = latency_estimate

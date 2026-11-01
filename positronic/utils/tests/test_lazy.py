@@ -1,4 +1,88 @@
-from positronic.utils.lazy import LazyDict
+from types import MappingProxyType
+from unittest.mock import Mock
+
+import pytest
+
+from positronic.utils.lazy import LazyDict, OverlayMapping, without_keys
+
+
+def test_overlay_preserves_lazy_values_and_overrides_without_reading_the_source_value():
+    kept = Mock(return_value=42)
+    shadowed = Mock(side_effect=AssertionError('Overridden value must not be evaluated'))
+    replacement = Mock(return_value=7)
+    source = LazyDict({}, {'kept': kept, 'override': shadowed})
+    overrides = LazyDict({}, {'override': replacement})
+    result = OverlayMapping(source, overrides)
+
+    assert set(result) == {'kept', 'override'}
+    assert len(result) == 2
+    assert 'kept' in result and 'override' in result and 'missing' not in result
+    kept.assert_not_called()
+    shadowed.assert_not_called()
+    replacement.assert_not_called()
+    assert result['override'] == result['override'] == 7
+    replacement.assert_called_once_with()
+    assert result['kept'] == 42
+    shadowed.assert_not_called()
+    with pytest.raises(AssertionError, match='Overridden value must not be evaluated'):
+        source['override']
+
+
+def test_overlay_reflects_updates_to_both_mappings():
+    source = {1: 'original', 2: 'kept'}
+    overrides = {1: 'replacement'}
+    result = OverlayMapping(MappingProxyType(source), MappingProxyType(overrides))
+    assert dict(result) == {1: 'replacement', 2: 'kept'}
+    source[2] = 'updated'
+    overrides[3] = 'added'
+    del overrides[1]
+    assert dict(result) == {1: 'original', 2: 'updated', 3: 'added'}
+    assert len(result) == 3
+    with pytest.raises(KeyError):
+        result[4]
+
+
+def test_without_keys_preserves_lazy_values_and_source():
+    kept = Mock(return_value=42)
+    removed = Mock(side_effect=AssertionError('Excluded value must not be evaluated'))
+    source = LazyDict({'eager': 1}, {'kept': kept, 'removed': removed})
+
+    result = without_keys(source, 'eager', 'removed', 'missing')
+
+    assert set(result) == {'kept'}
+    assert len(result) == 1
+    assert 'kept' in result
+    assert 'removed' not in result
+    assert result.get('removed') is None
+    with pytest.raises(KeyError):
+        result['removed']
+    assert set(source) == {'eager', 'kept', 'removed'}
+    kept.assert_not_called()
+    removed.assert_not_called()
+    assert result['kept'] == result['kept'] == 42
+    kept.assert_called_once_with()
+    removed.assert_not_called()
+
+
+def test_without_keys_accepts_read_only_mappings():
+    source = MappingProxyType({'keep': 1, 'remove': 2})
+    assert dict(without_keys(source, 'remove')) == {'keep': 1}
+    assert source == {'keep': 1, 'remove': 2}
+
+
+def test_without_keys_reuses_the_source_when_no_keys_are_excluded():
+    source = LazyDict({}, {'kept': Mock(side_effect=AssertionError('Must stay lazy'))})
+    assert without_keys(source) is source
+
+
+def test_without_keys_reflects_source_changes_and_hides_keys_added_later():
+    source = {1: 'first'}
+    result = without_keys(source, 2)
+    source.update({1: 'updated', 2: 'hidden', 3: 'added'})
+    assert dict(result) == {1: 'updated', 3: 'added'}
+    assert len(result) == 2
+    del source[1]
+    assert list(result.items()) == [(3, 'added')]
 
 
 def test_lazy_dict_basic_access():

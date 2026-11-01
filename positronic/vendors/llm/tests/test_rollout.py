@@ -25,9 +25,7 @@ from positronic.eval import keys as eval_keys
 from positronic.offboard.server import PolicyServer
 from positronic.policy import PolicyEnd
 from positronic.policy import keys as policy_keys
-from positronic.policy.processors import PauseOnUnavailable
 from positronic.policy.remote import RemotePolicy
-from positronic.policy.sequential import Sequential
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion
 from positronic.vendors.llm.policy import LLMPolicy, Tool
@@ -142,7 +140,7 @@ def arm_with_wrist_camera() -> Embodiment:
 def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_path, ending, end, charge, distance):
     states = script_move_then_end(monkeypatch, distance, ending)
     embodiment = arm_with_wrist_camera()
-    policy = Sequential(PauseOnUnavailable(), LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)))
+    policy = LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     run_world(embodiment, TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(tmp_path)))
     dataset = LocalDataset(tmp_path)

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from typing import TypeVar
 
+K = TypeVar('K')
 T = TypeVar('T')
 U = TypeVar('U')
 
@@ -103,6 +104,54 @@ class LazyDict(dict):
         eager_data = {k: dict.__getitem__(self, k) for k in dict.__iter__(self)}
         unevaluated = {k: v for k, v in self._lazy_getters.items() if k not in eager_data}
         return LazyDict(eager_data, unevaluated)
+
+
+class OverlayMapping(Mapping[K, T]):
+    """A read-only live view with overrides taking precedence over the source mapping."""
+
+    def __init__(self, data: Mapping[K, T], overrides: Mapping[K, T]) -> None:
+        self._data = data
+        self._overrides = overrides
+
+    def __getitem__(self, key: K) -> T:
+        return self._overrides[key] if key in self._overrides else self._data[key]
+
+    def __iter__(self) -> Iterator[K]:
+        yield from self._overrides
+        yield from (key for key in self._data if key not in self._overrides)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._overrides or key in self._data
+
+
+class _WithoutKeys(Mapping[K, T]):
+    """A read-only view that hides selected keys and delegates values to its source."""
+
+    def __init__(self, data: Mapping[K, T], keys: tuple[K, ...]) -> None:
+        self._data = data
+        self._excluded = frozenset(keys)
+
+    def __getitem__(self, key: K) -> T:
+        if key in self._excluded:
+            raise KeyError(key)
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[K]:
+        return (key for key in self._data if key not in self._excluded)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def __contains__(self, key: object) -> bool:
+        return key not in self._excluded and key in self._data
+
+
+def without_keys(data: Mapping[K, T], *keys: K) -> Mapping[K, T]:
+    """Return a read-only live view excluding keys, without evaluating values or changing the source."""
+    return _WithoutKeys(data, keys) if keys else data
 
 
 class LazySequence(Sequence[U]):
