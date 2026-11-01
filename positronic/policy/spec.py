@@ -45,7 +45,15 @@ from positronic.policy.compatibility import (
     rtc_schedule_v1,
     unpack_action_chunk_v1,
 )
-from positronic.policy.processors import ChunkedSchedule, EndOnField, RTCSchedule, TemporalStack, TrajectoryPlayer
+from positronic.policy.processors import (
+    ChunkedSchedule,
+    EndOnField,
+    InferenceSchedule,
+    Periodic,
+    RTCSchedule,
+    TemporalStack,
+    TrajectoryPlayer,
+)
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -59,6 +67,8 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         EncodeImages,
         EndCommand,
         EndOnField,
+        InferenceSchedule,
+        Periodic,
         RTCSchedule,
         TemporalStack,
         TrajectoryPlayer,
