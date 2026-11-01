@@ -53,7 +53,17 @@ from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndOnField, TemporalStack, TrajectoryPlayer
+from positronic.policy.processors import (
+    ChunkedSchedule,
+    ConstantDuration,
+    EndOnField,
+    InferenceSchedule,
+    Periodic,
+    RequestTiming,
+    TemporalStack,
+    TrajectoryMerge,
+    TrajectoryPlayer,
+)
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -645,6 +655,65 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
         assert episode_meta[policy_keys.SESSION_ID] == model.ended_sessions[-1]
     assert len(set(model.ended_sessions)) == 2
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+def test_periodic_jpeg_history_and_prediction_share_one_call(served, transport):
+    class HistoryModel(Model):
+        def __init__(self):
+            self.observations = []
+            self.session_ids = []
+            self.ended_sessions = []
+
+        def __call__(self, obs: Obs, *, session_id: str):
+            self.observations.append(obs)
+            self.session_ids.append(session_id)
+            index = obs[policy_keys.SAMPLE_INDEX]
+            if index == 1:
+                return None
+            return [{'value': index * 10 + i} for i in range(10)]
+
+        def end_session(self, session_id: str) -> None:
+            self.ended_sessions.append(session_id)
+
+    local = Sequential(
+        TrajectoryPlayer(),
+        Periodic(10),
+        InferenceSchedule(
+            50,
+            request_timing=RequestTiming.each_sample(),
+            merge=TrajectoryMerge.at_observation(),
+            latency_estimate=ConstantDuration(0),
+        ),
+    )
+    address, model, _ = served(local=local, model=HistoryModel(), transport=transport)
+    policy = RemotePolicy(transport, address)
+    for episode in range(2):
+        now = [0]
+        runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(policy)
+        try:
+            for index in range(3):
+                now[0] = index * 100_000_000
+                obs = {'image': np.full((16, 16, 3), index * 50, dtype=np.uint8)}
+                first = run.send(obs)
+                assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+                step = run.send(obs)
+                assert isinstance(first, Step) and isinstance(step, Step)
+                commands = [item.commands['value'] for item in (first, step) if item.commands]
+                assert commands == ([0] if index == 0 else [5] if index == 1 else [9, 20])
+                assert step.resume_at_ns == now[0] + 20_000_000
+            observations = model.observations[episode * 3 :]
+            assert [obs[policy_keys.SAMPLE_INDEX] for obs in observations] == [0, 1, 2]
+            assert [obs[policy_keys.OBS_TIME_NS] for obs in observations] == [0, 100_000_000, 200_000_000]
+            for index, obs in enumerate(observations):
+                np.testing.assert_allclose(obs['image'], index * 50, atol=1)
+                assert obs['image'].shape == (16, 16, 3)
+        finally:
+            runtime.close()
+            run.close()
+        assert model.session_ids[-3:] == [model.ended_sessions[-1]] * 3
+    assert len(set(model.ended_sessions)) == 2
 
 
 class DeclaredPromptModel(FixedModel):

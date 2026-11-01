@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import partial
+from queue import Full
 from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
@@ -118,17 +119,30 @@ class Executor(Runtime):
     simulation, charged calls include queueing and execution time; uncharged calls hold the simulator
     until the worker finishes. Submission and result reads belong to the control thread; submitted
     functions must not mutate episode state.
+
+    ``max_queue_size`` bounds waiting work in addition to ``max_workers`` execution slots.
+    ``submit`` raises ``queue.Full`` at capacity. Worker completion or cancellation frees a slot,
+    independently of answer visibility or consumption. Zero allows only the execution slots.
     """
 
     def __init__(
-        self, clock: Callable[[], int], *, simulated: bool, charge_inference_time: bool, max_workers: int = 1
+        self,
+        clock: Callable[[], int],
+        *,
+        simulated: bool,
+        charge_inference_time: bool,
+        max_workers: int = 1,
+        max_queue_size: int = 16,
     ) -> None:
+        if type(max_queue_size) is not int or max_queue_size < 0:
+            raise ValueError('max_queue_size must be a nonnegative integer')
         self._clock = clock
         self._simulated = simulated
         self._charge_inference_time = charge_inference_time
         self._tick = -1
         self._tick_time_ns: int | None = None
         self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
+        self._capacity = max_workers + max_queue_size
         self._answers: set[_UnchargedAnswer[Any]] = set()
         self._metadata: dict[str, Any] = {}
 
@@ -180,6 +194,8 @@ class Executor(Runtime):
         return completed
 
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        if sum(not answer.call.done() for answer in self._answers) >= self._capacity:
+            raise Full('Policy execution queue is full')
         context = contextvars.copy_context()
 
         def invoke() -> T:

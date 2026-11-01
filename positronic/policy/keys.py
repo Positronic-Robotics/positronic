@@ -37,6 +37,7 @@ POLICY_META = 'inference.policy'
 SERVER_META = f'{POLICY_META}.{SERVER}'
 
 OBS_TIME_NS = 'obs_time_ns'
+SAMPLE_INDEX = 'sample_index'
 
 PLAN = 'plan'
 REPLAN_NOW = 'replan_now'

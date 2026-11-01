@@ -139,7 +139,8 @@ class Runtime(ABC):
         return timed
 
     @abstractmethod
-    def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]: ...
+    def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        """Submit without waiting; raise ``queue.Full`` if the runtime's admission capacity is exhausted."""
 
     @abstractmethod
     def has_ready_answers(self) -> bool:

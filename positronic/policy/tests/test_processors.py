@@ -1,8 +1,10 @@
 """Scheduling, fault gating, temporal history, and deliverable stack specifications."""
 
 import json
+import threading
 from concurrent.futures import Future
 from datetime import date
+from queue import Full
 from sys import maxsize
 from typing import Any, cast
 from unittest.mock import Mock
@@ -54,7 +56,7 @@ from positronic.policy.codecs.observation import (
     StateObservationCodec,
 )
 from positronic.policy.compatibility import ObservationCodecV1
-from positronic.policy.executor import Executor
+from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import END, RTC
 from positronic.policy.processors import (
     ChunkedSchedule,
@@ -63,9 +65,13 @@ from positronic.policy.processors import (
     DurationEstimate,
     DurationEstimateRun,
     EndOnField,
+    InferenceSchedule,
+    Periodic,
+    RequestTiming,
     RTCSchedule,
     TemporalStack,
     Trajectory,
+    TrajectoryMerge,
     TrajectoryPlayer,
     Waypoint,
 )
@@ -81,6 +87,218 @@ class Echo(Policy):
         obs = yield
         while True:
             obs = yield Step(obs, runtime.time_ns + 100_000_000)
+
+
+@pytest.fixture
+def periodic_execution():
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    try:
+        yield runtime, now
+    finally:
+        runtime.close()
+
+
+def _sampled_policy(*, action_fps=50, sample_fps=10):
+    return Sequential(
+        TrajectoryPlayer(),
+        Periodic(sample_fps),
+        InferenceSchedule(
+            action_fps,
+            request_timing=RequestTiming.each_sample(),
+            merge=TrajectoryMerge.at_observation(),
+            latency_estimate=DelayEstimate.max(),
+        ),
+    )
+
+
+def test_periodic_samples_do_not_follow_action_waypoints_or_answer_wakeups(periodic_execution):
+    runtime, now = periodic_execution
+    requests = []
+    release = threading.Event()
+
+    def infer(obs):
+        assert release.wait(timeout=2)
+        requests.append(obs)
+        return [{MOTOR: i} for i in range(10)] if obs[policy_keys.SAMPLE_INDEX] == 0 else None
+
+    run = runtime.start(_sampled_policy(), infer)
+    image = np.array([0])
+    try:
+        assert run.send({'image': image}) == Step({}, 100_000_000)
+        release.set()
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        image[0] = 99
+        now[0] = 30_000_000
+        assert run.send({'image': image}) == Step({MOTOR: 0}, 50_000_000)
+        for tick, motor in ((50_000_000, 1), (70_000_000, 2), (90_000_000, 3)):
+            now[0] = tick
+            assert run.send({'image': image}).commands == {MOTOR: motor}
+        assert len(requests) == 1
+        now[0] = 100_000_000
+        run.send({'image': image})
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        run.send({'image': image})
+        assert [obs[policy_keys.OBS_TIME_NS] for obs in requests] == [0, 100_000_000]
+        assert [obs[policy_keys.SAMPLE_INDEX] for obs in requests] == [0, 1]
+        assert [obs['image'][0] for obs in requests] == [0, 99]
+    finally:
+        release.set()
+        run.close()
+
+
+def test_periodic_skips_missed_ticks_without_backdating_or_drifting(periodic_execution):
+    runtime, now = periodic_execution
+    run = runtime.start(Periodic(fps=10), runtime.start(Echo()))
+    try:
+        for tick, index, next_tick in (
+            (1_000_000_000, 0, 1_100_000_000),
+            (1_250_000_000, 2, 1_300_000_000),
+            (1_300_000_000, 3, 1_400_000_000),
+        ):
+            now[0] = tick
+            step = run.send({POSITION: tick})
+            assert step.commands[policy_keys.SAMPLE_INDEX] == index
+            assert step.commands[policy_keys.OBS_TIME_NS] == tick
+            assert step.commands[POSITION] == tick
+            assert step.resume_at_ns == next_tick
+    finally:
+        run.close()
+
+
+def test_answer_wakeup_keeps_sampled_plan_without_replaying_replan_signal(periodic_execution):
+    runtime, now = periodic_execution
+    run = runtime.start(Sequential(Periodic(10), Echo()))
+    command = {MOTOR: 1}
+    plan = [Waypoint(command, 0)]
+    try:
+        first = run.send({policy_keys.PLAN: plan, policy_keys.REPLAN_NOW: True})
+        assert first.commands[policy_keys.REPLAN_NOW]
+        command[MOTOR] = 99
+        plan.clear()
+        answer = runtime.submit(lambda: None)
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        now[0] = 50_000_000
+        step = run.send({policy_keys.PLAN: plan})
+        assert step.commands[policy_keys.PLAN] == [Waypoint({MOTOR: 1}, 0)]
+        assert step.commands[policy_keys.SAMPLE_INDEX] == 0
+        assert policy_keys.REPLAN_NOW not in step.commands
+        answer.result()
+    finally:
+        run.close()
+
+
+def test_queued_samples_preserve_data_and_deliver_every_trajectory(periodic_execution):
+    runtime, now = periodic_execution
+    started, release = threading.Event(), threading.Event()
+    requests = []
+
+    def infer(obs):
+        if obs[policy_keys.SAMPLE_INDEX] == 0:
+            started.set()
+            assert release.wait(timeout=2)
+        requests.append(obs)
+        index = obs[policy_keys.SAMPLE_INDEX]
+        return None if index == 1 else [{MOTOR: (index, i)} for i in range(10)]
+
+    run = runtime.start(_sampled_policy(), infer)
+    image = np.array([0])
+    state = {'position': [0]}
+    try:
+        run.send({'image': image, 'state': state})
+        assert started.wait(timeout=1)
+        for index in (1, 2):
+            now[0] = index * 100_000_000
+            image[0] = state['position'][0] = index
+            assert run.send({'image': image, 'state': state}).commands == {}
+        image[0] = state['position'][0] = 99
+        now[0] = 250_000_000
+        release.set()
+        completed = 0
+        while completed < 3:
+            result = runtime.wait(timeout_sec=2)
+            assert result.status is WaitStatus.ANSWERS_READY
+            completed += len(result.completed)
+        commands = []
+        while runtime.has_ready_answers():
+            step = run.send({'image': image, 'state': state})
+            if step.commands:
+                commands.append(step.commands[MOTOR])
+            if runtime.has_ready_answers():
+                assert step.resume_at_ns == now[0]
+        assert commands == [(0, 0), (2, 2)]
+        assert [obs['image'][0] for obs in requests] == [0, 1, 2]
+        assert [obs['state']['position'][0] for obs in requests] == [0, 1, 2]
+        assert [obs[policy_keys.OBS_TIME_NS] for obs in requests] == [0, 100_000_000, 200_000_000]
+    finally:
+        release.set()
+        run.close()
+
+
+def test_periodic_ordinary_schedule_waits_for_a_new_sample(periodic_execution):
+    runtime, now = periodic_execution
+    requests = []
+
+    def infer(obs):
+        requests.append(obs)
+        return [{MOTOR: len(requests)}]
+
+    run = runtime.start(Sequential(TrajectoryPlayer(), Periodic(10), ChunkedSchedule(20)), infer)
+    try:
+        run.send({POSITION: 0})
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        now[0] = 10_000_000
+        run.send({POSITION: 1})
+        now[0] = 60_000_000
+        assert run.send({POSITION: 2}).resume_at_ns == 100_000_000
+        assert len(requests) == 1
+        now[0] = 100_000_000
+        run.send({POSITION: 3})
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        run.send({POSITION: 4})
+        assert [obs[POSITION] for obs in requests] == [0, 3]
+        assert [obs[policy_keys.OBS_TIME_NS] for obs in requests] == [0, 100_000_000]
+    finally:
+        run.close()
+
+
+def test_periodic_queue_overflow_fails_and_cancels_queued_calls():
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_queue_size=1)
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def infer(obs):
+        calls.append(obs[policy_keys.SAMPLE_INDEX])
+        started.set()
+        assert release.wait(timeout=2)
+
+    run = runtime.start(_sampled_policy(), infer)
+    try:
+        run.send({})
+        assert started.wait(timeout=1)
+        now[0] = 100_000_000
+        run.send({})
+        now[0] = 200_000_000
+        with pytest.raises(Full):
+            run.send({})
+    finally:
+        release.set()
+        runtime.close()
+        run.close()
+    assert calls == [0]
+
+
+@pytest.mark.parametrize('fps', [0, -1, float('nan'), float('inf'), 1e9 + 1])
+def test_periodic_rejects_unrepresentable_sampling_rates(fps):
+    with pytest.raises(ValueError):
+        Periodic(fps)
+
+
+def test_periodic_stack_spec_round_trip():
+    stack = _sampled_policy()
+    encoded = json.loads(json.dumps(stack.to_spec()))
+    assert spec.from_spec(encoded).to_spec() == encoded
 
 
 @pytest.mark.parametrize('wrapper', [TemporalStack((MOTOR,), (0.0,)), EndOnField()])
@@ -1926,6 +2144,13 @@ def test_invalid_stack_specs_are_rejected(node, error):
 
 def test_wire_names_match_the_registered_components():
     instances = {
+        'periodic': Periodic(fps=10),
+        'inference_schedule': InferenceSchedule(
+            fps=50,
+            request_timing=RequestTiming.each_sample(),
+            merge=TrajectoryMerge.at_observation(),
+            latency_estimate=DelayEstimate.max(),
+        ),
         'trajectory_player': TrajectoryPlayer(),
         'chunked_schedule': ChunkedSchedule(fps=10),
         'encode_images': EncodeImages([['camera']]),
