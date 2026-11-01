@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Mapping, Sequence
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, Self
 
@@ -12,6 +12,7 @@ from eval_vocabulary.episode import PolicyEnd
 from typing_extensions import TypeAliasType, TypeVar
 
 from positronic import telemetry
+from positronic.utils import check_finite_positive
 
 
 class NotAnswered(RuntimeError):
@@ -54,8 +55,29 @@ Commands = Mapping[str, Any]
 
 
 @dataclass
+class Trajectory:
+    """Commands spaced by ``1 / fps`` from ``start_ns``."""
+
+    commands: Sequence[Commands]
+    start_ns: int
+    fps: float
+
+    @property
+    def period_ns(self) -> float:
+        """Time between commands in nanoseconds."""
+        return (1 / self.fps) * 1e9
+
+    def due_ns(self, index: int) -> int:
+        """Scheduled time of the command at ``index``."""
+        return self.start_ns + round(index * self.period_ns)
+
+    def __attrs_post_init__(self) -> None:
+        check_finite_positive(self.fps, 'fps')
+
+
+@dataclass
 class Step:
-    """Commands to emit now, auxiliary outputs, and the next requested call time.
+    """Commands for the outer processor, auxiliary outputs, and the next requested call time.
 
     Any submitted call becoming ready may resume the policy sooner, including at the same clock time.
     """

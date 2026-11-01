@@ -15,7 +15,7 @@ class Sequential(Processor[InputT, OutputT, ReturnT]):
     """Nest processors and codecs, with the first outermost.
 
     ``runtime.start(Sequential(A(...), B(...)), infer)`` passes ``infer`` to B's generator and B's
-    generator to A. Each processor controls when and how often it sends inputs to its child.
+    generator to A. Each processor controls when and how often it sends inputs to its inner run.
     Codecs encode inputs and decode outputs at their position in the sequence. A codec around a
     generator preserves step timing; a codec around a callable runs wherever that callable runs.
     Nested sequences are flattened, so grouping does not change the dependencies passed to components.
@@ -26,22 +26,22 @@ class Sequential(Processor[InputT, OutputT, ReturnT]):
         self, first: Processor[InputT, OutputT, ReturnT] | Codec, /, *rest: Processor[Any, Any, Any] | Codec
     ) -> None:
         self._components = tuple(
-            child
+            inner
             for component in (first, *rest)
-            for child in (component._components if type(component) is Sequential else (component,))
+            for inner in (component._components if type(component) is Sequential else (component,))
         )
 
     def run(self, runtime: Runtime, *dependencies: Any) -> ProcessorRun[InputT, OutputT, ReturnT]:
-        children: list[ProcessorRun[Any, Any, Any]] = []
+        runs: list[ProcessorRun[Any, Any, Any]] = []
         try:
             for component in reversed(self._components):
                 if isinstance(component, Processor):
-                    child = runtime.start(component, *dependencies)
+                    inner = runtime.start(component, *dependencies)
                 else:
-                    child = component.wrap(*dependencies)
-                if isinstance(child, Generator):
-                    children.append(child)
-                dependencies = (child,)
+                    inner = component.wrap(*dependencies)
+                if isinstance(inner, Generator):
+                    runs.append(inner)
+                dependencies = (inner,)
             call = dependencies[0]
             if isinstance(call, Generator):
                 call = call.send
@@ -53,8 +53,8 @@ class Sequential(Processor[InputT, OutputT, ReturnT]):
                     return end.value
                 value = yield result
         finally:
-            for child in reversed(children):
-                child.close()
+            for inner in reversed(runs):
+                inner.close()
 
     def meta(self) -> dict[str, Any]:
         """Combine metadata, allowing one frame conversion per pose signal; later components override other shared

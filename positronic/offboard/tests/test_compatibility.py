@@ -5,7 +5,7 @@ import logging
 import threading
 from concurrent.futures import Future
 from datetime import date
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import numpy as np
 import pytest
@@ -22,13 +22,51 @@ from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import PolicyEnd, spec
 from positronic.policy.base import Answer, Step
 from positronic.policy.codecs import Codec, ResizeMode, TransformImages
-from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
+from positronic.policy.compatibility import (
+    V1_SERVER_DEFAULT_ACTION_FPS,
+    PauseOnUnavailable,
+    StampObservationTimes,
+    from_v1_spec,
+)
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration, RTCSchedule
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, RTCSchedule, TrajectoryPlayer
 from positronic.policy.remote import RemotePolicy
+from positronic.policy.sequential import Sequential
 from positronic.utils import flatten_dict
 from positronic.utils.versions import Deprecation, Version
+
+
+@pytest.mark.parametrize('status', [RobotStatus.ERROR, RobotStatus.BUSY])
+@pytest.mark.parametrize('channel', [keys.ROBOT_STATUS, 'robot_state.left.status', 'robot_state.right.status'])
+def test_unavailability_withholds_commands_and_resumes_on_recovery(controlled_runtime, status, channel):
+    runtime, now, _ = controlled_runtime
+    inner = Mock(send=Mock(side_effect=lambda obs: Step(obs, 100_000_000)))
+    run = runtime.start(spec.from_spec(PauseOnUnavailable().to_spec()), inner)
+    try:
+        obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE, channel: status}
+        assert run.send(obs) == Step({}, now[0] + 1_000_000)
+        inner.send.assert_not_called()
+        obs[channel] = RobotStatus.AVAILABLE
+        assert run.send(obs) == Step(obs, 100_000_000)
+        assert run.send({'value': 1}) == Step({'value': 1}, 100_000_000)
+    finally:
+        run.close()
+
+
+def test_legacy_pause_returns_the_inner_run_result(controlled_runtime):
+    runtime, _, _ = controlled_runtime
+
+    def inner():
+        yield
+        return PolicyEnd.COMPLETE
+
+    inner_run = inner()
+    next(inner_run)
+    run = runtime.start(PauseOnUnavailable(), inner_run)
+    with pytest.raises(StopIteration) as end:
+        run.send({})
+    assert end.value.value is PolicyEnd.COMPLETE
 
 
 @pytest.mark.parametrize('sizes', [[224, 224], {'camera': [320, 180]}])
@@ -304,7 +342,11 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
             disconnected.set()
 
     monkeypatch.setattr(PolicyServer, '_serve_session', v1_session)
-    served = start_server(make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    served = start_server(
+        make_mock_model([], {}),
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        grpc=transport == 'grpc',
+    )
     address = served.ws()[1] if transport == 'websocket' else served.grpc()[1]
     now = [1_000_000_000]
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
@@ -332,7 +374,9 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
 def test_unknown_protocol_closes_before_any_request(start_server, make_mock_model, monkeypatch, version):
     monkeypatch.setattr(legacy_protocol, 'CURRENT_VERSION', version)
     model = make_mock_model([], {})
-    served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)))
+    served = start_server(
+        model, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
+    )
     with pytest.raises(ValueError, match=f'Unsupported policy protocol version {version}'):
         InferenceClient(*served.ws()).new_session()
     model.assert_not_called()
@@ -346,7 +390,8 @@ def test_component_versions_are_independent_and_exact():
         ]
     })
     assert stack.to_spec() == sequence(
-        ChunkedSchedule(fps=10, replan_on_error=False).to_spec(),
+        TrajectoryPlayer().to_spec(),
+        ChunkedSchedule(fps=10).to_spec(),
         TransformImages(32, 32, mode=ResizeMode.BOUND).to_spec(),
     )
     for version in (1, 99):

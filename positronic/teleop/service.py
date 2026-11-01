@@ -23,7 +23,6 @@ from typing import Any
 
 import cv2
 import numpy as np
-from positronic_model_server import spec
 from positronic_model_server.server import Model, ModelServer, PreparationCancelled, Session
 from positronic_model_server.server_wire import ServedAddress
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
@@ -36,7 +35,8 @@ from positronic.policy.codecs import AbsolutePositionAction, EncodeImages, EndCo
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.keys import END
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndOnField
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndOnField, TrajectoryPlayer
+from positronic.policy.sequential import Sequential
 
 from .clutch import Tracker
 from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, SessionParams
@@ -552,15 +552,16 @@ class TeleopModel(Model):
         a command, and the end of the trial."""
         # TODO: A sim run that does not charge inference time holds its clock during each call, so a person cannot
         #  control it. Refuse such a run.
-        schedule = ChunkedSchedule(
-            fps=cls.FRAME_FPS, record_stats=False, inference_lead=ConstantDuration(1 / cls.FRAME_FPS)
+        schedule = Sequential(
+            TrajectoryPlayer(replan_on_error=True, record_stats=False),
+            ChunkedSchedule(fps=cls.FRAME_FPS, inference_lead=ConstantDuration(1 / cls.FRAME_FPS)),
         )
         observation = StateObservationCodec({EE_POSE: {keys.EE_POSE: 7}, GRIP: {keys.GRIP: 1}}, task_field=TASK) & (
             image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
         )
         action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
         codec = (observation & action & EndCommand()) | EncodeImages(quality=settings.jpeg_quality)
-        return spec.sequence(EndOnField().to_spec(), schedule.to_spec(), codec.to_spec())
+        return Sequential(EndOnField(), schedule, codec).to_spec()
 
     def prepare_session(self, params: dict[str, Any]) -> TeleopSession:
         if self._open:

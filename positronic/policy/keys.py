@@ -38,6 +38,9 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 
 OBS_TIME_NS = 'obs_time_ns'
 
+PLAN = 'plan'
+REPLAN_NOW = 'replan_now'
+
 
 class RTC:
     """Observation fields describing the scheduler's remaining plan and timing."""
