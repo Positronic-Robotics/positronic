@@ -187,19 +187,30 @@ class ObservationCodecV1(Codec):
         }
 
 
+def chunked_schedule_v3(
+    fps: float,
+    horizon_sec: float | None = None,
+    record_stats: bool = True,
+    inference_lead: float | dict[str, Any] = 0.0,
+    replan_on_error: bool = True,
+) -> dict[str, Any]:
+    """Translate the combined scheduler and player into separate components."""
+    return sequence(
+        component(TrajectoryPlayer.WIRE_NAME, version=1, record_stats=record_stats, replan_on_error=replan_on_error),
+        component(
+            ChunkedSchedule.WIRE_NAME, version=4, fps=fps, horizon_sec=horizon_sec, inference_lead=inference_lead
+        ),
+    )
+
+
 def chunked_schedule_v2(
     fps: float,
     horizon_sec: float | None = None,
     record_stats: bool = True,
     inference_lead: float | dict[str, Any] = 0.0,
 ) -> dict[str, Any]:
-    """Translate the scheduler that keeps its pending chunk after an execution error."""
-    return sequence(
-        component(TrajectoryPlayer.WIRE_NAME, version=1, record_stats=record_stats),
-        component(
-            ChunkedSchedule.WIRE_NAME, version=3, fps=fps, horizon_sec=horizon_sec, inference_lead=inference_lead
-        ),
-    )
+    """Translate the scheduler that keeps its pending commands after an execution error."""
+    return chunked_schedule_v3(fps, horizon_sec, record_stats, inference_lead, replan_on_error=False)
 
 
 class StampObservationTimes(Policy):

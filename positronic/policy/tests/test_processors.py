@@ -964,7 +964,7 @@ def test_serialized_error_replanning_preserves_the_behavior(execution, replan_on
     runtime, clock = execution
     definition = Sequential(TrajectoryPlayer(replan_on_error=replan_on_error), ChunkedSchedule(fps=10))
     encoded = json.loads(json.dumps(definition.to_spec()))
-    assert encoded[SEQ][1][VERSION] == 3
+    assert encoded[SEQ][1][VERSION] == 4
     rebuilt = spec.from_spec(encoded)
     assert rebuilt.to_spec() == encoded
     infer = Mock(return_value=[{MOTOR: 1}] * 5)
@@ -990,6 +990,37 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
             clock.advance_to_ns(tick * PERIOD_NS)
             assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: tick % 5}
         assert infer.call_count == 2
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize(
+    'options',
+    [{}, {'record_stats': False}, {'replan_on_error': False}, {'record_stats': False, 'replan_on_error': False}],
+)
+def test_v3_specs_preserve_playback_and_recovery_options(execution, options):
+    runtime, clock = execution
+    declared = component(ChunkedSchedule.WIRE_NAME, version=3, fps=10, horizon_sec=0.15, inference_lead=0.05, **options)
+    schedule = spec.from_spec(declared)
+    expected = Sequential(
+        TrajectoryPlayer(
+            record_stats=options.get('record_stats', True), replan_on_error=options.get('replan_on_error', True)
+        ),
+        ChunkedSchedule(fps=10, horizon_sec=0.15, inference_lead=ConstantDuration(0.05)),
+    )
+    assert schedule.to_spec() == expected.to_spec()
+    infer = Mock(return_value=[{MOTOR: index} for index in range(5)])
+    run = runtime.start(schedule, infer)
+    try:
+        assert run.send({}) == Step({MOTOR: 0}, PERIOD_NS)
+        clock.advance_to_ns(PERIOD_NS // 2)
+        step = run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
+        replans = options.get('replan_on_error', True)
+        assert step.commands == ({MOTOR: 0} if replans else {})
+        assert infer.call_count == (2 if replans else 1)
+        assert (f'{eval_keys.SCHEDULE}.{eval_keys.SCHEDULED}' in runtime.metadata_snapshot()) == options.get(
+            'record_stats', True
+        )
     finally:
         run.close()
 
@@ -1625,7 +1656,7 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 3, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
+    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 4, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
     schedule = spec.from_spec(declared)
     assert type(schedule) is ChunkedSchedule
     assert schedule.to_spec() == declared
@@ -1789,7 +1820,7 @@ def test_scheduler_translation_preserves_explicit_settings(lead):
     )
     current = sequence(
         component(TrajectoryPlayer.WIRE_NAME, record_stats=False),
-        component(ChunkedSchedule.WIRE_NAME, version=3, fps=20, horizon_sec=0.3, inference_lead=lead),
+        component(ChunkedSchedule.WIRE_NAME, version=4, fps=20, horizon_sec=0.3, inference_lead=lead),
     )
     assert spec.from_spec(old).to_spec() == spec.from_spec(current).to_spec()
     assert old[VERSION] == 2
@@ -1811,13 +1842,13 @@ def test_latest_follows_client_upgrades_while_numeric_versions_stay_pinned(monke
 def test_latest_skips_removed_versions_and_fails_when_none_are_supported(monkeypatch):
     name = ChunkedSchedule.WIRE_NAME
     notice = Deprecation(date(2020, 1, 1), date(2020, 7, 1), 'Use another scheduler.')
-    versions = {3: spec.COMPONENTS[name][3], 4: Version(None, notice, removed_on=date(2020, 7, 1))}
+    versions = {4: spec.COMPONENTS[name][4], 5: Version(None, notice, removed_on=date(2020, 7, 1))}
     monkeypatch.setitem(spec.COMPONENTS, name, versions)
     latest = component(name, fps=20)
-    assert spec.from_spec(latest).to_spec()[VERSION] == 3
+    assert spec.from_spec(latest).to_spec()[VERSION] == 4
     with pytest.raises(ValueError, match='has been removed.*Use another scheduler'):
-        spec.from_spec(component(name, version=4, fps=20))
-    del versions[3]
+        spec.from_spec(component(name, version=5, fps=20))
+    del versions[4]
     with pytest.raises(ValueError, match='No supported versions'):
         spec.from_spec(latest)
 

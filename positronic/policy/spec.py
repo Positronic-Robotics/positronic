@@ -39,6 +39,7 @@ from positronic.policy.compatibility import (
     ObservationCodecV1,
     PauseOnUnavailable,
     chunked_schedule_v2,
+    chunked_schedule_v3,
     pack_observation_fields_v1,
     restrict_image_size_v1,
     unpack_action_chunk_v1,
@@ -89,7 +90,7 @@ COMPONENTS.update({
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
     'restrict_image_size': {1: Version(restrict_image_size_v1)},
 })
-COMPONENTS[ChunkedSchedule.WIRE_NAME][2] = Version(chunked_schedule_v2)
+COMPONENTS[ChunkedSchedule.WIRE_NAME].update({2: Version(chunked_schedule_v2), 3: Version(chunked_schedule_v3)})
 # Version 1 takes no arguments and flips the one-arm channels.
 COMPONENTS[FlipGrip.WIRE_NAME][FlipGrip.ONE_ARM_VERSION] = Version(lambda: FlipGrip())
 
