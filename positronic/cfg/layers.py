@@ -1,10 +1,11 @@
 import configuronic as cfn
 
 from positronic import keys as obs_keys
-from positronic.policy import Sequential
-from positronic.policy.processors import ChunkedSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, TemporalStack, TrajectoryPlayer
+from positronic.policy.sequential import Sequential
 
 chunked_schedule = cfn.Config(ChunkedSchedule)
+trajectory_player = cfn.Config(TrajectoryPlayer)
 temporal_stack = cfn.Config(TemporalStack)
 
 
@@ -33,7 +34,7 @@ def video_context_layers(history_frames: int, stride: int, keys: tuple[str, ...]
     """The pipeline's local half for video-conditioned policies: strided temporal context, scheduling.
 
     The temporal stack sits outside the scheduler so it records the named ``keys`` every control tick and
-    substitutes a stack sampled per ``history_frames``/``stride``. The scheduler plays each full chunk.
+    substitutes a stack sampled per ``history_frames``/``stride``. The player executes each full chunk.
 
     ``keys`` are the entries to stack: the cameras plus any per-frame proprio (e.g.
     ``('robot_state.ee_pose', 'grip')``) so each history step carries its own pose — the trajectory a
@@ -47,4 +48,4 @@ def video_context_layers(history_frames: int, stride: int, keys: tuple[str, ...]
     stack = TemporalStack(
         keys=tuple(keys), offsets_sec=_frame_offsets_sec(history_frames, stride, fps), pad_start=pad_start
     )
-    return Sequential(stack, ChunkedSchedule(fps))
+    return Sequential(stack, TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps))

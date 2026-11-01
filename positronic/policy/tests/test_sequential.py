@@ -15,7 +15,7 @@ from positronic.geom import Transform3D
 from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 
@@ -32,6 +32,7 @@ import sys
 from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
+    component('trajectory_player', replan_on_error=True),
     component('chunked_schedule', fps=20),
     parallel(
         component('transform_images', width=320, height=180, mode='bound'),
@@ -49,7 +50,9 @@ print(json.dumps(description))
     stack = from_spec(json.loads(result.stdout))
     assert isinstance(stack, Sequential)
     expected = Sequential(
-        ChunkedSchedule(fps=20), TransformImages(320, 180, mode=ResizeMode.BOUND) & Metadata({'model': 'example'})
+        TrajectoryPlayer(replan_on_error=True),
+        ChunkedSchedule(fps=20),
+        TransformImages(320, 180, mode=ResizeMode.BOUND) & Metadata({'model': 'example'}),
     )
     assert stack.meta() == expected.meta()
     assert stack.to_spec() == expected.to_spec()
@@ -73,7 +76,10 @@ def test_codec_work_is_inside_submit(nested):
     conversion = (
         Sequential(ThreadCodec(), TransformImages(640, 640, mode=ResizeMode.BOUND)) if nested else ThreadCodec()
     )
-    run = runtime.start(Sequential(ChunkedSchedule(fps=10), conversion), lambda obs: [{'value': obs['encoded']}])
+    run = runtime.start(
+        Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10), conversion),
+        lambda obs: [{'value': obs['encoded']}],
+    )
     try:
         first = run.send({})
         assert isinstance(first, Step)
@@ -94,11 +100,11 @@ def test_sequential_combines_component_metadata():
         def meta(self):
             return {'config': {'fps': 10}}
 
-    class NamedPause(PauseOnUnavailable):
+    class NamedPlayer(TrajectoryPlayer):
         def meta(self):
             return {'config': {'fault_handling': True, 'fps': 20}}
 
-    assert Sequential(NamedPause(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
+    assert Sequential(NamedPlayer(), NamedSchedule(fps=10)).meta() == {'config.fault_handling': True, 'config.fps': 10}
 
 
 @pytest.mark.parametrize('with_codec', [False, True])
@@ -138,7 +144,7 @@ def test_sequential_rejects_two_frame_conversions(translation):
     inner = ChangeEEFrame(
         EEFrame(site=GRIPPER_SITE, offset=Transform3D(np.array([translation, 0.0, 0.0])))
     ) | TransformImages(640, 640, mode=ResizeMode.BOUND)
-    schedule = ChunkedSchedule(fps=10)
+    schedule = Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))
     stack = Sequential(outer, schedule)
     assert stack.meta() == outer.meta | schedule.meta()
     with pytest.raises(ValueError, match='Only one component'):

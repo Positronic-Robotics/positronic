@@ -50,7 +50,7 @@ from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor,
 from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
 
@@ -102,7 +102,7 @@ class RemoteStubPolicy(StubPolicy):
             infer=Mock(return_value=[{keys.ROBOT_COMMAND: self.command, keys.TARGET_GRIP: self.target_grip}]),
             served_timing={},
         )
-        return ChunkedSchedule(fps=10).run(
+        return Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)).run(
             runtime, lambda obs: cast(list[dict[str, Any]], round_trip(session, obs, compress_images=False))
         )
 
@@ -900,7 +900,9 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
                 time.sleep(delay)
                 return [{MOTOR: i} for i in range(1, 51)]
 
-            return Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=15, horizon_sec=1.0)).run(runtime, infer)
+            return Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=15, horizon_sec=1.0)).run(
+                runtime, infer
+            )
 
     definition = CompletePolicy()
     with pimm.World(virtual_time=True) as world:
@@ -1436,7 +1438,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
                 observations.append(obs)
                 return [{MOTOR: 1}, {MOTOR: 2}]
 
-            return ChunkedSchedule(fps=10).run(runtime, infer)
+            return Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)).run(runtime, infer)
 
     with pimm.World(virtual_time=True) as world:
         motion = Motion()

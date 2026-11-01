@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime
+from math import isfinite
 from pathlib import Path
 
 import pos3
@@ -64,6 +65,18 @@ def interface_ipv4_addresses() -> list[tuple[str, str]]:
         for addr in addrs
         if addr.family == socket.AF_INET and not addr.address.startswith('127.')
     ]
+
+
+def check_finite_positive(value: float, name: str | None = None) -> None:
+    """Raise ValueError unless value is finite and strictly positive."""
+    if not isfinite(value) or value <= 0:
+        raise ValueError(f'{name if name is not None else "value"} must be finite and positive')
+
+
+def check_finite_nonnegative(value: float, name: str | None = None) -> None:
+    """Raise ValueError unless value is finite and nonnegative."""
+    if not isfinite(value) or value < 0:
+        raise ValueError(f'{name if name is not None else "value"} must be finite and nonnegative')
 
 
 def merge_dicts(dst: dict, src: dict) -> dict:

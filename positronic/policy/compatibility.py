@@ -13,9 +13,10 @@ from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION, component, se
 from positronic import keys as obs_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
 from positronic.dataset.transforms.image import Resample, ResizeMode
+from positronic.drivers.roboarm import RobotStatus
 from positronic.policy import keys as policy_keys
 from positronic.policy import training
-from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
+from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
 from positronic.policy.codecs import (
     TASK_FIELD,
     Codec,
@@ -26,8 +27,43 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, RTCSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, RTCSchedule, TemporalStack, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
+
+
+class PauseOnUnavailable(Policy):
+    """Withhold commands and inner calls while any arm is unavailable, retaining pending work.
+
+    TODO: Remove this processor and its registry entry when legacy ``stop_on_fault`` specs are retired.
+    """
+
+    WIRE_NAME = 'stop_on_fault'
+    WIRE_VERSION = 2
+    MILLISECOND_NS = 10**6
+
+    @staticmethod
+    def _arms_available(obs: Obs) -> bool:
+        return all(
+            RobotStatus(value) is RobotStatus.AVAILABLE
+            for name, value in obs.items()
+            if name.startswith(f'{obs_keys.ROBOT_STATE}.') and name.endswith(obs_keys.STATUS_SUFFIX)
+        )
+
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        obs = yield
+        while True:
+            if self._arms_available(obs):
+                try:
+                    step = inner.send(obs)
+                except StopIteration as end:
+                    return end.value
+                obs = yield step
+            else:
+                obs = yield Step({}, runtime.time_ns + self.MILLISECOND_NS)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
+
 
 TIMESTAMP = 'timestamp'
 WALL_TIME_NS = 'wall_time_ns'
@@ -158,14 +194,11 @@ def chunked_schedule_v2(
     inference_lead: float | dict[str, Any] = 0.0,
 ) -> dict[str, Any]:
     """Translate the scheduler that keeps its pending chunk after an execution error."""
-    return component(
-        ChunkedSchedule.WIRE_NAME,
-        version=3,
-        fps=fps,
-        horizon_sec=horizon_sec,
-        record_stats=record_stats,
-        inference_lead=inference_lead,
-        replan_on_error=False,
+    return sequence(
+        component(TrajectoryPlayer.WIRE_NAME, version=1, record_stats=record_stats),
+        component(
+            ChunkedSchedule.WIRE_NAME, version=3, fps=fps, horizon_sec=horizon_sec, inference_lead=inference_lead
+        ),
     )
 
 

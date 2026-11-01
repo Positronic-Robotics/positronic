@@ -135,7 +135,10 @@ def client_stack(
     """Describe scheduling, observation preparation and native-result decoding for one session."""
     settings = deepcopy(settings)
     settings[model_settings.IMAGE_MAPPINGS] = image_mappings
-    schedule = component('chunked_schedule', fps=fps, horizon_sec=horizon_sec)
+    schedule = sequence(
+        component('trajectory_player', replan_on_error=True),
+        component('chunked_schedule', fps=fps, horizon_sec=horizon_sec),
+    )
     codec = inference(settings, rtc=rtc is not None)
     if rtc is not None:
         schedule = component(

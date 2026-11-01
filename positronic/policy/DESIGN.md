@@ -493,9 +493,9 @@ class Codec:
     ) -> Callable[[Obs], Any] | ProcessorRun[Obs, Any]: ...
 ```
 
-For example, `runtime.start(Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=20)), infer)`
+For example, `runtime.start(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=20)), infer)`
 passes the inference callable into the scheduler, and the scheduler's live run
-into `PauseOnUnavailable`. The caller sends observations to the returned run.
+into `TrajectoryPlayer`. The caller sends observations to the returned run.
 
 Codecs compose with `|` for sequential conversion and `&` for parallel conversion.
 `Sequential.meta()` flattens and combines component metadata, with later

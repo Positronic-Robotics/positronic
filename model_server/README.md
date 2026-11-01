@@ -23,12 +23,15 @@ This test server returns each observation as a one-element result list:
 ```python
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
-from positronic_model_server.spec import component
+from positronic_model_server.spec import component, sequence
 from positronic_model_server.websocket_wire import WebsocketWire
 
 class EchoSession(Session):
     def __init__(self, fps):
-        super().__init__(component("chunked_schedule", fps=fps))
+        super().__init__(sequence(
+            component("trajectory_player", replan_on_error=True),
+            component("chunked_schedule", fps=fps),
+        ))
 
     def infer(self, observation):
         return [observation]
@@ -128,6 +131,7 @@ and instantiates their implementations:
 from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
+    component("trajectory_player", replan_on_error=True),
     component("chunked_schedule", fps=20),
     parallel(
         component("restrict_image_size", width=320, height=180),

@@ -37,19 +37,13 @@ from positronic.policy.codecs.observation import (
 )
 from positronic.policy.compatibility import (
     ObservationCodecV1,
+    PauseOnUnavailable,
     chunked_schedule_v2,
     pack_observation_fields_v1,
     restrict_image_size_v1,
     unpack_action_chunk_v1,
 )
-from positronic.policy.processors import (
-    ChunkedSchedule,
-    EndOnField,
-    PauseOnUnavailable,
-    RTCSchedule,
-    TemporalStack,
-    TrajectoryPlayer,
-)
+from positronic.policy.processors import ChunkedSchedule, EndOnField, RTCSchedule, TemporalStack, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -63,7 +57,6 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         EncodeImages,
         EndCommand,
         EndOnField,
-        PauseOnUnavailable,
         RTCSchedule,
         TemporalStack,
         TrajectoryPlayer,
@@ -91,6 +84,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 
 
 COMPONENTS.update({
+    PauseOnUnavailable.WIRE_NAME: {PauseOnUnavailable.WIRE_VERSION: Version(PauseOnUnavailable.from_spec_args)},
     'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
     'restrict_image_size': {1: Version(restrict_image_size_v1)},
