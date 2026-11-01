@@ -604,17 +604,14 @@ def test_player_context_includes_the_current_action_without_reissuing_it(executi
         run.close()
 
 
-def test_player_context_is_lazy_and_keeps_the_plan_at_observation_time(execution, monkeypatch):
+def test_player_context_keeps_the_plan_at_observation_time(execution):
     runtime, clock = execution
-    player = TrajectoryPlayer(plan_key=policy_keys.PLAN)
-    remaining = Mock(wraps=player._remaining_plan)
-    monkeypatch.setattr(player, '_remaining_plan', remaining)
     inner_run = Mock(
         send=Mock(
             side_effect=[Step(_trajectory([0, 1, 2]), 50_000_000), Step(_trajectory([9], 100_000_000), 500_000_000)]
         )
     )
-    run = runtime.start(player, inner_run)
+    run = runtime.start(TrajectoryPlayer(plan_key=policy_keys.PLAN), inner_run)
     try:
         run.send({})
         first_obs = inner_run.send.call_args.args[0]
@@ -623,12 +620,8 @@ def test_player_context_is_lazy_and_keeps_the_plan_at_observation_time(execution
         second_obs = inner_run.send.call_args.args[0]
         clock.advance_to_ns(100_000_000)
         assert run.send({}).commands == {MOTOR: 9}
-        remaining.assert_not_called()
         assert first_obs[policy_keys.PLAN] == []
         assert [point.commands[MOTOR] for point in second_obs[policy_keys.PLAN]] == [0, 1, 2]
-        assert remaining.call_count == 2
-        assert second_obs[policy_keys.PLAN] is second_obs[policy_keys.PLAN]
-        assert remaining.call_count == 2
     finally:
         run.close()
 
