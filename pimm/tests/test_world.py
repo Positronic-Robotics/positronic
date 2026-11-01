@@ -1026,7 +1026,7 @@ class TestWorldInterleave:
             assert 'before_exception' in execution_order
 
     def test_interleave_stop_behavior(self):
-        """Test stop event behavior: early stopping and completion detection."""
+        """Test stop flag behavior: early stopping and completion detection."""
 
         with World(virtual_time=True) as world:
             execution_order = []
@@ -1046,7 +1046,7 @@ class TestWorldInterleave:
                     execution_order.append(f'short_{i}')
                     yield Sleep(0.1)
 
-            # The short loop should complete first and set the stop event
+            # The short loop should complete first and set the stop flag
             sleep_times = list(world.interleave(stop_checking_loop, short_loop))
 
             # Both loops should run some steps
@@ -1057,7 +1057,7 @@ class TestWorldInterleave:
             assert any(item.startswith('step_') for item in execution_order)
             assert any(item.startswith('short_') for item in execution_order)
 
-            # The stop_checking_loop should detect the stop event and exit early
+            # The stop_checking_loop should detect the stop flag and exit early
             assert any(item.startswith('stopped_at_') for item in execution_order)
 
     def test_interleave_scheduling_order(self):
@@ -2240,7 +2240,6 @@ def test_a_signal_stops_a_protected_world_and_takes_effect_after_the_park(monkey
                 world.run(device)
         assert saw_stop == [True]
         assert parked == [device]
-        # The handler may interrupt the main thread inside the stop event's lock, so another thread sets it.
         assert stopped_by[0] is not threading.main_thread()
     finally:
         signal.signal(signum, previous)
@@ -2354,7 +2353,7 @@ def _mark_started(marker, should_stop, clock) -> Iterator[Command]:
 
 
 def _run_wrapper_in_a_child(tmp_path, parent_pid: int, *, stopped: bool = False):
-    """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop event."""
+    """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop flag."""
     ctx = mp.get_context('spawn')
     stop, marker = _StopFlag(ctx), tmp_path / 'started'
     if stopped:

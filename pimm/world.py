@@ -510,7 +510,7 @@ def _bg_wrapper(
     parent_pid: int,
 ):
     if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
-        # Stop only on the parent's stop event, so the device finishes its shutdown.
+        # Stop only on the parent's stop flag, so the device finishes its shutdown.
         for signum in _STOP_SIGNALS:
             signal.signal(signum, signal.SIG_IGN)
     try:
@@ -628,8 +628,8 @@ class World:
                 return
             if self._stopped_by_signal is None:
                 self._stopped_by_signal = signum
-            # FOOTGUN: a handler runs where the main thread stopped, which can be inside the stop event's lock.
-            # `request_stop` here would deadlock, so the relay thread raises the stop.
+            # FOOTGUN: a handler runs wherever the main thread stopped, so it only writes to the pipe.
+            # The relay thread logs and raises the stop.
             os.write(write_fd, bytes([signum]))
 
         self._previous_handlers = {}
@@ -780,9 +780,9 @@ class World:
         passes on its own; the yielded ``Sleep`` is the wait the caller honours so each
         loop keeps its real rate (a ``Yield`` means "no wait, run again now").
 
-        When a loop finishes (``StopIteration``) the stop event is set so the others can
+        When a loop finishes (``StopIteration``) the stop flag is set so the others can
         observe ``should_stop`` and exit. The iterator ends once no loop is left. A BACKGROUND
-        control system finishing sets the same event (``_bg_wrapper``), so any control system —
+        control system finishing sets the same flag (``_bg_wrapper``), so any control system —
         background or foreground — ending by returning, raising or being interrupted stops the world.
 
         A ``Yield`` is only legitimate when another loop in the same instant sleeps to pace it.
