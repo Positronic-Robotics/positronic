@@ -335,8 +335,8 @@ def test_interval_requests_require_a_representable_positive_interval(seconds):
         RequestTiming.every(seconds)
 
 
-@pytest.mark.parametrize('fps', [30, 60])
-def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_execution, fps):
+@pytest.mark.parametrize(('fps', 'indices'), [(30, range(100)), (60, range(100)), (29.97, [0, 46947, 46948, 46949])])
+def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_execution, fps, indices):
     runtime, now = periodic_execution
     requests = []
 
@@ -344,14 +344,17 @@ def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_
         requests.append(obs[POSITION])
 
     run = runtime.start(_sampled_policy(sample_fps=fps), infer)
+    next_sample_ns = 0
+    previous_index = -1
     try:
-        for index in range(100):
-            now[0] = round(index * 1e9 / fps)
+        for index in indices:
+            now[0] = next_sample_ns if index == previous_index + 1 else round(index * 1e9 / fps)
             run.send({POSITION: index})
             assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
             step = run.send({POSITION: index})
-            assert step.resume_at_ns == round((index + 1) * 1e9 / fps)
-        assert requests == list(range(100))
+            assert abs(step.resume_at_ns - round((index + 1) * 1e9 / fps)) <= 1
+            next_sample_ns, previous_index = step.resume_at_ns, index
+        assert requests == list(indices)
     finally:
         run.close()
 

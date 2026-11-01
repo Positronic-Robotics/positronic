@@ -434,20 +434,21 @@ class Periodic(Policy):
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         obs = yield
         origin_ns = next_sample_ns = runtime.time_ns
+        period_ns = (1 / self._fps) * 1e9
         next_index = 0
         sample: Obs = {}
         while True:
             now_ns = runtime.time_ns
             sampling = now_ns >= next_sample_ns
             if sampling:
-                index = max(next_index, int((now_ns - origin_ns) * self._fps / 1e9))
+                index = max(next_index, int((now_ns - origin_ns) / period_ns))
                 sample = {
                     **deepcopy(dict(OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,)))),
                     policy_keys.SAMPLE_INDEX: index,
                     policy_keys.OBS_TIME_NS: now_ns,
                 }
                 next_index = index + 1
-                next_sample_ns = origin_ns + round(next_index * 1e9 / self._fps)
+                next_sample_ns = origin_ns + round(next_index * period_ns)
             step = Step({}, next_sample_ns)
             if sampling or runtime.has_ready_answers() or obs.get(policy_keys.REPLAN_NOW, False):
                 inner_obs = sample
