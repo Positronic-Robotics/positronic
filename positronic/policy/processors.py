@@ -52,7 +52,7 @@ from positronic.policy.base import (
 )
 from positronic.policy.keys import ACTION_FPS, END
 from positronic.utils import check_finite_nonnegative, check_finite_positive
-from positronic.utils.lazy import LazyDict
+from positronic.utils.lazy import LazyDict, OverlayMapping, without_keys
 
 
 # TODO(#638): the arm is found by name because the harness serializes before the stack sees anything. Once
@@ -324,12 +324,8 @@ class TrajectoryPlayer(Policy):
     def _with_plan(self, obs: Obs, plan: deque[Waypoint], current: Waypoint | None, now_ns: int) -> Obs:
         if self._plan_key is None:
             return obs
-        return LazyDict(
-            {},
-            {
-                **{name: partial(obs.__getitem__, name) for name in obs},
-                self._plan_key: partial(self._remaining_plan, tuple(plan), current, now_ns),
-            },
+        return OverlayMapping(
+            obs, LazyDict({}, {self._plan_key: partial(self._remaining_plan, tuple(plan), current, now_ns)})
         )
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
@@ -347,7 +343,7 @@ class TrajectoryPlayer(Policy):
                 current_wp = None
                 inner_resume_at_ns = now_ns
                 planned, recovering = 0, True
-                obs = LazyDict({policy_keys.REPLAN_NOW: True}, {name: partial(obs.__getitem__, name) for name in obs})
+                obs = OverlayMapping(obs, {policy_keys.REPLAN_NOW: True})
 
             outputs: Mapping[str, Any] = {}
             if now_ns >= inner_resume_at_ns or obs.get(policy_keys.REPLAN_NOW, False) or runtime.has_ready_answers():
@@ -458,19 +454,15 @@ class ChunkedSchedule(Policy):
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         answer: Answer[Sequence[Commands] | None] | None = None
         lead = self._inference_lead.run()
-        lead_sec = 0.0
-        start_ns = end_ns = 0
+        call_ns = end_ns = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 if obs.get(policy_keys.REPLAN_NOW, False):
-                    start_ns = end_ns = now_ns
+                    call_ns = end_ns = now_ns
                 if policy_keys.REPLAN_NOW in obs:
-                    obs = LazyDict(
-                        {}, {name: partial(obs.__getitem__, name) for name in obs if name != policy_keys.REPLAN_NOW}
-                    )
-                call_ns = self._next_call_ns(start_ns, end_ns, lead_sec)
+                    obs = without_keys(obs, policy_keys.REPLAN_NOW)
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
                     answer = runtime.submit(infer, obs)
