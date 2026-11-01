@@ -613,9 +613,8 @@ class InferenceSchedule(Policy):
     def _call_obs(
         self,
         obs: Obs,
-        previous: Trajectory | None,
-        update: Trajectory | None,
-        now_ns: int,
+        trajectory: Trajectory | None,
+        obs_time_ns: int,
         estimated_latency_sec: float,
         measured_sec: float | None,
     ) -> Obs:
@@ -625,73 +624,77 @@ class InferenceSchedule(Policy):
         }
         if policy_keys.PLAN not in obs:
             return OverlayMapping(obs, add=context)
-        plan = update.waypoints() if update is not None else obs[policy_keys.PLAN]
-        start_ns = now_ns if previous is None else previous.start_ns
-        end_ns = now_ns if previous is None else previous.end_ns
-        running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
-        remaining = plan[running:] if now_ns < end_ns else ()
+        plan = obs[policy_keys.PLAN]
+        start_ns = obs_time_ns if trajectory is None else trajectory.start_ns
+        end_ns = obs_time_ns if trajectory is None else trajectory.end_ns
+        running = max(0, bisect_right(plan, obs_time_ns, key=lambda point: point.due_ns) - 1)
+        remaining = plan[running:] if obs_time_ns < end_ns else ()
         due_ns = remaining[0].due_ns if remaining else end_ns
         context[policy_keys.RTC.ACTION_PREFIX] = {
             policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
             policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
-            policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
+            policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - obs_time_ns) / 1e9,
         }
         return OverlayMapping(obs, add=context, remove=(policy_keys.PLAN,))
 
     @staticmethod
     def _replan_if_needed(
-        obs: Obs, previous: Trajectory | None, call_ns: int | None, now_ns: int
+        obs: Obs, previous: Trajectory | None, next_call_ns: int | None, now_ns: int
     ) -> tuple[Obs, Trajectory | None, int | None]:
         if policy_keys.REPLAN_NOW in obs:
             if obs[policy_keys.REPLAN_NOW]:
                 previous = None
-                if call_ns is not None:
-                    call_ns = now_ns
+                if next_call_ns is not None:
+                    next_call_ns = now_ns
             obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
-        return obs, previous, call_ns
+        return obs, previous, next_call_ns
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._latency_estimate.run()
         timing = self._request_timing.run()
         estimated_latency_sec = 0.0
-        measured_sec: float | None = None
+        measured_latency_sec: float | None = None
         pending: deque[tuple[Answer[Sequence[Commands] | None], int]] = deque()
         previous: Trajectory | None = None
-        call_ns: int | None = 0
+        next_call_ns: int | None = 0
         fresh_observation_ns = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 update = None
-                obs, previous, call_ns = self._replan_if_needed(obs, previous, call_ns, now_ns)
+                obs, previous, next_call_ns = self._replan_if_needed(obs, previous, next_call_ns, now_ns)
                 sample_time_ns: int = obs.get(policy_keys.OBS_TIME_NS, now_ns)
 
                 if pending and pending[0][0].done():
                     answer, observation_time_ns = pending.popleft()
-                    measured_sec = answer.elapsed_sec
-                    estimated_latency_sec = duration.update(measured_sec)
+                    measured_latency_sec = answer.elapsed_sec
+                    estimated_latency_sec = duration.update(measured_latency_sec)
                     check_finite_nonnegative(estimated_latency_sec, 'duration estimate')
                     if (chunk := answer.result()) is not None:
                         update = self._merge.plan(chunk, self._fps, previous, now_ns, observation_time_ns)
                         previous = update
-                    if call_ns is None:
-                        call_ns = timing.next_call_ns(update, estimated_latency_sec, now_ns)
-                        if call_ns is None:
-                            call_ns = now_ns
+                    if next_call_ns is None:
+                        next_call_ns = timing.next_call_ns(update, estimated_latency_sec, now_ns)
+                        if next_call_ns is None:
+                            next_call_ns = now_ns
 
-                if call_ns is not None and sample_time_ns >= max(call_ns, fresh_observation_ns):
+                if next_call_ns is not None and sample_time_ns >= max(next_call_ns, fresh_observation_ns):
+                    if update is not None and policy_keys.PLAN in obs:
+                        obs = OverlayMapping(obs, add={policy_keys.PLAN: update.waypoints()})
                     answer = runtime.submit(
                         infer,
-                        self._call_obs(obs, previous, update, sample_time_ns, estimated_latency_sec, measured_sec),
+                        self._call_obs(obs, previous, sample_time_ns, estimated_latency_sec, measured_latency_sec),
                     )
                     pending.append((answer, sample_time_ns))
                     fresh_observation_ns = sample_time_ns + 1 if policy_keys.OBS_TIME_NS in obs else 0
-                    call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
+                    next_call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
                 if update is not None and now_ns >= update.end_ns:
                     update = Trajectory([], update.start_ns, update.fps, update.start_ns)
                 commands = {} if update is None else asdict(update, recurse=False)
-                obs = yield Step(commands, now_ns if pending or call_ns is None else max(call_ns, fresh_observation_ns))
+                obs = yield Step(
+                    commands, now_ns if pending or next_call_ns is None else max(next_call_ns, fresh_observation_ns)
+                )
         finally:
             for answer, _ in pending:
                 answer.cancel()
