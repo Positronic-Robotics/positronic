@@ -189,11 +189,17 @@ class Waypoint:
 
 @dataclass
 class Trajectory:
-    """Commands spaced by ``1 / fps`` from ``start_ns``."""
+    """Commands spaced by ``1 / fps`` from ``start_ns``, with an effective scheduling end.
+
+    ``end_ns`` can shorten the final command's period: at 10 Hz, commands at 0 and 100 ms
+    can cover a 150 ms horizon, rather than the 200 ms implied by their count and rate.
+    The robot keeps holding its last issued command after this scheduling boundary.
+    """
 
     commands: Sequence[Commands]
     start_ns: int
     fps: float
+    end_ns: int
 
     @property
     def period_ns(self) -> float:
@@ -210,6 +216,8 @@ class Trajectory:
 
     def __attrs_post_init__(self) -> None:
         check_finite_positive(self.fps, 'fps')
+        if not self.start_ns <= self.end_ns <= self.start_ns + round(len(self.commands) / self.fps * 1e9):
+            raise ValueError('end_ns must lie within the trajectory duration')
 
 
 class TrajectoryPlayer(Policy):
@@ -404,7 +412,177 @@ class TrajectoryPlayer(Policy):
         }
 
 
-class ChunkedSchedule(Policy):
+class RequestTiming:
+    """Choose inference deadlines using a fixed interval or the scheduler's latency estimate."""
+
+    class Reference(Enum):
+        BEFORE_END = 'before_end'
+        AFTER_START = 'after_start'
+
+    def __init__(self, reference: Reference, after_start_sec: float = 0.0) -> None:
+        check_finite_nonnegative(after_start_sec, 'after_start_sec')
+        self._reference = reference
+        self.after_start_ns = round(after_start_sec * 1e9)
+
+    @classmethod
+    def before_end(cls) -> Self:
+        """Request before the trajectory ends, using the estimated duration as the lead."""
+        return cls(cls.Reference.BEFORE_END)
+
+    @classmethod
+    def after_start(cls, seconds: float) -> Self:
+        """Request a fixed interval after the trajectory starts."""
+        return cls(cls.Reference.AFTER_START, seconds)
+
+    def next_call_ns(self, trajectory: Trajectory, estimated_latency_sec: float, now_ns: int) -> int:
+        if self._reference is self.Reference.AFTER_START:
+            return trajectory.start_ns + self.after_start_ns
+        if not trajectory.commands:
+            return now_ns
+        return trajectory.end_ns - round(min(estimated_latency_sec * 1e9, trajectory.end_ns - trajectory.start_ns))
+
+
+class TrajectoryMerge:
+    """Place predictions on the playback timeline and limit their duration."""
+
+    class Start(Enum):
+        AFTER_PREVIOUS = 'after_previous'
+        OBSERVATION = 'observation'
+
+    def __init__(self, start: Start, horizon_sec: float | None = None) -> None:
+        if horizon_sec is not None:
+            check_finite_positive(horizon_sec, 'horizon_sec')
+        self._start = start
+        self.horizon_sec = horizon_sec
+
+    @classmethod
+    def after_previous(cls, horizon_sec: float | None = None) -> Self:
+        """Start after the preceding trajectory, or now if its end has passed."""
+        return cls(cls.Start.AFTER_PREVIOUS, horizon_sec)
+
+    @classmethod
+    def at_observation(cls) -> Self:
+        """Start at the request's observation time, except the first prediction starts now."""
+        return cls(cls.Start.OBSERVATION)
+
+    def plan(
+        self, chunk: Sequence[Commands], fps: float, previous: Trajectory | None, now_ns: int, obs_time_ns: int
+    ) -> Trajectory:
+        if previous is None:
+            start_ns = now_ns
+        elif self._start is self.Start.OBSERVATION:
+            start_ns = obs_time_ns
+        else:
+            start_ns = max(now_ns, previous.end_ns)
+        duration_sec = min(len(chunk) / fps, self.horizon_sec or inf)
+        trajectory = Trajectory(chunk, start_ns, fps, start_ns + round(duration_sec * 1e9))
+        if self.horizon_sec is not None:
+            trajectory.commands = [
+                command for i, command in enumerate(chunk) if trajectory.due_ns(i) < trajectory.end_ns
+            ]
+        return trajectory
+
+
+class _InferenceSchedule(Policy):
+    """Submit one call at a time and publish completed predictions as trajectories.
+
+    Optional observation fields ``PLAN`` and ``REPLAN_NOW`` provide playback context and request
+    immediate replanning. Both are consumed before inference; absent fields leave those features unused.
+    """
+
+    def __init__(
+        self, fps: float, *, request_timing: RequestTiming, merge: TrajectoryMerge, latency_estimate: DurationEstimate
+    ) -> None:
+        check_finite_positive(fps, 'fps')
+        self._fps = fps
+        self._request_timing = request_timing
+        self._merge = merge
+        self._latency_estimate = latency_estimate
+
+    def _call_obs(
+        self,
+        obs: Obs,
+        previous: Trajectory | None,
+        update: Trajectory | None,
+        now_ns: int,
+        estimated_latency_sec: float,
+        measured_sec: float | None,
+    ) -> Obs:
+        context: dict[str, Any] = {
+            policy_keys.RTC.ESTIMATED_LATENCY_SEC: estimated_latency_sec,
+            policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
+        }
+        if policy_keys.PLAN not in obs:
+            return OverlayMapping(obs, add=context)
+        plan = update.waypoints() if update is not None else obs[policy_keys.PLAN]
+        start_ns = now_ns if previous is None else previous.start_ns
+        end_ns = now_ns if previous is None else previous.end_ns
+        running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
+        remaining = plan[running:] if now_ns < end_ns else ()
+        due_ns = remaining[0].due_ns if remaining else end_ns
+        context[policy_keys.RTC.ACTION_PREFIX] = {
+            policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
+            policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
+            policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
+        }
+        return OverlayMapping(obs, add=context, remove=(policy_keys.PLAN,))
+
+    @staticmethod
+    def _replan_if_needed(
+        obs: Obs, previous: Trajectory | None, call_ns: int, now_ns: int
+    ) -> tuple[Obs, Trajectory | None, int]:
+        if policy_keys.REPLAN_NOW in obs:
+            if obs[policy_keys.REPLAN_NOW]:
+                previous = None
+                call_ns = now_ns
+            obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
+        return obs, previous, call_ns
+
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
+        duration = self._latency_estimate.run()
+        estimated_latency_sec = 0.0
+        measured_sec: float | None = None
+        answer: Answer[Sequence[Commands] | None] | None = None
+        previous: Trajectory | None = None
+        observation_time_ns = call_ns = 0
+        obs = yield
+        try:
+            while True:
+                now_ns = runtime.time_ns
+                update = None
+                obs, previous, call_ns = self._replan_if_needed(obs, previous, call_ns, now_ns)
+
+                if answer is not None and answer.done():
+                    measured_sec = answer.elapsed_sec
+                    estimated_latency_sec = duration.update(measured_sec)
+                    check_finite_nonnegative(estimated_latency_sec, 'duration estimate')
+                    if (chunk := answer.result()) is not None:
+                        update = self._merge.plan(chunk, self._fps, previous, now_ns, observation_time_ns)
+                        previous = update
+                        call_ns = self._request_timing.next_call_ns(previous, estimated_latency_sec, now_ns)
+                    answer = None
+
+                if answer is None and now_ns >= call_ns:
+                    observation_time_ns = now_ns
+                    answer = runtime.submit(
+                        infer, self._call_obs(obs, previous, update, now_ns, estimated_latency_sec, measured_sec)
+                    )
+                if update is not None and now_ns >= update.end_ns:
+                    update = Trajectory([], update.start_ns, update.fps, update.start_ns)
+                commands = {} if update is None else asdict(update, recurse=False)
+                obs = yield Step(commands, now_ns if answer is not None else call_ns)
+        finally:
+            if answer is not None:
+                answer.cancel()
+
+    def meta(self) -> dict[str, Any]:
+        meta = {ACTION_FPS: self._fps}
+        if self._merge.horizon_sec is not None:
+            meta[policy_keys.ACTION_HORIZON_SEC] = self._merge.horizon_sec
+        return meta
+
+
+class ChunkedSchedule(_InferenceSchedule):
     """Request action chunks asynchronously and return timed trajectories for playback.
 
         step                0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16 17
@@ -441,6 +619,8 @@ class ChunkedSchedule(Policy):
     episode. An early answer waits behind the remaining commands; the new chunk starts from its first
     action. The observation is read at the request, before commands emitted in that same round.
 
+    Inference observations include measured call latency and the estimate used for the lead.
+
     The optional observation argument ``replan_now`` defaults to ``False``. When true, inference is due
     immediately and its answer can start immediately. An existing pending call is kept. The argument
     is consumed before calling ``infer``.
@@ -455,68 +635,18 @@ class ChunkedSchedule(Policy):
     def __init__(
         self, fps: float, horizon_sec: float | None = None, inference_lead: DurationEstimate | None = None
     ) -> None:
-        check_finite_positive(fps, 'fps')
-        if horizon_sec is not None:
-            check_finite_positive(horizon_sec, 'horizon_sec')
-        self._fps = fps
-        self._horizon_sec = horizon_sec
-        self._inference_lead = ConstantDuration() if inference_lead is None else inference_lead
-
-    @staticmethod
-    def _next_call_ns(start_ns: int, end_ns: int, lead_sec: float) -> int:
-        return end_ns - round(min(lead_sec * 1e9, end_ns - start_ns))
-
-    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[Trajectory, int]:
-        duration_sec = min(len(chunk) / self._fps, self._horizon_sec or inf)
-        end_ns = start_ns + round(duration_sec * 1e9)
-        trajectory = Trajectory(commands=chunk, start_ns=start_ns, fps=self._fps)
-        trajectory.commands = [command for i, command in enumerate(chunk) if trajectory.due_ns(i) < end_ns]
-        return trajectory, end_ns
-
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
-        answer: Answer[Sequence[Commands] | None] | None = None
-        lead = self._inference_lead.run()
-        call_ns = end_ns = 0
-        obs = yield
-        try:
-            while True:
-                now_ns = runtime.time_ns
-                if obs.get(policy_keys.REPLAN_NOW, False):
-                    call_ns = end_ns = now_ns
-                if policy_keys.REPLAN_NOW in obs:
-                    obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
-                submitted = answer is None and now_ns >= call_ns
-                if submitted:
-                    answer = runtime.submit(infer, obs)
-                commands: Commands = {}
-                if answer is not None and answer.done():
-                    chunk = answer.result()
-                    lead_sec = lead.update(answer.elapsed_sec)
-                    check_finite_nonnegative(lead_sec, 'inference_lead')
-                    answer = None
-                    if chunk is not None:
-                        start_ns = max(now_ns, end_ns)
-                        trajectory, end_ns = self._plan_chunk(chunk, start_ns)
-                        commands = asdict(trajectory, recurse=False)
-                        call_ns = self._next_call_ns(start_ns, end_ns, lead_sec) if chunk else now_ns
-                    if not submitted and now_ns >= call_ns:
-                        answer = runtime.submit(infer, obs)
-                obs = yield Step(commands, now_ns if answer is not None else call_ns)
-        finally:
-            if answer is not None:
-                answer.cancel()
-
-    def meta(self) -> dict[str, Any]:
-        meta = {ACTION_FPS: self._fps}
-        if self._horizon_sec is not None:
-            meta[policy_keys.ACTION_HORIZON_SEC] = self._horizon_sec
-        return meta
+        super().__init__(
+            fps,
+            request_timing=RequestTiming.before_end(),
+            merge=TrajectoryMerge.after_previous(horizon_sec),
+            latency_estimate=ConstantDuration() if inference_lead is None else inference_lead,
+        )
 
     def to_spec(self) -> dict[str, Any]:
         args: dict[str, Any] = {self.FPS_ARG: self._fps}
-        if self._horizon_sec is not None:
-            args[self.HORIZON_SEC_ARG] = self._horizon_sec
-        lead = self._inference_lead.to_spec()
+        if self._merge.horizon_sec is not None:
+            args[self.HORIZON_SEC_ARG] = self._merge.horizon_sec
+        lead = self._latency_estimate.to_spec()
         if lead != 0:
             args[self.INFERENCE_LEAD_ARG] = lead
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
@@ -527,7 +657,7 @@ class ChunkedSchedule(Policy):
         return cls(**args)
 
 
-class RTCSchedule(Policy):
+class RTCSchedule(_InferenceSchedule):
     """Request overlapping trajectories for an outer ``TrajectoryPlayer`` to execute.
 
     One handover at 10 fps, with ``call_after_sec=0.5`` and inference taking 0.3 seconds::
@@ -571,8 +701,8 @@ class RTCSchedule(Policy):
     that request starts immediately. Composed codecs prepare the observation and planned commands
     for the model and decode its reply into commands. ``None`` leaves the trajectory unchanged.
 
-    ``plan_key`` names the observation field supplied by the outer player. The scheduler consumes
-    it to prepare the model prefix, excluding the held command once its prediction has expired.
+    When the observation contains ``PLAN``, the scheduler consumes it to prepare the model prefix,
+    excluding the held command once its prediction has expired. Without ``PLAN``, no prefix is added.
     """
 
     WIRE_NAME = 'rtc_schedule'
@@ -580,87 +710,19 @@ class RTCSchedule(Policy):
     CALL_AFTER_ARG = 'call_after_sec'
     LATENCY_ESTIMATE_ARG = 'latency_estimate'
 
-    def __init__(
-        self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate, *, plan_key: str = policy_keys.PLAN
-    ) -> None:
-        check_finite_positive(fps, 'fps')
-        check_finite_nonnegative(call_after_sec, 'call_after_sec')
-        self._fps = fps
-        self._call_after_ns = round(call_after_sec * 1e9)
-        self._latency_estimate = latency_estimate
-        self._plan_key = plan_key
-
-    def _rtc_context(
-        self,
-        plan: Sequence[Waypoint],
-        start_ns: int | None,
-        end_ns: int,
-        now_ns: int,
-        expected_sec: float,
-        measured_sec: float | None,
-    ) -> dict[str, Any]:
-        if start_ns is None:
-            start_ns = end_ns = now_ns
-        running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
-        remaining = plan[running:] if now_ns < end_ns else ()
-        due_ns = remaining[0].due_ns if remaining else end_ns
-        return {
-            policy_keys.RTC.ACTION_PREFIX: {
-                policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
-                policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
-                policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
-            },
-            policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
-            policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
-        }
-
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
-        duration = self._latency_estimate.run()
-        expected_sec = 0.0
-        measured_sec: float | None = None
-        answer: Answer[Sequence[Commands] | None] | None = None
-        start_ns: int | None = None
-        called_at_ns = end_ns = next_call_ns = 0
-        obs = yield
-        try:
-            while True:
-                now_ns = runtime.time_ns
-                trajectory = None
-                if answer is not None and answer.done():
-                    actions = answer.result()
-                    measured_sec = answer.elapsed_sec
-                    expected_sec = duration.update(measured_sec)
-                    check_finite_nonnegative(expected_sec, 'latency_estimate')
-                    answer = None
-                    if actions is not None:
-                        start_ns = now_ns if start_ns is None else called_at_ns
-                        trajectory = Trajectory(actions, start_ns, self._fps)
-                        end_ns = trajectory.due_ns(len(actions))
-                        next_call_ns = start_ns + self._call_after_ns
-
-                if answer is None and now_ns >= next_call_ns:
-                    plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
-                    context = self._rtc_context(plan, start_ns, end_ns, now_ns, expected_sec, measured_sec)
-                    called_at_ns = now_ns
-                    answer = runtime.submit(infer, OverlayMapping(obs, add=context, remove=(self._plan_key,)))
-
-                if trajectory is not None and now_ns >= end_ns:
-                    trajectory.commands = []
-                commands = {} if trajectory is None else asdict(trajectory, recurse=False)
-                obs = yield Step(commands, now_ns if answer is not None else next_call_ns)
-        finally:
-            if answer is not None:
-                answer.cancel()
-
-    def meta(self) -> dict[str, Any]:
-        return {ACTION_FPS: self._fps}
+    def __init__(self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate) -> None:
+        super().__init__(
+            fps,
+            request_timing=RequestTiming.after_start(call_after_sec),
+            merge=TrajectoryMerge.at_observation(),
+            latency_estimate=latency_estimate,
+        )
 
     def to_spec(self) -> dict[str, Any]:
         args = {
             ChunkedSchedule.FPS_ARG: self._fps,
-            self.CALL_AFTER_ARG: self._call_after_ns / 1e9,
+            self.CALL_AFTER_ARG: self._request_timing.after_start_ns / 1e9,
             self.LATENCY_ESTIMATE_ARG: self._latency_estimate.to_spec(),
-            'plan_key': self._plan_key,
         }
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
