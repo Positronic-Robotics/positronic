@@ -16,7 +16,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, parse_ee_fr
 from positronic.offboard import server as offboard_server
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
-from positronic.policy.processors import ChunkedSchedule, EndOnField
+from positronic.policy.processors import ChunkedSchedule, EndOnField, TrajectoryPlayer
 from positronic.vendors.llm import server
 from positronic.vendors.llm.client import ANTHROPIC_API_KEYS_ENV, Endpoint
 from positronic.vendors.llm.motion import Motion
@@ -402,7 +402,8 @@ def test_the_model_states_the_policy_meta_and_the_frames_of_its_poses(model, mak
 def test_the_client_stack_ends_on_the_end_field_and_plays_at_the_motion_rate():
     stack = deployment(LLMPolicy(Endpoint('test'), Motion(fps=10.0))).local.to_spec()
     assert stack['seq'][0] == EndOnField().to_spec()
-    assert stack['seq'][1] == ChunkedSchedule(10.0, replan_on_error=False).to_spec()
+    assert stack['seq'][1] == TrajectoryPlayer(replan_on_error=False).to_spec()
+    assert stack['seq'][2] == ChunkedSchedule(10.0).to_spec()
 
 
 def test_the_entry_point_takes_the_flags_of_the_local_config(monkeypatch, model, tmp_path):

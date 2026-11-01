@@ -42,8 +42,9 @@ from positronic.policy.codecs import EndCommand
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.executor import Executor
 from positronic.policy.keys import END
-from positronic.policy.processors import ChunkedSchedule, EndOnField
+from positronic.policy.processors import ChunkedSchedule, EndOnField, TrajectoryPlayer
 from positronic.policy.remote import RemotePolicy
+from positronic.policy.sequential import Sequential
 from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import VIEW_SIZE, session_query
@@ -447,11 +448,12 @@ def test_session_params_refuse_an_operator_position_that_is_no_operator_position
 
 def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_frame_at_a_time():
     stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,)))
-    end, schedule = stack['seq'][:2]
+    end, player, schedule = stack['seq'][:3]
     assert end['name'] == EndOnField.WIRE_NAME
+    assert player['name'] == TrajectoryPlayer.WIRE_NAME
     assert schedule['name'] == ChunkedSchedule.WIRE_NAME
     assert schedule['args']['inference_lead'] >= 1 / schedule['args']['fps']
-    assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][2])
+    assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][3])
 
 
 class _BlankRenderer:
@@ -520,7 +522,10 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
     for name in (keys.TARGET_EE_POSE, keys.TARGET_GRIP):
         assert episode.signals[name].timestamps(EMITTED_WORLD)[0] - first_state < 500_000_000
     names = {span.name for span in telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))}
-    assert {telemetry.component_name(ChunkedSchedule(fps=1.0)), telemetry_keys.SPAN_POLICY_INFER} <= names
+    assert {
+        telemetry.component_name(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=1.0))),
+        telemetry_keys.SPAN_POLICY_INFER,
+    } <= names
 
 
 class TestButtonsBetweenTrials:

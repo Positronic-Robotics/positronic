@@ -30,7 +30,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import ACTION, ResizeMode, TransformImages
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, TrajectoryPlayer
 from positronic.vendors import abc_dit
 from positronic.vendors.abc_dit import codecs
 
@@ -182,9 +182,14 @@ class Schedule:
         if not 0 <= self.prefix <= self.lead < self.executed:
             raise ValueError(f'A schedule needs 0 <= prefix <= lead < executed, got {self}')
 
-    def client_schedule(self) -> ChunkedSchedule:
-        return ChunkedSchedule(
-            codecs.FPS, horizon_sec=self.executed / codecs.FPS, inference_lead=ConstantDuration(self.lead / codecs.FPS)
+    def client_schedule(self) -> Sequential:
+        return Sequential(
+            TrajectoryPlayer(replan_on_error=True),
+            ChunkedSchedule(
+                codecs.FPS,
+                horizon_sec=self.executed / codecs.FPS,
+                inference_lead=ConstantDuration(self.lead / codecs.FPS),
+            ),
         )
 
     def action_prefix(self) -> codecs.ActionPrefix | None:

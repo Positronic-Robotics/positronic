@@ -20,7 +20,7 @@ from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy.codecs import ACTION
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.vendors.dreamzero import codecs, roboarena
 
 # The action space this codec decodes: seven absolute joint positions and a gripper. A server announcing
@@ -98,10 +98,10 @@ IMAGE_SIZE_OVERRIDE = 'obs.image_size'
 def local_stack(config: Mapping[str, Any]) -> Sequential:
     """The stack in front of a server announcing `config`: the codec, and a schedule at its training cadence.
 
-    `ChunkedSchedule` plays each chunk from the moment it arrives.
+    `ChunkedSchedule` dates each chunk from the moment it arrives; `TrajectoryPlayer` plays it.
     """
     codec = CODEC.override(**{IMAGE_SIZE_OVERRIDE: image_size(config)}).instantiate()
-    return Sequential(ChunkedSchedule(fps=codec.meta[ACTION_FPS]), codec)
+    return Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=codec.meta[ACTION_FPS]), codec)
 
 
 # The keys the chunk can arrive under in the server's reply, which is a mapping. The first key that the reply

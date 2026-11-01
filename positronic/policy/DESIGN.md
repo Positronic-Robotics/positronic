@@ -161,7 +161,7 @@ One algorithm may drive several robots at once.
   supplies an input and gets an output back.
 - The framework receives a complete policy definition, creates one runtime per
   episode, and starts the policy. The definition resolves its own dependencies;
-  child runs share the runtime and receive their dependencies explicitly.
+  inner runs share the runtime and receive their dependencies explicitly.
 - Whoever starts a run is responsible for closing it and the resources it owns.
   Submitted work must finish before those resources close. Closure happens
   between resumptions, never while the run is processing an input.
@@ -269,10 +269,10 @@ explicit which data reaches each component and which transformations it applies.
 
 - Sequential composition nests components from outermost to innermost. It is
   itself a processor definition; starting it creates the component runs.
-- Dependencies are supplied explicitly when starting a run: live child runs or
-  ordinary callables. Sequential passes each child to the component outside it.
-- The parent decides what input its child receives, whether to call it, and
-  how often. A custom processor may use several children. Calls at the same
+- Dependencies are supplied explicitly when starting a run: live inner runs or
+  ordinary callables. Sequential passes each inner run or callable to the component outside it.
+- The outer processor decides what input its inner run receives, whether to call it,
+  and how often. A custom processor may use several inner runs. Calls at the same
   clock time are allowed; code must not assume a positive time step.
 - Runs share the episode runtime. Each reads the clock when it needs it;
   real time continues to pass while synchronous code executes.
@@ -398,8 +398,9 @@ The runtime primes a generator to its first yield, which must be `None`.
 After that, sending an input returns its next output. A policy run must yield
 a step for each observation, or return its `PolicyEnd`.
 
-`Step.commands` contains robot commands; `Step.outputs` carries auxiliary results
-for surrounding processors. Codecs decode commands, including empty ones, while
+`Step.commands` carries commands for the outer processor to interpret; the outermost
+policy produces robot commands. `Step.outputs` carries auxiliary results for surrounding
+processors. Codecs decode commands, including empty ones, while
 preserving outputs and the requested wake-up time.
 
 ### Answers
@@ -492,16 +493,16 @@ class Codec:
     ) -> Callable[[Obs], Any] | ProcessorRun[Obs, Any]: ...
 ```
 
-For example, `runtime.start(Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=20)), infer)`
+For example, `runtime.start(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=20)), infer)`
 passes the inference callable into the scheduler, and the scheduler's live run
-into `PauseOnUnavailable`. The caller sends observations to the returned run.
+into `TrajectoryPlayer`. The caller sends observations to the returned run.
 
 Codecs compose with `|` for sequential conversion and `&` for parallel conversion.
 `Sequential.meta()` flattens and combines component metadata, with later
 components winning on shared keys.
 
 Sequential closes the runs it creates. External dependencies remain owned by
-their caller. `Codec.wrap` does not take ownership of the child it wraps.
+their caller. `Codec.wrap` does not take ownership of the inner run or callable it wraps.
 
 ## Deferred, not to decide now
 

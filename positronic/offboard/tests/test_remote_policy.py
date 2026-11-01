@@ -53,13 +53,7 @@ from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import (
-    ChunkedSchedule,
-    ConstantDuration,
-    EndOnField,
-    PauseOnUnavailable,
-    TemporalStack,
-)
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndOnField, TemporalStack, TrajectoryPlayer
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -656,7 +650,9 @@ def served(start_server):
     def start(*, codec=None, local=None, transport='websocket', model=None):
         model = FixedModel() if model is None else model
         pipeline = PolicyDeployment(
-            local if local is not None else Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
+            local
+            if local is not None
+            else Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
         )
         server = start_server(model, pipeline, grpc=transport == 'grpc')
@@ -702,12 +698,11 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
 @pytest.mark.parametrize('lead_sec', [0.0, 0.05])
 def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first, lead_sec):
     resize = TransformImages(8, 8, mode=ResizeMode.BOUND)
-    schedule = ChunkedSchedule(fps=10, horizon_sec=0.2, inference_lead=ConstantDuration(lead_sec))
-    local = (
-        Sequential(resize, PauseOnUnavailable(), schedule)
-        if resize_first
-        else Sequential(PauseOnUnavailable(), schedule, resize)
+    schedule = Sequential(
+        TrajectoryPlayer(replan_on_error=True),
+        ChunkedSchedule(fps=10, horizon_sec=0.2, inference_lead=ConstantDuration(lead_sec)),
     )
+    local = Sequential(resize, schedule) if resize_first else Sequential(schedule, resize)
     address, model, pipeline = served(local=local, transport=transport)
     policy = RemotePolicy(transport, address)
     assert policy.meta() == {policy_keys.TYPE: 'remote'}
@@ -1004,8 +999,8 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
     inputs = []
     for placement in (
         {'codec': codec},
-        {'local': Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), codec)},
-        {'local': Sequential(PauseOnUnavailable(), codec, ChunkedSchedule(fps=10))},
+        {'local': Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10), codec)},
+        {'local': Sequential(codec, TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))},
     ):
         address, model, _ = served(model=EchoStateModel(), **placement)
         runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
@@ -1026,13 +1021,19 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
-    local = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE)), ChunkedSchedule(fps=10))
+    local = Sequential(
+        ChangeEEFrame(EEFrame(site=GRIPPER_SITE)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
+    )
     with pytest.raises(ValueError, match='Only one side'):
         PolicyDeployment(local, codec=ChangeEEFrame(EEFrame(site=GRIPPER_SITE)))
 
 
 def test_pipeline_takes_frame_conversions_of_different_signals_on_each_side():
-    local = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    local = Sequential(
+        ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)),
+        TrajectoryPlayer(replan_on_error=True),
+        ChunkedSchedule(fps=10),
+    )
     PolicyDeployment(local, codec=ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.TARGET_EE_POSE,)))
 
 
@@ -1070,7 +1071,9 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
 def test_stack_failure_finishes_active_inference_before_closing_session(runtime):
     started, release = threading.Event(), threading.Event()
     order = []
-    stack = Sequential(TemporalStack(('image',), (0.0,)), ChunkedSchedule(fps=10))
+    stack = Sequential(
+        TemporalStack(('image',), (0.0,)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
+    )
     policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
 
     def infer(obs):
@@ -1248,7 +1251,7 @@ def test_a_run_records_the_frames_the_server_codec_states(runtime):
 def test_a_run_records_the_frames_both_sides_of_a_split_deployment_state(served, runtime):
     local = Sequential(
         ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)),
-        PauseOnUnavailable(),
+        TrajectoryPlayer(replan_on_error=True),
         ChunkedSchedule(fps=10, horizon_sec=0.2),
     )
     codec = ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.TARGET_EE_POSE,))
@@ -1260,7 +1263,7 @@ def test_a_run_records_the_frames_both_sides_of_a_split_deployment_state(served,
 def test_a_server_built_for_the_franka_hand_frame_states_its_poses_at_the_franka_hand_point(served, runtime):
     local = Sequential(
         ChangeEEFrame(cfg_codecs.franka_hand_frame.instantiate()),
-        PauseOnUnavailable(),
+        TrajectoryPlayer(replan_on_error=True),
         ChunkedSchedule(fps=10, horizon_sec=0.2),
     )
     address, _, _ = served(local=local)
@@ -1328,7 +1331,11 @@ def test_a_frame_codec_around_a_server_that_states_none_states_the_frames_for_it
 @pytest.mark.parametrize('side', ['client_stack', 'server_meta'])
 def test_a_remote_server_that_states_its_frames_gets_the_pose_with_no_fallback_on_one_session(caplog, side):
     if side == 'client_stack':
-        stack = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+        stack = Sequential(
+            ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)),
+            TrajectoryPlayer(replan_on_error=True),
+            ChunkedSchedule(fps=10),
+        )
         metadata = {offboard_keys.LOCAL_STACK: stack.to_spec()}
     else:
         metadata = {**CHUNKED_STACK, **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})}
@@ -1355,7 +1362,9 @@ def test_a_remote_server_that_states_another_site_is_refused_before_it_gets_an_o
 
 def test_a_remote_server_that_states_two_frames_for_one_pose_is_refused_before_it_gets_an_observation():
     offset = EEFrame(site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.1])))
-    stack = Sequential(ChangeEEFrame(offset, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    stack = Sequential(
+        ChangeEEFrame(offset, keys=(keys.EE_POSE,)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
+    )
     metadata = {
         offboard_keys.LOCAL_STACK: stack.to_spec(),
         **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}),
@@ -1371,7 +1380,9 @@ def test_a_remote_server_that_states_two_frames_for_one_pose_is_refused_before_i
 
 def test_a_remote_server_that_repeats_its_client_stack_frame_in_its_metadata_runs(runtime):
     frame = cfg_codecs.droid_frame.instantiate()
-    stack = Sequential(ChangeEEFrame(frame, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    stack = Sequential(
+        ChangeEEFrame(frame, keys=(keys.EE_POSE,)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
+    )
     policy, session = _mock_remote_policy({
         offboard_keys.LOCAL_STACK: stack.to_spec(),
         **ee_frames_entry({keys.EE_POSE: frame}),
@@ -1498,7 +1509,11 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
-    server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    server = start_server(
+        model,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        grpc=transport == 'grpc',
+    )
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
         run = runtime.start(RemotePolicy(transport, address))
@@ -1520,6 +1535,8 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
         telemetry_keys.SPAN_POLICY_INFER,
         telemetry_keys.SPAN_POLICY_SUBMIT,
         'chunked_schedule',
+        'trajectory_player',
+        'sequential',
         'remote_policy',
     ):
         assert span.parent_id is not None
@@ -1533,7 +1550,11 @@ def test_a_legacy_command_mapping_with_no_positions_fails_as_a_policy_command_er
     start_server, make_mock_model, runtime, transport
 ):
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'joint_pos'}}], {})
-    server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    server = start_server(
+        model,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        grpc=transport == 'grpc',
+    )
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     run = runtime.start(RemotePolicy(transport, address))
     try:
@@ -1711,11 +1732,16 @@ def test_an_end_command_in_the_codec_ends_the_client_run_when_its_element_plays(
         placement = {
             'codec': codec,
             'local': Sequential(
-                EndOnField(), ChunkedSchedule(fps=10), TransformImages(640, 640, mode=ResizeMode.BOUND)
+                EndOnField(),
+                TrajectoryPlayer(replan_on_error=True),
+                ChunkedSchedule(fps=10),
+                TransformImages(640, 640, mode=ResizeMode.BOUND),
             ),
         }
     else:  # dreamzero: the action codec sits in the client stack, inside the schedule
-        placement = {'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), codec)}
+        placement = {
+            'local': Sequential(EndOnField(), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10), codec)
+        }
     address, _, _ = served(model=_EndingModel(), transport=transport, **placement)
     now = [0]
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)

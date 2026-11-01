@@ -15,7 +15,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ResizeMode, TransformImages
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.utils.checkpoints import resolve_checkpoint
 from positronic.vendors.lerobot_0_3_3.backbone import register_all
 from positronic.vendors.lerobot_0_3_3.policy import LerobotModel, _detect_device, warm_observation
@@ -69,7 +69,9 @@ def pipeline(
 ) -> PolicyDeployment:
     return PolicyDeployment(
         local=Sequential(
-            ChunkedSchedule(fps=fps, horizon_sec=horizon_sec), TransformImages(224, 224, mode=ResizeMode.BOUND)
+            TrajectoryPlayer(replan_on_error=True),
+            ChunkedSchedule(fps=fps, horizon_sec=horizon_sec),
+            TransformImages(224, 224, mode=ResizeMode.BOUND),
         ),
         codec=codecs.compose_data(
             obs=obs, action=action, binarize_grip=binarize_grip, flip_grip=flip_grip, ee_frame=ee_frame

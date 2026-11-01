@@ -37,12 +37,14 @@ from positronic.policy.codecs.observation import (
 )
 from positronic.policy.compatibility import (
     ObservationCodecV1,
+    PauseOnUnavailable,
     chunked_schedule_v2,
+    chunked_schedule_v3,
     pack_observation_fields_v1,
     restrict_image_size_v1,
     unpack_action_chunk_v1,
 )
-from positronic.policy.processors import ChunkedSchedule, EndOnField, PauseOnUnavailable, RTCSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, EndOnField, RTCSchedule, TemporalStack, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -56,9 +58,9 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         EncodeImages,
         EndCommand,
         EndOnField,
-        PauseOnUnavailable,
         RTCSchedule,
         TemporalStack,
+        TrajectoryPlayer,
         BinarizeGripTraining,
         BinarizeGripInference,
         FlipGrip,
@@ -83,11 +85,12 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
 
 
 COMPONENTS.update({
+    PauseOnUnavailable.WIRE_NAME: {PauseOnUnavailable.WIRE_VERSION: Version(PauseOnUnavailable.from_spec_args)},
     'pack_observation_fields': {1: Version(pack_observation_fields_v1)},
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
     'restrict_image_size': {1: Version(restrict_image_size_v1)},
 })
-COMPONENTS[ChunkedSchedule.WIRE_NAME][2] = Version(chunked_schedule_v2)
+COMPONENTS[ChunkedSchedule.WIRE_NAME].update({2: Version(chunked_schedule_v2), 3: Version(chunked_schedule_v3)})
 # Version 1 takes no arguments and flips the one-arm channels.
 COMPONENTS[FlipGrip.WIRE_NAME][FlipGrip.ONE_ARM_VERSION] = Version(lambda: FlipGrip())
 
@@ -101,14 +104,14 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
 
     def build(node: dict[str, Any]) -> Processor | Codec:
         if SEQ in node:
-            parts = [build(child) for child in node[SEQ]]
+            parts = [build(entry) for entry in node[SEQ]]
             if not parts:
                 raise ValueError('A sequential spec must contain at least one component')
             if all(isinstance(part, Codec) for part in parts):
                 return reduce(or_, cast(list[Codec], parts))
             return Sequential(parts[0], *parts[1:])
         if PAR in node:
-            parts = [build(child) for child in node[PAR]]
+            parts = [build(entry) for entry in node[PAR]]
             if not parts or not all(isinstance(part, Codec) for part in parts):
                 raise ValueError('Parallel specs require at least one codec')
             return reduce(and_, cast(list[Codec], parts))

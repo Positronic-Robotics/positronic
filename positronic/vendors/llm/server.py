@@ -23,7 +23,7 @@ from positronic.offboard.server import serve_model
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd
-from positronic.policy.processors import ChunkedSchedule, EndOnField
+from positronic.policy.processors import ChunkedSchedule, EndOnField, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 
 from .policy import Conversation, LLMPolicy, llm
@@ -148,7 +148,9 @@ class LLMModel(Model):
 def deployment(policy: LLMPolicy) -> PolicyDeployment:
     """The client stack that plays the trajectories of ``policy`` and ends the run on its ``END``."""
     # The local policy plays its trajectory through an arm error, and so does this stack.
-    return PolicyDeployment(Sequential(EndOnField(), ChunkedSchedule(policy.motion.fps, replan_on_error=False)))
+    return PolicyDeployment(
+        Sequential(EndOnField(), TrajectoryPlayer(replan_on_error=False), ChunkedSchedule(policy.motion.fps))
+    )
 
 
 @cfn.config(
