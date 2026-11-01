@@ -9,7 +9,7 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy import executor as module
-from positronic.policy.base import NotAnswered, Policy, PolicyEnd, Step
+from positronic.policy.base import NotAnswered, Policy, PolicyEnd, QueueFull, Step
 from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 
@@ -17,9 +17,15 @@ from positronic.policy.executor import Executor, WaitResult, WaitStatus, _Unchar
 def executors():
     created = []
 
-    def make(*, simulated=True, charged=False, workers=1):
+    def make(*, simulated=True, charged=False, workers=1, max_queue_size=16):
         now = [0]
-        runtime = Executor(lambda: now[0], simulated=simulated, charge_inference_time=charged, max_workers=workers)
+        runtime = Executor(
+            lambda: now[0],
+            simulated=simulated,
+            charge_inference_time=charged,
+            max_workers=workers,
+            max_queue_size=max_queue_size,
+        )
         created.append(runtime)
         return runtime, now
 
@@ -379,3 +385,51 @@ def test_close_waits_for_running_work_and_cancels_queued_work(executors):
         queued.result()
     with pytest.raises(RuntimeError):
         runtime.submit(lambda: None)
+
+
+@pytest.mark.parametrize('capacity', [0, 1, 3])
+def test_full_queue_refuses_work_and_cancellation_frees_capacity(executors, capacity):
+    runtime, _ = executors(max_queue_size=capacity)
+    started, release = threading.Event(), threading.Event()
+
+    def work():
+        started.set()
+        assert release.wait(timeout=2)
+
+    running = runtime.submit(work)
+    try:
+        assert started.wait(timeout=1)
+        queued = [runtime.submit(lambda: 42) for _ in range(capacity)]
+        with pytest.raises(QueueFull):
+            runtime.submit(lambda: pytest.fail('Rejected work ran'))
+        if queued:
+            queued[0].cancel()
+            replacement = runtime.submit(lambda: 43)
+            with pytest.raises(QueueFull):
+                runtime.submit(lambda: None)
+            replacement.cancel()
+    finally:
+        release.set()
+    assert cast(_UnchargedAnswer, running).call.result(timeout=1) is None
+
+
+def test_finished_calls_free_capacity_before_visibility_or_consumption(executors, monkeypatch):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, _ = executors(charged=True, max_queue_size=0)
+
+    def work():
+        wall[0] += 100_000_000
+        return 42
+
+    first = cast(_UnchargedAnswer, runtime.submit(work))
+    assert first.call.result(timeout=1) == 42
+    assert not first.done()
+    second = cast(_UnchargedAnswer, runtime.submit(work))
+    assert second.call.result(timeout=1) == 42
+
+
+@pytest.mark.parametrize('capacity', [-1, True, 1.5])
+def test_queue_capacity_must_be_a_nonnegative_integer(executors, capacity):
+    with pytest.raises(ValueError, match='max_queue_size'):
+        executors(max_queue_size=capacity)
