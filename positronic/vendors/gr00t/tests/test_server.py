@@ -13,6 +13,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
 from positronic.policy.processors import DelayEstimate, RTCSchedule
+from positronic.utils.versions import Version
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import keys, server
 from positronic.vendors.gr00t.serving import settings as model_settings
@@ -55,6 +56,7 @@ def test_s3_selection_downloads_only_the_selected_checkpoint(monkeypatch, tmp_pa
 
 def test_standalone_checkpoint_metadata_contract():
     assert model_settings.MODEL_SETTINGS_PATH == MODEL_SETTINGS_PATH
+    assert keys.PLAN == policy_keys.PLAN
     for name in ('CHECKPOINT_ID', 'CHECKPOINT_PATH', 'EXPERIMENT_NAME', 'TYPE', 'JPEG_QUALITY', 'COMPRESS_IMAGES'):
         assert getattr(keys, name) == getattr(policy_keys, name)
 
@@ -350,11 +352,21 @@ def test_rtc_launch_warms_native_overlap_before_sessions_are_ready(native_policy
     assert any(call.kwargs.get('options') for call in native_policy.get_action.call_args_list)
     session = model.prepare_session(resolve_params(model.parameters, {}))
     assert session._previous_poses is None
-    schedule = spec.from_spec(json.loads(json.dumps(session.client_stack))).to_spec()[SEQ][0]
+    schedule = spec.from_spec(json.loads(json.dumps(session.client_stack))).to_spec()[SEQ][1]
     assert (
         schedule[ARGS][RTCSchedule.LATENCY_ESTIMATE_ARG]
         == DelayEstimate.max(last=5, max_sec=rtc_settings[keys.RTC.MAX_DELAY_SEC]).to_spec()
     )
+
+
+def test_rtc_stack_rejects_clients_without_trajectory_scheduling(native_policy, rtc_settings, monkeypatch):
+    model = server.Gr00tModel(native_policy, model_settings.droid(), {}, rtc=rtc_settings, horizon_sec=None)
+    session = model.prepare_session(resolve_params(model.parameters, {}))
+    legacy = Mock(side_effect=AssertionError('RTC v1 must not be constructed'))
+    monkeypatch.setitem(spec.COMPONENTS, RTCSchedule.WIRE_NAME, {1: Version(legacy)})
+    with pytest.raises(ValueError, match="Unsupported component 'rtc_schedule' version 2"):
+        spec.from_spec(json.loads(json.dumps(session.client_stack)))
+    legacy.assert_not_called()
 
 
 def test_ordinary_launch_refuses_enabling_an_unwarmed_rtc_path(model, rtc_settings):
