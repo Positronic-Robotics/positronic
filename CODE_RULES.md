@@ -422,3 +422,13 @@ _PARK_MAX_CORRECTION_RAD = 0.05
 class SettleTuning:
     max_correction_rad: float = 0.05
 ```
+
+### implementation-bound-tests
+
+Test the API's promised behavior, not incidental implementation choices. Assert observable results,
+errors and guarantees; don't freeze private call order, helper structure or same-invocation completion
+unless the API promises them. A refactor that preserves the contract should not require rewriting
+assertions.
+
+Use controlled asynchronous completion when testing asynchronous behavior. Assert timing, call counts
+or ordering when they are part of the contract—for example, keeping at most one request pending.
