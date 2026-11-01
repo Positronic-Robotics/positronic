@@ -141,11 +141,14 @@ def client_stack(
     )
     codec = inference(settings, rtc=rtc is not None)
     if rtc is not None:
-        schedule = component(
-            'rtc_schedule',
-            fps=fps,
-            call_after_sec=rtc[obs_keys.RTC.CALL_AFTER_SEC],
-            latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.RTC.MAX_DELAY_SEC]},
+        schedule = sequence(
+            component('trajectory_player', plan_key=obs_keys.PLAN, record_stats=False),
+            component(
+                'rtc_schedule',
+                fps=fps,
+                call_after_sec=rtc[obs_keys.RTC.CALL_AFTER_SEC],
+                latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.RTC.MAX_DELAY_SEC]},
+            ),
         )
     parts = [schedule, codec, component('metadata', values={model_settings.ACTION_FPS: fps})]
     if compress_images:

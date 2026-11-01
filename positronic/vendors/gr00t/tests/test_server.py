@@ -55,6 +55,7 @@ def test_s3_selection_downloads_only_the_selected_checkpoint(monkeypatch, tmp_pa
 
 def test_standalone_checkpoint_metadata_contract():
     assert model_settings.MODEL_SETTINGS_PATH == MODEL_SETTINGS_PATH
+    assert keys.PLAN == policy_keys.PLAN
     for name in ('CHECKPOINT_ID', 'CHECKPOINT_PATH', 'EXPERIMENT_NAME', 'TYPE', 'JPEG_QUALITY', 'COMPRESS_IMAGES'):
         assert getattr(keys, name) == getattr(policy_keys, name)
 
@@ -350,7 +351,7 @@ def test_rtc_launch_warms_native_overlap_before_sessions_are_ready(native_policy
     assert any(call.kwargs.get('options') for call in native_policy.get_action.call_args_list)
     session = model.prepare_session(resolve_params(model.parameters, {}))
     assert session._previous_poses is None
-    schedule = spec.from_spec(json.loads(json.dumps(session.client_stack))).to_spec()[SEQ][0]
+    schedule = spec.from_spec(json.loads(json.dumps(session.client_stack))).to_spec()[SEQ][1]
     assert (
         schedule[ARGS][RTCSchedule.LATENCY_ESTIMATE_ARG]
         == DelayEstimate.max(last=5, max_sec=rtc_settings[keys.RTC.MAX_DELAY_SEC]).to_spec()
