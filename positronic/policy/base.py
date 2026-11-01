@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, Self
 
@@ -12,7 +12,6 @@ from eval_vocabulary.episode import PolicyEnd
 from typing_extensions import TypeAliasType, TypeVar
 
 from positronic import telemetry
-from positronic.utils import check_finite_positive
 
 
 class NotAnswered(RuntimeError):
@@ -52,39 +51,6 @@ class Answer(ABC, Generic[T]):
 
 Obs = Mapping[str, Any]
 Commands = Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class Waypoint:
-    """Commands held from ``due_ns`` until the next waypoint."""
-
-    commands: Commands
-    due_ns: int
-
-
-@dataclass
-class Trajectory:
-    """Commands spaced by ``1 / fps`` from ``start_ns``."""
-
-    commands: Sequence[Commands]
-    start_ns: int
-    fps: float
-
-    @property
-    def period_ns(self) -> float:
-        """Time between commands in nanoseconds."""
-        return (1 / self.fps) * 1e9
-
-    def due_ns(self, index: int) -> int:
-        """Scheduled time of the command at ``index``."""
-        return self.start_ns + round(index * self.period_ns)
-
-    def waypoints(self) -> list[Waypoint]:
-        """Commands paired with their scheduled times, without copying command values."""
-        return [Waypoint(command, self.due_ns(i)) for i, command in enumerate(self.commands)]
-
-    def __attrs_post_init__(self) -> None:
-        check_finite_positive(self.fps, 'fps')
 
 
 @dataclass

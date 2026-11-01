@@ -22,7 +22,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step, Trajectory, Waypoint
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -65,7 +65,9 @@ from positronic.policy.processors import (
     EndOnField,
     RTCSchedule,
     TemporalStack,
+    Trajectory,
     TrajectoryPlayer,
+    Waypoint,
 )
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Deprecation, Version

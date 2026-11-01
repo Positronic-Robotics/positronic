@@ -47,8 +47,6 @@ from positronic.policy.base import (
     ReturnT,
     Runtime,
     Step,
-    Trajectory,
-    Waypoint,
 )
 from positronic.policy.keys import ACTION_FPS, END
 from positronic.utils import check_finite_nonnegative, check_finite_positive
@@ -179,6 +177,39 @@ class DelayEstimate(DurationEstimate):
     def max(cls, last: int = 5, max_sec: float = 0.4) -> 'DelayEstimate':
         """The longest of the last `last` delays, capped at `max_sec`. The RTC paper does this."""
         return cls(cls.Statistic.MAX, last, max_sec)
+
+
+@dataclass(frozen=True)
+class Waypoint:
+    """Commands held from ``due_ns`` until the next waypoint."""
+
+    commands: Commands
+    due_ns: int
+
+
+@dataclass
+class Trajectory:
+    """Commands spaced by ``1 / fps`` from ``start_ns``."""
+
+    commands: Sequence[Commands]
+    start_ns: int
+    fps: float
+
+    @property
+    def period_ns(self) -> float:
+        """Time between commands in nanoseconds."""
+        return (1 / self.fps) * 1e9
+
+    def due_ns(self, index: int) -> int:
+        """Scheduled time of the command at ``index``."""
+        return self.start_ns + round(index * self.period_ns)
+
+    def waypoints(self) -> list[Waypoint]:
+        """Commands paired with their scheduled times, without copying command values."""
+        return [Waypoint(command, self.due_ns(i)) for i, command in enumerate(self.commands)]
+
+    def __attrs_post_init__(self) -> None:
+        check_finite_positive(self.fps, 'fps')
 
 
 class TrajectoryPlayer(Policy):
