@@ -52,7 +52,7 @@ from positronic.policy.base import (
 )
 from positronic.policy.keys import ACTION_FPS, END
 from positronic.utils import check_finite_nonnegative, check_finite_positive
-from positronic.utils.lazy import LazyDict, OverlayMapping, without_keys
+from positronic.utils.lazy import LazyDict, OverlayMapping
 
 
 class EndOnField(Policy):
@@ -316,7 +316,7 @@ class TrajectoryPlayer(Policy):
         if self._plan_key is None:
             return obs
         return OverlayMapping(
-            obs, LazyDict({}, {self._plan_key: partial(self._remaining_plan, tuple(plan), current, now_ns)})
+            obs, add=LazyDict({}, {self._plan_key: partial(self._remaining_plan, tuple(plan), current, now_ns)})
         )
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
@@ -334,7 +334,7 @@ class TrajectoryPlayer(Policy):
                 current_wp = None
                 inner_resume_at_ns = now_ns
                 planned, recovering = 0, True
-                obs = OverlayMapping(obs, {policy_keys.REPLAN_NOW: True})
+                obs = OverlayMapping(obs, add={policy_keys.REPLAN_NOW: True})
 
             outputs: Mapping[str, Any] = {}
             if now_ns >= inner_resume_at_ns or obs.get(policy_keys.REPLAN_NOW, False) or runtime.has_ready_answers():
@@ -453,7 +453,7 @@ class ChunkedSchedule(Policy):
                 if obs.get(policy_keys.REPLAN_NOW, False):
                     call_ns = end_ns = now_ns
                 if policy_keys.REPLAN_NOW in obs:
-                    obs = without_keys(obs, policy_keys.REPLAN_NOW)
+                    obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
                     answer = runtime.submit(infer, obs)
@@ -611,7 +611,7 @@ class RTCSchedule(Policy):
                     plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
                     context = self._rtc_context(plan, start_ns, end_ns, now_ns, expected_sec, measured_sec)
                     called_at_ns = now_ns
-                    answer = runtime.submit(infer, OverlayMapping(without_keys(obs, self._plan_key), context))
+                    answer = runtime.submit(infer, OverlayMapping(obs, add=context, remove=(self._plan_key,)))
 
                 if trajectory is not None and now_ns >= end_ns:
                     trajectory.commands = []

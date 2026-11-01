@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import partial
 from typing import TypeVar
 
@@ -107,51 +107,29 @@ class LazyDict(dict):
 
 
 class OverlayMapping(Mapping[K, T]):
-    """A read-only live view with overrides taking precedence over the source mapping."""
+    """A read-only live view; ``add`` values take precedence over ``remove`` keys and source values."""
 
-    def __init__(self, data: Mapping[K, T], overrides: Mapping[K, T]) -> None:
+    def __init__(self, data: Mapping[K, T], *, add: Mapping[K, T] | None = None, remove: Iterable[K] = ()) -> None:
         self._data = data
-        self._overrides = overrides
+        self._added = {} if add is None else add
+        self._excluded = frozenset(remove)
 
     def __getitem__(self, key: K) -> T:
-        return self._overrides[key] if key in self._overrides else self._data[key]
-
-    def __iter__(self) -> Iterator[K]:
-        yield from self._overrides
-        yield from (key for key in self._data if key not in self._overrides)
-
-    def __len__(self) -> int:
-        return sum(1 for _ in self)
-
-    def __contains__(self, key: object) -> bool:
-        return key in self._overrides or key in self._data
-
-
-class _WithoutKeys(Mapping[K, T]):
-    """A read-only view that hides selected keys and delegates values to its source."""
-
-    def __init__(self, data: Mapping[K, T], keys: tuple[K, ...]) -> None:
-        self._data = data
-        self._excluded = frozenset(keys)
-
-    def __getitem__(self, key: K) -> T:
+        if key in self._added:
+            return self._added[key]
         if key in self._excluded:
             raise KeyError(key)
         return self._data[key]
 
     def __iter__(self) -> Iterator[K]:
-        return (key for key in self._data if key not in self._excluded)
+        yield from self._added
+        yield from (key for key in self._data if key not in self._added and key not in self._excluded)
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
 
     def __contains__(self, key: object) -> bool:
-        return key not in self._excluded and key in self._data
-
-
-def without_keys(data: Mapping[K, T], *keys: K) -> Mapping[K, T]:
-    """Return a read-only live view excluding keys, without evaluating values or changing the source."""
-    return _WithoutKeys(data, keys) if keys else data
+        return key in self._added or (key not in self._excluded and key in self._data)
 
 
 class LazySequence(Sequence[U]):
