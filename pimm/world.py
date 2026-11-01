@@ -21,7 +21,6 @@ from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.context import BaseContext
 from multiprocessing.managers import SyncManager
-from multiprocessing.synchronize import Event as EventClass
 from multiprocessing.synchronize import Lock as LockClass
 from queue import Empty, Queue
 from types import FrameType
@@ -430,14 +429,31 @@ class LocalQueueReceiver(SignalReceiver[T]):
         return Message(self._last_value.data, self._last_value.time, False)
 
 
-class EventReceiver(SignalReceiver[bool]):
-    def __init__(self, event: EventClass, clock: Clock):
-        self._event = event
+class _StopFlag:
+    """A World's stop flag in shared memory, read and set with no lock.
+
+    A process killed while it holds a lock never releases it, so a lock here would block every other process of
+    the World.
+    """
+
+    def __init__(self, ctx: BaseContext):
+        self._value = ctx.RawValue(ctypes.c_bool, False)
+
+    def is_set(self) -> bool:
+        return self._value.value
+
+    def set(self) -> None:
+        self._value.value = True
+
+
+class StopFlagReceiver(SignalReceiver[bool]):
+    def __init__(self, stop_flag: _StopFlag, clock: Clock):
+        self._stop_flag = stop_flag
         self._clock = clock
         self._last_value: Message[bool] | None = None
 
     def read(self) -> Message[bool] | None:
-        value = self._event.is_set()
+        value = self._stop_flag.is_set()
         if self._last_value is None or value != self._last_value.data:
             self._last_value = Message(value)._received(self._clock)
             return self._last_value
@@ -470,14 +486,14 @@ def _parent_is_gone(parent_pid: int) -> bool:
     return os.getppid() != parent_pid
 
 
-def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> None:
+def _stop_when_orphaned(stop_flag: _StopFlag, name: str, parent_pid: int) -> None:
     """Stop this child's World once its parent is gone."""
 
     def watch() -> None:
-        while not stop_event.is_set():
+        while not stop_flag.is_set():
             if _parent_is_gone(parent_pid):
                 logger.warning(f'{name}: the parent process {parent_pid} is gone; stopping')
-                stop_event.set()
+                stop_flag.set()
                 return
             time.sleep(_ORPHAN_POLL_S)
 
@@ -486,7 +502,7 @@ def _stop_when_orphaned(stop_event: EventClass, name: str, parent_pid: int) -> N
 
 def _bg_wrapper(
     run_func: ControlLoop,
-    stop_event: EventClass,
+    stop_flag: _StopFlag,
     clock: Clock,
     name: str,
     parent_component_levels: Mapping[str, int],
@@ -505,11 +521,11 @@ def _bg_wrapper(
         if _parent_is_gone(parent_pid):
             logger.warning(f'{name}: the parent process {parent_pid} is gone; not starting')
             return
-        if stop_event.is_set():
+        if stop_flag.is_set():
             logger.info(f'{name}: the World stopped before this process started; not starting')
             return
-        _stop_when_orphaned(stop_event, name, parent_pid)
-        for command in run_func(EventReceiver(stop_event, clock), clock):
+        _stop_when_orphaned(stop_flag, name, parent_pid)
+        for command in run_func(StopFlagReceiver(stop_flag, clock), clock):
             match command:
                 case Sleep(seconds):
                     time.sleep(seconds)
@@ -528,10 +544,10 @@ def _bg_wrapper(
         print(f'{"=" * 60}\n', file=sys.stderr)
         logger.error(f'Error in control system {name}:\n{traceback.format_exc()}')
     finally:
-        # Whatever ended this loop — a return, a raise, an interrupt — ends the WORLD: the event is
+        # Whatever ended this loop — a return, a raise, an interrupt — ends the WORLD: the flag is
         # the one every other control system reads, in this process and in the parent.
         logger.info(f'Stopping background process by {name}')
-        stop_event.set()
+        stop_flag.set()
 
 
 class _WallOnlyClock(SystemClock):
@@ -572,7 +588,7 @@ class World:
         # follows wall time (real hardware). This single flag is the only sim-vs-real switch.
         self._clock: Clock = VirtualClock() if virtual_time else SystemClock()
 
-        self._stop_event = self._mp_ctx.Event()
+        self._stop_flag = _StopFlag(self._mp_ctx)
         self.background_processes = []
         self._shutdown_policies = {}
         self._protected_foreground_loops: list[Iterator[Command]] = []
@@ -720,7 +736,7 @@ class World:
             self._deliver_signal(self._stopped_by_signal, None)
 
     def request_stop(self):
-        self._stop_event.set()
+        self._stop_flag.set()
 
     @property
     def clock(self) -> Clock:
@@ -733,10 +749,10 @@ class World:
 
     @property
     def should_stop(self) -> bool:
-        return self._stop_event.is_set()
+        return self._stop_flag.is_set()
 
     def should_stop_reader(self) -> SignalReceiver[bool]:
-        return EventReceiver(self._stop_event, self._clock)
+        return StopFlagReceiver(self._stop_flag, self._clock)
 
     def _advance_to(self, target_ns: int) -> None:
         """Move simulated time forward to ``target_ns``. Wall time advances on its own,
@@ -1124,7 +1140,7 @@ class World:
                 target=_bg_wrapper,
                 args=(
                     bg_loop,
-                    self._stop_event,
+                    self._stop_flag,
                     self._background_clock,
                     name,
                     parent_component_levels,

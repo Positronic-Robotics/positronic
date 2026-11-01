@@ -2,6 +2,7 @@
 
 Usage
     python -m pimm.tests.sigterm_probe <directory>
+    python -m pimm.tests.sigterm_probe <directory> --poll-without-sleep   # the parent reads the stop flag nonstop
 
 The child writes ``child.pid`` when it starts and ``shut_down`` when its shutdown ends.
 """
@@ -16,6 +17,7 @@ from pimm.world import World
 
 CHILD_PID_FILE = 'child.pid'
 SHUT_DOWN_FILE = 'shut_down'
+POLL_WITHOUT_SLEEP = '--poll-without-sleep'
 
 
 class Marker(ControlSystem):
@@ -34,7 +36,9 @@ class Marker(ControlSystem):
 
 
 if __name__ == '__main__':
+    poll_without_sleep = POLL_WITHOUT_SLEEP in sys.argv[2:]
     with World() as world:
         world.start([], Marker(sys.argv[1]))
         while not world.should_stop:
-            time.sleep(0.05)
+            if not poll_without_sleep:
+                time.sleep(0.05)
