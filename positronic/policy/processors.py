@@ -559,16 +559,28 @@ class RTCSchedule(Policy):
         self._latency_estimate = latency_estimate
         self._plan_key = plan_key
 
-    def _prefix(self, plan: Sequence[Waypoint], start_ns: int | None, end_ns: int, now_ns: int) -> dict[str, Any]:
+    def _rtc_context(
+        self,
+        plan: Sequence[Waypoint],
+        start_ns: int | None,
+        end_ns: int,
+        now_ns: int,
+        expected_sec: float,
+        measured_sec: float | None,
+    ) -> dict[str, Any]:
         if start_ns is None:
             start_ns = end_ns = now_ns
         running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
         remaining = plan[running:] if now_ns < end_ns else ()
         due_ns = remaining[0].due_ns if remaining else end_ns
         return {
-            policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
-            policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
-            policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
+            policy_keys.RTC.ACTION_PREFIX: {
+                policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
+                policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
+                policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
+            },
+            policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
+            policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
         }
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
@@ -597,11 +609,7 @@ class RTCSchedule(Policy):
 
                 if answer is None and now_ns >= next_call_ns:
                     plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
-                    context = {
-                        policy_keys.RTC.ACTION_PREFIX: self._prefix(plan, start_ns, end_ns, now_ns),
-                        policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
-                        policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
-                    }
+                    context = self._rtc_context(plan, start_ns, end_ns, now_ns, expected_sec, measured_sec)
                     called_at_ns = now_ns
                     answer = runtime.submit(infer, OverlayMapping(without_keys(obs, self._plan_key), context))
 
