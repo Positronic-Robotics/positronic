@@ -145,6 +145,7 @@ def client_stack(
             component('trajectory_player', plan_key=obs_keys.PLAN, record_stats=False),
             component(
                 'rtc_schedule',
+                version=2,
                 fps=fps,
                 call_after_sec=rtc[obs_keys.RTC.CALL_AFTER_SEC],
                 latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.RTC.MAX_DELAY_SEC]},
