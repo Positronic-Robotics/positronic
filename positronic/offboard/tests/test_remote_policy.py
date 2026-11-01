@@ -889,6 +889,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
         keys.EXTERIOR_IMAGE: np.full((224, 224, 3), 64, dtype=np.uint8),
         keys.TASK: 'stack',
     }
+    encoded_fields = codec.encode(obs).keys()
     outputs = []
     inputs = []
     for placement in (
@@ -906,12 +907,14 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             completed = run.send(obs)
             assert isinstance(completed, Step)
             outputs.append(legacy_protocol.serialise(dict(first.commands) | dict(completed.commands)))
-            inputs.append(legacy_protocol.serialise(model.observations[0]))
+            inputs.append(legacy_protocol.serialise({name: model.observations[0][name] for name in encoded_fields}))
         finally:
             runtime.close()
             run.close()
     assert inputs[0] == inputs[1] == inputs[2]
     assert outputs[0] == outputs[1] == outputs[2]
+    assert model.observations[0][policy_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.0
+    assert model.observations[0][policy_keys.RTC.MEASURED_LATENCY_SEC] is None
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():

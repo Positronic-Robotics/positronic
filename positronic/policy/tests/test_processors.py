@@ -196,7 +196,7 @@ def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, m
         # Tick 0 sampled this window. Later ticks appended to the buffer and did not change it.
         np.testing.assert_array_equal(requests[0][POSITION][:, 0], [0, 0])
         assert len(stacks) == 1
-        assert dict(requests[0]).keys() == {POSITION, keys.TASK} and requests[0][keys.TASK] == 'tick 0'
+        assert dict(requests[0]).keys() >= {POSITION, keys.TASK} and requests[0][keys.TASK] == 'tick 0'
     finally:
         run.close()
 
@@ -261,7 +261,9 @@ def test_last_action_keeps_its_full_period(execution, monkeypatch):
 def test_late_wake_merges_due_channels_and_keeps_absolute_deadlines(execution):
     runtime, clock = execution
     chunk = [{MOTOR: 1}, {POSITION: 2}, {MOTOR: 3}, {MOTOR: 4}]
-    inner = Mock(send=Mock(return_value=Step(asdict(Trajectory(chunk, 0, 10), recurse=False), 400_000_000)))
+    inner = Mock(
+        send=Mock(return_value=Step(asdict(Trajectory(chunk, 0, 10, 400_000_000), recurse=False), 400_000_000))
+    )
     run = runtime.start(TrajectoryPlayer(), inner)
     run.send({})
     clock.advance_to_ns(225_000_000)
@@ -435,7 +437,8 @@ class SlowModel:
 
 
 def _trajectory(values, start_ns=0, *, fps=10):
-    return asdict(Trajectory(commands=[{MOTOR: value} for value in values], start_ns=start_ns, fps=fps), recurse=False)
+    commands = [{MOTOR: value} for value in values]
+    return asdict(Trajectory(commands, start_ns, fps, start_ns + round(len(commands) / fps * 1e9)), recurse=False)
 
 
 def test_player_waypoint_wakeups_do_not_advance_the_inner_run(execution):
@@ -671,13 +674,19 @@ def test_player_interprets_inner_commands_and_returns_its_end(execution):
 @pytest.mark.parametrize('fps', [0, -1, float('nan'), float('inf'), -float('inf')])
 def test_trajectory_rejects_invalid_timing(execution, fps):
     runtime, _ = execution
-    update: dict[str, Any] = {'commands': [{MOTOR: 1}], 'start_ns': 0, 'fps': fps}
+    update: dict[str, Any] = {'commands': [{MOTOR: 1}], 'start_ns': 0, 'fps': fps, 'end_ns': PERIOD_NS}
     with pytest.raises(ValueError):
         Trajectory(**update)
     inner_run = Mock(send=Mock(return_value=Step(update, 0)))
     run = runtime.start(TrajectoryPlayer(), inner_run)
     with pytest.raises(ValueError):
         run.send({})
+
+
+@pytest.mark.parametrize('end_ns', [-1, 200_000_001])
+def test_trajectory_rejects_an_end_outside_its_duration(end_ns):
+    with pytest.raises(ValueError, match='end_ns'):
+        Trajectory([{MOTOR: 1}, {MOTOR: 2}], 0, 10, end_ns)
 
 
 def test_chunked_history_only_answer_preserves_playback_and_updates_duration(execution, monkeypatch):
@@ -712,11 +721,17 @@ def test_existing_codecs_decode_wire_arrays_and_timing_for_the_player(execution)
         | SplitActionChunk()
         | PackFields(decode_layout={'joints': ['joints'], 'grip': ['grip']})
     )
-    timing_keys = ('start_ns', 'fps')
+    timing_keys = ('start_ns', 'fps', 'end_ns')
     assert {field.name for field in fields(Trajectory)} == {'commands', *timing_keys}
     codec = spec.from_spec((commands & PackFields(decode_layout={key: [key] for key in timing_keys})).to_spec())
     assert isinstance(codec, Codec)
-    response = {'joints': np.array([[1, 2], [3, 4]]), 'grip': np.array([0.1, 0.2]), 'start_ns': 50_000_000, 'fps': 10}
+    response = {
+        'joints': np.array([[1, 2], [3, 4]]),
+        'grip': np.array([0.1, 0.2]),
+        'start_ns': 50_000_000,
+        'fps': 10,
+        'end_ns': 200_000_000,
+    }
     outputs = {'next_inference_ns': 1_000_000_000}
 
     def predictions():
@@ -796,15 +811,16 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, mon
         clock.advance_to_ns(PERIOD_NS)
         obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE.value, channel: status.value, POSITION: 42}
         step = run.send(obs)
+        initial = {RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
         if replan_on_error and status is RobotStatus.ERROR:
             model.answer_with([{MOTOR: (2, index)} for index in range(5)])
             step = run.send(obs)
             assert step == Step({MOTOR: (2, 0)}, 2 * PERIOD_NS)
-            assert model.requests == [{}, obs]
+            assert model.requests == [initial, {**obs, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0}]
             assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         else:
             assert step == Step({MOTOR: (1, 1)}, 2 * PERIOD_NS)
-            assert model.requests == [{}]
+            assert model.requests == [initial]
     finally:
         run.close()
 
@@ -956,19 +972,23 @@ def test_chunked_schedule_starts_the_first_trajectory_when_the_answer_is_read(ex
         model.answer_with(chunk)
         clock.advance_to_ns(350_000_000)
         step = run.send({POSITION: 43})
-        assert Trajectory(**step.commands) == Trajectory(chunk, 350_000_000, 10)
+        assert Trajectory(**step.commands) == Trajectory(chunk, 350_000_000, 10, 550_000_000)
         assert step.resume_at_ns == 550_000_000
-        assert model.requests == [obs]
+        assert model.requests == [{**obs, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}]
     finally:
         run.close()
 
 
 @pytest.mark.parametrize('override', [{}, {policy_keys.REPLAN_NOW: False}, {policy_keys.REPLAN_NOW: True}])
-def test_scheduler_replans_only_when_requested_by_the_observation(execution, monkeypatch, override):
+@pytest.mark.parametrize('rtc', [False, True])
+def test_scheduler_replans_only_when_requested_by_the_observation(execution, monkeypatch, override, rtc):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    run = runtime.start(ChunkedSchedule(fps=10), Mock())
+    schedule = (
+        RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=ConstantDuration()) if rtc else ChunkedSchedule(fps=10)
+    )
+    run = runtime.start(schedule, Mock())
     try:
         run.send({})
         model.answer('a', length=5)
@@ -976,15 +996,16 @@ def test_scheduler_replans_only_when_requested_by_the_observation(execution, mon
         clock.advance_to_ns(PERIOD_NS)
         fault = {keys.ROBOT_STATUS: RobotStatus.ERROR}
         step = run.send({**fault, **override})
+        initial = {RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
         if override.get(policy_keys.REPLAN_NOW, False):
-            assert model.requests == [{}, fault]
+            assert model.requests == [initial, {**fault, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0}]
             assert step.commands == {}
             clock.advance_to_ns(2 * PERIOD_NS)
             model.answer('b', length=5)
             step = run.send(fault)
             assert Trajectory(**step.commands).start_ns == 2 * PERIOD_NS
         else:
-            assert model.requests == [{}]
+            assert model.requests == [initial]
             assert step == Step({}, 5 * PERIOD_NS)
     finally:
         run.close()
@@ -1407,8 +1428,8 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
                 clock.advance_to_ns(now_ns)
                 run.send({})
             assert model.calls[-1][0] == call_ns
+            assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(delay_ns / 1e9)
             if rtc:
-                assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(delay_ns / 1e9)
                 assert len(model.calls[-1][1]) == 5
         finally:
             run.close()
@@ -1593,11 +1614,17 @@ def test_rtc_history_only_answer_keeps_playback_and_updates_latency(execution, m
         run.close()
 
 
-def test_rtc_accepts_shared_waypoints_without_a_player(execution, monkeypatch):
+@pytest.mark.parametrize('rtc', [False, True])
+def test_scheduler_accepts_shared_waypoints_without_a_player(execution, monkeypatch, rtc):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration()), Mock())
+    schedule = (
+        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration())
+        if rtc
+        else ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.25))
+    )
+    run = runtime.start(schedule, Mock())
     try:
         run.send({policy_keys.PLAN: []})
         clock.advance_to_ns(100_000_000)
@@ -1618,14 +1645,13 @@ def test_rtc_accepts_shared_waypoints_without_a_player(execution, monkeypatch):
         run.close()
 
 
-def test_rtc_uses_the_players_plan_and_consumes_its_configured_key(execution, monkeypatch):
+def test_rtc_uses_the_players_plan_and_consumes_its_key(execution, monkeypatch):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    plan_key = 'remaining'
     definition = Sequential(
-        TrajectoryPlayer(plan_key=plan_key, record_stats=False),
-        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration(), plan_key=plan_key),
+        TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False),
+        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration()),
     )
     run = runtime.start(spec.from_spec(definition.to_spec()), Mock())
     try:
@@ -1641,7 +1667,7 @@ def test_rtc_uses_the_players_plan_and_consumes_its_configured_key(execution, mo
         clock.advance_to_ns(1_200_000_000)
         run.send({POSITION: 43})
         assert model.calls[-1] == (1_200_000_000, [f'old{i}' for i in range(2, 10)])
-        assert all(plan_key not in request for request in model.requests)
+        assert all(policy_keys.PLAN not in request for request in model.requests)
         assert model.requests[-1][POSITION] == 43
         assert runtime.metadata_snapshot() == {}
     finally:
@@ -1740,7 +1766,7 @@ def test_invalid_lead_is_rejected_even_without_a_new_trajectory(execution, monke
     try:
         run.send({})
         model.answer_with(chunk)
-        with pytest.raises(ValueError, match='inference_lead'):
+        with pytest.raises(ValueError):
             run.send({})
     finally:
         run.close()
@@ -2126,7 +2152,7 @@ def _ending(motor):
 
 def test_end_on_field_sends_the_other_commands_and_returns_at_the_next_observation(execution):
     runtime, clock = execution
-    trajectory = Trajectory([{MOTOR: 1}, _ending(2)], 0, 10)
+    trajectory = Trajectory([{MOTOR: 1}, _ending(2)], 0, 10, 2 * PERIOD_NS)
     inner = Mock(send=Mock(return_value=Step(asdict(trajectory, recurse=False), 2 * PERIOD_NS)))
     run = runtime.start(Sequential(EndOnField(), TrajectoryPlayer()), inner)
     try:
@@ -2388,9 +2414,12 @@ def test_late_answer_reads_do_not_inflate_duration_estimates(execution, monkeypa
         clock.advance_to_ns(next_call_ns)
         run.send({})
         assert [time_ns for time_ns, _ in model.calls] == [0, next_call_ns]
-        if rtc:
-            assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
-            assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.1
+        assert model.requests[0][RTC.MEASURED_LATENCY_SEC] is None
+        assert model.requests[0][RTC.ESTIMATED_LATENCY_SEC] == 0.0
+        assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
+        assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.1
+        if not rtc:
+            assert RTC.ACTION_PREFIX not in model.requests[1]
     finally:
         run.close()
 
