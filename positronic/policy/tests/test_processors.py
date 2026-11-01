@@ -218,16 +218,6 @@ def execution(monkeypatch):
             runtime.close()
 
 
-def test_ready_answer_emits_without_an_initial_yield(execution, monkeypatch):
-    runtime, _ = execution
-    future = Future()
-    future.set_result([{MOTOR: 1}])
-    monkeypatch.setattr(runtime, 'submit', lambda *args: _FutureAnswer(future, runtime))
-    run = runtime.start(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)), lambda obs: [])
-    assert run.send({}) == Step({MOTOR: 1}, 100_000_000)
-    run.close()
-
-
 def test_pending_inference_is_not_resubmitted_on_each_tick(execution, monkeypatch):
     runtime, clock = execution
     future = Future()
@@ -246,27 +236,33 @@ def test_pending_inference_is_not_resubmitted_on_each_tick(execution, monkeypatc
         run.close()
 
 
-def test_last_action_keeps_its_full_period(execution):
+def test_last_action_keeps_its_full_period(execution, monkeypatch):
     runtime, clock = execution
-    requests = []
-
-    def infer(obs):
-        requests.append(runtime.time_ns)
-        return [{MOTOR: i} for i in (1, 2, 3)]
-
-    run = runtime.start(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)), infer)
-    for index in range(4):
-        clock.advance_to_ns(index * 100_000_000)
-        step = run.send({})
-        assert step == Step({MOTOR: index % 3 + 1}, (index + 1) * 100_000_000)
-    assert requests == [0, 300_000_000]
-    run.close()
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=10)), Mock())
+    try:
+        run.send({})
+        model.answer_with([{MOTOR: i} for i in (1, 2, 3)])
+        for index in range(3):
+            clock.advance_to_ns(index * PERIOD_NS)
+            assert run.send({}) == Step({MOTOR: index + 1}, (index + 1) * PERIOD_NS)
+        assert len(model.calls) == 1
+        clock.advance_to_ns(3 * PERIOD_NS)
+        assert run.send({}).commands == {}
+        assert [time for time, _ in model.calls] == [0, 3 * PERIOD_NS]
+        clock.advance_to_ns(350_000_000)
+        model.answer_with([{MOTOR: 4}])
+        assert run.send({}) == Step({MOTOR: 4}, 450_000_000)
+    finally:
+        run.close()
 
 
 def test_late_wake_merges_due_channels_and_keeps_absolute_deadlines(execution):
     runtime, clock = execution
     chunk = [{MOTOR: 1}, {POSITION: 2}, {MOTOR: 3}, {MOTOR: 4}]
-    run = runtime.start(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)), lambda obs: chunk)
+    inner = Mock(send=Mock(return_value=Step(asdict(Trajectory(chunk, 0, 10), recurse=False), 400_000_000)))
+    run = runtime.start(TrajectoryPlayer(), inner)
     run.send({})
     clock.advance_to_ns(225_000_000)
     assert run.send({}) == Step({POSITION: 2, MOTOR: 3}, 300_000_000)
@@ -276,10 +272,8 @@ def test_late_wake_merges_due_channels_and_keeps_absolute_deadlines(execution):
 
 def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(execution):
     runtime, clock = execution
-    run = runtime.start(
-        Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)),
-        lambda obs: [{MOTOR: i} for i in range(5)],
-    )
+    inner = Mock(send=Mock(return_value=Step(_trajectory(range(5)), 500_000_000)))
+    run = runtime.start(TrajectoryPlayer(), inner)
     emitted = []
     for now in (0, 100_000_000, 350_000_000, 400_000_000):
         clock.advance_to_ns(now)
@@ -300,10 +294,8 @@ def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(exec
 
 def test_a_schedule_without_stats_writes_no_metadata(execution):
     runtime, clock = execution
-    run = runtime.start(
-        Sequential(TrajectoryPlayer(replan_on_error=True, record_stats=False), ChunkedSchedule(fps=10)),
-        lambda obs: [{MOTOR: i} for i in range(5)],
-    )
+    inner = Mock(send=Mock(return_value=Step(_trajectory(range(5)), 500_000_000)))
+    run = runtime.start(TrajectoryPlayer(record_stats=False), inner)
     for now in (0, 100_000_000, 350_000_000):
         clock.advance_to_ns(now)
         run.send({})
@@ -313,15 +305,22 @@ def test_a_schedule_without_stats_writes_no_metadata(execution):
 
 def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
     runtime, clock = execution
-    run = runtime.start(
-        Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)),
-        lambda obs: [{MOTOR: i} for i in range(5)],
+    inner = Mock(
+        send=Mock(
+            side_effect=[
+                Step(_trajectory(range(5)), 600_000_000),
+                Step(_trajectory(range(5), 600_000_000), 1_100_000_000),
+            ]
+        )
     )
+    run = runtime.start(TrajectoryPlayer(), inner)
     emitted = []
-    for now in (0, 600_000_000):
-        clock.advance_to_ns(now)
-        emitted.append(run.send({}).commands[MOTOR])
-    run.close()
+    try:
+        for now in (0, 600_000_000):
+            clock.advance_to_ns(now)
+            emitted.append(run.send({}).commands[MOTOR])
+    finally:
+        run.close()
     assert emitted == [0, 0]
     prefix = eval_keys.SCHEDULE
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.SCHEDULED}'] == 10
@@ -331,10 +330,15 @@ def test_a_new_chunk_counts_the_due_waypoints_it_replaces_as_dropped(execution):
 
 def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
     runtime, clock = execution
-    run = runtime.start(
-        Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)),
-        lambda obs: [{MOTOR: i} for i in range(3)],
+    inner = Mock(
+        send=Mock(
+            side_effect=[
+                Step(_trajectory(range(3)), 300_000_000),
+                Step(_trajectory(range(3), 300_000_000), 600_000_000),
+            ]
+        )
     )
+    run = runtime.start(TrajectoryPlayer(), inner)
     emitted = []
     try:
         for now in (0, 100_000_000, 300_000_000, 305_000_000):
@@ -350,10 +354,9 @@ def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
 
 @pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
 def test_late_percentiles_match_numpy(execution, late_ms):
-    # The first waypoint is due when the answer is read, so it is never late.
     runtime, clock = execution
-    chunk = [{MOTOR: i} for i in range(len(late_ms))]
-    run = runtime.start(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=1)), lambda obs: chunk)
+    inner = Mock(send=Mock(return_value=Step(_trajectory(range(len(late_ms)), fps=1), len(late_ms) * 1_000_000_000)))
+    run = runtime.start(TrajectoryPlayer(), inner)
     for index, late in enumerate(late_ms):
         clock.advance_to_ns(index * 1_000_000_000 + late * 1_000_000)
         run.send({})
@@ -365,18 +368,24 @@ def test_late_percentiles_match_numpy(execution, late_ms):
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.LATE_MAX_MS}'] == max(late_ms)
 
 
-def test_horizon_cuts_commands_but_preserves_boundary(execution):
+def test_horizon_cuts_commands_but_preserves_boundary(execution, monkeypatch):
     runtime, clock = execution
-    run = runtime.start(
-        Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, horizon_sec=0.15)),
-        lambda obs: [{MOTOR: i} for i in range(5)],
-    )
-    assert run.send({}) == Step({MOTOR: 0}, 100_000_000)
-    clock.advance_to_ns(100_000_000)
-    assert run.send({}) == Step({MOTOR: 1}, 150_000_000)
-    clock.advance_to_ns(150_000_000)
-    assert run.send({}) == Step({MOTOR: 0}, 250_000_000)
-    run.close()
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=10, horizon_sec=0.15)), Mock())
+    try:
+        run.send({})
+        model.answer_with([{MOTOR: i} for i in range(5)])
+        assert run.send({}) == Step({MOTOR: 0}, 100_000_000)
+        clock.advance_to_ns(100_000_000)
+        assert run.send({}) == Step({MOTOR: 1}, 150_000_000)
+        clock.advance_to_ns(150_000_000)
+        assert run.send({}).commands == {}
+        assert [time for time, _ in model.calls] == [0, 150_000_000]
+        model.answer_with([{MOTOR: i} for i in range(5)])
+        assert run.send({}) == Step({MOTOR: 0}, 250_000_000)
+    finally:
+        run.close()
 
 
 def test_empty_chunks_request_an_immediate_retry(execution):
@@ -780,28 +789,29 @@ class ObservingModel(SlowModel):
 @pytest.mark.parametrize('status', list(RobotStatus))
 @pytest.mark.parametrize('arm', [None, *keys.BIMANUAL_ARMS])
 @pytest.mark.parametrize('replan_on_error', [False, True])
-def test_errors_bring_inference_and_playback_forward_when_enabled(execution, status, arm, replan_on_error):
+def test_errors_bring_inference_and_playback_forward_when_enabled(execution, monkeypatch, status, arm, replan_on_error):
     runtime, clock = execution
-    requests = []
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     channel = f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.STATUS_SUFFIX}'
 
-    def infer(obs):
-        requests.append(dict(obs))
-        return [{MOTOR: (len(requests), index)} for index in range(5)]
-
-    run = runtime.start(Sequential(TrajectoryPlayer(replan_on_error=replan_on_error), ChunkedSchedule(fps=10)), infer)
+    run = runtime.start(Sequential(TrajectoryPlayer(replan_on_error=replan_on_error), ChunkedSchedule(fps=10)), Mock())
     try:
+        run.send({})
+        model.answer_with([{MOTOR: (1, index)} for index in range(5)])
         assert run.send({}).commands == {MOTOR: (1, 0)}
         clock.advance_to_ns(PERIOD_NS)
         obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE.value, channel: status.value, POSITION: 42}
         step = run.send(obs)
         if replan_on_error and status is RobotStatus.ERROR:
+            model.answer_with([{MOTOR: (2, index)} for index in range(5)])
+            step = run.send(obs)
             assert step == Step({MOTOR: (2, 0)}, 2 * PERIOD_NS)
-            assert requests == [{}, obs]
+            assert model.requests == [{}, obs]
             assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         else:
             assert step == Step({MOTOR: (1, 1)}, 2 * PERIOD_NS)
-            assert requests == [{}]
+            assert model.requests == [{}]
     finally:
         run.close()
 
@@ -873,23 +883,31 @@ def test_errors_keep_an_existing_request_and_execute_its_answer_immediately(exec
         run.close()
 
 
-def test_errors_replace_a_prefetched_chunk_before_its_playback_starts(execution):
+def test_errors_replace_a_prefetched_chunk_before_its_playback_starts(execution, monkeypatch):
     runtime, clock = execution
-    infer = Mock(side_effect=[[{MOTOR: name} for _ in range(5)] for name in ('a', 'prefetched', 'fresh')])
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     run = runtime.start(
         Sequential(
             TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.3))
         ),
-        infer,
+        Mock(),
     )
     try:
         run.send({})
+        model.answer('a', length=5)
+        run.send({})
         clock.advance_to_ns(2 * PERIOD_NS)
-        assert run.send({}).commands == {MOTOR: 'a'}
-        assert infer.call_count == 2
+        assert run.send({}).commands == {MOTOR: 'a2'}
+        model.answer('prefetched', length=5)
+        run.send({})
         clock.advance_to_ns(250_000_000)
-        assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: 'fresh'}
-        assert infer.call_count == 3
+        fault = {keys.ROBOT_STATUS: RobotStatus.ERROR}
+        assert run.send(fault).commands == {}
+        assert len(model.calls) == 3
+        clock.advance_to_ns(3 * PERIOD_NS)
+        model.answer('fresh', length=5)
+        assert run.send(fault).commands == {MOTOR: 'fresh0'}
     finally:
         run.close()
 
@@ -903,31 +921,6 @@ def test_a_failed_request_before_the_error_still_raises(execution, monkeypatch):
     future.set_exception(RuntimeError('inference failed'))
     with pytest.raises(RuntimeError, match='inference failed'):
         run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
-
-
-@pytest.mark.parametrize('rtc', [False, True])
-@pytest.mark.parametrize('chunk', [None, [], [{MOTOR: 1}]])
-def test_schedulers_preserve_when_immediate_answers_are_consumed(execution, rtc, chunk):
-    runtime, _ = execution
-    estimate = Mock(spec=DurationEstimate)
-    estimate.run.return_value.update.return_value = 0.0
-    schedule = (
-        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=estimate)
-        if rtc
-        else ChunkedSchedule(fps=10, inference_lead=estimate)
-    )
-    infer = Mock(return_value=chunk)
-    run = runtime.start(schedule, infer)
-    try:
-        step = run.send({policy_keys.PLAN: []})
-        assert infer.call_count == 1
-        assert estimate.run.return_value.update.call_count == (0 if rtc else 1)
-        if rtc or chunk is None:
-            assert step.commands == {}
-        else:
-            assert Trajectory(**step.commands) == Trajectory(chunk, 0, 10)
-    finally:
-        run.close()
 
 
 @pytest.mark.parametrize('rtc', [False, True])
@@ -956,38 +949,49 @@ def test_schedulers_keep_one_pending_call_and_close_it(execution, monkeypatch, r
     assert future.cancelled() is not fail
 
 
-def test_chunked_schedule_returns_a_trajectory_and_passes_the_original_observation(execution):
+def test_chunked_schedule_starts_the_first_trajectory_when_the_answer_is_read(execution, monkeypatch):
     runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     clock.advance_to_ns(250_000_000)
-    obs = {POSITION: object()}
+    obs = {POSITION: 42}
     chunk = [{MOTOR: 1}, {MOTOR: 2}]
-    infer = Mock(return_value=chunk)
-    run = runtime.start(ChunkedSchedule(fps=10), infer)
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
     try:
-        step = run.send(obs)
-        assert Trajectory(**step.commands) == Trajectory(chunk, 250_000_000, 10)
-        assert step.resume_at_ns == 450_000_000
-        assert infer.call_args.args[0] is obs
+        run.send(obs)
+        clock.advance_to_ns(300_000_000)
+        model.answer_with(chunk)
+        clock.advance_to_ns(350_000_000)
+        step = run.send({POSITION: 43})
+        assert Trajectory(**step.commands) == Trajectory(chunk, 350_000_000, 10)
+        assert step.resume_at_ns == 550_000_000
+        assert model.requests == [obs]
     finally:
         run.close()
 
 
 @pytest.mark.parametrize('override', [{}, {policy_keys.REPLAN_NOW: False}, {policy_keys.REPLAN_NOW: True}])
-def test_scheduler_replans_only_when_requested_by_the_observation(execution, override):
+def test_scheduler_replans_only_when_requested_by_the_observation(execution, monkeypatch, override):
     runtime, clock = execution
-    infer = Mock(return_value=[{MOTOR: 1}] * 5)
-    run = runtime.start(ChunkedSchedule(fps=10), infer)
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(ChunkedSchedule(fps=10), Mock())
     try:
+        run.send({})
+        model.answer('a', length=5)
         run.send({})
         clock.advance_to_ns(PERIOD_NS)
         fault = {keys.ROBOT_STATUS: RobotStatus.ERROR}
         step = run.send({**fault, **override})
         if override.get(policy_keys.REPLAN_NOW, False):
-            assert infer.call_count == 2
-            assert Trajectory(**step.commands).start_ns == PERIOD_NS
-            assert dict(infer.call_args.args[0]) == fault
+            assert model.requests == [{}, fault]
+            assert step.commands == {}
+            clock.advance_to_ns(2 * PERIOD_NS)
+            model.answer('b', length=5)
+            step = run.send(fault)
+            assert Trajectory(**step.commands).start_ns == 2 * PERIOD_NS
         else:
-            assert infer.call_count == 1
+            assert model.requests == [{}]
             assert step == Step({}, 5 * PERIOD_NS)
     finally:
         run.close()
@@ -1014,36 +1018,45 @@ def test_player_requests_replanning_only_at_the_start_of_recovery(execution):
 
 
 @pytest.mark.parametrize('replan_on_error', [False, True])
-def test_serialized_error_replanning_preserves_the_behavior(execution, replan_on_error):
+def test_serialized_error_replanning_preserves_the_behavior(execution, monkeypatch, replan_on_error):
     runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     definition = Sequential(TrajectoryPlayer(replan_on_error=replan_on_error), ChunkedSchedule(fps=10))
     encoded = json.loads(json.dumps(definition.to_spec()))
     assert encoded[SEQ][1][VERSION] == 4
     rebuilt = spec.from_spec(encoded)
     assert rebuilt.to_spec() == encoded
-    infer = Mock(return_value=[{MOTOR: 1}] * 5)
-    run = runtime.start(rebuilt, infer)
+    run = runtime.start(rebuilt, Mock())
     try:
+        run.send({})
+        model.answer('a', length=5)
         run.send({})
         clock.advance_to_ns(PERIOD_NS)
         run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
-        assert infer.call_count == (2 if replan_on_error else 1)
+        assert len(model.calls) == (2 if replan_on_error else 1)
     finally:
         run.close()
 
 
-def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
+def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution, monkeypatch):
     runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
     schedule = spec.from_spec(declared)
     assert schedule.to_spec() == Sequential(TrajectoryPlayer(replan_on_error=False), ChunkedSchedule(fps=10)).to_spec()
-    infer = Mock(return_value=[{MOTOR: index} for index in range(5)])
-    run = runtime.start(schedule, infer)
+    run = runtime.start(schedule, Mock())
     try:
+        run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
+        model.answer_with([{MOTOR: index} for index in range(5)])
         for tick in range(6):
             clock.advance_to_ns(tick * PERIOD_NS)
+            if tick == 5:
+                run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
+                model.answer_with([{MOTOR: index} for index in range(5)])
             assert run.send({keys.ROBOT_STATUS: RobotStatus.ERROR}).commands == {MOTOR: tick % 5}
-        assert infer.call_count == 2
+        assert len(model.calls) == 2
     finally:
         run.close()
 
@@ -1052,8 +1065,10 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution):
     'options',
     [{}, {'record_stats': False}, {'replan_on_error': False}, {'record_stats': False, 'replan_on_error': False}],
 )
-def test_v3_specs_preserve_playback_and_recovery_options(execution, options):
+def test_v3_specs_preserve_playback_and_recovery_options(execution, monkeypatch, options):
     runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     declared = component(ChunkedSchedule.WIRE_NAME, version=3, fps=10, horizon_sec=0.15, inference_lead=0.05, **options)
     schedule = spec.from_spec(declared)
     expected = Sequential(
@@ -1063,15 +1078,19 @@ def test_v3_specs_preserve_playback_and_recovery_options(execution, options):
         ChunkedSchedule(fps=10, horizon_sec=0.15, inference_lead=ConstantDuration(0.05)),
     )
     assert schedule.to_spec() == expected.to_spec()
-    infer = Mock(return_value=[{MOTOR: index} for index in range(5)])
-    run = runtime.start(schedule, infer)
+    run = runtime.start(schedule, Mock())
     try:
+        run.send({})
+        model.answer_with([{MOTOR: index} for index in range(5)])
         assert run.send({}) == Step({MOTOR: 0}, PERIOD_NS)
         clock.advance_to_ns(PERIOD_NS // 2)
         step = run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
         replans = options.get('replan_on_error', True)
+        if replans:
+            model.answer_with([{MOTOR: index} for index in range(5)])
+            step = run.send({keys.ROBOT_STATUS: RobotStatus.ERROR})
         assert step.commands == ({MOTOR: 0} if replans else {})
-        assert infer.call_count == (2 if replans else 1)
+        assert len(model.calls) == (2 if replans else 1)
         assert (f'{eval_keys.SCHEDULE}.{eval_keys.SCHEDULED}' in runtime.metadata_snapshot()) == options.get(
             'record_stats', True
         )
@@ -1199,29 +1218,31 @@ def test_an_early_answer_keeps_a_late_final_waypoint_and_observes_the_previous_o
 
 
 @pytest.mark.parametrize('first_new_ms, new_index', [(500, 0), (650, 1)])
-def test_prefetched_chunk_resets_gap_when_execution_crosses_its_boundary(execution, first_new_ms, new_index):
+def test_prefetched_chunk_resets_gap_when_execution_crosses_its_boundary(
+    execution, monkeypatch, first_new_ms, new_index
+):
     runtime, clock = execution
-    calls = []
-
-    def infer(obs):
-        calls.append(runtime.time_ns)
-        return [{MOTOR: (len(calls), i)} for i in range(5)]
-
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     run = runtime.start(
         Sequential(
             TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.2))
         ),
-        infer,
+        Mock(),
     )
     try:
+        run.send({})
+        model.answer_with([{MOTOR: (1, i)} for i in range(5)])
         for index in range(5):
             clock.advance_to_ns(index * PERIOD_NS)
             assert run.send({}).commands == {MOTOR: (1, index)}
+            if index == 3:
+                model.answer_with([{MOTOR: (2, i)} for i in range(5)])
         clock.advance_to_ns(first_new_ms * 1_000_000)
         assert run.send({}).commands == {MOTOR: (2, new_index)}
     finally:
         run.close()
-    assert calls == [0, 300_000_000]
+    assert [time for time, _ in model.calls] == [0, 300_000_000]
     metadata = runtime.metadata_snapshot()
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 100.0
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.SCHEDULED}'] == 10
@@ -1292,29 +1313,30 @@ def test_an_early_answer_keeps_every_remaining_action_and_wakes_between_waypoint
 
 
 @pytest.mark.parametrize('lead_sec', [0.3, 10.0, 1e308])
-def test_a_lead_cannot_queue_more_than_the_next_chunk(execution, lead_sec):
+def test_a_lead_cannot_queue_more_than_the_next_chunk(execution, monkeypatch, lead_sec):
     runtime, clock = execution
-    calls = []
-
-    def infer(obs):
-        calls.append(runtime.time_ns)
-        return [{MOTOR: (len(calls), i)} for i in range(3)]
-
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     run = runtime.start(
         Sequential(
             TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, inference_lead=ConstantDuration(lead_sec))
         ),
-        infer,
+        Mock(),
     )
     try:
+        run.send({})
+        model.answer_with([{MOTOR: (1, i)} for i in range(3)])
         assert run.send({}) == Step({MOTOR: (1, 0)}, 0)
+        model.answer_with([{MOTOR: (2, i)} for i in range(3)])
         assert run.send({}) == Step({}, PERIOD_NS)
         assert run.send({}) == Step({}, PERIOD_NS)
-        assert calls == [0, 0]
+        assert [time for time, _ in model.calls] == [0, 0]
         for index in range(1, 9):
             clock.advance_to_ns(index * PERIOD_NS)
             assert run.send({}).commands == {MOTOR: (index // 3 + 1, index % 3)}
-        assert calls == [0, 0, 3 * PERIOD_NS, 6 * PERIOD_NS]
+            if index in (3, 6):
+                model.answer_with([{MOTOR: (len(model.calls), i)} for i in range(3)])
+        assert [time for time, _ in model.calls] == [0, 0, 3 * PERIOD_NS, 6 * PERIOD_NS]
     finally:
         run.close()
 
@@ -1454,28 +1476,28 @@ def test_an_early_empty_answer_retries_while_the_old_chunk_keeps_running(executi
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 0
 
 
-def test_lead_and_handoff_use_the_horizon_truncated_end(execution):
+def test_lead_and_handoff_use_the_horizon_truncated_end(execution, monkeypatch):
     runtime, clock = execution
-    calls = []
-
-    def infer(obs):
-        calls.append(runtime.time_ns)
-        return [{MOTOR: i} for i in range(5)]
-
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     schedule = Sequential(
         TrajectoryPlayer(replan_on_error=True),
         ChunkedSchedule(fps=10, horizon_sec=0.15, inference_lead=ConstantDuration(0.1)),
     )
-    run = runtime.start(schedule, infer)
+    run = runtime.start(schedule, Mock())
     try:
+        run.send({})
+        model.answer_with([{MOTOR: i} for i in range(5)])
         assert run.send({}) == Step({MOTOR: 0}, 50_000_000)
         clock.advance_to_ns(50_000_000)
+        run.send({})
+        model.answer_with([{MOTOR: i} for i in range(5)])
         assert run.send({}) == Step({}, 100_000_000)
         clock.advance_to_ns(100_000_000)
         assert run.send({}) == Step({MOTOR: 1}, 150_000_000)
         clock.advance_to_ns(150_000_000)
         assert run.send({}) == Step({MOTOR: 0}, 200_000_000)
-        assert calls == [0, 50_000_000]
+        assert [time for time, _ in model.calls] == [0, 50_000_000]
     finally:
         run.close()
 
@@ -1715,12 +1737,16 @@ def test_constant_durations_refuse_invalid_seconds(seconds):
 
 @pytest.mark.parametrize('seconds', [-0.1, float('nan'), float('inf')])
 @pytest.mark.parametrize('chunk', [None, []])
-def test_invalid_lead_is_rejected_even_without_a_new_trajectory(execution, seconds, chunk):
+def test_invalid_lead_is_rejected_even_without_a_new_trajectory(execution, monkeypatch, seconds, chunk):
     runtime, _ = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
     estimate = Mock(spec=DurationEstimate)
     estimate.run.return_value.update.return_value = seconds
     run = runtime.start(ChunkedSchedule(fps=10, inference_lead=estimate), lambda obs: chunk)
     try:
+        run.send({})
+        model.answer_with(chunk)
         with pytest.raises(ValueError, match='inference_lead'):
             run.send({})
     finally:
@@ -2107,10 +2133,9 @@ def _ending(motor):
 
 def test_end_on_field_sends_the_other_commands_and_returns_at_the_next_observation(execution):
     runtime, clock = execution
-    run = runtime.start(
-        Sequential(EndOnField(), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)),
-        lambda obs: [{MOTOR: 1}, _ending(2)],
-    )
+    trajectory = Trajectory([{MOTOR: 1}, _ending(2)], 0, 10)
+    inner = Mock(send=Mock(return_value=Step(asdict(trajectory, recurse=False), 2 * PERIOD_NS)))
+    run = runtime.start(Sequential(EndOnField(), TrajectoryPlayer()), inner)
     try:
         assert run.send({}).commands == {MOTOR: 1}
         clock.advance_to_ns(PERIOD_NS)
@@ -2143,8 +2168,9 @@ def test_end_on_field_preserves_auxiliary_outputs_on_the_final_step(execution):
         inner_run.close()
 
 
-def test_a_schedule_passes_end_up_as_a_command(execution):
+def test_a_schedule_passes_end_up_as_a_command(execution, monkeypatch):
     runtime, clock = execution
+    _answer_after(runtime, monkeypatch, PERIOD_NS)
     run = runtime.start(
         Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)),
         lambda obs: [{MOTOR: 1}, {MOTOR: 2, END: 'complete'}],
@@ -2152,15 +2178,18 @@ def test_a_schedule_passes_end_up_as_a_command(execution):
     try:
         run.send({})
         clock.advance_to_ns(PERIOD_NS)
-        assert run.send({}).commands == {MOTOR: 2, END: 'complete'}
+        run.send({})
         clock.advance_to_ns(2 * PERIOD_NS)
+        assert run.send({}).commands == {MOTOR: 2, END: 'complete'}
+        clock.advance_to_ns(3 * PERIOD_NS)
         run.send({})
     finally:
         run.close()
 
 
-def test_a_declared_end_on_field_ends_a_declared_stack(execution):
+def test_a_declared_end_on_field_ends_a_declared_stack(execution, monkeypatch):
     runtime, clock = execution
+    _answer_after(runtime, monkeypatch, PERIOD_NS)
     pose = np.array([0.1, -0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 0.5])
     declared = sequence(
         component(EndOnField.WIRE_NAME),
@@ -2174,8 +2203,10 @@ def test_a_declared_end_on_field_ends_a_declared_stack(execution):
     model = lambda obs: [{ACTION: pose}, {ACTION: pose, END: 'give_up'}]  # noqa: E731
     run = runtime.start(cast(Policy, spec.from_spec(declared)), model)
     try:
-        assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
+        run.send({})
         clock.advance_to_ns(PERIOD_NS)
+        assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
+        clock.advance_to_ns(2 * PERIOD_NS)
         assert run.send({}).commands.keys() == {keys.ROBOT_COMMAND, keys.TARGET_GRIP}
         with pytest.raises(StopIteration) as end:
             run.send({})
@@ -2187,10 +2218,8 @@ def test_a_declared_end_on_field_ends_a_declared_stack(execution):
 
 def test_end_on_field_refuses_a_malformed_end_when_its_element_plays(execution):
     runtime, _ = execution
-    run = runtime.start(
-        Sequential(EndOnField(), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)),
-        lambda obs: [{MOTOR: 1, END: 'done'}],
-    )
+    inner = Mock(send=Mock(return_value=Step({MOTOR: 1, END: 'done'}, 0)))
+    run = runtime.start(EndOnField(), inner)
     try:
         with pytest.raises(ValueError):
             run.send({})
@@ -2198,20 +2227,22 @@ def test_end_on_field_refuses_a_malformed_end_when_its_element_plays(execution):
         run.close()
 
 
-# A ready answer ends on its first element; a pending one lets the round play one element past the end.
-@pytest.mark.parametrize(('latency_ns', 'sent'), [(0, [1, (1, 0)]), (PERIOD_NS, [1, 5])])
+@pytest.mark.parametrize(('latency_ns', 'sent'), [(PERIOD_NS, [None, 1, 3, (1, 0)]), (4 * PERIOD_NS, [None, 1, 3, 5])])
 def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeypatch, latency_ns, sent):
     runtime, _ = execution
     model = _EndingModel(runtime, [{MOTOR: 1}, {MOTOR: 2}, {MOTOR: 3}, _ending(4), {MOTOR: 5}])
-    _answer_after(runtime, monkeypatch, 0, latency_ns)
-    times_ns = [0, 5 * PERIOD_NS, 6 * PERIOD_NS]
+    _answer_after(runtime, monkeypatch, PERIOD_NS, latency_ns)
+    times_ns = [0, PERIOD_NS, 3 * PERIOD_NS, 6 * PERIOD_NS, 7 * PERIOD_NS]
     assert _play(
         execution,
-        Sequential(TrajectoryPlayer(replan_on_error=True, record_stats=False), ChunkedSchedule(fps=10)),
+        Sequential(
+            TrajectoryPlayer(replan_on_error=True, record_stats=False),
+            ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.3)),
+        ),
         model,
         times_ns,
     ) == (sent, PolicyEnd.COMPLETE)
-    assert model.calls == [0, 5 * PERIOD_NS]
+    assert model.calls == [0, 3 * PERIOD_NS]
 
 
 # Each schedule asks for the next chunk before the end plays: one more call, and no more motion.
@@ -2223,7 +2254,7 @@ def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeyp
                 TrajectoryPlayer(replan_on_error=True, record_stats=False),
                 ChunkedSchedule(fps=10, inference_lead=ConstantDuration(0.1)),
             ),
-            [0, PERIOD_NS],
+            [0, 2 * PERIOD_NS],
         ),
         (
             lambda: Sequential(
@@ -2235,25 +2266,31 @@ def test_a_late_round_ends_the_run_on_the_next_end_that_plays(execution, monkeyp
     ],
     ids=['chunked', 'rtc'],
 )
-def test_a_queued_end_plays_on_its_own_element(execution, schedule, calls):
+def test_a_queued_end_plays_on_its_own_element(execution, monkeypatch, schedule, calls):
     runtime, _ = execution
+    _answer_after(runtime, monkeypatch, PERIOD_NS)
     model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2)])
     sent, end = _play(execution, schedule(), model, [i * PERIOD_NS for i in range(5)])
     assert (sent[-1], end) == (2, PolicyEnd.COMPLETE)
     assert model.calls == calls
 
 
-def test_an_end_past_the_horizon_plays_on_the_next_chunk(execution):
+def test_an_end_past_the_horizon_plays_on_the_next_chunk(execution, monkeypatch):
     runtime, _ = execution
+    _answer_after(runtime, monkeypatch, PERIOD_NS)
     model = _EndingModel(runtime, [{MOTOR: 1}, _ending(2)], on='first')
     schedule = Sequential(
         TrajectoryPlayer(replan_on_error=True, record_stats=False), ChunkedSchedule(fps=10, horizon_sec=0.1)
     )
-    assert _play(execution, schedule, model, [i * PERIOD_NS for i in range(5)]) == ([1, (1, 0)], PolicyEnd.COMPLETE)
+    assert _play(execution, schedule, model, [i * PERIOD_NS for i in range(5)]) == (
+        [None, 1, None, (1, 0)],
+        PolicyEnd.COMPLETE,
+    )
 
 
-def test_a_replan_after_an_arm_error_ends_on_the_replanned_chunk(execution):
+def test_a_replan_after_an_arm_error_ends_on_the_replanned_chunk(execution, monkeypatch):
     runtime, _ = execution
+    _answer_after(runtime, monkeypatch, PERIOD_NS)
     model = _EndingModel(runtime, [{MOTOR: i} for i in range(3)] + [_ending(3), {MOTOR: 4}], on='first')
     error = {2 * PERIOD_NS: {keys.ROBOT_STATUS: RobotStatus.ERROR}}
     sent, end = _play(
@@ -2263,7 +2300,7 @@ def test_a_replan_after_an_arm_error_ends_on_the_replanned_chunk(execution):
         [i * PERIOD_NS for i in range(6)],
         error,
     )
-    assert (sent, end) == ([0, 1, (1, 0)], PolicyEnd.COMPLETE)
+    assert (sent, end) == ([None, 0, None, (1, 0)], PolicyEnd.COMPLETE)
 
 
 # Answers arrive 2.5 periods late, so RTC skips each new chunk's first two elements.

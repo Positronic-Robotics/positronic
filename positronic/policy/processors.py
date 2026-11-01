@@ -418,7 +418,6 @@ class _InferenceSchedule(Policy):
         start: Start,
         duration_estimate: DurationEstimate,
         duration_name: str,
-        read_immediately: bool,
         replan_key: str | None = None,
     ) -> None:
         check_finite_positive(fps, 'fps')
@@ -426,75 +425,77 @@ class _InferenceSchedule(Policy):
         self._start = start
         self._duration_estimate = duration_estimate
         self._duration_name = duration_name
-        self._read_immediately = read_immediately
         self._replan_key = replan_key
 
-    def _start_ns(self, now_ns: int, called_at_ns: int, previous_start_ns: int | None, end_ns: int) -> int:
-        if self._start is self.Start.OBSERVATION:
-            return now_ns if previous_start_ns is None else called_at_ns
-        return max(now_ns, end_ns)
+    def _end_ns(self, trajectory: Trajectory) -> int:
+        return trajectory.due_ns(len(trajectory.commands))
 
-    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[Trajectory, int]:
-        trajectory = Trajectory(chunk, start_ns, self._fps)
-        return trajectory, trajectory.due_ns(len(chunk))
+    def _start_ns(self, previous: Trajectory | None, now_ns: int, called_at_ns: int) -> int:
+        if previous is None:
+            return now_ns
+        if self._start is self.Start.OBSERVATION:
+            return called_at_ns
+        return max(now_ns, self._end_ns(previous))
+
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> Trajectory:
+        return Trajectory(chunk, start_ns, self._fps)
 
     @abstractmethod
-    def _next_call_ns(self, trajectory: Trajectory, end_ns: int, expected_sec: float, now_ns: int) -> int: ...
+    def _next_call_ns(self, trajectory: Trajectory, expected_sec: float, now_ns: int) -> int: ...
 
     def _call_obs(
         self,
         obs: Obs,
-        trajectory: Trajectory | None,
-        start_ns: int | None,
-        end_ns: int,
+        previous: Trajectory | None,
+        update: Trajectory | None,
         now_ns: int,
         expected_sec: float,
         measured_sec: float | None,
     ) -> Obs:
         return obs
 
+    def _replan_if_needed(
+        self, obs: Obs, previous: Trajectory | None, call_ns: int, now_ns: int
+    ) -> tuple[Obs, Trajectory | None, int]:
+        if self._replan_key is not None and self._replan_key in obs:
+            if obs[self._replan_key]:
+                previous = None
+                call_ns = now_ns
+            obs = OverlayMapping(obs, remove=(self._replan_key,))
+        return obs, previous, call_ns
+
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._duration_estimate.run()
         expected_sec = 0.0
         measured_sec: float | None = None
         answer: Answer[Sequence[Commands] | None] | None = None
-        start_ns: int | None = None
-        called_at_ns = end_ns = call_ns = 0
+        previous: Trajectory | None = None
+        called_at_ns = call_ns = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
-                trajectory = None
-                if self._replan_key is not None and self._replan_key in obs:
-                    if obs[self._replan_key]:
-                        call_ns = end_ns = now_ns
-                    obs = OverlayMapping(obs, remove=(self._replan_key,))
+                update = None
+                obs, previous, call_ns = self._replan_if_needed(obs, previous, call_ns, now_ns)
 
-                submitted = self._read_immediately and answer is None and now_ns >= call_ns
-                if submitted:
-                    called_at_ns = now_ns
-                    answer = runtime.submit(
-                        infer, self._call_obs(obs, None, start_ns, end_ns, now_ns, expected_sec, measured_sec)
-                    )
                 if answer is not None and answer.done():
-                    chunk = answer.result()
                     measured_sec = answer.elapsed_sec
                     expected_sec = duration.update(measured_sec)
                     check_finite_nonnegative(expected_sec, self._duration_name)
+                    if (chunk := answer.result()) is not None:
+                        update = self._plan_chunk(chunk, self._start_ns(previous, now_ns, called_at_ns))
+                        previous = update
+                        call_ns = self._next_call_ns(previous, expected_sec, now_ns)
                     answer = None
-                    if chunk is not None:
-                        start_ns = self._start_ns(now_ns, called_at_ns, start_ns, end_ns)
-                        trajectory, end_ns = self._plan_chunk(chunk, start_ns)
-                        call_ns = self._next_call_ns(trajectory, end_ns, expected_sec, now_ns)
 
-                if not submitted and answer is None and now_ns >= call_ns:
+                if answer is None and now_ns >= call_ns:
                     called_at_ns = now_ns
                     answer = runtime.submit(
-                        infer, self._call_obs(obs, trajectory, start_ns, end_ns, now_ns, expected_sec, measured_sec)
+                        infer, self._call_obs(obs, previous, update, now_ns, expected_sec, measured_sec)
                     )
-                if trajectory is not None and now_ns >= end_ns:
-                    trajectory.commands = []
-                commands = {} if trajectory is None else asdict(trajectory, recurse=False)
+                if update is not None and now_ns >= self._end_ns(update):
+                    update = Trajectory([], update.start_ns, update.fps)
+                commands = {} if update is None else asdict(update, recurse=False)
                 obs = yield Step(commands, now_ns if answer is not None else call_ns)
         finally:
             if answer is not None:
@@ -560,24 +561,27 @@ class ChunkedSchedule(_InferenceSchedule):
             start=self.Start.AFTER_PREVIOUS,
             duration_estimate=ConstantDuration() if inference_lead is None else inference_lead,
             duration_name=self.INFERENCE_LEAD_ARG,
-            read_immediately=True,
             replan_key=policy_keys.REPLAN_NOW,
         )
         if horizon_sec is not None:
             check_finite_positive(horizon_sec, 'horizon_sec')
         self._horizon_sec = horizon_sec
 
-    def _next_call_ns(self, trajectory: Trajectory, end_ns: int, expected_sec: float, now_ns: int) -> int:
+    def _next_call_ns(self, trajectory: Trajectory, expected_sec: float, now_ns: int) -> int:
         if not trajectory.commands:
             return now_ns
+        end_ns = self._end_ns(trajectory)
         return end_ns - round(min(expected_sec * 1e9, end_ns - trajectory.start_ns))
 
-    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> tuple[Trajectory, int]:
-        duration_sec = min(len(chunk) / self._fps, self._horizon_sec or inf)
-        end_ns = start_ns + round(duration_sec * 1e9)
+    def _end_ns(self, trajectory: Trajectory) -> int:
+        duration_sec = min(len(trajectory.commands) / self._fps, self._horizon_sec or inf)
+        return trajectory.start_ns + round(duration_sec * 1e9)
+
+    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> Trajectory:
         trajectory = Trajectory(commands=chunk, start_ns=start_ns, fps=self._fps)
+        end_ns = self._end_ns(trajectory)
         trajectory.commands = [command for i, command in enumerate(chunk) if trajectory.due_ns(i) < end_ns]
-        return trajectory, end_ns
+        return trajectory
 
     def meta(self) -> dict[str, Any]:
         meta = super().meta()
@@ -661,28 +665,26 @@ class RTCSchedule(_InferenceSchedule):
             start=self.Start.OBSERVATION,
             duration_estimate=latency_estimate,
             duration_name=self.LATENCY_ESTIMATE_ARG,
-            read_immediately=False,
         )
         check_finite_nonnegative(call_after_sec, 'call_after_sec')
         self._call_after_ns = round(call_after_sec * 1e9)
         self._plan_key = plan_key
 
-    def _next_call_ns(self, trajectory: Trajectory, end_ns: int, expected_sec: float, now_ns: int) -> int:
+    def _next_call_ns(self, trajectory: Trajectory, expected_sec: float, now_ns: int) -> int:
         return trajectory.start_ns + self._call_after_ns
 
     def _call_obs(
         self,
         obs: Obs,
-        trajectory: Trajectory | None,
-        start_ns: int | None,
-        end_ns: int,
+        previous: Trajectory | None,
+        update: Trajectory | None,
         now_ns: int,
         expected_sec: float,
         measured_sec: float | None,
     ) -> Obs:
-        plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
-        if start_ns is None:
-            start_ns = end_ns = now_ns
+        plan = update.waypoints() if update is not None else obs[self._plan_key]
+        start_ns = now_ns if previous is None else previous.start_ns
+        end_ns = now_ns if previous is None else self._end_ns(previous)
         running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
         remaining = plan[running:] if now_ns < end_ns else ()
         due_ns = remaining[0].due_ns if remaining else end_ns
