@@ -18,9 +18,8 @@ Describe a local stack without creating episode state::
 
 from abc import ABC, abstractmethod
 from bisect import bisect_right, insort
-from collections import ChainMap, deque
+from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from math import inf
@@ -29,7 +28,7 @@ from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
-from attr import asdict
+from attr import asdict, dataclass
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -48,11 +47,10 @@ from positronic.policy.base import (
     ReturnT,
     Runtime,
     Step,
-    Trajectory,
 )
 from positronic.policy.keys import ACTION_FPS, END
 from positronic.utils import check_finite_nonnegative, check_finite_positive
-from positronic.utils.lazy import LazyDict, OverlayMapping, without_keys
+from positronic.utils.lazy import LazyDict, OverlayMapping
 
 
 class EndOnField(Policy):
@@ -181,6 +179,39 @@ class DelayEstimate(DurationEstimate):
         return cls(cls.Statistic.MAX, last, max_sec)
 
 
+@dataclass(frozen=True)
+class Waypoint:
+    """Commands held from ``due_ns`` until the next waypoint."""
+
+    commands: Commands
+    due_ns: int
+
+
+@dataclass
+class Trajectory:
+    """Commands spaced by ``1 / fps`` from ``start_ns``."""
+
+    commands: Sequence[Commands]
+    start_ns: int
+    fps: float
+
+    @property
+    def period_ns(self) -> float:
+        """Time between commands in nanoseconds."""
+        return (1 / self.fps) * 1e9
+
+    def due_ns(self, index: int) -> int:
+        """Scheduled time of the command at ``index``."""
+        return self.start_ns + round(index * self.period_ns)
+
+    def waypoints(self) -> list[Waypoint]:
+        """Commands paired with their scheduled times, without copying command values."""
+        return [Waypoint(command, self.due_ns(i)) for i, command in enumerate(self.commands)]
+
+    def __attrs_post_init__(self) -> None:
+        check_finite_positive(self.fps, 'fps')
+
+
 class TrajectoryPlayer(Policy):
     """Play an inner run's timed trajectories independently of its inference cadence.
 
@@ -215,23 +246,16 @@ class TrajectoryPlayer(Policy):
         self._replan_on_error = replan_on_error
 
     @dataclass(frozen=True)
-    class Waypoint:
-        """Commands held from ``due_ns`` until the next waypoint; ``starts_chunk`` resets gap statistics."""
+    class _Waypoint(Waypoint):
+        """A queued waypoint; ``starts_chunk`` resets gap statistics on emission."""
 
-        commands: Commands
-        due_ns: int
         starts_chunk: bool
 
     @classmethod
-    def _waypoints(cls, trajectory: Trajectory) -> list[Waypoint]:
-        return [
-            cls.Waypoint(command, trajectory.due_ns(i), starts_chunk=i == 0)
-            for i, command in enumerate(trajectory.commands)
+    def _update_plan(cls, plan: deque[_Waypoint], update: Trajectory, now_ns: int) -> int:
+        incoming = [
+            cls._Waypoint(command, update.due_ns(i), starts_chunk=i == 0) for i, command in enumerate(update.commands)
         ]
-
-    @classmethod
-    def _update_plan(cls, plan: deque[Waypoint], update: Trajectory, now_ns: int) -> int:
-        incoming = cls._waypoints(update)
         planned = len(incoming)
         if update.start_ns <= now_ns:
             plan.clear()
@@ -239,7 +263,7 @@ class TrajectoryPlayer(Policy):
             incoming = incoming[running:]
             if incoming:
                 first = incoming[0]
-                incoming[0] = cls.Waypoint(first.commands, first.due_ns, starts_chunk=True)
+                incoming[0] = cls._Waypoint(first.commands, first.due_ns, starts_chunk=True)
         while plan and plan[-1].due_ns >= update.start_ns:
             plan.pop()
         plan.extend(incoming)
@@ -249,8 +273,10 @@ class TrajectoryPlayer(Policy):
     def _remaining_plan(plan: Sequence[Waypoint], current: Waypoint | None, now_ns: int) -> list[Waypoint]:
         running = bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1
         if running >= 0:
-            return list(plan[running:])
-        return [current, *plan] if current is not None else list(plan)
+            remaining = plan[running:]
+        else:
+            remaining = [current, *plan] if current is not None else plan
+        return [Waypoint(point.commands, point.due_ns) for point in remaining]
 
     class _Stats:
         """How the schedule played its waypoints.
@@ -268,7 +294,7 @@ class TrajectoryPlayer(Policy):
             self._last_emit_ns: int | None = None
             self._round_due_ns: int | None = None
 
-        def record_waypoint(self, point: 'TrajectoryPlayer.Waypoint') -> None:
+        def record_waypoint(self, point: 'TrajectoryPlayer._Waypoint') -> None:
             self._round_due_ns = point.due_ns
             if point.starts_chunk:
                 self._last_emit_ns = None
@@ -317,16 +343,16 @@ class TrajectoryPlayer(Policy):
             if name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
         )
 
-    def _with_plan(self, obs: Obs, plan: deque[Waypoint], current: Waypoint | None, now_ns: int) -> Obs:
+    def _with_plan(self, obs: Obs, plan: deque[_Waypoint], current: _Waypoint | None, now_ns: int) -> Obs:
         if self._plan_key is None:
             return obs
         return OverlayMapping(
-            obs, LazyDict({}, {self._plan_key: partial(self._remaining_plan, tuple(plan), current, now_ns)})
+            obs, add=LazyDict({}, {self._plan_key: partial(self._remaining_plan, tuple(plan), current, now_ns)})
         )
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
-        plan: deque[TrajectoryPlayer.Waypoint] = deque()
-        current_wp: TrajectoryPlayer.Waypoint | None = None
+        plan: deque[TrajectoryPlayer._Waypoint] = deque()
+        current_wp: TrajectoryPlayer._Waypoint | None = None
         inner_resume_at_ns = 0
         recovering = False
         stats = self._Stats(runtime) if self._record_stats else None
@@ -339,7 +365,7 @@ class TrajectoryPlayer(Policy):
                 current_wp = None
                 inner_resume_at_ns = now_ns
                 planned, recovering = 0, True
-                obs = OverlayMapping(obs, {policy_keys.REPLAN_NOW: True})
+                obs = OverlayMapping(obs, add={policy_keys.REPLAN_NOW: True})
 
             outputs: Mapping[str, Any] = {}
             if now_ns >= inner_resume_at_ns or obs.get(policy_keys.REPLAN_NOW, False) or runtime.has_ready_answers():
@@ -458,7 +484,7 @@ class ChunkedSchedule(Policy):
                 if obs.get(policy_keys.REPLAN_NOW, False):
                     call_ns = end_ns = now_ns
                 if policy_keys.REPLAN_NOW in obs:
-                    obs = without_keys(obs, policy_keys.REPLAN_NOW)
+                    obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
                 submitted = answer is None and now_ns >= call_ns
                 if submitted:
                     answer = runtime.submit(infer, obs)
@@ -501,45 +527,8 @@ class ChunkedSchedule(Policy):
         return cls(**args)
 
 
-class _TimedChunk:
-    """A chunk whose action i is due at ``start_ns + i / fps``, executed in due order."""
-
-    def __init__(self, actions: Sequence[Commands], start_ns: int, fps: float, now_ns: int):
-        self._actions = actions
-        self._start_ns = start_ns
-        self._fps = fps
-        self._next_index = self._running_index(now_ns)
-
-    def _due_ns(self, index: int) -> int:
-        return self._start_ns + round(index * 1e9 / self._fps)
-
-    def _running_index(self, time_ns: int) -> int:
-        """The index of the action that runs at ``time_ns``, or ``len(actions)`` after the chunk ends."""
-        return next((i for i in range(len(self._actions)) if self._due_ns(i + 1) > time_ns), len(self._actions))
-
-    def prefix(self, now_ns: int) -> dict[str, Any]:
-        running = self._running_index(now_ns)
-        return {
-            policy_keys.RTC.PREFIX_ACTIONS: [dict(action) for action in self._actions[running:]],
-            policy_keys.RTC.CHUNK_OFFSET_SEC: running / self._fps,
-            policy_keys.RTC.OBSERVATION_OFFSET_SEC: (self._due_ns(running) - now_ns) / 1e9,
-        }
-
-    def take_due(self, now_ns: int) -> dict[str, Any]:
-        """The merged commands of every action due by ``now_ns`` and not taken yet."""
-        commands: dict[str, Any] = {}
-        while self._next_index < len(self._actions) and self._due_ns(self._next_index) <= now_ns:
-            commands.update(self._actions[self._next_index])
-            self._next_index += 1
-        return commands
-
-    def next_due_ns(self) -> int | None:
-        """When the next action not taken yet is due, or ``None`` after the last one."""
-        return self._due_ns(self._next_index) if self._next_index < len(self._actions) else None
-
-
 class RTCSchedule(Policy):
-    """Execute planned commands while requesting the next chunk in the background.
+    """Request overlapping trajectories for an outer ``TrajectoryPlayer`` to execute.
 
     One handover at 10 fps, with ``call_after_sec=0.5`` and inference taking 0.3 seconds::
 
@@ -574,77 +563,91 @@ class RTCSchedule(Policy):
     from ``latency_estimate``. Both travel separately from the prefix, in seconds. Before the
     first answer, measured latency is None and the estimate is zero; the prefix is empty.
 
-    Until the answer arrives, the policy executes the old chunk. On arrival, it switches to the
+    Until the answer arrives, the player executes the old chunk. On arrival, it switches to the
     new chunk at the action due now: n0 through n2 have elapsed, so it starts with n3. If the old
-    chunk ends before the answer arrives, the policy emits no commands while waiting.
+    chunk ends before the answer arrives, playback emits no commands while waiting.
 
     Only one call runs at a time. If an answer arrives after the next request is already due,
     that request starts immediately. Composed codecs prepare the observation and planned commands
-    for the model and decode its reply into the command sequence this scheduler executes.
+    for the model and decode its reply into commands. ``None`` leaves the trajectory unchanged.
+
+    ``plan_key`` names the observation field supplied by the outer player. The scheduler consumes
+    it to prepare the model prefix, excluding the held command once its prediction has expired.
     """
 
     WIRE_NAME = 'rtc_schedule'
-    WIRE_VERSION = 1
+    WIRE_VERSION = 2
     CALL_AFTER_ARG = 'call_after_sec'
     LATENCY_ESTIMATE_ARG = 'latency_estimate'
 
-    def __init__(self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate) -> None:
+    def __init__(
+        self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate, *, plan_key: str = policy_keys.PLAN
+    ) -> None:
         check_finite_positive(fps, 'fps')
         check_finite_nonnegative(call_after_sec, 'call_after_sec')
         self._fps = fps
         self._call_after_ns = round(call_after_sec * 1e9)
         self._latency_estimate = latency_estimate
+        self._plan_key = plan_key
 
-    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands]]) -> PolicyRun:
+    def _rtc_context(
+        self,
+        plan: Sequence[Waypoint],
+        start_ns: int | None,
+        end_ns: int,
+        now_ns: int,
+        expected_sec: float,
+        measured_sec: float | None,
+    ) -> dict[str, Any]:
+        if start_ns is None:
+            start_ns = end_ns = now_ns
+        running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
+        remaining = plan[running:] if now_ns < end_ns else ()
+        due_ns = remaining[0].due_ns if remaining else end_ns
+        return {
+            policy_keys.RTC.ACTION_PREFIX: {
+                policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
+                policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
+                policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
+            },
+            policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
+            policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
+        }
+
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._latency_estimate.run()
         expected_sec = 0.0
         measured_sec: float | None = None
-        answer: Answer[Sequence[Commands]] | None = None
-        called_at_ns = 0
-        chunk: _TimedChunk | None = None
-        next_call_ns = 0
+        answer: Answer[Sequence[Commands] | None] | None = None
+        start_ns: int | None = None
+        called_at_ns = end_ns = next_call_ns = 0
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
+                trajectory = None
                 if answer is not None and answer.done():
                     actions = answer.result()
                     measured_sec = answer.elapsed_sec
                     expected_sec = duration.update(measured_sec)
-                    # The first chunk counts from its answer: the robot did not move while it waited.
-                    start_ns = now_ns if chunk is None else called_at_ns
-                    chunk = _TimedChunk(actions, start_ns, self._fps, now_ns)
+                    check_finite_nonnegative(expected_sec, 'latency_estimate')
                     answer = None
-                    next_call_ns = start_ns + self._call_after_ns
+                    if actions is not None:
+                        start_ns = now_ns if start_ns is None else called_at_ns
+                        trajectory = Trajectory(actions, start_ns, self._fps)
+                        end_ns = trajectory.due_ns(len(actions))
+                        next_call_ns = start_ns + self._call_after_ns
 
                 if answer is None and now_ns >= next_call_ns:
-                    prefix = (
-                        {
-                            policy_keys.RTC.PREFIX_ACTIONS: [],
-                            policy_keys.RTC.CHUNK_OFFSET_SEC: 0.0,
-                            policy_keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
-                        }
-                        if chunk is None
-                        else chunk.prefix(now_ns)
-                    )
+                    plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
+                    context = self._rtc_context(plan, start_ns, end_ns, now_ns, expected_sec, measured_sec)
                     called_at_ns = now_ns
-                    context = {
-                        policy_keys.RTC.ACTION_PREFIX: prefix,
-                        policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
-                        policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
-                    }
-                    answer = runtime.submit(infer, ChainMap(context, obs))
+                    answer = runtime.submit(infer, OverlayMapping(obs, add=context, remove=(self._plan_key,)))
 
-                commands = {} if chunk is None else chunk.take_due(now_ns)
-                next_due_ns = None if chunk is None else chunk.next_due_ns()
-                if answer is not None:
-                    # Pending inference asks for the earliest allowed poll; action cadence is independent.
-                    resume_at_ns = now_ns
-                elif next_due_ns is not None:
-                    resume_at_ns = min(next_call_ns, next_due_ns)
-                else:
-                    resume_at_ns = next_call_ns
-                obs = yield Step(commands, resume_at_ns)
+                if trajectory is not None and now_ns >= end_ns:
+                    trajectory.commands = []
+                commands = {} if trajectory is None else asdict(trajectory, recurse=False)
+                obs = yield Step(commands, now_ns if answer is not None else next_call_ns)
         finally:
             if answer is not None:
                 answer.cancel()
@@ -657,6 +660,7 @@ class RTCSchedule(Policy):
             ChunkedSchedule.FPS_ARG: self._fps,
             self.CALL_AFTER_ARG: self._call_after_ns / 1e9,
             self.LATENCY_ESTIMATE_ARG: self._latency_estimate.to_spec(),
+            'plan_key': self._plan_key,
         }
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 

@@ -178,6 +178,70 @@ def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a
     assert isinstance(step.commands[obs_keys.ROBOT_COMMAND], command.JointPosition)
 
 
+@pytest.mark.parametrize('version', [None, 1, 2])
+def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, version):
+    schedule = spec.component('rtc_schedule', version=version or 1, fps=10, call_after_sec=0.2, latency_estimate=0.1)
+    if version is None:
+        del schedule[spec.VERSION]
+    if version == 2:
+        schedule = spec.sequence(
+            spec.component('trajectory_player', plan_key=policy_keys.PLAN, record_stats=False), schedule
+        )
+    description = spec.sequence(
+        schedule,
+        spec.parallel(
+            spec.component(
+                'select_observation_fields',
+                mapping={
+                    name: name for name in (policy_keys.RTC.ESTIMATED_LATENCY_SEC, policy_keys.RTC.MEASURED_LATENCY_SEC)
+                },
+            ),
+            spec.component(
+                'joint_position_action',
+                joints_key=obs_keys.ROBOT_COMMAND,
+                grip_key=obs_keys.TARGET_GRIP,
+                commands_path=[policy_keys.RTC.ACTION_PREFIX, policy_keys.RTC.PREFIX_ACTIONS],
+            ),
+        ),
+    )
+    seen = []
+
+    class RTCSession(Session):
+        def infer(self, observation):
+            seen.append(observation)
+            return [{obs_keys.ROBOT_COMMAND: JOINT_TARGET, obs_keys.TARGET_GRIP: float(i)} for i in range(5)]
+
+    class RTCModel(Model):
+        def prepare_session(self, params):
+            return RTCSession(description)
+
+    with serving(RTCModel) as (client, address):
+        now = [1_000_000_000]
+        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(client.NAME, address))
+        try:
+            run.send({})
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            first = run.send({})
+            assert first is not None
+            assert isinstance(first.commands[obs_keys.ROBOT_COMMAND], command.JointPosition)
+            now[0] += 250_000_000
+            step = run.send({})
+            assert step is not None
+            assert step.commands[obs_keys.TARGET_GRIP] == 2.0
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            prefix = seen[1][policy_keys.RTC.ACTION_PREFIX]
+            assert [action[obs_keys.TARGET_GRIP] for action in prefix[policy_keys.RTC.PREFIX_ACTIONS]] == [2, 3, 4]
+            assert prefix[policy_keys.RTC.CHUNK_OFFSET_SEC] == pytest.approx(0.2)
+            assert prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] == pytest.approx(-0.05)
+            assert policy_keys.PLAN not in seen[1]
+            assert seen[1][policy_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.1
+            assert seen[1][policy_keys.RTC.MEASURED_LATENCY_SEC] == 0.0
+        finally:
+            runtime.close()
+            run.close()
+
+
 def test_legacy_protocol_catalog_does_not_advertise_v3():
     with pytest.raises(ValueError, match='Unsupported policy protocol version 3'):
         resolve_version(legacy_protocol.VERSIONS, 3, 'policy protocol')
