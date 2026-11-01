@@ -20,7 +20,6 @@ from abc import ABC, abstractmethod
 from bisect import bisect_right, insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from math import inf
@@ -29,7 +28,7 @@ from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
-from attr import asdict
+from attr import asdict, dataclass
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -49,6 +48,7 @@ from positronic.policy.base import (
     Runtime,
     Step,
     Trajectory,
+    Waypoint,
 )
 from positronic.policy.keys import ACTION_FPS, END
 from positronic.utils import check_finite_nonnegative, check_finite_positive
@@ -215,24 +215,16 @@ class TrajectoryPlayer(Policy):
         self._replan_on_error = replan_on_error
 
     @dataclass(frozen=True)
-    class Waypoint:
-        """Commands held from ``due_ns`` until the next waypoint; ``starts_chunk`` resets gap statistics."""
+    class _Waypoint(Waypoint):
+        """A queued waypoint; ``starts_chunk`` resets gap statistics on emission."""
 
-        commands: Commands
-        due_ns: int
         starts_chunk: bool
 
     @classmethod
-    def waypoints(cls, trajectory: Trajectory) -> list[Waypoint]:
-        """Expand a trajectory into timed waypoints, retaining its original command values."""
-        return [
-            cls.Waypoint(command, trajectory.due_ns(i), starts_chunk=i == 0)
-            for i, command in enumerate(trajectory.commands)
+    def _update_plan(cls, plan: deque[_Waypoint], update: Trajectory, now_ns: int) -> int:
+        incoming = [
+            cls._Waypoint(command, update.due_ns(i), starts_chunk=i == 0) for i, command in enumerate(update.commands)
         ]
-
-    @classmethod
-    def _update_plan(cls, plan: deque[Waypoint], update: Trajectory, now_ns: int) -> int:
-        incoming = cls.waypoints(update)
         planned = len(incoming)
         if update.start_ns <= now_ns:
             plan.clear()
@@ -240,7 +232,7 @@ class TrajectoryPlayer(Policy):
             incoming = incoming[running:]
             if incoming:
                 first = incoming[0]
-                incoming[0] = cls.Waypoint(first.commands, first.due_ns, starts_chunk=True)
+                incoming[0] = cls._Waypoint(first.commands, first.due_ns, starts_chunk=True)
         while plan and plan[-1].due_ns >= update.start_ns:
             plan.pop()
         plan.extend(incoming)
@@ -250,8 +242,10 @@ class TrajectoryPlayer(Policy):
     def _remaining_plan(plan: Sequence[Waypoint], current: Waypoint | None, now_ns: int) -> list[Waypoint]:
         running = bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1
         if running >= 0:
-            return list(plan[running:])
-        return [current, *plan] if current is not None else list(plan)
+            remaining = plan[running:]
+        else:
+            remaining = [current, *plan] if current is not None else plan
+        return [Waypoint(point.commands, point.due_ns) for point in remaining]
 
     class _Stats:
         """How the schedule played its waypoints.
@@ -269,7 +263,7 @@ class TrajectoryPlayer(Policy):
             self._last_emit_ns: int | None = None
             self._round_due_ns: int | None = None
 
-        def record_waypoint(self, point: 'TrajectoryPlayer.Waypoint') -> None:
+        def record_waypoint(self, point: 'TrajectoryPlayer._Waypoint') -> None:
             self._round_due_ns = point.due_ns
             if point.starts_chunk:
                 self._last_emit_ns = None
@@ -318,7 +312,7 @@ class TrajectoryPlayer(Policy):
             if name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
         )
 
-    def _with_plan(self, obs: Obs, plan: deque[Waypoint], current: Waypoint | None, now_ns: int) -> Obs:
+    def _with_plan(self, obs: Obs, plan: deque[_Waypoint], current: _Waypoint | None, now_ns: int) -> Obs:
         if self._plan_key is None:
             return obs
         return OverlayMapping(
@@ -326,8 +320,8 @@ class TrajectoryPlayer(Policy):
         )
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
-        plan: deque[TrajectoryPlayer.Waypoint] = deque()
-        current_wp: TrajectoryPlayer.Waypoint | None = None
+        plan: deque[TrajectoryPlayer._Waypoint] = deque()
+        current_wp: TrajectoryPlayer._Waypoint | None = None
         inner_resume_at_ns = 0
         recovering = False
         stats = self._Stats(runtime) if self._record_stats else None
@@ -565,9 +559,7 @@ class RTCSchedule(Policy):
         self._latency_estimate = latency_estimate
         self._plan_key = plan_key
 
-    def _prefix(
-        self, plan: Sequence[TrajectoryPlayer.Waypoint], start_ns: int | None, end_ns: int, now_ns: int
-    ) -> dict[str, Any]:
+    def _prefix(self, plan: Sequence[Waypoint], start_ns: int | None, end_ns: int, now_ns: int) -> dict[str, Any]:
         if start_ns is None:
             start_ns = end_ns = now_ns
         running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
@@ -604,7 +596,7 @@ class RTCSchedule(Policy):
                         next_call_ns = start_ns + self._call_after_ns
 
                 if answer is None and now_ns >= next_call_ns:
-                    plan = TrajectoryPlayer.waypoints(trajectory) if trajectory is not None else obs[self._plan_key]
+                    plan = trajectory.waypoints() if trajectory is not None else obs[self._plan_key]
                     context = {
                         policy_keys.RTC.ACTION_PREFIX: self._prefix(plan, start_ns, end_ns, now_ns),
                         policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,

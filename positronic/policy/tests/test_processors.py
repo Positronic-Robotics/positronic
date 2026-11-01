@@ -22,7 +22,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step, Trajectory
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step, Trajectory, Waypoint
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -544,7 +544,8 @@ def test_player_context_is_one_remaining_plan_with_exact_replacement_times(execu
         clock.advance_to_ns(50_000_000)
         run.send({POSITION: 43})
         source = inner_run.send.call_args.args[0]['remaining'][0]
-        assert isinstance(source, TrajectoryPlayer.Waypoint)
+        assert type(source) is Waypoint
+        assert {field.name for field in fields(Waypoint)} == {'commands', 'due_ns'}
         assert source.commands is first['commands'][0]
         assert source.due_ns == 0
         clock.advance_to_ns(100_000_000)
@@ -1520,6 +1521,31 @@ def test_rtc_history_only_answer_keeps_playback_and_updates_latency(execution, m
         ]
         assert model.requests[-1][RTC.MEASURED_LATENCY_SEC] == pytest.approx(0.1)
         assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(0.1)
+    finally:
+        run.close()
+
+
+def test_rtc_accepts_shared_waypoints_without_a_player(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration()), Mock())
+    try:
+        run.send({policy_keys.PLAN: []})
+        clock.advance_to_ns(100_000_000)
+        model.answer('a', length=5)
+        trajectory = Trajectory(**run.send({policy_keys.PLAN: []}).commands)
+        assert trajectory.waypoints() == [Waypoint({MOTOR: f'a{i}'}, 100_000_000 + i * PERIOD_NS) for i in range(5)]
+        clock.advance_to_ns(350_000_000)
+        plan = [Waypoint({MOTOR: 'b0'}, 300_000_000), Waypoint({MOTOR: 'b1'}, 400_000_000)]
+        run.send({policy_keys.PLAN: plan})
+        request = model.requests[-1]
+        assert request[RTC.ACTION_PREFIX] == {
+            RTC.PREFIX_ACTIONS: [{MOTOR: 'b0'}, {MOTOR: 'b1'}],
+            RTC.CHUNK_OFFSET_SEC: 0.2,
+            RTC.OBSERVATION_OFFSET_SEC: -0.05,
+        }
+        assert policy_keys.PLAN not in request
     finally:
         run.close()
 

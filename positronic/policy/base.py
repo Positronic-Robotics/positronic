@@ -54,6 +54,14 @@ Obs = Mapping[str, Any]
 Commands = Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class Waypoint:
+    """Commands held from ``due_ns`` until the next waypoint."""
+
+    commands: Commands
+    due_ns: int
+
+
 @dataclass
 class Trajectory:
     """Commands spaced by ``1 / fps`` from ``start_ns``."""
@@ -70,6 +78,10 @@ class Trajectory:
     def due_ns(self, index: int) -> int:
         """Scheduled time of the command at ``index``."""
         return self.start_ns + round(index * self.period_ns)
+
+    def waypoints(self) -> list[Waypoint]:
+        """Commands paired with their scheduled times, without copying command values."""
+        return [Waypoint(command, self.due_ns(i)) for i, command in enumerate(self.commands)]
 
     def __attrs_post_init__(self) -> None:
         check_finite_positive(self.fps, 'fps')
