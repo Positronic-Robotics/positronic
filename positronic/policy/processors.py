@@ -411,24 +411,40 @@ class _InferenceSchedule(Policy):
         AFTER_PREVIOUS = 'after_previous'
         OBSERVATION = 'observation'
 
+    class RequestTiming(Enum):
+        BEFORE_END = 'before_end'
+        AFTER_START = 'after_start'
+
     def __init__(
         self,
         fps: float,
         *,
         start: Start,
+        request_timing: RequestTiming,
         duration_estimate: DurationEstimate,
         duration_name: str,
+        call_after_sec: float = 0.0,
+        horizon_sec: float | None = None,
+        plan_key: str | None = None,
         replan_key: str | None = None,
     ) -> None:
         check_finite_positive(fps, 'fps')
+        check_finite_nonnegative(call_after_sec, 'call_after_sec')
+        if horizon_sec is not None:
+            check_finite_positive(horizon_sec, 'horizon_sec')
         self._fps = fps
         self._start = start
+        self._request_timing = request_timing
         self._duration_estimate = duration_estimate
         self._duration_name = duration_name
+        self._call_after_ns = round(call_after_sec * 1e9)
+        self._horizon_sec = horizon_sec
+        self._plan_key = plan_key
         self._replan_key = replan_key
 
     def _end_ns(self, trajectory: Trajectory) -> int:
-        return trajectory.due_ns(len(trajectory.commands))
+        duration_sec = min(len(trajectory.commands) / self._fps, self._horizon_sec or inf)
+        return trajectory.start_ns + round(duration_sec * 1e9)
 
     def _start_ns(self, previous: Trajectory | None, now_ns: int, called_at_ns: int) -> int:
         if previous is None:
@@ -438,10 +454,19 @@ class _InferenceSchedule(Policy):
         return max(now_ns, self._end_ns(previous))
 
     def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> Trajectory:
-        return Trajectory(chunk, start_ns, self._fps)
+        trajectory = Trajectory(chunk, start_ns, self._fps)
+        if self._horizon_sec is not None:
+            end_ns = self._end_ns(trajectory)
+            trajectory.commands = [command for i, command in enumerate(chunk) if trajectory.due_ns(i) < end_ns]
+        return trajectory
 
-    @abstractmethod
-    def _next_call_ns(self, trajectory: Trajectory, expected_sec: float, now_ns: int) -> int: ...
+    def _next_call_ns(self, trajectory: Trajectory, expected_sec: float, now_ns: int) -> int:
+        if self._request_timing is self.RequestTiming.AFTER_START:
+            return trajectory.start_ns + self._call_after_ns
+        if not trajectory.commands:
+            return now_ns
+        end_ns = self._end_ns(trajectory)
+        return end_ns - round(min(expected_sec * 1e9, end_ns - trajectory.start_ns))
 
     def _call_obs(
         self,
@@ -452,7 +477,24 @@ class _InferenceSchedule(Policy):
         expected_sec: float,
         measured_sec: float | None,
     ) -> Obs:
-        return obs
+        if self._plan_key is None:
+            return obs
+        plan = update.waypoints() if update is not None else obs[self._plan_key]
+        start_ns = now_ns if previous is None else previous.start_ns
+        end_ns = now_ns if previous is None else self._end_ns(previous)
+        running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
+        remaining = plan[running:] if now_ns < end_ns else ()
+        due_ns = remaining[0].due_ns if remaining else end_ns
+        context = {
+            policy_keys.RTC.ACTION_PREFIX: {
+                policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
+                policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
+                policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
+            },
+            policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
+            policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
+        }
+        return OverlayMapping(obs, add=context, remove=(self._plan_key,))
 
     def _replan_if_needed(
         self, obs: Obs, previous: Trajectory | None, call_ns: int, now_ns: int
@@ -502,7 +544,10 @@ class _InferenceSchedule(Policy):
                 answer.cancel()
 
     def meta(self) -> dict[str, Any]:
-        return {ACTION_FPS: self._fps}
+        meta = {ACTION_FPS: self._fps}
+        if self._horizon_sec is not None:
+            meta[policy_keys.ACTION_HORIZON_SEC] = self._horizon_sec
+        return meta
 
 
 class ChunkedSchedule(_InferenceSchedule):
@@ -559,35 +604,12 @@ class ChunkedSchedule(_InferenceSchedule):
         super().__init__(
             fps,
             start=self.Start.AFTER_PREVIOUS,
+            request_timing=self.RequestTiming.BEFORE_END,
             duration_estimate=ConstantDuration() if inference_lead is None else inference_lead,
             duration_name=self.INFERENCE_LEAD_ARG,
+            horizon_sec=horizon_sec,
             replan_key=policy_keys.REPLAN_NOW,
         )
-        if horizon_sec is not None:
-            check_finite_positive(horizon_sec, 'horizon_sec')
-        self._horizon_sec = horizon_sec
-
-    def _next_call_ns(self, trajectory: Trajectory, expected_sec: float, now_ns: int) -> int:
-        if not trajectory.commands:
-            return now_ns
-        end_ns = self._end_ns(trajectory)
-        return end_ns - round(min(expected_sec * 1e9, end_ns - trajectory.start_ns))
-
-    def _end_ns(self, trajectory: Trajectory) -> int:
-        duration_sec = min(len(trajectory.commands) / self._fps, self._horizon_sec or inf)
-        return trajectory.start_ns + round(duration_sec * 1e9)
-
-    def _plan_chunk(self, chunk: Sequence[Commands], start_ns: int) -> Trajectory:
-        trajectory = Trajectory(commands=chunk, start_ns=start_ns, fps=self._fps)
-        end_ns = self._end_ns(trajectory)
-        trajectory.commands = [command for i, command in enumerate(chunk) if trajectory.due_ns(i) < end_ns]
-        return trajectory
-
-    def meta(self) -> dict[str, Any]:
-        meta = super().meta()
-        if self._horizon_sec is not None:
-            meta[policy_keys.ACTION_HORIZON_SEC] = self._horizon_sec
-        return meta
 
     def to_spec(self) -> dict[str, Any]:
         args: dict[str, Any] = {self.FPS_ARG: self._fps}
@@ -663,41 +685,12 @@ class RTCSchedule(_InferenceSchedule):
         super().__init__(
             fps,
             start=self.Start.OBSERVATION,
+            request_timing=self.RequestTiming.AFTER_START,
             duration_estimate=latency_estimate,
             duration_name=self.LATENCY_ESTIMATE_ARG,
+            call_after_sec=call_after_sec,
+            plan_key=plan_key,
         )
-        check_finite_nonnegative(call_after_sec, 'call_after_sec')
-        self._call_after_ns = round(call_after_sec * 1e9)
-        self._plan_key = plan_key
-
-    def _next_call_ns(self, trajectory: Trajectory, expected_sec: float, now_ns: int) -> int:
-        return trajectory.start_ns + self._call_after_ns
-
-    def _call_obs(
-        self,
-        obs: Obs,
-        previous: Trajectory | None,
-        update: Trajectory | None,
-        now_ns: int,
-        expected_sec: float,
-        measured_sec: float | None,
-    ) -> Obs:
-        plan = update.waypoints() if update is not None else obs[self._plan_key]
-        start_ns = now_ns if previous is None else previous.start_ns
-        end_ns = now_ns if previous is None else self._end_ns(previous)
-        running = max(0, bisect_right(plan, now_ns, key=lambda point: point.due_ns) - 1)
-        remaining = plan[running:] if now_ns < end_ns else ()
-        due_ns = remaining[0].due_ns if remaining else end_ns
-        context = {
-            policy_keys.RTC.ACTION_PREFIX: {
-                policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
-                policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
-                policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - now_ns) / 1e9,
-            },
-            policy_keys.RTC.ESTIMATED_LATENCY_SEC: expected_sec,
-            policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
-        }
-        return OverlayMapping(obs, add=context, remove=(self._plan_key,))
 
     def to_spec(self) -> dict[str, Any]:
         args = {
