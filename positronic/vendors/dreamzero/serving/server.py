@@ -172,7 +172,7 @@ class DreamZeroModel(Model):
         return session
 
     def close(self) -> None:
-        self._release()
+        self._policy.close()
 
 
 def load_model(model_source: str, revision: str | None = None) -> DreamZeroModel:

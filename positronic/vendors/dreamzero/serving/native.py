@@ -65,3 +65,10 @@ class Policy:
         head.kv_cache1 = head.kv_cache_neg = None
         head.crossattn_cache = head.crossattn_cache_neg = None
         head.clip_feas = head.ys = None
+
+    def close(self) -> None:
+        self.reset()
+        del self._policy
+        dist.destroy_process_group()
+        self._rendezvous.cleanup()
+        torch.cuda.empty_cache()
