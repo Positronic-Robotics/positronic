@@ -20,10 +20,10 @@ from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import PolicyEnd, spec
-from positronic.policy.base import Step
+from positronic.policy.base import Answer, Step
 from positronic.policy.codecs import Codec, ResizeMode, TransformImages
 from positronic.policy.compatibility import V1_SERVER_DEFAULT_ACTION_FPS, StampObservationTimes, from_v1_spec
-from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
+from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule, ConstantDuration, RTCSchedule
 from positronic.policy.remote import RemotePolicy
@@ -51,7 +51,14 @@ def controlled_runtime(monkeypatch):
     def submit(function, obs):
         future = Future()
         calls.append((future, obs, function))
-        return _UnchargedAnswer(future)
+        return MagicMock(
+            spec=Answer,
+            done=future.done,
+            result=future.result,
+            cancel=future.cancel,
+            elapsed_sec=0.0,
+            execution_sec=0.0,
+        )
 
     monkeypatch.setattr(runtime, 'submit', submit)
     yield runtime, now, calls

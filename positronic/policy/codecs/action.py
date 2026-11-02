@@ -97,6 +97,8 @@ class JointPositionAction(Codec):
         return {name: tree.update_at(data[name], self._commands_path[1:], self._encode_commands)}
 
     def _decode_single(self, data: dict) -> dict:
+        if not data:
+            return {}
         return {
             keys.ROBOT_COMMAND: command.JointPosition(
                 positions=np.asarray(data[self._joints_key]).reshape(self._num_joints)
@@ -136,6 +138,8 @@ class CartesianDeltaAction(Codec):
         self._rotation_rep = RotRep(rotation_rep)
 
     def _decode_single(self, data: dict) -> dict:
+        if not data:
+            return {}
         action = np.asarray(data[self._action_key])
         expected = 4 + self._rotation_rep.size
         if action.shape != (expected,):
@@ -166,6 +170,8 @@ class AbsolutePositionAction(Codec):
         return {}
 
     def _decode_single(self, data: dict) -> dict:
+        if not data:
+            return {}
         action_vector = data[ACTION]
         target_pose = geom.Transform3D.from_vector(action_vector[:-1], self.rot_rep)
         target_grip = action_vector[-1].item()
@@ -208,6 +214,8 @@ class AbsoluteJointsAction(Codec):
         return {}
 
     def _decode_single(self, data: dict) -> dict:
+        if not data:
+            return {}
         action_vector = data[ACTION]
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')
@@ -248,6 +256,8 @@ class BimanualJointsAction(Codec):
         self.num_joints = num_joints
 
     def _decode_single(self, data: dict) -> dict:
+        if not data:
+            return {}
         vector = np.asarray(data[ACTION], dtype=np.float64)
         width = self.num_joints + 1
         if vector.shape[-1] != width * len(keys.BIMANUAL_ARMS):
@@ -326,6 +336,8 @@ class JointDeltaAction(Codec):
         return {}
 
     def _decode_single(self, data: dict) -> dict:
+        if not data:
+            return {}
         action_vector = data[ACTION]
         if action_vector.shape[-1] != self.num_joints + 1:
             raise ValueError(f'Expected action vector of size {self.num_joints + 1}, got {action_vector.shape[-1]}')

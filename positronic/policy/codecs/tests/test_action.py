@@ -16,6 +16,7 @@ from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.command import Impedance, JointDelta
 from positronic.geom import Rotation, Transform3D
+from positronic.policy.base import Step
 from positronic.policy.codecs import (
     ACTION,
     BimanualJointsAction,
@@ -28,8 +29,32 @@ from positronic.policy.codecs import (
     SplitActionChunk,
     StateObservationCodec,
 )
-from positronic.policy.codecs.action import AbsoluteJointsAction, AbsolutePositionAction, IKJointsAction
+from positronic.policy.codecs.action import (
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    IKJointsAction,
+    JointDeltaAction,
+)
 from positronic.policy.spec import from_spec
+
+
+@pytest.mark.parametrize(
+    'codec',
+    [
+        JointPositionAction('joints', 'grip'),
+        CartesianDeltaAction(),
+        AbsolutePositionAction('pose', 'grip'),
+        AbsoluteJointsAction('joints', 'grip'),
+        BimanualJointsAction(),
+        JointDeltaAction(),
+    ],
+)
+def test_action_decoders_accept_empty_commands_without_dropping_step_outputs(codec):
+    outputs = {'sample': object()}
+    step = Step({}, 123, outputs=outputs)
+    assert codec.decode({}) == {}
+    assert codec.decode([{}]) == [{}]
+    assert codec.wrap(lambda obs: step)({}) == step
 
 
 def test_joint_commands_encode_through_composition_without_changing_the_plan():

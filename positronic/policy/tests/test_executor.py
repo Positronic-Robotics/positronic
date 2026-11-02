@@ -116,13 +116,17 @@ def test_completion_is_delivered_once_independently_of_result_reads(executors, r
     runtime, _ = executors()
     answer = cast(_UnchargedAnswer[int], runtime.submit(lambda: 42))
     assert answer.call.result(timeout=1) == 42
+    assert runtime.has_ready_answers()
     if read_first:
         assert answer.result() == 42
+    assert runtime.has_ready_answers() is not read_first
     assert runtime.has_pending
     assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
     assert not runtime.has_pending
     assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
+    assert runtime.has_ready_answers() is not read_first
     assert answer.result() == 42
+    assert not runtime.has_ready_answers()
     assert runtime.take_completed() == ()
 
 
@@ -132,11 +136,16 @@ def test_submission_and_bounded_wait_do_not_wait_out_a_worker(executors):
     try:
         answer = runtime.submit(lambda: release.wait(timeout=2))
         assert not answer.done()
+        assert not runtime.has_ready_answers()
         assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.TIMED_OUT)
         assert runtime.take_completed() == ()
         assert now == [0]
         with pytest.raises(NotAnswered):
             answer.result()
+        with pytest.raises(NotAnswered):
+            _ = answer.elapsed_sec
+        with pytest.raises(NotAnswered):
+            _ = answer.execution_sec
     finally:
         release.set()
     assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
@@ -150,7 +159,11 @@ def test_fast_call_completes_while_another_worker_is_pending(executors):
     try:
         fast = cast(_UnchargedAnswer[int], runtime.submit(lambda: 42))
         assert fast.call.result(timeout=1) == 42
+        assert runtime.has_ready_answers()
         assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (fast,))
+        assert runtime.has_ready_answers()
+        assert fast.result() == 42
+        assert not runtime.has_ready_answers()
         assert runtime.has_pending
         assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.TIMED_OUT)
     finally:
@@ -174,9 +187,57 @@ def test_charged_completion_is_hidden_until_its_episode_time(executors, monkeypa
         assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
         assert runtime.has_pending
         assert not answer.done()
+        assert not runtime.has_ready_answers()
+        with pytest.raises(NotAnswered):
+            _ = answer.elapsed_sec
+        with pytest.raises(NotAnswered):
+            _ = answer.execution_sec
     now[0] = 20_000_000
     assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert runtime.has_ready_answers()
+    assert answer.elapsed_sec == answer.execution_sec == 0.02
     assert answer.result() == 42
+    assert not runtime.has_ready_answers()
+
+
+@pytest.mark.parametrize('simulated, charged', [(False, False), (False, True), (True, True), (True, False)])
+def test_durations_separate_queueing_from_execution_and_ignore_late_reads(executors, monkeypatch, simulated, charged):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(simulated=simulated, charged=charged)
+    started, release = threading.Event(), threading.Event()
+
+    def first():
+        started.set()
+        assert release.wait(timeout=2)
+
+    def second():
+        wall[0] = 50_000_000
+        return 42
+
+    first_answer = cast(_UnchargedAnswer[None], runtime.submit(first))
+    try:
+        assert started.wait(timeout=1)
+        wall[0] = now[0] = 10_000_000
+        second_answer = cast(_UnchargedAnswer[int], runtime.submit(second))
+        assert not second_answer.done()
+        wall[0] = 30_000_000
+    finally:
+        release.set()
+    assert second_answer.call.result(timeout=1) == 42
+    now[0] = 50_000_000
+    expected = (0.0, 0.0) if simulated and not charged else (0.04, 0.02)
+    assert (second_answer.elapsed_sec, second_answer.execution_sec) == expected
+    assert first_answer.elapsed_sec == (0.0 if simulated and not charged else 0.03)
+    runtime.take_completed()
+    assert runtime.has_ready_answers()
+    wall[0] = now[0] = 1_000_000_000
+    assert (second_answer.elapsed_sec, second_answer.execution_sec) == expected
+    assert second_answer.result() == 42
+    assert runtime.has_ready_answers()
+    assert first_answer.result() is None
+    assert not runtime.has_ready_answers()
+    assert (second_answer.elapsed_sec, second_answer.execution_sec) == expected
 
 
 def test_charged_wait_is_bounded_by_the_time_still_owed(executors, monkeypatch):
@@ -231,6 +292,11 @@ def test_cancellation_notifies_once(executors):
     try:
         queued = runtime.submit(lambda: 42)
         queued.cancel()
+        assert not runtime.has_ready_answers()
+        with pytest.raises(CancelledError):
+            _ = queued.elapsed_sec
+        with pytest.raises(CancelledError):
+            _ = queued.execution_sec
         assert runtime.take_completed() == (queued,)
         assert runtime.take_completed() == ()
         with pytest.raises(CancelledError):
@@ -248,8 +314,12 @@ def test_failure_notifies_and_is_raised_by_result(executors, caplog):
 
     answer = runtime.submit(fail)
     assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert runtime.has_ready_answers()
+    assert answer.elapsed_sec == answer.execution_sec == 0.0
+    assert runtime.has_ready_answers()
     with pytest.raises(ValueError, match='model failed'):
         answer.result()
+    assert not runtime.has_ready_answers()
     runtime.close()
     assert 'model failed' not in caplog.text
 

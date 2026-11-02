@@ -137,11 +137,14 @@ ABC_MULTITASK_TASKS = (
 # ABC's own sim eval draws world `i` of a task from seed `20260511 + i`, so trial `i` here runs the same scene.
 ABC_FIRST_SEED = 20260511
 ABC_TRIALS_PER_TASK = 20
-# The render size changes what a policy sees, so a definition pins it rather than take a config default.
+# The render size and the camera view change what a policy sees, so a definition pins them rather than take a
+# config default.
 ABC_CAMERA_HEIGHT, ABC_CAMERA_WIDTH = 260, 416
+# The value of `positronic.simulator.amazon_abc.mapping.CameraView.ZED_X`: a fit to the ZED-X stations of ABC-130k.
+ABC_CAMERA_VIEW = 'zed_x'
 ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
-# The `main` commit that merged the ABC backend.
-ABC_POSITRONIC_REVISION = 'c1e5853f2f0c1291bc5bd6e19fa80da2ce3233e3'
+# The `main` commit that added the camera view to the ABC config.
+ABC_POSITRONIC_REVISION = 'b2499cbe5565dc3cbd9cd8fcbdf29f588a6aaa88'
 
 
 def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
@@ -156,6 +159,7 @@ def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
             'trial_count': ABC_TRIALS_PER_TASK,
             'camera_height': ABC_CAMERA_HEIGHT,
             'camera_width': ABC_CAMERA_WIDTH,
+            'camera_view': ABC_CAMERA_VIEW,
         },
         tasks=[EvalTask(name=task, trials=[{SEED: seed} for seed in seeds]) for task in tasks],
         time_limit_s=time_limit_s,
