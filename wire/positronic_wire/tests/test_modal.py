@@ -1,14 +1,13 @@
 """The client side of a Modal Server with sticky sessions."""
 
 import atexit
-import email.message
 import http.client
 import json
 import pickle
 import socket
 import ssl
 import threading
-import urllib.error
+import time
 from collections.abc import Iterator, Mapping
 from http import HTTPStatus
 from unittest.mock import patch
@@ -18,7 +17,6 @@ from positronic_wire import modal, websocket, wire
 
 _ADDRESS = wire.HostPortAddress('app-server.eu-west.modal.direct', 443, wire.SESSION_PATH, '')
 _CREDENTIALS = {'Modal-Key': 'KEY', 'Modal-Secret': 'SECRET'}
-_ROOT = 'https://app-server.eu-west.modal.direct'
 
 
 class FakeEdge:
@@ -33,17 +31,19 @@ class FakeEdge:
         self.container_free.set()
         self._issued = 0
 
-    def post(self, url: str, headers: Mapping[str, str], timeout: float) -> bytes:
-        if url.endswith(modal.TERMINATE_PATH):
+    def post(
+        self, root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float
+    ) -> tuple[int, bytes]:
+        if path == modal.TERMINATE_PATH:
             self.ended.append(headers[modal.SESSION_TOKEN_HEADER])
-            return b''
-        assert url.endswith(modal.START_PATH)
-        self.starts.append({**headers, 'url': url})
+            return HTTPStatus.OK, b''
+        assert path == modal.START_PATH
+        self.starts.append({**headers, 'host': root.host})
         if self.refuse:
-            raise urllib.error.HTTPError(url, self.refuse.pop(0), 'refused', email.message.Message(), None)
+            return self.refuse.pop(0), b''
         self.container_free.wait()
         self._issued += 1
-        return json.dumps({modal.START_ANSWER_TOKEN: f'token-{self._issued}'}).encode()
+        return HTTPStatus.OK, json.dumps({modal.START_ANSWER_TOKEN: f'token-{self._issued}'}).encode()
 
 
 class FakeConnection(wire.ClientConnection):
@@ -414,11 +414,13 @@ def test_a_start_the_edge_drops_before_its_answer_continues_under_the_same_key(m
     monkeypatch.setattr('positronic_wire.modal.time.sleep', lambda seconds: None)
     answer = edge.post
 
-    def drop_first(url: str, headers: Mapping[str, str], timeout: float) -> bytes:
+    def drop_first(
+        root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float
+    ) -> tuple[int, bytes]:
         if len(edge.starts) == 0:
             edge.starts.append(dict(headers))
             raise http.client.RemoteDisconnected('Remote end closed connection without response')
-        return answer(url, headers, timeout)
+        return answer(root, path, headers, timeout)
 
     with patch.object(modal.ModalClientWire, '_post', staticmethod(drop_first)):
         modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
@@ -433,8 +435,10 @@ def test_a_start_the_edge_drops_before_its_answer_continues_under_the_same_key(m
     [socket.gaierror(socket.EAI_NONAME, 'Name or service not known'), ssl.SSLCertVerificationError('unknown issuer')],
 )
 def test_a_start_no_retry_reaches_surfaces_at_once_as_final(modal_wire, reason):
-    def unreachable(url: str, headers: Mapping[str, str], timeout: float) -> bytes:
-        raise urllib.error.URLError(reason)
+    def unreachable(
+        root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float
+    ) -> tuple[int, bytes]:
+        raise reason
 
     with (
         patch.object(modal.ModalClientWire, '_post', staticmethod(unreachable)),
@@ -445,10 +449,40 @@ def test_a_start_no_retry_reaches_surfaces_at_once_as_final(modal_wire, reason):
     assert refused.value.refusal is wire.Refusal.FINAL
 
 
+def _hanging_lookup(*_args, **_kwargs):
+    time.sleep(3.0)
+    raise socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution')
+
+
+def test_a_start_whose_name_lookup_hangs_ends_at_its_start_deadline(inner, monkeypatch):
+    monkeypatch.setattr(socket, 'getaddrinfo', _hanging_lookup)
+    client_wire = modal.ModalClientWire(inner, start_deadline=0.3)
+    atexit.unregister(client_wire.end_all)
+    started = time.monotonic()
+
+    with pytest.raises(wire.ConnectRefused) as refused:
+        client_wire.dial(_ADDRESS, _CREDENTIALS, 2.5)
+
+    assert refused.value.refusal is wire.Refusal.SILENT
+    assert time.monotonic() - started < 2.0, 'the start deadline did not cover the name lookup'
+
+
+def test_a_terminate_whose_name_lookup_hangs_returns_within_its_timeout(modal_wire, edge, monkeypatch):
+    conn = modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+    monkeypatch.setattr(socket, 'getaddrinfo', _hanging_lookup)
+    monkeypatch.setattr(modal, 'TERMINATE_TIMEOUT', 0.3)
+    started = time.monotonic()
+
+    with patch.object(modal.ModalClientWire, '_post', modal.ModalClientWire.__dict__['_post']):
+        assert conn.close() == 'closed'
+
+    assert time.monotonic() - started < 2.0, 'the terminate timeout did not cover the name lookup'
+
+
 def test_a_terminate_the_edge_drops_is_logged_and_not_raised(modal_wire, edge):
     conn = modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
-    def dropped(url: str, headers: Mapping[str, str], timeout: float) -> bytes:
+    def dropped(root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float) -> tuple[int, bytes]:
         raise http.client.RemoteDisconnected('Remote end closed connection without response')
 
     with patch.object(modal.ModalClientWire, '_post', staticmethod(dropped)):
@@ -471,7 +505,7 @@ def test_each_server_holds_its_own_sessions(modal_wire, edge, inner):
     modal_wire.dial(other, _CREDENTIALS, 5.0)
 
     assert inner.dialled == ['token-2']
-    assert edge.starts[1]['url'] == 'https://other-server.eu-west.modal.direct' + modal.START_PATH
+    assert edge.starts[1]['host'] == 'other-server.eu-west.modal.direct'
 
 
 def test_a_pickled_wire_holds_no_sessions(modal_wire, edge):
@@ -487,7 +521,9 @@ def test_a_pickled_wire_holds_no_sessions(modal_wire, edge):
 @pytest.mark.parametrize('answer', [b'{}', b'not json', b'{"token": ""}', b'{"token": "a b"}', b'{"token": 7}'])
 def test_a_start_answer_without_a_token_a_header_holds_is_final(modal_wire, answer):
     with (
-        patch.object(modal.ModalClientWire, '_post', staticmethod(lambda url, headers, timeout: answer)),
+        patch.object(
+            modal.ModalClientWire, '_post', staticmethod(lambda root, path, headers, timeout: (HTTPStatus.OK, answer))
+        ),
         pytest.raises(wire.ConnectRefused) as refused,
     ):
         modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)

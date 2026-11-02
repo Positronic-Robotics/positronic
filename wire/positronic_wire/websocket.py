@@ -112,41 +112,6 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
     # The most of the keepalive answer's body the call reads: a JSON object of one key fits in it many times.
     _MAX_KEEPALIVE_BODY_BYTES = 16 * 1024
 
-    @classmethod
-    def _post_keepalive(
-        cls, connection: HTTPConnection, headers: Mapping[str, str] | None, deadline: float
-    ) -> tuple[int, bytes]:
-        """The status of the keepalive call on ``connection`` before ``deadline``, and the body of a 200.
-
-        A socket timeout bounds each read, so a peer that sends one byte at a time can hold a read past any
-        deadline. A timer shuts the socket down at the deadline instead.
-        """
-        connection.connect()
-        sock = connection.sock
-
-        def shut_down() -> None:
-            try:
-                # The plain socket's call: `ssl.SSLSocket.shutdown` also drops its TLS state, which a read uses.
-                socket.socket.shutdown(sock, socket.SHUT_RDWR)
-            except OSError as e:
-                # ENOTCONN: the peer ended the connection first, and with it the read.
-                if e.errno != errno.ENOTCONN:
-                    raise
-
-        timer = threading.Timer(max(0.0, deadline - time.monotonic()), shut_down)
-        timer.daemon = True
-        timer.start()
-        try:
-            connection.request('POST', wire.KEEPALIVE_PATH, headers=dict(headers or {}))
-            # Closed here: the answer holds the socket open past the connection's own close.
-            with connection.getresponse() as answer:
-                body = answer.read(cls._MAX_KEEPALIVE_BODY_BYTES) if answer.status == HTTPStatus.OK else b''
-                return answer.status, body
-        finally:
-            timer.cancel()
-            # `join` waits out a shutdown already running, so none runs after this returns.
-            timer.join()
-
     @staticmethod
     def _alive_seconds(body: bytes, where: str) -> int | None:
         """The seconds the keepalive answer in ``body`` carries.
@@ -172,7 +137,9 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
         where = f'{wire.KEEPALIVE_PATH} on {self.session_url(address)}'
         connection = self._api_connection(address, deadline)
         try:
-            status, body = self._post_keepalive(connection, headers, deadline)
+            status, body = post_within(
+                connection, wire.KEEPALIVE_PATH, headers, deadline, self._MAX_KEEPALIVE_BODY_BYTES
+            )
         except HTTPException as e:
             # The connection opened, and no answer the call can read came before the close or the deadline.
             raise wire.ConnectRefused(wire.Refusal.SILENT, f'{e} (calling {where})') from e
@@ -304,6 +271,63 @@ class _HTTPConnectionOn(HTTPConnection):
         self.sock = self._open_socket(_seconds_until(self._deadline))
 
 
+def tls_socket(host: str, port: int, timeout: float) -> socket.socket:
+    """A TLS socket to the edge on ``host:port``. ``timeout`` covers the name lookup, the connect and the TLS
+    handshake."""
+    deadline = time.monotonic() + timeout
+    sock = connected_socket(host, port, timeout)
+    try:
+        sock.settimeout(_seconds_until(deadline))
+        # No context named: the socket verifies the edge against the system's own roots.
+        return ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+    except BaseException:
+        sock.close()
+        raise
+
+
+def https_connection(address: wire.HostPortAddress, default_port: int, deadline: float) -> HTTPConnection:
+    """An unopened HTTPS connection to the edge on ``address``, which opens its socket before ``deadline``."""
+    return _HTTPConnectionOn(
+        wire.netloc(address, default_port), partial(tls_socket, address.host, address.port), deadline
+    )
+
+
+def post_within(
+    connection: HTTPConnection, path: str, headers: Mapping[str, str] | None, deadline: float, max_body_bytes: int
+) -> tuple[int, bytes]:
+    """The status of a ``POST`` on ``path`` over ``connection`` before ``deadline``, and up to ``max_body_bytes`` of
+    the body of a 2xx answer.
+
+    A socket timeout bounds each read, so a peer that sends one byte at a time can hold a read past any
+    deadline. A timer shuts the socket down at the deadline instead.
+    """
+    connection.connect()
+    sock = connection.sock
+
+    def shut_down() -> None:
+        try:
+            # The plain socket's call: `ssl.SSLSocket.shutdown` also drops its TLS state, which a read uses.
+            socket.socket.shutdown(sock, socket.SHUT_RDWR)
+        except OSError as e:
+            # ENOTCONN: the peer ended the connection first, and with it the read.
+            if e.errno != errno.ENOTCONN:
+                raise
+
+    timer = threading.Timer(max(0.0, deadline - time.monotonic()), shut_down)
+    timer.daemon = True
+    timer.start()
+    try:
+        connection.request('POST', path, headers=dict(headers or {}))
+        # Closed here: the answer holds the socket open past the connection's own close.
+        with connection.getresponse() as answer:
+            succeeded = HTTPStatus.OK <= answer.status < HTTPStatus.MULTIPLE_CHOICES
+            return answer.status, answer.read(max_body_bytes) if succeeded else b''
+    finally:
+        timer.cancel()
+        # `join` waits out a shutdown already running, so none runs after this returns.
+        timer.join()
+
+
 class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     """The client side of the websocket wire, which the server's HTTP port carries beside its API."""
 
@@ -339,19 +363,7 @@ class WebsocketTlsClientWire(WebsocketClientWire):
     SCHEME = 'wss'
 
     def _api_connection(self, address: wire.HostPortAddress, deadline: float) -> HTTPConnection:
-        return _HTTPConnectionOn(wire.netloc(address, self.DEFAULT_PORT), partial(self._open_tls, address), deadline)
-
-    def _open_tls(self, address: wire.HostPortAddress, timeout: float) -> socket.socket:
-        """A TLS socket to the edge on ``address``. ``timeout`` covers the connect and the TLS handshake."""
-        deadline = time.monotonic() + timeout
-        sock = self._open_socket(address, timeout)
-        try:
-            sock.settimeout(_seconds_until(deadline))
-            # No context named: the socket verifies the edge against the system's own roots.
-            return ssl.create_default_context().wrap_socket(sock, server_hostname=address.host)
-        except BaseException:
-            sock.close()
-            raise
+        return https_connection(address, self.DEFAULT_PORT, deadline)
 
 
 class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):

@@ -6,17 +6,15 @@ import json
 import logging
 import threading
 import time
-import urllib.error
-import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from functools import partial
 from http import HTTPStatus
-from http.client import HTTPException, HTTPMessage
-from typing import IO, NamedTuple
+from http.client import HTTPException
+from typing import NamedTuple
 
 from positronic_wire import wire
-from positronic_wire.websocket import refusal_of
+from positronic_wire.websocket import https_connection, post_within, refusal_of
 
 _logger = logging.getLogger(__name__)
 
@@ -53,7 +51,7 @@ class _Parked(NamedTuple):
 class _Endpoint:
     """The Modal sessions this process holds on one endpoint."""
 
-    root: str
+    root: wire.HostPortAddress
     # The credentials every start and terminate on this endpoint carries; a request in a session carries a token.
     headers: Mapping[str, str] | None
     # The sessions that open connections hold, oldest first.
@@ -223,9 +221,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         with self._changed:
             endpoint = self._endpoints.get(key)
             if endpoint is None:
-                endpoint = _Endpoint(
-                    f'https://{wire.netloc(root, self.DEFAULT_PORT)}', dict(headers) if headers else None
-                )
+                endpoint = _Endpoint(root, dict(headers) if headers else None)
                 self._endpoints[key] = endpoint
             return endpoint
 
@@ -306,7 +302,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 left = deadline - time.monotonic()
                 if left <= 0:
                     raise wire.ConnectRefused(
-                        wire.Refusal.COLD, f'The Modal session start on {endpoint.root} still waits for a container'
+                        wire.Refusal.COLD,
+                        f'The Modal session start on {endpoint.root.host} still waits for a container',
                     )
                 self._changed.wait(left)
             token = endpoint.spare
@@ -325,7 +322,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             failure = refused
         except Exception as e:
             failure = wire.ConnectRefused(
-                wire.Refusal.SILENT, f'The Modal session start on {endpoint.root} failed: {e}'
+                wire.Refusal.SILENT, f'The Modal session start on {endpoint.root.host} failed: {e}'
             )
             failure.__cause__ = e
         extra: str | None = None
@@ -355,24 +352,18 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             raise wire.ConnectRefused(wire.Refusal.FINAL, 'Modal answered a session start with a token no header holds')
         return token
 
-    @staticmethod
-    def _refusal(failed: OSError | HTTPException) -> wire.Refusal:
-        """What a session call that got no HTTP answer says about the edge: ``FINAL`` for a host with no address and for
-        a certificate that does not verify, ``SILENT`` for the rest."""
-        reason = failed.reason if isinstance(failed, urllib.error.URLError) else failed
-        return refusal_of(reason) if isinstance(reason, OSError) else wire.Refusal.SILENT
-
     def _start_session(self, endpoint: _Endpoint) -> str:
         """The token of a new session. A 5xx, a 429 and a lost answer continue the start under the same key."""
         key, stamp = str(uuid.uuid4()), str(time.time())
         deadline = time.monotonic() + self._start_deadline
-        lost: Exception | None = None
+        last = 'no answer yet'
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
                 raise wire.ConnectRefused(
-                    wire.Refusal.SILENT, f'No container took the Modal session start on {endpoint.root} in time'
-                ) from lost
+                    wire.Refusal.SILENT,
+                    f'No container took the Modal session start on {endpoint.root.host} in time (last: {last})',
+                )
             headers = {
                 **(endpoint.headers or {}),
                 IDLE_TIMEOUT_HEADER: str(self._idle_timeout),
@@ -380,25 +371,25 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 TIMESTAMP_HEADER: stamp,
             }
             try:
-                return self._session_token(
-                    self._post(endpoint.root + START_PATH, headers, min(left, START_REQUEST_TIMEOUT))
-                )
-            except urllib.error.HTTPError as refused:
-                # The edge answers a start it rate-limits with 429, and the start continues as after a 5xx.
-                if refused.code < HTTPStatus.INTERNAL_SERVER_ERROR and refused.code != HTTPStatus.TOO_MANY_REQUESTS:
-                    forbidden = refused.code in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN)
-                    raise wire.ConnectRefused(
-                        wire.Refusal.FORBIDDEN if forbidden else wire.Refusal.FINAL,
-                        f'Modal refused a session start on {endpoint.root} with {refused.code}',
-                    ) from None
-                lost = refused
+                status, answer = self._post(endpoint.root, START_PATH, headers, min(left, START_REQUEST_TIMEOUT))
             except (OSError, HTTPException) as failed:
-                if self._refusal(failed) is wire.Refusal.FINAL:
+                if isinstance(failed, OSError) and refusal_of(failed) is wire.Refusal.FINAL:
                     raise wire.ConnectRefused(
-                        wire.Refusal.FINAL, f'The Modal session start on {endpoint.root} failed: {failed}'
+                        wire.Refusal.FINAL, f'The Modal session start on {endpoint.root.host} failed: {failed}'
                     ) from failed
                 _logger.info('A Modal session start got no answer (%s); asking again under the same key', failed)
-                lost = failed
+                last = str(failed)
+            else:
+                if HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES:
+                    return self._session_token(answer)
+                # The edge answers a start it rate-limits with 429, and the start continues as after a 5xx.
+                if status < HTTPStatus.INTERNAL_SERVER_ERROR and status != HTTPStatus.TOO_MANY_REQUESTS:
+                    forbidden = status in (HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN)
+                    raise wire.ConnectRefused(
+                        wire.Refusal.FORBIDDEN if forbidden else wire.Refusal.FINAL,
+                        f'Modal refused a session start on {endpoint.root.host} with {status}',
+                    )
+                last = f'answered {status}'
             time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
     def _terminate(self, endpoint: _Endpoint, token: str) -> None:
@@ -408,27 +399,25 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         """
         headers = {**(endpoint.headers or {}), SESSION_TOKEN_HEADER: token}
         try:
-            self._post(endpoint.root + TERMINATE_PATH, headers, TERMINATE_TIMEOUT)
-        except urllib.error.HTTPError as answer:
-            if answer.code != HTTPStatus.NOT_FOUND:
-                _logger.error('Modal session terminate answered %s; the session ends at its idle timeout', answer.code)
+            status, _ = self._post(endpoint.root, TERMINATE_PATH, headers, TERMINATE_TIMEOUT)
         except (OSError, HTTPException) as lost:
             _logger.error('Modal session terminate got no answer (%s); the session ends at its idle timeout', lost)
-
-    class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-        """Answers a redirect as an ``HTTPError``. A session call carries the endpoint's credentials, so it goes to the
-        endpoint alone. ``urllib`` makes a redirected ``POST`` a ``GET`` without its body, which no session call is."""
-
-        def redirect_request(
-            self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage, newurl: str
-        ) -> None:
-            return None
-
-    _SESSION_CALLS = urllib.request.build_opener(_RefuseRedirects)
+            return
+        if not HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES and status != HTTPStatus.NOT_FOUND:
+            _logger.error('Modal session terminate answered %s; the session ends at its idle timeout', status)
 
     @classmethod
-    def _post(cls, url: str, headers: Mapping[str, str], timeout: float) -> bytes:
-        """The answer to a ``POST`` on ``url``. A refusal and a redirect raise ``urllib.error.HTTPError``."""
-        request = urllib.request.Request(url, data=b'', method='POST', headers=dict(headers))
-        with cls._SESSION_CALLS.open(request, timeout=timeout) as answer:
-            return answer.read(MAX_ANSWER_BYTES)
+    def _post(
+        cls, root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float
+    ) -> tuple[int, bytes]:
+        """The status of a ``POST`` on ``path`` at the edge on ``root``, and the body of a 2xx answer.
+
+        ``timeout`` bounds the whole call: the name lookup, the TLS handshake and every read. A session call carries
+        the endpoint's credentials, so it follows no redirect: a 3xx is a refusal.
+        """
+        deadline = time.monotonic() + timeout
+        connection = https_connection(root, cls.DEFAULT_PORT, deadline)
+        try:
+            return post_within(connection, path, headers, deadline, MAX_ANSWER_BYTES)
+        finally:
+            connection.close()
