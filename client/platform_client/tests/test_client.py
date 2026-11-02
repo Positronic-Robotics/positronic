@@ -47,7 +47,27 @@ from platform_client.eval_plan import (
     plan_of_image,
 )
 from platform_client.identity_providers import GITHUB_REGISTER_TIMEOUT, timeout_after_deadline
-from platform_client.ids import ApiKey, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
+from platform_client.ids import (
+    ApiKey,
+    LeaderboardVersionId,
+    OrgSlug,
+    PackageId,
+    PurchaseId,
+    SubmissionId,
+    TransactionKey,
+)
+from platform_client.leaderboards import (
+    PRIMARY_METRIC,
+    LeaderboardChartsResponse,
+    LeaderboardEpisodesResponse,
+    LeaderboardListResponse,
+    LeaderboardModelsResponse,
+    LeaderboardProgressResponse,
+    LeaderboardRef,
+    LeaderboardResponse,
+    LeaderboardTag,
+    LeaderboardTaskId,
+)
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import BillingPurchaseCreateRequest, CancelRequest, RegisterRequest
 from platform_client.responses import (
@@ -743,6 +763,156 @@ def test_list_boards_asks_without_a_key_and_parses_every_board():
     assert 'authorization' not in gateway.request().headers
 
 
+LEADERBOARD_DESCRIPTOR = {
+    'metrics': [{'key': 'primary', 'name': 'success_rate', 'decimals': 2}],
+    'ranked_by': 'primary',
+}
+LEADERBOARD_PART = {'leaderboard': 'example-board', 'version': '2a'}
+EPISODE_COLUMN = {'name': 'Result'}
+
+
+def test_list_leaderboards_names_the_tag_and_parses_each_leaderboard():
+    gateway = Gateway(
+        200,
+        {
+            'tag': 'example.site',
+            'leaderboards': [
+                {
+                    'leaderboard': 'example-board',
+                    'title': 'Example',
+                    'method': 'example_method',
+                    'tags': [{'tag': 'example.site', 'position': 0}],
+                    'descriptor': {**LEADERBOARD_DESCRIPTOR, 'eval': 'fake.smoke'},
+                }
+            ],
+        },
+    )
+
+    response = make_client(gateway, api_key=None).list_leaderboards(LeaderboardTag('example.site'))
+
+    assert isinstance(response, LeaderboardListResponse)
+    assert response.leaderboards[0].descriptor.eval == EvalRef('fake.smoke')
+    assert gateway.request().url.path == routes.LEADERBOARDS_LIST
+    assert dict(gateway.request().url.params) == {'tag': 'example.site'}
+
+
+def test_get_leaderboard_names_the_slug_and_parses_the_rows():
+    gateway = Gateway(
+        200,
+        {
+            'leaderboard': 'example-org/example-board',
+            'title': 'Example',
+            'method': 'example_method',
+            'descriptor': LEADERBOARD_DESCRIPTOR,
+            'computed_at': AT,
+            'rows': [
+                {
+                    'key': 'team-1f',
+                    'user_tag': '0ddba7',
+                    'display_name': 'demo',
+                    'rank': {'best': 1, 'worst': 1},
+                    'metrics': {'primary': {'value': 0.75, 'low': 0.75, 'high': 0.75}},
+                    'submission': {'id': '1f', 'submitted_at': AT},
+                }
+            ],
+        },
+    )
+
+    response = make_client(gateway).get_leaderboard(LeaderboardRef('example-org/example-board'))
+
+    assert isinstance(response, LeaderboardResponse)
+    assert response.rows[0].metrics[PRIMARY_METRIC].value == 0.75
+    assert response.rows[0].submission is not None
+    assert response.rows[0].submission.id == SubmissionId(0x1F)
+    assert response.version is None
+    assert gateway.request().url.path == routes.LEADERBOARDS_GET
+    assert dict(gateway.request().url.params) == {'leaderboard': 'example-org/example-board'}
+
+
+def test_the_charts_of_a_task_name_the_version_and_the_task():
+    gateway = Gateway(200, {**LEADERBOARD_PART, 'task': 'stack-the-cubes', 'windows': [0.0, 1.0]})
+
+    response = make_client(gateway).leaderboard_charts(
+        LeaderboardRef('example-board'), version=LeaderboardVersionId(0x2A), task=LeaderboardTaskId('stack-the-cubes')
+    )
+
+    assert isinstance(response, LeaderboardChartsResponse)
+    assert response.version == LeaderboardVersionId(0x2A)
+    assert gateway.request().url.path == routes.LEADERBOARDS_CHARTS
+    assert dict(gateway.request().url.params) == {
+        'leaderboard': 'example-board',
+        'version': '2a',
+        'task': 'stack-the-cubes',
+    }
+
+
+def test_a_part_asked_with_no_version_or_task_sends_neither():
+    gateway = Gateway(200, {**LEADERBOARD_PART, 'windows': []})
+    make_client(gateway).leaderboard_charts(LeaderboardRef('example-board'))
+    assert dict(gateway.request().url.params) == {'leaderboard': 'example-board'}
+
+
+def test_the_episodes_and_the_progress_name_the_version():
+    episodes = Gateway(200, {**LEADERBOARD_PART, 'result': EPISODE_COLUMN, 'pace': EPISODE_COLUMN})
+    progress = Gateway(200, LEADERBOARD_PART)
+    version = LeaderboardVersionId(0x2A)
+
+    listed = make_client(episodes).leaderboard_episodes(LeaderboardRef('example-board'), version=version)
+    panels = make_client(progress).leaderboard_progress(LeaderboardRef('example-board'), version=version)
+
+    assert isinstance(listed, LeaderboardEpisodesResponse)
+    assert isinstance(panels, LeaderboardProgressResponse)
+    assert [gateway.request().url.path for gateway in (episodes, progress)] == [
+        routes.LEADERBOARDS_EPISODES,
+        routes.LEADERBOARDS_PROGRESS,
+    ]
+    for gateway in (episodes, progress):
+        assert dict(gateway.request().url.params) == {'leaderboard': 'example-board', 'version': '2a'}
+
+
+def test_leaderboard_models_parses_each_family():
+    gateway = Gateway(200, {'models': [{'id': 'model-a', 'display_name': 'Model A', 'short_name': 'A'}]})
+
+    response = make_client(gateway).leaderboard_models()
+
+    assert isinstance(response, LeaderboardModelsResponse)
+    assert response.models[0].id == 'model-a'
+    assert gateway.request().url.path == routes.LEADERBOARDS_MODELS
+
+
+@pytest.mark.parametrize(
+    ('payload', 'call'),
+    [
+        ({'tag': 'example.site'}, lambda client: client.list_leaderboards(LeaderboardTag('example.site'))),
+        (
+            {
+                'leaderboard': 'example-board',
+                'title': 'Example',
+                'method': 'example_method',
+                'descriptor': LEADERBOARD_DESCRIPTOR,
+                'computed_at': AT,
+            },
+            lambda client: client.get_leaderboard(LeaderboardRef('example-board')),
+        ),
+        (
+            {**LEADERBOARD_PART, 'windows': []},
+            lambda client: client.leaderboard_charts(LeaderboardRef('example-board')),
+        ),
+        (
+            {**LEADERBOARD_PART, 'result': EPISODE_COLUMN, 'pace': EPISODE_COLUMN},
+            lambda client: client.leaderboard_episodes(LeaderboardRef('example-board')),
+        ),
+        (LEADERBOARD_PART, lambda client: client.leaderboard_progress(LeaderboardRef('example-board'))),
+        ({'models': []}, lambda client: client.leaderboard_models()),
+    ],
+    ids=['list', 'get', 'charts', 'episodes', 'progress', 'models'],
+)
+def test_a_leaderboard_read_sends_no_key_even_when_the_client_holds_one(payload: dict, call):
+    gateway = Gateway(200, payload)
+    call(make_client(gateway, api_key=KEY))
+    assert 'authorization' not in gateway.request().headers
+
+
 def test_an_error_envelope_becomes_the_typed_exception():
     gateway = Gateway(
         400,
@@ -870,6 +1040,12 @@ def test_every_endpoint_has_exactly_one_method():
         'cancel_submission',
         'rankings',
         'list_boards',
+        'list_leaderboards',
+        'get_leaderboard',
+        'leaderboard_charts',
+        'leaderboard_episodes',
+        'leaderboard_progress',
+        'leaderboard_models',
         'catalog_evals',
         'catalog_tasks',
         'billing_account',

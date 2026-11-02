@@ -14,16 +14,7 @@ import pytest
 
 # The words that name a role or a period in one engagement rather than anything the platform has.
 # What the contract says instead is `user` for the account and `caller` for whoever is asking.
-ENGAGEMENT_WORDS = (
-    'competition',
-    'participant',
-    'contestant',
-    'season',
-    'qualifier',
-    'prize',
-    'entrant',
-    'leaderboard',
-)
+ENGAGEMENT_WORDS = ('competition', 'participant', 'contestant', 'season', 'qualifier', 'prize', 'entrant')
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI_ROOT = REPO_ROOT / 'positronic' / 'cli'
