@@ -213,8 +213,10 @@ class InferenceSession:
         try:
             try:
                 with self._send_lock:
-                    if self._closed or self._closing:
+                    if self._closed:
                         raise wire.PeerDisconnected('The inference session is closed')
+                    if self._closing:
+                        raise RuntimeError('The inference session is closing')
                     with self._responses:
                         self._pending.append(token)
                     self._conn.send(serialised)

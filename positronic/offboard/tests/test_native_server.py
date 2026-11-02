@@ -1,6 +1,7 @@
 """The Positronic client selects v3 without interpreting native results as robot commands."""
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
@@ -176,6 +177,41 @@ def test_pipeline_timeout_fails_unanswered_calls_and_closes_session(serving, wat
                         answer.result(timeout=3)
                 with pytest.raises(wire.PeerDisconnected):
                     session.infer({'index': 3})
+            finally:
+                release.set()
+        session.close()
+
+
+def test_a_call_rejected_during_close_does_not_abort_an_outstanding_reply(serving):
+    started, release = threading.Event(), threading.Event()
+
+    class BlockingSession(Session):
+        def infer(self, observation):
+            if observation['index'] == 1:
+                started.set()
+                assert release.wait(5)
+            return observation['index']
+
+    class BlockingModel(Model):
+        def prepare_session(self, params):
+            return BlockingSession(spec.component('chunked_schedule', version=2, fps=10))
+
+    with serving(BlockingModel) as endpoint:
+        session = InferenceClient(*endpoint, infer_timeout=5).new_session()
+        assert session.infer({'index': 0}) == 0
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                answer = pool.submit(session.infer, {'index': 1})
+                assert started.wait(3)
+                closing = pool.submit(session.close)
+                deadline = time.monotonic() + 3
+                while not session._closing and time.monotonic() < deadline:
+                    time.sleep(0.001)
+                with pytest.raises(RuntimeError, match='session is closing'):
+                    session.infer({'index': 2})
+                release.set()
+                assert answer.result(timeout=3) == 1
+                closing.result(timeout=3)
             finally:
                 release.set()
         session.close()
