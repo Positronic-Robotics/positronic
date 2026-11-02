@@ -501,6 +501,39 @@ def test_a_channel_that_answers_and_refuses_the_ring_still_raises(socket_path, f
 
 
 @pytestmark_ring
+def test_a_channel_that_never_answers_the_handover_raises_at_the_connection_deadline(socket_path):
+    silent = _bind_frame_channel(socket_path)
+    try:
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            frame_ring.FrameWriter.open(_frame_channel_dialer(socket_path), SESSION_ID, ready_by=started + 0.2)
+
+        assert time.monotonic() - started < frame_ring.HANDOVER_TIMEOUT_SEC / 2
+    finally:
+        silent.close()
+
+
+@pytestmark_ring
+def test_a_handover_with_time_left_before_the_connection_deadline_opens_a_ring(socket_path, frame_channel):
+    writer = frame_ring.FrameWriter.open(_frame_channel_dialer(socket_path), SESSION_ID, ready_by=time.monotonic() + 30)
+    assert writer is not None
+    try:
+        image = _image()
+        served = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(writer, {'image.left': image})))
+        np.testing.assert_array_equal(served['image.left'], image)
+    finally:
+        writer.close()
+
+
+def test_a_session_past_its_connection_deadline_dials_no_frame_channel():
+    def dial_past_the_deadline(timeout: float) -> socket.socket:
+        raise AssertionError(f'dialed with {timeout}s past the deadline')
+
+    with pytest.raises(TimeoutError):
+        frame_ring.FrameWriter.open(dial_past_the_deadline, SESSION_ID, ready_by=time.monotonic())
+
+
+@pytestmark_ring
 def test_a_frame_view_keeps_its_pixels_for_the_calls_a_frame_stays_valid_and_no_longer(frame_channel, frame_writer):
     first = _image()
     view = frame_channel.resolve(SESSION_ID, _over_the_wire(_packed(frame_writer, {'image.left': first})))['image.left']
@@ -567,8 +600,8 @@ def test_a_growth_whose_answer_is_lost_after_the_server_took_the_ring_leaves_the
     _packed(frame_writer, {'image.left': _image(8, 8)})
     hand_over = frame_ring.FrameWriter._hand_over
 
-    def answer_lost(writer, sock, ring):
-        hand_over(writer, sock, ring)
+    def answer_lost(writer, sock, ring, ready_by):
+        hand_over(writer, sock, ring, ready_by)
         raise TimeoutError('the answer came after the writer stopped waiting')
 
     monkeypatch.setattr(frame_ring.FrameWriter, '_hand_over', answer_lost)

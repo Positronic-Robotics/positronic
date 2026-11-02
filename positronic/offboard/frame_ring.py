@@ -7,10 +7,12 @@ valid for ``CALLS_A_FRAME_STAYS_VALID`` calls: a server that keeps it longer rea
 
 import fcntl
 import logging
+import math
 import mmap
 import os
 import socket
 import threading
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from functools import partial
 from typing import Any
@@ -166,6 +168,14 @@ def _detach_images(value: Any, found: list[tuple[dict[bytes, Any], np.ndarray]])
 HANDOVER_TIMEOUT_SEC = 10.0
 
 
+def _handover_wait(ready_by: float) -> float:
+    """``HANDOVER_TIMEOUT_SEC``, or the seconds left before the ``time.monotonic()`` instant ``ready_by``."""
+    left = ready_by - time.monotonic()
+    if left <= 0:
+        raise TimeoutError('No time is left to hand the server a frame ring')
+    return min(HANDOVER_TIMEOUT_SEC, left)
+
+
 class FrameWriter:
     """The client's half: one ring per session, handed to the server and grown when a frame outgrows it.
 
@@ -180,19 +190,23 @@ class FrameWriter:
         self._ring: FrameRing | None = None
 
     @classmethod
-    def open(cls, dial_channel: Callable[[float], socket.socket], session_id: str) -> 'FrameWriter | None':
+    def open(
+        cls, dial_channel: Callable[[float], socket.socket], session_id: str, ready_by: float = math.inf
+    ) -> 'FrameWriter | None':
         """A writer whose ring the server has mapped, or None where no channel answers at ``dial_channel``.
 
+        The dial and the server's answer wait for nothing past the ``time.monotonic()`` instant ``ready_by``.
         A hard link to the session socket, or a bind mount of the socket file alone, reaches no channel.
         """
+        wait = _handover_wait(ready_by)
         try:
-            sock = dial_channel(HANDOVER_TIMEOUT_SEC)
+            sock = dial_channel(wait)
         # The ring is optional: the session sends whole images, as on a server that declares none.
         except OSError as unreachable:
             logger.error('No frame ring: %s', unreachable)
             return None
         writer = cls(dial_channel, session_id)
-        writer._hand_over_new_ring(sock, 0)
+        writer._hand_over_new_ring(sock, 0, ready_by)
         return writer
 
     def pack(self, obs: Mapping[str, Any]) -> tuple[dict[str, Any], Callable[[], None] | None]:
@@ -219,11 +233,11 @@ class FrameWriter:
             return self._ring
         return self._hand_over_new_ring(self._dial_channel(HANDOVER_TIMEOUT_SEC), slot_bytes)
 
-    def _hand_over_new_ring(self, sock: socket.socket, slot_bytes: int) -> FrameRing:
+    def _hand_over_new_ring(self, sock: socket.socket, slot_bytes: int, ready_by: float = math.inf) -> FrameRing:
         with sock:
             ring = FrameRing(slot_bytes)
             try:
-                self._hand_over(sock, ring)
+                self._hand_over(sock, ring, ready_by)
             except BaseException:
                 ring.close()
                 # The server can take the ring and lose its answer, so the old ring may not be its ring now.
@@ -236,7 +250,8 @@ class FrameWriter:
         self._ring = ring
         return ring
 
-    def _hand_over(self, sock: socket.socket, ring: FrameRing) -> None:
+    def _hand_over(self, sock: socket.socket, ring: FrameRing, ready_by: float) -> None:
+        sock.settimeout(_handover_wait(ready_by))
         header = serialization.serialise({_SESSION: self._session_id, _SLOTS: ring.slots, _SLOT_BYTES: ring.slot_bytes})
         socket.send_fds(sock, [header], [ring.fd])
         if sock.recv(len(_ACK)) != _ACK:

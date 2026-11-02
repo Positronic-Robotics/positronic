@@ -45,7 +45,7 @@ class InferenceSession:
 
     ``reopen`` returns a new session on the same server. A connection that drops before the server's first
     answer reconnects through it, once, and sends the observation again. ``ready_by`` is the
-    ``time.monotonic()`` instant past which the status handshake waits for no further update.
+    ``time.monotonic()`` instant past which neither the status handshake nor the frame ring handover waits.
 
     ``dial_frame_channel`` is the wire's ``frame_channel_dialer``, where the wire has one. A server that
     also declares a frame ring then gets every image through shared memory, and the message carries a
@@ -84,7 +84,7 @@ class InferenceSession:
         self._pending: deque[object] = deque()
         self._timings = local()
         self.served_timing = self.wire_timing = {}
-        self._frames = self._frame_writer(dial_frame_channel)
+        self._frames = self._frame_writer(dial_frame_channel, ready_by)
 
     @property
     def served_timing(self) -> Mapping[str, float]:
@@ -104,11 +104,13 @@ class InferenceSession:
     def wire_timing(self, value: Mapping[str, float]) -> None:
         self._timings.wire = value
 
-    def _frame_writer(self, dial_channel: Callable[[float], socket.socket] | None) -> frames.FrameWriter | None:
+    def _frame_writer(
+        self, dial_channel: Callable[[float], socket.socket] | None, ready_by: float
+    ) -> frames.FrameWriter | None:
         declared = self._metadata.get(frames.HANDSHAKE_KEY)
         if dial_channel is None or self._session_id is None or not declared or not frames.SUPPORTED:
             return None
-        return frames.FrameWriter.open(dial_channel, self._session_id)
+        return frames.FrameWriter.open(dial_channel, self._session_id, ready_by)
 
     @property
     def sends_frames_through_ring(self) -> bool:
