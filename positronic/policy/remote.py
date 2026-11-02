@@ -3,7 +3,7 @@ import logging
 from concurrent.futures import Future, wait
 from contextlib import closing
 from functools import partial
-from threading import Lock, Thread
+from threading import Thread
 from typing import Any
 
 import numpy as np
@@ -192,7 +192,6 @@ class RemotePolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
-        connection_lock = Lock()
         try:
             try:
                 server_meta = dict(session.metadata)
@@ -224,10 +223,9 @@ class RemotePolicy(Policy):
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
                 nonlocal answered_session_id
-                with connection_lock:
-                    answer = round_trip(session, obs, compress_images, self._jpeg_quality)
-                    answered_session_id = session.session_id
-                    return answer
+                answer = round_trip(session, obs, compress_images, self._jpeg_quality)
+                answered_session_id = session.session_id
+                return answer
 
             with closing(runtime.start(stack, infer)) as run:
                 obs = yield
@@ -253,6 +251,4 @@ class RemotePolicy(Policy):
                             runtime.set_metadata(policy_keys.SESSION_ID, recorded_session_id)
                     obs = yield step
         finally:
-            # Generator failure can reach cleanup while inference still owns the connection.
-            with connection_lock:
-                _close_within_bound(session)
+            _close_within_bound(session)

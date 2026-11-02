@@ -26,7 +26,9 @@ class DreamZeroSession(Session):
     """Keep a bounded sampled history; advance native video state only on prediction calls.
 
     Prediction deadlines share the first observation's clock. Missed deadlines use the latest
-    supplied observation. History offsets select the last sample at or before each requested time.
+    supplied observation. History timestamps and targets map to the nearest sampling tick;
+    missing ticks use the most recent older sample, or the earliest retained sample at startup.
+    Observations older than or equal to the latest accepted timestamp return ``None`` without changing state.
     """
 
     def __init__(
@@ -44,6 +46,7 @@ class DreamZeroSession(Session):
         super().__init__(client_stack)
         self._policy = policy
         self._period_ns = round(prediction_period_sec * 1e9)
+        self._sampling_period_ns = sampling_period_sec * 1e9
         self._offsets_ns = tuple(round(offset * 1e9) for offset in history_offsets_sec)
         capacity = math.ceil(-self._offsets_ns[0] / (sampling_period_sec * 1e9)) + 2
         self._history: deque[tuple[int, dict[str, np.ndarray]]] = deque(maxlen=capacity)
@@ -57,8 +60,10 @@ class DreamZeroSession(Session):
         if self._closed:
             raise RuntimeError('Session is closed')
         now_ns = observation[OBS_TIME_NS]
-        if type(now_ns) is not int or now_ns < 0 or (self._history and now_ns <= self._history[-1][0]):
-            raise ValueError('obs_time_ns must be a strictly increasing nonnegative integer')
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError('obs_time_ns must be a nonnegative integer')
+        if self._history and now_ns <= self._history[-1][0]:
+            return None
         images = {name: np.asarray(observation[name]) for name in CAMERAS}
         if any(image.shape != self._shape or image.dtype != np.uint8 for image in images.values()):
             raise ValueError(f'Camera images must be uint8 with shape {self._shape}')
@@ -70,15 +75,23 @@ class DreamZeroSession(Session):
             self._origin_ns = now_ns
         elif now_ns < self._next_prediction_ns:
             return None
+        assert self._origin_ns is not None
         offsets = (0,) if first else self._offsets_ns
-        frames = [
-            next((images for stamp, images in reversed(self._history) if stamp <= now_ns + offset), self._history[0][1])
-            for offset in offsets
-        ]
+        frames = []
+        for offset in offsets:
+            target_index = round((now_ns + offset - self._origin_ns) / self._sampling_period_ns)
+            frame = next(
+                (
+                    images
+                    for stamp, images in reversed(self._history)
+                    if round((stamp - self._origin_ns) / self._sampling_period_ns) <= target_index
+                ),
+                self._history[0][1],
+            )
+            frames.append(frame)
         inputs = {name: np.stack([frame[name] for frame in frames]) for name in CAMERAS}
         inputs.update({name: observation[name] for name in (JOINTS, GRIP, PROMPT)})
         result = self._policy.predict(inputs)
-        assert self._origin_ns is not None
         periods = (now_ns - self._origin_ns) // self._period_ns + 1
         self._next_prediction_ns = self._origin_ns + periods * self._period_ns
         return result
