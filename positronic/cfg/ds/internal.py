@@ -34,8 +34,7 @@ from positronic.drivers.roboarm.models import (
     FLANGE_LINK,
     GRIPPER_2F85_XYZ,
     GRIPPER_SITE,
-    GRIPPER_YAM_XYZ,
-    YAM_WRIST_LINK,
+    YAM_BASE_IN_EARLIER_BASE,
     EEFrame,
     attach_frame,
     bundled_franka_model,
@@ -77,6 +76,8 @@ _LEGACY_CONTROL_FRAME = 'control_frame'
 _LEGACY_EE_FRAME = 'ee_frame'
 _LEGACY_DEFAULT_SITE = 'default'
 _LEGACY_YAM_GRASP_SITE = 'grasp_site'
+# The wrist link of the earlier bundled YAM URDF, and ``GRIPPER_SITE`` in it: the site a recording on that model lacks.
+_LEGACY_YAM_WRIST_LINK, _LEGACY_GRIPPER_YAM_XYZ = 'link_6', '0 -0.0408 0.138'
 
 
 def _legacy_ee_frames(episode, site: str, pose_signals: Sequence[str] = _POSE_SIGNALS) -> dict[str, Any]:
@@ -162,10 +163,25 @@ SIM_ROBOT_TRANSFORM = (
     | _AT_THE_FRANKA_GRIPPER
 )
 
+
+def _yam_mounts(episode) -> dict[str, list[float]]:
+    """The mount of each arm, for the model the read draws. A recording with no model was made on the earlier YAM
+    model, so each of its mounts moves to the base frame of the bundled model."""
+    mounts = episode[eval_keys.MOUNTS] if eval_keys.MOUNTS in episode else {}
+    if roboarm_keys.URDF in episode:
+        return mounts
+    signals = set(mounts) | set(episode[eval_keys.JOINT_SIGNALS] if eval_keys.JOINT_SIGNALS in episode else [])
+    earlier = {signal: Transform3D(np.asarray(mounts.get(signal, [0.0, 0.0, 0.0]))) for signal in signals}
+    return {signal: (mount * YAM_BASE_IN_EARLIER_BASE).translation.tolist() for signal, mount in earlier.items()}
+
+
 # A YAM recording carries the model its driver emitted; the bundled YAM model backfills one that carries none.
-YAM_ROBOT_TRANSFORM = Group(Identity(remove=_LEGACY_FRAME_KEYS), _YAM_MODEL, _YAM_EE_FRAMES) | _at_the_gripper(
-    YAM_WRIST_LINK, GRIPPER_YAM_XYZ
-)
+YAM_ROBOT_TRANSFORM = Group(
+    Derive(meta=None, **{eval_keys.MOUNTS: _yam_mounts}),
+    Identity(remove=_LEGACY_FRAME_KEYS),
+    _YAM_MODEL,
+    _YAM_EE_FRAMES,
+) | _at_the_gripper(_LEGACY_YAM_WRIST_LINK, _LEGACY_GRIPPER_YAM_XYZ)
 
 RECOVERY_TASK = 'Recovery cases.'
 

@@ -4,15 +4,21 @@ import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from pathlib import Path
 
+import mujoco
 import numpy as np
 import pytest
 
 from positronic import geom, keys
-from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, SIM_ROBOT_TRANSFORM, YAM_ROBOT_TRANSFORM
+from positronic.cfg.ds.internal import (
+    _LEGACY_YAM_WRIST_LINK,
+    REAL_ROBOT_TRANSFORM,
+    SIM_ROBOT_TRANSFORM,
+    YAM_ROBOT_TRANSFORM,
+)
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.ik import _prepare_spec, ee_frames
 from positronic.drivers.roboarm.models import (
     DROID_EE_FRAME,
     EE_LINK,
@@ -21,7 +27,7 @@ from positronic.drivers.roboarm.models import (
     GRIPPER_SITE,
     PANDA_HAND_FRAME,
     YAM_GRASP_SITE_FRAME,
-    YAM_WRIST_LINK,
+    YAM_JOINT_NAMES,
     EEFrame,
     attach_frame,
     bundled_franka_model,
@@ -29,6 +35,7 @@ from positronic.drivers.roboarm.models import (
     bundled_yam_model,
     ee_frames_entry,
 )
+from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
 from positronic.eval import keys as eval_keys
 from positronic.policy.training import ChangeEEFrame
 from positronic.utils import package_assets_path
@@ -154,9 +161,10 @@ def test_training_moves_a_recording_from_before_485_off_the_gripper():
 
 
 def _yam_urdf_with_default() -> str:
-    """The URDF a YAM recording carried before ``gripper``: ``default`` at the MJCF ``grasp_site``, no ``gripper``."""
-    root = ET.fromstring(Path(package_assets_path('assets/i2rt_yam/yam.urdf')).read_text())
-    attach_frame(root, DEFAULT, YAM_WRIST_LINK, '0 0 0.1347', '0 0 -1.5707963268')
+    """The frames of the URDF a YAM recording carried before ``gripper`` that a read uses: its wrist link, and
+    ``default`` at the ``grasp_site`` of the earlier MJCF. It has no ``gripper``."""
+    root = ET.fromstring(f'<robot name="yam"><link name="{_LEGACY_YAM_WRIST_LINK}"/></robot>')
+    attach_frame(root, DEFAULT, _LEGACY_YAM_WRIST_LINK, '0 0 0.1347', '0 0 -1.5707963268')
     return ET.tostring(root, encoding='unicode')
 
 
@@ -183,6 +191,58 @@ def test_a_yam_recording_moves_from_the_default_site_of_the_model_it_carries(sta
         **statics,
     })
     _assert_reads_at_the_gripper(YAM_ROBOT_TRANSFORM(recording), YAM_GRASP_SITE_FRAME)
+
+
+def _gripper_at(urdf: str, mount: list[float], q) -> geom.Transform3D:
+    """``GRIPPER_SITE`` of ``urdf`` at joints ``q``, with its base at ``mount``."""
+    compiled = _prepare_spec(urdf, GRIPPER_SITE).compile()
+    data = mujoco.MjData(compiled)  # pyright: ignore[reportAttributeAccessIssue]
+    data.qpos[[compiled.joint(name).qposadr.item() for name in YAM_JOINT_NAMES]] = q
+    mujoco.mj_kinematics(compiled, data)  # pyright: ignore[reportAttributeAccessIssue]
+    site = data.site(GRIPPER_SITE)
+    rotation = geom.Rotation.from_rotation_matrix(site.xmat.reshape(3, 3))
+    return geom.Transform3D(np.array(mount)) * geom.Transform3D(site.xpos.copy(), rotation)
+
+
+YAMBOX_EARLIER_MOUNTS = {
+    keys.arm_channel(keys.ROBOT_STATE, side) + keys.JOINTS_SUFFIX: [0.30, y, 0.322]
+    for side, y in ((keys.LEFT_ARM, 0.305), (keys.RIGHT_ARM, -0.305))
+}
+
+
+@pytest.mark.parametrize(
+    'statics, earlier_mounts',
+    [
+        (
+            {eval_keys.JOINT_SIGNALS: list(YAMBOX_EARLIER_MOUNTS), eval_keys.MOUNTS: YAMBOX_EARLIER_MOUNTS},
+            YAMBOX_EARLIER_MOUNTS,
+        ),
+        # A single arm recorded no mount: its arm stood at the origin.
+        ({eval_keys.JOINT_SIGNALS: [keys.JOINTS]}, {keys.JOINTS: [0.0, 0.0, 0.0]}),
+    ],
+    ids=['bimanual', 'single_arm'],
+)
+def test_a_yam_recording_with_no_model_draws_the_bundled_model_where_its_arm_stood(statics, earlier_mounts):
+    read = YAM_ROBOT_TRANSFORM(_recording(**{eval_keys.POSE_SIGNALS: list(POSE_SIGNALS), **statics}))
+
+    for signal, earlier_mount in earlier_mounts.items():
+        for q, translation, quat in EARLIER_MODEL_POSES:
+            reported = geom.Transform3D(np.array(translation), geom.Rotation.from_quat(quat))
+            stood = geom.Transform3D(np.array(earlier_mount)) * reported
+            drawn = _gripper_at(read[roboarm_keys.URDF], read[eval_keys.MOUNTS][signal], q)
+            assert np.linalg.norm(drawn.translation - stood.translation) < SAME_POSE_M
+            assert (drawn.rotation.inv * stood.rotation).angle < SAME_POSE_RAD
+
+
+def test_a_yam_recording_that_carries_its_model_keeps_its_mounts():
+    recording = _recording(**{
+        roboarm_keys.URDF: bundled_yam_model()[roboarm_keys.URDF],
+        eval_keys.POSE_SIGNALS: list(POSE_SIGNALS),
+        eval_keys.JOINT_SIGNALS: list(YAMBOX_EARLIER_MOUNTS),
+        eval_keys.MOUNTS: YAMBOX_EARLIER_MOUNTS,
+    })
+
+    assert YAM_ROBOT_TRANSFORM(recording)[eval_keys.MOUNTS] == YAMBOX_EARLIER_MOUNTS
 
 
 def test_a_bimanual_yam_recording_reads_each_pose_of_both_arms_at_the_gripper():

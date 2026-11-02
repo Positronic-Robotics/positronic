@@ -14,6 +14,8 @@ ARMS = ('left', 'right')
 ARM_JOINTS = 6
 # The site each arm is measured and driven at: the YAM's ``grasp_site``, ``YAM_GRASP_SITE_FRAME`` from ``GRIPPER_SITE``.
 CONTROL_SITE = '{arm}_grasp_site'
+# The base frame of the bundled YAM model, in the frame of the base body of an ABC arm: 9.5mm lower.
+BUNDLED_YAM_BASE = (0.0, 0.0, -0.0095)
 JOINT = '{arm}_joint{index}'
 # ABC's camera names.
 TOP_CAMERA = 'top'

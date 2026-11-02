@@ -23,13 +23,21 @@ from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm import yam as yam_package
 from positronic.drivers.roboarm.ik import ee_frames
-from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
+from positronic.drivers.roboarm.models import (
+    GRIPPER_SITE,
+    YAM_BASE_IN_EARLIER_BASE,
+    YAM_GRASP_SITE_FRAME,
+    YAM_JOINT_NAMES,
+    bundled_yam_model,
+)
+from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.harness import Harness, Rollout
+from positronic.simulator.amazon_abc import mapping as abc_mapping
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.zeros(6)
@@ -498,6 +506,79 @@ def test_the_bimanual_embodiment_states_a_frame_for_each_pose_signal_of_both_arm
         assert frames[f'{keys.ROBOT_COMMAND}.{side}{keys.POSE_SUFFIX}'].site == GRIPPER_SITE
 
 
+# The height of the arm-base frame of each bimanual embodiment under the earlier model.
+EARLIER_MOUNT_Z = [(embodiment_cfg.yam_bimanual, 0.311), (embodiment_cfg.yam_bimanual_yambox, 0.322)]
+# The 7 µm between the two models moves an IK answer by less than this.
+SAME_JOINTS_RAD = 3e-4
+
+
+def _earlier_world_poses(embodiment, earlier_z):
+    """``(mount, q, pose)`` per arm and per earlier pose: ``pose`` is the world pose the earlier model reported."""
+    mounts = embodiment.override(cameras={}).instantiate().static_meta[eval_keys.MOUNTS]
+    for mount in mounts.values():
+        earlier_mount = geom.Transform3D(np.array([*mount[:2], earlier_z]))
+        for q, translation, quat in EARLIER_MODEL_POSES:
+            pose = earlier_mount * geom.Transform3D(np.array(translation), geom.Rotation.from_quat(quat))
+            yield geom.Transform3D(np.array(mount)), np.array(q), pose
+
+
+@pytest.mark.parametrize('embodiment, earlier_z', EARLIER_MOUNT_Z, ids=['default', 'yambox'])
+def test_each_bimanual_yam_reports_the_ee_pose_that_the_earlier_model_reported(embodiment, earlier_z):
+    kinematics = yam._Kinematics()
+    for mount, q, earlier in _earlier_world_poses(embodiment, earlier_z):
+        reported = mount * kinematics.fk(q)
+        assert np.linalg.norm(reported.translation - earlier.translation) < SAME_POSE_M
+        assert (reported.rotation.inv * earlier.rotation).angle < SAME_POSE_RAD
+
+
+@pytest.mark.parametrize('embodiment, earlier_z', EARLIER_MOUNT_Z, ids=['default', 'yambox'])
+def test_each_bimanual_yam_solves_an_earlier_pose_to_the_joints_that_the_earlier_model_reached_it_at(
+    embodiment, earlier_z
+):
+    kinematics = yam._Kinematics()
+    for mount, q, earlier in _earlier_world_poses(embodiment, earlier_z):
+        start = np.clip(q + 0.05, kinematics.lower, kinematics.upper)
+        solved = kinematics.ik(mount.inv * earlier, start, kinematics.lower, kinematics.upper)
+        assert solved is not None
+        assert np.max(np.abs(solved - q)) < SAME_JOINTS_RAD
+
+
+def test_the_yam_legacy_frame_is_the_grasp_site_of_the_earlier_model():
+    """``grasp_site`` of the earlier model, at the first joints of ``EARLIER_MODEL_POSES``."""
+    _, translation, quat = EARLIER_MODEL_POSES[0]
+    grasp_site = geom.Transform3D(
+        np.array([0.327502184, 0.103479486, 0.194780095]),
+        geom.Rotation.from_quat([0.353978092, 0.500946103, 0.761194692, 0.210559145]),
+    )
+    gripper = geom.Transform3D(np.array(translation), geom.Rotation.from_quat(quat))
+    np.testing.assert_allclose((gripper * YAM_GRASP_SITE_FRAME).as_matrix, grasp_site.as_matrix, atol=1e-8)
+
+
+def test_at_its_base_in_the_earlier_base_the_bundled_yam_model_reports_the_earlier_poses():
+    kinematics = yam._Kinematics()
+    for q, translation, quat in EARLIER_MODEL_POSES:
+        reported = YAM_BASE_IN_EARLIER_BASE * kinematics.fk(np.array(q))
+        assert np.linalg.norm(reported.translation - np.array(translation)) < SAME_POSE_M
+        assert (reported.rotation.inv * geom.Rotation.from_quat(quat)).angle < SAME_POSE_RAD
+
+
+def test_abc_puts_the_bundled_yam_base_where_positronic_puts_it():
+    np.testing.assert_array_equal(abc_mapping.BUNDLED_YAM_BASE, YAM_BASE_IN_EARLIER_BASE.translation)
+
+
+def test_the_single_arm_yam_reports_and_records_the_ee_pose_that_the_earlier_model_reported():
+    """The earlier single arm reported in its own base frame."""
+    embodiment = embodiment_cfg.yam.instantiate()
+    (robot,) = [system for system in embodiment.control_systems if isinstance(system, yam.Robot)]
+    recorded = geom.Transform3D(np.array(embodiment.static_meta[eval_keys.MOUNTS][keys.JOINTS]))
+    kinematics = yam._Kinematics()
+    for q, translation, quat in EARLIER_MODEL_POSES:
+        for mount in (robot.base_pose, recorded):
+            reported = mount * kinematics.fk(np.array(q))
+            assert np.linalg.norm(reported.translation - np.array(translation)) < SAME_POSE_M
+            assert (reported.rotation.inv * geom.Rotation.from_quat(quat)).angle < SAME_POSE_RAD
+
+
 def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):
     rig.raise_arm()
     rig.vendor.stuck = True
@@ -722,10 +803,10 @@ def test_the_joint_range_is_the_range_of_the_i2rt_arm_model():
     rig.loop.close()
 
 
-def test_a_cartesian_target_that_needs_joint_4_past_the_mjcf_range_reaches_the_chain(rig):
+def test_a_cartesian_target_that_needs_joint_4_below_minus_half_pi_reaches_the_chain(rig):
     rig.raise_arm()
     wrist_down = RAISED.copy()
-    wrist_down[3] = -1.62  # past the -1.5708 of the MJCF, inside the -1.69297 of the i2rt arm model
+    wrist_down[3] = -1.62  # past -pi/2, inside the -1.69297 of the i2rt arm model
     rig.commands.push(command.CartesianPosition(yam._Kinematics().fk(wrist_down)))
     rig.tick(0.9)
     np.testing.assert_allclose(_asked(rig)[-1], wrist_down, atol=1e-6)

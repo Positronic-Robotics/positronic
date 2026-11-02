@@ -7,7 +7,7 @@ import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 from positronic import keys
 from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
+from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_BASE_IN_EARLIER_BASE, EEFrame, ee_frames_entry
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
@@ -58,9 +58,11 @@ droid_fake = droid.override(
 droid_3cam_fake = droid_fake.override(cameras=positronic.cfg.hardware.camera.droid_3cam_fake)
 
 
-@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam, cameras={})
+# The world frame of the single arm is the base frame of the earlier YAM model.
+@cfn.config(robot_arm=positronic.cfg.hardware.roboarm.yam.override(base_pose=YAM_BASE_IN_EARLIER_BASE), cameras={})
 def yam(robot_arm, cameras):
-    """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain)."""
+    """Real single-arm i2rt YAM: the arm driver carries the gripper (they share one CAN chain). static_meta records
+    the mount of the arm."""
     observations = {
         keys.ROBOT_STATE: Observation(robot_arm.state, Serializers.robot_state),
         keys.GRIP: Observation(robot_arm.grip, None),
@@ -75,7 +77,7 @@ def yam(robot_arm, cameras):
         observations=observations,
         commands=commands,
         prepare_handlers={eval_keys.ARM: robot_arm.sync_move, eval_keys.GRIPPER: robot_arm.sync_grip},
-        static_meta=dict(ROBOT_STATIC_META),
+        static_meta={**ROBOT_STATIC_META, eval_keys.MOUNTS: {keys.JOINTS: robot_arm.base_pose.translation.tolist()}},
         meta_source=robot_arm.robot_meta,
         arm_meta_sources={keys.JOINTS: robot_arm.arm_meta},
         ready_handlers={eval_keys.ARM: robot_arm.ready, **{name: cam.ready for name, cam in cameras.items()}},
@@ -96,9 +98,10 @@ def yam(robot_arm, cameras):
         keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
         keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
     },
-    # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
-    # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
-    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
+    # World-frame arm-base mount positions of the sim scene the training data uses: the arms at (0.30, ±0.305),
+    # facing +x, on the 0.011 base plate of the 0.30 tabletop. z is 9.5mm below the top of the plate: the base frame
+    # of the i2rt model is 9.5mm below the base frame of the sim arm.
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3015], keys.RIGHT_ARM: [0.30, -0.305, 0.3015]},
     gravity_comp_factor=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
@@ -185,8 +188,8 @@ yam_bimanual_yambox = yam_bimanual.override(
     left_channel='can_follower_l',
     right_channel='can_follower_r',
     # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
-    # The sim scene's plate is 0.011, so only z differs from the default.
-    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
+    # The sim scene's plate is 0.011, so only z differs from the default: it is 0.011 higher.
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3125], keys.RIGHT_ARM: [0.30, -0.305, 0.3125]},
     # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
     # are sent, past the 20 mrad tolerance of a blocking move. These bring both arms inside it with about
     # 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.

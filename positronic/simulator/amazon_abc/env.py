@@ -186,12 +186,14 @@ class AbcEnv(EnvProtocol):
         return np.concatenate(per_arm).astype(np.float32)
 
     def _mounts(self) -> dict[str, list[float]]:
-        """Where each arm's base stands in the scene, keyed by the joint signal the recording names it by."""
+        """Where the base frame of the bundled YAM model stands under each arm, keyed by the joint signal the recording
+        names it by."""
         self._sync_sites()
         mounts = {}
         for arm in self._arms:
             signal = protocol.arm_channel(protocol.ROBOT_STATE, arm.name) + protocol.JOINTS_SUFFIX
-            mounts[signal] = self._env.data.xpos[arm.base_body_id].tolist()
+            base = self._env.data.xmat[arm.base_body_id].reshape(3, 3) @ np.asarray(mapping.BUNDLED_YAM_BASE)
+            mounts[signal] = (self._env.data.xpos[arm.base_body_id] + base).tolist()
         return mounts
 
     def _sync_sites(self) -> None:
