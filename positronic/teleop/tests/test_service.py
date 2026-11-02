@@ -748,6 +748,12 @@ def test_a_scripted_headset_rate_or_time_that_is_not_finite_and_positive_is_refu
         scripted_headset.drive(page='http://127.0.0.1:1', trials=1, **{name: value})
 
 
+@pytest.mark.parametrize('radius', [-0.01, float('nan'), float('inf')])
+def test_a_scripted_headset_radius_that_is_negative_or_not_finite_is_refused(radius):
+    with pytest.raises(ValueError, match='radius must be finite and not negative'):
+        scripted_headset.drive(page='http://127.0.0.1:1', trials=1, radius=radius)
+
+
 def test_the_phone_page_reads_the_fields_of_the_page_state():
     page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
     [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
@@ -780,7 +786,7 @@ def _until_served(url: str, seconds: float = 10.0) -> None:
 
 
 @pytest.mark.timeout(60)
-def test_the_scripted_headset_readies_moves_and_completes_a_trial_through_the_page(socket_path, runtime, caplog):
+def test_the_scripted_headset_readies_moves_and_completes_each_trial_through_the_page(socket_path, runtime, caplog):
     caplog.set_level(logging.INFO, logger=scripted_headset.__name__)
     port = free_port()
     page = f'http://127.0.0.1:{port}'
@@ -796,22 +802,26 @@ def test_the_scripted_headset_readies_moves_and_completes_a_trial_through_the_pa
         loops = pool.submit(world.run, [headset], [webxr])
         try:
             _until_served(page + STATE_PATH)
-            trials = pool.submit(scripted_headset.drive, page=page, trials=1, trial_sec=0.5, circle_sec=1.0)
-            started = pool.submit(runtime.start, _policy(socket_path, operator_position='BACK'))
-            # A failure of the scripted headset is the cause of a run that never gets Ready, so it raises first.
-            wait([trials, started], return_when=FIRST_COMPLETED)
-            if trials.done():
-                trials.result()
-            run = started.result()
-            steps, end = _drive(run, 10.0)
-            run.close()
+            trials = pool.submit(scripted_headset.drive, page=page, trials=2, trial_sec=0.5, circle_sec=1.0)
+            ends, moves = [], []
+            for _ in range(2):
+                started = pool.submit(runtime.start, _policy(socket_path, operator_position='BACK'))
+                # A failure of the scripted headset is the cause of a run that never gets Ready, so it raises first.
+                wait([trials, started], return_when=FIRST_COMPLETED)
+                if trials.done():
+                    trials.result()
+                run = started.result()
+                steps, end = _drive(run, 10.0)
+                run.close()
+                ends.append(end)
+                moves.append(np.array([_target(step).translation for step in _moves(steps)]))
             trials.result(timeout=10)
         finally:
             world.request_stop()
             loops.result(timeout=10)
-    assert end is PolicyEnd.COMPLETE
-    targets = np.array([_target(step).translation for step in _moves(steps)])
-    assert np.ptp(targets, axis=0).max() > 0.01
+    assert ends == [PolicyEnd.COMPLETE, PolicyEnd.COMPLETE]
+    for targets in moves:
+        assert np.ptp(targets, axis=0).max() > 0.01
 
 
 class _RecordingNotice:

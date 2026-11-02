@@ -89,12 +89,15 @@ class _Hand:
         if self._error is not None:
             raise RuntimeError('The scripted headset stopped sending samples') from self._error
 
+    def hold(self, *down: Button) -> None:
+        """Hold the buttons ``down`` and release the others, until the thread sent at least one sample of them."""
+        self.buttons = _buttons(*down)
+        time.sleep(max(self._PRESS_SEC, 2 * self._period_sec))
+
     def press(self, button: Button) -> None:
         logger.info('The scripted headset presses %s', button.name)
-        self.buttons = _buttons(button)
-        # Two send periods, so the thread sends at least one sample with the button down.
-        time.sleep(max(self._PRESS_SEC, 2 * self._period_sec))
-        self.buttons = _buttons()
+        self.hold(button)
+        self.hold()
 
 
 class _Page:
@@ -128,7 +131,8 @@ def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
     if page.phase() is Phase.RUNNING:
         hand.buttons = _buttons(Button.B)
         page.until([phase for phase in Phase if phase is not Phase.RUNNING])
-    hand.buttons = _buttons()
+    # The service sees the release of B before the next trial, so the next press of B is a new press.
+    hand.hold()
     hand.moving_since = None
 
 
@@ -145,6 +149,8 @@ def drive(page: str, trials: int, rate_hz: float, trial_sec: float, radius: floa
     for name, value in (('rate_hz', rate_hz), ('trial_sec', trial_sec), ('circle_sec', circle_sec)):
         if not 0 < value < math.inf:
             raise ValueError(f'{name} must be finite and positive, got {value}')
+    if not 0 <= radius < math.inf:
+        raise ValueError(f'radius must be finite and not negative, got {radius}')
     url = urlsplit(page)
     tls = ssl.create_default_context()
     tls.check_hostname = False
