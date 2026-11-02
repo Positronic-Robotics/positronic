@@ -626,7 +626,7 @@ class InferenceSchedule(Policy):
     episode metadata; recovery intent is retained until a call can carry it.
     Replanning ignores predictions from earlier calls while letting those calls finish.
     Each accepted call carries a per-run ``call_id`` and unreported completions in ``call_timings``.
-    ``on_replan`` (a streaming session's frame streamer, not part of the spec) gets the time of each replan.
+    ``on_replan``, which is not part of the spec, is called with the time of each replan.
     """
 
     WIRE_NAME = 'inference_schedule'
