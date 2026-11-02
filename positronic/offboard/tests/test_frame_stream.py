@@ -479,43 +479,16 @@ def test_an_rtc_answer_read_after_the_predicted_call_plans_no_rows():
         assert request[KEY][b'rows'] == []
 
 
-def test_snap_refers_to_every_streamed_row_near_the_predicted_time():
+def test_snap_leaves_an_array_stack_to_the_pixel_compare():
     with _streamed_call_1(snap_sec=0.05) as (streamer, clock, _):
         clock.ns = 1_520_000_000  # 20 ms after the predicted 1.5 s
         stack = np.stack([_frame(11), _frame(13), _frame(15)])  # the stack picked tick 11 where the stream sent 12
-        value = streamer.request({KEY: stack})[KEY]
-        assert value[b'rows'] == [2, 1]
-        assert streamer.counts['snapped'] == 1
-        np.testing.assert_allclose(_decoded(value[b'tail']), stack[2:], atol=2)
-
-
-def test_snap_does_not_apply_past_its_tolerance_nor_without_it():
-    for snap, at_ns in ((0.05, 1_560_000_000), (0.0, 1_520_000_000)):
-        with _streamed_call_1(snap_sec=snap) as (streamer, clock, _):
-            clock.ns = at_ns
-            stack = np.stack([_frame(11), _frame(13), _frame(15)])
-            assert streamer.request({KEY: stack})[KEY][b'rows'] == []
-            assert streamer.counts['snapped'] == 0
-
-
-def test_snap_refers_only_to_rows_of_the_stack_s_shape():
-    with _streamed_call_1(snap_sec=0.05) as (streamer, clock, _):
-        clock.ns = 1_500_000_000
-        stack = np.zeros((3, 4, 4, 3), np.uint8)
         assert streamer.request({KEY: stack})[KEY][b'rows'] == []
-
-
-def test_snap_reads_the_submit_time_not_the_time_the_request_is_built():
-    with _streamed_call_1(snap_sec=0.03) as (streamer, clock, _):
-        clock.ns = 1_510_000_000
-        streamer.on_submit()  # the call at 1.51 s; its codecs run until 1.56 s
-        clock.ns = 1_560_000_000
-        stack = np.stack([_frame(11), _frame(13), _frame(15)])
-        assert streamer.request({KEY: stack})[KEY][b'rows'] == [2, 1]
+        assert streamer.counts['snapped'] == 0
 
 
 @contextmanager
-def _fed_call_1(**overrides: Any) -> Iterator[tuple[FrameStreamer, list[dict[str, np.ndarray]]]]:
+def _fed_call_1(**overrides: Any) -> Iterator[tuple[FrameStreamer, _Clock, list[dict[str, np.ndarray]]]]:
     """``_streamed_call_1`` with the ticks given as the entries of a temporal stack's buffer (``on_entry``)."""
     with _streamer(**overrides) as (streamer, clock, _):
         entries = []
@@ -526,17 +499,17 @@ def _fed_call_1(**overrides: Any) -> Iterator[tuple[FrameStreamer, list[dict[str
             if index == 10:
                 streamer.on_answer([{}] * 5, 0.0)
         streamer.flush()
-        yield streamer, entries
+        yield streamer, clock, entries
 
 
 def test_a_stack_entry_feed_streams_the_entries_that_temporal_stack_samples():
-    with _fed_call_1() as (streamer, entries):
+    with _fed_call_1() as (streamer, _, entries):
         rows = streamer._streamed_entries
         assert rows[2] is entries[12] and rows[1] is entries[13]
 
 
 def test_a_request_refers_to_the_rows_of_stack_rows_that_sample_the_streamed_entries():
-    with _fed_call_1() as (streamer, entries):
+    with _fed_call_1() as (streamer, _, entries):
         value = streamer.request({KEY: StackRows(KEY, [entries[12], entries[13], entries[15]])})[KEY]
         assert (value[b'call'], value[b'rows']) == (1, [2, 1])
         # Equal pixels in another entry: not the streamed row, so it goes inline.
@@ -549,7 +522,7 @@ def test_a_request_refers_to_the_rows_of_stack_rows_that_sample_the_streamed_ent
 def test_a_request_of_stack_rows_carries_the_bytes_that_the_stacked_array_carries(codec, picks):
     resize = TransformImages(6, 4, mode=ResizeMode.BOUND)
     with (
-        _fed_call_1(codec=codec, resize=resize.encode) as (fed, entries),
+        _fed_call_1(codec=codec, resize=resize.encode) as (fed, _, entries),
         _streamed_call_1(codec=codec, resize=resize.encode) as (stacked, _, _),
     ):
         rows = resize.encode({KEY: StackRows(KEY, [entries[i] for i in picks])})[KEY]
@@ -566,7 +539,7 @@ def test_a_request_sizes_only_the_rows_of_stack_rows_that_it_carries():
         sized.append(len(frames))
         return [resize.encode({KEY: frame})[KEY] for frame in frames]
 
-    with _fed_call_1(resize=resize.encode) as (streamer, entries):
+    with _fed_call_1(resize=resize.encode) as (streamer, _, entries):
         rows = StackRows(KEY, [entries[12], entries[13], entries[15]]).sized_by(size, resize.transformed_shape)
         value = streamer.request({KEY: rows})[KEY]
         assert value[b'rows'] == [2, 1]
@@ -575,10 +548,37 @@ def test_a_request_sizes_only_the_rows_of_stack_rows_that_it_carries():
 
 
 def test_snap_refers_to_the_streamed_rows_of_stack_rows_by_shape():
-    with _fed_call_1(snap_sec=0.05) as (streamer, entries):
+    with _fed_call_1(snap_sec=0.05) as (streamer, clock, entries):
+        clock.ns = 1_520_000_000  # 20 ms after the predicted 1.5 s
         rows = StackRows(KEY, [entries[11], entries[13], entries[15]])  # tick 11 where the stream sent 12
-        assert streamer.request({KEY: rows})[KEY][b'rows'] == [2, 1]
+        value = streamer.request({KEY: rows})[KEY]
+        assert value[b'rows'] == [2, 1]
         assert streamer.counts['snapped'] == 1
+        np.testing.assert_allclose(_decoded(value[b'tail']), rows.stack(2), atol=2)
+
+
+def test_snap_does_not_apply_past_its_tolerance_nor_without_it():
+    for snap, at_ns in ((0.05, 1_560_000_000), (0.0, 1_520_000_000)):
+        with _fed_call_1(snap_sec=snap) as (streamer, clock, entries):
+            clock.ns = at_ns
+            rows = StackRows(KEY, [entries[11], entries[13], entries[15]])
+            assert streamer.request({KEY: rows})[KEY][b'rows'] == []
+            assert streamer.counts['snapped'] == 0
+
+
+def test_snap_refers_only_to_rows_of_the_stack_s_shape():
+    with _fed_call_1(snap_sec=0.05) as (streamer, _, _):
+        rows = StackRows(KEY, [{KEY: np.zeros((4, 4, 3), np.uint8)} for _ in range(3)])
+        assert streamer.request({KEY: rows})[KEY][b'rows'] == []
+
+
+def test_snap_reads_the_submit_time_not_the_time_the_request_is_built():
+    with _fed_call_1(snap_sec=0.03) as (streamer, clock, entries):
+        clock.ns = 1_510_000_000
+        streamer.on_submit()  # the call at 1.51 s; its codecs run until 1.56 s
+        clock.ns = 1_560_000_000
+        rows = StackRows(KEY, [entries[11], entries[13], entries[15]])
+        assert streamer.request({KEY: rows})[KEY][b'rows'] == [2, 1]
 
 
 def test_a_row_whose_entry_has_left_the_feed_is_not_streamed():

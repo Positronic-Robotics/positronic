@@ -55,7 +55,9 @@ One such row makes the server's precompute miss. ``snap_sec`` trades that exactn
 was submitted within ``snap_sec`` after the predicted time (the schedule's codecs may run before the request is built)
 refers to every streamed row of its call (a run from the stack's oldest history row, by shape, not by pixels). Its
 history rows are then the streamed frames: each row may be sampled up to ``snap_sec`` earlier than the stack would
-sample it. The default 0 keeps every observation exact.
+sample it. The default 0 keeps every observation exact. Only a ``StackRows`` stack snaps: its components pass each
+camera on under its own key. An array stack may come through codecs that put another camera's frames under a key, so
+it refers only to rows of equal pixels.
 """
 
 import collections.abc as cabc
@@ -330,7 +332,7 @@ class FrameStreamer:
     and ``on_replan`` takes its replans.
     ``call_after_sec`` is that of an ``RTCSchedule`` (None: a ``ChunkedSchedule``), whose next call counts from the
     submit of the current one (``on_submit``). ``snap_sec`` (see the module docstring) lets a request close to the
-    predicted time refer to every streamed row.
+    predicted time refer to every streamed row of its ``StackRows`` stacks.
     ``send`` puts one message on the session's connection, under the lock of the connection. ``clock`` is
     the episode clock in nanoseconds.
     """
@@ -504,6 +506,7 @@ class FrameStreamer:
             for key in self._image_keys or ()
             if isinstance(stack := obs.get(key), StackRows) or (isinstance(stack, np.ndarray) and stack.ndim == 4)
         }
+        snap = snap and any(isinstance(stack, StackRows) for stack in stacks.values())
         refer = partial(self._refer, snap=snap)
         # The stacks are independent: the cameras' inline frames are sized and encoded at the same time.
         values = list(self._map(refer, list(stacks), list(stacks.values())))
@@ -601,8 +604,8 @@ class FrameStreamer:
         """The request value of one stack: its oldest rows that equal the streamed rows, then the other frames.
 
         A ``StackRows`` row equals a streamed row when both sample the same buffer entry; it is sized and stacked
-        only when the request carries it. With ``snap`` a streamed row stands for the stack's row by shape alone
-        (the module docstring).
+        only when the request carries it. With ``snap`` a streamed row stands for a ``StackRows`` row by shape alone
+        (the module docstring); an array row needs equal pixels.
         """
         n = len(stack)
         rows: list[int] = []
@@ -628,7 +631,7 @@ class FrameStreamer:
                 return False
             # The same entry: the stack would size the very frame that the stream sized.
             return snap or self._streamed_entries.get(back) is stack.entries[index]
-        return row.shape == stack[index].shape and (snap or np.array_equal(row, stack[index]))
+        return row.shape == stack[index].shape and np.array_equal(row, stack[index])
 
     def _encode(self, key: str, image: np.ndarray) -> dict[bytes, Any]:
         if self._codec is FrameCodec.JPEG:

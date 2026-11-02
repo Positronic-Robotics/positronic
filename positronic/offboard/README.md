@@ -221,8 +221,8 @@ This metadata tells the client:
   end, less its inference lead; an `rtc_schedule`: `call_after_sec` after the current call). A declared
   `encode_images` sets the JPEG quality of the rows and the requests; the client streams only when it is
   the stack's last part and encodes every image. `frame_stream_snap_sec` lets a request close to its
-  predicted time refer to every streamed row (its history then lags the stack's sampling by at most that
-  time). The request then refers to them, and the server can start its work before the request arrives.
+  predicted time refer to every streamed row, for a stack of components the client knows (its history then
+  lags the stack's sampling by at most that time). The request then refers to them, and the server can start its work before the request arrives.
   Without a request from the client and a declaration from the server, requests go in full.
   `positronic/offboard/frame_stream.py`
   describes the messages. `PolicyServer` declares the stream for a deployment whose client compresses

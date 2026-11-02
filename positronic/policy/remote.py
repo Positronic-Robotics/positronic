@@ -169,7 +169,8 @@ class RemotePolicy(Policy):
     (``positronic.offboard.frame_stream``), for a server that declares one for a declared stack that the stream mirrors
     (``_stream_refusal``); otherwise requests go in full.
     ``frame_stream_snap_sec`` lets a streamed request that comes within that many seconds after its predicted time
-    refer to every streamed row (``FrameStreamer``'s ``snap_sec``); 0 keeps every observation exact.
+    refer to every streamed row (``FrameStreamer``'s ``snap_sec``), when this client knows every component of the
+    declared stack; 0 keeps every observation exact.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
