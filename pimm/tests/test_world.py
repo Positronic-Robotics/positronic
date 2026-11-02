@@ -2325,7 +2325,7 @@ def test_a_sigterm_to_the_process_group_still_runs_the_protected_child_shutdown(
     assert (tmp_path / SHUT_DOWN_FILE).exists()
 
 
-def _set_within(flag: _StopFlag, seconds: float) -> bool:
+def _becomes_set_within(flag: _StopFlag, seconds: float) -> bool:
     deadline = time.monotonic() + seconds
     while not flag.is_set() and time.monotonic() < deadline:
         time.sleep(0.01)
@@ -2335,14 +2335,14 @@ def _set_within(flag: _StopFlag, seconds: float) -> bool:
 def test_a_child_whose_parent_is_already_gone_stops_at_once():
     stop = _new_stop_flag()
     _stop_when_orphaned(stop, 'probe', parent_pid=os.getpid())
-    assert _set_within(stop, 5)
+    assert _becomes_set_within(stop, 5)
 
 
 def test_a_child_whose_parent_is_alive_keeps_running():
     stop = _new_stop_flag()
     _stop_when_orphaned(stop, 'probe', parent_pid=os.getppid())
     try:
-        assert not _set_within(stop, 1.0)
+        assert not _becomes_set_within(stop, 1.0)
     finally:
         stop.set()
 
