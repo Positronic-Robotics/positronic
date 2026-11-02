@@ -566,7 +566,6 @@ class TeleopModel(Model):
             image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
         )
         action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
-        # A client stack that states no frame gets no pose.
         frame = ChangeEEFrame(EEFrame(site=GRIPPER_SITE))
         codec = frame | (observation & action & EndCommand()) | EncodeImages(quality=settings.jpeg_quality)
         return spec.sequence(EndOnField().to_spec(), schedule.to_spec(), codec.to_spec())
