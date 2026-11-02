@@ -1,5 +1,83 @@
 # Changelog
 
+## [0.4.3] - 2026-11-02
+
+This release publishes `positronic-platform-client` 0.47.6, and `positronic` requires that version. The client reads the public leaderboards. `positronic eval status` shows the score of a failed run over the episodes that closed before it failed. A listed submission shows when its run started and ended, and a finished submission can carry a report link. The client refuses a team name over 64 characters or with a control character. A policy can request its next action chunk while the robot executes the current one (real-time chunking), and GR00T is the first model that uses it. A plan can name a Modal Server with sticky sessions as its wire. A person who teleoperates is now an ordinary remote model server. A launcher selects a dataset writer for the video encoding, so code that builds a `Rollout` or a `Harness` passes a writer.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.47.6 |
+| `positronic-evals` | 0.2.3 |
+| `positronic-eval-vocabulary` | 0.7.1 |
+| `positronic-model-server` | 0.3.4 |
+| `positronic-wire` | 0.12.2 |
+
+### Platform client
+- `PlatformClient` reads the public leaderboards through six keyless routes: the leaderboards of a tag, one leaderboard and its rows, and the charts, episodes, progress and model families of one version. `platform_client.leaderboards` holds their models ([#1108](https://github.com/Positronic-Robotics/positronic/pull/1108))
+- A failed run's view has `scores`, the score over the episodes that closed before the run failed, and `positronic eval status` shows it. A failed view without `scores` parses as before ([#1060](https://github.com/Positronic-Robotics/positronic/pull/1060))
+- A listed submission has `started_at`, `ended_at` and `estimated_end_at`. Each is `None` until the platform knows it ([#1070](https://github.com/Positronic-Robotics/positronic/pull/1070))
+- A finished submission has a `report` link beside `replay`. It is `None` until the platform builds the report ([#1076](https://github.com/Positronic-Robotics/positronic/pull/1076))
+- The client README states how the platform replays a scene that a plan pins with `scene_seed`, and how it keys a recorded table by the `clutter` block that the plan states ([#1064](https://github.com/Positronic-Robotics/positronic/pull/1064)) ([#1072](https://github.com/Positronic-Robotics/positronic/pull/1072))
+
+### Competition
+- The client removes the spaces at the ends of a team name (`--alias`). It refuses a name with fewer than 1 or more than 64 characters, or with a control character or a text-direction character ([#1112](https://github.com/Positronic-Robotics/positronic/pull/1112))
+- The competition guide shows how to fine-tune GR00T N1.7 DROID on MolmoSpaces demonstrations, with a small public dataset ([#1066](https://github.com/Positronic-Robotics/positronic/pull/1066))
+
+### Inference
+- Real-time chunking: the client requests the next action chunk while it executes the current plan, and sends the planned commands and the inference latency with the request. GR00T conditions its prediction on them, and the `droid_rtc` preset serves it. An RTC stack needs protocol v2 or later ([#1036](https://github.com/Positronic-Robotics/positronic/pull/1036))
+- The `modal_websocket_tls` wire serves a Modal Server with sticky sessions (`@modal.sessioned`, a `.modal.direct` URL). It holds one session per host and per credentials, and a reconnect after a drop reaches the same container. The plan enum gains `Wire.modal_websocket_tls` ([#1106](https://github.com/Positronic-Robotics/positronic/pull/1106))
+- A Modal session start pauses 1 s after a failure, then twice the last pause, up to 30 s. `InferenceClient` dial retries use the same schedule, `wire.retry_pauses()` ([#1126](https://github.com/Positronic-Robotics/positronic/pull/1126))
+- A parallel codec decodes an RTC reply that comes as a list on the wire ([#1079](https://github.com/Positronic-Robotics/positronic/pull/1079))
+- GR00T normalization keeps the planned RTC targets, so a frozen target does not change ([#1082](https://github.com/Positronic-Robotics/positronic/pull/1082))
+- With a lead of the whole chunk, `ChunkedSchedule` sends the next call in the round that reads the answer ([#1069](https://github.com/Positronic-Robotics/positronic/pull/1069))
+- A policy stack or an answer that the client cannot use raises `positronic.policy.PolicyCommandError`, with the original error as its cause ([#1091](https://github.com/Positronic-Robotics/positronic/pull/1091))
+- A WebSocket session that the model server refuses delivers its error to the client before the close, so `RemotePolicy` does not open a new session ([#1061](https://github.com/Positronic-Robotics/positronic/pull/1061))
+- An answer reports `elapsed_sec`, the time from submission to completion, and `execution_sec`, the time the call ran. `runtime.has_ready_answers()` tells whether a finished answer is not read yet ([#1115](https://github.com/Positronic-Robotics/positronic/pull/1115))
+- `Step.outputs` carries the auxiliary results of a policy step to the processors around it. A codec keeps them, and the wake-up time, when it decodes the commands ([#1116](https://github.com/Positronic-Robotics/positronic/pull/1116))
+- The `abc_dit` vendor serves ABC-DiT, the bimanual YAM policy of the ABC project, from its multi-task sim checkpoint ([#1017](https://github.com/Positronic-Robotics/positronic/pull/1017))
+- The ABC sim renders from cameras at the ZED-X stations of the ABC-130k dataset by default. `camera_view=d405` keeps ABC's own cameras ([#1104](https://github.com/Positronic-Robotics/positronic/pull/1104))
+- The LM IK search returns the iterate with the lowest error, and that error ([#1103](https://github.com/Positronic-Robotics/positronic/pull/1103))
+- The bundled YAM model is the model of i2rt at the commit that the `yam` extra pins, with the linear gripper. Every YAM mount is 9.5 mm lower, so the same joints report the same `ee_pose` ([#1124](https://github.com/Positronic-Robotics/positronic/pull/1124))
+- The YAM driver takes the joint range from the limits that the chain reports, less a margin ([#1099](https://github.com/Positronic-Robotics/positronic/pull/1099))
+- The YAM IK accepts an answer that passes its FK check, whatever the solver reports ([#1095](https://github.com/Positronic-Robotics/positronic/pull/1095))
+
+### LLM policy
+- `positronic.vendors.llm.server` serves the LLM policy over the offboard protocol, so it can be a `remote` endpoint. One process serves one model ([#1086](https://github.com/Positronic-Robotics/positronic/pull/1086))
+- The tool `move_path` replaces `move_to`. One call carries up to `motion.max_waypoints` (5) waypoints ([#1107](https://github.com/Positronic-Robotics/positronic/pull/1107))
+- The default motion bounds are 0.4 m and 90° per move, at 0.15 m/s ([#1097](https://github.com/Positronic-Robotics/positronic/pull/1097))
+- The message history is append-only, so the provider prompt cache can match each request ([#1057](https://github.com/Positronic-Robotics/positronic/pull/1057))
+- Each episode of an Anthropic eval can take its API key at random from a pool of keys ([#1090](https://github.com/Positronic-Robotics/positronic/pull/1090))
+- The results tables name each LLM model by its family and version ([#1085](https://github.com/Positronic-Robotics/positronic/pull/1085))
+
+### Evals
+- `--eval.horizon_sec` sets the episode length of every task of a RoboLab run ([#1077](https://github.com/Positronic-Robotics/positronic/pull/1077))
+- A RoboLab episode records the scene state that a labeler needs for the stage labels: object poses, gripper contacts and progress per condition ([#1087](https://github.com/Positronic-Robotics/positronic/pull/1087))
+- `recorded_try_window` gives the world times of the first and the last sample of the try that an episode directory records. It reads the signal files with pyarrow only ([#1109](https://github.com/Positronic-Robotics/positronic/pull/1109))
+- Each ABC eval definition pins `camera_view=zed_x`, so the camera view does not follow the `all_tasks` default ([#1111](https://github.com/Positronic-Robotics/positronic/pull/1111))
+
+### Teleoperation
+- `positronic teleop` is a model server, and an eval run connects to it through an ordinary `RemotePolicy` with `cfg.policy.teleop` ([#969](https://github.com/Positronic-Robotics/positronic/pull/969))
+- With `AUTH_TOKEN` unset, the teleop service starts on a host and a port and serves with no token ([#1084](https://github.com/Positronic-Robotics/positronic/pull/1084))
+- `positronic teleop` shows a desktop notice with a sound while a trial waits for Ready ([#1062](https://github.com/Positronic-Robotics/positronic/pull/1062))
+- A MolmoSpaces demonstration collection drops the object image points sensor, so each teleop step runs faster ([#1065](https://github.com/Positronic-Robotics/positronic/pull/1065))
+
+### Datasets
+- A launcher selects a dataset writer, and the writer holds the video encoding. `Rollout` carries an unopened writer, and `Harness` opens and closes it in the recording process ([#1080](https://github.com/Positronic-Robotics/positronic/pull/1080))
+- `LocalDatasetWriter` locks the dataset directory itself, so no lock file goes to a mirror of the directory ([#1083](https://github.com/Positronic-Robotics/positronic/pull/1083))
+- Signal and frames-index parquet files use zstd level 3 and delta and byte-split encodings ([#1088](https://github.com/Positronic-Robotics/positronic/pull/1088))
+- `read_spans` and the timing report read zstd-compressed span files (`*.spans.jsonl.zst`) ([#1089](https://github.com/Positronic-Robotics/positronic/pull/1089))
+- A Franka episode records `robot_state.ee_wrench`, the external wrench at the end effector. An arm that does not measure it records no new key ([#1071](https://github.com/Positronic-Robotics/positronic/pull/1071))
+- A YAM episode records the gravity compensation of each arm's chain in its statics ([#1096](https://github.com/Positronic-Robotics/positronic/pull/1096))
+- GR00T arm action labels use the state ahead, and the gripper label uses its command ([#1055](https://github.com/Positronic-Robotics/positronic/pull/1055))
+- GR00T fine-tuning keeps the normalization statistics of the base checkpoint ([#1056](https://github.com/Positronic-Robotics/positronic/pull/1056))
+- The 3D view of an episode replay opens on a raised side view across the reach ([#1105](https://github.com/Positronic-Robotics/positronic/pull/1105))
+- The replay charts of joint commands and joint deltas name each joint ([#1114](https://github.com/Positronic-Robotics/positronic/pull/1114))
+- The stats sampler keeps running when a child process exits before its first CPU read ([#1118](https://github.com/Positronic-Robotics/positronic/pull/1118))
+
+### Tests
+- The probe child writes its pid file atomically ([#1093](https://github.com/Positronic-Robotics/positronic/pull/1093))
+- The teleop camera tests drive the run until the image shows ([#1074](https://github.com/Positronic-Robotics/positronic/pull/1074)) ([#1094](https://github.com/Positronic-Robotics/positronic/pull/1094))
+
 ## [0.4.2] - 2026-10-27
 
 This release shows the competition terms when a team enters, and `positronic eval run` with no `--eval` runs the eval that the public leaderboard ranks. It publishes `positronic-platform-client` 0.43.0, and `positronic` requires that version. `robosuite` moves to the new `scenes` extra, so the default install needs no C compiler. Code that imports the MuJoCo scene builder installs `positronic[scenes]`.

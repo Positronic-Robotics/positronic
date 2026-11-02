@@ -2,6 +2,7 @@ import base64
 import collections
 import contextlib
 import io
+import json
 import socket
 import time
 import types
@@ -424,6 +425,23 @@ def test_the_page_state_is_empty_until_something_sends_one(world):
         assert httpx.get(base + '/state', timeout=1.0).json() == {}
         emitter.emit({'phase': 'running', 'control': True})
         assert httpx.get(base + '/state', timeout=1.0).json() == {'phase': 'running', 'control': True}
+
+
+def test_a_controller_message_parses_back_to_its_poses_and_buttons():
+    pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
+    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0]})
+    positions, buttons = webxr._parse_controller_data(json.loads(json.dumps(message)))
+    assert positions[webxr.LEFT] is None and buttons[webxr.LEFT] is None
+    right, right_buttons = positions[webxr.RIGHT], buttons[webxr.RIGHT]
+    assert right is not None and right_buttons is not None
+    np.testing.assert_allclose(right.translation, pose.translation)
+    np.testing.assert_allclose(right.rotation.as_quat, pose.rotation.as_quat)
+    np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0])
+
+
+def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
+    with pytest.raises(ValueError, match='positions and buttons must name the same controllers'):
+        webxr.controller_message({webxr.RIGHT: Transform3D()}, {})
 
 
 def test_the_phone_page_for_data_collection_keeps_its_own_mode():

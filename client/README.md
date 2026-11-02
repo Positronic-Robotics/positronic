@@ -303,7 +303,7 @@ sample: {percent: 10, seed: 7}           # or {count: 50, seed: 7}
 
 An `image` endpoint whose registry serves no anonymous caller states `image_credential`. A plan
 file names the registry user and the FILE the password is in. `positronic eval run --from-file`
-reads it as `EvalPlan[RegistryCredentialFile]`, then `plan_with_passwords_read` gives the `EvalPlan`
+reads it as `EvalPlan[EndpointFile]`, then `plan_with_secrets_read` gives the `EvalPlan`
 a request carries, whose `RegistryCredential` holds the password. From Python, `credential_from_file`
 builds that credential.
 
@@ -316,6 +316,21 @@ endpoints:
     image_credential:
       username: a-reader
       password_file: ~/.config/positronic/registry-password
+```
+
+A `remote` endpoint whose server checks a bearer token states `auth_token_file`, the FILE the token
+is in. The platform presents `Authorization: Bearer <token>` to that endpoint only, and deletes the
+token when the run ends. The token is 1 to 4096 characters of visible ASCII, and the last line
+ending of the file comes off. A plan file never states the token itself. `plan_with_secrets_read`
+reads the file, and the request carries the token as `auth_token`. A `served` or an `image`
+endpoint takes no token, and neither does the `websocket_unix` wire.
+
+```yaml
+endpoints:
+  - name: policy
+    wire: websocket_tls
+    address: {host: policy.example.com, port: 443, path: /api/v1/session}
+    auth_token_file: ~/.config/positronic/policy-token
 ```
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan

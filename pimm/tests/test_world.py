@@ -37,22 +37,27 @@ from pimm.core import (
 )
 from pimm.logging import LOG_LEVEL_ENV
 from pimm.shared_memory import SMCompliant
-from pimm.tests.sigterm_probe import CHILD_PID_FILE, SHUT_DOWN_FILE
+from pimm.tests.sigterm_probe import CHILD_PID_FILE, POLL_WITHOUT_SLEEP, SHUT_DOWN_FILE
 from pimm.tests.testing import MockClock
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, Time
 from pimm.utils import map as pimm_map
 from pimm.world import (
-    EventReceiver,
     LocalQueueEmitter,
     MultiprocessEmitter,
     MultiprocessReceiver,
+    StopFlagReceiver,
     SystemClock,
     TransportMode,
     VirtualClock,
     World,
     _bg_wrapper,
     _stop_when_orphaned,
+    _StopFlag,
 )
+
+
+def _new_stop_flag() -> _StopFlag:
+    return _StopFlag(mp.get_context('spawn'))
 
 
 @pytest.mark.parametrize('transport', ['local', 'queue', 'shared_memory'])
@@ -260,45 +265,37 @@ class DummySMValue(SMCompliant):
         self.value = struct.unpack('d', buffer[:8])[0]
 
 
-class TestEventReceiver:
-    """Test the EventReceiver class."""
-
-    def test_event_reader_unset_event(self):
-        """Test reading from an unset event."""
-        event = mp.Event()
-        reader = EventReceiver(event, SystemClock())
+class TestStopFlagReceiver:
+    def test_reads_an_unset_flag(self):
+        reader = StopFlagReceiver(_new_stop_flag(), SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
         assert result.data is False
         assert isinstance(result.time[RECEIVED_WALL], int)
 
-    def test_event_reader_set_event(self):
-        """Test reading from a set event."""
-        event = mp.Event()
-        event.set()
-        reader = EventReceiver(event, SystemClock())
+    def test_reads_a_set_flag(self):
+        flag = _new_stop_flag()
+        flag.set()
+        reader = StopFlagReceiver(flag, SystemClock())
 
         result = reader.read()
         assert isinstance(result, Message)
         assert result.data is True
         assert isinstance(result.time[RECEIVED_WALL], int)
 
-    def test_event_reader_uses_clock(self):
-        """Test that EventReceiver uses clocks for timestamps."""
-        event = mp.Event()
+    def test_stamps_a_read_with_its_clock(self):
         clk = MockClock()
         clk.set(0.987654321)
-        reader = EventReceiver(event, clk)
+        reader = StopFlagReceiver(_new_stop_flag(), clk)
 
         result = reader.read()
         assert result is not None
         assert result.time[RECEIVED_WORLD] == 987654321
 
-    def test_event_reader_updated_flag(self):
-        """EventReceiver should toggle updated when event state changes."""
-        event = mp.Event()
-        reader = EventReceiver(event, SystemClock())
+    def test_marks_a_read_updated_only_when_the_flag_changes(self):
+        flag = _new_stop_flag()
+        reader = StopFlagReceiver(flag, SystemClock())
 
         first = reader.read()
         assert first.updated is True
@@ -306,7 +303,7 @@ class TestEventReceiver:
         second = reader.read()
         assert second.updated is False
 
-        event.set()
+        flag.set()
         third = reader.read()
         assert third.updated is True
 
@@ -366,15 +363,14 @@ class TestWorld:
             assert len(world.background_processes) == 1
 
             # Stopping before the child reaches its loop body would leave the loop untested: the generator
-            # sees a set event on its first condition and returns without ever running the body.
+            # sees a set flag on its first condition and returns without ever running the body.
             deadline = time.monotonic() + 30
             while receiver.read() is None:
                 assert time.monotonic() < deadline, 'background process never entered its control loop'
                 time.sleep(0.01)
 
-            # We have to set the private event manually, because out of the scope of the context manager
-            # we can't access exit code of the process
-            world._stop_event.set()
+            # Set the private flag by hand: outside the context manager the process exit code is unreachable.
+            world._stop_flag.set()
             world.background_processes[0].join(timeout=30)
             assert not world.background_processes[0].is_alive()
             assert world.background_processes[0].exitcode == 0
@@ -758,8 +754,8 @@ class TestWorldControlSystems:
             assert len(consumer.invocations) == 1
             producer_stop_reader, producer_clock = producer.invocations[0]
             consumer_stop_reader, consumer_clock = consumer.invocations[0]
-            assert isinstance(producer_stop_reader, EventReceiver)
-            assert isinstance(consumer_stop_reader, EventReceiver)
+            assert isinstance(producer_stop_reader, StopFlagReceiver)
+            assert isinstance(consumer_stop_reader, StopFlagReceiver)
             assert producer_clock is world.clock
             assert consumer_clock is world.clock
 
@@ -800,7 +796,7 @@ class TestWorldControlSystems:
             assert sleeps == [Yield()]
             assert len(main_cs.invocations) == 1
             stop_reader, used_clock = main_cs.invocations[0]
-            assert isinstance(stop_reader, EventReceiver)
+            assert isinstance(stop_reader, StopFlagReceiver)
             assert used_clock is world.clock
 
     def test_start_cross_process_local_emitter_uses_world_clock(self, monkeypatch):
@@ -841,7 +837,7 @@ class TestWorldControlSystems:
             assert sleeps == [Yield()]
             assert len(main_cs.invocations) == 1
             stop_reader, used_clock = main_cs.invocations[0]
-            assert isinstance(stop_reader, EventReceiver)
+            assert isinstance(stop_reader, StopFlagReceiver)
             assert used_clock is world.clock
 
     def test_start_handles_empty_main_process(self, monkeypatch):
@@ -928,25 +924,6 @@ class TestIntegration:
 
             assert result1.data == 'message1'
             assert result2.data == 'message2'
-
-    def test_event_reader_integration(self):
-        """Test EventReceiver with actual multiprocessing Event."""
-        event = mp.Event()
-        reader = EventReceiver(event, SystemClock())
-
-        # Initially event is not set
-        result = reader.read()
-        assert result.data is False
-
-        # Set the event
-        event.set()
-        result = reader.read()
-        assert result.data is True
-
-        # Clear the event
-        event.clear()
-        result = reader.read()
-        assert result.data is False
 
 
 class TestWorldInterleave:
@@ -1048,7 +1025,7 @@ class TestWorldInterleave:
             assert 'before_exception' in execution_order
 
     def test_interleave_stop_behavior(self):
-        """Test stop event behavior: early stopping and completion detection."""
+        """Test stop flag behavior: early stopping and completion detection."""
 
         with World(virtual_time=True) as world:
             execution_order = []
@@ -1068,7 +1045,7 @@ class TestWorldInterleave:
                     execution_order.append(f'short_{i}')
                     yield Sleep(0.1)
 
-            # The short loop should complete first and set the stop event
+            # The short loop should complete first and set the stop flag
             sleep_times = list(world.interleave(stop_checking_loop, short_loop))
 
             # Both loops should run some steps
@@ -1079,7 +1056,7 @@ class TestWorldInterleave:
             assert any(item.startswith('step_') for item in execution_order)
             assert any(item.startswith('short_') for item in execution_order)
 
-            # The stop_checking_loop should detect the stop event and exit early
+            # The stop_checking_loop should detect the stop flag and exit early
             assert any(item.startswith('stopped_at_') for item in execution_order)
 
     def test_interleave_scheduling_order(self):
@@ -2262,7 +2239,6 @@ def test_a_signal_stops_a_protected_world_and_takes_effect_after_the_park(monkey
                 world.run(device)
         assert saw_stop == [True]
         assert parked == [device]
-        # The handler may interrupt the main thread inside the stop event's lock, so another thread sets it.
         assert stopped_by[0] is not threading.main_thread()
     finally:
         signal.signal(signum, previous)
@@ -2326,6 +2302,19 @@ def test_a_signalled_parent_leaves_no_child_running(tmp_path, parent_signal):
 
 
 @pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
+@pytest.mark.parametrize('attempt', range(5))
+def test_a_parent_killed_while_it_reads_the_stop_flag_leaves_no_child_running(tmp_path, attempt):
+    # The parent reads the flag nonstop, so the kill lands inside a read most of the time.
+    command = [sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path), POLL_WITHOUT_SLEEP]
+    parent = subprocess.Popen(command)
+    child = _wait_for_probe_child(parent, tmp_path)
+    parent.kill()
+    parent.wait(timeout=30)
+    _wait_until_gone(child)
+    assert (tmp_path / SHUT_DOWN_FILE).exists()
+
+
+@pytest.mark.skipif(not os.path.isdir('/proc'), reason='reads child state from /proc')
 def test_a_sigterm_to_the_process_group_still_runs_the_protected_child_shutdown(tmp_path):
     parent = subprocess.Popen([sys.executable, '-m', 'pimm.tests.sigterm_probe', str(tmp_path)], start_new_session=True)
     child = _wait_for_probe_child(parent, tmp_path)
@@ -2335,17 +2324,24 @@ def test_a_sigterm_to_the_process_group_still_runs_the_protected_child_shutdown(
     assert (tmp_path / SHUT_DOWN_FILE).exists()
 
 
+def _becomes_set_within(flag: _StopFlag, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while not flag.is_set() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return flag.is_set()
+
+
 def test_a_child_whose_parent_is_already_gone_stops_at_once():
-    stop = mp.get_context('spawn').Event()
+    stop = _new_stop_flag()
     _stop_when_orphaned(stop, 'probe', parent_pid=os.getpid())
-    assert stop.wait(5)
+    assert _becomes_set_within(stop, 5)
 
 
 def test_a_child_whose_parent_is_alive_keeps_running():
-    stop = mp.get_context('spawn').Event()
+    stop = _new_stop_flag()
     _stop_when_orphaned(stop, 'probe', parent_pid=os.getppid())
     try:
-        assert not stop.wait(1.0)
+        assert not _becomes_set_within(stop, 1.0)
     finally:
         stop.set()
 
@@ -2356,9 +2352,9 @@ def _mark_started(marker, should_stop, clock) -> Iterator[Command]:
 
 
 def _run_wrapper_in_a_child(tmp_path, parent_pid: int, *, stopped: bool = False):
-    """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop event."""
+    """Run `_bg_wrapper` in a spawned child that names `parent_pid` as its parent; return the marker and stop flag."""
     ctx = mp.get_context('spawn')
-    stop, marker = ctx.Event(), tmp_path / 'started'
+    stop, marker = _StopFlag(ctx), tmp_path / 'started'
     if stopped:
         stop.set()
     args = (partial(_mark_started, marker), stop, SystemClock(), 'probe', {}, ShutdownPolicy.BEST_EFFORT, parent_pid)

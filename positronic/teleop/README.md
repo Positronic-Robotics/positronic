@@ -164,6 +164,27 @@ uv run positronic eval run \
 
 Start `positronic teleop` first, as in MuJoCo.
 
+## Time a run with no person
+
+`positronic.teleop.scripted_headset` does the trials in place of the person and the headset. It connects to the page
+of the service, and sends a sample of the right controller at 72 Hz, as a Quest does. In each trial it presses
+Ready, turns control on, and moves the hand on a circle of 5 cm for 20 s. Then it holds B for Complete.
+
+1. Start `positronic teleop`.
+2. Start a run with `--timing=True`, for example the MuJoCo run of 2 trials with `--eval.trial_count=2`.
+3. Start the scripted headset with the same number of trials:
+
+   ```bash
+   uv run python -m positronic.teleop.scripted_headset --page=https://127.0.0.1:5005 --trials=2
+   ```
+
+4. After the run, read the report: `positronic eval timing-report --run_dir=<the output_dir of the run>`.
+
+`--rate_hz`, `--trial_sec`, `--radius` and `--circle_sec` change the samples and the motion. When the service runs
+with `--view_fps`, give the scripted headset the same `--view_fps`. On a loaded machine, raise `--min_hold_sec`
+(0.2 s). Use `http` in `--page` for a phone config of the service. The scripted headset does not check the
+self-signed certificate of the page.
+
 ## Session parameters
 
 The run sets the parameters of its session in the query of its address. The service takes no session parameters, so
@@ -211,6 +232,8 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 - With `AUTH_TOKEN` unset, the service serves open: each peer that reaches the port can open a session. Then dial it
   with `--policy.headers=None`.
 - The sessions have no TLS. Use a private network, such as a tailnet.
+- A plan file sends the token with `auth_token_file` on the endpoint, so a service at a public address keeps
+  auth on. See the plan-file section of [client/README.md](../../client/README.md).
 - Each frame waits for one round trip of the network.
 - `--served_address.port` changes the port. Give `--policy.address.port` the same value.
 - On the Unix socket, the service takes no token, and `AUTH_TOKEN` has no effect.

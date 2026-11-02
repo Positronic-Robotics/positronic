@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from abc import abstractmethod
 from collections import Counter
 from pathlib import Path
 from typing import Annotated, ClassVar, Generic, Literal, Self
@@ -25,6 +26,7 @@ from pydantic import (
     SecretStr,
     SerializationInfo,
     SerializerFunctionWrapHandler,
+    field_serializer,
     model_serializer,
     model_validator,
 )
@@ -206,8 +208,14 @@ ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
 }
 
 
-# The serialisation context key under which a registry password dumps as plaintext.
-REVEAL_REGISTRY_PASSWORD = 'reveal_registry_password'
+# The serialisation context key under which the secrets of a request dump as plaintext: each registry password and
+# each endpoint token.
+REVEAL_SECRETS = 'reveal_secrets'
+
+
+def _dumped(secret: SecretStr, info: SerializationInfo) -> str:
+    """`secret` as a JSON dump writes it: plaintext under `REVEAL_SECRETS`, masked in every other dump."""
+    return secret.get_secret_value() if (info.context or {}).get(REVEAL_SECRETS) else str(secret)
 
 
 class RegistryCredential(BaseModel):
@@ -226,14 +234,13 @@ class RegistryCredential(BaseModel):
 
     @model_serializer(mode='plain', when_used='json')
     def _dump(self, info: SerializationInfo) -> dict[str, str]:
-        reveal = (info.context or {}).get(REVEAL_REGISTRY_PASSWORD)
-        return {'username': self.username, 'password': self.plaintext_password() if reveal else str(self.password)}
+        return {'username': self.username, 'password': _dumped(self.password, info)}
 
 
 class RegistryCredentialFile(BaseModel):
     """A registry credential as a plan file states it: the username, and the file the password is in.
 
-    A request carries no such model. `plan_with_passwords_read` turns a plan of it into the plan a
+    A request carries no such model. `plan_with_secrets_read` turns a plan of it into the plan a
     request carries.
     """
 
@@ -248,24 +255,32 @@ class RegistryCredentialFile(BaseModel):
         return SecretStr(password_from_file(self.password_file))
 
 
+def _secret_from_file(secret_file: Path, secret: str) -> str:
+    """The text of the file a caller names, with its last line ending off. `secret` names what it holds.
+
+    A path that is mistyped, names a directory, or cannot be read raises `ValueError`.
+    """
+    # No message names the path: a caller who pastes the secret in its place would see it printed.
+    try:
+        path = secret_file.expanduser()
+    except RuntimeError as exc:  # `~name` for a user this machine does not have
+        raise ValueError(f'the {secret} file path names no home directory') from exc
+    try:
+        if not path.is_file():
+            raise ValueError(f'the {secret} file path names no file')
+        held = path.read_text()
+    except OSError as exc:
+        raise ValueError(f'the {secret} file cannot be read: {exc.strerror}') from exc
+    return held.removesuffix('\n').removesuffix('\r')
+
+
 def password_from_file(password_file: Path) -> str:
     """The registry password a caller states as a path, read from the file it names.
 
     The file's last line ending comes off. A path that is mistyped, names a directory, cannot be
     read, or holds only whitespace raises `ValueError`.
     """
-    # No message names the path: a caller who pastes the password in its place would see it printed.
-    try:
-        path = password_file.expanduser()
-    except RuntimeError as exc:  # `~name` for a user this machine does not have
-        raise ValueError('the password file path names no home directory') from exc
-    try:
-        if not path.is_file():
-            raise ValueError('the password file path names no file')
-        held = path.read_text()
-    except OSError as exc:
-        raise ValueError(f'the password file cannot be read: {exc.strerror}') from exc
-    password = held.removesuffix('\n').removesuffix('\r')
+    password = _secret_from_file(password_file, 'password')
     if not password.strip():
         raise ValueError('the password file holds no password')
     return password
@@ -276,9 +291,9 @@ def credential_from_file(username: str, password_file: Path) -> RegistryCredenti
     return RegistryCredential(username=username, password=SecretStr(password_from_file(password_file)))
 
 
-# The credential an image endpoint carries. A request carries a `RegistryCredential`, and so does a
-# plan with no parameter. A plan file carries a `RegistryCredentialFile`.
-Credential = TypeVar('Credential', RegistryCredential, RegistryCredentialFile, default=RegistryCredential)
+# The credential an image endpoint carries: a `RegistryCredential` in an `Endpoint`, and a `RegistryCredentialFile` in
+# an `EndpointFile`.
+Credential = TypeVar('Credential', RegistryCredential, RegistryCredentialFile)
 
 
 # An endpoint overrides one cascading property; every other property of `Cascade` is per task.
@@ -286,7 +301,7 @@ _ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
 _PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
 
 
-class Endpoint(Cascade, Generic[Credential]):
+class _EndpointBase(Cascade, Generic[Credential]):
     """One policy to run, where it comes from, and the wire a session with it runs over.
 
     * `remote` — the caller provides the server, and `address` carries the fields its `wire` dials.
@@ -297,7 +312,10 @@ class Endpoint(Cascade, Generic[Credential]):
       `image_credential` opens the registry that serves it to no anonymous caller.
     * no locator at all — the entry sits on a task and names one of the plan's endpoints.
 
-    Every kind that names a locator names its wire.
+    Every kind that names a locator names its wire. A remote endpoint at a network address may state a
+    bearer token, which the platform presents to that endpoint alone.
+
+    `Endpoint` is the form a request carries, and `EndpointFile` the form a plan file states.
     """
 
     _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (
@@ -435,11 +453,112 @@ class Endpoint(Cascade, Generic[Credential]):
             )
         return self
 
+    @model_validator(mode='after')
+    def _a_token_opens_a_remote_address(self) -> Self:
+        if not self.states_a_token:
+            return self
+        if self.kind is not EndpointKind.remote:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} states a bearer token, which only a remote endpoint '
+                "carries: the platform serves this policy and gives it the run's own token"
+            )
+        if self.address is None:
+            raise ValueError(
+                f'endpoint {self.name!r} states a bearer token and names no address: state it on the plan endpoint '
+                'this label names'
+            )
+        if self.wire is Wire.websocket_unix:
+            raise ValueError(
+                f'endpoint {self.name!r} states a bearer token on the {slug_of(Wire.websocket_unix)} wire, where the '
+                'server takes no token'
+            )
+        return self
+
     @property
     def names_a_locator(self) -> bool:
         """Whether this entry says where its policy comes from: the `address` a remote one dials, the
         `spec` a served one names, or the `image` the platform runs."""
         return self.address is not None or self.spec is not None or self.image is not None
+
+    @property
+    @abstractmethod
+    def states_a_token(self) -> bool:
+        """Whether this entry states a bearer token for its endpoint."""
+
+
+# The longest bearer token an endpoint takes.
+MAX_TOKEN_LENGTH = 4096
+
+
+def _a_valid_token(token: str) -> str:
+    # No message quotes the token: it is a secret, and a header carries it whole.
+    if not token:
+        raise ValueError('the bearer token is empty')
+    if len(token) > MAX_TOKEN_LENGTH:
+        raise ValueError(f'the bearer token is longer than {MAX_TOKEN_LENGTH} characters')
+    if not _VISIBLE_ASCII.fullmatch(token):
+        raise ValueError('the bearer token holds a space, a line ending or a character outside visible ASCII')
+    return token
+
+
+def _a_valid_secret_token(token: SecretStr) -> SecretStr:
+    _a_valid_token(token.get_secret_value())
+    return token
+
+
+# The token a request carries for the platform to present to one endpoint as `Authorization: Bearer <token>`.
+EndpointToken = Annotated[SecretStr, AfterValidator(_a_valid_secret_token)]
+
+
+class Endpoint(_EndpointBase[RegistryCredential]):
+    """An endpoint as a request carries it: a token as its value."""
+
+    _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*_EndpointBase._OMITTED_WHEN_NONE, 'auth_token')
+
+    auth_token: EndpointToken | None = None
+
+    @field_serializer('auth_token', when_used='json')
+    def _dump_token(self, token: SecretStr | None, info: SerializationInfo) -> str | None:
+        return None if token is None else _dumped(token, info)
+
+    @property
+    def states_a_token(self) -> bool:
+        return self.auth_token is not None
+
+
+def token_from_file(token_file: Path) -> str:
+    """The bearer token a caller states as a path, read from the file it names.
+
+    The file's last line ending comes off. A path that is mistyped, names a directory, or cannot be
+    read raises `ValueError`, and so does a token that is empty, longer than `MAX_TOKEN_LENGTH`, or
+    not all visible ASCII.
+    """
+    return _a_valid_token(_secret_from_file(token_file, 'token'))
+
+
+class EndpointFile(_EndpointBase[RegistryCredentialFile]):
+    """An endpoint as a plan file states it: a token by the file it is in.
+
+    A request carries no such model. `plan_with_secrets_read` turns a plan of it into the plan a
+    request carries.
+    """
+
+    _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*_EndpointBase._OMITTED_WHEN_NONE, 'auth_token_file')
+
+    auth_token_file: Path | None = None
+
+    @property
+    def auth_token(self) -> SecretStr | None:
+        """The token the file holds, read on each access."""
+        return None if self.auth_token_file is None else SecretStr(token_from_file(self.auth_token_file))
+
+    @property
+    def states_a_token(self) -> bool:
+        return self.auth_token_file is not None
+
+
+# An `Endpoint` in a request and in a plan with no parameter, an `EndpointFile` in a plan file.
+EndpointForm = TypeVar('EndpointForm', Endpoint, EndpointFile, default=Endpoint)
 
 
 class NebiusCompetition(BaseModel):
@@ -493,7 +612,7 @@ class Sample(BaseModel):
         return self
 
 
-class TaskNode(Cascade, Generic[Credential]):
+class TaskNode(Cascade, Generic[EndpointForm]):
     """One task of a plan, by its catalogue id, and what this plan changes for it.
 
     `endpoints`, when given, replaces the plan's list for this task; an entry with no locator refers
@@ -502,7 +621,7 @@ class TaskNode(Cascade, Generic[Credential]):
     """
 
     task_id: TaskRef
-    endpoints: list[Endpoint[Credential]] | None = Field(default=None, min_length=1)
+    endpoints: list[EndpointForm] | None = Field(default=None, min_length=1)
 
     @model_validator(mode='before')
     @classmethod
@@ -515,7 +634,7 @@ class TaskNode(Cascade, Generic[Credential]):
         return self
 
 
-class EvalPlan(Cascade, Generic[Credential]):
+class EvalPlan(Cascade, Generic[EndpointForm]):
     """`submissions.create` — one eval to run: the tasks, the endpoints each task runs, and the
     count per endpoint.
 
@@ -531,11 +650,11 @@ class EvalPlan(Cascade, Generic[Credential]):
     request_type: PlanRequestType
     # The rig shape a plan that states its tasks runs on.
     rig_shape: Slugged[RigShape] = RigShape.franka
-    tasks: list[TaskNode[Credential]] = Field(default_factory=list)
+    tasks: list[TaskNode[EndpointForm]] = Field(default_factory=list)
     # The eval whose tasks this plan runs. The catalogue expands it, so a plan states `tasks` or
     # names an eval, and both arrive at the same set.
     eval: EvalRef | None = None
-    endpoints: list[Endpoint[Credential]] = Field(default_factory=list)
+    endpoints: list[EndpointForm] = Field(default_factory=list)
     # What a reader calls this run. It names nothing and identifies nothing.
     alias: str | None = None
     # A checksum. When stated, it must equal the sum over the leaves; when absent, the platform fills it in.
@@ -665,11 +784,11 @@ class EvalPlan(Cascade, Generic[Credential]):
             )
         return self
 
-    def task_endpoints(self, task: TaskNode[Credential]) -> list[Endpoint[Credential]]:
+    def task_endpoints(self, task: TaskNode[EndpointForm]) -> list[EndpointForm]:
         """The endpoints `task` runs on: its own list, else the plan's."""
         return self.endpoints if task.endpoints is None else task.endpoints
 
-    def episodes_on(self, task: TaskNode[Credential], entry: Endpoint[Credential]) -> int:
+    def episodes_on(self, task: TaskNode[EndpointForm], entry: EndpointForm) -> int:
         """The episodes `entry` takes for `task`.
 
         The count comes from `entry`, then from its definition, then from `task`, then from the plan.
@@ -693,12 +812,13 @@ class EvalPlan(Cascade, Generic[Credential]):
         return sum(self.episodes_on(task, entry) for task in self.tasks for entry in self.task_endpoints(task))
 
 
-def plan_with_passwords_read(plan: EvalPlan[RegistryCredentialFile]) -> EvalPlan:
-    """The plan a request carries: `plan`, with the password of each credential read from its file.
+def plan_with_secrets_read(plan: EvalPlan[EndpointFile]) -> EvalPlan:
+    """The plan a request carries: `plan`, with the password of each credential and the token of each
+    endpoint read from its file.
 
-    A file that gives no password raises `ValidationError` at the place of its credential in the plan.
+    A file that gives no secret raises `ValidationError` at the place of its secret in the plan.
     """
-    return EvalPlan[RegistryCredential].model_validate(plan, from_attributes=True)
+    return EvalPlan[Endpoint].model_validate(plan, from_attributes=True)
 
 
 # The name the one endpoint of an image run carries. Such a run serves one policy, so nothing picks

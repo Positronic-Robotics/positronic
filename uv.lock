@@ -5535,7 +5535,7 @@ wheels = [
 
 [[package]]
 name = "positronic"
-version = "0.4.2"
+version = "0.4.3"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "15.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
@@ -5853,7 +5853,7 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.47.6"
+version = "0.47.7"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
