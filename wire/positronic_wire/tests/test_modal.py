@@ -17,6 +17,8 @@ from positronic_wire import modal, websocket, wire
 
 _ADDRESS = wire.HostPortAddress('app-server.eu-west.modal.direct', 443, wire.SESSION_PATH, '')
 _CREDENTIALS = {'Modal-Key': 'KEY', 'Modal-Secret': 'SECRET'}
+# The session calls to the real edge, before a test puts a fake edge in their place.
+_EDGE_POST = modal.ModalClientWire._post
 
 
 class FakeEdge:
@@ -473,7 +475,7 @@ def test_a_terminate_whose_name_lookup_hangs_returns_within_its_timeout(modal_wi
     monkeypatch.setattr(modal, 'TERMINATE_TIMEOUT', 0.3)
     started = time.monotonic()
 
-    with patch.object(modal.ModalClientWire, '_post', modal.ModalClientWire.__dict__['_post']):
+    with patch.object(modal.ModalClientWire, '_post', _EDGE_POST):
         assert conn.close() == 'closed'
 
     assert time.monotonic() - started < 2.0, 'the terminate timeout did not cover the name lookup'
@@ -505,7 +507,7 @@ def test_each_server_holds_its_own_sessions(modal_wire, edge, inner):
     modal_wire.dial(other, _CREDENTIALS, 5.0)
 
     assert inner.dialled == ['token-2']
-    assert edge.starts[1]['host'] == 'other-server.eu-west.modal.direct'
+    assert edge.starts[1]['host'] == other.host
 
 
 def test_a_pickled_wire_holds_no_sessions(modal_wire, edge):
