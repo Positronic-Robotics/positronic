@@ -2,15 +2,15 @@
 
 ## [0.4.3] - 2026-11-02
 
-This release publishes `positronic-platform-client` 0.47.5, and `positronic` requires that version. The client reads the public leaderboards. `positronic eval status` shows the score of a failed run over the episodes that closed before it failed. A listed submission shows when its run started and ended, and a finished submission can carry a report link. The client refuses a team name over 64 characters or with a control character. A policy can request its next action chunk while the robot executes the current one (real-time chunking), and GR00T is the first model that uses it. A person who teleoperates is now an ordinary remote model server. A launcher selects a dataset writer for the video encoding, so code that builds a `Rollout` or a `Harness` passes a writer.
+This release publishes `positronic-platform-client` 0.47.6, and `positronic` requires that version. The client reads the public leaderboards. `positronic eval status` shows the score of a failed run over the episodes that closed before it failed. A listed submission shows when its run started and ended, and a finished submission can carry a report link. The client refuses a team name over 64 characters or with a control character. A policy can request its next action chunk while the robot executes the current one (real-time chunking), and GR00T is the first model that uses it. A plan can name a Modal Server with sticky sessions as its wire. A person who teleoperates is now an ordinary remote model server. A launcher selects a dataset writer for the video encoding, so code that builds a `Rollout` or a `Harness` passes a writer.
 
 | Distribution | Version |
 |---|---|
-| `positronic-platform-client` | 0.47.5 |
+| `positronic-platform-client` | 0.47.6 |
 | `positronic-evals` | 0.2.3 |
 | `positronic-eval-vocabulary` | 0.7.1 |
-| `positronic-model-server` | 0.3.2 |
-| `positronic-wire` | 0.12.0 |
+| `positronic-model-server` | 0.3.4 |
+| `positronic-wire` | 0.12.2 |
 
 ### Platform client
 - `PlatformClient` reads the public leaderboards through six keyless routes: the leaderboards of a tag, one leaderboard and its rows, and the charts, episodes, progress and model families of one version. `platform_client.leaderboards` holds their models ([#1108](https://github.com/Positronic-Robotics/positronic/pull/1108))
@@ -25,6 +25,8 @@ This release publishes `positronic-platform-client` 0.47.5, and `positronic` req
 
 ### Inference
 - Real-time chunking: the client requests the next action chunk while it executes the current plan, and sends the planned commands and the inference latency with the request. GR00T conditions its prediction on them, and the `droid_rtc` preset serves it. An RTC stack needs protocol v2 or later ([#1036](https://github.com/Positronic-Robotics/positronic/pull/1036))
+- The `modal_websocket_tls` wire serves a Modal Server with sticky sessions (`@modal.sessioned`, a `.modal.direct` URL). It holds one session per host and per credentials, and a reconnect after a drop reaches the same container. The plan enum gains `Wire.modal_websocket_tls` ([#1106](https://github.com/Positronic-Robotics/positronic/pull/1106))
+- A Modal session start pauses 1 s after a failure, then twice the last pause, up to 30 s. `InferenceClient` dial retries use the same schedule, `wire.retry_pauses()` ([#1126](https://github.com/Positronic-Robotics/positronic/pull/1126))
 - A parallel codec decodes an RTC reply that comes as a list on the wire ([#1079](https://github.com/Positronic-Robotics/positronic/pull/1079))
 - GR00T normalization keeps the planned RTC targets, so a frozen target does not change ([#1082](https://github.com/Positronic-Robotics/positronic/pull/1082))
 - With a lead of the whole chunk, `ChunkedSchedule` sends the next call in the round that reads the answer ([#1069](https://github.com/Positronic-Robotics/positronic/pull/1069))
@@ -35,6 +37,7 @@ This release publishes `positronic-platform-client` 0.47.5, and `positronic` req
 - The `abc_dit` vendor serves ABC-DiT, the bimanual YAM policy of the ABC project, from its multi-task sim checkpoint ([#1017](https://github.com/Positronic-Robotics/positronic/pull/1017))
 - The ABC sim renders from cameras at the ZED-X stations of the ABC-130k dataset by default. `camera_view=d405` keeps ABC's own cameras ([#1104](https://github.com/Positronic-Robotics/positronic/pull/1104))
 - The LM IK search returns the iterate with the lowest error, and that error ([#1103](https://github.com/Positronic-Robotics/positronic/pull/1103))
+- The bundled YAM model is the model of i2rt at the commit that the `yam` extra pins, with the linear gripper. Every YAM mount is 9.5 mm lower, so the same joints report the same `ee_pose` ([#1124](https://github.com/Positronic-Robotics/positronic/pull/1124))
 - The YAM driver takes the joint range from the limits that the chain reports, less a margin ([#1099](https://github.com/Positronic-Robotics/positronic/pull/1099))
 - The YAM IK accepts an answer that passes its FK check, whatever the solver reports ([#1095](https://github.com/Positronic-Robotics/positronic/pull/1095))
 
