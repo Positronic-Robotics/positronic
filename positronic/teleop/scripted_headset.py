@@ -90,6 +90,7 @@ class _Hand:
             raise RuntimeError('The scripted headset stopped sending samples') from self._error
 
     def press(self, button: Button) -> None:
+        logger.info('The scripted headset presses %s', button.name)
         self.buttons = _buttons(button)
         # Two send periods, so the thread sends at least one sample with the button down.
         time.sleep(max(self._PRESS_SEC, 2 * self._period_sec))
@@ -141,6 +142,9 @@ def drive(page: str, trials: int, rate_hz: float, trial_sec: float, radius: floa
 
     The page of the service has a self-signed certificate, so the scripted headset does not check it.
     """
+    for name, value in (('rate_hz', rate_hz), ('trial_sec', trial_sec), ('circle_sec', circle_sec)):
+        if not 0 < value < math.inf:
+            raise ValueError(f'{name} must be finite and positive, got {value}')
     url = urlsplit(page)
     tls = ssl.create_default_context()
     tls.check_hostname = False

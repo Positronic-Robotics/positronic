@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import socket
@@ -6,7 +7,7 @@ import threading
 import time
 import types
 from collections.abc import Callable, Generator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
@@ -740,6 +741,13 @@ def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, vie
         command._Headset(TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC), view_fps)
 
 
+@pytest.mark.parametrize('name', ['rate_hz', 'trial_sec', 'circle_sec'])
+@pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf')])
+def test_a_scripted_headset_rate_or_time_that_is_not_finite_and_positive_is_refused(name, value):
+    with pytest.raises(ValueError, match=f'{name} must be finite and positive'):
+        scripted_headset.drive(page='http://127.0.0.1:1', trials=1, **{name: value})
+
+
 def test_the_phone_page_reads_the_fields_of_the_page_state():
     page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
     [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
@@ -772,22 +780,29 @@ def _until_served(url: str, seconds: float = 10.0) -> None:
 
 
 @pytest.mark.timeout(60)
-def test_the_scripted_headset_readies_moves_and_completes_a_trial_through_the_page(socket_path, runtime):
+def test_the_scripted_headset_readies_moves_and_completes_a_trial_through_the_page(socket_path, runtime, caplog):
+    caplog.set_level(logging.INFO, logger=scripted_headset.__name__)
     port = free_port()
     page = f'http://127.0.0.1:{port}'
     webxr = WebXR(port, use_https=False)
     # A loaded machine starts the page and the scripted headset slowly, so the ready limit is long.
     service = TeleopService(ServedUnixSocket(socket_path), ready_limit=30.0, silence_limit=0.1, hold_sec=HOLD_SEC)
     headset = command._Headset(service)
-    with service, pimm.World() as world, ThreadPoolExecutor(max_workers=2) as pool:
+    with service, pimm.World() as world, ThreadPoolExecutor(max_workers=3) as pool:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
         world.connect(headset.page_state, webxr.page_state)
-        loops = pool.submit(world.run, [headset, webxr])
+        # As in `serve`, the page runs in a process of its own. Its start blocks for a while on some machines.
+        loops = pool.submit(world.run, [headset], [webxr])
         try:
             _until_served(page + STATE_PATH)
             trials = pool.submit(scripted_headset.drive, page=page, trials=1, trial_sec=0.5, circle_sec=1.0)
-            run = runtime.start(_policy(socket_path, operator_position='BACK'))
+            started = pool.submit(runtime.start, _policy(socket_path, operator_position='BACK'))
+            # A failure of the scripted headset is the cause of a run that never gets Ready, so it raises first.
+            wait([trials, started], return_when=FIRST_COMPLETED)
+            if trials.done():
+                trials.result()
+            run = started.result()
             steps, end = _drive(run, 10.0)
             run.close()
             trials.result(timeout=10)
