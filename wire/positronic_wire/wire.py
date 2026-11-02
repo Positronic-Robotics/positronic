@@ -92,6 +92,10 @@ class KeepaliveUnsupported(Exception):
     """The server answers sessions but not the keepalive call."""
 
 
+class ProbeUnsupported(Exception):
+    """The wire carries no probe. A caller asks ``keepalive`` whether the server is up."""
+
+
 class Refusal(Enum):
     """What a refused connect says about the server."""
 
@@ -156,7 +160,7 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         the server behind it, so the probe wakes what a session would reach. ``None`` when a server answers.
         A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a backend still starting,
         ``SILENT`` for a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for
-        a refusal no retry reaches.
+        a refusal no retry reaches. Raises ``ProbeUnsupported`` on a wire that carries no probe.
         """
 
 

@@ -17,7 +17,13 @@ from positronic_wire.wire import SessionAddress
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
+from positronic.offboard.client import (
+    DEFAULT_CONNECT_DEADLINE,
+    DEFAULT_INFER_TIMEOUT,
+    DEFAULT_OPEN_TIMEOUT,
+    InferenceClient,
+    InferenceSession,
+)
 from positronic.policy import keys as policy_keys
 
 from .base import Policy, PolicyRun, Processor, Runtime, Step
@@ -132,8 +138,9 @@ def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
-    ``wire`` names the transport and ``address`` is the address it dials. ``jpeg_quality`` sets the JPEG
-    quality of images sent to a server that asks for compressed images.
+    ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout`` and ``connect_deadline``
+    bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality of images sent to a server
+    that asks for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -149,11 +156,18 @@ class RemotePolicy(Policy):
         address: SessionAddress,
         *,
         headers: dict[str, str] | None = None,
+        open_timeout: float = DEFAULT_OPEN_TIMEOUT,
+        connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     ):
         self._client = InferenceClient(
-            registry.client_wire(wire), address, headers=headers, infer_timeout=infer_timeout
+            registry.client_wire(wire),
+            address,
+            headers=headers,
+            open_timeout=open_timeout,
+            connect_deadline=connect_deadline,
+            infer_timeout=infer_timeout,
         )
         self._jpeg_quality = jpeg_quality
 

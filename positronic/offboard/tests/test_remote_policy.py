@@ -89,7 +89,7 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     ) -> wire.Refusal | None:
         return None
 
-    def keepalive(self, address, headers, timeout):
+    def keepalive(self, address, headers, timeout) -> int | None:
         raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
@@ -319,6 +319,40 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert slept == [deadline], f'a {deadline}s connect deadline slept {slept}'
 
+    def test_a_connect_deadline_of_zero_is_one_dial_with_the_whole_open_timeout(self):
+        fake = _FakeWire(_refused(wire.Refusal.COLD))
+        with patch('positronic.offboard.client.time.sleep'), pytest.raises(TimeoutError):
+            InferenceClient(fake, _ADDRESS, open_timeout=5.0, connect_deadline=0.0).new_session()
+
+        assert [open_timeout for _, _, open_timeout in fake.dials] == [5.0]
+
+    def test_a_retry_dials_with_no_more_than_the_time_left_to_connect(self):
+        """The first dial gets the whole open timeout, so it can wait through a cold start. No retry is granted
+        time past the deadline."""
+        fake = _FakeWire(_refused(wire.Refusal.COLD), _refused(wire.Refusal.COLD))
+        clock = [0.0]
+
+        def refuse_after(seconds: float):
+            def dial(address, headers, open_timeout):
+                clock[0] += seconds
+                return _FakeWire.dial(fake, address, headers, open_timeout)
+
+            return dial
+
+        with (
+            patch.object(fake, 'dial', side_effect=refuse_after(40.0)),
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, open_timeout=900.0, connect_deadline=60.0).new_session()
+
+        assert [open_timeout for _, _, open_timeout in fake.dials] == [900.0, 19.0]
+
 
 def _ready(
     session_id: str, meta: dict | None = None, *, version: protocol.ProtocolVersion = protocol.ProtocolVersion.V2
@@ -365,6 +399,19 @@ class TestADroppedConnectionReconnects:
         assert _observations_sent(reopened) == [{'image': 'test'}]
         assert legacy_protocol.deserialise(reopened.send.call_args.args[0])[protocol.SESSION_ID] == 'second'
         assert session.session_id == 'second'
+
+    def test_a_drop_before_the_first_answer_closes_the_dropped_connection_before_it_dials_again(self):
+        # A Modal wire parks the dropped connection's session on close, and the next dial takes it.
+        dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+        reopened = _connection(_ready('second'), _answer({'action_data': [1]}))
+        fake = _FakeWire(dropped, reopened)
+        dials_at_close: list[int] = []
+        dropped.close.side_effect = lambda: dials_at_close.append(len(fake.dials))
+        session = InferenceClient(fake, _ADDRESS).new_session()
+
+        session.infer({'image': 'test'})
+
+        assert dials_at_close == [1]
 
     @pytest.mark.parametrize('version', list(protocol.ProtocolVersion))
     def test_numpy_metadata_survives_a_reconnect_and_reordered_mapping(self, version):
@@ -459,6 +506,18 @@ class TestADroppedConnectionReconnects:
 
         assert len(fake.dials) == 3
 
+    def test_a_reconnect_dials_no_longer_than_the_reconnect_deadline(self):
+        """A long open timeout serves a cold first connect. A reconnect holds the arm still, so its dial stops at
+        the reconnect deadline."""
+        fake = _FakeWire(
+            _connection(_ready('first'), wire.PeerDisconnected('dropped')),
+            _connection(_ready('second'), _answer({'action_data': [1]})),
+        )
+        session = InferenceClient(fake, _ADDRESS, open_timeout=900.0, reconnect_deadline=45.0).new_session()
+
+        assert session.infer({'image': 'test'}) == {'action_data': [1]}
+        assert [open_timeout for _, _, open_timeout in fake.dials] == [900.0, 45.0]
+
     def test_the_reconnect_deadline_bounds_a_handshake_that_never_reaches_ready(self):
         """A server that sends status updates while it loads keeps the arm waiting only for the deadline."""
         clock = [0.0]
@@ -495,9 +554,11 @@ class TestWaitForServer:
             super().__init__()
             self._answers = list(answers)
             self.probes = 0
+            self.open_timeouts: list[float] = []
 
         def probe(self, address, headers, open_timeout):
             self.probes += 1
+            self.open_timeouts.append(open_timeout)
             return self._answers.pop(0)
 
     def test_a_cold_server_is_probed_until_it_answers(self):
@@ -516,6 +577,46 @@ class TestWaitForServer:
         assert refused.value.refusal is wire.Refusal.FINAL
         assert fake.probes == 1
 
+    class _KeptAliveWire(_FakeWire):
+        """A wire that carries no probe, and answers each keepalive from ``answers``: a refusal raises."""
+
+        def __init__(self, *answers: wire.Refusal | None):
+            super().__init__()
+            self._answers = list(answers)
+            self.keepalives = 0
+
+        def probe(self, address, headers, open_timeout):
+            raise wire.ProbeUnsupported('this wire carries no probe')
+
+        def keepalive(self, address, headers, timeout):
+            self.keepalives += 1
+            if (refusal := self._answers.pop(0)) is not None:
+                raise wire.ConnectRefused(refusal, 'refused')
+            return 60
+
+    def test_a_wire_without_a_probe_is_kept_alive_until_the_server_answers(self):
+        fake = self._KeptAliveWire(wire.Refusal.COLD, None)
+        with patch('positronic.offboard.client.time.sleep'):
+            InferenceClient(fake, _ADDRESS).wait_for_server()
+
+        assert fake.keepalives == 2
+        assert fake.dials == []
+
+    def test_a_retried_probe_waits_no_more_than_the_time_left(self):
+        """The probe takes its timeouts as a dial does: the first one gets the whole open timeout."""
+        fake = self._ProbedWire(wire.Refusal.COLD, None)
+        clock = [0.0]
+        with (
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + 40.0 + seconds),
+            ),
+        ):
+            InferenceClient(fake, _ADDRESS, open_timeout=900.0, connect_deadline=60.0).wait_for_server()
+
+        assert fake.open_timeouts == [900.0, 19.0]
+
 
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
     headers = {'Modal-Key': 'k'}
@@ -523,6 +624,11 @@ def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client()
     client = policy._client
     assert client.session_url == 'wss://example.com/api/v1/session?fps=2.5'
     assert client.headers == headers
+
+
+def test_remote_policy_hands_the_connect_timeouts_to_the_client():
+    policy = RemotePolicy('websocket_tls', _address('example.com', 443), open_timeout=600.0, connect_deadline=700.0)
+    assert (policy._client.open_timeout, policy._client.connect_deadline) == (600.0, 700.0)
 
 
 class FixedModel(Model):
