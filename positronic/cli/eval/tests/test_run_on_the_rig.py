@@ -7,6 +7,7 @@ import pytest
 from platform_client import routes
 from platform_client.ids import SubmissionId
 
+from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.conftest import KEY, runs_of_four
 from positronic.cli.eval.plan import given, read_plan
 from positronic.cli.eval.run import run
@@ -301,6 +302,58 @@ def test_a_password_file_that_is_not_there_is_refused_at_its_credential(platform
         run_command(run, from_file=a_plan_file(tmp_path, 'plan.yaml', payload))
     assert REGISTRY_PASSWORD not in str(refusal.value)
     assert platform.seen is None
+
+
+# No run of this appears in a temp path or in the words a refusal is built from.
+ENDPOINT_TOKEN = 'Qw8NpZ3Jv6Hc'
+
+
+def a_plan_file_stating(directory: Path, token_line: str) -> Path:
+    """A plan file whose one remote endpoint states `token_line`."""
+    assert PLAN_YAML.count('    address:') == 1
+    payload = PLAN_YAML.replace('    address:', f'    {token_line}\n    address:')
+    return Path(a_plan_file(directory, 'plan.yaml', payload))
+
+
+def test_read_plan_reads_the_token_file_into_the_plan(tmp_path: Path):
+    token_file = tmp_path / 'endpoint-token'
+    token_file.write_text(f'{ENDPOINT_TOKEN}\n')
+
+    plan = read_plan(a_plan_file_stating(tmp_path, f'auth_token_file: {token_file}'))
+
+    token = plan.endpoints[0].auth_token
+    assert token is not None and token.get_secret_value() == ENDPOINT_TOKEN
+
+
+def test_a_plan_file_sends_the_token_its_file_holds(platform, run_command, tmp_path: Path):
+    platform.answer(FILED)
+    token_file = tmp_path / 'endpoint-token'
+    token_file.write_text(f'{ENDPOINT_TOKEN}\n')
+
+    run_command(run, from_file=str(a_plan_file_stating(tmp_path, f'auth_token_file: {token_file}')))
+
+    assert platform.body['endpoints'][0]['auth_token'] == ENDPOINT_TOKEN
+
+
+@pytest.mark.parametrize('held', [None, '', 'a token with spaces\n'], ids=['absent', 'empty', 'not a token'])
+def test_a_token_file_that_gives_no_token_is_a_usage_fault(tmp_path: Path, held: str | None):
+    token_file = tmp_path / 'endpoint-token'
+    if held is not None:
+        token_file.write_text(held)
+    with pytest.raises(CommandFailed, match=r'endpoints\.0\.auth_token: ') as refusal:
+        read_plan(a_plan_file_stating(tmp_path, f'auth_token_file: {token_file}'))
+    assert refusal.value.fault is Fault.USAGE
+    message = str(refusal.value)
+    assert str(token_file) not in message
+    assert 'with spaces' not in message
+
+
+def test_a_plan_file_stating_a_token_is_refused_at_it(tmp_path: Path):
+    with pytest.raises(CommandFailed, match=r'endpoints\.0\.auth_token: Extra inputs are not permitted') as refusal:
+        read_plan(a_plan_file_stating(tmp_path, f'auth_token: {ENDPOINT_TOKEN}'))
+    assert refusal.value.fault is Fault.USAGE
+    message = str(refusal.value)
+    assert not [run_of_the_token for run_of_the_token in runs_of_four(ENDPOINT_TOKEN) if run_of_the_token in message]
 
 
 def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path: Path):

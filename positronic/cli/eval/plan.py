@@ -4,7 +4,7 @@ import functools
 from pathlib import Path
 
 import yaml
-from platform_client.eval_plan import EvalPlan, PrivateEval, RegistryCredentialFile, plan_with_passwords_read
+from platform_client.eval_plan import EndpointFile, EvalPlan, PrivateEval, plan_with_secrets_read
 from platform_client.ids import OrgSlug
 from platform_client.responses import SubmissionCreateResponse
 from pydantic import ValidationError
@@ -24,7 +24,7 @@ class _KeyGivenTwice(yaml.constructor.ConstructorError):
 @functools.cache
 def _plan_field_names() -> frozenset[str]:
     """Every name a plan file's schema declares, at any depth."""
-    schema = EvalPlan[RegistryCredentialFile].model_json_schema()
+    schema = EvalPlan[EndpointFile].model_json_schema()
     names = set(schema.get('properties', ()))
     for definition in schema.get('$defs', {}).values():
         names.update(definition.get('properties', ()))
@@ -73,8 +73,8 @@ def read_plan(
 ) -> EvalPlan:
     """The whole plan, from a file. A YAML reader reads JSON too, so one reader takes both forms.
 
-    A credential in the file names the file its password is in, and the plan this returns holds the
-    password read from it.
+    A credential in the file names the file its password is in, and an endpoint's `auth_token_file`
+    names the file its bearer token is in. The plan this returns holds each secret read from its file.
 
     `--transaction-key`, `--alias` and `--org` are the plan fields the command line states beside a
     file. A file carrying one takes no flag for it. `--org` states a private request for that org.
@@ -96,7 +96,7 @@ def read_plan(
             raise CommandFailed(f'{path} carries {field}; drop --{flag}', Fault.USAGE)
         payload = {**payload, field: stated}
     try:
-        return plan_with_passwords_read(EvalPlan[RegistryCredentialFile].model_validate(payload))
+        return plan_with_secrets_read(EvalPlan[EndpointFile].model_validate(payload))
     except ValidationError as exc:
         raise CommandFailed(f'{path}: {one_line(exc)}', Fault.USAGE) from exc
 
