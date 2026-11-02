@@ -6,8 +6,9 @@ import subprocess
 import tempfile
 import threading
 import traceback
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from enum import StrEnum
+from typing import Any
 
 import numpy as np
 import turbojpeg
@@ -34,19 +35,45 @@ _LOG_CONFIG = {
 # The names of the controllers in the positions and the buttons that ``WebXR`` emits.
 LEFT, RIGHT = 'left', 'right'
 
+# The routes of the page state and of the controller stream.
+STATE_PATH, CONTROLLER_PATH = '/state', '/ws'
+
+# The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
+_CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
+
 
 def _parse_controller_data(data: dict):
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
     buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
-        if data['controllers'][side] is not None:
-            translation = np.array(data['controllers'][side]['position'], dtype=np.float64)
-            rotation = np.array(data['controllers'][side]['orientation'], dtype=np.float64)
-            buttons = np.array(data['controllers'][side]['buttons'], dtype=np.float64)
+        if data[_CONTROLLERS][side] is not None:
+            translation = np.array(data[_CONTROLLERS][side][_POSITION], dtype=np.float64)
+            rotation = np.array(data[_CONTROLLERS][side][_ORIENTATION], dtype=np.float64)
+            buttons = np.array(data[_CONTROLLERS][side][_BUTTONS], dtype=np.float64)
             controller_positions[side] = geom.Transform3D(translation, geom.Rotation.from_quat(rotation))
             buttons_dict[side] = buttons
 
     return controller_positions, buttons_dict
+
+
+def controller_message(
+    positions: Mapping[str, geom.Transform3D], buttons: Mapping[str, Sequence[float]]
+) -> dict[str, Any]:
+    """The message of the page on ``/ws`` for the controllers that ``positions`` and ``buttons`` name. The page
+    does not track the others."""
+    if positions.keys() != buttons.keys():
+        raise ValueError(
+            f'positions and buttons must name the same controllers, got {list(positions)}, {list(buttons)}'
+        )
+    tracked = {
+        side: {
+            _POSITION: pose.translation.tolist(),
+            _ORIENTATION: pose.rotation.as_quat.tolist(),
+            _BUTTONS: [float(value) for value in buttons[side]],
+        }
+        for side, pose in positions.items()
+    }
+    return {_CONTROLLERS: {side: tracked.get(side) for side in (LEFT, RIGHT)}}
 
 
 def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[str, str]:
@@ -191,7 +218,7 @@ class WebXR(pimm.ControlSystem):
                 return RedirectResponse(f'/?{PHONE_TELEOP_QUERY}')
             return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
 
-        @app.get('/state')
+        @app.get(STATE_PATH)
         async def page_state():
             message = self.page_state.read()
             return JSONResponse({} if message is None else message.data)
@@ -246,7 +273,7 @@ class WebXR(pimm.ControlSystem):
         """``/ws``: the controller stream from the page."""
 
         # TODO: Require a pairing key before `/ws` accepts a client. Any client that can reach the port sends input.
-        @app.websocket('/ws')
+        @app.websocket(CONTROLLER_PATH)
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
             logger.info('WebSocket connection accepted')

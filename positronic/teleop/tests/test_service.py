@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import socket
@@ -6,10 +7,12 @@ import threading
 import time
 import types
 from collections.abc import Callable, Generator
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
+import httpx
 import numpy as np
 import pos3
 import pytest
@@ -30,6 +33,7 @@ from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers.webxr import STATE_PATH, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
@@ -40,11 +44,12 @@ from positronic.policy.executor import Executor
 from positronic.policy.keys import END
 from positronic.policy.processors import ChunkedSchedule, EndOnField
 from positronic.policy.remote import RemotePolicy
-from positronic.teleop import command, protocol
+from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import VIEW_SIZE, session_query
-from positronic.teleop.service import ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
+from positronic.teleop.service import Button, ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
 from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
+from positronic.tests.testing_inference import free_port
 from positronic.utils import package_assets_path
 
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
@@ -60,8 +65,11 @@ HOLD_SEC = 0.2
 
 
 def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0) -> list[float]:
-    """The values that the headset page sends for a controller: trigger, grip, touchpad, stick, A, B."""
-    return [trigger, 0.0, 0.0, stick, a, b]
+    """The values that the headset page sends for a controller."""
+    values = [0.0] * (max(Button) + 1)
+    for button, value in ((Button.TRIGGER, trigger), (Button.STICK, stick), (Button.A, a), (Button.B, b)):
+        values[button] = value
+    return values
 
 
 class TestButtonMap:
@@ -112,12 +120,7 @@ class TestButtonMap:
     def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
         page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
         [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
-        assert tuple(map(int, layout)) == (
-            service_module._TRIGGER,
-            service_module._STICK,
-            service_module._A,
-            service_module._B,
-        )
+        assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
@@ -738,6 +741,25 @@ def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, vie
         command._Headset(TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC), view_fps)
 
 
+@pytest.mark.parametrize('name', ['rate_hz', 'view_fps', 'min_hold_sec', 'trial_sec', 'circle_sec'])
+@pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf')])
+def test_a_scripted_headset_rate_or_time_that_is_not_finite_and_positive_is_refused(name, value):
+    with pytest.raises(ValueError, match=f'{name} must be finite and positive'):
+        scripted_headset.drive(page='http://127.0.0.1:1', trials=1, **{name: value})
+
+
+@pytest.mark.parametrize('trials', [0, -1, 1.5])
+def test_a_scripted_headset_trial_count_that_is_not_a_positive_integer_is_refused(trials):
+    with pytest.raises(ValueError, match='trials must be a positive integer'):
+        scripted_headset.drive(page='http://127.0.0.1:1', trials=trials)
+
+
+@pytest.mark.parametrize('radius', [-0.01, float('nan'), float('inf')])
+def test_a_scripted_headset_radius_that_is_negative_or_not_finite_is_refused(radius):
+    with pytest.raises(ValueError, match='radius must be finite and not negative'):
+        scripted_headset.drive(page='http://127.0.0.1:1', trials=1, radius=radius)
+
+
 def test_the_phone_page_reads_the_fields_of_the_page_state():
     page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
     [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
@@ -756,6 +778,58 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
     assert state == {'phase': Phase.IDLE, 'control': False}
+
+
+def _until_served(url: str, seconds: float = 10.0) -> None:
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            httpx.get(url).raise_for_status()
+            return
+        except httpx.TransportError:
+            assert time.monotonic() < deadline, f'nothing serves {url}'
+            time.sleep(0.05)
+
+
+@pytest.mark.timeout(60)
+def test_the_scripted_headset_readies_moves_and_completes_each_trial_through_the_page(socket_path, runtime, caplog):
+    caplog.set_level(logging.INFO, logger=scripted_headset.__name__)
+    port = free_port()
+    page = f'http://127.0.0.1:{port}'
+    webxr = WebXR(port, use_https=False)
+    # A loaded machine starts the page and the scripted headset slowly, so the ready limit is long. The samples pass
+    # through the process of the page, so the silence limit is the one of `serve`.
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=30.0, silence_limit=0.5, hold_sec=HOLD_SEC)
+    headset = command._Headset(service)
+    with service, pimm.World() as world, ThreadPoolExecutor(max_workers=3) as pool:
+        world.connect(webxr.controller_positions, headset.controller_positions)
+        world.connect(webxr.buttons, headset.buttons)
+        world.connect(headset.page_state, webxr.page_state)
+        # As in `serve`, the page runs in a process of its own. Its start blocks for a while on some machines.
+        loops = pool.submit(world.run, [headset], [webxr])
+        try:
+            _until_served(page + STATE_PATH)
+            # The hand moves for 2 s, so a loaded machine still turns control on and plays a move in each trial.
+            trials = pool.submit(scripted_headset.drive, page=page, trials=2, trial_sec=2.0, circle_sec=2.0)
+            ends, moves = [], []
+            for _ in range(2):
+                started = pool.submit(runtime.start, _policy(socket_path, operator_position='BACK'))
+                # A failure of the scripted headset is the cause of a run that never gets Ready, so it raises first.
+                wait([trials, started], return_when=FIRST_COMPLETED)
+                if trials.done():
+                    trials.result()
+                run = started.result()
+                steps, end = _drive(run, 10.0)
+                run.close()
+                ends.append(end)
+                moves.append(np.array([_target(step).translation for step in _moves(steps)]))
+            trials.result(timeout=10)
+        finally:
+            world.request_stop()
+            loops.result(timeout=10)
+    assert ends == [PolicyEnd.COMPLETE, PolicyEnd.COMPLETE]
+    for trial, targets in enumerate(moves):
+        assert np.ptp(targets, axis=0).max() > 0.01, f'trial {trial} played {len(targets)} moves with no motion'
 
 
 class _RecordingNotice:
