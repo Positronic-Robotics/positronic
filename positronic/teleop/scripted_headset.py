@@ -91,7 +91,8 @@ class _Hand:
 
     def press(self, button: Button) -> None:
         self.buttons = _buttons(button)
-        time.sleep(self._PRESS_SEC)
+        # Two send periods, so the thread sends at least one sample with the button down.
+        time.sleep(max(self._PRESS_SEC, 2 * self._period_sec))
         self.buttons = _buttons()
 
 

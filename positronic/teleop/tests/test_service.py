@@ -6,6 +6,7 @@ import threading
 import time
 import types
 from collections.abc import Callable, Generator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
@@ -771,32 +772,29 @@ def _until_served(url: str, seconds: float = 10.0) -> None:
 
 
 @pytest.mark.timeout(60)
-def test_the_scripted_headset_readies_moves_and_completes_a_trial_through_the_page(service, socket_path, runtime):
+def test_the_scripted_headset_readies_moves_and_completes_a_trial_through_the_page(socket_path, runtime):
     port = free_port()
-    webxr = WebXR(port, use_https=False)
-    headset = command._Headset(service)
     page = f'http://127.0.0.1:{port}'
-    with pimm.World() as world:
+    webxr = WebXR(port, use_https=False)
+    # A loaded machine starts the page and the scripted headset slowly, so the ready limit is long.
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=30.0, silence_limit=0.1, hold_sec=HOLD_SEC)
+    headset = command._Headset(service)
+    with service, pimm.World() as world, ThreadPoolExecutor(max_workers=2) as pool:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
         world.connect(headset.page_state, webxr.page_state)
-        loops = threading.Thread(target=world.run, args=([headset, webxr],), daemon=True)
-        loops.start()
-        _until_served(page + STATE_PATH)
-        trials = threading.Thread(
-            target=scripted_headset.drive,
-            kwargs={'page': page, 'trials': 1, 'trial_sec': 0.5, 'circle_sec': 1.0},
-            daemon=True,
-        )
-        trials.start()
-        run = runtime.start(_policy(socket_path, operator_position='BACK'))
-        steps, end = _drive(run, 10.0)
-        run.close()
-        trials.join(timeout=5)
-        world.request_stop()
-        loops.join(timeout=5)
+        loops = pool.submit(world.run, [headset, webxr])
+        try:
+            _until_served(page + STATE_PATH)
+            trials = pool.submit(scripted_headset.drive, page=page, trials=1, trial_sec=0.5, circle_sec=1.0)
+            run = runtime.start(_policy(socket_path, operator_position='BACK'))
+            steps, end = _drive(run, 10.0)
+            run.close()
+            trials.result(timeout=10)
+        finally:
+            world.request_stop()
+            loops.result(timeout=10)
     assert end is PolicyEnd.COMPLETE
-    assert not trials.is_alive()
     targets = np.array([_target(step).translation for step in _moves(steps)])
     assert np.ptp(targets, axis=0).max() > 0.01
 
