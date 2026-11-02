@@ -194,7 +194,12 @@ class InferenceSession:
         ):
             reopened.close()
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
-        self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+        with self._send_lock:
+            if not self._closing:
+                self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+                return
+        reopened.close()
+        raise RuntimeError('The inference session is closing')
 
     def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
@@ -291,8 +296,8 @@ class InferenceSession:
                 raise TimeoutError('Pending inference calls did not finish before session close')
         if self._closed:
             return
-        self._closed = True
         if self._protocol is protocol.ProtocolVersion.V1:
+            self._closed = True
             logger.info('InferenceSession.close: %s', self._conn.close())
             return
         message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
@@ -309,6 +314,7 @@ class InferenceSession:
             if response != message:
                 raise RuntimeError(f'Unexpected end-session response: {response}')
         finally:
+            self._closed = True
             logger.info('InferenceSession.close: %s', self._conn.close())
 
 
