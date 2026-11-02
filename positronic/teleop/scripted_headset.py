@@ -43,15 +43,21 @@ class _Hand:
 
     # The pose before control comes on, in the reference space of the page.
     _REST = geom.Transform3D(np.array([0.0, 1.0, -0.3]), geom.Rotation.identity)
-    # The shortest hold of a button, so that a loaded machine does not miss it.
-    _MIN_HOLD_SEC = 0.2
 
-    def __init__(self, websocket: Connection, rate_hz: float, view_fps: float, radius: float, circle_sec: float):
+    def __init__(
+        self,
+        websocket: Connection,
+        rate_hz: float,
+        view_fps: float,
+        min_hold_sec: float,
+        radius: float,
+        circle_sec: float,
+    ):
         self._websocket = websocket
         self._period_sec = 1 / rate_hz
         # The service reads the latest sample once in each period of its view rate. A hold of two periods of the slower
         # rate puts at least one sample of each state of the buttons in a read of the service.
-        self._hold_sec = max(self._MIN_HOLD_SEC, 2 * self._period_sec, 2 / view_fps)
+        self._hold_sec = max(min_hold_sec, 2 * self._period_sec, 2 / view_fps)
         self._radius = radius
         self._circle_sec = circle_sec
         self.buttons = _buttons()
@@ -152,13 +158,20 @@ def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
 _WEBSOCKET_SCHEMES = {'http': 'ws', 'https': 'wss'}
 
 
-@cfn.config(rate_hz=72.0, view_fps=30.0, trial_sec=20.0, radius=0.05, circle_sec=4.0)
+@cfn.config(rate_hz=72.0, view_fps=30.0, min_hold_sec=0.2, trial_sec=20.0, radius=0.05, circle_sec=4.0)
 def drive(
-    page: str, trials: int, rate_hz: float, view_fps: float, trial_sec: float, radius: float, circle_sec: float
+    page: str,
+    trials: int,
+    rate_hz: float,
+    view_fps: float,
+    min_hold_sec: float,
+    trial_sec: float,
+    radius: float,
+    circle_sec: float,
 ) -> None:
     """Do ``trials`` trials on the page of ``positronic teleop`` at the URL ``page``. Each trial moves the hand for
     ``trial_sec`` on a circle of ``radius``, once each ``circle_sec``. ``view_fps`` is the ``--view_fps`` of the
-    service.
+    service. ``min_hold_sec`` is the shortest hold of a button; a loaded machine needs a longer one.
 
     The page of the service has a self-signed certificate, so the scripted headset does not check it.
     """
@@ -167,6 +180,7 @@ def drive(
     for name, value in (
         ('rate_hz', rate_hz),
         ('view_fps', view_fps),
+        ('min_hold_sec', min_hold_sec),
         ('trial_sec', trial_sec),
         ('circle_sec', circle_sec),
     ):
@@ -183,7 +197,7 @@ def drive(
         # `connect` refuses a TLS context for a ws URL.
         connect(controller_url, ssl=tls if url.scheme == 'https' else None) as websocket,
         httpx.Client(base_url=page, verify=tls) as client,
-        _Hand(websocket, rate_hz, view_fps, radius, circle_sec) as hand,
+        _Hand(websocket, rate_hz, view_fps, min_hold_sec, radius, circle_sec) as hand,
     ):
         for trial in range(trials):
             _trial(_Page(client, hand), hand, trial_sec)

@@ -180,8 +180,9 @@ Ready, turns control on, and moves the hand on a circle of 5 cm for 20 s. Then i
 4. After the run, read the report: `positronic eval timing-report --run_dir=<the output_dir of the run>`.
 
 `--rate_hz`, `--trial_sec`, `--radius` and `--circle_sec` change the samples and the motion. When the service runs
-with `--view_fps`, give the scripted headset the same `--view_fps`. Use `http` in `--page` for a phone config of the
-service. The scripted headset does not check the self-signed certificate of the page.
+with `--view_fps`, give the scripted headset the same `--view_fps`. On a loaded machine, raise `--min_hold_sec`
+(0.2 s). Use `http` in `--page` for a phone config of the service. The scripted headset does not check the
+self-signed certificate of the page.
 
 ## Session parameters
 
