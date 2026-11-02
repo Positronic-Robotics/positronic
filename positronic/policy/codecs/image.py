@@ -63,11 +63,15 @@ class ResizeCache:
 
     A fingerprint of a strided pixel sample finds an entry. A hit needs the whole frame to equal the
     stored frame, so it gives the pixels of a transform. The cache shares one read-only array between its hits.
+    It keeps at most ``capacity`` entries and ``max_bytes`` of stored frames and transforms, dropping the least
+    recently used first; a frame it dropped is transformed again.
     """
 
-    def __init__(self, capacity: int = 96) -> None:
+    def __init__(self, capacity: int = 96, max_bytes: int = 256 * 1024 * 1024) -> None:
         self._capacity = capacity
+        self._max_bytes = max_bytes
         self._entries: OrderedDict[tuple, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+        self._held = 0
         self._lock = threading.Lock()
 
     @staticmethod
@@ -90,11 +94,19 @@ class ResizeCache:
     def put(self, image: np.ndarray, work: Hashable, transformed: np.ndarray) -> None:
         key = self._key(image, work)
         transformed.flags.writeable = False  # shared by every hit
+        if image.nbytes + transformed.nbytes > self._max_bytes:
+            return
         with self._lock:
+            self._drop(key)
             self._entries[key] = (image.copy(), transformed)
-            self._entries.move_to_end(key)
-            while len(self._entries) > self._capacity:
-                self._entries.popitem(last=False)
+            self._held += image.nbytes + transformed.nbytes
+            while len(self._entries) > self._capacity or self._held > self._max_bytes:
+                self._drop(next(iter(self._entries)))
+
+    def _drop(self, key: tuple) -> None:
+        """Drop the entry at ``key``, if there is one. The caller holds the lock."""
+        if (entry := self._entries.pop(key, None)) is not None:
+            self._held -= entry[0].nbytes + entry[1].nbytes
 
 
 class TransformImages(Codec):

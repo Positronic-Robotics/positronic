@@ -407,6 +407,21 @@ class TestResizeCache:
         assert cache.get(frames[1], (32, 24)) is None
         assert cache.get(frames[2], (32, 24)) is not None
 
+    def test_the_least_recently_used_frames_go_first_past_the_byte_budget(self):
+        frames = [np.full((48, 64, 3), value, dtype=np.uint8) for value in (1, 2, 3)]
+        cache = ResizeCache(max_bytes=2 * (frames[0].nbytes + frames[0][::2, ::2].nbytes))
+        for frame in frames:
+            cache.put(frame, (32, 24), frame[::2, ::2].copy())
+        assert cache.get(frames[0], (32, 24)) is None
+        assert cache.get(frames[1], (32, 24)) is not None
+        assert cache.get(frames[2], (32, 24)) is not None
+
+    def test_a_frame_past_the_byte_budget_is_not_kept(self):
+        frame = np.full((48, 64, 3), 1, dtype=np.uint8)
+        cache = ResizeCache(max_bytes=frame.nbytes)
+        cache.put(frame, (32, 24), frame[::2, ::2].copy())
+        assert cache.get(frame, (32, 24)) is None
+
     def test_a_cached_transform_is_read_only(self):
         frame = np.full((48, 64, 3), 5, dtype=np.uint8)
         cache = ResizeCache()
