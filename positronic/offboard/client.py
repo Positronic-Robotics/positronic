@@ -343,7 +343,7 @@ class InferenceClient:
 
         Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
         """
-        # A reconnect holds the arm still, so even its first dial waits no longer than the reconnect deadline.
+        # The reconnect deadline bounds the first dial of a reconnect too.
         return self._connect(
             self.connect_deadline,
             self.open_timeout,
