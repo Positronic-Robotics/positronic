@@ -835,6 +835,22 @@ def test_a_robolab_label_marks_each_stage_of_each_subtask_at_its_first_frame(tmp
     assert given is not None and given.furthest_stage is Stage.control
 
 
+def test_a_robolab_label_takes_the_reach_distance_as_configuration(tmp_path: Path):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: 'RubiksCubeThenBananaTask', SUCCESS: False, TERMINATED: True})
+    _write_pick_episode(
+        episode,
+        completed=[0, 0, 0],
+        # The ee is 15 cm from the cube at 0.5 s and 5 cm from it at 1.0 s.
+        ee=[_FAR, [0.5, 0.0, 0.15], [0.5, 0.0, 0.05]],
+        poses={'rubiks_cube': [_pose(_CUBE_AT)] * 3},
+        contacts={'rubiks_cube': [False] * 3},
+        progress={f'0.rubiks_cube.0.{GT_STATE_GRABBED}': [False] * 3},
+    )
+    assert _stage_marks(robolab_label(episode)) == [(0, {Stage.reaching: 1.0})]
+    assert _stage_marks(robolab_label(episode, reach_m=0.2)) == [(0, {Stage.reaching: 0.5})]
+    assert _stage_marks(robolab_label(episode, reach_m=0.01)) == [(0, {})]
+
+
 def test_a_robolab_label_marks_a_chain_at_its_target_before_its_subtask_ends_and_nothing_after_the_last(tmp_path: Path):
     (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: 'BananasInBowlTask', SUCCESS: True, TERMINATED: True})
     _write_pick_episode(

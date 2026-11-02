@@ -747,12 +747,13 @@ class _Mark(NamedTuple):
 
 
 class _StageReader:
-    """Reads the stage marks of one RoboLab episode from its `gt_state`, `subtask` and end effector signals."""
+    """Reads the stage marks of one RoboLab episode from its `gt_state`, `subtask` and end effector signals.
 
-    # The arm reaches an object when its end effector comes this near to the object's origin.
-    _REACH_M = 0.10
+    The arm reaches an object when its end effector comes within `reach_m` of the object's origin.
+    """
 
-    def __init__(self, episode: Path, subtasks: list[_SubtaskSample]):
+    def __init__(self, episode: Path, subtasks: list[_SubtaskSample], reach_m: float):
+        self._reach_m = reach_m
         self._state = _scene_state(episode)
         self._counts = _Series([(sample.time_ns, sample.completed) for sample in subtasks])
         self._ee = _Series(_timed_values(episode / f'{ROBOT_STATE}{EE_POSE_SUFFIX}{SIGNAL_FILE_SUFFIX}'))
@@ -806,21 +807,21 @@ class _StageReader:
                 if item not in self._objects.get(subtask, ()) or effector is None:
                     continue
                 if isinstance(effector.value, list) and isinstance(pose, list):
-                    if math.dist(effector.value[:3], pose[:3]) <= self._REACH_M:
+                    if math.dist(effector.value[:3], pose[:3]) <= self._reach_m:
                         yield _Mark(subtask, Stage.reaching, frame_ns)
 
 
-def _robolab_stages(episode: Path, start_ns: int, subtasks: list[_SubtaskSample]) -> list[StageReached]:
+def _robolab_stages(episode: Path, start_ns: int, subtasks: list[_SubtaskSample], reach_m: float) -> list[StageReached]:
     """The first mark of each stage in each subtask, from the episode's `gt_state` signals."""
     first: dict[tuple[int, Stage], int] = {}
-    for mark in _StageReader(episode, subtasks).marks():
+    for mark in _StageReader(episode, subtasks, reach_m).marks():
         key = (mark.subtask, mark.stage)
         first[key] = min(first.get(key, mark.time_ns), mark.time_ns)
     ordered = sorted(first.items(), key=lambda entry: (entry[1], entry[0][1]))
     return [StageReached(seconds=(time_ns - start_ns) / 1e9, stage=stage) for (_, stage), time_ns in ordered]
 
 
-def robolab_label(episode: Path) -> Label | None:
+def robolab_label(episode: Path, *, reach_m: float = 0.10) -> Label | None:
     """RoboLab's labeler: a trial ends as in `molmo_label`, the `subtask` signal gives its progress, and the
     `gt_state` signals give its stages.
 
@@ -828,6 +829,8 @@ def robolab_label(episode: Path) -> Label | None:
     of that sample. A change of the score alone is not an event, so the label's `subtask_score` is the score at
     the last change of the count. `_robolab_stages` gives the `StageReached` events. An episode that records no
     `gt_state` has none. A trial whose `subtask` signal holds no sample has no label.
+
+    The arm reaches an object when its end effector comes within `reach_m` metres of the object's origin.
     """
     trial = _recorded_sim_trial(episode, BENCHMARK_TASK)
     samples = _subtask_samples(episode) if trial is not None else []
@@ -840,7 +843,7 @@ def robolab_label(episode: Path) -> Label | None:
             achieved = sample.completed
             seconds = (sample.time_ns - trial.start_ns) / 1e9
             events.append(SubtaskAchieved(seconds=seconds, achieved=achieved, score=sample.score))
-    events += _robolab_stages(episode, trial.start_ns, samples)
+    events += _robolab_stages(episode, trial.start_ns, samples, reach_m)
     events.sort(key=lambda event: (event.seconds, isinstance(event, StageReached)))
     return Label(
         uid=trial.uid,
