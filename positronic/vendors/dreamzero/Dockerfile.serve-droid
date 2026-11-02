@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1.7
+# Build from the repository root. Each image carries one DROID checkpoint and starts offline.
+ARG BASE_IMAGE=positro/dreamzero-base:latest
+ARG MODEL=GEAR-Dreams/DreamZero-DROID
+ARG MODEL_REVISION=96ad344138c66e82536422432ad742f015784942
+ARG WAN=Wan-AI/Wan2.1-I2V-14B-480P
+ARG WAN_REVISION=6b73f84e66371cdfe870c72acd6826e1d61cf279
+ARG TOKENIZER=google/umt5-xxl
+ARG TOKENIZER_REVISION=66cb9e7e85526fe440a945569e42c72fb6cbc0ad
+
+# This stage is independent of the native environment and serving source.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS weights
+ARG MODEL MODEL_REVISION WAN WAN_REVISION TOKENIZER TOKENIZER_REVISION
+ENV HF_HOME=/opt/hf
+RUN pip install --no-cache-dir huggingface_hub==0.35.3
+RUN hf download "$MODEL" --revision "$MODEL_REVISION" --local-dir /opt/dreamzero-model \
+      --include 'model-*.safetensors' 'model.safetensors.index.json' config.json 'experiment_cfg/*' README.md \
+ && hf download "$WAN" --revision "$WAN_REVISION" \
+      --include models_t5_umt5-xxl-enc-bf16.pth models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth \
+      Wan2.1_VAE.pth LICENSE.txt \
+ && hf download "$TOKENIZER" --revision "$TOKENIZER_REVISION" \
+      --include config.json tokenizer.json tokenizer_config.json special_tokens_map.json spiece.model \
+ && for spec in "${WAN}@${WAN_REVISION}" "${TOKENIZER}@${TOKENIZER_REVISION}"; do \
+      repo="${spec%@*}" rev="${spec#*@}" \
+   && refs="$HF_HOME/hub/models--$(echo "$repo" | sed 's|/|--|g')/refs" \
+   && mkdir -p "$refs" && printf %s "$rev" > "$refs/main" || exit 1; \
+    done
+# The full checkpoint supplies the diffusion weights; do not preload a second WAN backbone.
+RUN python - <<'PY'
+import json
+from pathlib import Path
+
+path = Path('/opt/dreamzero-model/config.json')
+config = json.loads(path.read_text())
+config['action_head_cfg']['config']['skip_component_loading'] = True
+path.write_text(json.dumps(config))
+PY
+
+FROM ${BASE_IMAGE} AS runtime
+
+ENV HF_HOME=/opt/hf \
+    DREAMZERO_MODEL_SOURCE=/opt/dreamzero-model \
+    PYTHONPATH=/opt/positronic-vendors:/dreamzero \
+    PYTHONUNBUFFERED=1 \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600
+
+COPY pyproject.toml uv.lock /opt/positronic-packages/
+COPY client/pyproject.toml /opt/positronic-packages/client/
+COPY wire/pyproject.toml /opt/positronic-packages/wire/
+COPY model_server/pyproject.toml /opt/positronic-packages/model_server/
+COPY vocabulary/pyproject.toml /opt/positronic-packages/vocabulary/
+COPY evals/pyproject.toml /opt/positronic-packages/evals/
+COPY docker/install-model-server-deps.sh /opt/positronic-packages/install-model-server-deps.sh
+RUN --mount=type=cache,target=/root/.cache/uv \
+    bash /opt/positronic-packages/install-model-server-deps.sh /.venv/bin/python
+
+COPY --link wire /opt/positronic-packages/wire
+COPY --link model_server /opt/positronic-packages/model_server
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /.venv/bin/python --no-deps \
+      /opt/positronic-packages/wire /opt/positronic-packages/model_server
+
+WORKDIR /opt/positronic-vendors
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    UV_OFFLINE=1 \
+    UV_NO_SYNC=1
+EXPOSE 8000
+STOPSIGNAL SIGINT
+ENTRYPOINT ["/.venv/bin/python", "-m", "dreamzero_serving.server"]
+CMD ["droid"]
+
+# Independent linked layers keep weight blobs reusable across code and dependency changes.
+FROM runtime
+COPY --link --from=weights /opt/dreamzero-model /opt/dreamzero-model
+COPY --link --from=weights /opt/hf /opt/hf
+COPY --link positronic/vendors/dreamzero/serving /opt/positronic-vendors/dreamzero_serving

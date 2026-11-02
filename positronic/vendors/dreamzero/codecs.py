@@ -8,7 +8,7 @@ import numpy as np
 from eval_vocabulary.timeline import recording_timeline
 
 from positronic import keys
-from positronic.cfg import codecs, layers
+from positronic.cfg import codecs
 from positronic.dataset import Signal, transforms
 from positronic.dataset.episode import Episode
 from positronic.dataset.transforms import image
@@ -245,12 +245,3 @@ def _ik_dreamzero_action(solver: str):
 
 joints_ik = codecs.compose.override(obs=dreamzero_obs, action=_ik_dreamzero_action, training_fps=15.0)
 joints_ik_sim = joints_ik.override(**{'action.solver': 'lm'})
-
-
-# DreamZero AR eval schedule: 24-step action horizon → 23-frame look-back (ACTION_HORIZON - 1), sampled
-# at stride 8 from the current frame with the oldest pinned to the window start → trained offsets
-# -23, -16, -8, 0 (test_client_AR.py RELATIVE_OFFSETS; -23 not -24 keeps the oldest inside the window).
-dreamzero_layers = layers.video_context_layers.override(
-    history_frames=23, stride=8, keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
-)
-dreamzero_layers_3cam = dreamzero_layers.override(keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2))

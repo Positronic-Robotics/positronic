@@ -239,7 +239,7 @@ the contact address. The server listens on port 8000 for the WebSocket wire, and
 the gRPC one, so the endpoint returns two URLs. `--grpc.served_address.port=<port>` moves the second one, and
 `NEBIUS_GRPC_PORT=` drops the gRPC wire and its URL. The URLs
 survive endpoint stop/start; deleting an endpoint retires them, so a re-created one of the same name
-gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t`, `dreamzero` and
+gets new ones. Supported vendors: `lerobot_0_3_3`, `lerobot`, `openpi`, `gr00t` and
 `molmoact2`, the set `serve.sh` accepts.
 
 `serve.sh` declares the gRPC port as an ordinary HTTP port, so its front selects HTTP/2 over ALPN
