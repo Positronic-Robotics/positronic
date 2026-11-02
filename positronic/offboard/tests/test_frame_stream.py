@@ -424,9 +424,8 @@ def test_a_stack_that_refers_to_a_row_twice_is_refused():
         rows.resolve(_wire({KEY: {REF: True, b'call': 1, b'rows': [1, 1], b'tail': encode_jpeg(_gradient(1)[None])}}))
 
 
-def test_a_row_past_the_held_bytes_is_dropped_and_its_request_misses_it(monkeypatch):
-    monkeypatch.setattr(StreamedRows, 'MAX_HELD_BYTES', _gradient(0).nbytes)
-    rows = StreamedRows()
+def test_a_row_past_the_held_bytes_is_dropped_and_its_request_misses_it():
+    rows = StreamedRows(max_held_bytes=_gradient(0).nbytes)
     rows.add(_row(1, 2, encode_jpeg(_gradient(0))))
     rows.add(_row(1, 1, encode_jpeg(_gradient(1))))
     with pytest.raises(RowsMissing) as raised:

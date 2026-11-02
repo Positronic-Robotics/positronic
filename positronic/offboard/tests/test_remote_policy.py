@@ -2070,6 +2070,22 @@ def test_a_server_declares_a_frame_stream_for_a_client_that_stacks_compressed_fr
         session.close()
 
 
+def test_a_server_holds_the_rows_of_each_session_within_its_budget(start_server, monkeypatch):
+    budgets = []
+
+    class Recorded(StreamedRows):
+        def __init__(self, max_held_bytes: int = StreamedRows.DEFAULT_HELD_BYTES) -> None:
+            budgets.append(max_held_bytes)
+            super().__init__(max_held_bytes)
+
+    monkeypatch.setattr(server_module, 'StreamedRows', Recorded)
+    deployment = PolicyDeployment(_streamed_stack(ChunkedSchedule(fps=10)))
+    server = start_server(FixedModel(), deployment, frame_stream_held_bytes=1024)
+    session = InferenceClient(*server.ws()).new_session()
+    session.close()
+    assert budgets == [1024]
+
+
 def _gradient_frame(index: int) -> np.ndarray:
     """A smooth 32 x 48 frame that changes every tick, which JPEG and H.264 both keep close."""
     ramp = np.add.outer(np.arange(32), np.arange(48)).astype(np.uint8) * 2

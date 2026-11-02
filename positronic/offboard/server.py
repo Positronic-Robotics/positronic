@@ -88,7 +88,7 @@ class PolicyServer:
 
     A deployment whose client compresses images and stacks frames with one ``TemporalStack`` that ends at the current
     frame takes a frame stream (``positronic.offboard.frame_stream``): its handshake declares one, and each session
-    keeps its rows.
+    keeps its rows, up to ``frame_stream_held_bytes`` of decoded frames.
 
     ``build_model`` runs once, when ``serve`` starts, and its model serves every session. It returns the model
     warmed, with ``server_utils.warmup``: a client reads any keepalive answer as ready. A config-launched
@@ -102,6 +102,7 @@ class PolicyServer:
         pipeline: cfn.Config | PolicyDeployment,
         idle_timeout_min: float | None = None,
         auth_token: str | None = None,
+        frame_stream_held_bytes: int = StreamedRows.DEFAULT_HELD_BYTES,
     ):
         self._pipeline_cfg = pipeline if isinstance(pipeline, cfn.Config) else None
         self._pipeline = pipeline.instantiate() if isinstance(pipeline, cfn.Config) else pipeline
@@ -130,6 +131,7 @@ class PolicyServer:
         if auth_token is not None and not (auth_token and all('!' <= c <= '~' for c in auth_token)):
             raise ValueError('auth_token must be non-empty printable ASCII without spaces; pass None to serve open')
         self._auth_token = auth_token
+        self._frame_stream_held_bytes = frame_stream_held_bytes
 
     def _token_matches(self, authorization: str | None) -> bool:
         if self._auth_token is None:
@@ -263,7 +265,7 @@ class PolicyServer:
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)
             if pipeline.codec is not None:
                 infer = pipeline.codec.wrap(infer)
-            rows = StreamedRows() if FRAME_STREAM in meta else None
+            rows = StreamedRows(self._frame_stream_held_bytes) if FRAME_STREAM in meta else None
             try:
                 await conn.send(
                     serialise({
@@ -398,25 +400,33 @@ def serve_model(
     pipeline: cfn.Config | PolicyDeployment,
     wires: Sequence[server_wire.Wire],
     idle_timeout_min: float | None,
+    frame_stream_held_bytes: int = StreamedRows.DEFAULT_HELD_BYTES,
 ) -> None:
     """Serve ``build_model`` through ``pipeline`` on every wire in ``wires``, until the server stops.
 
     The bearer token comes from ``AUTH_TOKEN_ENV``; a flag would put a secret in the process arguments.
-    Unset serves open.
+    Unset serves open. ``frame_stream_held_bytes`` is ``PolicyServer``'s.
     """
     server = PolicyServer(
-        build_model, pipeline, idle_timeout_min=idle_timeout_min, auth_token=os.environ.get(AUTH_TOKEN_ENV)
+        build_model,
+        pipeline,
+        idle_timeout_min=idle_timeout_min,
+        auth_token=os.environ.get(AUTH_TOKEN_ENV),
+        frame_stream_held_bytes=frame_stream_held_bytes,
     )
     server.serve(wires)
 
 
-@cfn.config(websocket=websocket, grpc=None, idle_timeout_min=None)
+@cfn.config(
+    websocket=websocket, grpc=None, idle_timeout_min=None, frame_stream_held_bytes=StreamedRows.DEFAULT_HELD_BYTES
+)
 def serve(
     model: cfn.Config,
     pipeline: cfn.Config,
     websocket: server_wire.Wire | None,
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
+    frame_stream_held_bytes: int,
 ):
     """The CLI entry point of a vendor server that binds a ``model`` config and a ``pipeline`` config; the
     commands are configs of this.
@@ -430,6 +440,8 @@ def serve(
         --websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/p.sock
         --grpc=@positronic.offboard.server.grpc --grpc.served_address.port=8001
 
-    The bearer token comes from ``AUTH_TOKEN_ENV``, as ``serve_model`` reads it.
+    The bearer token comes from ``AUTH_TOKEN_ENV``, as ``serve_model`` reads it. ``--frame_stream_held_bytes``
+    bounds the decoded frames that each streaming session holds.
     """
-    serve_model(model, pipeline, [w for w in (websocket, grpc) if w is not None], idle_timeout_min)
+    wires = [w for w in (websocket, grpc) if w is not None]
+    serve_model(model, pipeline, wires, idle_timeout_min, frame_stream_held_bytes)

@@ -164,16 +164,17 @@ class StreamedRows:
     the client would have sent it without a stream. Each H.264 unit decodes in arrival order, also the tail of a
     request that refers to a row the server does not have. The client streams the rows of a call only after it read
     the answer before, so a row of a newer call drops the rows of the older ones. Bounds on the rows, images and
-    frame sides refuse a malformed stream, and past ``MAX_HELD_BYTES`` a row is dropped: its request then misses
+    frame sides refuse a malformed stream, and past ``max_held_bytes`` a row is dropped: its request then misses
     it and goes again in full.
     """
 
     MAX_BACK = 64
     MAX_IMAGES = 16
     MAX_SIDE = 4096
-    MAX_HELD_BYTES = 512 * 1024 * 1024
+    DEFAULT_HELD_BYTES = 512 * 1024 * 1024
 
-    def __init__(self) -> None:
+    def __init__(self, max_held_bytes: int = DEFAULT_HELD_BYTES) -> None:
+        self._max_held_bytes = max_held_bytes
         self._call = -1
         self._rows: dict[int, dict[str, np.ndarray]] = {}
         self._held = 0
@@ -193,7 +194,7 @@ class StreamedRows:
             self._call, self._rows, self._held = call, {}, 0
         held = self._held + sum(frame.nbytes for frame in decoded.values())
         held -= sum(frame.nbytes for frame in self._rows.get(back, {}).values())
-        if held > self.MAX_HELD_BYTES:
+        if held > self._max_held_bytes:
             self._rows.pop(back, None)
             return
         self._rows[back], self._held = decoded, held
