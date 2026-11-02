@@ -366,7 +366,6 @@ Our plans evolve with your feedback. Highlights for the next milestones:
   - **Policy presets for π₀.₅ and GR00T.** Full support for both architectures.
   - **Remote inference primitives.** Run policies on different machines over one session protocol, on a WebSocket or a gRPC wire.
 - **Short term**
-  - **Serving Dockerfile layout.** Move all model-serving Dockerfiles into their respective vendor directories.
   - **Richer Positronic Server.** Surface metadata fields, annotation, and filtering flows for rapid triage.
   - **Direct Positronic Dataset integration.** Native adapter for training scripts to stream tensors directly from Positronic datasets.
 - **Medium term**
