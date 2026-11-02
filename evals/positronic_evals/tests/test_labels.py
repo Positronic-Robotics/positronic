@@ -774,19 +774,21 @@ def _write_pick_episode(
     poses: dict[str, list[list[float]]],
     contacts: dict[str, list[bool]],
     progress: dict[str, list[bool]],
+    subtask_ns: int = 5_000,
+    scene_ns: int = 9_000,
 ) -> None:
     """The signals of a RoboLab episode: `subtask`, the end effector, and `gt_state` with `progress` keyed by
     `<subtask>.<group>.<index>.<condition>`. Each list holds one value per frame."""
     subtask = [[0.0, float(done), 2.0, done / 2] for done in completed]
-    _write_frames(episode, SUBTASK_SIGNAL, subtask, pa.list_(pa.float32()), offset_ns=5_000)
+    _write_frames(episode, SUBTASK_SIGNAL, subtask, pa.list_(pa.float32()), offset_ns=subtask_ns)
     _write_frames(episode, f'{ROBOT_STATE}{EE_POSE_SUFFIX}', ee, pa.list_(pa.float32()))
     objects = f'{GT_STATE_SIGNAL}.{GT_STATE_OBJECTS}'
     for item, values in poses.items():
-        _write_frames(episode, f'{objects}.{item}.{GT_STATE_POSE}', values, pa.list_(pa.float32()), 9_000)
+        _write_frames(episode, f'{objects}.{item}.{GT_STATE_POSE}', values, pa.list_(pa.float32()), scene_ns)
     for item, values in contacts.items():
-        _write_frames(episode, f'{objects}.{item}.{GT_STATE_GRIPPER_CONTACT}', values, pa.bool_(), 9_000)
+        _write_frames(episode, f'{objects}.{item}.{GT_STATE_GRIPPER_CONTACT}', values, pa.bool_(), scene_ns)
     for condition, values in progress.items():
-        _write_frames(episode, f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.{condition}', values, pa.bool_(), 9_000)
+        _write_frames(episode, f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.{condition}', values, pa.bool_(), scene_ns)
 
 
 _FAR, _CUBE_AT, _BANANA_AT = [0.0, 0.0, 0.5], [0.5, 0.0, 0.0], [0.0, 0.5, 0.0]
@@ -865,6 +867,59 @@ def test_a_robolab_subtask_whose_groups_name_no_object_takes_every_object_as_its
         progress={'0.conditions.0.stacked': [False, False]},
     )
     assert _stage_marks(robolab_label(episode)) == [(0, {Stage.reaching: 0.5, Stage.contact: 0.5})]
+
+
+@pytest.mark.parametrize(('subtask_ns', 'scene_ns'), [(5_000, 9_000), (9_000, 5_000), (0, 0)])
+def test_a_robolab_mark_on_the_frame_that_starts_a_subtask_falls_in_that_subtask_in_any_order_of_the_frame(
+    tmp_path: Path, subtask_ns: int, scene_ns: int
+):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: 'RubiksCubeThenBananaTask', SUCCESS: False, TERMINATED: True})
+    _write_pick_episode(
+        episode,
+        completed=[0, 1, 1],
+        # The ee is at the banana, the object of subtask 1, on the frame where subtask 1 starts.
+        ee=[_FAR, _BANANA_AT, _FAR],
+        poses={'rubiks_cube': [_pose(_CUBE_AT)] * 3, 'banana': [_pose(_BANANA_AT)] * 3},
+        contacts={},
+        progress={'0.rubiks_cube.0.object_grabbed': [False], '1.banana.0.object_grabbed': [False, False, False]},
+        subtask_ns=subtask_ns,
+        scene_ns=scene_ns,
+    )
+    assert _stage_marks(robolab_label(episode)) == [(0, {}), (1, {Stage.reaching: 0.5})]
+
+
+def test_a_robolab_group_can_hold_a_dot_and_a_misnamed_progress_signal_is_logged_and_gives_no_stage(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BANANA, SUCCESS: False, TERMINATED: True})
+    _write_pick_episode(
+        episode,
+        completed=[0, 0],
+        ee=[_FAR, _FAR],
+        poses={},
+        contacts={},
+        progress={
+            '0.banana.v2.0.object_grabbed': [False, True],
+            '0.banana.v2.1.object_in_container': [False, False],
+            'x.banana.0.object_grabbed': [True, True],
+        },
+    )
+    with caplog.at_level(logging.ERROR, logger=labels.__name__):
+        assert _stage_marks(robolab_label(episode)) == [(0, {Stage.control: 0.5})]
+    assert 'x.banana.0.object_grabbed' in caplog.records[0].getMessage()
+
+
+def test_a_robolab_scene_signal_with_no_values_is_logged_and_gives_no_stage(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    (episode,) = _episodes(tmp_path, {BENCHMARK_TASK: BANANA, SUCCESS: False, TERMINATED: True})
+    _write_pick_episode(
+        episode, completed=[0, 0], ee=[_FAR, _FAR], poses={}, contacts={}, progress={'0.banana.0.object_grabbed': []}
+    )
+    _write_timed_signal(episode, f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.0.banana.0.object_grabbed', [0, 500_000_000])
+    with caplog.at_level(logging.ERROR, logger=labels.__name__):
+        assert _stage_marks(robolab_label(episode)) == [(0, {})]
+    assert VALUE_COLUMN in caplog.records[0].getMessage()
 
 
 def test_a_robolab_episode_that_records_no_scene_state_has_no_stage(tmp_path: Path):

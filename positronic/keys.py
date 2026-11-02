@@ -65,8 +65,8 @@ LEFT_ARM, RIGHT_ARM = 'left', 'right'
 BIMANUAL_ARMS = (LEFT_ARM, RIGHT_ARM)
 
 
-# The arm's state channel, and the signals a recorded state unfolds into. As on the command side, the
-# suffixes are ``Serializers.robot_state``'s, so the names derive from the channel rather than restating it.
+# The signals a recorded state unfolds into, on the ``ROBOT_STATE`` channel that ``eval_vocabulary`` names. As on the
+# command side, the suffixes are ``Serializers.robot_state``'s, so the names derive from the channel.
 JOINTS = f'{ROBOT_STATE}{JOINTS_SUFFIX}'
 JOINT_VEL = f'{ROBOT_STATE}{JOINT_VEL_SUFFIX}'
 EE_POSE = f'{ROBOT_STATE}{EE_POSE_SUFFIX}'

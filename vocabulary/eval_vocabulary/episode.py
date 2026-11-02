@@ -46,7 +46,8 @@ TIMELINE_METADATA_KEY = b'positronic.timeline'
 VALUE_COLUMN = 'value'
 
 # The arm's measured state. A recorded state unfolds into one signal per field, `<ROBOT_STATE><suffix>`. The field at
-# `EE_POSE_SUFFIX` is the [x, y, z, qw, qx, qy, qz] of the end effector.
+# `EE_POSE_SUFFIX` is the [x, y, z, qw, qx, qy, qz] of the end effector. A RoboLab episode records it at the rig's
+# gripper site, in the frames of `GT_STATE_SIGNAL`'s poses.
 ROBOT_STATE = 'robot_state'
 EE_POSE_SUFFIX = '.ee_pose'
 
@@ -71,6 +72,8 @@ GT_STATE_OBJECTS = 'objects'
 GT_STATE_POSE = 'pose'
 GT_STATE_GRIPPER_CONTACT = 'gripper_contact'
 GT_STATE_PROGRESS = 'progress'
+# The `<condition>` that opens each pick chain of RoboLab's tasks: the arm holds the object.
+GT_STATE_GRABBED = 'object_grabbed'
 
 # ABC's task evaluator records each of its metrics as the signal `<ABC_TASK_EVAL_SIGNAL>.<metric>`, under ABC's name.
 ABC_TASK_EVAL_SIGNAL = 'task_eval'
