@@ -797,8 +797,9 @@ def test_the_scripted_headset_readies_moves_and_completes_each_trial_through_the
     port = free_port()
     page = f'http://127.0.0.1:{port}'
     webxr = WebXR(port, use_https=False)
-    # A loaded machine starts the page and the scripted headset slowly, so the ready limit is long.
-    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=30.0, silence_limit=0.1, hold_sec=HOLD_SEC)
+    # A loaded machine starts the page and the scripted headset slowly, so the ready limit is long. The samples pass
+    # through the process of the page, so the silence limit is the one of `serve`.
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=30.0, silence_limit=0.5, hold_sec=HOLD_SEC)
     headset = command._Headset(service)
     with service, pimm.World() as world, ThreadPoolExecutor(max_workers=3) as pool:
         world.connect(webxr.controller_positions, headset.controller_positions)
@@ -827,8 +828,8 @@ def test_the_scripted_headset_readies_moves_and_completes_each_trial_through_the
             world.request_stop()
             loops.result(timeout=10)
     assert ends == [PolicyEnd.COMPLETE, PolicyEnd.COMPLETE]
-    for targets in moves:
-        assert np.ptp(targets, axis=0).max() > 0.01
+    for trial, targets in enumerate(moves):
+        assert np.ptp(targets, axis=0).max() > 0.01, f'trial {trial} played {len(targets)} moves with no motion'
 
 
 class _RecordingNotice:
