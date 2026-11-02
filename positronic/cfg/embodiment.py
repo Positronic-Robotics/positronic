@@ -194,8 +194,8 @@ yam_bimanual_yambox = yam_bimanual.override(
     # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
     # The sim scene's plate is 0.011, so only z differs from the default.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
-    # Fitted on this station to the rest error of recorded holds at working poses, one set for both arms.
-    gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.20, 1.25, 1.26, 1.38, 1.0]),
+    # Fitted on this station to the rest error of recorded holds at working poses: the mean of the two arms' fits.
+    gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.26, 1.245, 1.305, 1.405, 1.0]),
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
