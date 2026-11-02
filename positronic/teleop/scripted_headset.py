@@ -131,7 +131,10 @@ class _Page:
 def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
     page.until([Phase.READY_WAIT])
     hand.press(Button.B)
-    page.until([Phase.RUNNING])
+    # A trial that ends at once after Ready, for example by a short timeout, can end before this poll sees it run.
+    if page.until([Phase.RUNNING, Phase.ENDED, Phase.IDLE]) is not Phase.RUNNING:
+        logger.warning('The trial ended before the scripted headset saw it run')
+        return
     hand.press(Button.A)
     hand.moving_since = time.monotonic()
     while page.phase() is Phase.RUNNING and time.monotonic() - hand.moving_since < trial_sec:
