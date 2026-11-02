@@ -3,6 +3,11 @@
 
 import { WebXRButton } from '/webxr-button.js';
 
+// The `mode` query of the page URL. `PHONE_TELEOP_QUERY` and `VR_QUERY` in `positronic/drivers/webxr.py` write it.
+export const PAGE_MODE = new URLSearchParams(window.location.search).get('mode');
+export const TELEOP_MODE = 'teleop';
+export const VR_MODE = 'vr';
+
 export function initWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -17,7 +22,7 @@ export function sendControllers(ws, controllers) {
 }
 
 export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
-  const sessionMode = new URLSearchParams(window.location.search).get('mode') === 'vr' ? 'immersive-vr' : 'immersive-ar';
+  const sessionMode = PAGE_MODE === VR_MODE ? 'immersive-vr' : 'immersive-ar';
   let xrButton = null;
   let xrRefSpace = null;
   let scene = null, camera = null, renderer = null, gl = null;

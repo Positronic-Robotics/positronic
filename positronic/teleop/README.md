@@ -37,7 +37,11 @@ The plain form of the policy works too:
 | iPhone | XR Browser | `--webxr=@positronic.cfg.webxr.iphone_teleop` (http) | `http://<laptop>:5005/?mode=teleop` |
 | Android phone | Chrome | `--webxr=@positronic.cfg.webxr.android_teleop` (https) | `https://<laptop>:5005/?mode=teleop` |
 | Meta Quest | Oculus Browser | `--webxr=@positronic.cfg.webxr.oculus` (https, the default) | `https://<laptop>:5005/` |
-| PlayStation VR2 | Chrome | `--webxr=@positronic.cfg.webxr.psvr2` (https) | `https://<laptop>:5005/?mode=vr` |
+| PlayStation VR2 | Chrome on the PC | `--webxr=@positronic.cfg.webxr.psvr2` (https) | `https://localhost:5005/?mode=vr` |
+
+The PlayStation VR2 has no browser of its own. It connects to a PC through the PC adapter and SteamVR, and Chrome on
+that PC opens the page. The address above is for a service that runs on the same PC; on another machine, use its
+address.
 
 The banner of `positronic teleop` prints the URL of the page, and the IPv4 address of each network interface with its
 name. Use the address of the network that the phone or the headset is on. Open port 5005 in the firewall of the
@@ -54,11 +58,11 @@ confirms that the person holds the controller. The window on the laptop offers o
 
 | Phase | Phone (teleop mode) | Quest (right controller) | PlayStation VR2 (right controller) | What it does |
 |---|---|---|---|---|
-| The trial waits for Ready | tap **Ready** | press B | press O | Ready: the episode starts |
+| The trial waits for Ready | tap **Ready** | press B | press Circle (○) | Ready: the episode starts |
 | The trial waits for Ready | tap **Cancel** (or Cancel in the window) | press the stick | press the stick | Cancel (see Limits) |
-| The trial runs | tap **Control** | press A | press X | control on or off (the clutch) |
+| The trial runs | tap **Control** | press A | press Cross (✕) | control on or off (the clutch) |
 | Control is on | the slider | the trigger | the trigger | the grip |
-| The trial runs | hold **Complete** for 1 s | hold B for 1 s | hold O for 1 s | Complete: the episode ends |
+| The trial runs | hold **Complete** for 1 s | hold B for 1 s | hold Circle (○) for 1 s | Complete: the episode ends |
 | The trial runs | hold **Hold: Give up** for 1 s | hold the stick for 1 s | hold the stick for 1 s | Give up: the episode ends |
 
 When control comes on, the hand moves the robot from its current pose, so the robot does not jump. When the phone or

@@ -25,7 +25,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import webxr
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.webxr import Frontend, WebXR
+from positronic.drivers.webxr import Frontend, SessionMode, WebXR
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -394,9 +394,33 @@ def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
         bare = httpx.get(base + '/', timeout=1.0)
         assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
         page = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
-        assert page.status_code == 200 and "get('mode') === 'teleop'" in page.text
+        assert page.status_code == 200 and 'const TELEOP = PAGE_MODE === TELEOP_MODE;' in page.text
+        core = httpx.get(base + '/core.js', timeout=1.0).text
+        assert f"TELEOP_MODE = '{webxr.PHONE_TELEOP_QUERY.removeprefix('mode=')}'" in core
         assert 'id="phase"' in page.text and "STATE_ROUTE = '/state'" in page.text and 'btn--control-on' in page.text
         assert 'PHASES_THAT_OPEN_THE_GRIP = [PHASE.readyWait, PHASE.ended]' in page.text and 'setGrip(0.0)' in page.text
+
+
+def test_the_headset_page_for_vr_requests_an_immersive_vr_session():
+    served = WebXR(port=free_port(), session_mode=SessionMode.VR, use_https=False)
+    with _served_webxr(webxr=served) as base:
+        bare = httpx.get(base + '/', timeout=1.0)
+        assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.VR_QUERY}'
+        page = httpx.get(f'{base}/?{webxr.VR_QUERY}', timeout=1.0)
+        assert page.status_code == 200 and "from '/core.js'" in page.text
+        core = httpx.get(base + '/core.js', timeout=1.0).text
+        assert f"VR_MODE = '{webxr.VR_QUERY.removeprefix('mode=')}'" in core
+        assert "PAGE_MODE === VR_MODE ? 'immersive-vr' : 'immersive-ar'" in core
+
+
+def test_the_headset_page_for_ar_opens_with_no_query():
+    with _served_webxr() as base:
+        assert httpx.get(base + '/', timeout=1.0).status_code == 200
+
+
+def test_a_vr_session_on_the_phone_page_is_refused():
+    with pytest.raises(ValueError, match='session_mode VR needs the headset frontend'):
+        WebXR(port=free_port(), frontend=Frontend.IPHONE, session_mode=SessionMode.VR)
 
 
 def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
