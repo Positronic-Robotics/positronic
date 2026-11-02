@@ -45,6 +45,7 @@ from positronic.policy.base import (
     PolicyRun,
     Processor,
     ProcessorRun,
+    QueueFull,
     ReturnT,
     Runtime,
     Step,
@@ -507,7 +508,7 @@ class RequestTiming:
 
     @classmethod
     def every(cls, seconds: float) -> Self:
-        """Request on a fixed grid from the first submission, skipping missed slots and queueing slow calls."""
+        """Request on a fixed grid from the first submission, skipping missed slots."""
         return cls(cls.Reference.EVERY, seconds)
 
     class _Run:
@@ -598,11 +599,13 @@ class InferenceSchedule(Policy):
     """Schedule inference calls and publish completed predictions as trajectories.
 
     Optional observation fields ``PLAN`` and ``REPLAN_NOW`` provide playback context and request
-    replanning. Both are consumed before inference; absent fields leave those features unused.
+    replanning. ``PLAN`` becomes RTC context; ``REPLAN_NOW`` remains available to inference codecs.
     ``RequestTiming.every(seconds)`` queues calls at a fixed interval. Other timing strategies keep at
     most one call outstanding. Answers are consumed in submission order, one per resumption.
     ``obs_time_key`` selects the observation timestamp in nanoseconds for request eligibility and
     trajectory placement; without that field, the current runtime time is used.
+    ``max_in_flight`` bounds outstanding calls. Samples at capacity are skipped and counted in
+    episode metadata; recovery intent is retained until a call can carry it.
     """
 
     WIRE_NAME = 'inference_schedule'
@@ -616,13 +619,17 @@ class InferenceSchedule(Policy):
         merge: TrajectoryMerge,
         latency_estimate: DurationEstimate,
         obs_time_key: str = policy_keys.OBS_TIME_NS,
+        max_in_flight: int = 1,
     ) -> None:
         check_finite_positive(fps, 'fps')
+        if type(max_in_flight) is not int or max_in_flight < 1:
+            raise ValueError('max_in_flight must be a positive integer')
         self._fps = fps
         self._request_timing = request_timing
         self._merge = merge
         self._latency_estimate = latency_estimate
         self._obs_time_key = obs_time_key
+        self._max_in_flight = max_in_flight
 
     def _call_obs(
         self,
@@ -654,14 +661,12 @@ class InferenceSchedule(Policy):
     @staticmethod
     def _replan_if_needed(
         obs: Obs, previous: Trajectory | None, next_call_ns: int | None, now_ns: int
-    ) -> tuple[Obs, Trajectory | None, int | None]:
-        if policy_keys.REPLAN_NOW in obs:
-            if obs[policy_keys.REPLAN_NOW]:
-                previous = None
-                if next_call_ns is not None:
-                    next_call_ns = now_ns
-            obs = OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,))
-        return obs, previous, next_call_ns
+    ) -> tuple[Trajectory | None, int | None]:
+        if obs.get(policy_keys.REPLAN_NOW, False):
+            previous = None
+            if next_call_ns is not None:
+                next_call_ns = now_ns
+        return previous, next_call_ns
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._latency_estimate.run()
@@ -672,12 +677,15 @@ class InferenceSchedule(Policy):
         previous: Trajectory | None = None
         next_call_ns: int | None = 0
         fresh_observation_ns = 0
+        skipped = 0
+        replan = False
         obs = yield
         try:
             while True:
                 now_ns = runtime.time_ns
                 update = None
-                obs, previous, next_call_ns = self._replan_if_needed(obs, previous, next_call_ns, now_ns)
+                previous, next_call_ns = self._replan_if_needed(obs, previous, next_call_ns, now_ns)
+                replan = replan or obs.get(policy_keys.REPLAN_NOW, False)
                 sample_time_ns: int = obs.get(self._obs_time_key, now_ns)
 
                 if pending and pending[0][0].done():
@@ -696,13 +704,29 @@ class InferenceSchedule(Policy):
                 if next_call_ns is not None and sample_time_ns >= max(next_call_ns, fresh_observation_ns):
                     if update is not None and policy_keys.PLAN in obs:
                         obs = OverlayMapping(obs, add={policy_keys.PLAN: update.waypoints()})
-                    answer = runtime.submit(
-                        infer,
-                        self._call_obs(obs, previous, sample_time_ns, estimated_latency_sec, measured_latency_sec),
-                    )
-                    pending.append((answer, sample_time_ns))
+                    if replan:
+                        obs = OverlayMapping(obs, add={policy_keys.REPLAN_NOW: True})
+                    answer = None
+                    if len(pending) < self._max_in_flight:
+                        try:
+                            answer = runtime.submit(
+                                infer,
+                                self._call_obs(
+                                    obs, previous, sample_time_ns, estimated_latency_sec, measured_latency_sec
+                                ),
+                            )
+                        except QueueFull:
+                            pass
+                    if answer is None:
+                        skipped += 1
+                        runtime.set_metadata(policy_keys.SKIPPED_SAMPLES, skipped)
+                    else:
+                        pending.append((answer, sample_time_ns))
+                        replan = False
                     fresh_observation_ns = sample_time_ns + 1 if self._obs_time_key in obs else 0
                     next_call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
+                    if next_call_ns is None and not pending:
+                        next_call_ns = now_ns
                 if update is not None and now_ns >= update.end_ns:
                     update = Trajectory([], update.start_ns, update.fps, update.start_ns)
                 commands = {} if update is None else asdict(update, recurse=False)
@@ -729,6 +753,7 @@ class InferenceSchedule(Policy):
                 'merge': self._merge.to_spec(),
                 'latency_estimate': self._latency_estimate.to_spec(),
                 'obs_time_key': self._obs_time_key,
+                'max_in_flight': self._max_in_flight,
             },
         }
 
@@ -781,7 +806,7 @@ class ChunkedSchedule(InferenceSchedule):
 
     The optional observation argument ``replan_now`` defaults to ``False``. When true, inference is due
     immediately and its answer can start immediately. An existing pending call is kept. The argument
-    is consumed before calling ``infer``.
+    remains available to inference codecs.
     """
 
     WIRE_NAME = 'chunked_schedule'

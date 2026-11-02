@@ -335,6 +335,12 @@ checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
+Periodic recipes can set `InferenceSchedule(max_in_flight=...)` above its default of one to pipeline
+ordinary calls over the session connection. Replies must arrive in request order, including `None`
+and errors. At capacity, the scheduler skips new samples and records `skipped_samples` in episode
+metadata. A pending `replan_now` survives skipped samples and remains available to the recipe's
+observation codecs. The first inference establishes the session before pipelining begins.
+
 ## Real-time chunking
 
 Real-time chunking (RTC) predicts a new action chunk while the client executes

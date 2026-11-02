@@ -23,7 +23,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, QueueFull, Step
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -91,14 +91,14 @@ class Echo(Policy):
 @pytest.fixture
 def periodic_execution():
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_workers=1)
     try:
         yield runtime, now
     finally:
         runtime.close()
 
 
-def _sampled_policy(*, action_fps=50, sample_fps=10, obs_time_key=policy_keys.OBS_TIME_NS):
+def _sampled_policy(*, action_fps=50, sample_fps=10, obs_time_key=policy_keys.OBS_TIME_NS, max_in_flight=16):
     return Sequential(
         TrajectoryPlayer(),
         Periodic(sample_fps, obs_time_key=obs_time_key),
@@ -108,6 +108,7 @@ def _sampled_policy(*, action_fps=50, sample_fps=10, obs_time_key=policy_keys.OB
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=DelayEstimate.max(),
             obs_time_key=obs_time_key,
+            max_in_flight=max_in_flight,
         ),
     )
 
@@ -366,31 +367,53 @@ def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_
         run.close()
 
 
-def test_periodic_queue_overflow_fails_and_cancels_queued_calls():
+@pytest.mark.parametrize('max_in_flight,max_queue_size', [(2, 16), (16, 1)])
+def test_periodic_capacity_skips_samples_and_preserves_recovery_intent(max_in_flight, max_queue_size):
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_queue_size=1)
+    runtime = Executor(
+        lambda: now[0], simulated=True, charge_inference_time=False, max_workers=1, max_queue_size=max_queue_size
+    )
     started, release = threading.Event(), threading.Event()
     calls = []
 
     def infer(obs):
-        calls.append(obs[policy_keys.SAMPLE_INDEX])
+        calls.append(dict(obs))
         started.set()
         assert release.wait(timeout=2)
 
-    run = runtime.start(_sampled_policy(), infer)
+    run = runtime.start(_sampled_policy(max_in_flight=max_in_flight), infer)
     try:
         run.send({})
         assert started.wait(timeout=1)
         now[0] = 100_000_000
         run.send({})
         now[0] = 200_000_000
-        with pytest.raises(QueueFull):
+        run.send({policy_keys.REPLAN_NOW: True})
+        assert runtime.metadata_snapshot()[policy_keys.SKIPPED_SAMPLES] == 1
+        release.set()
+        completed = 0
+        while completed < 2:
+            result = runtime.wait(timeout_sec=2)
+            assert result.status is WaitStatus.ANSWERS_READY
+            completed += len(result.completed)
+        while runtime.has_ready_answers():
             run.send({})
+        assert len(calls) == 2
+        now[0] = 300_000_000
+        run.send({})
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        run.send({})
+        now[0] = 400_000_000
+        run.send({})
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        run.send({})
     finally:
         release.set()
         runtime.close()
         run.close()
-    assert calls == [0]
+    assert [obs[policy_keys.SAMPLE_INDEX] for obs in calls] == [0, 1, 3, 4]
+    assert calls[2][policy_keys.REPLAN_NOW] is True
+    assert not calls[3].get(policy_keys.REPLAN_NOW, False)
 
 
 @pytest.mark.parametrize('fps', [0, -1, float('nan'), float('inf'), 1e9 + 1])
@@ -400,9 +423,40 @@ def test_periodic_rejects_unrepresentable_sampling_rates(fps):
 
 
 def test_periodic_stack_spec_round_trip():
-    stack = _sampled_policy()
+    stack = _sampled_policy(max_in_flight=3)
     encoded = json.loads(json.dumps(stack.to_spec()))
     assert spec.from_spec(encoded).to_spec() == encoded
+
+
+@pytest.mark.parametrize('rtc', [False, True])
+def test_schedule_retries_after_another_branch_releases_runtime_capacity(rtc):
+    now = [0]
+    release = threading.Event()
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_workers=1, max_queue_size=0)
+    occupied = runtime.submit(release.wait, 2)
+    schedule = RTCSchedule(10, call_after_sec=0.5, latency_estimate=ConstantDuration()) if rtc else ChunkedSchedule(10)
+    calls = []
+    run = runtime.start(schedule, lambda obs: calls.append(dict(obs)))
+    try:
+        run.send({policy_keys.REPLAN_NOW: True})
+        release.set()
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        occupied.result()
+        now[0] = 100_000_000
+        run.send({})
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        assert len(calls) == 1
+        assert calls[0][policy_keys.REPLAN_NOW] is True
+    finally:
+        release.set()
+        runtime.close()
+        run.close()
+
+
+@pytest.mark.parametrize('limit', [0, -1, 1.5, True])
+def test_schedule_rejects_invalid_outstanding_call_limit(limit):
+    with pytest.raises(ValueError, match='max_in_flight'):
+        _sampled_policy(max_in_flight=limit)
 
 
 @pytest.mark.parametrize('wrapper', [TemporalStack((MOTOR,), (0.0,)), EndOnField()])
@@ -1138,7 +1192,10 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, mon
             model.answer_with([{MOTOR: (2, index)} for index in range(5)])
             step = run.send(obs)
             assert step == Step({MOTOR: (2, 0)}, 2 * PERIOD_NS)
-            assert model.requests == [initial, {**obs, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0}]
+            assert model.requests == [
+                initial,
+                {**obs, policy_keys.REPLAN_NOW: True, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0},
+            ]
             assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         else:
             assert step == Step({MOTOR: (1, 1)}, 2 * PERIOD_NS)
@@ -1320,7 +1377,10 @@ def test_scheduler_replans_only_when_requested_by_the_observation(execution, mon
         step = run.send({**fault, **override})
         initial = {RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
         if override.get(policy_keys.REPLAN_NOW, False):
-            assert model.requests == [initial, {**fault, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0}]
+            assert model.requests == [
+                initial,
+                {**fault, policy_keys.REPLAN_NOW: True, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0},
+            ]
             assert step.commands == {}
             clock.advance_to_ns(2 * PERIOD_NS)
             model.answer('b', length=5)

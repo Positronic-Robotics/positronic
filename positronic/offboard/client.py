@@ -1,10 +1,11 @@
 import logging
 import math
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
-from types import MappingProxyType
+from threading import Condition, Lock, local
 from typing import Any, TypeVar
 
 from positronic_model_server import protocol, serialization
@@ -45,13 +46,6 @@ class InferenceSession:
     ``time.monotonic()`` instant past which the status handshake waits for no further update.
     """
 
-    # The timing block of the last decoded inference response; empty when the server sent none, and
-    # empty while a round trip is in flight. Declared here so an implementation that skips ``__init__``
-    # still carries it.
-    served_timing: Mapping[str, float] = MappingProxyType({})
-    # This client's own halves of the last round trip, under ``SEND_MS`` and ``RECV_MS``.
-    wire_timing: Mapping[str, float] = MappingProxyType({})
-
     def __init__(
         self,
         conn: wire.ClientConnection,
@@ -72,7 +66,32 @@ class InferenceSession:
         self._metadata = ready[protocol.META]
         self._session_id = None if self._protocol is protocol.ProtocolVersion.V1 else ready[protocol.SESSION_ID]
         self._closed = False
+        self._closing = False
         self._answered = False
+        self._startup = Lock()
+        self._send_lock = Lock()
+        self._responses = Condition()
+        self._pending: deque[object] = deque()
+        self._timings = local()
+        self.served_timing = self.wire_timing = {}
+
+    @property
+    def served_timing(self) -> Mapping[str, float]:
+        """Server timings of this thread's latest call."""
+        return self._timings.served
+
+    @served_timing.setter
+    def served_timing(self, value: Mapping[str, float]) -> None:
+        self._timings.served = value
+
+    @property
+    def wire_timing(self) -> Mapping[str, float]:
+        """Send and response-wait timings of this thread's latest call."""
+        return self._timings.wire
+
+    @wire_timing.setter
+    def wire_timing(self, value: Mapping[str, float]) -> None:
+        self._timings.wire = value
 
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -123,13 +142,28 @@ class InferenceSession:
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
-    def infer(self, obs: dict[str, Any]) -> Any:
+    def infer(self, obs: dict[str, Any], *, on_pipeline_ready: Callable[[], None] | None = None) -> Any:
         """Send an observation and receive native v3 data, or typed robot commands for legacy versions.
 
         ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
+
+        Concurrent calls consume replies in send order. ``on_pipeline_ready`` releases the next caller's
+        preparation after transmission. The first answer establishes the session before releasing
+        further calls, so a startup reconnect cannot lose queued observations.
         """
+        self.served_timing = self.wire_timing = {}
+        with self._startup:
+            if not self._answered:
+                try:
+                    return self._first_call(obs)
+                finally:
+                    if on_pipeline_ready is not None:
+                        on_pipeline_ready()
+        return self._round_trip(obs, on_pipeline_ready=on_pipeline_ready)
+
+    def _first_call(self, obs: dict[str, Any]) -> Any:
         if self._closed:
             raise wire.PeerDisconnected('The inference session is closed')
         try:
@@ -166,7 +200,7 @@ class InferenceSession:
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
         self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
 
-    def _round_trip(self, obs: dict[str, Any]) -> Any:
+    def _round_trip(self, obs: dict[str, Any], *, on_pipeline_ready: Callable[[], None] | None = None) -> Any:
         self.served_timing = self.wire_timing = {}
         request = (
             obs
@@ -177,22 +211,39 @@ class InferenceSession:
             serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
         )
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
-        # The pair reads as the uplink and then the wait the server's own time sits inside: each span
-        # holds the socket alone. A send outlasting its own bytes is an uplink too slow for the payload.
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
+        token = object()
         try:
             try:
-                self._conn.send(serialised)
+                with self._send_lock:
+                    if self._closed or self._closing:
+                        raise wire.PeerDisconnected('The inference session is closed')
+                    with self._responses:
+                        self._pending.append(token)
+                    self._conn.send(serialised)
             finally:
                 # A send that raises gets timed too, so the span is recorded on the way out.
                 sent = time.time_ns()
                 telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
             try:
-                received = self._conn.recv(timeout=self._infer_timeout)
+                deadline = time.monotonic() + self._infer_timeout
+                if on_pipeline_ready is not None:
+                    on_pipeline_ready()
+                with self._responses:
+                    ready = self._responses.wait_for(
+                        lambda: self._closed or self._pending[0] is token, timeout=max(0.0, deadline - time.monotonic())
+                    )
+                    if self._closed:
+                        raise wire.PeerDisconnected('The inference session is closed')
+                    if not ready:
+                        raise TimeoutError()
+                received = self._conn.recv(timeout=max(0.0, deadline - time.monotonic()))
             finally:
                 answered = time.time_ns()
                 telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
+            self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
+            return self._decode_answer(received)
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
@@ -206,8 +257,14 @@ class InferenceSession:
             self._closed = True
             self._conn.close()
             raise
+        finally:
+            with self._responses:
+                if token in self._pending:
+                    self._pending.remove(token)
+                self._responses.notify_all()
+
+    def _decode_answer(self, received: bytes) -> Any:
         self._answered = True
-        self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
         response = (
             serialization.deserialise(received)
             if self._protocol is protocol.ProtocolVersion.V3
@@ -227,6 +284,15 @@ class InferenceSession:
 
     def close(self) -> None:
         """End the server session and wait for its cleanup before closing the connection."""
+        with self._send_lock:
+            self._closing = True
+        with self._responses:
+            drained = self._responses.wait_for(lambda: not self._pending or self._closed, timeout=self._infer_timeout)
+            if not drained:
+                self._closed = True
+                self._responses.notify_all()
+                self._conn.close()
+                raise TimeoutError('Pending inference calls did not finish before session close')
         if self._closed:
             return
         self._closed = True

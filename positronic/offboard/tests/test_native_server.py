@@ -1,6 +1,7 @@
 """The Positronic client selects v3 without interpreting native results as robot commands."""
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
 
@@ -15,10 +16,19 @@ from positronic.drivers.roboarm import command
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import EncodeImages, PolicyCommandError
+from positronic.policy.codecs import Codec, EncodeImages, PolicyCommandError
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
+from positronic.policy.processors import (
+    ConstantDuration,
+    InferenceSchedule,
+    Periodic,
+    RequestTiming,
+    TrajectoryMerge,
+    TrajectoryPlayer,
+)
 from positronic.policy.remote import RemotePolicy
+from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.utils import flatten_dict
 from positronic.utils.versions import resolve_version
@@ -78,6 +88,150 @@ def test_v3_client_preserves_native_markers_in_metadata_and_results(serving):
             np.testing.assert_array_equal(result['array'], native['array'])
         finally:
             session.close()
+
+
+def test_calls_pipeline_while_model_execution_and_replies_stay_ordered(serving):
+    release = threading.Event()
+    observed = []
+
+    class PipelineSession(Session):
+        def infer(self, observation):
+            index = observation['index']
+            observed.append(index)
+            if index == 1:
+                assert release.wait(5)
+                return None
+            if index == 2:
+                raise ValueError('Rejected sample')
+            return index
+
+    class PipelineModel(Model):
+        def prepare_session(self, params):
+            return PipelineSession(spec.component('chunked_schedule', version=2, fps=10))
+
+    with serving(PipelineModel) as endpoint:
+        session = InferenceClient(*endpoint, infer_timeout=5).new_session()
+        assert session.infer({'index': 0}) == 0
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            try:
+                answers = []
+                for index in (1, 2, 3):
+                    sent = threading.Event()
+                    answers.append(pool.submit(session.infer, {'index': index}, on_pipeline_ready=sent.set))
+                    assert sent.wait(2), 'A send waited for an earlier prediction'
+                assert not any(answer.done() for answer in answers)
+                release.set()
+                assert answers[0].result(timeout=5) is None
+                with pytest.raises(RuntimeError, match='Rejected sample'):
+                    answers[1].result(timeout=5)
+                assert answers[2].result(timeout=5) == 3
+                assert observed == [0, 1, 2, 3]
+            finally:
+                release.set()
+        session.close()
+
+
+def test_pipeline_timeout_fails_unanswered_calls_and_closes_session(serving):
+    release = threading.Event()
+
+    class StalledSession(Session):
+        def infer(self, observation):
+            if observation['index']:
+                assert release.wait(5)
+            return observation['index']
+
+    class StalledModel(Model):
+        def prepare_session(self, params):
+            return StalledSession(spec.component('chunked_schedule', version=2, fps=10))
+
+    with serving(StalledModel) as endpoint:
+        session = InferenceClient(*endpoint, infer_timeout=0.5).new_session()
+        assert session.infer({'index': 0}) == 0
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                answers = []
+                for index in (1, 2):
+                    sent = threading.Event()
+                    answers.append(pool.submit(session.infer, {'index': index}, on_pipeline_ready=sent.set))
+                    assert sent.wait(2)
+                for answer in answers:
+                    with pytest.raises((TimeoutError, wire.PeerDisconnected)):
+                        answer.result(timeout=3)
+                with pytest.raises(wire.PeerDisconnected):
+                    session.infer({'index': 3})
+            finally:
+                release.set()
+        session.close()
+
+
+def test_remote_pipeline_preserves_encoding_order_and_recipe_recovery_fields(serving, monkeypatch):
+    encoding, release = threading.Event(), threading.Event()
+    encoded, observed = [], []
+
+    class SlowCodec(Codec):
+        def encode(self, data):
+            if data['index'] == 1:
+                encoding.set()
+                assert release.wait(5)
+            encoded.append(data['index'])
+            return data
+
+    stack = Sequential(
+        TrajectoryPlayer(),
+        Periodic(10),
+        InferenceSchedule(
+            10,
+            request_timing=RequestTiming.every(0.1),
+            merge=TrajectoryMerge.at_observation(),
+            latency_estimate=ConstantDuration(),
+            max_in_flight=3,
+        ),
+        SlowCodec(),
+        from_spec(
+            spec.component(
+                'select_observation_fields', mapping={'index': 'index', policy_keys.REPLAN_NOW: policy_keys.REPLAN_NOW}
+            )
+        ),
+    )
+
+    class ObservingSession(Session):
+        def infer(self, observation):
+            observed.append(observation)
+
+    class ObservingModel(Model):
+        def prepare_session(self, params):
+            return ObservingSession(spec.component('chunked_schedule', version=2, fps=10))
+
+    monkeypatch.setattr('positronic.policy.remote.declared_stack', lambda *_: stack)
+    now = [0]
+    with serving(ObservingModel) as (client, address):
+        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(client.NAME, address))
+        try:
+            run.send({'index': 0, policy_keys.REPLAN_NOW: False})
+            assert runtime.wait(timeout_sec=3).status is WaitStatus.ANSWERS_READY
+            run.send({'index': 0, policy_keys.REPLAN_NOW: False})
+            now[0] = 100_000_000
+            run.send({'index': 1, policy_keys.REPLAN_NOW: True})
+            assert encoding.wait(3)
+            now[0] = 200_000_000
+            run.send({'index': 2, policy_keys.REPLAN_NOW: False})
+            release.set()
+            completed = 0
+            while completed < 2:
+                result = runtime.wait(timeout_sec=3)
+                assert result.status is WaitStatus.ANSWERS_READY
+                completed += len(result.completed)
+            assert encoded == [0, 1, 2]
+            assert observed == [
+                {'index': 0, policy_keys.REPLAN_NOW: False},
+                {'index': 1, policy_keys.REPLAN_NOW: True},
+                {'index': 2, policy_keys.REPLAN_NOW: False},
+            ]
+        finally:
+            release.set()
+            runtime.close()
+            run.close()
 
 
 @pytest.mark.parametrize('image_args', [{}, {'paths': [['video', 'camera']]}], ids=['automatic', 'explicit'])
