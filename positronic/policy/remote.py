@@ -271,9 +271,9 @@ class RemotePolicy(Policy):
                 return call(obs)
 
     class _ReportingAnswer(Answer[T]):
-        """``answer``, reporting its result to ``on_read`` at the first read."""
+        """``answer``, reporting its result and ``elapsed_sec`` to ``on_read`` at the first read."""
 
-        def __init__(self, answer: Answer[T], on_read: cabc.Callable[[T], None]) -> None:
+        def __init__(self, answer: Answer[T], on_read: cabc.Callable[[T, float], None]) -> None:
             self._answer = answer
             self._on_read = on_read
             self._reported = False
@@ -293,22 +293,18 @@ class RemotePolicy(Policy):
             result = self._answer.result()
             if not self._reported:
                 self._reported = True
-                self._on_read(result)
+                self._on_read(result, self._answer.elapsed_sec)
             return result
 
         def cancel(self) -> None:
             self._answer.cancel()
 
     class _ReportingRuntime(Runtime):
-        """``inner``, with each answer reporting its result to ``on_read`` at the first read, and each submit to
-        ``on_submit`` before the call starts."""
+        """``inner``, with each answer reporting its result and its ``elapsed_sec`` to ``on_read`` at the first read."""
 
-        def __init__(
-            self, inner: Runtime, on_read: cabc.Callable[[Any], None], on_submit: cabc.Callable[[], None] | None = None
-        ) -> None:
+        def __init__(self, inner: Runtime, on_read: cabc.Callable[[Any, float], None]) -> None:
             self._inner = inner
             self._on_read = on_read
-            self._on_submit = on_submit
 
         def set_metadata(self, name: str, value: Any) -> None:
             self._inner.set_metadata(name, value)
@@ -322,8 +318,6 @@ class RemotePolicy(Policy):
             return self._inner.tick
 
         def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
-            if self._on_submit is not None:
-                self._on_submit()
             return RemotePolicy._ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read)
 
         def _submit_on(
@@ -379,11 +373,7 @@ class RemotePolicy(Policy):
                 return answer
 
             infer = partial(self._infer, streamer, call, connection_lock)
-            policy_runtime = (
-                execution
-                if streamer is None
-                else self._ReportingRuntime(execution, streamer.on_answer, streamer.on_submit)
-            )
+            policy_runtime = execution if streamer is None else self._ReportingRuntime(execution, streamer.on_answer)
             run = policy_runtime.start(stack, infer)
             obs = yield
             while True:
@@ -538,7 +528,8 @@ class RemotePolicy(Policy):
             pad_start=stacked.pad_start,
             fps=stack_meta[policy_keys.ACTION_FPS],
             horizon_sec=stack_meta.get(policy_keys.ACTION_HORIZON_SEC),
-            # The schedule's own estimate of its lead, fed the same delays: one estimate per session, as per episode.
+            # The schedule's own estimate of its lead, fed the same elapsed times: one estimate per session, as per
+            # episode.
             lead=schedules[0].latency_estimate.run().update,
             resize=partial(self._transform_row, transforms) if transforms else None,
             jpeg_quality=quality,

@@ -66,6 +66,7 @@ from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
     ChunkedSchedule,
     ConstantDuration,
+    DelayEstimate,
     EndOnField,
     InferenceSchedule,
     Periodic,
@@ -1913,6 +1914,19 @@ def test_a_frame_stream_targets_the_request_that_the_inference_lead_brings_forwa
     assert (second[b'call'], second[b'rows']) == (1, [2, 1])
 
 
+def test_a_frame_stream_follows_a_lead_estimated_from_the_elapsed_time_of_each_call():
+    temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
+    lead = DelayEstimate.max(last=5, max_sec=1.0)
+    meta = _stream_meta(ChunkedSchedule(fps=10.0, inference_lead=lead).to_spec())
+    meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
+    session = _run_on_mock_session(meta, 8, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
+
+    # A simulated call that is not charged takes no time, so the lead stays 0 although each answer is read one tick
+    # after its call: read at 0.1 s, the next request goes at 0.6 s, with the rows of 0.35 s and 0.45 s.
+    second = session.infer.call_args_list[1].args[0]['image']
+    assert (second[b'call'], second[b'rows']) == (1, [2, 1])
+
+
 def test_a_replan_after_an_arm_error_streams_the_rows_of_the_call_that_the_schedule_plans_next():
     temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
     # A player that replans on an arm error around the chunked schedule, as `chunked_schedule` v3 declares them.
@@ -2170,7 +2184,9 @@ def test_a_server_decodes_each_message_of_a_streamed_session_off_its_event_loop(
 
 def test_an_answer_reports_its_result_once_at_its_first_read(runtime):
     reads = []
-    answer = RemotePolicy._ReportingRuntime(runtime, reads.append).submit(lambda: [1, 2, 3])
+    answer = RemotePolicy._ReportingRuntime(runtime, lambda chunk, elapsed_sec: reads.append(chunk)).submit(
+        lambda: [1, 2, 3]
+    )
     assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
     assert answer.done()
     assert reads == []

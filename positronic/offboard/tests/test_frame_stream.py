@@ -83,7 +83,7 @@ def _streamed_call_1(**overrides: Any) -> Iterator[tuple[FrameStreamer, _Clock, 
     """A streamer that read a 5-row chunk at 1.0 s and sent the rows of the request it expects at 1.5 s."""
     with _streamer(**overrides) as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)
+        streamer.on_answer([{}] * 5, 0.0)
         _tick(streamer, clock, 11, 12, 13, 14, 15)
         streamer.flush()
         yield streamer, clock, sent
@@ -112,7 +112,7 @@ def test_each_row_goes_out_with_the_frame_temporal_stack_samples_at_the_predicte
     with _streamer() as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
         # Read at 1.0 s, 5 rows at 10 per second: the next request is due at 1.5 s, its rows at 1.25 s and 1.35 s.
-        streamer.on_answer([{}] * 5)
+        streamer.on_answer([{}] * 5, 0.0)
         assert streamer.call == 1
         _tick(streamer, clock, 11, 12)
         streamer.flush()
@@ -128,7 +128,7 @@ def test_each_row_goes_out_with_the_frame_temporal_stack_samples_at_the_predicte
 def test_the_horizon_bounds_the_predicted_request_time():
     with _streamer(horizon_sec=0.3) as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)  # due at 1.3 s, not 1.5 s
+        streamer.on_answer([{}] * 5, 0.0)  # due at 1.3 s, not 1.5 s
         _tick(streamer, clock, 11, 12)
         streamer.flush()
         assert _rows(sent) == [(1, 2, 10), (1, 1, 11)]
@@ -163,7 +163,7 @@ def test_a_request_refers_only_to_the_rows_before_the_first_one_that_differs():
 
 def test_a_request_of_a_new_call_does_not_refer_to_the_rows_of_the_last_call():
     with _streamed_call_1() as (streamer, _, _):
-        streamer.on_answer([{}] * 5)
+        streamer.on_answer([{}] * 5, 0.0)
         value = streamer.request({KEY: np.stack([_frame(12), _frame(13), _frame(15)])})[KEY]
         assert (value[b'call'], value[b'rows']) == (2, [])
 
@@ -180,7 +180,7 @@ def test_rows_go_out_sized_as_the_declared_stack_sizes_its_frames():
 def test_a_row_that_is_not_due_when_the_request_goes_out_never_goes_out():
     with _streamer() as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)
+        streamer.on_answer([{}] * 5, 0.0)
         _tick(streamer, clock, 11, 12, 13)
         value = streamer.request({KEY: np.stack([_frame(12), _frame(13), _frame(13)])})[KEY]
         assert value[b'rows'] == [2]
@@ -192,7 +192,7 @@ def test_a_row_that_is_not_due_when_the_request_goes_out_never_goes_out():
 def test_the_timer_sends_a_due_row_between_ticks():
     with _streamer() as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)
+        streamer.on_answer([{}] * 5, 0.0)
         clock.ns = 1_300_000_000
         deadline = time.monotonic() + 5
         while not sent and time.monotonic() < deadline:
@@ -211,7 +211,7 @@ def test_a_failed_send_reaches_the_next_flush():
     )
     try:
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)
+        streamer.on_answer([{}] * 5, 0.0)
         _tick(streamer, clock, 11, 12, 13)
         with pytest.raises(RuntimeError, match='frame streamer failed') as raised:
             streamer.flush()
@@ -263,7 +263,7 @@ def test_h264_carries_the_whole_stack_as_jpeg_when_a_row_differs():
 def test_the_inference_lead_brings_the_next_request_forward_and_a_passed_row_goes_at_once():
     with _streamer(lead=ConstantDuration(0.3).run().update) as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)  # read at 1.0 s: the chunk ends at 1.5 s, the next request goes at 1.2 s
+        streamer.on_answer([{}] * 5, 0.0)  # read at 1.0 s: the chunk ends at 1.5 s, the next request goes at 1.2 s
         streamer.flush()
         assert _rows(sent) == [(1, 2, 9)]  # its target, 0.95 s, has passed
         _tick(streamer, clock, 11)
@@ -274,20 +274,19 @@ def test_the_inference_lead_brings_the_next_request_forward_and_a_passed_row_goe
 def test_an_answer_read_before_the_chunk_ends_starts_its_chunk_at_that_end():
     with _streamer(lead=ConstantDuration(0.3).run().update) as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)  # read at 1.0 s: the chunk runs to 1.5 s
+        streamer.on_answer([{}] * 5, 0.0)  # read at 1.0 s: the chunk runs to 1.5 s
         _tick(streamer, clock, 11, 12, 13)
-        streamer.on_answer([{}] * 5)  # read at 1.3 s: the chunk runs from 1.5 s to 2.0 s, the next request at 1.7 s
+        # Read at 1.3 s: the chunk runs from 1.5 s to 2.0 s, and the next request goes at 1.7 s.
+        streamer.on_answer([{}] * 5, 0.0)
         _tick(streamer, clock, *range(14, 18))
         streamer.flush()
         assert _rows(sent)[2:] == [(2, 2, 14), (2, 1, 15)]
 
 
-def test_the_lead_estimate_follows_the_delay_from_the_submit_to_the_read():
+def test_the_lead_estimate_follows_the_elapsed_time_of_each_call():
     with _streamer(lead=DelayEstimate.max(last=5, max_sec=1.0).run().update) as (streamer, clock, sent):
-        _tick(streamer, clock, *range(8))
-        streamer.on_submit()  # at 0.7 s
-        _tick(streamer, clock, 8, 9, 10)
-        streamer.on_answer([{}] * 5)  # read at 1.0 s, 0.3 s after its submit: the next request goes at 1.2 s
+        _tick(streamer, clock, *range(11))
+        streamer.on_answer([{}] * 5, 0.3)  # read at 1.0 s, a call of 0.3 s: the next request goes at 1.2 s
         _tick(streamer, clock, 11)
         streamer.flush()
         assert _rows(sent) == [(1, 2, 9), (1, 1, 10)]
@@ -296,13 +295,13 @@ def test_the_lead_estimate_follows_the_delay_from_the_submit_to_the_read():
 def test_a_replan_starts_the_next_chunk_when_its_answer_is_read():
     with _streamer(lead=ConstantDuration(0.3).run().update) as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([{}] * 5)  # read at 1.0 s: the chunk runs to 1.5 s
+        streamer.on_answer([{}] * 5, 0.0)  # read at 1.0 s: the chunk runs to 1.5 s
         _tick(streamer, clock, 11, 12)
         streamer.request({KEY: np.stack([_frame(9), _frame(10), _frame(12)])})  # the call at 1.2 s
         streamer.on_replan(1_250_000_000)  # an arm error at 1.25 s clears the plan
         _tick(streamer, clock, 13)
         # Read at 1.3 s: the chunk runs from 1.3 s, not from 1.5 s, and the next request goes at 1.5 s.
-        streamer.on_answer([{}] * 5)
+        streamer.on_answer([{}] * 5, 0.0)
         _tick(streamer, clock, 14)
         streamer.flush()
         assert _rows(sent)[2:] == [(2, 2, 12), (2, 1, 13)]
@@ -311,7 +310,7 @@ def test_a_replan_starts_the_next_chunk_when_its_answer_is_read():
 def test_an_answer_whose_next_request_is_due_at_once_plans_no_rows():
     with _streamer() as (streamer, clock, sent):
         _tick(streamer, clock, *range(11))
-        streamer.on_answer([])
+        streamer.on_answer([], 0.0)
         _tick(streamer, clock, 11, 12)
         streamer.flush()
         assert sent == []
