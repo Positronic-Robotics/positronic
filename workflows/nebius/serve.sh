@@ -3,8 +3,6 @@
 #
 # Usage
 #   bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
-#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server joints \
-#     --model.model_path=s3://<your-bucket>/checkpoints/dreamzero/ --model.backbone=wan2.2 --model.num_gpus=8
 #   NEBIUS_GRPC_PORT= bash workflows/nebius/serve.sh lerobot ws-only ee \
 #     --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/   # the websocket wire alone
 #
@@ -30,8 +28,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-# Nebius GPU preset. Default is one H100; multi-GPU presets must match the server's GPU count
-# (DreamZero's --num_gpus runs torchrun --nproc_per_node, so an 8-GPU server needs an 8-GPU preset).
+# Nebius GPU preset. Multi-GPU presets must match the server's GPU count.
 PRESET="${NEBIUS_PRESET:-1gpu-16vcpu-200gb}"
 PLATFORM="${NEBIUS_PLATFORM:-gpu-h100-sxm}"
 
@@ -39,7 +36,7 @@ if [ $# -lt 2 ]; then
   cat >&2 <<'EOF'
 Usage: bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
 
-Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero | molmoact2
+Vendors: lerobot_0_3_3 | lerobot | openpi | gr00t | molmoact2
 
 The endpoint name must be unique in the project (lowercase alphanumeric + dashes).
 Remaining arguments forward to the vendor's server CLI.
@@ -91,11 +88,9 @@ case "$VENDOR" in
                  WORKING_DIR=/opt/positronic-vendors
                  GRPC_CONFIG=gr00t_serving.server.grpc
                  ENV_FLAGS=("${HF_ENV_FLAGS[@]}" --env PYTHONPATH=/opt/positronic-vendors) ;;
-  # dreamzero.server imports `huggingface_hub` at module top → needs --extra dreamzero
-  dreamzero)     IMAGE="positro/dreamzero:${IMAGE_TAG}"; SERVER_LAUNCH+=(--extra dreamzero python) ;;
   molmoact2)     IMAGE="positro/positronic:${IMAGE_TAG}"; SERVER_LAUNCH+=(--extra molmoact2 python) ;;
   *)
-    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | dreamzero | molmoact2" >&2
+    echo "Unknown vendor: '$VENDOR'. Supported: lerobot_0_3_3 | lerobot | openpi | gr00t | molmoact2" >&2
     exit 1
     ;;
 esac

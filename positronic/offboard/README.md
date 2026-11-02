@@ -472,7 +472,7 @@ Vendors provide their own launch configurations and share the inference protocol
 - **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints
 - **GR00T**: [`vendors/gr00t/serving/server.py`](../vendors/gr00t/serving/server.py) serves a native checkpoint through the lightweight wrapper.
 - **OpenPI**: `positronic.vendors.openpi.server` - Serves OpenPI checkpoints with config name
-- **DreamZero**: `positronic.vendors.dreamzero.server` - Serves DreamZero checkpoints through a torchrun subprocess
+- **DreamZero**: `positronic.vendors.dreamzero.serving.server` - Serves the public DROID checkpoint directly through the standalone model server
 - **MolmoAct2**: `positronic.vendors.molmoact2.server` - Serves the pretrained MolmoAct2 DROID model
 - **LLM**: `positronic.vendors.llm.server` - Serves an API-backed LLM policy, one conversation per session
 

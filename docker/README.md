@@ -57,6 +57,9 @@ publishes the five example images to Docker Hub as `positro/*` images:
 the memory that each image uses. The last two need more GPU memory than the 24 GB that a platform run
 gets by default.
 
+DreamZero's self-contained DROID build lives in
+[`vendors/dreamzero`](../positronic/vendors/dreamzero/README.md#self-contained-droid-image), with separate serving and training Dockerfiles.
+
 ## GR00T N1.7 containers
 
 `make build-groot` pulls the published `positro/gr00t-base:latest` image. The fork image contains
