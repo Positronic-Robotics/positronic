@@ -98,20 +98,22 @@ def periodic_execution():
         runtime.close()
 
 
-def _sampled_policy(*, action_fps=50, sample_fps=10):
+def _sampled_policy(*, action_fps=50, sample_fps=10, obs_time_key=policy_keys.OBS_TIME_NS):
     return Sequential(
         TrajectoryPlayer(),
-        Periodic(sample_fps),
+        Periodic(sample_fps, obs_time_key=obs_time_key),
         InferenceSchedule(
             action_fps,
             request_timing=RequestTiming.every(1 / sample_fps),
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=DelayEstimate.max(),
+            obs_time_key=obs_time_key,
         ),
     )
 
 
-def test_periodic_samples_do_not_follow_action_waypoints_or_answer_wakeups(periodic_execution):
+@pytest.mark.parametrize('obs_time_key', [policy_keys.OBS_TIME_NS, 'capture_time_ns'])
+def test_periodic_samples_do_not_follow_action_waypoints_or_answer_wakeups(periodic_execution, obs_time_key):
     runtime, now = periodic_execution
     requests = []
     release = threading.Event()
@@ -121,7 +123,8 @@ def test_periodic_samples_do_not_follow_action_waypoints_or_answer_wakeups(perio
         requests.append(obs)
         return [{MOTOR: i} for i in range(10)] if obs[policy_keys.SAMPLE_INDEX] == 0 else None
 
-    run = runtime.start(_sampled_policy(), infer)
+    definition = spec.from_spec(_sampled_policy(obs_time_key=obs_time_key).to_spec())
+    run = runtime.start(definition, infer)
     image = np.array([0])
     try:
         assert run.send({'image': image}) == Step({}, 100_000_000)
@@ -138,7 +141,9 @@ def test_periodic_samples_do_not_follow_action_waypoints_or_answer_wakeups(perio
         run.send({'image': image})
         assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
         run.send({'image': image})
-        assert [obs[policy_keys.OBS_TIME_NS] for obs in requests] == [0, 100_000_000]
+        assert [obs[obs_time_key] for obs in requests] == [0, 100_000_000]
+        if obs_time_key != policy_keys.OBS_TIME_NS:
+            assert all(policy_keys.OBS_TIME_NS not in obs for obs in requests)
         assert [obs[policy_keys.SAMPLE_INDEX] for obs in requests] == [0, 1]
         assert [obs['image'][0] for obs in requests] == [0, 99]
     finally:
@@ -262,7 +267,8 @@ def test_periodic_ordinary_schedule_waits_for_a_new_sample(periodic_execution):
 
 
 @pytest.mark.parametrize('with_index', [False, True])
-def test_interval_requests_use_observation_time_and_keep_their_grid(periodic_execution, with_index):
+@pytest.mark.parametrize('obs_time_key', [policy_keys.OBS_TIME_NS, 'capture_time_ns'])
+def test_interval_requests_use_observation_time_and_keep_their_grid(periodic_execution, with_index, obs_time_key):
     runtime, now = periodic_execution
     requests = []
 
@@ -274,13 +280,14 @@ def test_interval_requests_use_observation_time_and_keep_their_grid(periodic_exe
         request_timing=RequestTiming.every(0.1),
         merge=TrajectoryMerge.at_observation(),
         latency_estimate=ConstantDuration(),
+        obs_time_key=obs_time_key,
     )
     for origin in (1_000_000_000, 5_000_000_000):
         run = runtime.start(policy, infer)
         try:
             for offset, next_offset in ((0, 100), (250, 300), (300, 400), (650, 700), (700, 800)):
                 now[0] = origin + offset * 1_000_000
-                obs: dict[str, Any] = {policy_keys.OBS_TIME_NS: now[0]}
+                obs: dict[str, Any] = {obs_time_key: now[0]}
                 if with_index:
                     obs[policy_keys.SAMPLE_INDEX] = 'opaque server identifier'
                 run.send(obs)
@@ -293,7 +300,7 @@ def test_interval_requests_use_observation_time_and_keep_their_grid(periodic_exe
                 assert not runtime.has_pending
         finally:
             run.close()
-    assert [obs[policy_keys.OBS_TIME_NS] for obs in requests] == [
+    assert [obs[obs_time_key] for obs in requests] == [
         origin + offset * 1_000_000 for origin in (1_000_000_000, 5_000_000_000) for offset in (0, 250, 300, 650, 700)
     ]
     if with_index:

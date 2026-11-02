@@ -2,15 +2,7 @@
 
 from enum import Enum
 
-from positronic_model_server.spec import (
-    MERGE_HORIZON_SEC,
-    MERGE_START,
-    TIMING_REFERENCE,
-    TIMING_SECONDS,
-    component,
-    parallel,
-    sequence,
-)
+from positronic_model_server.spec import component, parallel, sequence
 
 from .keys import (
     ACTION_GRIP,
@@ -82,14 +74,15 @@ def client_stack(
     """Both modes sample periodically; RTC-like playback starts each continuation at its observation."""
     return sequence(
         component('trajectory_player', replan_on_error=False),
-        component('periodic', fps=1 / sampling_period_sec),
+        component('periodic', fps=1 / sampling_period_sec, obs_time_key=OBS_TIME_NS),
         component(
             'inference_schedule',
             fps=fps,
-            request_timing={TIMING_REFERENCE: 'every', TIMING_SECONDS: sampling_period_sec},
+            obs_time_key=OBS_TIME_NS,
+            request_timing={'reference': 'every', 'seconds': sampling_period_sec},
             merge={
-                MERGE_START: 'after_previous' if mode is Mode.CHUNKED else 'observation',
-                MERGE_HORIZON_SEC: prediction_period_sec if mode is Mode.CHUNKED else None,
+                'start': 'after_previous' if mode is Mode.CHUNKED else 'observation',
+                'horizon_sec': prediction_period_sec if mode is Mode.CHUNKED else None,
             },
             latency_estimate=0.0,
         ),

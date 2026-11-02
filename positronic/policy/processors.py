@@ -30,15 +30,7 @@ from typing import Any, Self, TypeVar
 
 import numpy as np
 from attr import asdict, dataclass
-from positronic_model_server.spec import (
-    ARGS,
-    MERGE_HORIZON_SEC,
-    MERGE_START,
-    NAME,
-    TIMING_REFERENCE,
-    TIMING_SECONDS,
-    VERSION,
-)
+from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
@@ -425,19 +417,21 @@ class Periodic(Policy):
     """Sample observations on a fixed grid while allowing answers to be handled between samples.
 
     ``fps`` sets the sampling rate, independently of action playback. Each sample copies the latest
-    observation and adds ``SAMPLE_INDEX`` and its actual ``OBS_TIME_NS``. Late ticks skip grid positions;
-    unchanged camera frames are still sampled. Answer wakeups reuse the last sample. Inner request
-    deadlines are serviced on sampling ticks; ``REPLAN_NOW`` is forwarded immediately.
+    observation and adds ``SAMPLE_INDEX`` and its actual sampling time under ``obs_time_key`` (nanoseconds).
+    Late ticks skip grid positions; unchanged camera frames are still sampled. Answer wakeups reuse
+    the last sample. Inner request deadlines are serviced on sampling ticks; ``REPLAN_NOW`` is
+    forwarded immediately.
     """
 
     WIRE_NAME = 'periodic'
     WIRE_VERSION = 1
 
-    def __init__(self, fps: float) -> None:
+    def __init__(self, fps: float, *, obs_time_key: str = policy_keys.OBS_TIME_NS) -> None:
         check_finite_positive(fps, 'fps')
         if fps > 1e9:
             raise ValueError('sampling fps must be at most 1 GHz')
         self._fps = fps
+        self._obs_time_key = obs_time_key
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         obs = yield
@@ -453,7 +447,7 @@ class Periodic(Policy):
                 sample = {
                     **deepcopy(dict(OverlayMapping(obs, remove=(policy_keys.REPLAN_NOW,)))),
                     policy_keys.SAMPLE_INDEX: index,
-                    policy_keys.OBS_TIME_NS: now_ns,
+                    self._obs_time_key: now_ns,
                 }
                 next_index = index + 1
                 next_sample_ns = origin_ns + round(next_index * period_ns)
@@ -475,7 +469,11 @@ class Periodic(Policy):
             obs = yield step
 
     def to_spec(self) -> dict[str, Any]:
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'fps': self._fps}}
+        return {
+            NAME: self.WIRE_NAME,
+            VERSION: self.WIRE_VERSION,
+            ARGS: {'fps': self._fps, 'obs_time_key': self._obs_time_key},
+        }
 
 
 class RequestTiming:
@@ -541,11 +539,11 @@ class RequestTiming:
         return self._Run(self)
 
     def to_spec(self) -> dict[str, Any]:
-        return {TIMING_REFERENCE: self._reference.value, TIMING_SECONDS: self.duration_ns / 1e9}
+        return {'reference': self._reference.value, 'seconds': self.duration_ns / 1e9}
 
     @classmethod
     def from_spec(cls, spec: Mapping[str, Any]) -> Self:
-        return cls(cls.Reference(spec[TIMING_REFERENCE]), spec.get(TIMING_SECONDS, 0.0))
+        return cls(cls.Reference(spec['reference']), spec.get('seconds', 0.0))
 
 
 class TrajectoryMerge:
@@ -572,11 +570,11 @@ class TrajectoryMerge:
         return cls(cls.Start.OBSERVATION)
 
     def to_spec(self) -> dict[str, Any]:
-        return {MERGE_START: self._start.value, MERGE_HORIZON_SEC: self.horizon_sec}
+        return {'start': self._start.value, 'horizon_sec': self.horizon_sec}
 
     @classmethod
     def from_spec(cls, spec: Mapping[str, Any]) -> Self:
-        return cls(cls.Start(spec[MERGE_START]), spec.get(MERGE_HORIZON_SEC))
+        return cls(cls.Start(spec['start']), spec.get('horizon_sec'))
 
     def plan(
         self, chunk: Sequence[Commands], fps: float, previous: Trajectory | None, now_ns: int, obs_time_ns: int
@@ -603,21 +601,28 @@ class InferenceSchedule(Policy):
     replanning. Both are consumed before inference; absent fields leave those features unused.
     ``RequestTiming.every(seconds)`` queues calls at a fixed interval. Other timing strategies keep at
     most one call outstanding. Answers are consumed in submission order, one per resumption.
-    ``OBS_TIME_NS`` supplies the observation time for request eligibility and trajectory placement;
-    without it, the current runtime time is used.
+    ``obs_time_key`` selects the observation timestamp in nanoseconds for request eligibility and
+    trajectory placement; without that field, the current runtime time is used.
     """
 
     WIRE_NAME = 'inference_schedule'
     WIRE_VERSION = 1
 
     def __init__(
-        self, fps: float, *, request_timing: RequestTiming, merge: TrajectoryMerge, latency_estimate: DurationEstimate
+        self,
+        fps: float,
+        *,
+        request_timing: RequestTiming,
+        merge: TrajectoryMerge,
+        latency_estimate: DurationEstimate,
+        obs_time_key: str = policy_keys.OBS_TIME_NS,
     ) -> None:
         check_finite_positive(fps, 'fps')
         self._fps = fps
         self._request_timing = request_timing
         self._merge = merge
         self._latency_estimate = latency_estimate
+        self._obs_time_key = obs_time_key
 
     def _call_obs(
         self,
@@ -673,7 +678,7 @@ class InferenceSchedule(Policy):
                 now_ns = runtime.time_ns
                 update = None
                 obs, previous, next_call_ns = self._replan_if_needed(obs, previous, next_call_ns, now_ns)
-                sample_time_ns: int = obs.get(policy_keys.OBS_TIME_NS, now_ns)
+                sample_time_ns: int = obs.get(self._obs_time_key, now_ns)
 
                 if pending and pending[0][0].done():
                     answer, observation_time_ns = pending.popleft()
@@ -696,7 +701,7 @@ class InferenceSchedule(Policy):
                         self._call_obs(obs, previous, sample_time_ns, estimated_latency_sec, measured_latency_sec),
                     )
                     pending.append((answer, sample_time_ns))
-                    fresh_observation_ns = sample_time_ns + 1 if policy_keys.OBS_TIME_NS in obs else 0
+                    fresh_observation_ns = sample_time_ns + 1 if self._obs_time_key in obs else 0
                     next_call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
                 if update is not None and now_ns >= update.end_ns:
                     update = Trajectory([], update.start_ns, update.fps, update.start_ns)
@@ -723,6 +728,7 @@ class InferenceSchedule(Policy):
                 'request_timing': self._request_timing.to_spec(),
                 'merge': self._merge.to_spec(),
                 'latency_estimate': self._latency_estimate.to_spec(),
+                'obs_time_key': self._obs_time_key,
             },
         }
 

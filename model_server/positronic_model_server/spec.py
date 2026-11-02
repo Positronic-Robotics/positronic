@@ -9,10 +9,6 @@ PAR = 'par'
 NAME = 'name'
 ARGS = 'args'
 VERSION = 'version'
-TIMING_REFERENCE = 'reference'
-TIMING_SECONDS = 'seconds'
-MERGE_START = 'start'
-MERGE_HORIZON_SEC = 'horizon_sec'
 
 LATEST: Literal['latest'] = 'latest'
 
