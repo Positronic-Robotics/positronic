@@ -267,7 +267,7 @@ class FrameStreamer:
         self._send = send
         self._clock = clock
         self._codec = codec
-        self._keys = keys
+        self._keys = tuple(dict.fromkeys(keys))  # a stack may name a camera twice; it streams once
         self._offsets = offsets_sec
         self._pad_start = pad_start
         self._fps = fps

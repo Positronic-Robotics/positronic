@@ -243,6 +243,15 @@ def test_h264_rows_and_the_current_frame_make_one_stream_in_send_order():
             np.testing.assert_allclose(decoded, expected, atol=4)
 
 
+def test_a_stack_that_names_a_camera_twice_streams_it_as_one_h264_stream():
+    with _streamed_call_1(codec=FrameCodec.H264, keys=(KEY, KEY)) as (streamer, _, sent):
+        stack = np.stack([_frame(12), _frame(13), _frame(15)])
+        value = streamer.request({KEY: stack})[KEY]
+        units = [message[ROW]['images'][KEY] for message in sent] + [value[b'tail']]
+        for decoded, expected in zip(_h264_frames(units), stack, strict=True):
+            np.testing.assert_allclose(decoded, expected, atol=4)
+
+
 def test_h264_carries_the_whole_stack_as_jpeg_when_a_row_differs():
     with _streamed_call_1(codec=FrameCodec.H264) as (streamer, _, _):
         stack = np.stack([_frame(12), np.full_like(_frame(0), 7), _frame(15)])
