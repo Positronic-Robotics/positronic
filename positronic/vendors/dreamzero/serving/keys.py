@@ -1,0 +1,21 @@
+"""DreamZero native fields, Positronic observation names and serving environment variables."""
+
+JOINTS = 'state.joint_position'
+GRIP = 'state.gripper_position'
+PROMPT = 'annotation.language.action_text'
+ACTION_JOINTS = 'action.joint_position'
+ACTION_GRIP = 'action.gripper_position'
+EXTERIOR = 'video.exterior_image_1_left'
+EXTERIOR_2 = 'video.exterior_image_2_left'
+WRIST = 'video.wrist_image_left'
+CAMERAS = (EXTERIOR, EXTERIOR_2, WRIST)
+OBS_TIME_NS = 'obs_time_ns'
+OBS_JOINTS = 'robot_state.q'
+OBS_GRIP = 'grip'
+TASK = 'task'
+EXTERIOR_IMAGE = 'image.exterior'
+EXTERIOR_IMAGE_2 = 'image.exterior_2'
+WRIST_IMAGE = 'image.wrist'
+
+MODEL_SOURCE_ENV = 'DREAMZERO_MODEL_SOURCE'
+AUTH_TOKEN_ENV = 'AUTH_TOKEN'
