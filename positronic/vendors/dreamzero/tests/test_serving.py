@@ -66,6 +66,25 @@ def test_history_only_calls_and_selected_frames():
     session.close()
 
 
+@pytest.mark.parametrize('missing', [False, True])
+def test_jittered_history_uses_sampling_ticks_and_backfills_missing_frames(missing):
+    native = NativePolicy()
+    model = DreamZeroModel(native, width=3, height=2)
+    session = model.prepare_session(model.parameters)
+    for index in range(25):
+        if missing and index == 16:
+            continue
+        frame = observation(index)
+        frame[OBS_TIME_NS] += 10_000_000_000
+        if index:
+            frame[OBS_TIME_NS] += 2_000_000 if index in (1, 8, 16) else 1_000_000
+        session.infer(frame)
+    assert len(native.observations) == 2
+    for name in CAMERAS:
+        np.testing.assert_array_equal(native.observations[-1][name][:, 0, 0, 0], [1, 8, 15 if missing else 16, 24])
+    session.close()
+
+
 def test_late_samples_use_latest_observation_without_catching_up_predictions():
     native = NativePolicy()
     model = DreamZeroModel(native, width=3, height=2)
