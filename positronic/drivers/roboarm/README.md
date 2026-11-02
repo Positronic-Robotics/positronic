@@ -40,7 +40,8 @@ first YAM recordings name it `grasp_site`), or before `ee_frames` at the site th
 codec offset in `ee_frame`. `cfg.ds.internal.REAL_ROBOT_TRANSFORM`, `SIM_ROBOT_TRANSFORM` and `YAM_ROBOT_TRANSFORM`
 relabel these as `ee_frames`, and then re-express every pose signal at `gripper` from the model the recording
 carries (`ik.MoveToSite`). A model with no `gripper` gets one at the grip point of its gripper. A YAM recording with
-no model gets the bundled YAM model.
+no model gets the bundled YAM model, and each of its mounts moves 9.5 mm down to the base frame of that model
+(`models.YAM_BASE_IN_EARLIER_BASE`).
 
 Checkpoints trained on those recordings speak the old frame. They state it as an offset from `gripper`:
 `models.FRANKA_HAND_FRAME` (the FR3's `F_T_EE`, 51.6 mm short of `gripper` and −45°), `models.PANDA_HAND_FRAME`
@@ -56,7 +57,7 @@ pins the YAM constant to poses of the earlier model.
 | RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
 | MolmoSpaces (`simulator/molmo_spaces/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`. MolmoSpaces' own robot base is at the bottom of the stand below it. |
 | LIBERO (`simulator/libero/`) | `gripper` | `LiberoAdapter` takes the env's grip site to be the panda's `end_effector` (`PANDA_HAND_FRAME`); it is not ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
-| YAM (`yam/driver.py`) | `gripper` | The site in `yam.xml` and the link in the bundled URDF, 40.8 mm off the wrist axis, where the fingertips of the crank gripper meet. The linear gripper of the model closes on the axis. Each mount puts the arm-base frame 9.5 mm below the one of ABC's arm, so the same joints report the same `ee_pose` in both. |
+| YAM (`yam/driver.py`) | `gripper` | The site in `yam.xml` and the link in the bundled URDF, 40.8 mm off the wrist axis, where the fingertips of the crank gripper meet. The linear gripper of the model closes on the axis. Each mount puts the arm-base frame 9.5 mm below the one of ABC's arm, so the same joints report the same `ee_pose` in both. The single arm is mounted there too, and records its mount. |
 | SO-101 (`so101/driver.py`) | `gripper` | Coincident with `gripper_frame_link`. |
 
 ## Adding an embodiment

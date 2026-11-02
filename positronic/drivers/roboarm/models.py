@@ -255,6 +255,9 @@ def bundled_franka_model() -> dict:
 
 YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 YAM_WRIST_LINK = 'link6'
+# The base frame of the bundled YAM model, measured from the base frame of the earlier YAM model that ABC's arms
+# carry: 9.5mm lower. There, the bundled model reports the ``ee_pose`` of the earlier one for the same joints.
+YAM_BASE_IN_EARLIER_BASE = geom.Transform3D(np.array([0.0, 0.0, -0.0095]))
 # ``GRIPPER_SITE`` in ``YAM_WRIST_LINK``: where the closed fingertips of the crank gripper meet, 40.8mm off the wrist
 # axis. The linear gripper of the model closes on the axis. The approach axis is -z of ``YAM_WRIST_LINK``.
 _GRIPPER_YAM_XYZ, _GRIPPER_YAM_RPY = '0.0408 0 -0.1377', '3.1415926536 0 -1.5707963268'

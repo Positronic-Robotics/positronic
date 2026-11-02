@@ -697,6 +697,11 @@ class Robot(pimm.ControlSystem):
         # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
+    @property
+    def base_pose(self) -> geom.Transform3D:
+        """The arm-base mount pose in the world frame."""
+        return self._base_pose
+
     def _should_park(self, idle_since: float | None, now: float) -> bool:
         return (
             idle_since is not None
