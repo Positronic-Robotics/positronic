@@ -706,23 +706,17 @@ class InferenceSchedule(Policy):
                         obs = OverlayMapping(obs, add={policy_keys.PLAN: update.waypoints()})
                     if replan:
                         obs = OverlayMapping(obs, add={policy_keys.REPLAN_NOW: True})
-                    answer = None
-                    if len(pending) < self._max_in_flight:
-                        try:
-                            answer = runtime.submit(
-                                infer,
-                                self._call_obs(
-                                    obs, previous, sample_time_ns, estimated_latency_sec, measured_latency_sec
-                                ),
-                            )
-                        except QueueFull:
-                            pass
-                    if answer is None:
+                    try:
+                        if len(pending) >= self._max_in_flight:
+                            raise QueueFull('Inference schedule is at capacity')
+                        call_obs = self._call_obs(
+                            obs, previous, sample_time_ns, estimated_latency_sec, measured_latency_sec
+                        )
+                        pending.append((runtime.submit(infer, call_obs), sample_time_ns))
+                        replan = False
+                    except QueueFull:
                         skipped += 1
                         runtime.set_metadata(policy_keys.SKIPPED_SAMPLES, skipped)
-                    else:
-                        pending.append((answer, sample_time_ns))
-                        replan = False
                     fresh_observation_ns = sample_time_ns + 1 if self._obs_time_key in obs else 0
                     next_call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
                     if next_call_ns is None and not pending:

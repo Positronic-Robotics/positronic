@@ -7,7 +7,6 @@ import re
 import threading
 import time
 from collections.abc import Mapping
-from concurrent.futures import CancelledError
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
@@ -61,11 +60,10 @@ from positronic.policy.processors import (
     InferenceSchedule,
     Periodic,
     RequestTiming,
-    TemporalStack,
     TrajectoryMerge,
     TrajectoryPlayer,
 )
-from positronic.policy.remote import RemotePolicy, _RemoteRuntime, prepare_obs, round_trip
+from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.policy.tests.test_harness import legacy_point_warnings, run_robot_rollout
@@ -73,62 +71,6 @@ from positronic.tests.testing_inference import post, read_status, run_attended, 
 from positronic.utils import flatten_dict
 
 CHUNKED_STACK = {'local_stack': {'name': 'chunked_schedule', 'version': 2, 'args': {'fps': 10}}}
-
-
-def test_remote_runtime_cancelled_queued_call_does_not_block_later_calls():
-    executor = Executor(time.monotonic_ns, simulated=False, charge_inference_time=False, max_workers=1)
-    runtime = _RemoteRuntime(executor)
-    started, release = threading.Event(), threading.Event()
-
-    def blocked():
-        started.set()
-        assert release.wait(timeout=5)
-        return 1
-
-    try:
-        first = runtime.submit(blocked)
-        assert started.wait(timeout=5)
-        cancelled = runtime.submit(lambda: pytest.fail('Cancelled call ran'))
-        cancelled.cancel()
-        last = runtime.submit(lambda: 3)
-        release.set()
-        runtime.finish()
-        executor.close()
-        assert first.result() == 1
-        with pytest.raises(CancelledError):
-            cancelled.result()
-        assert last.result() == 3
-    finally:
-        release.set()
-        executor.close()
-
-
-@pytest.mark.parametrize('simulated', [False, True])
-def test_remote_runtime_execution_time_excludes_waiting_to_prepare(simulated):
-    executor = Executor(time.monotonic_ns, simulated=simulated, charge_inference_time=False, max_workers=2)
-    runtime = _RemoteRuntime(executor)
-    started, release = threading.Event(), threading.Event()
-
-    def blocked():
-        started.set()
-        assert release.wait(timeout=5)
-
-    try:
-        runtime.submit(blocked)
-        assert started.wait(timeout=5)
-        answer = runtime.submit(lambda: 42)
-        time.sleep(0.1)
-        release.set()
-        runtime.finish()
-        executor.close()
-        assert answer.result() == 42
-        if simulated:
-            assert answer.elapsed_sec == answer.execution_sec == 0
-        else:
-            assert answer.elapsed_sec - answer.execution_sec >= 0.09
-    finally:
-        release.set()
-        executor.close()
 
 
 class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
@@ -1091,38 +1033,6 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
     session.close.assert_called_once()
 
 
-def test_stack_failure_finishes_active_inference_before_closing_session(runtime):
-    started, release = threading.Event(), threading.Event()
-    order = []
-    stack = Sequential(
-        TemporalStack(('image',), (0.0,)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
-    )
-    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
-
-    def infer(obs, *, on_pipeline_ready=None):
-        started.set()
-        assert release.wait(5), 'inference was not released'
-        order.append('inference finished')
-        return [{}]
-
-    session.infer.side_effect = infer
-    session.close.side_effect = lambda: order.append('session closed')
-    run = runtime.start(policy)
-    releaser = threading.Timer(0.05, release.set)
-    try:
-        run.send({'image': _make_image(8, 8)})
-        assert started.wait(5)
-        releaser.start()
-        with pytest.raises(PolicyCommandError, match='image'):
-            run.send({})
-    finally:
-        release.set()
-        releaser.cancel()
-        runtime.close()
-        run.close()
-    assert order == ['inference finished', 'session closed']
-
-
 def test_a_failed_session_close_reaches_the_caller(runtime):
     failure = RuntimeError('Unexpected end-session response')
     policy, session = _mock_remote_policy(CHUNKED_STACK)
@@ -1210,7 +1120,7 @@ def test_a_run_records_its_session_and_the_session_a_reconnect_opens(runtime):
     session = _mock_session(CHUNKED_STACK)
     session.session_id = 'first'
 
-    def reconnect(obs, *, on_pipeline_ready=None):
+    def reconnect(obs):
         session.session_id = 'reopened'
         return [{'value': 42}]
 
@@ -1234,7 +1144,7 @@ def test_a_run_keeps_the_dropped_session_when_the_reopened_one_never_answers(run
     session = _mock_session(CHUNKED_STACK)
     session.session_id = 'first'
 
-    def reconnect_then_fail(obs, *, on_pipeline_ready=None):
+    def reconnect_then_fail(obs):
         session.session_id = 'reopened'
         raise RuntimeError('Server error: TimeoutError: ')
 

@@ -24,6 +24,7 @@ from positronic.policy.processors import (
     InferenceSchedule,
     Periodic,
     RequestTiming,
+    TemporalStack,
     TrajectoryMerge,
     TrajectoryPlayer,
 )
@@ -90,7 +91,23 @@ def test_v3_client_preserves_native_markers_in_metadata_and_results(serving):
             session.close()
 
 
-def test_calls_pipeline_while_model_execution_and_replies_stay_ordered(serving):
+@pytest.fixture
+def watch_sends(monkeypatch):
+    def watch(session):
+        sent = threading.Semaphore(0)
+        send = session._conn.send
+
+        def send_and_notify(data):
+            send(data)
+            sent.release()
+
+        monkeypatch.setattr(session._conn, 'send', send_and_notify)
+        return sent
+
+    return watch
+
+
+def test_calls_pipeline_while_model_execution_and_replies_stay_ordered(serving, watch_sends):
     release = threading.Event()
     observed = []
 
@@ -112,13 +129,13 @@ def test_calls_pipeline_while_model_execution_and_replies_stay_ordered(serving):
     with serving(PipelineModel) as endpoint:
         session = InferenceClient(*endpoint, infer_timeout=5).new_session()
         assert session.infer({'index': 0}) == 0
+        sent = watch_sends(session)
         with ThreadPoolExecutor(max_workers=3) as pool:
             try:
                 answers = []
                 for index in (1, 2, 3):
-                    sent = threading.Event()
-                    answers.append(pool.submit(session.infer, {'index': index}, on_pipeline_ready=sent.set))
-                    assert sent.wait(2), 'A send waited for an earlier prediction'
+                    answers.append(pool.submit(session.infer, {'index': index}))
+                    assert sent.acquire(timeout=2), 'A send waited for an earlier prediction'
                 assert not any(answer.done() for answer in answers)
                 release.set()
                 assert answers[0].result(timeout=5) is None
@@ -131,7 +148,7 @@ def test_calls_pipeline_while_model_execution_and_replies_stay_ordered(serving):
         session.close()
 
 
-def test_pipeline_timeout_fails_unanswered_calls_and_closes_session(serving):
+def test_pipeline_timeout_fails_unanswered_calls_and_closes_session(serving, watch_sends):
     release = threading.Event()
 
     class StalledSession(Session):
@@ -147,13 +164,13 @@ def test_pipeline_timeout_fails_unanswered_calls_and_closes_session(serving):
     with serving(StalledModel) as endpoint:
         session = InferenceClient(*endpoint, infer_timeout=0.5).new_session()
         assert session.infer({'index': 0}) == 0
+        sent = watch_sends(session)
         with ThreadPoolExecutor(max_workers=2) as pool:
             try:
                 answers = []
                 for index in (1, 2):
-                    sent = threading.Event()
-                    answers.append(pool.submit(session.infer, {'index': index}, on_pipeline_ready=sent.set))
-                    assert sent.wait(2)
+                    answers.append(pool.submit(session.infer, {'index': index}))
+                    assert sent.acquire(timeout=2)
                 for answer in answers:
                     with pytest.raises((TimeoutError, wire.PeerDisconnected)):
                         answer.result(timeout=3)
@@ -164,7 +181,7 @@ def test_pipeline_timeout_fails_unanswered_calls_and_closes_session(serving):
         session.close()
 
 
-def test_remote_pipeline_preserves_encoding_order_and_recipe_recovery_fields(serving, monkeypatch):
+def test_remote_calls_match_responses_when_encoding_reorders_observations(serving, monkeypatch):
     encoding, release = threading.Event(), threading.Event()
     encoded, observed = [], []
 
@@ -176,11 +193,14 @@ def test_remote_pipeline_preserves_encoding_order_and_recipe_recovery_fields(ser
             encoded.append(data['index'])
             return data
 
+        def _decode_single(self, data):
+            return data
+
     stack = Sequential(
         TrajectoryPlayer(),
         Periodic(10),
         InferenceSchedule(
-            10,
+            1,
             request_timing=RequestTiming.every(0.1),
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=ConstantDuration(),
@@ -189,7 +209,7 @@ def test_remote_pipeline_preserves_encoding_order_and_recipe_recovery_fields(ser
         SlowCodec(),
         from_spec(
             spec.component(
-                'select_observation_fields', mapping={'index': 'index', policy_keys.REPLAN_NOW: policy_keys.REPLAN_NOW}
+                'pack_fields', encode_layout={'index': ['index'], policy_keys.REPLAN_NOW: [policy_keys.REPLAN_NOW]}
             )
         ),
     )
@@ -197,6 +217,7 @@ def test_remote_pipeline_preserves_encoding_order_and_recipe_recovery_fields(ser
     class ObservingSession(Session):
         def infer(self, observation):
             observed.append(observation)
+            return [{'value': observation['index']}]
 
     class ObservingModel(Model):
         def prepare_session(self, params):
@@ -216,20 +237,59 @@ def test_remote_pipeline_preserves_encoding_order_and_recipe_recovery_fields(ser
             assert encoding.wait(3)
             now[0] = 200_000_000
             run.send({'index': 2, policy_keys.REPLAN_NOW: False})
+            assert runtime.wait(timeout_sec=3).status is WaitStatus.ANSWERS_READY
+            assert observed[-1]['index'] == 2
             release.set()
-            completed = 0
-            while completed < 2:
-                result = runtime.wait(timeout_sec=3)
-                assert result.status is WaitStatus.ANSWERS_READY
-                completed += len(result.completed)
-            assert encoded == [0, 1, 2]
+            assert runtime.wait(timeout_sec=3).status is WaitStatus.ANSWERS_READY
+            for value in (1, 2):
+                step = run.send({'index': 2})
+                assert step is not None and step.commands == {'value': value}
+            assert encoded == [0, 2, 1]
             assert observed == [
                 {'index': 0, policy_keys.REPLAN_NOW: False},
-                {'index': 1, policy_keys.REPLAN_NOW: True},
                 {'index': 2, policy_keys.REPLAN_NOW: False},
+                {'index': 1, policy_keys.REPLAN_NOW: True},
             ]
         finally:
             release.set()
+            runtime.close()
+            run.close()
+
+
+def test_stack_failure_drains_sent_inference_before_closing_session(serving):
+    started, release = threading.Event(), threading.Event()
+    order = []
+    stack = spec.sequence(
+        TemporalStack(('image',), (0.0,)).to_spec(), spec.component('chunked_schedule', version=2, fps=10)
+    )
+
+    class BlockingSession(Session):
+        def infer(self, observation):
+            started.set()
+            assert release.wait(5)
+            order.append('inference finished')
+
+        def close(self):
+            order.append('session closed')
+
+    class BlockingModel(Model):
+        def prepare_session(self, params):
+            return BlockingSession(stack)
+
+    with serving(BlockingModel) as (client, address):
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(client.NAME, address))
+        releaser = threading.Timer(0.05, release.set)
+        try:
+            run.send({'image': np.zeros((8, 8, 3), dtype=np.uint8)})
+            assert started.wait(5)
+            releaser.start()
+            with pytest.raises(PolicyCommandError, match='image'):
+                run.send({})
+            assert order == ['inference finished', 'session closed']
+        finally:
+            release.set()
+            releaser.cancel()
             runtime.close()
             run.close()
 

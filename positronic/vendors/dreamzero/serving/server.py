@@ -28,6 +28,7 @@ class DreamZeroSession(Session):
     Prediction deadlines share the first observation's clock. Missed deadlines use the latest
     supplied observation. History timestamps and targets map to the nearest sampling tick;
     missing ticks use the most recent older sample, or the earliest retained sample at startup.
+    Observations older than or equal to the latest accepted timestamp return ``None`` without changing state.
     """
 
     def __init__(
@@ -59,8 +60,10 @@ class DreamZeroSession(Session):
         if self._closed:
             raise RuntimeError('Session is closed')
         now_ns = observation[OBS_TIME_NS]
-        if type(now_ns) is not int or now_ns < 0 or (self._history and now_ns <= self._history[-1][0]):
-            raise ValueError('obs_time_ns must be a strictly increasing nonnegative integer')
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError('obs_time_ns must be a nonnegative integer')
+        if self._history and now_ns <= self._history[-1][0]:
+            return None
         images = {name: np.asarray(observation[name]) for name in CAMERAS}
         if any(image.shape != self._shape or image.dtype != np.uint8 for image in images.values()):
             raise ValueError(f'Camera images must be uint8 with shape {self._shape}')

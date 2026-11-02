@@ -177,12 +177,37 @@ def test_invalid_session_configuration_does_not_claim_model(name, value):
     model.prepare_session(model.parameters).close()
 
 
-def test_observation_time_must_advance():
-    model = DreamZeroModel(NativePolicy(), width=3, height=2)
+def test_out_of_order_and_duplicate_observations_do_not_change_history_or_prediction_cadence():
+    native = NativePolicy()
+    model = DreamZeroModel(native, width=3, height=2)
     session = model.prepare_session(model.parameters)
     session.infer(observation(0))
-    with pytest.raises(ValueError, match='strictly increasing'):
-        session.infer(observation(0))
+    for index in range(1, 25):
+        if index != 8:
+            session.infer(observation(index))
+        if index == 9:
+            assert session.infer(observation(8)) is None
+            duplicate = observation(200)
+            duplicate[OBS_TIME_NS] = observation(9)[OBS_TIME_NS]
+            assert session.infer(duplicate) is None
+    assert len(native.observations) == 2
+    for name in CAMERAS:
+        np.testing.assert_array_equal(native.observations[-1][name][:, 0, 0, 0], [1, 7, 16, 24])
+    assert session.infer(observation(23)) is None
+    assert session.infer(observation(25)) is None
+    assert len(native.observations) == 2
+    session.close()
+
+
+@pytest.mark.parametrize('stamp', [-1, 1.5, True])
+def test_invalid_observation_timestamp_is_rejected(stamp):
+    model = DreamZeroModel(NativePolicy(), width=3, height=2)
+    session = model.prepare_session(model.parameters)
+    frame = observation(0)
+    frame[OBS_TIME_NS] = stamp
+    with pytest.raises(ValueError, match='nonnegative integer'):
+        session.infer(frame)
+    session.close()
 
 
 def test_droid_control_mode():

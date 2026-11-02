@@ -19,12 +19,12 @@ shared message fields, pipeline descriptions and neutral value serialization liv
 [`positronic-model-server`](../../model_server/README.md). Robot-command encoding and protocol
 v1/v2 support remain in `positronic.offboard.protocol`.
 
-| Wire | `--policy.wire` | Where it answers |
-|---|---|---|
-| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the keepalive route |
-| WebSocket on a Unix socket | `websocket_unix` | the websocket wire's socket path, beside the same keepalive route |
-| gRPC | `grpc` | the gRPC wire's own port, beside the keepalive method |
-| gRPC over TLS | `grpc_tls` | a TLS edge in front of that same port |
+| Wire                       | `--policy.wire`                                   | Where it answers                                                  |
+| -------------------------- | ------------------------------------------------- | ----------------------------------------------------------------- |
+| WebSocket                  | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the keepalive route             |
+| WebSocket on a Unix socket | `websocket_unix`                                  | the websocket wire's socket path, beside the same keepalive route |
+| gRPC                       | `grpc`                                            | the gRPC wire's own port, beside the keepalive method             |
+| gRPC over TLS              | `grpc_tls`                                        | a TLS edge in front of that same port                             |
 
 - A client names its wire; nothing reads one off a URL. The WebSocket wire is the default, and a server
   serves gRPC only where `--grpc` names that wire.
@@ -81,8 +81,9 @@ curl -X POST http://localhost:8000/api/v1/keepalive
 ```
 
 **Response:**
+
 ```json
-{"alive_seconds": 1800}
+{ "alive_seconds": 1800 }
 ```
 
 `alive_seconds` is the number of seconds the server stays alive after the call, if nothing else calls
@@ -97,11 +98,13 @@ A server without the call answers `404` on HTTP and `UNIMPLEMENTED` on gRPC, and
 answers there, no positronic server is at the address, and the client raises `wire.ConnectRefused`.
 
 #### `/api/v1/session`
+
 Establishes an inference session with the server's model. The server loads one checkpoint at startup:
 the configured one, or the latest available at that moment. To serve another checkpoint, start another
 server.
 
 **Example:**
+
 - `ws://localhost:8000/api/v1/session` → over the WebSocket wire
 - `localhost:9000/api/v1/session` → over gRPC
 
@@ -137,6 +140,7 @@ separate `headers` argument.
 ### Session Flow
 
 #### 1. Handshake
+
 Upon connection, the server sends a ready packet with metadata:
 
 ```json
@@ -152,11 +156,25 @@ Upon connection, the server sends a ready packet with metadata:
     "checkpoint_id": "10000",
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
-    "local_stack": {"seq": [
-      {"name": "trajectory_player", "version": 1, "args": {"replan_on_error": true}},
-      {"name": "chunked_schedule", "version": 4, "args": {"fps": 15.0, "horizon_sec": 1.0}},
-      {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
-    ]},
+    "local_stack": {
+      "seq": [
+        {
+          "name": "trajectory_player",
+          "version": 1,
+          "args": { "replan_on_error": true }
+        },
+        {
+          "name": "chunked_schedule",
+          "version": 4,
+          "args": { "fps": 15.0, "horizon_sec": 1.0 }
+        },
+        {
+          "name": "restrict_image_size",
+          "version": 1,
+          "args": { "width": 224, "height": 224 }
+        }
+      ]
+    },
     "compress_images": true,
     "positronic_version": "0.2.1"
   }
@@ -170,6 +188,7 @@ owns the session, includes its ID in each inference request, and records it in t
 `inference.policy.session_id`.
 
 This metadata tells the client:
+
 - Which checkpoint is loaded
 - Server connection details
 - Scheduler cadence (`action_fps`, `action_horizon_sec`).
@@ -275,10 +294,15 @@ scheduler supplies timing; commands carry no timestamps or end-of-chunk sentinel
 
 ```json
 {
-  "result": [{
-    "robot_command": {"type": "cartesian_pos", "pose": [0.51, 0.21, 0.31, 1, 0, 0, 0, 1, 0, 0, 0, 1]},
-    "target_grip": 0.02
-  }]
+  "result": [
+    {
+      "robot_command": {
+        "type": "cartesian_pos",
+        "pose": [0.51, 0.21, 0.31, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+      },
+      "target_grip": 0.02
+    }
+  ]
 }
 ```
 
@@ -287,6 +311,7 @@ A command's `type` selects the fields beside it: `cartesian_pos` (`pose`), `join
 Every command may carry a `mode`, itself a tagged mapping naming the control law to execute under: `{"type": "position_control", "stiffness": [...]}` or `{"type": "impedance", "kq": [...], "kqd": [...], "kx": [...], "kxd": [...], "frame": [...]}`. Omit `stiffness` to take the arm's own gains — an empty list is refused. An impedance `frame` is a pose in the same form, measured from the rig's control frame: the point where the Cartesian stiffness acts. Omit it and the stiffness acts at the control frame. The Franka arm refuses a `frame` with a rotation. Omit `mode` entirely and the arm runs its native law. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
 
 **Server → Client (Error):**
+
 ```json
 {
   "error": "Shape mismatch: expected (7,) but got (6,)"
@@ -302,7 +327,7 @@ before invoking the model. The other session stays open; no replacement session 
 After inference finishes, closing the policy run sends:
 
 ```json
-{"session_id": "<server-issued ID>", "end_session": true}
+{ "session_id": "<server-issued ID>", "end_session": true }
 ```
 
 The server calls `model.end_session(id)` and acknowledges with the same message. The client then
@@ -336,8 +361,9 @@ checkpoints, start one server for each.
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
 Periodic recipes can set `InferenceSchedule(max_in_flight=...)` above its default of one to pipeline
-ordinary calls over the session connection. Replies must arrive in request order, including `None`
-and errors. At capacity, the scheduler skips new samples and records `skipped_samples` in episode
+ordinary calls over the session connection. Replies must arrive in actual send order, including `None`
+and errors; observation timestamps need not arrive in order and are the server's responsibility.
+At capacity, the scheduler skips new samples and records `skipped_samples` in episode
 metadata. A pending `replan_now` survives skipped samples and remains available to the recipe's
 observation codecs. The first inference establishes the session before pipelining begins.
 
@@ -376,6 +402,7 @@ predictions alongside client-supplied joint and grip targets.
 ## Classes
 
 ### `server.PolicyServer`
+
 Serves one `Model` through a `PolicyDeployment` with explicit `local` and `codec` arguments. The server
 calls `build_model` once, when `serve` starts, and the model it returns owns the loaded resources and
 reports its checkpoint in `meta()`. `build_model` warms the model before it returns: it runs one inference
@@ -423,12 +450,14 @@ an instantiated pipeline serves exactly as launched. `idle_timeout_min` ends the
 many minutes with no session and no keepalive call.
 
 ### `server.serve`
+
 The CLI entry point for `PolicyServer` deployments. A vendor binds `model` and `pipeline` and exposes named configurations as subcommands.
 `--model.checkpoints_dir=...` names the checkpoint for LeRobot and OpenPI. `--pipeline.*` configures the client stack and server codec.
 `--websocket.served_address.port=9000` moves the WebSocket listener. `--grpc=@positronic.offboard.server.grpc` adds a gRPC listener.
 GR00T has its own [standalone CLI](../vendors/gr00t/README.md#serve), with `--model.model_source=...` and `--grpc=@gr00t_serving.server.grpc`.
 
 ### `client.InferenceClient`
+
 A Python client for connecting to an inference server. It takes the wire and the address that wire
 dials (`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the server
 and the session params. Each wire names its own address type, and the client refuses one built for

@@ -142,26 +142,22 @@ class InferenceSession:
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
-    def infer(self, obs: dict[str, Any], *, on_pipeline_ready: Callable[[], None] | None = None) -> Any:
+    def infer(self, obs: dict[str, Any]) -> Any:
         """Send an observation and receive native v3 data, or typed robot commands for legacy versions.
 
         ``obs`` must be wire-serializable: plain-data containers and scalars, plus numeric numpy
         arrays/scalars, and no arbitrary Python objects. The result is whatever the server's session
         returned — canonically a list of action dicts, but a bare dict or ``None`` too.
 
-        Concurrent calls consume replies in send order. ``on_pipeline_ready`` releases the next caller's
-        preparation after transmission. The first answer establishes the session before releasing
-        further calls, so a startup reconnect cannot lose queued observations.
+        Concurrent calls consume replies in actual send order, independent of observation timestamps.
+        The first answer establishes the session before further sends, so a startup reconnect cannot
+        lose queued observations.
         """
         self.served_timing = self.wire_timing = {}
         with self._startup:
             if not self._answered:
-                try:
-                    return self._first_call(obs)
-                finally:
-                    if on_pipeline_ready is not None:
-                        on_pipeline_ready()
-        return self._round_trip(obs, on_pipeline_ready=on_pipeline_ready)
+                return self._first_call(obs)
+        return self._round_trip(obs)
 
     def _first_call(self, obs: dict[str, Any]) -> Any:
         if self._closed:
@@ -200,7 +196,7 @@ class InferenceSession:
             raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
         self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
 
-    def _round_trip(self, obs: dict[str, Any], *, on_pipeline_ready: Callable[[], None] | None = None) -> Any:
+    def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
         request = (
             obs
@@ -228,8 +224,6 @@ class InferenceSession:
                 telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
             try:
                 deadline = time.monotonic() + self._infer_timeout
-                if on_pipeline_ready is not None:
-                    on_pipeline_ready()
                 with self._responses:
                     ready = self._responses.wait_for(
                         lambda: self._closed or self._pending[0] is token, timeout=max(0.0, deadline - time.monotonic())

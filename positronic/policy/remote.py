@@ -1,12 +1,9 @@
 import collections.abc as cabc
 import logging
-import time
-from collections import deque
 from concurrent.futures import Future, wait
 from contextlib import closing
-from contextvars import ContextVar
 from functools import partial
-from threading import Condition, Thread
+from threading import Thread
 from typing import Any
 
 import numpy as np
@@ -23,7 +20,7 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.offboard.client import DEFAULT_INFER_TIMEOUT, InferenceClient, InferenceSession
 from positronic.policy import keys as policy_keys
 
-from .base import Answer, P, Policy, PolicyRun, Processor, Runtime, Step, T
+from .base import Policy, PolicyRun, Processor, Runtime, Step
 from .codecs import PolicyCommandError
 from .codecs.action import JointPositionAction
 from .compatibility import from_v1_spec
@@ -50,8 +47,6 @@ def round_trip(
     obs: cabc.Mapping[str, Any],
     compress_images: bool,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
-    *,
-    on_pipeline_ready: cabc.Callable[[], None] | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
@@ -61,7 +56,7 @@ def round_trip(
         prepared = prepare_obs(obs, compress_images, jpeg_quality)
     with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
         try:
-            return session.infer(prepared, on_pipeline_ready=on_pipeline_ready)
+            return session.infer(prepared)
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
             telemetry.set_attrs(span, **served)
@@ -134,100 +129,6 @@ def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict
     return {**from_stack, **declared}
 
 
-class _RemoteRuntime(Runtime):
-    """Prepare and send calls in submission order, releasing the next call before waiting for a reply."""
-
-    def __init__(self, inner: Runtime):
-        self._inner = inner
-        self._turn = Condition()
-        self._pending: deque[object] = deque()
-        self._current: ContextVar[object] = ContextVar('remote_call')
-        self._active = 0
-
-    @property
-    def time_ns(self) -> int:
-        return self._inner.time_ns
-
-    @property
-    def tick(self) -> int:
-        return self._inner.tick
-
-    def set_metadata(self, name: str, value: Any) -> None:
-        self._inner.set_metadata(name, value)
-
-    def has_ready_answers(self) -> bool:
-        return self._inner.has_ready_answers()
-
-    def _release(self, token: object) -> None:
-        with self._turn:
-            if token in self._pending:
-                self._pending.remove(token)
-            self._turn.notify_all()
-
-    def release_next(self) -> None:
-        if (token := self._current.get(None)) is not None:
-            self._release(token)
-
-    def finish(self) -> None:
-        with self._turn:
-            self._turn.wait_for(lambda: not self._pending and not self._active)
-
-    class _Answer(Answer[T]):
-        def __init__(
-            self, inner: Answer[T], release: cabc.Callable[[], None], queue_duration: cabc.Callable[[], float]
-        ):
-            self._inner, self._release = inner, release
-            self._queue_duration = queue_duration
-
-        def done(self) -> bool:
-            return self._inner.done()
-
-        @property
-        def elapsed_sec(self) -> float:
-            return self._inner.elapsed_sec
-
-        @property
-        def execution_sec(self) -> float:
-            return max(0.0, self._inner.execution_sec - self._queue_duration())
-
-        def result(self) -> T:
-            return self._inner.result()
-
-        def cancel(self) -> None:
-            self._inner.cancel()
-            if self._inner.done():
-                self._release()
-
-    def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
-        token = object()
-        queued_sec = 0.0
-        with self._turn:
-            self._pending.append(token)
-
-        def call() -> T:
-            nonlocal queued_sec
-            waiting_since = time.monotonic()
-            with self._turn:
-                self._turn.wait_for(lambda: self._pending[0] is token)
-                self._active += 1
-            queued_sec = time.monotonic() - waiting_since
-            current = self._current.set(token)
-            try:
-                return function(*args, **kwargs)
-            finally:
-                self._current.reset(current)
-                with self._turn:
-                    self._active -= 1
-                    self._release(token)
-
-        try:
-            answer = self._inner.submit(call)
-        except BaseException:
-            self._release(token)
-            raise
-        return self._Answer(answer, partial(self._release, token), lambda: queued_sec)
-
-
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
@@ -277,7 +178,6 @@ class RemotePolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
-        remote_runtime = _RemoteRuntime(runtime)
         try:
             try:
                 server_meta = dict(session.metadata)
@@ -309,13 +209,11 @@ class RemotePolicy(Policy):
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
                 nonlocal answered_session_id
-                answer = round_trip(
-                    session, obs, compress_images, self._jpeg_quality, on_pipeline_ready=remote_runtime.release_next
-                )
+                answer = round_trip(session, obs, compress_images, self._jpeg_quality)
                 answered_session_id = session.session_id
                 return answer
 
-            with closing(remote_runtime.start(stack, infer)) as run:
+            with closing(runtime.start(stack, infer)) as run:
                 obs = yield
                 while True:
                     try:
@@ -339,6 +237,4 @@ class RemotePolicy(Policy):
                             runtime.set_metadata(policy_keys.SESSION_ID, recorded_session_id)
                     obs = yield step
         finally:
-            # Generator failure can reach cleanup while inference still owns the connection.
-            remote_runtime.finish()
             _close_within_bound(session)
