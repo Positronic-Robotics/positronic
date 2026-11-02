@@ -34,8 +34,6 @@ from positronic.drivers.roboarm.models import (
     FLANGE_LINK,
     GRIPPER_2F85_XYZ,
     GRIPPER_SITE,
-    GRIPPER_YAM_XYZ,
-    YAM_WRIST_LINK,
     EEFrame,
     attach_frame,
     bundled_franka_model,
@@ -77,6 +75,8 @@ _LEGACY_CONTROL_FRAME = 'control_frame'
 _LEGACY_EE_FRAME = 'ee_frame'
 _LEGACY_DEFAULT_SITE = 'default'
 _LEGACY_YAM_GRASP_SITE = 'grasp_site'
+# The wrist link of the earlier bundled YAM URDF, and ``GRIPPER_SITE`` in it: the site a recording on that model lacks.
+_LEGACY_YAM_WRIST_LINK, _LEGACY_GRIPPER_YAM_XYZ = 'link_6', '0 -0.0408 0.138'
 
 
 def _legacy_ee_frames(episode, site: str, pose_signals: Sequence[str] = _POSE_SIGNALS) -> dict[str, Any]:
@@ -164,7 +164,7 @@ SIM_ROBOT_TRANSFORM = (
 
 # A YAM recording carries the model its driver emitted; the bundled YAM model backfills one that carries none.
 YAM_ROBOT_TRANSFORM = Group(Identity(remove=_LEGACY_FRAME_KEYS), _YAM_MODEL, _YAM_EE_FRAMES) | _at_the_gripper(
-    YAM_WRIST_LINK, GRIPPER_YAM_XYZ
+    _LEGACY_YAM_WRIST_LINK, _LEGACY_GRIPPER_YAM_XYZ
 )
 
 RECOVERY_TASK = 'Recovery cases.'

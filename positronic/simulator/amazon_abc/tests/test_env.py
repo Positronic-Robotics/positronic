@@ -202,6 +202,15 @@ def test_the_zed_x_view_places_the_top_camera_from_the_arm_mounts_and_renders_th
     assert frame[protocol.SLOTS]
 
 
+def test_each_mount_is_where_the_bundled_yam_model_stands_under_its_abc_arm(env):
+    mounts = env.reset(_TOKEN)[protocol.FRAME_ROBOT_META][protocol.MOUNTS]
+
+    # The fake scene's arm bases stand at y = +-0.3 on the world axes.
+    for arm, y in (('left', 0.3), ('right', -0.3)):
+        signal = protocol.arm_channel(protocol.ROBOT_STATE, arm) + protocol.JOINTS_SUFFIX
+        np.testing.assert_allclose(mounts[signal], np.array([0.0, y, 0.0]) + mapping.BUNDLED_YAM_BASE, atol=1e-12)
+
+
 def test_the_zed_x_view_turns_each_wrist_camera_from_abcs_pose_and_keeps_it_on_its_body(env, scene):
     mujoco.mj_kinematics(scene.model, scene.data)
     mujoco.mj_camlight(scene.model, scene.data)

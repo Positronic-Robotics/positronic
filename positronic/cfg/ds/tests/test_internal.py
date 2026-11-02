@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from positronic import geom, keys
-from positronic.cfg.ds.internal import REAL_ROBOT_TRANSFORM, SIM_ROBOT_TRANSFORM, YAM_ROBOT_TRANSFORM
+from positronic.cfg.ds.internal import (
+    _LEGACY_YAM_WRIST_LINK,
+    REAL_ROBOT_TRANSFORM,
+    SIM_ROBOT_TRANSFORM,
+    YAM_ROBOT_TRANSFORM,
+)
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -21,7 +26,6 @@ from positronic.drivers.roboarm.models import (
     GRIPPER_SITE,
     PANDA_HAND_FRAME,
     YAM_GRASP_SITE_FRAME,
-    YAM_WRIST_LINK,
     EEFrame,
     attach_frame,
     bundled_franka_model,
@@ -154,9 +158,10 @@ def test_training_moves_a_recording_from_before_485_off_the_gripper():
 
 
 def _yam_urdf_with_default() -> str:
-    """The URDF a YAM recording carried before ``gripper``: ``default`` at the MJCF ``grasp_site``, no ``gripper``."""
-    root = ET.fromstring(Path(package_assets_path('assets/i2rt_yam/yam.urdf')).read_text())
-    attach_frame(root, DEFAULT, YAM_WRIST_LINK, '0 0 0.1347', '0 0 -1.5707963268')
+    """The frames of the URDF a YAM recording carried before ``gripper`` that a read uses: its wrist link, and
+    ``default`` at the ``grasp_site`` of the earlier MJCF. It has no ``gripper``."""
+    root = ET.fromstring(f'<robot name="yam"><link name="{_LEGACY_YAM_WRIST_LINK}"/></robot>')
+    attach_frame(root, DEFAULT, _LEGACY_YAM_WRIST_LINK, '0 0 0.1347', '0 0 -1.5707963268')
     return ET.tostring(root, encoding='unicode')
 
 

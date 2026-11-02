@@ -96,9 +96,10 @@ def yam(robot_arm, cameras):
         keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
         keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
     },
-    # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
-    # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
-    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
+    # World-frame arm-base mount positions of the sim scene the training data uses: the arms at (0.30, ±0.305),
+    # facing +x, on the 0.011 base plate of the 0.30 tabletop. z is 9.5mm below the top of the plate: the base frame
+    # of the i2rt model is 9.5mm below the base frame of the sim arm.
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3015], keys.RIGHT_ARM: [0.30, -0.305, 0.3015]},
     gravity_comp_factor=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
@@ -185,8 +186,8 @@ yam_bimanual_yambox = yam_bimanual.override(
     left_channel='can_follower_l',
     right_channel='can_follower_r',
     # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
-    # The sim scene's plate is 0.011, so only z differs from the default.
-    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
+    # The sim scene's plate is 0.011, so only z differs from the default: it is 0.011 higher.
+    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3125], keys.RIGHT_ARM: [0.30, -0.305, 0.3125]},
     # Measured on this station: under i2rt's own factors joints 3 and 4 hold 29 and 32 mrad below where they
     # are sent, past the 20 mrad tolerance of a blocking move. These bring both arms inside it with about
     # 10 mrad to spare. Joint 4 is the sensitive one — its zero sits near 1.37.

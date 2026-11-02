@@ -17,10 +17,11 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 FLANGE_LINK = 'link8'
 ROBOLAB_EEF_LINK = 'robolab_eef'
 # The point a bundled model reported at before ``GRIPPER_SITE``, as a URDF link: the FR3's ``F_T_EE``, the old grasp
-# site of the sim panda, the YAM's i2rt grasp site. A policy that states no frame observes its poses there.
+# site of the sim panda, the grasp site of the earlier YAM model. A policy that states no frame observes its poses
+# there.
 EE_LINK = 'end_effector'
-# The grip point every bundled model names, on the axes of the arm's last link: z is the approach axis. Every
-# embodiment reports its poses here, and every codec transform is measured from here.
+# The grip point every bundled model names, with z along the approach axis. Every embodiment reports its poses here,
+# and every codec transform is measured from here.
 GRIPPER_SITE = 'gripper'
 # The frame DROID records its poses in: the flange, ``panda_link8``, measured from ``GRIPPER_SITE`` of the
 # FR3 with the 2F-85. DROID's ``cartesian_position`` equals FK at ``panda_link8``, and its checkpoints speak it.
@@ -40,9 +41,9 @@ FRANKA_HAND_FRAME = geom.Transform3D(
 # the flange approach axis and -45deg about it. Sim recordings and checkpoints older than ``GRIPPER_SITE`` speak
 # poses there.
 PANDA_HAND_FRAME = geom.Transform3D(np.array([0.0, 0.0, -0.04525]), geom.Rotation.from_euler([0.0, 0.0, -0.7853981634]))
-# The i2rt grasp site of the YAM, ``grasp_site`` in its MJCF, measured from ``GRIPPER_SITE``. ``grasp_site`` is on the
-# wrist axis, 134.7mm along it and -90deg about it. YAM recordings and checkpoints older than ``GRIPPER_SITE`` speak
-# poses there.
+# ``grasp_site`` of the earlier bundled YAM MJCF, measured from ``GRIPPER_SITE``: on the wrist axis, 40.8mm to the side,
+# 3.3mm short and -90deg about the approach axis. ABC's YAM arms carry that MJCF, and YAM recordings and checkpoints
+# older than ``GRIPPER_SITE`` speak poses there.
 YAM_GRASP_SITE_FRAME = geom.Transform3D(
     np.array([0.0, 0.0408, -0.0033]), geom.Rotation.from_euler([0.0, 0.0, -1.5707963268])
 )
@@ -253,21 +254,28 @@ def bundled_franka_model() -> dict:
 
 
 YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
-YAM_WRIST_LINK = 'link_6'
-# The centroid of the face where the closed YAM fingertips meet, in the i2rt CAD mesh of ``YAM_WRIST_LINK``.
-GRIPPER_YAM_XYZ = '0 -0.0408 0.138'
-# The YAM MJCF's ``grasp_site``: 134.7mm along the wrist axis, turned -90deg about it.
-_YAM_GRASP_SITE_XYZ, _YAM_GRASP_SITE_RPY = '0 0 0.1347', '0 0 -1.5707963268'
+YAM_WRIST_LINK = 'link6'
+# ``GRIPPER_SITE`` in ``YAM_WRIST_LINK``: where the closed fingertips of the crank gripper meet, 40.8mm off the wrist
+# axis. The linear gripper of the model closes on the axis. The approach axis is -z of ``YAM_WRIST_LINK``.
+_GRIPPER_YAM_XYZ, _GRIPPER_YAM_RPY = '0.0408 0 -0.1377', '3.1415926536 0 -1.5707963268'
+
+
+def _urdf_origin(transform: geom.Transform3D) -> tuple[str, str]:
+    """The ``xyz`` and ``rpy`` of a URDF origin at ``transform``."""
+    xyz, rpy = (
+        ' '.join(f'{v:.12g}' for v in values) for values in (transform.translation, transform.rotation.as_euler)
+    )
+    return xyz, rpy
 
 
 @lru_cache(maxsize=1)
 def bundled_yam_model() -> dict:
-    """i2rt YAM model metadata: its URDF and visual meshes, and its joint names."""
+    """i2rt YAM model metadata: its URDF and meshes, and its joint names."""
     urdf_path = Path(__file__).resolve().parents[2] / 'assets' / 'i2rt_yam' / 'yam.urdf'
     root = ET.fromstring(urdf_path.read_text())
     mesh_files = {mesh.attrib['filename'] for mesh in root.iter('mesh')}
-    attach_frame(root, GRIPPER_SITE, YAM_WRIST_LINK, GRIPPER_YAM_XYZ)
-    attach_frame(root, EE_LINK, YAM_WRIST_LINK, _YAM_GRASP_SITE_XYZ, _YAM_GRASP_SITE_RPY)
+    attach_frame(root, GRIPPER_SITE, YAM_WRIST_LINK, _GRIPPER_YAM_XYZ, _GRIPPER_YAM_RPY)
+    attach_frame(root, EE_LINK, GRIPPER_SITE, *_urdf_origin(YAM_GRASP_SITE_FRAME))
     return {
         'robot': 'i2rt_yam',
         roboarm_keys.URDF: ET.tostring(root, encoding='unicode'),
