@@ -10,8 +10,9 @@ COPY wire/pyproject.toml /opt/positronic-packages/wire/
 COPY model_server/pyproject.toml /opt/positronic-packages/model_server/
 COPY vocabulary/pyproject.toml /opt/positronic-packages/vocabulary/
 COPY evals/pyproject.toml /opt/positronic-packages/evals/
-COPY docker/install-gr00t-server-deps.sh /opt/positronic-packages/install-gr00t-server-deps.sh
-RUN --mount=type=cache,target=/root/.cache/uv bash /opt/positronic-packages/install-gr00t-server-deps.sh
+COPY docker/install-model-server-deps.sh /opt/positronic-packages/install-model-server-deps.sh
+RUN --mount=type=cache,target=/root/.cache/uv \
+    bash /opt/positronic-packages/install-model-server-deps.sh /opt/gr00t-venv/bin/python
 
 COPY --link wire /opt/positronic-packages/wire
 COPY --link model_server /opt/positronic-packages/model_server

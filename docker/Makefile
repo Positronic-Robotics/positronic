@@ -9,9 +9,10 @@ IMAGE_NAME_OPENPI_BASE := positro/openpi-base
 IMAGE_NAME_ROBOLAB := positro/robolab
 # The public MolmoSpaces eval image. Not in `build` or `push`: CI publishes it from a job of its own.
 IMAGE_NAME_MOLMOSPACES := positro/molmospaces
-# One serving image per checkpoint, the weights inside, starting with no network: positro/<name>, from
-# Dockerfile.serve-<name>. Not in `build` or `push`.
-SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid flux3-action cosmos3-nano
+# One serving image per checkpoint, including weights and starting offline: positro/<name>.
+# Dockerfile.serve-<name> is the default path; vendor-local files override it. Not in `build` or `push`.
+SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid flux3-action cosmos3-nano dreamzero-droid
+SERVE_DOCKERFILE_dreamzero-droid := ../positronic/vendors/dreamzero/Dockerfile.serve-droid
 
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
 
@@ -118,7 +119,7 @@ push-dreamzero-base: build-dreamzero-base
 
 build-dreamzero:
 	@echo "Building $(IMAGE_NAME_DREAMZERO)..."
-	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_DREAMZERO_BASE_LATEST) -f Dockerfile.dreamzero -t $(IMAGE_NAME_DREAMZERO):local ..
+	docker build --platform linux/amd64 --build-arg BASE_IMAGE=$(TAG_DREAMZERO_BASE_LATEST) -f ../positronic/vendors/dreamzero/Dockerfile.training -t $(IMAGE_NAME_DREAMZERO):local ..
 
 build-robolab:
 	@echo "Building $(IMAGE_NAME_ROBOLAB)..."
@@ -146,13 +147,13 @@ define SERVE_IMAGE
 .PHONY: build-serve-$(1) push-serve-$(1)
 
 build-serve-$(1):
-	docker build --platform linux/amd64 $$(SERVE_BUILD_FLAGS_$(1)) -f Dockerfile.serve-$(1) -t $(2):local ..
+	docker build --platform linux/amd64 $$(SERVE_BUILD_FLAGS_$(1)) -f $$(or $$(SERVE_DOCKERFILE_$(1)),Dockerfile.serve-$(1)) -t $(2):local ..
 
 push-serve-$(1):
 	docker buildx build --platform linux/amd64 --provenance=false --sbom=false $$(SERVE_BUILD_FLAGS_$(1)) \
 		--cache-from type=registry,ref=$(2):buildcache \
 		--cache-to type=registry,ref=$(2):buildcache,mode=$$(or $$(SERVE_CACHE_MODE_$(1)),max) \
-		$$(foreach tag,$$(SERVE_TAGS),-t $(2):$$(tag)) --push -f Dockerfile.serve-$(1) ..
+		$$(foreach tag,$$(SERVE_TAGS),-t $(2):$$(tag)) --push -f $$(or $$(SERVE_DOCKERFILE_$(1)),Dockerfile.serve-$(1)) ..
 endef
 
 $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name))))
