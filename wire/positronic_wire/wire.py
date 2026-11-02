@@ -8,7 +8,7 @@ spells whatever its library takes.
 
 import abc
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import ClassVar, Generic, Self, TypeVar
@@ -104,6 +104,14 @@ class Refusal(Enum):
     FINAL = 'final'  # a permanent refusal; surface at once
     # Nothing answered: no connection, or none before the timeout or the close. Retry to the deadline.
     SILENT = 'silent'
+
+
+def retry_pauses() -> Iterator[float]:
+    """The seconds to pause before each retry of a refused call: 1, then double the last, up to 30."""
+    pause = 1.0
+    while True:
+        yield pause
+        pause = min(pause * 2, 30.0)
 
 
 class ConnectRefused(Exception):

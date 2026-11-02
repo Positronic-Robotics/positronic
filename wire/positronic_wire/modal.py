@@ -374,6 +374,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         """The token of a new session. A 5xx, a 429 and a lost answer continue the start under the same key."""
         key, stamp = str(uuid.uuid4()), str(time.time())
         deadline = time.monotonic() + self._start_deadline
+        pauses = wire.retry_pauses()
         last = 'no answer yet'
         while True:
             left = deadline - time.monotonic()
@@ -408,7 +409,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                         f'Modal refused a session start on {endpoint.root.host} with {status}',
                     )
                 last = f'answered {status}'
-            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+            time.sleep(min(next(pauses), max(0.0, deadline - time.monotonic())))
 
     def _terminate(self, endpoint: _Endpoint, token: str) -> None:
         """End the session, so its container takes the next one. A session that already ended answers 404.

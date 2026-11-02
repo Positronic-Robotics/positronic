@@ -387,7 +387,7 @@ class InferenceClient:
         ``attempt`` takes the seconds its dial may wait. The first attempt gets ``first_open_timeout``, and a retry
         gets ``open_timeout`` or the time left, whichever is shorter.
         """
-        backoff = 1.0
+        pauses = wire.retry_pauses()
         retries = ConnectRetries()
         open_timeout = first_open_timeout
         while True:
@@ -400,9 +400,9 @@ class InferenceClient:
                 refusal, not_ready = wire.Refusal.COLD, e
             if retries.take(refusal) is ConnectOutcome.SURFACE:
                 raise not_ready
-            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, backoff)
-            time.sleep(max(0.0, min(backoff, deadline - time.monotonic())))
-            backoff = min(backoff * 2, 30.0)
+            pause = next(pauses)
+            logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, pause)
+            time.sleep(max(0.0, min(pause, deadline - time.monotonic())))
             if time.monotonic() >= deadline:
                 raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
             open_timeout = max(0.0, min(self.open_timeout, deadline - time.monotonic()))
