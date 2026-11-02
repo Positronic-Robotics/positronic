@@ -30,7 +30,15 @@ from typing import Any, Self, TypeVar
 
 import numpy as np
 from attr import asdict, dataclass
-from positronic_model_server.spec import ARGS, NAME, VERSION
+from positronic_model_server.spec import (
+    ARGS,
+    MERGE_HORIZON_SEC,
+    MERGE_START,
+    NAME,
+    TIMING_REFERENCE,
+    TIMING_SECONDS,
+    VERSION,
+)
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
@@ -533,11 +541,11 @@ class RequestTiming:
         return self._Run(self)
 
     def to_spec(self) -> dict[str, Any]:
-        return {'reference': self._reference.value, 'seconds': self.duration_ns / 1e9}
+        return {TIMING_REFERENCE: self._reference.value, TIMING_SECONDS: self.duration_ns / 1e9}
 
     @classmethod
     def from_spec(cls, spec: Mapping[str, Any]) -> Self:
-        return cls(cls.Reference(spec['reference']), spec.get('seconds', 0.0))
+        return cls(cls.Reference(spec[TIMING_REFERENCE]), spec.get(TIMING_SECONDS, 0.0))
 
 
 class TrajectoryMerge:
@@ -564,11 +572,11 @@ class TrajectoryMerge:
         return cls(cls.Start.OBSERVATION)
 
     def to_spec(self) -> dict[str, Any]:
-        return {'start': self._start.value, 'horizon_sec': self.horizon_sec}
+        return {MERGE_START: self._start.value, MERGE_HORIZON_SEC: self.horizon_sec}
 
     @classmethod
     def from_spec(cls, spec: Mapping[str, Any]) -> Self:
-        return cls(cls.Start(spec['start']), spec.get('horizon_sec'))
+        return cls(cls.Start(spec[MERGE_START]), spec.get(MERGE_HORIZON_SEC))
 
     def plan(
         self, chunk: Sequence[Commands], fps: float, previous: Trajectory | None, now_ns: int, obs_time_ns: int
