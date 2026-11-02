@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
-from enum import Enum, StrEnum
+from enum import Enum, IntEnum, StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -45,9 +45,15 @@ logger = logging.getLogger(__name__)
 
 QUAT = geom.Rotation.Representation.QUAT
 
-# The index of each button in the values that the headset page sends for a controller, in the xr-standard gamepad
-# layout.
-_TRIGGER, _STICK, _A, _B = 0, 3, 4, 5
+
+class Button(IntEnum):
+    """The index of each button in the values that the headset page sends for a controller, in the xr-standard
+    gamepad layout."""
+
+    TRIGGER = 0
+    STICK = 3
+    A = 4
+    B = 5
 
 
 class Event(StrEnum):
@@ -93,14 +99,14 @@ class ButtonMap:
         # A button whose value is at least this is down.
         self._press_threshold = press_threshold
         # The time at which each button went down, while it is down.
-        self._down_since: dict[int, int] = {}
+        self._down_since: dict[Button, int] = {}
         # The buttons whose press did something already, until they go up.
-        self._used: set[int] = set()
+        self._used: set[Button] = set()
 
-    def _new_presses(self, buttons: Sequence[float], now_ns: int) -> set[int]:
+    def _new_presses(self, buttons: Sequence[float], now_ns: int) -> set[Button]:
         """Record the state of the buttons, and return the buttons that went down since the previous sample."""
         new_presses = set()
-        for button in (_STICK, _A, _B):
+        for button in (Button.STICK, Button.A, Button.B):
             if buttons[button] < self._press_threshold:
                 self._down_since.pop(button, None)
                 self._used.discard(button)
@@ -114,7 +120,7 @@ class ButtonMap:
         self._new_presses(buttons, now_ns)
         self._used.update(self._down_since)
 
-    def _is_held(self, button: int, now_ns: int) -> bool:
+    def _is_held(self, button: Button, now_ns: int) -> bool:
         since = self._down_since.get(button)
         return since is not None and button not in self._used and now_ns - since >= self._hold_ns
 
@@ -122,28 +128,28 @@ class ButtonMap:
         new_presses = self._new_presses(buttons, now_ns)
         # A button that is down before the trial runs does not hold in it.
         self._used.update(self._down_since)
-        if _B in new_presses:
+        if Button.B in new_presses:
             return ReadyAnswer.READY
-        if _STICK in new_presses:
+        if Button.STICK in new_presses:
             return ReadyAnswer.CANCELLED
         return None
 
     def events(self, buttons: Sequence[float], now_ns: int) -> list[Event]:
         new_presses = self._new_presses(buttons, now_ns)
         events = []
-        if _A in new_presses:
+        if Button.A in new_presses:
             events.append(Event.CLUTCH)
-        if self._is_held(_B, now_ns):
-            self._used.add(_B)
+        if self._is_held(Button.B, now_ns):
+            self._used.add(Button.B)
             events.append(Event.COMPLETE)
-        if self._is_held(_STICK, now_ns):
-            self._used.add(_STICK)
+        if self._is_held(Button.STICK, now_ns):
+            self._used.add(Button.STICK)
             events.append(Event.GIVE_UP)
         return events
 
     @staticmethod
     def grip(buttons: Sequence[float]) -> float:
-        return float(buttons[_TRIGGER])
+        return float(buttons[Button.TRIGGER])
 
 
 class Phase(StrEnum):

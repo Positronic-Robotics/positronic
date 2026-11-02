@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
+import httpx
 import numpy as np
 import pos3
 import pytest
@@ -30,6 +31,7 @@ from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers.webxr import STATE_PATH, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
@@ -40,11 +42,12 @@ from positronic.policy.executor import Executor
 from positronic.policy.keys import END
 from positronic.policy.processors import ChunkedSchedule, EndOnField
 from positronic.policy.remote import RemotePolicy
-from positronic.teleop import command, protocol
+from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
 from positronic.teleop.protocol import VIEW_SIZE, session_query
-from positronic.teleop.service import ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
+from positronic.teleop.service import Button, ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
 from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
+from positronic.tests.testing_inference import free_port
 from positronic.utils import package_assets_path
 
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
@@ -60,8 +63,11 @@ HOLD_SEC = 0.2
 
 
 def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0) -> list[float]:
-    """The values that the headset page sends for a controller: trigger, grip, touchpad, stick, A, B."""
-    return [trigger, 0.0, 0.0, stick, a, b]
+    """The values that the headset page sends for a controller."""
+    values = [0.0] * (max(Button) + 1)
+    for button, value in ((Button.TRIGGER, trigger), (Button.STICK, stick), (Button.A, a), (Button.B, b)):
+        values[button] = value
+    return values
 
 
 class TestButtonMap:
@@ -112,12 +118,7 @@ class TestButtonMap:
     def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
         page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
         [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
-        assert tuple(map(int, layout)) == (
-            service_module._TRIGGER,
-            service_module._STICK,
-            service_module._A,
-            service_module._B,
-        )
+        assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
@@ -756,6 +757,48 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
     assert state == {'phase': Phase.IDLE, 'control': False}
+
+
+def _until_served(url: str, seconds: float = 10.0) -> None:
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            httpx.get(url).raise_for_status()
+            return
+        except httpx.TransportError:
+            assert time.monotonic() < deadline, f'nothing serves {url}'
+            time.sleep(0.05)
+
+
+@pytest.mark.timeout(60)
+def test_the_scripted_headset_readies_moves_and_completes_a_trial_through_the_page(service, socket_path, runtime):
+    port = free_port()
+    webxr = WebXR(port, use_https=False)
+    headset = command._Headset(service)
+    page = f'http://127.0.0.1:{port}'
+    with pimm.World() as world:
+        world.connect(webxr.controller_positions, headset.controller_positions)
+        world.connect(webxr.buttons, headset.buttons)
+        world.connect(headset.page_state, webxr.page_state)
+        loops = threading.Thread(target=world.run, args=([headset, webxr],), daemon=True)
+        loops.start()
+        _until_served(page + STATE_PATH)
+        trials = threading.Thread(
+            target=scripted_headset.drive,
+            kwargs={'page': page, 'trials': 1, 'trial_sec': 0.5, 'circle_sec': 1.0},
+            daemon=True,
+        )
+        trials.start()
+        run = runtime.start(_policy(socket_path, operator_position='BACK'))
+        steps, end = _drive(run, 10.0)
+        run.close()
+        trials.join(timeout=5)
+        world.request_stop()
+        loops.join(timeout=5)
+    assert end is PolicyEnd.COMPLETE
+    assert not trials.is_alive()
+    targets = np.array([_target(step).translation for step in _moves(steps)])
+    assert np.ptp(targets, axis=0).max() > 0.01
 
 
 class _RecordingNotice:
