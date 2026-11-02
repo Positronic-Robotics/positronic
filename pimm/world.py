@@ -544,8 +544,8 @@ def _bg_wrapper(
         print(f'{"=" * 60}\n', file=sys.stderr)
         logger.error(f'Error in control system {name}:\n{traceback.format_exc()}')
     finally:
-        # Whatever ended this loop — a return, a raise, an interrupt — ends the WORLD: the flag is
-        # the one every other control system reads, in this process and in the parent.
+        # Whatever ended this loop — a return, a raise, an interrupt — ends the WORLD: every other
+        # control system reads this flag, in this process and in the parent.
         logger.info(f'Stopping background process by {name}')
         stop_flag.set()
 

@@ -369,8 +369,7 @@ class TestWorld:
                 assert time.monotonic() < deadline, 'background process never entered its control loop'
                 time.sleep(0.01)
 
-            # We have to set the private flag manually, because out of the scope of the context manager
-            # we can't access exit code of the process
+            # Set the private flag by hand: outside the context manager the process exit code is unreachable.
             world._stop_flag.set()
             world.background_processes[0].join(timeout=30)
             assert not world.background_processes[0].is_alive()
