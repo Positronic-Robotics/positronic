@@ -14,10 +14,12 @@ from platform_client.eval_plan import (
     _ENDPOINT_OVERRIDES,
     _PER_TASK_ONLY,
     ADDRESS_OF_WIRE,
-    REVEAL_REGISTRY_PASSWORD,
+    MAX_TOKEN_LENGTH,
+    REVEAL_SECRETS,
     SESSION_ROUTE,
     Cascade,
     Endpoint,
+    EndpointFile,
     EvalPlan,
     Host,
     HostPortAddress,
@@ -25,7 +27,6 @@ from platform_client.eval_plan import (
     Port,
     PrivateEval,
     RegistryCredential,
-    RegistryCredentialFile,
     RoboarenaAddress,
     Sample,
     SessionPath,
@@ -36,7 +37,8 @@ from platform_client.eval_plan import (
     credential_from_file,
     password_from_file,
     plan_of_image,
-    plan_with_passwords_read,
+    plan_with_secrets_read,
+    token_from_file,
 )
 from platform_client.ids import OrgSlug
 from platform_client.policy_images import PolicyImage
@@ -240,7 +242,7 @@ def test_a_level_without_a_scene_seed_omits_it_from_its_dump(mode: str):
     assert stated['tasks'][0]['scene_seed'] == 'scene-a' and 'scene_seed' not in stated
 
 
-@pytest.mark.parametrize('model', [Cascade, TaskNode, Endpoint, EvalPlan])
+@pytest.mark.parametrize('model', [Cascade, TaskNode, Endpoint, EndpointFile, EvalPlan])
 def test_every_field_a_dump_omits_while_none_is_a_field_of_the_model(model: type[Cascade]):
     """The serializer reads these names off the dump, so a renamed field would be sent as null."""
     assert set(model._OMITTED_WHEN_NONE) <= set(model.model_fields)
@@ -860,11 +862,11 @@ def test_a_request_refuses_a_credential_that_names_a_file(password_file: Path):
         a_plan_with({'username': 'a-reader', 'password_file': str(password_file)})
 
 
-def a_plan_file_with(credential: dict, *, on_task: dict | None = None) -> EvalPlan[RegistryCredentialFile]:
+def a_plan_file_with(credential: dict, *, on_task: dict | None = None) -> EvalPlan[EndpointFile]:
     task = (
         SPOONS if on_task is None else {'task_id': SPOONS, 'endpoints': [an_image_endpoint(image_credential=on_task)]}
     )
-    return EvalPlan[RegistryCredentialFile].model_validate({
+    return EvalPlan[EndpointFile].model_validate({
         'request_type': PRIVATE,
         'tasks': [task],
         'endpoints': [an_image_endpoint(image_credential=credential)],
@@ -891,7 +893,7 @@ def test_each_password_file_of_a_plan_is_read_into_its_credential(tmp_path: Path
         on_task={'username': 'a-reader', 'password_file': str(on_task)},
     )
 
-    plan = plan_with_passwords_read(stated)
+    plan = plan_with_secrets_read(stated)
 
     task_endpoints = plan.tasks[0].endpoints
     assert task_endpoints is not None
@@ -910,7 +912,7 @@ def test_a_password_file_that_is_not_there_is_refused_at_its_credential(tmp_path
         on_task={'username': 'a-reader', 'password_file': str(tmp_path / 'never-written')},
     )
     with pytest.raises(ValidationError, match=r'tasks\.0\.endpoints\.0\.image_credential\.password') as caught:
-        plan_with_passwords_read(stated)
+        plan_with_secrets_read(stated)
     assert A_PASSWORD not in str(caught.value)
 
 
@@ -956,7 +958,7 @@ def test_the_wire_shape_reads_back_as_the_same_credential(credential: dict):
     """The platform validates a request as an `EvalPlan`, so what the send path dumps must be a plan
     this model accepts."""
     plan = a_plan_with(credential)
-    sent = plan.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
+    sent = plan.model_dump(mode='json', context={REVEAL_SECRETS: True})
 
     received = EvalPlan.model_validate(sent)
 
@@ -966,13 +968,166 @@ def test_the_wire_shape_reads_back_as_the_same_credential(credential: dict):
 
 
 def test_only_the_send_path_serialises_the_password_as_itself(credential: dict):
-    """The `REVEAL_REGISTRY_PASSWORD` context dumps the password as plaintext; every other dump
+    """The `REVEAL_SECRETS` context dumps the password as plaintext; every other dump
     masks it."""
     plan = a_plan_with(credential)
-    sent = plan.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
+    sent = plan.model_dump(mode='json', context={REVEAL_SECRETS: True})
     assert sent['endpoints'][0]['image_credential'] == {'username': 'a-reader', 'password': A_PASSWORD}
     assert A_PASSWORD not in json.dumps(plan.model_dump(mode='json'))
     assert A_PASSWORD not in plan.model_dump_json()
+
+
+# No assertion below may find this value, or the path of the file that holds it, in a rendering or a refusal.
+A_TOKEN = 'the-endpoint-token'
+
+
+@pytest.fixture
+def token_file(tmp_path: Path) -> Path:
+    """The file a plan names. It ends in a newline, as one written with `echo` does."""
+    path = tmp_path / 'endpoint-token'
+    path.write_text(f'{A_TOKEN}\n')
+    return path
+
+
+def a_plan_file_of(endpoints: list[dict]) -> EvalPlan[EndpointFile]:
+    return EvalPlan[EndpointFile].model_validate({
+        'request_type': PRIVATE,
+        'tasks': [SPOONS],
+        'endpoints': endpoints,
+        'episodes_per_endpoint': 2,
+    })
+
+
+def a_plan_carrying(token: str) -> EvalPlan:
+    return a_plan(endpoints=[remote('baseline', auth_token=token), CANDIDATE])
+
+
+def test_a_plan_file_s_token_file_is_read_into_the_request(token_file: Path):
+    plan = plan_with_secrets_read(a_plan_file_of([remote('baseline', auth_token_file=str(token_file))]))
+
+    token = plan.endpoints[0].auth_token
+    assert token is not None and token.get_secret_value() == A_TOKEN
+
+
+def test_only_the_endpoint_that_states_a_token_carries_one(token_file: Path):
+    stated = a_plan_file_of([remote('baseline', auth_token_file=str(token_file)), CANDIDATE])
+
+    plan = plan_with_secrets_read(stated)
+
+    first, second = plan.endpoints
+    assert first.auth_token is not None and first.auth_token.get_secret_value() == A_TOKEN
+    assert second.auth_token is None
+
+
+def test_a_token_dumps_as_itself_only_on_the_send_path():
+    plan = a_plan_carrying(A_TOKEN)
+
+    sent = plan.model_dump(mode='json', context={REVEAL_SECRETS: True})
+
+    assert sent['endpoints'][0]['auth_token'] == A_TOKEN
+    assert A_TOKEN not in json.dumps(plan.model_dump(mode='json'))
+    assert A_TOKEN not in plan.model_dump_json()
+    assert A_TOKEN not in str(plan.model_dump())
+    assert A_TOKEN not in repr(plan)
+    assert A_TOKEN not in str(plan)
+    received = EvalPlan.model_validate(sent).endpoints[0].auth_token
+    assert received is not None and received.get_secret_value() == A_TOKEN
+
+
+@pytest.mark.parametrize('context', [None, {REVEAL_SECRETS: True}])
+def test_a_plan_with_no_token_dumps_no_token_field(context: dict | None):
+    sent = a_plan().model_dump(mode='json', context=context)
+    assert not any('auth_token' in entry for entry in sent['endpoints'])
+    stated = a_plan_file_of([BASELINE]).model_dump(mode='json', context=context)
+    assert not any('auth_token_file' in entry for entry in stated['endpoints'])
+
+
+@pytest.mark.parametrize(
+    'entry',
+    [
+        {'name': 'pi05', 'kind': 'served', 'spec': 'pi05-droid', 'wire': 'grpc'},
+        an_image_endpoint(),
+        {'name': 'baseline'},
+        {'name': 'local', 'wire': 'websocket_unix', 'address': {'uds': '/run/policy.sock', 'path': SESSION}},
+    ],
+    ids=['served', 'image', 'bare label', 'websocket_unix'],
+)
+def test_a_token_is_refused_where_the_platform_cannot_present_it(token_file: Path, entry: dict):
+    with pytest.raises(ValidationError, match='bearer token') as caught:
+        EndpointFile.model_validate({**entry, 'auth_token_file': str(token_file)})
+    assert str(token_file) not in str(caught.value)
+    with pytest.raises(ValidationError, match='bearer token') as caught:
+        Endpoint.model_validate({**entry, 'auth_token': A_TOKEN})
+    assert A_TOKEN not in str(caught.value)
+
+
+def test_a_plan_file_refuses_a_token_it_states():
+    with pytest.raises(ValidationError, match=r'endpoints\.0\.auth_token\n') as caught:
+        a_plan_file_of([remote('baseline', auth_token=A_TOKEN)])
+    assert A_TOKEN not in str(caught.value)
+
+
+def test_a_request_refuses_a_token_that_names_a_file(token_file: Path):
+    # The gateway validates the request model, so it never opens a path a caller sends.
+    with pytest.raises(ValidationError, match='auth_token_file'):
+        a_plan(endpoints=[remote('baseline', auth_token_file=str(token_file))])
+
+
+def a_token_file_holding(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / 'endpoint-token'
+    path.write_text(text)
+    return path
+
+
+@pytest.mark.parametrize(
+    ('held', 'refusal'),
+    [
+        ('', 'empty'),
+        ('a token\n', 'outside visible ASCII'),
+        ('a\ttoken', 'outside visible ASCII'),
+        ('a\ntoken\n', 'outside visible ASCII'),
+        ('t' * (MAX_TOKEN_LENGTH + 1), f'longer than {MAX_TOKEN_LENGTH}'),
+    ],
+    ids=['empty', 'space', 'tab', 'line feed', 'too long'],
+)
+def test_a_token_file_that_holds_no_valid_token_is_refused(tmp_path: Path, held: str, refusal: str):
+    path = a_token_file_holding(tmp_path, held)
+    with pytest.raises(ValueError, match=refusal) as caught:
+        token_from_file(path)
+    assert str(path) not in str(caught.value)
+    if held:
+        assert held.strip() not in str(caught.value)
+
+
+@pytest.mark.parametrize('token', ['', 'a token', 'a\ttoken', 'a\ntoken', 't' * (MAX_TOKEN_LENGTH + 1)])
+def test_a_request_refuses_a_token_outside_the_valid_set(token: str):
+    with pytest.raises(ValidationError) as caught:
+        a_plan_carrying(token)
+    if token:
+        assert token not in str(caught.value)
+
+
+def test_a_token_file_that_is_not_there_is_refused(tmp_path: Path):
+    with pytest.raises(ValueError, match='names no file') as caught:
+        token_from_file(tmp_path / 'never-written')
+    assert str(tmp_path) not in str(caught.value)
+    with pytest.raises(ValueError, match='names no file'):
+        token_from_file(tmp_path)
+
+
+def test_the_longest_token_of_visible_ascii_is_read_whole(tmp_path: Path):
+    longest = ('!~' + 'a-Token.0' * MAX_TOKEN_LENGTH)[:MAX_TOKEN_LENGTH]
+    path = a_token_file_holding(tmp_path, f'{longest}\n')
+
+    assert token_from_file(path) == longest
+    assert a_plan_carrying(longest).endpoints[0].auth_token is not None
+
+
+def test_a_token_file_that_is_not_there_is_refused_at_its_endpoint(tmp_path: Path):
+    stated = a_plan_file_of([remote('baseline', auth_token_file=str(tmp_path / 'never-written'))])
+    with pytest.raises(ValidationError, match=r'endpoints\.0\.auth_token') as caught:
+        plan_with_secrets_read(stated)
+    assert str(tmp_path) not in str(caught.value)
 
 
 def test_a_plan_states_its_request_type():

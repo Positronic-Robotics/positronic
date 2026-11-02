@@ -26,7 +26,7 @@ from platform_client.billing import BillingAccount, PurchaseListResponse, Purcha
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
-from platform_client.eval_plan import REVEAL_REGISTRY_PASSWORD, EvalPlan
+from platform_client.eval_plan import REVEAL_SECRETS, EvalPlan
 from platform_client.identity_providers import longest_register_timeout
 from platform_client.ids import ApiKey, LeaderboardVersionId, OrgSlug, PurchaseId, SubmissionId
 from platform_client.leaderboards import (
@@ -359,8 +359,8 @@ class PlatformClient:
         # A write is applied before its answer names the platform's version, so the version is read first.
         if not self._platform_version_checked:
             self.auth_config()
-        # This dump reveals the registry password. Every other dump masks it.
-        body = request.model_dump(mode='json', context={REVEAL_REGISTRY_PASSWORD: True})
+        # This dump reveals the secrets a request carries. Every other dump masks them.
+        body = request.model_dump(mode='json', context={REVEAL_SECRETS: True})
         # None keeps the client's own timeout.
         sent = self._send(
             'POST', path, json=body, auth=auth, timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout

@@ -86,7 +86,7 @@ from platform_client.responses import (
 )
 from platform_client.tasks import TaskRef
 from positronic_evals.evals import EvalRef
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 BASE = 'http://gateway.test'
 KEY = ApiKey('pk_live_secret')
@@ -1191,6 +1191,25 @@ def test_create_submission_sends_the_session_limit_a_remote_endpoint_states():
     make_client(gateway).create_submission(plan)
 
     assert gateway.body()['endpoints'][0]['max_concurrent_sessions'] == 1
+
+
+def test_create_submission_sends_a_token_to_the_endpoint_that_states_it_alone():
+    """The request carries the token as plaintext: a masked token opens no endpoint."""
+    gateway = Gateway(200, {'submission_id': '2a', 'status': 'pending'})
+    candidate = PLAN.endpoints[0].model_copy()
+    candidate.name = 'candidate'
+    stated = PLAN.endpoints[0].model_copy()
+    stated.auth_token = SecretStr('the-endpoint-token')
+    plan = PLAN.model_copy()
+    plan.endpoints = [stated, candidate]
+
+    make_client(gateway).create_submission(plan)
+
+    sent = gateway.request().content.decode()
+    assert sent.count('the-endpoint-token') == 1
+    first, second = gateway.body()['endpoints']
+    assert first['auth_token'] == 'the-endpoint-token'
+    assert 'auth_token' not in second
 
 
 def test_create_submission_sends_the_scene_seed_a_plan_states():

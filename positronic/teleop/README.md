@@ -210,6 +210,8 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 - With `AUTH_TOKEN` unset, the service serves open: each peer that reaches the port can open a session. Then dial it
   with `--policy.headers=None`.
 - The sessions have no TLS. Use a private network, such as a tailnet.
+- A plan file sends the token with `auth_token_file` on the endpoint, so a service at a public address keeps
+  auth on. See the plan-file section of [client/README.md](../../client/README.md).
 - Each frame waits for one round trip of the network.
 - `--served_address.port` changes the port. Give `--policy.address.port` the same value.
 - On the Unix socket, the service takes no token, and `AUTH_TOKEN` has no effect.
