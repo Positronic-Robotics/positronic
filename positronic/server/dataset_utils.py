@@ -297,16 +297,15 @@ class ReplayLayout:
 
 
 _POSE_VALUE_NAMES = ['tx', 'ty', 'tz', 'qw', 'qx', 'qy', 'qz']  # ``Serializers.transform_3d`` is scalar-first
+_PER_JOINT_SUFFIXES = (keys.JOINT_VEL_SUFFIX, keys.JOINT_TARGETS_SUFFIX, keys.JOINT_DELTAS_SUFFIX)
 
 
 def _value_names(key: str, signals: EpisodeSignals, ep: Episode) -> list[str] | None:
     """The names of the values of the numeric signal ``key``, where the episode gives them."""
     joint_names = ep.static.get(roboarm_keys.JOINT_NAMES)
-    is_joint_vel = (
-        key.endswith(keys.JOINT_VEL_SUFFIX)
-        and key.removesuffix(keys.JOINT_VEL_SUFFIX) + keys.JOINTS_SUFFIX in signals.joints
-    )
-    if (key in signals.joints or is_joint_vel) and joint_names:
+    if joint_names and (
+        key in signals.joints or (key.endswith(_PER_JOINT_SUFFIXES) and signals.dims[key] == len(joint_names))
+    ):
         return joint_names
     if key in signals.poses and signals.dims[key] == len(_POSE_VALUE_NAMES):
         return _POSE_VALUE_NAMES
