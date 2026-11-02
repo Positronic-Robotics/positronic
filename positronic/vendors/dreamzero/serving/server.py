@@ -15,7 +15,8 @@ from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import WebsocketWire
 
-from . import ACTION_JOINTS, AUTH_TOKEN_ENV, CAMERAS, GRIP, JOINTS, MODEL_SOURCE_ENV, OBS_TIME_NS, PROMPT, recipe
+from . import recipe
+from .keys import ACTION_JOINTS, AUTH_TOKEN_ENV, CAMERAS, GRIP, JOINTS, MODEL_SOURCE_ENV, OBS_TIME_NS, PROMPT
 from .recipe import Mode
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class DreamZeroSession(Session):
         self._policy = policy
         self._period_ns = round(prediction_period_sec * 1e9)
         self._offsets_ns = tuple(round(offset * 1e9) for offset in history_offsets_sec)
-        capacity = math.ceil(-history_offsets_sec[0] / sampling_period_sec) + 2
+        capacity = math.ceil(-self._offsets_ns[0] / (sampling_period_sec * 1e9)) + 2
         self._history: deque[tuple[int, dict[str, np.ndarray]]] = deque(maxlen=capacity)
         self._shape = (height, width, 3)
         self._origin_ns: int | None = None

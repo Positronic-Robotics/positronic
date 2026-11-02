@@ -24,7 +24,7 @@ match between the two**.
 | **Inference** | 1× H100 (80GB) | wan2.2 (5B) ≈ half the VRAM of wan2.1 (14B, ~52GB bf16) |
 | **Training** | 1× or 8× H100 | Full fine-tune or LoRA, DeepSpeed ZeRO-2. Single-H100 full fine-tune works (see presets) |
 
-Train and serve run on an H100 box you reach through a Docker context. Examples use `<h100>` for the Docker
+The fine-tune examples use an H100 box reached through a Docker context. They use `<h100>` for the Docker
 **context** name and `<h100-host>` for the box's **hostname/IP** (what the inference client connects to on
 `:8000`) — the same machine, often the same string if your context targets the host by name. (The Nebius
 serverless alternative is in the [Appendix](#appendix-nebius-serverless).)
@@ -227,19 +227,19 @@ protocol details in the [Inference Guide](../../../docs/inference.md).
   absolute joint target is reconstructed from the current state at serve time and decoded to a `JointPosition`.
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt. The wan2.2 fine-tunes
   use the `(320, 176)` codec and the trainer resizes to 160 at load; the pretrained DROID model (wan2.1)
-  asserts exactly `(320, 180)`, so the `droid` codec (`codecs.droid`) feeds that resolution.
+  asserts exactly `(320, 180)`, which the standalone serving recipe supplies.
 - **Action horizon**: 24 timesteps per inference. The standalone DROID server samples history and requests
   predictions at its configured periods; the legacy fine-tune server declares `dreamzero_layers`.
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
 - **A roboarena server with no Positronic server in front**: `roboarena_policy.RoboarenaPolicy(address, headers)` dials
   the server on the `roboarena` wire and runs the `droid_3cam` codec on the robot side.
-- **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
-  configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.
+- **Native source**: [`Dockerfile`](./Dockerfile) pins upstream DreamZero and applies a Transformer Engine
+  compatibility patch. Configs are injected via Hydra YAML; the image includes the native checkout.
 
 ## Appendix: Nebius serverless
 
-If you run on Nebius serverless instead of your own H100 box, the **same recipe** (same presets, codec, and
-args) goes through the `workflows/nebius/*.sh` wrappers — Jobs for convert/train, an Endpoint for serving.
+The fine-tune workflow above runs on Nebius serverless through the `workflows/nebius/*.sh` wrappers —
+Jobs for convert/train, an Endpoint for serving.
 See [`workflows/nebius/README.md`](../../../workflows/nebius/README.md) for the one-time setup (Nebius CLI
 auth, S3 / MysteryBox credentials, the shared cache filesystem) and `NEBIUS_*` overrides. It uses the
 production image by default; set `NEBIUS_IMAGE_TAG=<tag>` only to test a specific build.

@@ -42,9 +42,7 @@ def _warm_observation(server_config: dict, session_id: str) -> dict[str, Any]:
         raise ValueError('roboarena server asks for stereo cameras, which this source does not send')
     resolution = server_config[roboarena.RESOLUTION]
     if resolution is None:
-        # Both backbone scripts announce one — wan2.1 pins 320x180, wan2.2 reports whatever it was configured
-        # with — so an absent resolution is the protocol's optional field going unset, not a size to infer.
-        # The codec's geometry is a rig-side setting this source cannot see, and the backbones disagree on it.
+        # Warmup requires the backbone's announced geometry.
         raise ValueError('roboarena server announced no image resolution, so there is no geometry to warm it at')
     height, width = resolution
     frame = np.zeros((height, width, 3), dtype=np.uint8)
@@ -75,6 +73,8 @@ class DreamZeroSubprocess:
         roboarena_port: int = 9000,
         enable_dit_cache: bool = True,
     ):
+        if backbone not in self._BACKBONE_SCRIPTS:
+            raise ValueError(f'Unknown DreamZero backbone: {backbone}')
         self.model_path = model_path
         self.dreamzero_venv = dreamzero_venv
         self.backbone = backbone
@@ -86,7 +86,7 @@ class DreamZeroSubprocess:
     def _build_command(self) -> list[str]:
         root = _dreamzero_root()
         torchrun = str(self.dreamzero_venv / 'bin' / 'torchrun')
-        script = self._BACKBONE_SCRIPTS.get(self.backbone, self._BACKBONE_SCRIPTS['wan2.1'])
+        script = self._BACKBONE_SCRIPTS[self.backbone]
         command = [
             torchrun,
             f'--nproc_per_node={self.num_gpus}',

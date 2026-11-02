@@ -3,7 +3,8 @@
 #
 # Usage
 #   bash workflows/nebius/serve.sh <vendor> <endpoint-name> [server args...]
-#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server droid --model.num_gpus=8
+#   NEBIUS_PRESET=8gpu-128vcpu-1600gb bash workflows/nebius/serve.sh dreamzero dz-server joints \
+#     --model.model_path=s3://<your-bucket>/checkpoints/dreamzero/ --model.backbone=wan2.2 --model.num_gpus=8
 #   NEBIUS_GRPC_PORT= bash workflows/nebius/serve.sh lerobot ws-only ee \
 #     --model.checkpoints_dir=s3://<your-bucket>/checkpoints/smolvla/<exp_name>/   # the websocket wire alone
 #

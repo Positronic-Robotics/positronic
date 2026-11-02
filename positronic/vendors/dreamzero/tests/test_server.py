@@ -20,6 +20,11 @@ from positronic.vendors.dreamzero.server import (  # noqa: E402
 RUN_DIR = 's3://checkpoints/phail/dreamzero/w22f1_100k_200626/'
 
 
+def test_unknown_backbone_is_rejected_before_starting_a_process():
+    with pytest.raises(ValueError, match='Unknown DreamZero backbone'):
+        server.DreamZeroSubprocess('checkpoint', Path('/unused'), backbone='unknown')
+
+
 class _FakeSubprocess:
     def __init__(self, model_path, roboarena_port, **kwargs):
         self.model_path = model_path

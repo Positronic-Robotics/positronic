@@ -13,7 +13,7 @@ from huggingface_hub import snapshot_download
 from tianshou.data import Batch
 from torch.distributed.device_mesh import init_device_mesh
 
-from . import ACTION_GRIP, ACTION_JOINTS
+from .keys import ACTION_GRIP, ACTION_JOINTS
 
 
 class Policy:

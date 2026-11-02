@@ -4,7 +4,24 @@ from enum import Enum
 
 from positronic_model_server.spec import component, parallel, sequence
 
-from . import ACTION_GRIP, ACTION_JOINTS, CAMERAS, EXTERIOR, EXTERIOR_2, GRIP, JOINTS, OBS_TIME_NS, PROMPT, WRIST
+from .keys import (
+    ACTION_GRIP,
+    ACTION_JOINTS,
+    CAMERAS,
+    EXTERIOR,
+    EXTERIOR_2,
+    EXTERIOR_IMAGE,
+    EXTERIOR_IMAGE_2,
+    GRIP,
+    JOINTS,
+    OBS_GRIP,
+    OBS_JOINTS,
+    OBS_TIME_NS,
+    PROMPT,
+    TASK,
+    WRIST,
+    WRIST_IMAGE,
+)
 
 
 class Mode(Enum):
@@ -28,12 +45,10 @@ def inference(image_mappings: dict[str, str], width: int, height: int, jpeg_qual
     return sequence(
         parallel(
             sequence(
-                component('state_observation', state={JOINTS: {'robot_state.q': 7}, GRIP: {'grip': 1}}),
+                component('state_observation', state={JOINTS: {OBS_JOINTS: 7}, GRIP: {OBS_GRIP: 1}}),
                 component('pack_fields', encode_layout={JOINTS: [JOINTS], GRIP: [GRIP]}, unsqueeze_dims=1),
             ),
-            component(
-                'select_observation_fields', mapping={**image_mappings, PROMPT: 'task', OBS_TIME_NS: OBS_TIME_NS}
-            ),
+            component('select_observation_fields', mapping={**image_mappings, PROMPT: TASK, OBS_TIME_NS: OBS_TIME_NS}),
             sequence(
                 component('set_control_mode', mode=DROID_CONTROL_MODE),
                 component('joint_position_action', joints_key=ACTION_JOINTS, grip_key=ACTION_GRIP),
@@ -75,4 +90,4 @@ def client_stack(
 
 
 def droid_cameras() -> dict[str, str]:
-    return {EXTERIOR: 'image.exterior', EXTERIOR_2: 'image.exterior_2', WRIST: 'image.wrist'}
+    return {EXTERIOR: EXTERIOR_IMAGE, EXTERIOR_2: EXTERIOR_IMAGE_2, WRIST: WRIST_IMAGE}

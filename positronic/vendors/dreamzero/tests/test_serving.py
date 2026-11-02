@@ -14,7 +14,8 @@ from positronic.drivers.roboarm import command
 from positronic.policy import spec
 from positronic.policy.codecs import Codec
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.vendors.dreamzero.serving import (
+from positronic.vendors.dreamzero.serving import recipe, server
+from positronic.vendors.dreamzero.serving.keys import (
     ACTION_GRIP,
     ACTION_JOINTS,
     CAMERAS,
@@ -22,8 +23,6 @@ from positronic.vendors.dreamzero.serving import (
     JOINTS,
     OBS_TIME_NS,
     PROMPT,
-    recipe,
-    server,
 )
 from positronic.vendors.dreamzero.serving.server import DreamZeroModel
 
@@ -78,18 +77,22 @@ def test_late_samples_use_latest_observation_without_catching_up_predictions():
     np.testing.assert_array_equal(native.observations[-1][CAMERAS[0]][:, 0, 0, 0], [0, 0, 0, 100])
 
 
-def test_history_releases_old_images_and_close_releases_all_images():
+@pytest.mark.parametrize('sample_fps', [15, 150])
+def test_history_releases_old_images_and_close_releases_all_images(sample_fps):
     native = NativePolicy()
     model = DreamZeroModel(native, width=3, height=2)
     session = model.prepare_session({**model.parameters, 'prediction_period_sec': 10000})
     references = []
     for index in range(2000):
         frame = observation(index)
+        frame[OBS_TIME_NS] = round(index * 1e9 / sample_fps)
         references.append(weakref.ref(frame[CAMERAS[0]]))
         session.infer(frame)
     del frame
     gc.collect()
     assert sum(reference() is not None for reference in references) <= 25
+    assert not any(reference() is not None for reference in references[:-25])
+    assert references[-1]() is not None
     session.close()
     gc.collect()
     assert not any(reference() is not None for reference in references)
