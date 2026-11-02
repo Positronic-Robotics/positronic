@@ -214,6 +214,19 @@ def test_a_start_the_edge_answers_with_a_5xx_or_a_429_continues_under_the_same_k
     assert len(keys) == 2 and keys[0] == keys[1] and stamps[0] == stamps[1]
 
 
+@pytest.mark.parametrize('status', [HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.TOO_MANY_REQUESTS])
+def test_a_start_the_edge_refuses_at_once_pauses_twice_as_long_after_each_refusal_up_to_30_seconds(
+    modal_wire, edge, monkeypatch, status
+):
+    slept: list[float] = []
+    monkeypatch.setattr('positronic_wire.modal.time.sleep', slept.append)
+    edge.refuse = [status] * 7
+
+    modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+
+    assert slept == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+
+
 @pytest.mark.parametrize(
     ('status', 'refusal'),
     [
