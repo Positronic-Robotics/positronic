@@ -741,7 +741,7 @@ def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, vie
         command._Headset(TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC), view_fps)
 
 
-@pytest.mark.parametrize('name', ['rate_hz', 'trial_sec', 'circle_sec'])
+@pytest.mark.parametrize('name', ['rate_hz', 'view_fps', 'trial_sec', 'circle_sec'])
 @pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf')])
 def test_a_scripted_headset_rate_or_time_that_is_not_finite_and_positive_is_refused(name, value):
     with pytest.raises(ValueError, match=f'{name} must be finite and positive'):

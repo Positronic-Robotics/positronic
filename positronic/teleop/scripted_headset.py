@@ -43,17 +43,22 @@ class _Hand:
 
     # The pose before control comes on, in the reference space of the page.
     _REST = geom.Transform3D(np.array([0.0, 1.0, -0.3]), geom.Rotation.identity)
-    # A press holds its button down for longer than one period of the view rate of the service, which reads the samples.
-    _PRESS_SEC = 0.2
+    # The shortest hold of a button, so that a loaded machine does not miss it.
+    _MIN_HOLD_SEC = 0.2
 
-    def __init__(self, websocket: Connection, rate_hz: float, radius: float, circle_sec: float):
+    def __init__(self, websocket: Connection, rate_hz: float, view_fps: float, radius: float, circle_sec: float):
         self._websocket = websocket
         self._period_sec = 1 / rate_hz
+        # The service reads the latest sample once in each period of its view rate. A hold of two periods of the slower
+        # rate puts at least one sample of each state of the buttons in a read of the service.
+        self._hold_sec = max(self._MIN_HOLD_SEC, 2 * self._period_sec, 2 / view_fps)
         self._radius = radius
         self._circle_sec = circle_sec
         self.buttons = _buttons()
         # The `time.monotonic()` instant at which the hand started its circle, or `None` while it rests.
         self.moving_since: float | None = None
+        # The instant at which the hand stopped on its circle, or `None` while it moves or rests.
+        self.stopped_at: float | None = None
         self._stop = threading.Event()
         self._error: Exception | None = None
         self._thread = threading.Thread(target=self._send, name='scripted-headset', daemon=True)
@@ -69,7 +74,7 @@ class _Hand:
     def _pose(self, now: float) -> geom.Transform3D:
         if self.moving_since is None:
             return self._REST
-        angle = 2 * math.pi * (now - self.moving_since) / self._circle_sec
+        angle = 2 * math.pi * ((self.stopped_at or now) - self.moving_since) / self._circle_sec
         offset = self._radius * np.array([math.cos(angle) - 1, 0.0, math.sin(angle)])
         return geom.Transform3D(self._REST.translation + offset, self._REST.rotation)
 
@@ -94,9 +99,9 @@ class _Hand:
             raise RuntimeError('The scripted headset stopped sending samples') from self._error
 
     def hold(self, *down: Button) -> None:
-        """Hold the buttons ``down`` and release the others, until the thread sent at least one sample of them."""
+        """Hold the buttons ``down`` and release the others, until the service read at least one sample of them."""
         self.buttons = _buttons(*down)
-        time.sleep(max(self._PRESS_SEC, 2 * self._period_sec))
+        time.sleep(self._hold_sec)
 
     def press(self, button: Button) -> None:
         logger.info('The scripted headset presses %s', button.name)
@@ -133,26 +138,35 @@ def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
         time.sleep(_STATE_POLL_SEC)
     # A trial that ended already, for example at its timeout, must not take this hold as the Ready of the next trial.
     if page.phase() is Phase.RUNNING:
+        hand.stopped_at = time.monotonic()
         hand.buttons = _buttons(Button.B)
         page.until([phase for phase in Phase if phase is not Phase.RUNNING])
     # The service sees the release of B before the next trial, so the next press of B is a new press.
     hand.hold()
-    hand.moving_since = None
+    hand.moving_since = hand.stopped_at = None
 
 
 _WEBSOCKET_SCHEMES = {'http': 'ws', 'https': 'wss'}
 
 
-@cfn.config(rate_hz=72.0, trial_sec=20.0, radius=0.05, circle_sec=4.0)
-def drive(page: str, trials: int, rate_hz: float, trial_sec: float, radius: float, circle_sec: float) -> None:
+@cfn.config(rate_hz=72.0, view_fps=30.0, trial_sec=20.0, radius=0.05, circle_sec=4.0)
+def drive(
+    page: str, trials: int, rate_hz: float, view_fps: float, trial_sec: float, radius: float, circle_sec: float
+) -> None:
     """Do ``trials`` trials on the page of ``positronic teleop`` at the URL ``page``. Each trial moves the hand for
-    ``trial_sec`` on a circle of ``radius``, once each ``circle_sec``.
+    ``trial_sec`` on a circle of ``radius``, once each ``circle_sec``. ``view_fps`` is the ``--view_fps`` of the
+    service.
 
     The page of the service has a self-signed certificate, so the scripted headset does not check it.
     """
     if type(trials) is not int or trials < 1:
         raise ValueError(f'trials must be a positive integer, got {trials!r}')
-    for name, value in (('rate_hz', rate_hz), ('trial_sec', trial_sec), ('circle_sec', circle_sec)):
+    for name, value in (
+        ('rate_hz', rate_hz),
+        ('view_fps', view_fps),
+        ('trial_sec', trial_sec),
+        ('circle_sec', circle_sec),
+    ):
         if not 0 < value < math.inf:
             raise ValueError(f'{name} must be finite and positive, got {value}')
     if not 0 <= radius < math.inf:
@@ -166,7 +180,7 @@ def drive(page: str, trials: int, rate_hz: float, trial_sec: float, radius: floa
         # `connect` refuses a TLS context for a ws URL.
         connect(controller_url, ssl=tls if url.scheme == 'https' else None) as websocket,
         httpx.Client(base_url=page, verify=tls) as client,
-        _Hand(websocket, rate_hz, radius, circle_sec) as hand,
+        _Hand(websocket, rate_hz, view_fps, radius, circle_sec) as hand,
     ):
         for trial in range(trials):
             _trial(_Page(client, hand), hand, trial_sec)
