@@ -256,8 +256,11 @@ The builder must warm the model before it returns: `warmup` runs one inference, 
 the first-call cost of a backend is paid before the server serves. A client reads
 any keepalive answer as ready, and a cold model makes its first inference slow.
 
-The server supplies `session_id` on every call. A stateless model may ignore it;
-a stateful model must keep episodes separate or reject another active owner.
+The server supplies `session_id` on every call. Several sessions can be open at the
+same time: a competition run opens up to 12. The server calls the model for one
+inference at a time. A stateless model may ignore `session_id`. A stateful model
+keeps one state for each session over one copy of the weights, as the LeRobot model
+in [`positronic/vendors/lerobot/policy.py`](../positronic/vendors/lerobot/policy.py) does.
 Implement `end_session(session_id)` to release that episode's state. It runs after
 outstanding inference finishes, both on explicit session end and on disconnect.
 The model remains loaded for subsequent episodes.
