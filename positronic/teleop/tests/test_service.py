@@ -808,7 +808,8 @@ def test_the_scripted_headset_readies_moves_and_completes_each_trial_through_the
         loops = pool.submit(world.run, [headset], [webxr])
         try:
             _until_served(page + STATE_PATH)
-            trials = pool.submit(scripted_headset.drive, page=page, trials=2, trial_sec=0.5, circle_sec=1.0)
+            # The hand moves for 2 s, so a loaded machine still turns control on and plays a move in each trial.
+            trials = pool.submit(scripted_headset.drive, page=page, trials=2, trial_sec=2.0, circle_sec=2.0)
             ends, moves = [], []
             for _ in range(2):
                 started = pool.submit(runtime.start, _policy(socket_path, operator_position='BACK'))
