@@ -108,7 +108,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
     ``COLD`` while it still waits. The next dial waits for the same start. The edge answers a start that waits past
     its own limit with a 5xx, and the start continues under the same idempotency key, so it places one session.
 
-    A normal close ends the connection's session, so its container takes the next one. A dropped connection keeps
+    A normal close ends the connection's session on a thread of its own, so its container takes the next one and the
+    close does not wait for the edge's answer. A dropped connection keeps
     its session for ``idle_timeout``, so a reconnect reaches the same container. ``keepalive`` carries the token
     of a held session or of the spare, and starts the spare when there is none: on a cold app that wakes the
     container the next dial takes. ``probe`` raises ``wire.ProbeUnsupported``. The wire ends every session it holds
@@ -133,6 +134,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         # Keyed by the server and the credentials, so a session never serves another caller's credentials.
         self._endpoints: dict[tuple[wire.HostPortAddress, frozenset[tuple[str, str]]], _Endpoint] = {}
         self._changed = threading.Condition()
+        # The threads that end a session after a close or a failed dial; ``end_all`` waits for them.
+        self._ending: list[threading.Thread] = []
         atexit.register(self.end_all)
 
     def __reduce__(self) -> tuple[type['ModalClientWire'], tuple[wire.ClientWire[wire.HostPortAddress], int, float]]:
@@ -202,7 +205,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         raise wire.ProbeUnsupported(f'{self.NAME} carries no probe; ask keepalive whether the server is up')
 
     def end_all(self) -> None:
-        """End every Modal session this wire holds."""
+        """End every Modal session this wire holds, and wait for the ends that already run."""
         with self._changed:
             ending = []
             for endpoint in self._endpoints.values():
@@ -213,6 +216,21 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 endpoint.held, endpoint.parked, endpoint.spare = {}, {}, None
         for endpoint, token in ending:
             self._terminate(endpoint, token)
+        self._wait_for_ends()
+
+    def _end_later(self, endpoint: _Endpoint, token: str) -> None:
+        """End the session on a thread of its own, so the caller does not wait up to ``TERMINATE_TIMEOUT``."""
+        thread = threading.Thread(target=self._terminate, args=(endpoint, token), name='modal-session-end', daemon=True)
+        with self._changed:
+            self._ending = [ending for ending in self._ending if ending.is_alive()] + [thread]
+            thread.start()
+
+    def _wait_for_ends(self) -> None:
+        """Wait for every session end that ``_end_later`` started."""
+        with self._changed:
+            ending, self._ending = self._ending, []
+        for thread in ending:
+            thread.join()
 
     def _endpoint(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None) -> _Endpoint:
         """The sessions on ``address``'s server under the credentials ``headers``."""
@@ -239,7 +257,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             conn = self._inner.dial(address, {SESSION_HEADER: f'Bearer {token}'}, max(0.0, deadline - time.monotonic()))
         except BaseException as failed:
             if isinstance(failed, wire.ConnectRefused) and failed.refusal is wire.Refusal.FINAL:
-                self._terminate(endpoint, token)
+                self._end_later(endpoint, token)
             else:
                 keep(token)
             raise
@@ -254,7 +272,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         if dropped:
             self._park(endpoint, address, token)
         else:
-            self._terminate(endpoint, token)
+            self._end_later(endpoint, token)
 
     def _park(self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str) -> None:
         """Keep ``token`` for the next dial on ``address``, until ``idle_timeout`` passes."""
@@ -277,7 +295,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 endpoint.spare = token
                 self._changed.notify_all()
                 return
-        self._terminate(endpoint, token)
+        self._end_later(endpoint, token)
 
     def _call_headers(self, token: str) -> dict[str, str]:
         return {SESSION_HEADER: f'Bearer {token}', IDLE_TIMEOUT_HEADER: str(self._idle_timeout)}

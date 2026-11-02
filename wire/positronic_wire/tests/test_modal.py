@@ -31,12 +31,16 @@ class FakeEdge:
         # A start blocks until this is set, as a start on a cold app waits for a container.
         self.container_free = threading.Event()
         self.container_free.set()
+        # A terminate blocks until this is set, as an edge that is slow to answer holds it.
+        self.terminate_free = threading.Event()
+        self.terminate_free.set()
         self._issued = 0
 
     def post(
         self, root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float
     ) -> tuple[int, bytes]:
         if path == modal.TERMINATE_PATH:
+            self.terminate_free.wait()
             self.ended.append(headers[modal.SESSION_TOKEN_HEADER])
             return HTTPStatus.OK, b''
         assert path == modal.START_PATH
@@ -116,6 +120,7 @@ def edge() -> Iterator[FakeEdge]:
     with patch.object(modal.ModalClientWire, '_post', staticmethod(fake.post)):
         yield fake
         fake.container_free.set()
+        fake.terminate_free.set()
 
 
 @pytest.fixture
@@ -163,6 +168,20 @@ def test_a_closed_connection_ends_its_session(modal_wire, edge):
     conn.close()
     conn.close()
 
+    modal_wire._wait_for_ends()
+    assert edge.ended == ['token-1']
+
+
+def test_a_close_does_not_wait_for_the_edge_to_end_its_session(modal_wire, edge):
+    conn = modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
+    edge.terminate_free.clear()
+    started = time.monotonic()
+
+    conn.close()
+
+    assert time.monotonic() - started < 1.0, 'the close waited for the terminate'
+    edge.terminate_free.set()
+    modal_wire._wait_for_ends()
     assert edge.ended == ['token-1']
 
 
@@ -230,6 +249,7 @@ def test_a_reconnect_after_a_drop_dials_the_same_session(modal_wire, edge, inner
 
     assert inner.dialled == ['token-1', 'token-1']
     assert len(edge.starts) == 1
+    modal_wire._wait_for_ends()
     assert edge.ended == []
 
 
@@ -265,6 +285,7 @@ def test_sessions_under_other_credentials_are_kept_apart(modal_wire, edge, inner
 
     assert inner.dialled == ['token-2']
     assert [start['Modal-Key'] for start in edge.starts] == ['KEY', 'OTHER']
+    modal_wire._wait_for_ends()
     assert edge.ended == ['token-2']
 
 
@@ -274,6 +295,7 @@ def test_a_timed_out_connection_is_not_a_drop_and_ends_its_session(modal_wire, e
 
     modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
+    modal_wire._wait_for_ends()
     assert edge.ended == ['token-1']
     assert len(edge.starts) == 2
 
@@ -333,6 +355,7 @@ def test_a_dropped_session_a_dial_took_is_not_ended_by_its_timer(modal_wire, edg
 
     FakeTimer.made[0].fire()
 
+    modal_wire._wait_for_ends()
     assert edge.ended == []
 
 
@@ -343,6 +366,7 @@ def test_a_dial_on_a_session_that_has_ended_waits_for_a_new_one(modal_wire, edge
     modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
     assert inner.dialled == ['token-1', 'token-1', 'token-2']
+    modal_wire._wait_for_ends()
     assert edge.ended == ['token-1']
 
 
@@ -354,6 +378,7 @@ def test_a_dial_refused_for_a_while_keeps_its_session_for_the_next_dial(modal_wi
     modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
     assert inner.dialled == ['token-1', 'token-1']
+    modal_wire._wait_for_ends()
     assert edge.ended == []
 
 
@@ -364,6 +389,7 @@ def test_a_dial_refused_for_good_on_a_new_session_ends_it_and_surfaces(modal_wir
         modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0)
 
     assert refused.value.refusal is wire.Refusal.FINAL
+    modal_wire._wait_for_ends()
     assert edge.ended == ['token-1']
 
 
