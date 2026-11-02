@@ -36,7 +36,7 @@ from .codecs.action import JointPositionAction
 from .codecs.image import ResizeCache
 from .compatibility import from_v1_spec, unnest_seq
 from .executor import ExecutionRuntime
-from .processors import InferenceSchedule, TemporalStack
+from .processors import InferenceSchedule, RequestTiming, TemporalStack
 from .spec import ComponentFactory, from_spec
 
 P = ParamSpec('P')
@@ -138,6 +138,14 @@ def _close_within_bound(session: Any) -> None:
 def _log_late_close_failure(closed: Future[None]) -> None:
     if (failure := closed.exception()) is not None:
         logger.error('The session close failed after the run continued: %r', failure)
+
+
+def _predicts(schedule: Policy) -> bool:
+    """Whether the frame streamer predicts the calls of ``schedule``: a chunked schedule's, one call at a time, each
+    after the previous chunk less its lead (``ChunkedSchedule``)."""
+    if not isinstance(schedule, InferenceSchedule):
+        return False
+    return schedule.request_timing.reference is RequestTiming.Reference.BEFORE_END and schedule.merge.chained
 
 
 def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
@@ -461,14 +469,17 @@ class RemotePolicy(Policy):
     def _stream_refusal(
         parts: cabc.Sequence[cabc.Mapping[str, Any]],
         temporal: cabc.Sequence[TemporalStack],
+        schedules: cabc.Sequence[Policy],
         encodes: cabc.Sequence[_PassImages],
     ) -> str | None:
-        """Why the frame stream does not mirror the declared stack of ``parts``, built with ``temporal`` and
-        ``encodes``, or None when it does. It mirrors one temporal stack whose rows it carries, and an
-        ``encode_images`` only as the stack's last part, over every image: the rows and the requests then carry the
-        frames that the stack would send."""
+        """Why the frame stream does not mirror the declared stack of ``parts``, built with ``temporal``,
+        ``schedules`` and ``encodes``, or None when it does. It mirrors one temporal stack whose rows it carries, one
+        schedule whose calls it predicts, and an ``encode_images`` only as the stack's last part, over every image:
+        the rows and the requests then carry the frames that the stack would send."""
         if len(temporal) != 1 or not streams_stack(temporal[0].keys, temporal[0].offsets_sec):
             return 'it holds no temporal stack whose rows the stream carries'
+        if len(schedules) != 1 or not _predicts(schedules[0]):
+            return 'it holds no schedule whose calls the stream predicts'
         last = parts[-1].get(NAME) == EncodeImages.WIRE_NAME
         if encodes and not (len(encodes) == 1 and encodes[0].encodes_every_image and last):
             return 'its encode_images is not one last encoder of every image'
@@ -506,7 +517,7 @@ class RemotePolicy(Policy):
             EncodeImages.from_spec_args: self._recorded(self._PassImages.from_spec_args, encodes),
         }
         stack = declared_stack(meta, version, overrides)
-        refusal = self._stream_refusal(unnest_seq(meta[offboard_keys.LOCAL_STACK]), temporal, encodes)
+        refusal = self._stream_refusal(unnest_seq(meta[offboard_keys.LOCAL_STACK]), temporal, schedules, encodes)
         if refusal is not None:
             logger.warning('The frame stream does not mirror the declared stack: %s; requests go in full', refusal)
             return declared_stack(meta, version), None, self._jpeg_quality
@@ -528,7 +539,7 @@ class RemotePolicy(Policy):
             fps=stack_meta[policy_keys.ACTION_FPS],
             horizon_sec=stack_meta.get(policy_keys.ACTION_HORIZON_SEC),
             # The schedule's own estimate of its lead, fed the same delays: one estimate per session, as per episode.
-            lead=schedules[0].latency_estimate.run().update if len(schedules) == 1 else None,
+            lead=schedules[0].latency_estimate.run().update,
             resize=partial(self._transform_row, transforms) if transforms else None,
             jpeg_quality=quality,
         )

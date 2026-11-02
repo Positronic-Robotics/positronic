@@ -496,6 +496,10 @@ class RequestTiming:
         if reference is self.Reference.EVERY and self.duration_ns < 1:
             raise ValueError('request interval must be at least one nanosecond')
 
+    @property
+    def reference(self) -> Reference:
+        return self._reference
+
     @classmethod
     def before_end(cls) -> Self:
         """Request before the trajectory ends, using the estimated duration as the lead."""
@@ -578,6 +582,11 @@ class TrajectoryMerge:
         self._start = start
         self.horizon_sec = horizon_sec
 
+    @property
+    def chained(self) -> bool:
+        """Whether each prediction starts after the preceding one rather than at its observation."""
+        return self._start is self.Start.AFTER_PREVIOUS
+
     @classmethod
     def after_previous(cls, horizon_sec: float | None = None) -> Self:
         """Start after the preceding trajectory, or now if its end has passed."""
@@ -653,6 +662,14 @@ class InferenceSchedule(Policy):
     @property
     def latency_estimate(self) -> DurationEstimate:
         return self._latency_estimate
+
+    @property
+    def request_timing(self) -> RequestTiming:
+        return self._request_timing
+
+    @property
+    def merge(self) -> TrajectoryMerge:
+        return self._merge
 
     def _call_obs(
         self, obs: Obs, trajectory: Trajectory | None, obs_time_ns: int, *, update: Trajectory | None, replan: bool

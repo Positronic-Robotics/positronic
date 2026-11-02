@@ -70,6 +70,7 @@ from positronic.policy.processors import (
     InferenceSchedule,
     Periodic,
     RequestTiming,
+    RTCSchedule,
     TemporalStack,
     TrajectoryMerge,
     TrajectoryPlayer,
@@ -1932,6 +1933,19 @@ def test_a_replan_after_an_arm_error_streams_the_rows_of_the_call_that_the_sched
     ]
     fourth = session.infer.call_args_list[3].args[0]['image']
     assert (fourth[b'call'], fourth[b'rows']) == (3, [2, 1])
+
+
+def test_an_rtc_session_goes_in_full_because_the_stream_predicts_chunked_calls(caplog):
+    temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
+    rtc = RTCSchedule(fps=10.0, call_after_sec=0.4, latency_estimate=ConstantDuration(0.1))
+    meta = _stream_meta(rtc.to_spec())
+    meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
+        session = _run_on_mock_session(meta, 8, frame_stream='jpeg', version=protocol.ProtocolVersion.V2)
+
+    session.send_message.assert_not_called()
+    assert len(session.infer.call_args_list) >= 2
+    assert 'frame stream' in caplog.text
 
 
 def test_a_frame_miss_sends_the_request_again_in_full(caplog):
