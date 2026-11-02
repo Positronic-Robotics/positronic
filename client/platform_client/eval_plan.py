@@ -286,40 +286,6 @@ def password_from_file(password_file: Path) -> str:
     return password
 
 
-# The longest bearer token an endpoint takes.
-MAX_TOKEN_LENGTH = 4096
-
-
-def _a_valid_token(token: str) -> str:
-    # No message quotes the token: it is a secret, and a header carries it whole.
-    if not token:
-        raise ValueError('the bearer token is empty')
-    if len(token) > MAX_TOKEN_LENGTH:
-        raise ValueError(f'the bearer token is longer than {MAX_TOKEN_LENGTH} characters')
-    if not _VISIBLE_ASCII.fullmatch(token):
-        raise ValueError('the bearer token holds a space, a line ending or a character outside visible ASCII')
-    return token
-
-
-def token_from_file(token_file: Path) -> str:
-    """The bearer token a caller states as a path, read from the file it names.
-
-    The file's last line ending comes off. A path that is mistyped, names a directory, or cannot be
-    read raises `ValueError`, and so does a token that is empty, longer than `MAX_TOKEN_LENGTH`, or
-    not all visible ASCII.
-    """
-    return _a_valid_token(_secret_from_file(token_file, 'token'))
-
-
-def _a_valid_secret_token(token: SecretStr) -> SecretStr:
-    _a_valid_token(token.get_secret_value())
-    return token
-
-
-# The token a request carries for the platform to present to one endpoint as `Authorization: Bearer <token>`.
-EndpointToken = Annotated[SecretStr, AfterValidator(_a_valid_secret_token)]
-
-
 def credential_from_file(username: str, password_file: Path) -> RegistryCredential:
     """The credential a caller states as a username and the path of the file its password is in."""
     return RegistryCredential(username=username, password=SecretStr(password_from_file(password_file)))
@@ -520,6 +486,30 @@ class _EndpointBase(Cascade, Generic[Credential]):
         """Whether this entry states a bearer token for its endpoint."""
 
 
+# The longest bearer token an endpoint takes.
+MAX_TOKEN_LENGTH = 4096
+
+
+def _a_valid_token(token: str) -> str:
+    # No message quotes the token: it is a secret, and a header carries it whole.
+    if not token:
+        raise ValueError('the bearer token is empty')
+    if len(token) > MAX_TOKEN_LENGTH:
+        raise ValueError(f'the bearer token is longer than {MAX_TOKEN_LENGTH} characters')
+    if not _VISIBLE_ASCII.fullmatch(token):
+        raise ValueError('the bearer token holds a space, a line ending or a character outside visible ASCII')
+    return token
+
+
+def _a_valid_secret_token(token: SecretStr) -> SecretStr:
+    _a_valid_token(token.get_secret_value())
+    return token
+
+
+# The token a request carries for the platform to present to one endpoint as `Authorization: Bearer <token>`.
+EndpointToken = Annotated[SecretStr, AfterValidator(_a_valid_secret_token)]
+
+
 class Endpoint(_EndpointBase[RegistryCredential]):
     """An endpoint as a request carries it: a token as its value."""
 
@@ -534,6 +524,16 @@ class Endpoint(_EndpointBase[RegistryCredential]):
     @property
     def states_a_token(self) -> bool:
         return self.auth_token is not None
+
+
+def token_from_file(token_file: Path) -> str:
+    """The bearer token a caller states as a path, read from the file it names.
+
+    The file's last line ending comes off. A path that is mistyped, names a directory, or cannot be
+    read raises `ValueError`, and so does a token that is empty, longer than `MAX_TOKEN_LENGTH`, or
+    not all visible ASCII.
+    """
+    return _a_valid_token(_secret_from_file(token_file, 'token'))
 
 
 class EndpointFile(_EndpointBase[RegistryCredentialFile]):
