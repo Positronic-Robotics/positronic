@@ -1040,8 +1040,8 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
     are omitted, and the stack grows until the full window has been observed.
 
-    ``on_entry`` (a streaming session's frame streamer, not part of the spec) gets every tick and each entry the
-    buffer stores, and the keys it returns go on as ``StackRows`` in place of stacked arrays.
+    ``on_entry``, which is not part of the spec, gets every tick and each entry the buffer stores, and the keys it
+    returns go on as ``StackRows`` in place of stacked arrays.
     """
 
     WIRE_NAME = 'temporal_stack'
