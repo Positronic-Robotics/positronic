@@ -94,6 +94,10 @@ time. The event loop answers keepalive while the worker is busy; no waiting mess
 inference response. A failed inference reports an error and keeps the session open. A malformed
 session request ends that session.
 
+Clients may pipeline inference requests. Each request receives exactly one response, in request
+order, including `None` results and inference errors. No unsolicited application messages may
+interrupt these replies. Pipelining does not require concurrent model execution.
+
 Clients own recovery from reported inference errors. The recommended client behavior is to close
 the affected session and, if retrying, open a fresh session and wait for `ready`. Continuing in the
 same session is an explicit client choice for failures it knows are recoverable. An open session

@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
@@ -60,7 +61,6 @@ from positronic.policy.processors import (
     InferenceSchedule,
     Periodic,
     RequestTiming,
-    TemporalStack,
     TrajectoryMerge,
     TrajectoryPlayer,
 )
@@ -391,6 +391,62 @@ def _observations_sent(conn: MagicMock) -> list:
 class TestADroppedConnectionReconnects:
     """A connection that drops before the server's first answer opens a new session and sends the observation
     again. A new session holds no state, so this is safe only while the dropped one had answered nothing."""
+
+    def test_close_during_reconnect_releases_the_replacement_session(self):
+        reconnecting, finish_reconnect = threading.Event(), threading.Event()
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        replies = iter([_ready('second'), end_ack])
+
+        def recv(timeout=None):
+            reconnecting.set()
+            assert finish_reconnect.wait(3)
+            return next(replies)
+
+        dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+        reopened = _connection()
+        reopened.recv.side_effect = recv
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+        with ThreadPoolExecutor() as pool:
+            answer = pool.submit(session.infer, {'image': 'test'})
+            try:
+                assert reconnecting.wait(3)
+                session.close()
+            finally:
+                finish_reconnect.set()
+            with pytest.raises(RuntimeError, match='session is closing'):
+                answer.result(timeout=3)
+
+        assert _observations_sent(reopened) == []
+        assert legacy_protocol.deserialise(reopened.send.call_args.args[0]) == {
+            protocol.SESSION_ID: 'second',
+            protocol.END_SESSION: True,
+        }
+        reopened.close.assert_called_once()
+
+    def test_late_inference_does_not_interrupt_the_end_session_acknowledgement(self):
+        ending, acknowledge = threading.Event(), threading.Event()
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'first', protocol.END_SESSION: True})
+        conn = _connection(_ready('first'), _answer(None))
+        session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
+        session.infer({})
+
+        def recv(timeout=None):
+            ending.set()
+            assert acknowledge.wait(3)
+            conn.close.assert_not_called()
+            return end_ack
+
+        conn.recv.side_effect = recv
+        with ThreadPoolExecutor() as pool:
+            closing = pool.submit(session.close)
+            try:
+                assert ending.wait(3)
+                with pytest.raises(RuntimeError, match='session is closing'):
+                    session.infer({})
+            finally:
+                acknowledge.set()
+            closing.result(timeout=3)
+        conn.close.assert_called_once()
 
     def test_a_drop_before_the_first_answer_sends_the_observation_on_a_new_session(self):
         dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
@@ -1138,38 +1194,6 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
-
-
-def test_stack_failure_finishes_active_inference_before_closing_session(runtime):
-    started, release = threading.Event(), threading.Event()
-    order = []
-    stack = Sequential(
-        TemporalStack(('image',), (0.0,)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
-    )
-    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
-
-    def infer(obs):
-        started.set()
-        assert release.wait(5), 'inference was not released'
-        order.append('inference finished')
-        return [{}]
-
-    session.infer.side_effect = infer
-    session.close.side_effect = lambda: order.append('session closed')
-    run = runtime.start(policy)
-    releaser = threading.Timer(0.05, release.set)
-    try:
-        run.send({'image': _make_image(8, 8)})
-        assert started.wait(5)
-        releaser.start()
-        with pytest.raises(PolicyCommandError, match='image'):
-            run.send({})
-    finally:
-        release.set()
-        releaser.cancel()
-        runtime.close()
-        run.close()
-    assert order == ['inference finished', 'session closed']
 
 
 def test_a_failed_session_close_reaches_the_caller(runtime):

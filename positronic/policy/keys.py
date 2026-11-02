@@ -38,6 +38,7 @@ SERVER_META = f'{POLICY_META}.{SERVER}'
 
 OBS_TIME_NS = 'obs_time_ns'
 SAMPLE_INDEX = 'sample_index'
+SKIPPED_SAMPLES = 'skipped_samples'
 
 PLAN = 'plan'
 REPLAN_NOW = 'replan_now'

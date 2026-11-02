@@ -130,7 +130,7 @@ class Executor(Runtime):
         *,
         simulated: bool,
         charge_inference_time: bool,
-        max_workers: int = 1,
+        max_workers: int = 16,
         max_queue_size: int = 16,
     ) -> None:
         if type(max_queue_size) is not int or max_queue_size < 0:
