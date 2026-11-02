@@ -103,6 +103,7 @@ class Frontend(StrEnum):
     """The page that ``WebXR`` serves."""
 
     OCULUS = 'oculus'
+    PSVR2 = 'psvr2'
     IPHONE = 'iphone'
     # The phone page with the labels of ``positronic teleop``.
     IPHONE_TELEOP = 'iphone_teleop'
@@ -110,6 +111,7 @@ class Frontend(StrEnum):
 
 # The query that shows the phone page with the labels of ``positronic teleop``.
 PHONE_TELEOP_QUERY = 'mode=teleop'
+VR_QUERY = 'mode=vr'
 
 
 def _build_access_url(host: str, port: int, use_https: bool) -> str:
@@ -185,7 +187,9 @@ class WebXR(pimm.ControlSystem):
 
         @app.get('/')
         async def root(request: Request):
-            if self.frontend is Frontend.OCULUS:
+            if self.frontend is Frontend.PSVR2 and request.url.query != VR_QUERY:
+                return RedirectResponse(f'/?{VR_QUERY}')
+            if self.frontend in (Frontend.OCULUS, Frontend.PSVR2):
                 return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
             if self.frontend is Frontend.IPHONE_TELEOP and request.url.query != PHONE_TELEOP_QUERY:
                 return RedirectResponse(f'/?{PHONE_TELEOP_QUERY}')
@@ -208,7 +212,7 @@ class WebXR(pimm.ControlSystem):
         async def webxr_core():
             return FileResponse(utils.package_assets_path('assets/webxr/core.js'))
 
-        if self.frontend is Frontend.OCULUS:
+        if self.frontend in (Frontend.OCULUS, Frontend.PSVR2):
 
             @app.get('/video-player.js')
             async def video_player():
@@ -298,7 +302,9 @@ class WebXR(pimm.ControlSystem):
 
         primary_host = utils.resolve_host_ip()
         url = _build_access_url(primary_host, self.port, self.use_https)
-        if self.frontend is Frontend.IPHONE_TELEOP:
+        if self.frontend is Frontend.PSVR2:
+            url += f'?{VR_QUERY}'
+        elif self.frontend is Frontend.IPHONE_TELEOP:
             url += f'?{PHONE_TELEOP_QUERY}'
         banner = '=' * 80
         print(banner)

@@ -17,6 +17,7 @@ export function sendControllers(ws, controllers) {
 }
 
 export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
+  const sessionMode = new URLSearchParams(window.location.search).get('mode') === 'vr' ? 'immersive-vr' : 'immersive-ar';
   let xrButton = null;
   let xrRefSpace = null;
   let scene = null, camera = null, renderer = null, gl = null;
@@ -46,7 +47,7 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
     if (domOverlayRoot) {
       sessionInit.domOverlay = { root: domOverlayRoot };
     }
-    return navigator.xr.requestSession('immersive-ar', sessionInit).then((session) => {
+    return navigator.xr.requestSession(sessionMode, sessionInit).then((session) => {
       xrButton.setSession(session);
       onSessionStarted(session);
     });
@@ -100,7 +101,7 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
   xrButton = new WebXRButton({ onRequestSession, onEndSession: (s) => s.end() });
   document.querySelector('header')?.appendChild(xrButton.domElement);
   if (navigator.xr) {
-    navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+    navigator.xr.isSessionSupported(sessionMode).then((supported) => {
       xrButton.enabled = supported;
     });
   }
