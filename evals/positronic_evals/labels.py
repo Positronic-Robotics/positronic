@@ -8,23 +8,32 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from bisect import bisect_right
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from enum import IntEnum, unique
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, ClassVar, Literal, NamedTuple, NewType, Self
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, NewType, Self
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from eval_vocabulary.episode import (
     ABC_REWARD_SIGNAL,
     BENCHMARK_TASK,
+    EE_POSE_SUFFIX,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    GT_STATE_GRIPPER_CONTACT,
+    GT_STATE_OBJECTS,
+    GT_STATE_POSE,
+    GT_STATE_PROGRESS,
+    GT_STATE_SIGNAL,
     LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
+    ROBOT_STATE,
     SIGNAL_FILE_SUFFIX,
     STATIC_FILE,
     SUBTASK_COMPLETED_INDEX,
@@ -628,13 +637,20 @@ class _SubtaskSample(NamedTuple):
     score: float
 
 
-def _subtask_samples(episode: Path) -> list[_SubtaskSample]:
-    """Each sample of the `subtask` signal, which `recorded_span` has parsed."""
-    signal = episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}'
+def _timed_values(signal: Path) -> list[tuple[int, Any]]:
+    """Each sample of `signal`, which `recorded_span` has parsed, as its world time and its value.
+
+    Empty when the episode does not record the signal.
+    """
     column = _world_time_column(signal) if signal.is_file() else None
     if column is None:
         return []
     table = pq.read_table(signal, columns=[column, VALUE_COLUMN])
+    return list(zip(table.column(column).to_pylist(), table.column(VALUE_COLUMN).to_pylist(), strict=True))
+
+
+def _subtask_samples(episode: Path) -> list[_SubtaskSample]:
+    """Each sample of the `subtask` signal."""
     return [
         _SubtaskSample(
             time_ns,
@@ -642,30 +658,170 @@ def _subtask_samples(episode: Path) -> list[_SubtaskSample]:
             int(vector[SUBTASK_TOTAL_INDEX]),
             float(vector[SUBTASK_SCORE_INDEX]),
         )
-        for time_ns, vector in zip(
-            table.column(column).to_pylist(), table.column(VALUE_COLUMN).to_pylist(), strict=True
-        )
+        for time_ns, vector in _timed_values(episode / f'{SUBTASK_SIGNAL}{SIGNAL_FILE_SUFFIX}')
+    ]
+
+
+class _Condition(NamedTuple):
+    """One condition of a chain that RoboLab tracks, as a `gt_state` progress signal names it."""
+
+    subtask: int
+    group: str
+    position: int  # in the group's chain
+    name: str
+
+
+class _SceneState(NamedTuple):
+    """The samples of an episode's `gt_state` signals, by object and by condition."""
+
+    poses: dict[str, list[tuple[int, Any]]]
+    contacts: dict[str, list[tuple[int, Any]]]
+    progress: dict[_Condition, list[tuple[int, Any]]]
+
+
+def _scene_state(episode: Path) -> _SceneState:
+    """The `gt_state` signals that `episode` records. A field that this labeler does not read is left out."""
+    objects = f'{GT_STATE_SIGNAL}.{GT_STATE_OBJECTS}.'
+    progress = f'{GT_STATE_SIGNAL}.{GT_STATE_PROGRESS}.'
+    state = _SceneState({}, {}, {})
+    for signal in sorted(episode.glob(f'{GT_STATE_SIGNAL}.*{SIGNAL_FILE_SUFFIX}')):
+        name = signal.name.removesuffix(SIGNAL_FILE_SUFFIX)
+        if name.startswith(objects):
+            item, _, field = name.removeprefix(objects).rpartition('.')
+            fields = {GT_STATE_POSE: state.poses, GT_STATE_GRIPPER_CONTACT: state.contacts}
+            if field in fields:
+                fields[field][item] = _timed_values(signal)
+        elif name.startswith(progress):
+            subtask, group, index, condition = name.removeprefix(progress).split('.')
+            state.progress[_Condition(int(subtask), group, int(index), condition)] = _timed_values(signal)
+    return state
+
+
+# The condition that opens each pick chain of RoboLab's tasks. The arm controls the object while it holds.
+_GRABBED = 'object_grabbed'
+# The arm reaches an object when its end effector comes this near to the object's origin.
+_REACH_M = 0.10
+# The samples of one recorded frame differ by microseconds of world time, and its frames are 1/15 s apart.
+_SAME_FRAME_NS = 10_000_000
+
+
+class _Series:
+    """The samples of one signal, in time order, read by the frame they fall in."""
+
+    def __init__(self, samples: Sequence[tuple[int, Any]]):
+        self._times = [time_ns for time_ns, _ in samples]
+        self._values = [value for _, value in samples]
+
+    def at(self, time_ns: int) -> Any:
+        """The value of the last sample in the frame at `time_ns` or before it, or None."""
+        index = bisect_right(self._times, time_ns + _SAME_FRAME_NS) - 1
+        return self._values[index] if index >= 0 else None
+
+
+class _Mark(NamedTuple):
+    """A sample where the arm is at `stage` in `subtask`."""
+
+    subtask: int
+    stage: Stage
+    time_ns: int
+
+
+class _StageReader:
+    """Reads the stage marks of one RoboLab episode from its `gt_state`, `subtask` and end effector signals."""
+
+    def __init__(self, episode: Path, subtasks: list[_SubtaskSample]):
+        self._state = _scene_state(episode)
+        self._counts = _Series([(sample.time_ns, sample.completed) for sample in subtasks])
+        self._ee = _Series(_timed_values(episode / f'{ROBOT_STATE}{EE_POSE_SUFFIX}{SIGNAL_FILE_SUFFIX}'))
+        self._chain_ends: dict[tuple[int, str], int] = {}
+        for condition in self._state.progress:
+            key = (condition.subtask, condition.group)
+            self._chain_ends[key] = max(self._chain_ends.get(key, 0), condition.position)
+        # Per subtask, the groups of its chains that name an object, or every object when no group does. A subtask
+        # that records no chain, as after the last subtask, has none.
+        self._objects: dict[int, set[str]] = {}
+        for subtask, group in self._chain_ends:
+            self._objects.setdefault(subtask, set()).add(group)
+        everything = set(self._state.poses)
+        for subtask, groups in self._objects.items():
+            self._objects[subtask] = (groups & everything) or everything
+
+    def subtask_at(self, time_ns: int) -> int:
+        completed = self._counts.at(time_ns)
+        return completed if isinstance(completed, int) else 0
+
+    def objects_of(self, subtask: int) -> set[str]:
+        return self._objects.get(subtask, set())
+
+    def condition_marks(self) -> Iterator[_Mark]:
+        for condition, samples in self._state.progress.items():
+            last = condition.position == self._chain_ends[(condition.subtask, condition.group)]
+            for time_ns, done in samples:
+                if done is True and condition.name == _GRABBED:
+                    yield _Mark(condition.subtask, Stage.control, time_ns)
+                if done is True and last:
+                    yield _Mark(condition.subtask, Stage.at_target, time_ns)
+
+    def contact_marks(self) -> Iterator[_Mark]:
+        for item, samples in self._state.contacts.items():
+            for time_ns, touching in samples:
+                subtask = self.subtask_at(time_ns)
+                if touching is True and item in self.objects_of(subtask):
+                    yield _Mark(subtask, Stage.contact, time_ns)
+
+    def reach_marks(self) -> Iterator[_Mark]:
+        for item, samples in self._state.poses.items():
+            for time_ns, pose in samples:
+                subtask = self.subtask_at(time_ns)
+                if item not in self.objects_of(subtask):
+                    continue
+                effector = self._ee.at(time_ns)
+                if isinstance(effector, list) and isinstance(pose, list):
+                    if math.dist(effector[:3], pose[:3]) <= _REACH_M:
+                        yield _Mark(subtask, Stage.reaching, time_ns)
+
+
+def _robolab_stages(episode: Path, start_ns: int, subtasks: list[_SubtaskSample]) -> list[StageReached]:
+    """The first mark of each stage in each subtask, from the episode's `gt_state` signals.
+
+    A mark counts in a subtask only while that subtask is the current one. Reaching: the end effector comes within
+    `_REACH_M` of an object of the subtask (`_StageReader._objects`). Contact: the gripper touches one. Control:
+    an `object_grabbed` is done. At target: the last condition of a chain is done before the subtask is.
+    """
+    reader = _StageReader(episode, subtasks)
+    first: dict[tuple[int, Stage], int] = {}
+    for mark in chain(reader.condition_marks(), reader.contact_marks(), reader.reach_marks()):
+        key = (mark.subtask, mark.stage)
+        if reader.subtask_at(mark.time_ns) == mark.subtask and mark.time_ns < first.get(key, mark.time_ns + 1):
+            first[key] = mark.time_ns
+    return [
+        StageReached(seconds=(time_ns - start_ns) / 1e9, stage=stage)
+        for (_subtask, stage), time_ns in sorted(first.items(), key=lambda entry: (entry[1], entry[0][1]))
     ]
 
 
 def robolab_label(episode: Path) -> Label | None:
-    """RoboLab's labeler: a trial ends as in `molmo_label`, and the `subtask` signal gives its progress.
+    """RoboLab's labeler: a trial ends as in `molmo_label`, the `subtask` signal gives its progress, and the
+    `gt_state` signals give its stages.
 
     A `SubtaskAchieved` event sits at each sample where the count of subtasks completed changes, with the score
     of that sample. A change of the score alone is not an event, so the label's `subtask_score` is the score at
-    the last change of the count. A trial whose signal holds no sample has no label.
+    the last change of the count. `_robolab_stages` gives the `StageReached` events. An episode that records no
+    `gt_state` has none. A trial whose `subtask` signal holds no sample has no label.
     """
     trial = _recorded_sim_trial(episode, BENCHMARK_TASK)
     samples = _subtask_samples(episode) if trial is not None else []
     if trial is None or not samples:
         return None
-    events: list[SubtaskAchieved] = []
+    events: list[Event] = []
     achieved = 0
     for sample in samples:
         if sample.completed != achieved:
             achieved = sample.completed
             seconds = (sample.time_ns - trial.start_ns) / 1e9
             events.append(SubtaskAchieved(seconds=seconds, achieved=achieved, score=sample.score))
+    events += _robolab_stages(episode, trial.start_ns, samples)
+    events.sort(key=lambda event: event.seconds)
     return Label(
         uid=trial.uid,
         task=trial.task,
