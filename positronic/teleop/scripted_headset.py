@@ -80,7 +80,11 @@ class _Hand:
                 message = controller_message({RIGHT: self._pose(time.monotonic())}, {RIGHT: self.buttons})
                 self._websocket.send(json.dumps(message))
                 next_send += self._period_sec
-                self._stop.wait(max(0.0, next_send - time.monotonic()))
+                now = time.monotonic()
+                if next_send < now:
+                    # A late send skips the slots that it missed, so the thread sends no burst to catch up.
+                    next_send += math.ceil((now - next_send) / self._period_sec) * self._period_sec
+                self._stop.wait(next_send - now)
         except Exception as error:
             self._error = error
 
@@ -146,6 +150,8 @@ def drive(page: str, trials: int, rate_hz: float, trial_sec: float, radius: floa
 
     The page of the service has a self-signed certificate, so the scripted headset does not check it.
     """
+    if type(trials) is not int or trials < 1:
+        raise ValueError(f'trials must be a positive integer, got {trials!r}')
     for name, value in (('rate_hz', rate_hz), ('trial_sec', trial_sec), ('circle_sec', circle_sec)):
         if not 0 < value < math.inf:
             raise ValueError(f'{name} must be finite and positive, got {value}')

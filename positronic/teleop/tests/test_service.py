@@ -748,6 +748,12 @@ def test_a_scripted_headset_rate_or_time_that_is_not_finite_and_positive_is_refu
         scripted_headset.drive(page='http://127.0.0.1:1', trials=1, **{name: value})
 
 
+@pytest.mark.parametrize('trials', [0, -1, 1.5])
+def test_a_scripted_headset_trial_count_that_is_not_a_positive_integer_is_refused(trials):
+    with pytest.raises(ValueError, match='trials must be a positive integer'):
+        scripted_headset.drive(page='http://127.0.0.1:1', trials=trials)
+
+
 @pytest.mark.parametrize('radius', [-0.01, float('nan'), float('inf')])
 def test_a_scripted_headset_radius_that_is_negative_or_not_finite_is_refused(radius):
     with pytest.raises(ValueError, match='radius must be finite and not negative'):
