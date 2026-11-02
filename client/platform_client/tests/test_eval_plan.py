@@ -14,7 +14,7 @@ from platform_client.eval_plan import (
     _ENDPOINT_OVERRIDES,
     _PER_TASK_ONLY,
     ADDRESS_OF_WIRE,
-    MAX_TOKEN_LENGTH,
+    MAX_BEARER_TOKEN_LENGTH,
     REVEAL_SECRETS,
     SESSION_ROUTE,
     Cascade,
@@ -857,7 +857,7 @@ def test_a_tilde_naming_no_user_is_refused():
 
 
 def test_a_request_refuses_a_credential_that_names_a_file(password_file: Path):
-    # The gateway validates the request model, so it never opens a path a caller sends.
+    # A request names no path: only a plan file reads one.
     with pytest.raises(ValidationError, match='password_file'):
         a_plan_with({'username': 'a-reader', 'password_file': str(password_file)})
 
@@ -1049,8 +1049,13 @@ def test_a_plan_with_no_token_dumps_no_token_field(context: dict | None):
         an_image_endpoint(),
         {'name': 'baseline'},
         {'name': 'local', 'wire': 'websocket_unix', 'address': {'uds': '/run/policy.sock', 'path': SESSION}},
+        {
+            'name': 'modal',
+            'wire': 'modal_websocket_tls',
+            'address': {'host': 'h.example', 'port': 443, 'path': SESSION},
+        },
     ],
-    ids=['served', 'image', 'bare label', 'websocket_unix'],
+    ids=['served', 'image', 'bare label', 'websocket_unix', 'modal_websocket_tls'],
 )
 def test_a_token_is_refused_where_the_platform_cannot_present_it(token_file: Path, entry: dict):
     with pytest.raises(ValidationError, match='bearer token') as caught:
@@ -1068,7 +1073,7 @@ def test_a_plan_file_refuses_a_token_it_states():
 
 
 def test_a_request_refuses_a_token_that_names_a_file(token_file: Path):
-    # The gateway validates the request model, so it never opens a path a caller sends.
+    # A request names no path: only a plan file reads one.
     with pytest.raises(ValidationError, match='auth_token_file'):
         a_plan(endpoints=[remote('baseline', auth_token_file=str(token_file))])
 
@@ -1086,7 +1091,7 @@ def a_token_file_holding(tmp_path: Path, text: str) -> Path:
         ('a token\n', 'outside visible ASCII'),
         ('a\ttoken', 'outside visible ASCII'),
         ('a\ntoken\n', 'outside visible ASCII'),
-        ('t' * (MAX_TOKEN_LENGTH + 1), f'longer than {MAX_TOKEN_LENGTH}'),
+        ('t' * (MAX_BEARER_TOKEN_LENGTH + 1), f'longer than {MAX_BEARER_TOKEN_LENGTH}'),
     ],
     ids=['empty', 'space', 'tab', 'line feed', 'too long'],
 )
@@ -1099,7 +1104,7 @@ def test_a_token_file_that_holds_no_valid_token_is_refused(tmp_path: Path, held:
         assert held.strip() not in str(caught.value)
 
 
-@pytest.mark.parametrize('token', ['', 'a token', 'a\ttoken', 'a\ntoken', 't' * (MAX_TOKEN_LENGTH + 1)])
+@pytest.mark.parametrize('token', ['', 'a token', 'a\ttoken', 'a\ntoken', 't' * (MAX_BEARER_TOKEN_LENGTH + 1)])
 def test_a_request_refuses_a_token_outside_the_valid_set(token: str):
     with pytest.raises(ValidationError) as caught:
         a_plan_carrying(token)
@@ -1116,7 +1121,7 @@ def test_a_token_file_that_is_not_there_is_refused(tmp_path: Path):
 
 
 def test_the_longest_token_of_visible_ascii_is_read_whole(tmp_path: Path):
-    longest = ('!~' + 'a-Token.0' * MAX_TOKEN_LENGTH)[:MAX_TOKEN_LENGTH]
+    longest = ('!~' + 'a-Token.0' * MAX_BEARER_TOKEN_LENGTH)[:MAX_BEARER_TOKEN_LENGTH]
     path = a_token_file_holding(tmp_path, f'{longest}\n')
 
     assert token_from_file(path) == longest

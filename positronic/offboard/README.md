@@ -70,8 +70,9 @@ process arguments. No token serves open, which is the usual shape on a trusted L
 broken secret and refuses to start. `InferenceClient(headers=...)` carries the header, and
 `positronic.cfg.policy.authed_remote` fills it in from the same variable.
 
-A plan file for the platform sends the token with `auth_token_file` on the endpoint, so a server at a
-public address keeps auth on (see [client/README.md](../../client/README.md)).
+A plan file for the platform sends the token with `auth_token_file` on the endpoint (see
+[client/README.md](../../client/README.md)). The `websocket` and `grpc` wires have no TLS, so the token travels in
+clear on them. Keep such a server on a private network, such as a tailnet, or put it behind a TLS wire.
 
 ### Endpoints
 
