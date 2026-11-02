@@ -53,12 +53,13 @@ prediction includes its newest frame in the same request. The four history offse
 seconds: `[-23/15, -16/15, -8/15, 0]`; the first prediction uses only the current frame.
 
 The session query selects `mode=chunked` (default) or `mode=rtc`. Both use the same scheduler and
-player. Chunked playback appends after the previous trajectory; RTC-like playback starts a continuation
-at its observation time and skips elapsed actions. **This is video continuation, not action-prefix
-conditioning:** DreamZero does not freeze previous actions like GR00T RTC does.
+player. Chunked playback appends after the previous trajectory; after the first chunk, RTC-like playback
+starts each continuation at its observation time and skips elapsed actions. **This is video continuation,
+not action-prefix conditioning:** DreamZero does not freeze previous actions like GR00T RTC does.
 
 `prediction_period_sec` defaults to the checkpoint's output duration at 15 Hz. Set it in the session
-query to request another cadence, for example `--policy.address.query='mode=rtc&prediction_period_sec=1.6'`.
+query to request overlapping continuations, for example
+`--policy.address.query='mode=rtc&prediction_period_sec=0.8'` for a 1.6-second trajectory.
 Chunked playback is limited to that period so predictions cannot accumulate a growing future plan.
 The default camera mapping requires two exterior views and the wrist. `image_mappings` can map both
 exterior slots to the same camera on a two-camera rig.
