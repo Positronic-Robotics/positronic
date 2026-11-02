@@ -1,4 +1,7 @@
-"""DreamZero inference server: the roboarena subprocess model and its serving pipelines."""
+"""Legacy DreamZero fine-tune serving through a Roboarena subprocess.
+
+TODO: migrate fine-tuned checkpoint layouts to the standalone adapter in ``serving``.
+"""
 
 import logging
 import os
@@ -280,11 +283,6 @@ joints = pipeline
 joints_traj = pipeline.override(codec=codecs.joints_traj)
 joints_ik = pipeline.override(codec=codecs.joints_ik)
 joints_ik_sim = pipeline.override(codec=codecs.joints_ik_sim)
-# Asserts 320x180 frames, as the public pretrained DROID checkpoint does.
-droid = pipeline.override(codec=codecs.droid, height=180)
-droid_3cam = droid.override(codec=codecs.droid_3cam, local=codecs.dreamzero_layers_3cam)
-# The public pretrained DROID checkpoint on the wan2.1 backbone.
-droid_model = dreamzero_model.override(model_path='GEAR-Dreams/DreamZero-DROID')
 
 
 # Every pipeline is a subcommand, and so is every deployment — a pipeline and the checkpoint it pairs with.
@@ -304,8 +302,6 @@ COMMANDS = {
         ),
         pipeline=joints.override(codec=codecs.phail_v1),
     ),
-    'droid': serve.override(model=droid_model, pipeline=droid),
-    'droid_3cam': serve.override(model=droid_model, pipeline=droid_3cam),
 }
 
 

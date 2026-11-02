@@ -31,29 +31,43 @@ serverless alternative is in the [Appendix](#appendix-nebius-serverless).)
 
 ## Zero-shot inference (wan2.1 DROID checkpoint)
 
-To try the pretrained DROID model with no training. `positronic` comes from `uv sync` (see
-[Installation](../../../README.md#installation)). Replace `<user>` with your username on the H100 box —
-`CACHE_ROOT` is that box's home, where the mounted `~/.cache` and `~/.aws` live (more in
-[Prerequisites](#full-pipeline-fine-tune-your-own-checkpoint) below).
+The DROID reference uses a standalone model server. Image resizing, JPEG encoding and action decoding
+run on the client through existing codecs. The server holds one active session and a bounded image
+history. It calls the native model directly, without accumulating generated videos.
 
 ```bash
-# Serve the public pretrained DROID checkpoint on your H100 box (auto-downloaded on first start,
-# ~10-20 min via HuggingFace). The `droid` preset pins the checkpoint, wan2.1 backbone, and serving pipeline.
-cd docker
-CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server droid
+# Build from the repository root on a GPU host. Mount that host's Hugging Face cache.
+docker build -f docker/Dockerfile.serve-dreamzero-droid -t dreamzero-reference .
+docker run --rm --gpus all --ipc=host -p 8000:8000 \
+  -v "$HOME/.cache/huggingface:/root/.cache/huggingface" dreamzero-reference
 
-# Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.address.host=<h100-host> --policy.address.port=8000 \
+# RoboLab needs its own NVIDIA GPU for rendering. It can share a sufficiently large GPU with the model.
+uv run --locked positronic eval run --eval=.sim.robolab.banana_in_bowl \
+  --policy=.remote --policy.address.host=<gpu-host> --policy.address.port=8000 \
   --eval.trial_count=2
 ```
 
-The server owns the whole policy pipeline: it runs the codec (raw observations in, decoded joint
-commands out) and declares the rig-side half — the model's autoregressive video context
-(`TemporalStack`, which must run every control tick to record frames) plus chunk scheduling — in its
-handshake. The client builds that declared stack automatically.
-(Server config and defaults: [`server.py`](./server.py); layers: [`codecs.py`](./codecs.py);
-remote-policy protocol: [Inference Guide](../../../docs/inference.md).)
+Every `sampling_period_sec` (default `1/15`), the client sends the latest sampled observation through
+ordinary inference. Between predictions, the server returns `None` and playback continues. Each
+prediction includes its newest frame in the same request. The four history offsets are expressed in
+seconds: `[-23/15, -16/15, -8/15, 0]`; the first prediction uses only the current frame.
+
+The session query selects `mode=chunked` (default) or `mode=rtc`. Both use the same scheduler and
+player. Chunked playback appends after the previous trajectory; RTC-like playback starts a continuation
+at its observation time and skips elapsed actions. **This is video continuation, not action-prefix
+conditioning:** DreamZero does not freeze previous actions like GR00T RTC does.
+
+`prediction_period_sec` defaults to the checkpoint's output duration at 15 Hz. Set it in the session
+query to request another cadence, for example `--policy.address.query='mode=rtc&prediction_period_sec=1.6'`.
+Chunked playback is limited to that period so predictions cannot accumulate a growing future plan.
+The default camera mapping requires two exterior views and the wrist. `image_mappings` can map both
+exterior slots to the same camera on a two-camera rig.
+
+The runtime queue is bounded: a model that cannot keep up eventually fails explicitly. A larger queue
+cannot fix sustained overload. Inference time remains charged during simulator evaluations.
+
+The wan2.2 fine-tune commands below use the legacy serving path in [`server.py`](./server.py).
+TODO: migrate that path after validating the fine-tuned checkpoints with the standalone adapter.
 
 ## Full pipeline (fine-tune your own checkpoint)
 
@@ -182,11 +196,10 @@ that decodes to a `JointPosition` command. They differ only in how **training la
 
 Each codec has a same-named serving pipeline (see [`server.py`](./server.py)), selected as the serve
 subcommand. Since the four `joints*` codecs decode inference identically, `joints` serves any of their
-checkpoints; the `droid` subcommand serves the pretrained DROID model through the `droid` pipeline, which
-sends its required 320×180 frames and executes each chunk under DROID's impedance gains (`codecs.droid_execution`; see
-[Control mode](../../policy/codecs/README.md#control-mode)).
+checkpoints. The standalone DROID recipe sends 320×180 frames and decodes actions under DROID's
+impedance gains (see [Control mode](../../policy/codecs/README.md#control-mode)).
 
-## Session parameters
+## Legacy fine-tune session parameters
 
 A client can tune the serving pipeline per connection: session query params become dotted overrides into the
 pipeline config, applied server-side (values are literals; the model checkpoint and backbone are fixed at
