@@ -557,8 +557,7 @@ class EndpointFile(_EndpointBase[RegistryCredentialFile]):
         return self.auth_token_file is not None
 
 
-# The form an endpoint takes. A request carries an `Endpoint`, and so does a plan with no parameter. A plan file
-# carries an `EndpointFile`.
+# An `Endpoint` in a request and in a plan with no parameter, an `EndpointFile` in a plan file.
 EndpointForm = TypeVar('EndpointForm', Endpoint, EndpointFile, default=Endpoint)
 
 
