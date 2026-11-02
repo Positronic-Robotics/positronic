@@ -11,6 +11,7 @@ import numpy as np
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server.protocol import ProtocolVersion
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, encode_jpeg
+from positronic_model_server.spec import NAME
 from positronic_model_server.tree import map_leaves
 from positronic_wire import registry
 from positronic_wire.wire import SessionAddress
@@ -33,7 +34,7 @@ from .base import Answer, Policy, PolicyRun, Processor, Runtime, Step
 from .codecs import EncodeImages, PolicyCommandError, TransformImages
 from .codecs.action import JointPositionAction
 from .codecs.image import ResizeCache
-from .compatibility import from_v1_spec
+from .compatibility import from_v1_spec, unnest_seq
 from .executor import ExecutionRuntime
 from .processors import InferenceSchedule, TemporalStack
 from .spec import ComponentFactory, from_spec
@@ -156,8 +157,8 @@ class RemotePolicy(Policy):
     ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout`` and ``connect_deadline``
     bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality of images sent to a server that
     asks for compressed images. ``frame_stream`` names the codec (``jpeg`` or ``h264``) of a frame stream
-    (``positronic.offboard.frame_stream``), for a server that declares one for a temporal stack that the stream carries;
-    otherwise requests go in full.
+    (``positronic.offboard.frame_stream``), for a server that declares one for a declared stack that the stream mirrors
+    (``_stream_refusal``); otherwise requests go in full.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -437,6 +438,10 @@ class RemotePolicy(Policy):
         def quality(self) -> int:
             return self._quality
 
+        @property
+        def encodes_every_image(self) -> bool:
+            return self._images is None
+
         def encode(self, data: dict) -> dict:
             return data
 
@@ -451,6 +456,23 @@ class RemotePolicy(Policy):
             if self.streamer is None:
                 raise RuntimeError('The schedule replans before its frame streamer exists')
             self.streamer.on_replan(now_ns)
+
+    @staticmethod
+    def _stream_refusal(
+        parts: cabc.Sequence[cabc.Mapping[str, Any]],
+        temporal: cabc.Sequence[TemporalStack],
+        encodes: cabc.Sequence[_PassImages],
+    ) -> str | None:
+        """Why the frame stream does not mirror the declared stack of ``parts``, built with ``temporal`` and
+        ``encodes``, or None when it does. It mirrors one temporal stack whose rows it carries, and an
+        ``encode_images`` only as the stack's last part, over every image: the rows and the requests then carry the
+        frames that the stack would send."""
+        if len(temporal) != 1 or not streams_stack(temporal[0].keys, temporal[0].offsets_sec):
+            return 'it holds no temporal stack whose rows the stream carries'
+        last = parts[-1].get(NAME) == EncodeImages.WIRE_NAME
+        if encodes and not (len(encodes) == 1 and encodes[0].encodes_every_image and last):
+            return 'its encode_images is not one last encoder of every image'
+        return None
 
     def _stack_and_streamer(
         self, session: InferenceSession, compress_images: bool, connection_lock: Lock, runtime: Runtime
@@ -484,10 +506,9 @@ class RemotePolicy(Policy):
             EncodeImages.from_spec_args: self._recorded(self._PassImages.from_spec_args, encodes),
         }
         stack = declared_stack(meta, version, overrides)
-        if len(temporal) != 1 or not streams_stack(temporal[0].keys, temporal[0].offsets_sec):
-            logger.warning(
-                'The declared stack holds no temporal stack that a frame stream carries; requests go in full'
-            )
+        refusal = self._stream_refusal(unnest_seq(meta[offboard_keys.LOCAL_STACK]), temporal, encodes)
+        if refusal is not None:
+            logger.warning('The frame stream does not mirror the declared stack: %s; requests go in full', refusal)
             return declared_stack(meta, version), None, self._jpeg_quality
         (stacked,) = temporal
         quality = encodes[0].quality if encodes else self._jpeg_quality

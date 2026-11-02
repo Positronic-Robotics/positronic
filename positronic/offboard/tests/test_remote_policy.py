@@ -60,6 +60,7 @@ from positronic.policy import remote as remote_module
 from positronic.policy.base import Obs, Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
 from positronic.policy.codecs.image import ResizeCache
+from positronic.policy.compatibility import WALL_TIME_NS
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
@@ -1834,6 +1835,44 @@ def test_a_declared_encode_images_leaves_the_stack_for_the_frame_stream_to_refer
     assert (second[REF], second[b'call'], second[b'rows']) == (True, 1, [2, 1])
     # The rows and the frames each request carries go at the declared quality.
     assert qualities and set(qualities) == {75}
+
+
+def _request_bytes(session: MagicMock) -> list[bytes]:
+    """The serialised requests that ``session`` got, each without its wall-clock time."""
+    return [
+        serialization.serialise({k: v for k, v in call.args[0].items() if k != WALL_TIME_NS})
+        for call in session.infer.call_args_list
+    ]
+
+
+@pytest.mark.parametrize(
+    'parts',
+    [
+        pytest.param(
+            ({'name': 'encode_images', 'args': {'quality': 75, 'paths': [['wrist']]}},), id='an-encoder-of-some-paths'
+        ),
+        pytest.param(
+            (
+                {'name': 'encode_images', 'args': {'quality': 75}},
+                {'name': 'restrict_image_size', 'args': {'width': 6, 'height': 4}},
+            ),
+            id='an-encoder-before-a-resize',
+        ),
+        pytest.param(
+            ({'name': 'encode_images', 'args': {'quality': 75}}, {'name': 'encode_images', 'args': {'quality': 60}}),
+            id='two-encoders',
+        ),
+    ],
+)
+def test_a_stack_whose_encode_images_is_not_one_last_encoder_of_every_image_goes_in_full(parts, caplog):
+    wrist = {index: {'wrist': _stream_frame(index)} for index in range(8)}
+    full = _run_on_mock_session(_stream_meta(*parts), 8, frame_stream=None, extra=wrist)
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
+        streamed = _run_on_mock_session(_stream_meta(*parts), 8, frame_stream='jpeg', extra=wrist)
+
+    streamed.send_message.assert_not_called()
+    assert _request_bytes(streamed) == _request_bytes(full)
+    assert 'frame stream' in caplog.text
 
 
 def test_a_protocol_v2_session_streams_the_rows_as_a_v1_session_does():
