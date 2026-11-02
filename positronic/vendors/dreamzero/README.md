@@ -65,6 +65,9 @@ exterior slots to the same camera on a two-camera rig.
 
 The runtime queue is bounded: a model that cannot keep up eventually fails explicitly. A larger queue
 cannot fix sustained overload. Inference time remains charged during simulator evaluations.
+For a behavior comparison on hardware slower than the prediction cadence, add
+`--charge_inference_time=False`: simulation then pauses during calls. This does not validate real-time
+playback; RTC-like playback needs answers before their trajectories expire.
 
 The wan2.2 fine-tune commands below use the legacy serving path in [`server.py`](./server.py).
 TODO: migrate that path after validating the fine-tuned checkpoints with the standalone adapter.
@@ -224,8 +227,8 @@ protocol details in the [Inference Guide](../../../docs/inference.md).
 - **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt. The wan2.2 fine-tunes
   use the `(320, 176)` codec and the trainer resizes to 160 at load; the pretrained DROID model (wan2.1)
   asserts exactly `(320, 180)`, so the `droid` codec (`codecs.droid`) feeds that resolution.
-- **Action horizon**: 24 timesteps per inference; the server-declared `dreamzero_layers` re-query
-  aligns the chunk schedule with the AR frame-stack window
+- **Action horizon**: 24 timesteps per inference. The standalone DROID server samples history and requests
+  predictions at its configured periods; the legacy fine-tune server declares `dreamzero_layers`.
 - **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
 - **A roboarena server with no Positronic server in front**: `roboarena_policy.RoboarenaPolicy(address, headers)` dials
   the server on the `roboarena` wire and runs the `droid_3cam` codec on the robot side.
