@@ -191,7 +191,6 @@ yam_bimanual_yambox = yam_bimanual.override(
     # The sim scene's plate is 0.011, so only z differs from the default: it is 0.011 higher.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3125], keys.RIGHT_ARM: [0.30, -0.305, 0.3125]},
     # Fitted on this station to the rest error of holds at working poses: the mean of the two arms' fits.
-    # Under these factors the mean rest error of joints 2-5 is within 2 mrad on both arms.
     gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.26, 1.245, 1.305, 1.405, 1.0]),
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
