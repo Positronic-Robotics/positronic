@@ -20,6 +20,7 @@ import turbojpeg
 
 import pimm
 from positronic import data_collection, keys, utils, wire
+from positronic.cfg import webxr as cfg_webxr
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -27,7 +28,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers import webxr
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
 from positronic.drivers.roboarm import command as roboarm_command
-from positronic.drivers.webxr import Frontend, WebXR
+from positronic.drivers.webxr import Frontend, SessionMode, WebXR
 from positronic.geom import Rotation, Transform3D
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
@@ -360,7 +361,7 @@ def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(wor
 
 
 @contextlib.contextmanager
-def _served_webxr(frontend: Frontend = Frontend.OCULUS, webxr: WebXR | None = None) -> Iterator[str]:
+def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = None) -> Iterator[str]:
     """A ``WebXR`` server of ``frontend`` on a free port, or ``webxr`` when given, and its base URL once it answers."""
     if webxr is None:
         webxr = WebXR(port=free_port(), frontend=frontend, use_https=False)
@@ -406,6 +407,30 @@ def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
         assert page.status_code == 200 and "get('mode') === 'teleop'" in page.text
         assert 'id="phase"' in page.text and "STATE_ROUTE = '/state'" in page.text and 'btn--control-on' in page.text
         assert 'PHASES_THAT_OPEN_THE_GRIP = [PHASE.readyWait, PHASE.ended]' in page.text and 'setGrip(0.0)' in page.text
+
+
+@pytest.mark.parametrize(('preset', 'session'), [(cfg_webxr.oculus, 'immersive-ar'), (cfg_webxr.psvr2, 'immersive-vr')])
+def test_the_headset_page_requests_the_session_of_its_preset(preset, session):
+    served = preset.override(port=free_port(), use_https=False).instantiate()
+    with _served_webxr(webxr=served) as base:
+        assert httpx.get(base + '/', timeout=1.0).status_code == 200
+        script = httpx.get(base + '/session-mode.js', timeout=1.0)
+        assert script.headers['content-type'].startswith('text/javascript')
+        assert script.text == f'export const SESSION_MODE = "{session}";\n'
+        core = httpx.get(base + '/core.js', timeout=1.0).text
+        assert "import { SESSION_MODE } from '/session-mode.js';" in core
+        assert 'requestSession(SESSION_MODE,' in core and 'isSessionSupported(SESSION_MODE)' in core
+
+
+def test_the_headset_page_drops_a_query():
+    with _served_webxr() as base:
+        stale = httpx.get(f'{base}/?mode=vr', timeout=1.0)
+        assert stale.status_code == 307 and stale.headers['location'] == '/'
+
+
+def test_a_vr_session_on_the_phone_page_is_refused():
+    with pytest.raises(ValueError, match='session_mode VR needs the headset frontend'):
+        WebXR(port=free_port(), frontend=Frontend.IPHONE, session_mode=SessionMode.VR)
 
 
 def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
@@ -455,6 +480,8 @@ def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
 def test_the_phone_page_for_data_collection_keeps_its_own_mode():
     with _served_webxr(Frontend.IPHONE) as base:
         assert httpx.get(base + '/', timeout=1.0).status_code == 200
+        stale = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
+        assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
 def test_the_headset_video_keeps_the_colors_of_an_rgb_frame():

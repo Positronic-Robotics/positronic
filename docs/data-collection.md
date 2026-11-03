@@ -77,7 +77,7 @@ Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --loc
 | Parameter | Description | Example |
 |-----------|-------------|---------|
 | `--output_dir` | Dataset location | `~/datasets/my_task`, `s3://bucket/datasets/task` |
-| `--webxr` | Teleoperation | `.iphone`, `.android`, `.oculus`, `None` |
+| `--webxr` | Teleoperation | `.iphone`, `.android`, `.oculus`, `.psvr2`, `None` |
 | `--sound` | Audio feedback | `None` (disable), default (enable) |
 | `--operator_position` | Camera viewpoint | `.FRONT`, `.BACK`, `.LEFT`, `.RIGHT` |
 

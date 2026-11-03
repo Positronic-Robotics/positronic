@@ -1,6 +1,7 @@
-// Shared WebXR bootstrap and WebSocket utilities for Oculus/iPhone frontends
+// Shared WebXR bootstrap and WebSocket utilities for the headset and phone frontends
 // Provides XR setup, session lifecycle, render loop, and message sending.
 
+import { SESSION_MODE } from '/session-mode.js';
 import { WebXRButton } from '/webxr-button.js';
 
 export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
@@ -34,7 +35,7 @@ export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverl
     if (domOverlayRoot) {
       sessionInit.domOverlay = { root: domOverlayRoot };
     }
-    return navigator.xr.requestSession('immersive-ar', sessionInit).then((session) => {
+    return navigator.xr.requestSession(SESSION_MODE, sessionInit).then((session) => {
       xrButton.setSession(session);
       onSessionStarted(session);
     });
@@ -105,7 +106,7 @@ export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverl
   xrButton = new WebXRButton({ onRequestSession, onEndSession: (s) => s.end() });
   document.querySelector('header')?.appendChild(xrButton.domElement);
   if (navigator.xr) {
-    navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+    navigator.xr.isSessionSupported(SESSION_MODE).then((supported) => {
       xrButton.enabled = supported;
     });
   }
