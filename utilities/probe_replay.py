@@ -1235,6 +1235,30 @@ class Probe:
         )
         page.close()
 
+    def src_removed(self):
+        print('A src removed while a row plays, then an inline script added:')
+        page = self.open('/page/small')
+        self.until(page, "all('camera').length > 0")
+        part(page, 'play').click()
+        self.until(page, "all('camera').every((video) => !video.paused)", 8000)
+        page.evaluate("window.removed = all('camera'); host().removeAttribute('src')")
+        time.sleep(0.5)
+        state = page.evaluate("[all('camera').length, one('player') === null, removed.every((video) => video.paused)]")
+        self.check('no video plays and no player shows', state == [0, True, True], state)
+        status = page.evaluate("one('status')?.textContent ?? ''")
+        self.check('the element says it waits for data', 'Waiting' in status, status)
+        data = json.dumps({
+            'columns': [{'key': 'task', 'label': 'Task'}],
+            'rows': [{'id': '1', 'values': {'task': 'x'}}],
+        })
+        page.evaluate(
+            "(data) => { const script = document.createElement('script'); script.type = 'application/json';"
+            ' script.textContent = data; host().append(script); }',
+            data,
+        )
+        self.check('an inline script then renders', self.until(page, "all('row').length === 1", 5000))
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1329,6 +1353,7 @@ def main(headed: bool) -> int:
             probe.list_entries_and_link_param,
             probe.take_over_and_join,
             probe.dock_below_and_length,
+            probe.src_removed,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

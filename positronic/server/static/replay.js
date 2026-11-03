@@ -323,7 +323,8 @@ export class PositronicReplay extends HTMLElement {
     if (!src) {
       const script = this.querySelector(':scope > script[type="application/json"]');
       if (!script) {
-        // The parser can connect the element before it adds the children.
+        // The parser can connect the element before it adds the children, and a host can remove `src` first.
+        this.#status('Waiting for the replay data…');
         this.#waitForScript ??= new MutationObserver(() => this.#load());
         this.#waitForScript.observe(this, { childList: true });
         return;
@@ -333,6 +334,7 @@ export class PositronicReplay extends HTMLElement {
       this.#take(() => readInline(JSON.parse(script.textContent), document.baseURI));
       return;
     }
+    this.#waitForScript?.disconnect();
     this.#loaded = key;
     let url;
     try {
