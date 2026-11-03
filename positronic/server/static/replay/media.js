@@ -166,7 +166,11 @@ export class EpisodePlayer {
   #frameKeys;
   #cameraName;
   #turn = 0;
-  #playback = () => START;
+  // The playback state of the episode on show: set when a row opens, updated by the visitor and the element, and
+  // kept while its media elements change, also while the 3D viewer, whose time is not readable, owns the episode.
+  #state = { ...START };
+  // Stops the listeners that update `#state` from the media elements, before the element clears them.
+  #detachMedia = () => {};
   // The waits and the requests of the episode on show; `stop` and the next `show` end them.
   #timers = new Set();
   #requests = new AbortController();
@@ -189,14 +193,14 @@ export class EpisodePlayer {
   /** Shows `row` in the `playback` state: whether it plays, from which time, at which rate. A row opened later stops
    * the waits of this one. */
   show(row, summary, playback = {}) {
-    const state = { ...START, ...playback };
+    this.#state = { ...START, ...playback };
     this.#endWaits();
     const turn = ++this.#turn;
     const wanted = () => turn === this.#turn;
     this.#summary.textContent = summary;
     this.#clearVideos();
     this.#setNote('replay', null);
-    const startVideo = this.#videoStarter(row, state);
+    const startVideo = this.#videoStarter(row);
     if (this.#full && row.rrd && !this.#narrow.matches) {
       this.#playRecording(row, startVideo, wanted);
       return;
@@ -208,7 +212,7 @@ export class EpisodePlayer {
 
   /** The playback state of the episode on show, which a new player for the same row takes whole. */
   playback() {
-    return this.#playback();
+    return { ...this.#state };
   }
 
   /** Stops every video and empties the viewer. */
@@ -257,9 +261,9 @@ export class EpisodePlayer {
   }
 
   /** The function that starts the video `row` plays on this screen; null for a row with no video. */
-  #videoStarter(row, playback) {
-    if (row.phone && (this.#narrow.matches || !row.cameras.length)) return () => this.#playPhone(row, playback);
-    if (row.cameras.length) return () => this.#playCameras(row, playback);
+  #videoStarter(row) {
+    if (row.phone && (this.#narrow.matches || !row.cameras.length)) return () => this.#playPhone(row);
+    if (row.cameras.length) return () => this.#playCameras(row);
     return null;
   }
 
@@ -340,6 +344,8 @@ export class EpisodePlayer {
   // The videos go with their retries and requests, also where the 3D replay takes their place.
   #clearVideos() {
     this.#endWaits();
+    this.#detachMedia();
+    this.#detachMedia = () => {};
     for (const video of this.#stage.querySelectorAll('video')) {
       pause(video);
       video.removeAttribute('src');
@@ -348,7 +354,6 @@ export class EpisodePlayer {
     this.#stage.replaceChildren();
     this.#setNote('video', null);
     this.lead = null;
-    this.#playback = () => START;
   }
 
   // A video that fails is asked for once more: a 202 means it is building, and it loads again after the wait.
@@ -371,23 +376,30 @@ export class EpisodePlayer {
     video.addEventListener('loadedmetadata', () => onState(MediaState.READY));
   }
 
-  #playPhone(row, { playing, at, rate }) {
+  #playPhone(row) {
+    const state = this.#state;
     const video = element('video', { part: 'phone', src: row.phone, controls: '', playsinline: '', muted: '' });
     video.muted = true;
     video.dataset.name = 'The phone video';
-    startAt(video, at);
+    startAt(video, state.at);
     // A load sets the rate back to the default, so the video takes it once it knows its length.
-    video.addEventListener('loadedmetadata', () => setRate(video, rate), { once: true });
+    video.addEventListener('loadedmetadata', () => setRate(video, state.rate), { once: true });
+    const listening = new AbortController();
+    const { signal } = listening;
+    video.addEventListener('play', () => (state.playing = true), { signal });
+    video.addEventListener('pause', () => video.error || video.ended || (state.playing = false), { signal });
+    video.addEventListener('timeupdate', () => video.error || (state.at = video.currentTime), { signal });
+    video.addEventListener('ratechange', () => video.readyState && (state.rate = video.playbackRate), { signal });
+    this.#detachMedia = () => listening.abort();
     this.#reportNativeControls(row, video);
-    this.#watch(video, row.phone, (state) => {
-      this.#setNote('video', cameraNote([[null, state]]));
+    this.#watch(video, row.phone, (each) => {
+      this.#setNote('video', cameraNote([[null, each]]));
       // A row that opened playing plays once its building video is there.
-      if (state === MediaState.READY && playing) start(video);
+      if (each === MediaState.READY && state.playing) start(video);
     });
     this.#stage.replaceChildren(video);
     this.lead = video;
-    this.#playback = () => ({ playing: !video.paused, at: video.currentTime, rate: video.playbackRate });
-    if (playing) start(video);
+    if (state.playing) start(video);
   }
 
   // The browser's own controls fire only media events. An event the element did not cause is a visitor's use; a
@@ -421,7 +433,7 @@ export class EpisodePlayer {
   }
 
   // Each camera holds its own state, and `#settle` derives from all of them which camera leads and the note.
-  #playCameras(row, { playing, at, rate }) {
+  #playCameras(row) {
     const cameras = row.cameras.map((camera) => {
       const name = camera.label ?? this.#cameraName(camera.camera);
       const video = element('video', {
@@ -444,10 +456,8 @@ export class EpisodePlayer {
       row,
       cameras,
       durationS: row.durationS ?? Math.max(...cameras.map((camera) => camera.durationS)),
-      // The visitor's play state, time and rate, which a new lead takes over and every ready camera takes.
-      playing,
-      moment: at,
-      rate,
+      // The player's playback state, which a new lead takes over and every ready camera takes.
+      state: this.#state,
       lead: null,
       detach: () => {},
     };
@@ -467,7 +477,7 @@ export class EpisodePlayer {
         cameras.map((camera) => camera.figure),
       ),
     );
-    this.#playback = () => ({ playing: episode.playing, at: episode.moment, rate: episode.rate });
+    this.#detachMedia = () => episode.detach();
     this.#settle(episode);
   }
 
@@ -483,7 +493,7 @@ export class EpisodePlayer {
     const lead = longestReady(episode.cameras)?.video ?? null;
     if (lead !== episode.lead) this.#lead(episode, lead);
     for (const camera of episode.cameras) {
-      if (camera.state === MediaState.READY) setRate(camera.video, episode.rate);
+      if (camera.state === MediaState.READY) setRate(camera.video, episode.state.rate);
     }
     // A camera that is ready under a lead it has not joined takes the lead's time and play state.
     for (const camera of episode.cameras) {
@@ -505,22 +515,23 @@ export class EpisodePlayer {
     if (!lead) return;
     const listening = new AbortController();
     const { signal } = listening;
-    lead.addEventListener('play', () => (episode.playing = true), { signal });
-    lead.addEventListener('pause', () => lead.error || lead.ended || (episode.playing = false), { signal });
-    lead.addEventListener('timeupdate', () => lead.error || (episode.moment = lead.currentTime), { signal });
+    const { state } = episode;
+    lead.addEventListener('play', () => (state.playing = true), { signal });
+    lead.addEventListener('pause', () => lead.error || lead.ended || (state.playing = false), { signal });
+    lead.addEventListener('timeupdate', () => lead.error || (state.at = lead.currentTime), { signal });
     const followers = episode.cameras.map((camera) => camera.video).filter((video) => video !== lead);
     follow(lead, followers, signal);
     const speed = {
-      rate: episode.rate,
+      rate: state.rate,
       choose: (rate) => {
-        episode.rate = rate;
+        state.rate = rate;
         this.#settle(episode);
       },
     };
     this.#stage.append(this.#controls(episode.row, lead, episode.durationS, speed, signal));
     episode.detach = () => listening.abort();
-    if (Math.abs(lead.currentTime - episode.moment) > DRIFT_S) seek(lead, Math.min(episode.moment, lead.duration));
-    if (episode.playing) start(lead);
+    if (Math.abs(lead.currentTime - state.at) > DRIFT_S) seek(lead, Math.min(state.at, lead.duration));
+    if (state.playing) start(lead);
   }
 
   // One control set for the episode, which drives `lead` until `signal` aborts. Without `durationS`, the length of

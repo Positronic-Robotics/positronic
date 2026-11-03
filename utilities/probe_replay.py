@@ -131,7 +131,8 @@ def row_media(n: int) -> dict:
     has a phone video only, which builds, 15 loses its longest video only after a wait,
     16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there, 17 builds
     its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
-    names no length, and 20 names no length and its second camera is the longest."""
+    names no length, 20 names no length and its second camera is the longest, 21 builds its replay, and 22 builds it
+    after slow answers."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -163,6 +164,8 @@ def row_media(n: int) -> dict:
         15: {'rrd': None, 'phone': None, 'cameras': lost_longest('slowgone')},
         16: {'rrd': None, 'phone': None, 'cameras': three_cameras()},
         17: {'rrd': '/rrd/building/17.rrd', 'phone': None, 'cameras': at('slowbuilding', cameras)},
+        21: {'rrd': '/rrd/building/21.rrd'},
+        22: {'rrd': '/rrd/slowbuilding/22.rrd'},
         20: {
             'rrd': None,
             'phone': None,
@@ -1337,6 +1340,27 @@ class Probe:
         self.check('the longest video leads once the lengths are known', longest, page.evaluate("one('seek').max"))
         page.close()
 
+    def width_change_around_the_viewer(self):
+        print('A width change while the recording is pending, and after the viewer took over:')
+        page = self.open('/page/dock?episode=22', wait_until='domcontentloaded')
+        self.until(page, "host().hasAttribute('open')", 5000)
+        page.set_viewport_size({'width': 400, 'height': 800})
+        playing = self.until(page, "one('phone') !== null && !one('phone').paused", 8000)
+        self.check('an autoplay row still waiting for its recording plays its phone video', playing)
+        page.close()
+        page = self.open('/page/dock?episode=21', wait_until='domcontentloaded')
+        self.until(page, "one('speed') !== null", 8000)
+        part(page, 'speed').press('ArrowDown')
+        took_over = self.until(page, "loads('/rrd/building/21.rrd')", 15000)
+        page.set_viewport_size({'width': 400, 'height': 800})
+        phone = "one('phone') !== null && !one('phone').paused && one('phone').playbackRate === 2"
+        self.check(
+            'after the viewer took over, the phone video plays at the chosen rate',
+            took_over and self.until(page, phone, 8000),
+            page.evaluate("[one('phone')?.paused, one('phone')?.playbackRate]"),
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1438,6 +1462,7 @@ def main(headed: bool) -> int:
             probe.src_removed,
             probe.rate_and_keyboard,
             probe.rate_across_widths_and_real_length,
+            probe.width_change_around_the_viewer,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,
