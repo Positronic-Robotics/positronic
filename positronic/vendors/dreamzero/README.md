@@ -60,10 +60,10 @@ previous actions like GR00T RTC.
 --policy.address.query='mode=rtc&prediction_period_sec=0.8'
 ```
 
-Chunked playback is limited to the prediction period to keep the future plan bounded. A model that
-cannot keep up eventually fills the runtime queue and fails explicitly. To compare behavior on slower
-hardware, `--charge_inference_time=False` pauses simulation during inference; that comparison does not
-establish real-time performance.
+Chunked playback is limited to the prediction period to keep the future plan bounded. At the outstanding
+call limit or runtime capacity, the client skips new samples and counts them in `skipped_samples` metadata.
+To compare behavior on slower hardware, `--charge_inference_time=False` pauses simulation during inference;
+that comparison does not establish real-time performance.
 
 ## Training
 
