@@ -44,10 +44,12 @@
 //   place of its cameras and its 3D replay, and the dock covers the page there.
 //
 // Events and methods
-//   A `replay-action` event, with `detail.action`, reports each control a visitor uses:
-//   open {row, from: Row|Step|Link}, close {row, via: Button|Escape}, filter {column, value},
-//   more {via: Button|Scroll}, resize {via: Drag|Key}, details {open}, full {row}, play {row, playing},
-//   seek {row}, speed {row, value}. A link open is reported first, so the host can show the element.
+//   A `replay-action` event, with `detail.action`, reports each use of a control by a visitor, one event a use:
+//   open {row, from: Row|Button|Run|Link|Step, via: Button|Key for a step}, close {row, via: Button|Escape},
+//   play {row, playing, via: Button|Video|Row|Run}, seek {row}, speed {row, value}, filter {column, value},
+//   more {via: Button|Scroll}, resize {via: Drag|Key}, details {open}, full {row}, link {row}.
+//   A link open is reported first, so the host can show the element. The keys inside the 3D viewer step and
+//   close as on the page; the viewer's own controls report nothing.
 //   `show({column key: value, …})` sets the filters; a value the column does not offer shows all.
 //   The `details` slot shows in the dock beside the player, behind a Details button.
 //   The `actions` slot shows in the compact head.
@@ -446,7 +448,10 @@ export class PositronicReplay extends HTMLElement {
 
   /** A click on the row's link follows it; a click anywhere else in the row opens the row. */
   #rowClicked(event, row) {
-    if (event.composedPath().some((node) => node instanceof HTMLAnchorElement)) return;
+    if (event.composedPath().some((node) => node instanceof HTMLAnchorElement)) {
+      if (event.isTrusted) this.#act('link', { row: row.id });
+      return;
+    }
     if (this.#docked) this.#open(row, 'Row', event);
     else this.#select(row, event);
   }
@@ -544,7 +549,7 @@ export class PositronicReplay extends HTMLElement {
       const button = element('button', { type: 'button', part: 'step', 'aria-label': label, title }, [
         by < 0 ? '↑' : '↓',
       ]);
-      button.addEventListener('click', () => this.#step(by));
+      button.addEventListener('click', () => this.#step(by, 'Button'));
       return button;
     };
     const details = element('div', { part: 'details', hidden: '' }, [element('slot', { name: 'details' })]);
@@ -613,9 +618,10 @@ export class PositronicReplay extends HTMLElement {
     }
   }
 
-  /** `from` names what opened it: a row, a step from the open row, or a link that names the row. */
-  #open(row, from, event = null) {
-    if (from !== 'Row' || event?.isTrusted) this.#act('open', { row: row.id, from });
+  /** `from` names what opened it: a row, a step from the open row, or a link that names the row. A step names
+   * its `via`: a button or a key. */
+  #open(row, from, event = null, via = null) {
+    if (from !== 'Row' || event?.isTrusted) this.#act('open', { row: row.id, from, ...(via && { via }) });
     if (openDock && openDock !== this) openDock.#close();
     openDock = this;
     this.#current = row;
@@ -674,10 +680,10 @@ export class PositronicReplay extends HTMLElement {
     setLinkParam(this.getAttribute('link-param'), null);
   }
 
-  #step(by) {
+  #step(by, via) {
     const matches = this.#matches();
     const next = matches[matches.indexOf(this.#current) + by];
-    if (next) this.#open(next, 'Step');
+    if (next) this.#open(next, 'Step', null, via);
   }
 
   #showPosition(matches) {
@@ -698,7 +704,7 @@ export class PositronicReplay extends HTMLElement {
     event.preventDefault();
     event.stopPropagation();
     if (by) {
-      this.#step(by);
+      this.#step(by, 'Key');
       return;
     }
     this.#act('close', { row: this.#current?.id, via: 'Escape' });
@@ -833,7 +839,11 @@ export class PositronicReplay extends HTMLElement {
         element('span', { part: 'episode-values' }, values),
         element('span', { part: 'episode-time' }, [row.durationS === null ? '' : seconds(row.durationS)]),
       ]);
-      for (const node of [run, item]) node.addEventListener('click', (event) => this.#pick(row, event));
+      run.addEventListener('click', (event) => this.#pick(row, event, 'Run'));
+      item.addEventListener('click', (event) => {
+        const button = event.composedPath().some((node) => node instanceof HTMLButtonElement);
+        this.#pick(row, event, button ? 'Button' : 'Row');
+      });
       this.#rows.set(row, [item, run]);
       return item;
     });
@@ -870,16 +880,17 @@ export class PositronicReplay extends HTMLElement {
     observe(this.#held, new ResizeObserver(moreBelow)).observe(list);
   }
 
-  /** A row opens the screen and plays; the open row plays or pauses. */
-  #pick(row, event) {
+  /** A row opens the screen and plays; the open row plays or pauses. `via` names what the visitor used: the row,
+   * its play button, or its run in the strip. */
+  #pick(row, event, via) {
     const playing = this.#player.lead;
     if (this.#current === row && playing) {
-      if (event.isTrusted) this.#act('play', { row: row.id, playing: playing.paused });
+      if (event.isTrusted) this.#act('play', { row: row.id, playing: playing.paused, via });
       if (playing.paused) start(playing);
       else playing.pause();
       return;
     }
-    if (event.isTrusted) this.#act('open', { row: row.id, from: 'Row' });
+    if (event.isTrusted) this.#act('open', { row: row.id, from: via });
     this.#current = row;
     for (const [each, nodes] of this.#rows) nodes.forEach((node) => node.part.toggle('current', each === row));
     this.#play(row, { autoplay: true });

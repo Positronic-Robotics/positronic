@@ -253,7 +253,8 @@ export class EpisodePlayer {
   }
 
   // A video that fails is asked for once more: a 202 means it is building, and it loads again after the wait.
-  #watch(video, url, onNote) {
+  // `wantsPlay()` says whether the video plays once it loads again.
+  #watch(video, url, onNote, wantsPlay) {
     video.addEventListener('error', async () => {
       if (video.getAttribute('src') !== url) return;
       const turn = this.#turn;
@@ -263,6 +264,7 @@ export class EpisodePlayer {
         onNote(NOTES.videoBuilding, 'building');
         await this.#pause(answer.retryS);
         if (turn !== this.#turn) return;
+        if (wantsPlay()) video.addEventListener('loadeddata', () => start(video), { once: true });
         video.src = url;
         return;
       }
@@ -271,15 +273,29 @@ export class EpisodePlayer {
     video.addEventListener('loadeddata', () => onNote(null, MediaState.READY));
   }
 
+  // The phone video takes the element's own controls, so each control a visitor uses reports one action.
   #playPhone(row, { autoplay, at }) {
-    const video = element('video', { part: 'phone', src: row.phone, controls: '', playsinline: '', muted: '' });
+    const video = element('video', { part: 'phone', src: row.phone, playsinline: '', muted: '' });
     video.muted = true;
     video.dataset.name = 'The phone video';
     startAt(video, at);
-    this.#watch(video, row.phone, (note) => this.#setNote('video', note));
-    this.#stage.replaceChildren(video);
+    video.addEventListener('click', (event) => this.#toggle(row, video, event.isTrusted ? 'Video' : null));
+    this.#watch(
+      video,
+      row.phone,
+      (note) => this.#setNote('video', note),
+      () => autoplay,
+    );
+    this.#stage.replaceChildren(video, this.#controls(row, video, row.durationS));
     this.lead = video;
     if (autoplay) start(video);
+  }
+
+  /** Plays or pauses `lead`, and reports it as the visitor's use of the control `via`; null reports nothing. */
+  #toggle(row, lead, via) {
+    if (via) this.#act('play', { row: row.id, playing: lead.paused, via });
+    if (lead.paused) start(lead);
+    else lead.pause();
   }
 
   #playCameras(row, { autoplay, at }) {
@@ -316,24 +332,32 @@ export class EpisodePlayer {
       video.muted = true;
       video.dataset.name = name;
       startAt(video, at);
-      video.addEventListener('click', () => this.#stage.querySelector('[part~="play"]')?.click());
+      video.addEventListener('click', (event) => this.#toggle(row, this.lead, event.isTrusted ? 'Video' : null));
       const caption = element('figcaption', { part: 'caption' }, [name]);
       const figure = element('figure', { part: 'figure' }, [video, caption]);
-      this.#watch(video, camera.src, (note, state) => {
-        figure.dataset.state = state;
-        caption.textContent = note ? `${name} · ${state}` : name;
-        if (note) this.#setNote('video', note);
-        else if ([...this.#stage.querySelectorAll('figure')].every((each) => each.dataset.state === MediaState.READY)) {
-          this.#setNote('video', null);
-        }
-        if (state !== MediaState.GONE && state !== MediaState.FAILED) return;
-        lost.add(video);
-        // A lost lead hands the controls to a camera that can still play.
-        const next = video === this.lead ? videos.find((each) => !lost.has(each)) : null;
-        if (!next) return;
-        drive(next);
-        if (autoplay) start(next);
-      });
+      const wantsPlay = () => autoplay && video === this.lead;
+      this.#watch(
+        video,
+        camera.src,
+        (note, state) => {
+          figure.dataset.state = state;
+          caption.textContent = note ? `${name} · ${state}` : name;
+          if (note) this.#setNote('video', note);
+          else if (
+            [...this.#stage.querySelectorAll('figure')].every((each) => each.dataset.state === MediaState.READY)
+          ) {
+            this.#setNote('video', null);
+          }
+          if (state !== MediaState.GONE && state !== MediaState.FAILED) return;
+          lost.add(video);
+          // A lost lead hands the controls to a camera that can still play.
+          const next = video === this.lead ? videos.find((each) => !lost.has(each)) : null;
+          if (!next) return;
+          drive(next);
+          if (autoplay) start(next);
+        },
+        wantsPlay,
+      );
       return figure;
     });
     const videos = figures.map((figure) => figure.querySelector('video'));
@@ -342,14 +366,14 @@ export class EpisodePlayer {
     if (autoplay) start(videos[longest]);
   }
 
-  // One control set for the episode, which drives `lead`.
+  // One control set for the episode, which drives `lead`. Without `durationS`, the length of `lead` sets the end.
   #controls(row, lead, durationS) {
     const play = element('button', { type: 'button', part: 'play', 'aria-label': PLAY_LABEL }, ['▶']);
     const seek = element('input', {
       type: 'range',
       part: 'seek',
       min: '0',
-      max: String(durationS),
+      max: String(durationS ?? 0),
       step: '0.01',
       value: '0',
       'aria-label': 'Position',
@@ -360,19 +384,21 @@ export class EpisodePlayer {
       { part: 'speed', 'aria-label': 'Speed' },
       SPEEDS.map((rate) => element('option', { value: String(rate), selected: rate === 1 ? '' : null }, [`${rate}×`])),
     );
+    let total = durationS;
+    lead.addEventListener('loadedmetadata', () => {
+      if (total) return;
+      total = lead.duration;
+      seek.max = String(total);
+    });
     const showState = () => {
       play.textContent = lead.paused ? '▶' : '❚❚';
       play.setAttribute('aria-label', lead.paused ? PLAY_LABEL : PAUSE_LABEL);
     };
     const showTime = () => {
       seek.value = String(lead.currentTime);
-      time.textContent = `${clock(lead.currentTime)} / ${clock(durationS)}`;
+      time.textContent = `${clock(lead.currentTime)} / ${clock(total)}`;
     };
-    play.addEventListener('click', (event) => {
-      if (event.isTrusted) this.#act('play', { row: row.id, playing: lead.paused });
-      if (lead.paused) start(lead);
-      else lead.pause();
-    });
+    play.addEventListener('click', (event) => this.#toggle(row, lead, event.isTrusted ? 'Button' : null));
     seek.addEventListener('input', () => {
       lead.currentTime = Number(seek.value);
     });

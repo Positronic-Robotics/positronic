@@ -125,7 +125,8 @@ def long_share() -> dict:
 
 def inline_rows() -> dict:
     """Rows of every cell type and media state. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media,
-    9 lost its videos, 10 builds them, 11 lost its longest video only, 12 builds its replay and its videos."""
+    9 lost its videos, 10 builds them, 11 lost its longest video only, 12 builds its replay and its videos,
+    13 builds its videos only."""
     rows = []
     for n in range(1, ROWS + 1):
         cameras = [
@@ -167,6 +168,10 @@ def inline_rows() -> dict:
         if n == 11:
             longest = {**cameras[0], 'src': cameras[0]['src'].replace('/ok/', '/gone/'), 'duration_s': 3.0}
             row['cameras'] = [longest, cameras[1]]
+            for key in ('rrd', 'phone'):
+                del row[key]
+        if n == 13:
+            row['cameras'] = [{**camera, 'src': camera['src'].replace('/ok/', '/building/')} for camera in cameras]
             for key in ('rrd', 'phone'):
                 del row[key]
         if n == 12:
@@ -367,6 +372,16 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
 # ── The checks ───────────────────────────────────────────────────────────────
 
 
+def part(page: Page, name: str):
+    """The element's nodes that carry the part `name`."""
+    return page.locator(f'positronic-replay [part~="{name}"]')
+
+
+def cell(page: Page, row: int):
+    """A cell of the row `row` with no link in it."""
+    return page.locator(f'positronic-replay tr[data-id="{row}"] td').nth(2)
+
+
 class Probe:
     def __init__(self, browser: Browser, base: str, requests: Requests):
         self.browser = browser
@@ -476,7 +491,10 @@ class Probe:
         page.locator('positronic-replay [part~="row"]').nth(1).click()
         self.check('a row click makes the row current', page.evaluate("all('row')[1].part.contains('current')"))
         actions = self.actions(page)
-        wanted = [{'action': 'play', 'row': '0', 'playing': True}, {'action': 'open', 'row': '1', 'from': 'Row'}]
+        wanted = [
+            {'action': 'play', 'row': '0', 'playing': True, 'via': 'Button'},
+            {'action': 'open', 'row': '1', 'from': 'Row'},
+        ]
         self.check('the controls send play and open', actions == wanted, actions)
         self.nothing_detailed(page, mark)
         page.close()
@@ -511,7 +529,7 @@ class Probe:
         actions = self.actions(page)
         wanted = [
             {'action': 'open', 'row': '1', 'from': 'Row'},
-            {'action': 'play', 'row': '1', 'playing': False},
+            {'action': 'play', 'row': '1', 'playing': False, 'via': 'Row'},
             {'action': 'close', 'row': '1', 'via': 'Button'},
         ]
         self.check('the controls send open, play and close', actions == wanted, actions)
@@ -618,7 +636,7 @@ class Probe:
         wanted = [{'action': 'open', 'row': row, 'from': 'Row'} for row in ('5', '6', '9', '10', '8')] + [
             {'action': 'details', 'open': True},
             {'action': 'resize', 'via': 'Key'},
-            {'action': 'open', 'row': '9', 'from': 'Step'},
+            {'action': 'open', 'row': '9', 'from': 'Step', 'via': 'Button'},
             {'action': 'full', 'row': '9'},
             {'action': 'close', 'row': '9', 'via': 'Button'},
         ]
@@ -657,8 +675,8 @@ class Probe:
         self.check('closing removes the link parameter', 'episode=' not in page.url, page.url)
         actions = self.actions(page)
         wanted = [
-            {'action': 'open', 'row': '119', 'from': 'Step'},
-            {'action': 'open', 'row': '118', 'from': 'Step'},
+            {'action': 'open', 'row': '119', 'from': 'Step', 'via': 'Key'},
+            {'action': 'open', 'row': '118', 'from': 'Step', 'via': 'Key'},
             {'action': 'close', 'row': '118', 'via': 'Escape'},
         ]
         self.check('the steps and Escape send open/Step and close/Escape', actions == wanted, actions)
@@ -768,6 +786,177 @@ class Probe:
         self.check('a click beside the link opens the row', self.until(page, "host().hasAttribute('open')", 5000))
         page.close()
 
+    def building_video_autoplays(self):
+        print('A row that opens playing while its videos build:')
+        page = self.open('/page/dock?episode=13')
+        lead = "all('camera').find((video) => video.dataset.camera === 'front')"
+        self.until(page, "noteText().includes('building')", 8000)
+        playing = self.until(page, f'{lead} && !{lead}.paused && {lead}.currentTime > 0.2', 15000)
+        self.check('the video plays once the server has built it', playing, page.evaluate('noteText()'))
+        page.close()
+
+    def used(self, page: Page, control: str, use, wanted: dict):
+        """Uses one control, and checks that it sends `wanted` and nothing else."""
+        use()
+        time.sleep(0.4)
+        actions = self.actions(page)
+        self.check(f'{control} sends one action', actions == [wanted], actions)
+
+    def every_control_reports_once(self):
+        print('Every control a visitor uses, one at a time:')
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        self.used(
+            page,
+            'the task filter',
+            lambda: page.locator('positronic-replay select[data-key="task"]').press('T'),
+            {'action': 'filter', 'column': 'task', 'value': 'Task 1'},
+        )
+        page.evaluate("host().show({task: ''})")
+        self.used(page, 'the more button', lambda: part(page, 'more').click(), {'action': 'more', 'via': 'Button'})
+        self.used(page, 'a scroll to the end', lambda: self.scroll_to_more(page), {'action': 'more', 'via': 'Scroll'})
+        self.used(page, 'a row', lambda: cell(page, 7).click(), {'action': 'open', 'row': '7', 'from': 'Row'})
+        self.until(page, "all('camera').length === 2 && !all('camera')[0].paused", 8000)
+        self.used(
+            page,
+            'the play button',
+            lambda: part(page, 'play').click(),
+            {'action': 'play', 'row': '7', 'playing': False, 'via': 'Button'},
+        )
+        self.used(
+            page,
+            'a camera',
+            lambda: part(page, 'camera').first.click(),
+            {'action': 'play', 'row': '7', 'playing': True, 'via': 'Video'},
+        )
+        self.used(page, 'the seek bar', lambda: part(page, 'seek').press('ArrowRight'), {'action': 'seek', 'row': '7'})
+        self.used(
+            page,
+            'the speed',
+            lambda: part(page, 'speed').press('ArrowDown'),
+            {'action': 'speed', 'row': '7', 'value': '2'},
+        )
+        self.used(
+            page,
+            'the next button',
+            lambda: part(page, 'step').nth(1).click(),
+            {'action': 'open', 'row': '8', 'from': 'Step', 'via': 'Button'},
+        )
+        self.used(
+            page,
+            'the up arrow',
+            lambda: page.keyboard.press('ArrowUp'),
+            {'action': 'open', 'row': '7', 'from': 'Step', 'via': 'Key'},
+        )
+        self.used(page, 'Details', lambda: part(page, 'details-toggle').click(), {'action': 'details', 'open': True})
+        box = part(page, 'resize').bounding_box()
+
+        def drag():
+            page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+            page.mouse.down()
+            page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2 - 60, steps=5)
+            page.mouse.up()
+
+        self.used(page, 'a drag of the dock edge', drag, {'action': 'resize', 'via': 'Drag'})
+        self.used(
+            page,
+            'an arrow on the dock edge',
+            lambda: part(page, 'resize').press('ArrowUp'),
+            {'action': 'resize', 'via': 'Key'},
+        )
+
+        def full_page():
+            with page.context.expect_page() as popup:
+                part(page, 'full').click()
+            popup.value.close()
+
+        self.used(page, 'Full page', full_page, {'action': 'full', 'row': '7'})
+        self.used(
+            page,
+            'the close button',
+            lambda: part(page, 'close').click(),
+            {'action': 'close', 'row': '7', 'via': 'Button'},
+        )
+        cell(page, 7).click()
+        self.actions(page)
+        self.used(
+            page, 'Escape', lambda: page.keyboard.press('Escape'), {'action': 'close', 'row': '7', 'via': 'Escape'}
+        )
+
+        def follow_link():
+            with page.expect_navigation(timeout=WAIT_MS):
+                page.locator('positronic-replay tr[data-id="2"] [part~="row-link"]').click()
+
+        page.evaluate(
+            "addEventListener('pagehide', () => sessionStorage.setItem('actions', JSON.stringify(window.actions)))"
+        )
+        follow_link()
+        actions = json.loads(page.evaluate("sessionStorage.getItem('actions') ?? '[]'"))
+        self.check('the row link sends one action', actions == [{'action': 'link', 'row': '2'}], actions)
+        page.close()
+
+        page = self.open('/page/compact')
+        self.until(page, "all('episode').length > 0")
+        self.used(
+            page,
+            'a compact row',
+            lambda: part(page, 'episode-values').nth(1).click(),
+            {'action': 'open', 'row': '1', 'from': 'Row'},
+        )
+        self.until(page, "host().hasAttribute('playing')", 8000)
+        self.used(
+            page,
+            'its play button',
+            lambda: part(page, 'episode-play').nth(1).click(),
+            {'action': 'play', 'row': '1', 'playing': False, 'via': 'Button'},
+        )
+        self.used(
+            page,
+            'its run',
+            lambda: part(page, 'run').nth(1).click(),
+            {'action': 'play', 'row': '1', 'playing': True, 'via': 'Run'},
+        )
+        self.until(page, "host().hasAttribute('playing')", 8000)
+        self.used(
+            page,
+            'a camera on the screen',
+            lambda: part(page, 'camera').first.click(),
+            {'action': 'play', 'row': '1', 'playing': False, 'via': 'Video'},
+        )
+        self.used(
+            page,
+            'the play button on the screen',
+            lambda: part(page, 'play').click(),
+            {'action': 'play', 'row': '1', 'playing': True, 'via': 'Button'},
+        )
+        self.used(
+            page,
+            'the screen close button',
+            lambda: part(page, 'screen-close').click(),
+            {'action': 'close', 'row': '1', 'via': 'Button'},
+        )
+        self.used(
+            page, 'another run', lambda: part(page, 'run').first.click(), {'action': 'open', 'row': '0', 'from': 'Run'}
+        )
+        page.close()
+
+        page = self.open('/page/dock?episode=7', width=400, height=800)
+        self.until(page, "one('phone') !== null && !one('phone').paused", 8000)
+        self.actions(page)
+        self.used(
+            page,
+            'the phone play button',
+            lambda: part(page, 'play').click(),
+            {'action': 'play', 'row': '7', 'playing': False, 'via': 'Button'},
+        )
+        self.used(
+            page,
+            'the phone video',
+            lambda: part(page, 'phone').click(),
+            {'action': 'play', 'row': '7', 'playing': True, 'via': 'Video'},
+        )
+        page.close()
+
     def width_change(self):
         print('A width change while a row plays:')
         page = self.open('/page/dock?episode=7')
@@ -842,6 +1031,8 @@ def main(headed: bool) -> int:
             probe.stale_and_broken_sources,
             probe.row_link,
             probe.width_change,
+            probe.building_video_autoplays,
+            probe.every_control_reports_once,
             probe.no_recording_row,
             probe.video_mode,
             probe.phone,
