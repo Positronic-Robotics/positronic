@@ -3,6 +3,7 @@
 import enum
 import importlib.util
 import inspect
+import logging
 import sys
 import types
 from contextlib import nullcontext
@@ -165,7 +166,8 @@ class DroppingSdk:
 
     A camera opened before the drop grabs again only from ``sdk_recovers_at``. ``None`` is a model whose loss the SDK
     never recovers, such as the ZED Mini. The first ``failed_reopens`` opens after the drop fail. A camera opened
-    before ``images_stop_at`` grabs with no error from then on, and gives no image.
+    before ``images_stop_at`` grabs with no error from then on, and gives no image. ``frame_means`` holds the mean
+    pixel value of each image of each camera object, in the order the driver makes them; the last value repeats.
     """
 
     def __init__(
@@ -176,6 +178,7 @@ class DroppingSdk:
         sdk_recovers_at: float | None = None,
         failed_reopens: int = 0,
         images_stop_at: float = float('inf'),
+        frame_means: tuple[tuple[int, ...], ...] = ((128,),),
     ):
         self.clock = clock
         self.lost_at = lost_at
@@ -183,11 +186,12 @@ class DroppingSdk:
         self.sdk_recovers_at = sdk_recovers_at
         self.failed_reopens = failed_reopens
         self.images_stop_at = images_stop_at
+        self.frame_means = frame_means
         self.cameras: list[FakeCamera] = []
         self.reboots: list[int] = []
 
     def __call__(self) -> 'FakeCamera':
-        camera = FakeCamera(self)
+        camera = FakeCamera(self, self.frame_means[min(len(self.cameras), len(self.frame_means) - 1)])
         self.cameras.append(camera)
         return camera
 
@@ -202,9 +206,16 @@ class DroppingSdk:
         return ErrorCode.INVALID_FUNCTION_CALL
 
 
+VIDEO_SETTINGS = ('AEC_AGC', 'EXPOSURE_TIME', 'ANALOG_GAIN', 'DIGITAL_GAIN', 'EXPOSURE', 'GAIN')
+# The settings the fake camera reports: a ZED X with auto-exposure on, as it reads after a normal open.
+REPORTED_SETTINGS = {'AEC_AGC': 1, 'EXPOSURE_TIME': 4389, 'ANALOG_GAIN': 7609, 'DIGITAL_GAIN': 1}
+
+
 class FakeCamera:
-    def __init__(self, sdk: DroppingSdk):
+    def __init__(self, sdk: DroppingSdk, frame_means: tuple[int, ...]):
         self._sdk = sdk
+        self._frame_means = frame_means
+        self.images_given = 0
         self.opened_at: float | None = None
         self.closed_at: float | None = None
 
@@ -232,11 +243,20 @@ class FakeCamera:
     def get_timestamp(self, _reference) -> types.SimpleNamespace:
         return types.SimpleNamespace(get_nanoseconds=self._sdk.clock.now_ns)
 
-    def retrieve_image(self, _image, _view) -> ErrorCode:
+    def retrieve_image(self, image: 'FakeMat', _view) -> ErrorCode:
         assert self.opened_at is not None
         if self.opened_at < self._sdk.images_stop_at <= self._sdk.clock.now():
             return ErrorCode.FAILURE
+        mean = self._frame_means[min(self.images_given, len(self._frame_means) - 1)]
+        self.images_given += 1
+        image.data = np.full((2, 2, 4), mean, dtype=np.uint8)
+        image.data[:, :, 3] = 255  # the SDK's BGRA alpha
         return ErrorCode.SUCCESS
+
+    def get_camera_settings(self, setting: str) -> tuple[ErrorCode, int]:
+        if setting in REPORTED_SETTINGS:
+            return ErrorCode.SUCCESS, REPORTED_SETTINGS[setting]
+        return ErrorCode.FAILURE, -1
 
 
 class FakeInitParameters:
@@ -245,13 +265,17 @@ class FakeInitParameters:
 
 
 class FakeMat:
+    def __init__(self) -> None:
+        self.data = np.zeros((2, 2, 4), dtype=np.uint8)
+
     def get_data(self) -> np.ndarray:
-        return np.zeros((2, 2, 4), dtype=np.uint8)
+        return self.data
 
 
 LOST_AT = 1.0
 LISTED_AGAIN_AT = 3.0
 NEVER = float('inf')
+DARK, BRIGHT = 20, 128
 
 
 @pytest.fixture
@@ -260,7 +284,7 @@ def world():
         yield w
 
 
-def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter):
+def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter, **settings):
     """The driver for the camera `SERIAL`, bound to ``sdk``, sending its frames to ``frames``."""
     module.sl.__dict__.update(
         ERROR_CODE=ErrorCode,
@@ -272,8 +296,9 @@ def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter):
         DEPTH_MODE=types.SimpleNamespace(NONE='none'),
         UNIT=types.SimpleNamespace(METER='meter'),
         TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
+        VIDEO_SETTINGS=types.SimpleNamespace(**{name: name for name in VIDEO_SETTINGS}),
     )
-    camera = module.SLCamera(serial_number=SERIAL)
+    camera = module.SLCamera(serial_number=SERIAL, **settings)
     camera.frame._bind(frames, clock=sdk.clock)
     return camera
 
@@ -303,6 +328,10 @@ def _frame_times(frames: RecordingEmitter) -> list[float]:
 
 def _errors(frames: RecordingEmitter) -> list[pimm.SignalError]:
     return [data for _, data in frames.emitted if isinstance(data, pimm.SignalError)]
+
+
+def _messages(caplog, part: str) -> list[str]:
+    return [record.getMessage() for record in caplog.records if part in record.getMessage()]
 
 
 def test_a_lost_camera_sends_an_error_and_keeps_it_until_it_is_asked_to_be_ready(zed_module):
@@ -437,3 +466,84 @@ def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
     stop.stopped = True
     _drive(loop, clock, until=clock.now() + 1.0)
     assert _returned(loop)
+
+
+def test_a_camera_that_opens_dark_is_reopened_once(zed_module, caplog):
+    caplog.set_level(logging.INFO)
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, frame_means=((DARK,), (BRIGHT,)))
+    loop = _camera(zed_module, sdk, frames).run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    dark, reopened = sdk.cameras
+    assert dark.closed_at is not None and reopened.closed_at is None
+    assert dark.images_given == zed_module.SLCamera.DARK_CHECK_FRAMES
+    assert _frame_times(frames) and not _errors(frames)
+    assert _messages(caplog, 'reopening') == [f'Camera {SERIAL} opened dark; reopening it once']
+    assert _messages(caplog, 'opened:') == [
+        f'Camera {SERIAL} opened: frame mean {DARK}.0 of 255; aec_agc 1, exposure_time 4389, analog_gain 7609, '
+        'digital_gain 1',
+        f'Camera {SERIAL} opened: frame mean {BRIGHT}.0 of 255; aec_agc 1, exposure_time 4389, analog_gain 7609, '
+        'digital_gain 1',
+    ]
+
+
+def test_a_camera_that_opens_at_the_dark_threshold_is_not_reopened(zed_module, caplog):
+    caplog.set_level(logging.INFO)
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, frame_means=((60,),))
+    loop = _camera(zed_module, sdk, frames, dark_frame_mean=60.0).run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    (camera,) = sdk.cameras
+    assert camera.closed_at is None
+    assert not _messages(caplog, 'dark')
+    assert _messages(caplog, 'opened:') == [
+        f'Camera {SERIAL} opened: frame mean 60.0 of 255; aec_agc 1, exposure_time 4389, analog_gain 7609, '
+        'digital_gain 1'
+    ]
+
+
+def test_a_camera_whose_dark_first_frames_turn_bright_within_the_check_is_not_reopened(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, frame_means=((DARK, DARK, BRIGHT),))
+    loop = _camera(zed_module, sdk, frames).run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    (camera,) = sdk.cameras
+    assert camera.closed_at is None
+
+
+def test_a_camera_that_is_still_dark_after_its_reopen_stays_open_and_sends_frames(zed_module, caplog):
+    caplog.set_level(logging.INFO)
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, frame_means=((DARK,),))
+    loop = _camera(zed_module, sdk, frames).run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    assert not _returned(loop)
+    dark, still_dark = sdk.cameras
+    assert dark.closed_at is not None and still_dark.closed_at is None
+    assert _frame_times(frames) and not _errors(frames)
+    assert _messages(caplog, 'still dark') == [f'Camera {SERIAL} is still dark after its reopen; it stays open']
+
+
+def test_a_dark_camera_that_fails_to_reopen_holds_the_error_until_a_ready_call_opens_it(zed_module, world, monkeypatch):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, frame_means=((DARK,), (DARK,), (BRIGHT,)))
+    close = FakeCamera.close
+
+    def close_and_leave_the_device_list(camera: FakeCamera) -> None:
+        close(camera)
+        sdk.lost_at = clock.now()
+
+    monkeypatch.setattr(FakeCamera, 'close', close_and_leave_the_device_list)
+    camera = _camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=10.0)
+    assert not _returned(loop)
+    assert not _frame_times(frames)
+    (error,) = _errors(frames)
+    assert isinstance(error, DeviceFault) and 'did not open' in str(error)
+
+    sdk.listed_at = clock.now()
+    answer = _readier(world, camera)(None)
+    _drive(loop, clock, until=clock.now() + 0.01)
+    assert answer.result() is None
+    assert _frame_times(frames)

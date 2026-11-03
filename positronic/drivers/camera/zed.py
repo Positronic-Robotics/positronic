@@ -44,6 +44,7 @@ class SLCamera(pimm.ControlSystem):
         depth_mask: bool = False,
         image_enhancement: bool = False,
         mono: bool = False,
+        dark_frame_mean: float = 50.0,
     ):
         """
         StereoLabs camera driver.
@@ -59,6 +60,8 @@ class SLCamera(pimm.ControlSystem):
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
             mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
                   support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
+            dark_frame_mean: (float) The camera is reopened once when no frame after an open has a mean pixel value,
+                  of 255, at or above this.
         """
         super().__init__()
         # IMPORTANT: This control system may be spawned under multiprocessing "spawn".
@@ -72,6 +75,7 @@ class SLCamera(pimm.ControlSystem):
         self._image_enhancement = image_enhancement
         self._depth_mask_requested = depth_mask
         self._mono = mono
+        self._dark_frame_mean = dark_frame_mean
 
         self.max_depth = max_depth
 
@@ -97,6 +101,10 @@ class SLCamera(pimm.ControlSystem):
     REBOOTED_CAMERA_MAX_POLLS = 60
     # A ready call reopens a camera whose last frame is older than this.
     STALE_FRAME_SEC = 1.0
+    # An open is dark only when all of this many frames are dark: one dark frame does not reopen the camera.
+    DARK_CHECK_FRAMES = 30
+    # Each open logs the ones of these that the camera model reports.
+    OPEN_LOG_SETTINGS = ('AEC_AGC', 'EXPOSURE_TIME', 'ANALOG_GAIN', 'DIGITAL_GAIN', 'EXPOSURE', 'GAIN')
 
     @staticmethod
     def _is_listed(serial: int) -> bool:
@@ -181,14 +189,55 @@ class SLCamera(pimm.ControlSystem):
             emitter.emit(error)
         return error
 
-    def _open_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
+    def _open_once_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, bool]:
         """Open a new camera and clear the error, or hold the error that the open path raises."""
         try:
             self._camera = yield from self._open_camera(should_stop)
         except CameraOpenError as e:
             self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
-            return
+            return False
         self._error = None
+        return True
+
+    def _open_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
+        """Open a new camera, and reopen it once when it opens dark. Hold the error when an open fails."""
+        if not (yield from self._open_once_or_hold(should_stop)) or not self._check_dark_open():
+            return
+        assert self._camera is not None
+        logger.warning('Camera %s opened dark; reopening it once', self._serial_number)
+        self._camera.close()
+        self._camera = None
+        if (yield from self._open_once_or_hold(should_stop)) and self._check_dark_open():
+            logger.warning('Camera %s is still dark after its reopen; it stays open', self._serial_number)
+
+    def _grab_frame_mean(self, camera) -> float | None:
+        """Grab one frame and return its mean pixel value, of 255, or ``None`` when the camera gives no image."""
+        image = sl.Mat()
+        if camera.grab() != sl.ERROR_CODE.SUCCESS or camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
+            return None
+        return float(image.get_data()[:, :, :3].mean())
+
+    def _check_dark_open(self) -> bool:
+        """Log the exposure, gain and frame mean of the camera that just opened. Return whether it opened dark."""
+        camera = self._camera
+        assert camera is not None, 'a camera that holds no error is open'
+        frame_mean = None
+        for _ in range(self.DARK_CHECK_FRAMES):
+            frame_mean = self._grab_frame_mean(camera)
+            if frame_mean is None or frame_mean >= self._dark_frame_mean:
+                break
+        brightness = 'no frame' if frame_mean is None else f'frame mean {frame_mean:.1f} of 255'
+        logger.info('Camera %s opened: %s; %s', self._serial_number, brightness, self._exposure_and_gain(camera))
+        return frame_mean is not None and frame_mean < self._dark_frame_mean
+
+    @staticmethod
+    def _exposure_and_gain(camera) -> str:
+        settings = []
+        for name in SLCamera.OPEN_LOG_SETTINGS:
+            error_code, value = camera.get_camera_settings(getattr(sl.VIDEO_SETTINGS, name))
+            if error_code == sl.ERROR_CODE.SUCCESS:
+                settings.append(f'{name.lower()} {value}')
+        return ', '.join(settings)
 
     def _make_ready(
         self, call: pimm.calls.Call[None, None], clock: pimm.Clock, should_stop: pimm.SignalReceiver
