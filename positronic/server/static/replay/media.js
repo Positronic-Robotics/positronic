@@ -296,6 +296,7 @@ export class EpisodePlayer {
       blank = view.location.href === 'about:blank';
     } catch (error) {
       if (error.name !== 'SecurityError') throw error;
+      // A cross-origin host refuses this step on every open, so it is a warning, not an error.
       console.warn(`The viewer on another origin keeps its own keys: ${error.message}`);
       return;
     }
@@ -416,9 +417,10 @@ export class EpisodePlayer {
       // The longest camera leads where it is ready, then the next longest.
       preferred: [...cameras].sort((a, b) => b.durationS - a.durationS),
       durationS: row.durationS ?? Math.max(...cameras.map((camera) => camera.durationS)),
-      // The visitor's play state and time, which a new lead takes over.
+      // The visitor's play state, time and rate, which a new lead takes over and every ready camera takes.
       playing: autoplay,
       moment: at,
+      rate: 1,
       lead: null,
       detach: () => {},
     };
@@ -452,6 +454,9 @@ export class EpisodePlayer {
     this.#setNote('video', cameraNote(episode.cameras.map((camera) => [camera.name, camera.state])));
     const lead = episode.preferred.find((camera) => camera.state === MediaState.READY)?.video ?? null;
     if (lead !== episode.lead) this.#lead(episode, lead);
+    for (const camera of episode.cameras) {
+      if (camera.state === MediaState.READY) setRate(camera.video, episode.rate);
+    }
     // A camera that is ready under a lead it has not joined takes the lead's time and play state.
     for (const camera of episode.cameras) {
       if (camera.state !== MediaState.READY || camera.video === lead || camera.joined === lead) continue;
@@ -477,15 +482,22 @@ export class EpisodePlayer {
     lead.addEventListener('timeupdate', () => lead.error || (episode.moment = lead.currentTime), { signal });
     const followers = episode.cameras.map((camera) => camera.video).filter((video) => video !== lead);
     follow(lead, followers, signal);
-    this.#stage.append(this.#controls(episode.row, lead, episode.durationS, signal));
+    const speed = {
+      rate: episode.rate,
+      choose: (rate) => {
+        episode.rate = rate;
+        this.#settle(episode);
+      },
+    };
+    this.#stage.append(this.#controls(episode.row, lead, episode.durationS, speed, signal));
     episode.detach = () => listening.abort();
     if (Math.abs(lead.currentTime - episode.moment) > DRIFT_S) seek(lead, Math.min(episode.moment, lead.duration));
     if (episode.playing) start(lead);
   }
 
   // One control set for the episode, which drives `lead` until `signal` aborts. Without `durationS`, the length of
-  // `lead` sets the end.
-  #controls(row, lead, durationS, signal = undefined) {
+  // `lead` sets the end. The speed control shows `speed.rate`, and `speed.choose` sets the episode's rate.
+  #controls(row, lead, durationS, speed, signal) {
     const play = element('button', { type: 'button', part: 'play', 'aria-label': PLAY_LABEL }, ['▶']);
     const slider = element('input', {
       type: 'range',
@@ -497,10 +509,12 @@ export class EpisodePlayer {
       'aria-label': 'Position',
     });
     const time = element('span', { part: 'clock' }, [`${clock(0)} / ${clock(durationS)}`]);
-    const speed = element(
+    const rates = element(
       'select',
       { part: 'speed', 'aria-label': 'Speed' },
-      SPEEDS.map((rate) => element('option', { value: String(rate), selected: rate === 1 ? '' : null }, [`${rate}×`])),
+      SPEEDS.map((rate) =>
+        element('option', { value: String(rate), selected: rate === speed.rate ? '' : null }, [`${rate}×`]),
+      ),
     );
     let total = durationS;
     // A row that names no length takes the lead's, which the lead can know before the controls attach.
@@ -524,16 +538,16 @@ export class EpisodePlayer {
       seek(lead, Number(slider.value));
     });
     slider.addEventListener('change', (event) => event.isTrusted && this.#act('seek', { row: row.id }));
-    speed.addEventListener('change', (event) => {
-      setRate(lead, Number(speed.value));
-      if (event.isTrusted) this.#act('speed', { row: row.id, value: speed.value });
+    rates.addEventListener('change', (event) => {
+      speed.choose(Number(rates.value));
+      if (event.isTrusted) this.#act('speed', { row: row.id, value: rates.value });
     });
     for (const type of ['play', 'pause', 'ended']) lead.addEventListener(type, showState, { signal });
     for (const type of ['timeupdate', 'seeked']) lead.addEventListener(type, showTime, { signal });
     showState();
     showTime();
     takeLength();
-    return element('div', { part: 'controls' }, [play, slider, time, speed]);
+    return element('div', { part: 'controls' }, [play, slider, time, rates]);
   }
 }
 
@@ -558,11 +572,4 @@ function follow(lead, followers, signal) {
     }
   };
   lead.addEventListener('pause', rest, { signal });
-  lead.addEventListener(
-    'ratechange',
-    () => {
-      for (const video of followers) setRate(video, lead.playbackRate);
-    },
-    { signal },
-  );
 }

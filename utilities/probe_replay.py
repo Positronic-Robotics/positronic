@@ -30,7 +30,6 @@ import av
 import numpy as np
 import rerun as rr
 from playwright.sync_api import Browser, ConsoleMessage, Error, Page, sync_playwright
-from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 STATIC = Path(__file__).resolve().parents[1] / 'positronic' / 'server' / 'static'
 FIXTURES = Path(__file__).resolve().parent / 'replay_fixtures'
@@ -508,14 +507,15 @@ class Probe:
 
     @staticmethod
     def actions(page: Page) -> list[dict]:
-        return page.evaluate('window.actions.splice(0)')
+        return page.evaluate('window.actions?.splice(0) ?? []')
 
     @staticmethod
     def until(page: Page, condition: str, timeout: int = WAIT_MS) -> bool:
+        """Whether `condition` holds within `timeout`. A page that moved on, as after a followed link, fails it."""
         try:
             page.wait_for_function(condition, timeout=timeout)
             return True
-        except PlaywrightTimeout:
+        except Error:
             return False
 
     @staticmethod
@@ -1259,6 +1259,48 @@ class Probe:
         self.check('an inline script then renders', self.until(page, "all('row').length === 1", 5000))
         page.close()
 
+    def rate_and_keyboard(self):
+        print('The speed under late and new leads, and a row opened from the keyboard:')
+        page = self.open('/page/dock?episode=18', wait_until='domcontentloaded')
+        front, wrist = camera_named('front'), camera_named('wrist')
+        self.until(page, f'{front} && !{front}.paused', 8000)
+        part(page, 'speed').press('ArrowDown')
+        built = self.until(page, f"{wrist}.parentElement.dataset.state === 'ready'", 20000)
+        rates = page.evaluate(f'[{front}.playbackRate, {wrist}.playbackRate]')
+        self.check('a camera ready after the visitor chose 2x plays at 2x', built and rates == [2, 2], rates)
+        page.close()
+        page = self.open('/page/dock?episode=16', wait_until='domcontentloaded')
+        side = camera_named('side')
+        self.until(page, f'{camera_named("wrist")} && !{camera_named("wrist")}.paused', 8000)
+        part(page, 'speed').press('ArrowDown')
+        # At 2x the seek bar moves 0.5 s of video between two `timeupdate` events, so it may lag that much.
+        led = self.until(page, f"{side}.parentElement.dataset.state === 'ready'", 20000)
+        time.sleep(0.5)
+        state = page.evaluate(
+            f"[{side}.playbackRate, one('speed').value, Math.abs(Number(one('seek').value) - {side}.currentTime) < 0.6]"
+        )
+        self.check('a new lead plays at 2x and its speed control shows 2x', led and state == [2, '2', True], state)
+        page.close()
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        on_row = 'host().shadowRoot.activeElement?.matches(\'tr[part~="row"]\')'
+        for _ in range(12):
+            page.keyboard.press('Tab')
+            if page.evaluate(on_row):
+                break
+        focused = page.evaluate(f'{on_row} ? host().shadowRoot.activeElement.dataset.id : null')
+        self.actions(page)
+        page.keyboard.press('Enter')
+        opened = self.until(page, "host().hasAttribute('open')", 5000)
+        actions = self.actions(page)
+        wanted = [{'action': 'open', 'row': focused, 'from': 'Row', 'via': 'Key'}]
+        self.check(
+            'Tab reaches a row, and Enter opens it',
+            focused is not None and opened and actions == wanted,
+            (focused, actions),
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1354,6 +1396,7 @@ def main(headed: bool) -> int:
             probe.take_over_and_join,
             probe.dock_below_and_length,
             probe.src_removed,
+            probe.rate_and_keyboard,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

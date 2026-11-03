@@ -70,7 +70,7 @@
 // Events
 //   - A `replay-action` event reports each use of a control by a visitor. Each use sends one event.
 //   - `detail.action` names the action. The fields of each action:
-//     - open {row, from: Row|Button|Run|Link|Step, via: Button|Key for a step}
+//     - open {row, from: Row|Button|Run|Link|Step, via: Button|Key for a step, via: Key for a row from the keyboard}
 //     - close {row, via: Button|Escape}
 //     - play {row, playing, via: Button|Video|Row|Run|Native}
 //     - seek {row, via?}
@@ -81,6 +81,7 @@
 //     - details {open}
 //     - full {row}
 //     - link {row}
+//   - A table row takes the keyboard focus. Enter or Space on it opens it, as a click does.
 //   - A script event sends no action.
 //   - A link open is reported first, so the host can show the element.
 //   - The phone video keeps the browser's controls. A use of them sends `via: Native`.
@@ -564,8 +565,9 @@ export class PositronicReplay extends HTMLElement {
         const content = cellContent(column, row.values[column.key], column === linkColumn ? row.href : null);
         return element('td', { part: `cell ${column.type}`, 'data-label': column.label }, content);
       });
-      const tr = element('tr', { part: 'row', 'data-id': row.id }, cells);
+      const tr = element('tr', { part: 'row', 'data-id': row.id, tabindex: '0', 'aria-label': row.label }, cells);
       tr.addEventListener('click', (event) => this.#rowClicked(event, row));
+      tr.addEventListener('keydown', (event) => this.#rowKey(event, row));
       this.#rows.set(row, tr);
       return tr;
     });
@@ -580,6 +582,14 @@ export class PositronicReplay extends HTMLElement {
     }
     if (this.#docked) this.#open(row, 'Row', event);
     else this.#select(row, event);
+  }
+
+  /** Enter or Space on the row itself opens it; a link in the row keeps its own keys. */
+  #rowKey(event, row) {
+    if (event.composedPath()[0] !== this.#rows.get(row) || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault();
+    if (this.#docked) this.#open(row, 'Row', event, 'Key');
+    else this.#select(row, event, 'Key');
   }
 
   // A sticky row inside the sideways scroller sticks to the scroller, so the copy that stays under the host's
@@ -653,13 +663,13 @@ export class PositronicReplay extends HTMLElement {
   }
 
   /** The player above the list shows `row`. */
-  #select(row, event = null) {
+  #select(row, event = null, via = null) {
     this.#current = row;
     this.#reveal(row);
     this.#markCurrent(row);
     this.#play(row, { autoplay: false });
     if (event?.isTrusted) {
-      this.#act('open', { row: row.id, from: 'Row' });
+      this.#act('open', { row: row.id, from: 'Row', ...(via && { via }) });
       setLinkParam(this.#linkParam, row.id);
     }
   }
@@ -745,7 +755,7 @@ export class PositronicReplay extends HTMLElement {
   }
 
   /** `from` names what opened it: a row, a step from the open row, or a link that names the row. A step names
-   * its `via`: a button or a key. */
+   * its `via`, a button or a key, and a row opened from the keyboard names `via: Key`. */
   #open(row, from, event = null, via = null) {
     // A link names the row in the page's own address, so its open counts as the visitor's.
     if (from === 'Link' || event?.isTrusted) this.#act('open', { row: row.id, from, ...(via && { via }) });
