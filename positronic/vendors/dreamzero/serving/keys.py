@@ -16,6 +16,8 @@ TASK = 'task'
 EXTERIOR_IMAGE = 'image.exterior'
 EXTERIOR_IMAGE_2 = 'image.exterior_2'
 WRIST_IMAGE = 'image.wrist'
+TYPE = 'type'
+CHECKPOINT_PATH = 'checkpoint_path'
 
 MODEL_SOURCE_ENV = 'DREAMZERO_MODEL_SOURCE'
 AUTH_TOKEN_ENV = 'AUTH_TOKEN'
