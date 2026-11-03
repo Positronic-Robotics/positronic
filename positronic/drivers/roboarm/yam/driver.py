@@ -76,6 +76,20 @@ def _chain_call() -> Iterator[None]:
         raise ChainFault(f'the chain failed: {exc}') from exc
 
 
+def _set_coulomb_friction(chain: Any, compensation: Compensation) -> None:
+    """Set the Coulomb friction of ``compensation`` on ``chain``, which i2rt opened with the flag off. The values go
+    in before the flag, so the control loop of the chain never runs the values of i2rt's arm config in their place.
+
+    HACK: i2rt's get_yam_robot takes the flag but reads the values only from its arm config.
+    """
+    if compensation.coulomb_friction is not None:
+        friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)  # none on the gripper motor
+        if friction.shape != chain._coulomb_friction.shape:
+            raise ValueError(f'coulomb_friction needs one value per arm joint, not {compensation.coulomb_friction}')
+        chain._coulomb_friction = friction
+    chain.use_coulomb_friction = compensation.use_coulomb_friction
+
+
 def _connect(channel: str, sim: bool, compensation: Compensation):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
     # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
@@ -95,20 +109,6 @@ def _connect(channel: str, sim: bool, compensation: Compensation):
     if not sim:  # i2rt's sim chain runs no friction
         _set_coulomb_friction(chain, compensation)
     return chain
-
-
-def _set_coulomb_friction(chain: Any, compensation: Compensation) -> None:
-    """Set the Coulomb friction of ``compensation`` on ``chain``. The values go in before the flag, so the control loop
-    of the chain never runs the values of i2rt's arm config in their place.
-
-    HACK: i2rt's get_yam_robot takes the flag but reads the values only from its arm config.
-    """
-    if compensation.coulomb_friction is not None:
-        friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)  # none on the gripper motor
-        if friction.shape != chain._coulomb_friction.shape:
-            raise ValueError(f'coulomb_friction needs one value per arm joint, not {compensation.coulomb_friction}')
-        chain._coulomb_friction = friction
-    chain.use_coulomb_friction = compensation.use_coulomb_friction
 
 
 class YamState(State, pimm.shared_memory.NumpySMAdapter):
