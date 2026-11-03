@@ -1,3 +1,5 @@
+import copy
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -5,6 +7,8 @@ import torch
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.types import FeatureType
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
+from lerobot.policies.pretrained import PreTrainedPolicy
+from lerobot.processor import PolicyProcessorPipeline
 from lerobot.utils.constants import OBS_IMAGES
 
 from positronic.offboard.spec import Model
@@ -51,10 +55,24 @@ def warm_observation(config: PreTrainedConfig) -> dict[str, Any]:
     return obs
 
 
+@dataclass
+class _Session:
+    """One session's copy of the policy and its processors, which holds the session's queues."""
+
+    policy: PreTrainedPolicy
+    preprocessor: PolicyProcessorPipeline
+    postprocessor: PolicyProcessorPipeline
+
+
 class LerobotModel(Model):
+    """A LeRobot policy that serves overlapping sessions, each with its own state, over one copy of the weights.
+
+    The loaded policy and processors run no inference. Each session runs a copy of them.
+    """
+
     def __init__(self, checkpoint_path: str, device: str | None = None, extra_meta: dict[str, Any] | None = None):
         self._device = device or _detect_device()
-        self._session_id: str | None = None
+        self._sessions: dict[str, _Session] = {}
         config = PreTrainedConfig.from_pretrained(checkpoint_path)
         policy_cls = get_policy_class(config.type)
         self._policy = policy_cls.from_pretrained(checkpoint_path).to(self._device)
@@ -69,14 +87,15 @@ class LerobotModel(Model):
     def meta(self) -> dict[str, Any]:
         return self._meta
 
+    def _new_session(self) -> _Session:
+        """A copy of the loaded policy and processors that shares every parameter and buffer of the policy."""
+        weights = {id(t): t for t in [*self._policy.parameters(), *self._policy.buffers()]}
+        return _Session(*copy.deepcopy((self._policy, self._preprocessor, self._postprocessor), weights))
+
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
-        if self._session_id is None:
-            self._policy.reset()
-            self._preprocessor.reset()
-            self._postprocessor.reset()
-            self._session_id = session_id
-        if self._session_id != session_id:
-            raise RuntimeError('LeRobot is serving another session; end it before starting inference')
+        if session_id not in self._sessions:
+            self._sessions[session_id] = self._new_session()
+        session = self._sessions[session_id]
         obs_int = {}
         for key, val in obs.items():
             if key == TASK_FIELD:
@@ -90,11 +109,11 @@ class LerobotModel(Model):
             else:
                 obs_int[key] = torch.as_tensor(val)
 
-        obs_int = self._preprocessor(obs_int)
+        obs_int = session.preprocessor(obs_int)
 
-        action = self._policy.select_action(obs_int)
+        action = session.policy.select_action(obs_int)
 
-        action = self._postprocessor(action)
+        action = session.postprocessor(action)
 
         action = action.cpu().numpy().squeeze(0)
         if action.ndim == 1:
@@ -102,13 +121,10 @@ class LerobotModel(Model):
         return [{ACTION: a} for a in action]
 
     def end_session(self, session_id: str) -> None:
-        if self._session_id == session_id:
-            self._policy.reset()
-            self._preprocessor.reset()
-            self._postprocessor.reset()
-            self._session_id = None
+        self._sessions.pop(session_id, None)
 
     def close(self):
+        self._sessions.clear()
         if self._policy is not None:
             del self._policy
             self._policy = None
