@@ -318,9 +318,11 @@ export class EpisodePlayer {
     if (holder && holder === this.#focused()) this.focusViewer();
   }
 
-  /** The element with the focus, in the element's own tree where the focus is there. */
+  /** The innermost element with the focus: a shadow tree on the page reports only its host, so look inside it. */
   #focused() {
-    return this.#root.getRootNode().activeElement ?? this.#root.ownerDocument.activeElement;
+    let focused = this.#root.ownerDocument.activeElement;
+    while (focused?.shadowRoot?.activeElement) focused = focused.shadowRoot.activeElement;
+    return focused;
   }
 
   #hideFrame() {

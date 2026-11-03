@@ -352,6 +352,14 @@ def page_html(body: str) -> str:
     return f'<!doctype html><html><head><meta charset="utf-8">{helpers}{SCRIPT}</head><body>{body}</body></html>'
 
 
+PANEL = (
+    '<probe-panel></probe-panel><script>customElements.define("probe-panel", class extends HTMLElement {'
+    ' constructor() { super(); this.attachShadow({ mode: "open" }).innerHTML ='
+    ' "<button>A control</button><select><option>One</option></select>"; } });</script>'
+)
+"""Another component with its own shadow tree, which holds the focus apart from the element's."""
+
+
 def inline_element(attributes: str) -> str:
     data = json.dumps(inline_rows()).replace('</', '<\\/')
     return (
@@ -381,6 +389,7 @@ def pages() -> dict[str, str]:
         ),
         '/page/dock': page_html(inline_element('mode="full" dock link-param="episode"')),
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
+        '/page/dock-panel': page_html(inline_element('mode="full" dock link-param="episode"') + PANEL),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/nulls': page_html(null_cells()),
         '/page/cut': page_html(f'<positronic-replay src="{SHARE}/cut.json"></positronic-replay>'),
@@ -1615,7 +1624,7 @@ class Probe:
         page = self.open('/page/dock?episode=35')
         shown = self.until(page, "loads('/rrd/ok/35.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
         page.locator('positronic-replay iframe').click()
-        self.until(page, 'host().shadowRoot.activeElement === frame()', 5000)
+        focused = self.until(page, 'host().shadowRoot.activeElement === frame()', 5000)
         page.keyboard.press('ArrowDown')
         time.sleep(0.3)
         page.locator('positronic-replay select[data-key="task"]').focus()
@@ -1623,7 +1632,28 @@ class Probe:
         time.sleep(1)
         kept = page.evaluate('host().shadowRoot.activeElement?.matches(\'select[data-key="task"]\') ?? false')
         self.check(
-            'the select the visitor chose keeps the focus once the recording shows', shown and showed and kept, kept
+            'the select the visitor chose keeps the focus once the recording shows',
+            shown and focused and showed and kept,
+            (focused, kept),
+        )
+        page.close()
+
+    def focus_inside_another_component(self):
+        print('A focus move inside another component on the page while a recording is pending:')
+        page = self.open('/page/dock-panel?episode=35')
+        shown = self.until(page, "loads('/rrd/ok/35.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
+        page.locator('probe-panel button').focus()
+        page.keyboard.press('ArrowDown')
+        time.sleep(0.3)
+        stepped = page.evaluate("row('36').part.contains('current')")
+        page.locator('probe-panel select').focus()
+        showed = self.until(page, "loads('/rrd/slow/36.rrd')", 15000)
+        time.sleep(1)
+        kept = page.evaluate("document.querySelector('probe-panel').shadowRoot.activeElement?.tagName === 'SELECT'")
+        self.check(
+            'the select inside the other component keeps the focus once the recording shows',
+            shown and stepped and showed and kept,
+            (stepped, kept),
         )
         page.close()
 
@@ -1737,6 +1767,7 @@ def main(headed: bool) -> int:
             probe.fault_is_not_input,
             probe.keys_from_the_viewer,
             probe.broken_body_and_focus_choice,
+            probe.focus_inside_another_component,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,
