@@ -208,10 +208,6 @@ ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
 }
 
 
-# The wires whose session dial carries no header of the endpoint, so no bearer token reaches the server.
-_WIRES_THAT_PRESENT_NO_TOKEN = frozenset({Wire.websocket_unix, Wire.modal_websocket_tls})
-
-
 # The serialisation context key under which the secrets of a request dump as plaintext: each registry password and
 # each endpoint token.
 REVEAL_SECRETS = 'reveal_secrets'
@@ -463,7 +459,8 @@ class _EndpointBase(Cascade):
         self._refuse_off_a_remote_address(
             'a bearer token', "the platform serves this policy and gives it the run's own token"
         )
-        if self.wire is not None and self.wire in _WIRES_THAT_PRESENT_NO_TOKEN:
+        # The session dial of these wires carries no header of the endpoint, so no bearer token reaches the server.
+        if self.wire is Wire.websocket_unix or self.wire is Wire.modal_websocket_tls:
             raise ValueError(
                 f'endpoint {self.name!r} states a bearer token on the {slug_of(self.wire)} wire, whose session '
                 'carries no endpoint header'
