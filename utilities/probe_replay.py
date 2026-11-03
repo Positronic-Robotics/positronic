@@ -1096,8 +1096,15 @@ class Probe:
     def three_cameras(self):
         print('Three cameras: the longest lost after a wait, the next built after waits, one there at once:')
         page = self.open('/page/dock?episode=16', wait_until='domcontentloaded')
-        mixed = self.until(page, "noteText().includes('is gone') && noteText().includes('is building')", 10000)
-        self.check('the note names the lost and the building camera', mixed, page.evaluate('noteText()'))
+        between = self.until(
+            page,
+            f"{camera_named('front')}.parentElement.dataset.state === 'gone' && "
+            f"{camera_named('side')}.parentElement.dataset.state !== 'ready'",
+            10000,
+        )
+        self.check('the longest camera is gone while the next still builds', between)
+        note = page.evaluate('noteText()')
+        self.check('the note names the lost and the building camera', 'is gone' in note and 'is building' in note, note)
         before = page.evaluate(f"[Number(one('seek').value), {camera_named('wrist')}.currentTime]")
         time.sleep(1)
         after = page.evaluate(
