@@ -204,8 +204,8 @@ yam_bimanual_yambox = yam_bimanual.override(
     compensation=dict.fromkeys(
         keys.BIMANUAL_ARMS,
         positronic.cfg.hardware.roboarm.yam_compensation.override(
-            gravity_comp_factor=[1.0, 1.113, 1.096, 1.089, 1.133, 1.0],
-            ee_mass=0.834,
+            gravity_comp_factor=[1.0, 1.021, 1.024, 1.2, 1.133, 1.0],
+            ee_mass=1.020,
             use_coulomb_friction=True,
             coulomb_friction=[0.0, 1.335, 1.15, 0.05, 0.07, 0.0],
         ),
