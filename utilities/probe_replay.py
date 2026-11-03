@@ -214,6 +214,13 @@ def null_cells() -> str:
     return f'<positronic-replay><script type="application/json">{data}</script></positronic-replay>'
 
 
+def bad_option() -> str:
+    """A filter whose first option is null, over rows that hold the second."""
+    columns = [{'key': 'task', 'label': 'Task', 'filter': {'options': [None, ['x', 'Task x']]}}]
+    data = json.dumps({'columns': columns, 'rows': [{'id': '1', 'values': {'task': 'x'}}]})
+    return f'<positronic-replay><script type="application/json">{data}</script></positronic-replay>'
+
+
 SCRIPT = '<script type="module" src="/static/replay.js"></script>'
 # The page's own record of the element's actions, and short names for what the checks read in its shadow root.
 HELPERS = """<script>
@@ -296,6 +303,10 @@ def pages(release: str) -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/nulls': page_html(null_cells()),
+        '/page/bad-option': page_html(bad_option()),
+        '/page/compact-link': page_html(
+            f'<positronic-replay layout="compact" link-param="episode" src="{SHARE}/replay.json"></positronic-replay>'
+        ),
         '/page/names': page_html(
             f'<positronic-replay src="{SHARE}/replay.json" camera-names=\'["Outside"]\'></positronic-replay>'
         ),
@@ -1139,6 +1150,37 @@ class Probe:
         )
         page.close()
 
+    def list_entries_and_link_param(self):
+        print('A bad entry of a list, and link-param where it does not apply:')
+        page = self.open('/page/bad-option', expected=('options[0]',))
+        self.until(page, "all('row').length > 0", 5000)
+        options = page.evaluate("[...host().shadowRoot.querySelectorAll('select option')].map((o) => o.textContent)")
+        errors = [text for text in self.expected_errors if 'options[0]' in text]
+        self.check('the good option renders', options == ['All', 'Task x'], options)
+        self.check('the null option logs one error', len(errors) == 1, errors)
+        page.close()
+        page = self.open('/page/compact-link?episode=1', expected=('link-param',))
+        self.until(page, "all('episode').length > 0", 5000)
+        time.sleep(0.5)
+        errors = [text for text in self.expected_errors if 'link-param' in text]
+        opened = page.evaluate("host().hasAttribute('screen-open')")
+        self.check('link-param on the compact layout logs one error', len(errors) == 1, errors)
+        self.check('and opens nothing', not opened and self.actions(page) == [], opened)
+        page.close()
+        page = self.open('/page/list?episode=30')
+        self.until(page, "row('30').part.contains('current')", 5000)
+        page.evaluate("host().setAttribute('link-param', 'other')")
+        time.sleep(0.3)
+        self.check('a new link-param changes nothing', page.evaluate("row('30').part.contains('current')"))
+        cell(page, 31).click()
+        self.until(page, "row('31').part.contains('current')", 5000)
+        self.check(
+            'a row still writes the first link-param, and no other',
+            'episode=31' in page.url and 'other=' not in page.url,
+            page.url,
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1230,6 +1272,7 @@ def main(headed: bool) -> int:
             probe.three_cameras,
             probe.host_inputs,
             probe.undocked_link,
+            probe.list_entries_and_link_param,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

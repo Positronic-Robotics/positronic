@@ -17,10 +17,12 @@
 //                A row with no `rrd` plays as video in either mode.
 //   dock         (full layout) the player opens at the bottom of the window when a visitor opens a row.
 //   dock-below   (dock) a selector of the host's bar; the dock and the list share the window below it.
-//   link-param   the URL search parameter that names the open row, so a link opens it.
+//   link-param   (full layout) the URL search parameter that names the open row, so a link opens it. The element
+//                reads it once, when it first connects.
 //   camera-names a JSON object that maps a camera key to the name the visitor sees.
 //   A value of the wrong shape logs an error, and the element uses the default: `full`, `video`, the top of the
-//   window, no link parameter, the camera keys. A `src` that is not a URL shows that the replay did not load.
+//   window, no link parameter (also with `layout="compact"`), the camera keys. A `src` that is not a URL shows
+//   that the replay did not load.
 //
 // Manifest (`src`)
 //   {title, url, about: [{key, label, value}], columns: [{key, label}], episodes: [{index, values: {key: value},
@@ -37,8 +39,9 @@
 //   A value is a scalar, or {text, key?, color?, ink?, icon?, title?}: `key` is what a filter compares,
 //   `color` paints a badge, `icon` is the image of an icon cell.
 //   `filter` is `true` or {all?, options?: [[value, label], …]}; without options, every value of the column.
-//   A list of the wrong shape shows that the replay did not load; a field of the wrong shape logs an error, and
-//   the element leaves it empty.
+//   A list that is not an array shows that the replay did not load. An entry of a list or a field of the wrong
+//   shape logs an error; the element drops the entry, leaves the field empty, or reads an unknown column type
+//   as `text`.
 //
 // Media
 //   The element loads only the URLs a row names, and builds no URL from another one. A row with no media
@@ -138,10 +141,6 @@ const ATTRIBUTES = {
       return wrongInput('dock-below', value, null, 'the top of the window');
     }
   },
-  'link-param': (value) => {
-    if (value === null) return null;
-    return value.trim() ? value : wrongInput('link-param', value, null, 'no link');
-  },
   'camera-names': (value) => {
     if (value === null) return {};
     let names;
@@ -195,6 +194,8 @@ export class PositronicReplay extends HTMLElement {
   #end = null;
   #narrow = window.matchMedia(NARROW);
   #inputs = Object.fromEntries(Object.entries(ATTRIBUTES).map(([name, read]) => [name, read(null)]));
+  // Read once, at the first connect.
+  #linkParam = undefined;
 
   constructor() {
     super();
@@ -203,6 +204,7 @@ export class PositronicReplay extends HTMLElement {
 
   connectedCallback() {
     this.#connected = true;
+    if (this.#linkParam === undefined) this.#linkParam = this.#readLinkParam();
     if (this.#list) this.#render();
     else this.#load();
   }
@@ -216,6 +218,16 @@ export class PositronicReplay extends HTMLElement {
       this.#loaded = null;
     }
     this.#release();
+  }
+
+  /** The `link-param` attribute, for the full layout only. */
+  #readLinkParam() {
+    const value = this.getAttribute('link-param');
+    if (value === null) return null;
+    if (!value.trim()) return wrongInput('link-param', value, null, 'no link');
+    if (this.#layout === 'compact')
+      return wrongInput('link-param', value, null, 'no link: the compact layout has none');
+    return value;
   }
 
   attributeChangedCallback(name, previous, value) {
@@ -468,7 +480,7 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #linkedRow() {
-    const name = this.#inputs['link-param'];
+    const name = this.#linkParam;
     const id = name ? new URLSearchParams(window.location.search).get(name) : null;
     return id === null ? null : (this.#list.rows.find((row) => row.id === id) ?? null);
   }
@@ -610,7 +622,7 @@ export class PositronicReplay extends HTMLElement {
     this.#play(row, { autoplay: false });
     if (event?.isTrusted) {
       this.#act('open', { row: row.id, from: 'Row' });
-      setLinkParam(this.#inputs['link-param'], row.id);
+      setLinkParam(this.#linkParam, row.id);
     }
   }
 
@@ -726,7 +738,7 @@ export class PositronicReplay extends HTMLElement {
     }
     this.#focus(row);
     if (!this.#narrow.matches) this.#player.focusViewer();
-    setLinkParam(this.#inputs['link-param'], row.id);
+    setLinkParam(this.#linkParam, row.id);
     if (from === 'Link') this.#holdOpenRow();
   }
 
@@ -754,7 +766,7 @@ export class PositronicReplay extends HTMLElement {
     this.#markCurrent(null);
     this.#current = null;
     if (openDock === this) openDock = null;
-    setLinkParam(this.#inputs['link-param'], null);
+    setLinkParam(this.#linkParam, null);
   }
 
   #step(by, via, event) {

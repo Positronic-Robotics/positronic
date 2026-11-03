@@ -32,6 +32,11 @@ export function wrongInput(input, value, fallback, fallbackText) {
   return fallback;
 }
 
+/** The entries of `list` that `read(entry, index)` takes; `read` logs an entry it drops and returns null for it. */
+function entries(list, read) {
+  return list.map(read).filter((entry) => entry !== null);
+}
+
 /** Refuses a list whose shape the element cannot read; the element then shows that the replay did not load. */
 function refuse(input, value, wanted) {
   throw new TypeError(`${input} is not ${wanted}: ${JSON.stringify(value)}`);
@@ -77,19 +82,20 @@ function readFilter(input, filter) {
   if (!isEmpty(spelled.options) && !Array.isArray(spelled.options)) {
     return wrongInput(`${input}.options`, spelled.options, null, 'no filter');
   }
-  const options = spelled.options?.map((option) =>
-    Array.isArray(option)
-      ? { value: String(option[0]), label: String(option[1]) }
-      : { value: String(option.value), label: String(option.label ?? option.value) },
-  );
+  const readOption = (option, at) => {
+    const [value, label] = Array.isArray(option) ? option : isObject(option) ? [option.value, option.label] : [];
+    if (isEmpty(value)) return wrongInput(`${input}.options[${at}]`, option, null, 'no option');
+    return { value: String(value), label: String(label ?? value) };
+  };
+  const options = spelled.options && entries(spelled.options, readOption);
   return { all: spelled.all === undefined ? 'All' : String(spelled.all), options: options ?? null };
 }
 
 function readColumn(column, at) {
   const input = `columns[${at}]`;
-  if (!isObject(column) || isEmpty(column.key)) refuse(input, column, 'an object with a key');
-  const type = column.type ?? ColumnType.TEXT;
-  if (!COLUMN_TYPES.has(type)) refuse(`${input}.type`, type, `one of ${[...COLUMN_TYPES].join(', ')}`);
+  if (!isObject(column) || isEmpty(column.key)) return wrongInput(input, column, null, 'no column');
+  let type = column.type ?? ColumnType.TEXT;
+  if (!COLUMN_TYPES.has(type)) type = wrongInput(`${input}.type`, type, ColumnType.TEXT, 'a text column');
   return {
     key: String(column.key),
     label: String(column.label ?? column.key),
@@ -118,7 +124,7 @@ function withOptions(columns, rows) {
 
 function readRow(row, base, at) {
   const input = `rows[${at}]`;
-  if (!isObject(row)) refuse(input, row, 'an object');
+  if (!isObject(row)) return wrongInput(input, row, null, 'no row');
   const id = String(row.id ?? at);
   const values =
     isEmpty(row.values) || isObject(row.values)
@@ -131,7 +137,7 @@ function readRow(row, base, at) {
     label: String(row.label ?? `Episode ${id}`),
     values,
     durationS: number(`${input}.duration_s`, row.duration_s),
-    cameras: cameras.map((camera, each) => readCamera(`${input}.cameras[${each}]`, camera, base)).filter(Boolean),
+    cameras: entries(cameras, (camera, each) => readCamera(`${input}.cameras[${each}]`, camera, base)),
     phone: mediaUrl(`${input}.phone`, row.phone, base),
     rrd: mediaUrl(`${input}.rrd`, row.rrd, base),
     href: mediaUrl(`${input}.href`, row.href, base),
@@ -141,9 +147,10 @@ function readRow(row, base, at) {
 function readAbout(about) {
   if (isEmpty(about)) return [];
   if (!Array.isArray(about)) return wrongInput('about', about, [], 'no facts');
-  return about
-    .filter((fact) => isObject(fact) || wrongInput('about[]', fact, false, 'no fact'))
-    .map((fact) => ({ key: String(fact.key), label: String(fact.label ?? fact.key), value: fact.value }));
+  return entries(about, (fact, at) => {
+    if (!isObject(fact) || isEmpty(fact.key)) return wrongInput(`about[${at}]`, fact, null, 'no fact');
+    return { key: String(fact.key), label: String(fact.label ?? fact.key), value: fact.value };
+  });
 }
 
 /** A manifest, read from `base`: its episodes are the rows, between an index and a duration column. */
@@ -151,8 +158,8 @@ export function readManifest(manifest, base) {
   if (!isObject(manifest)) refuse('the manifest', manifest, 'an object');
   if (!Array.isArray(manifest.episodes)) refuse('the manifest episodes', manifest.episodes, 'an array');
   if (!Array.isArray(manifest.columns)) refuse('the manifest columns', manifest.columns, 'an array');
-  const rows = manifest.episodes.map((episode, at) => {
-    if (!isObject(episode)) refuse(`episodes[${at}]`, episode, 'an object');
+  const rows = entries(manifest.episodes, (episode, at) => {
+    if (!isObject(episode)) return wrongInput(`episodes[${at}]`, episode, null, 'no episode');
     const values = isObject(episode.values)
       ? episode.values
       : wrongInput(`episodes[${at}].values`, episode.values, {}, 'no values');
@@ -170,10 +177,10 @@ export function readManifest(manifest, base) {
     );
   });
   const columns = [
-    { key: INDEX_KEY, label: '#', type: ColumnType.NUMBER },
-    ...manifest.columns,
-    { key: DURATION_KEY, label: 'Duration', type: ColumnType.NUMBER, decimals: 1, unit: ' s' },
-  ].map(readColumn);
+    readColumn({ key: INDEX_KEY, label: '#', type: ColumnType.NUMBER }, '#'),
+    ...entries(manifest.columns, readColumn),
+    readColumn({ key: DURATION_KEY, label: 'Duration', type: ColumnType.NUMBER, decimals: 1, unit: ' s' }, 'duration'),
+  ];
   const title = isEmpty(manifest.title) ? null : String(manifest.title);
   return { title, about: readAbout(manifest.about), columns: withOptions(columns, rows), rows };
 }
@@ -183,8 +190,8 @@ export function readInline(data, base) {
   if (!isObject(data)) refuse('the inline rows', data, 'an object');
   if (!Array.isArray(data.rows)) refuse('the inline rows', data.rows, 'an array');
   if (!Array.isArray(data.columns)) refuse('the inline columns', data.columns, 'an array');
-  const rows = data.rows.map((row, position) => readRow(row, base, position));
-  const columns = data.columns.map(readColumn);
+  const rows = entries(data.rows, (row, position) => readRow(row, base, position));
+  const columns = entries(data.columns, readColumn);
   const title = isEmpty(data.title) ? null : String(data.title);
   return { title, about: readAbout(data.about), columns: withOptions(columns, rows), rows };
 }
