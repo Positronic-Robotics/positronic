@@ -127,7 +127,8 @@ def row_media(n: int) -> dict:
     """The media of row `n`. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media, 9 lost its videos, 10
     builds them, 11 lost its longest video only, 12 builds its replay and its videos, 13 builds its videos only, 14
     has a phone video only, which builds, 15 loses its longest video only after a wait,
-    and 16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there."""
+    16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there, 17 builds
+    its replay and, more slowly, its videos, and 18 has a longest camera that is there and one built after waits."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -158,6 +159,12 @@ def row_media(n: int) -> dict:
         14: {'rrd': None, 'cameras': None, 'phone': '/media/building/14/phone.webm'},
         15: {'rrd': None, 'phone': None, 'cameras': lost_longest('slowgone')},
         16: {'rrd': None, 'phone': None, 'cameras': three_cameras()},
+        17: {'rrd': '/rrd/building/17.rrd', 'phone': None, 'cameras': at('slowbuilding', cameras)},
+        18: {
+            'rrd': None,
+            'phone': None,
+            'cameras': [{**cameras[0], 'duration_s': VIDEO_S + 1}, *at('slowbuilding', cameras[1:])],
+        },
     }
     media = {'cameras': cameras, 'phone': f'/media/ok/{n}/phone.webm', 'rrd': f'/rrd/ok/{n}.rrd'}
     media |= variants.get(n, {})
@@ -1181,6 +1188,26 @@ class Probe:
         )
         page.close()
 
+    def take_over_and_join(self):
+        print('A recording that takes over from building videos, and a camera built under a paused lead:')
+        page = self.open('/page/dock?episode=17', wait_until='domcontentloaded')
+        took_over = self.until(page, "loads('/rrd/building/17.rrd')", 15000)
+        mark = self.requests.mark()
+        time.sleep(3 * SLOW_S)
+        asked = [path for path in self.requests.since(mark) if '/17/' in path and not path.endswith('.rrd')]
+        self.check('the replaced videos ask for nothing more', took_over and not asked, asked)
+        page.close()
+        page = self.open('/page/dock?episode=18', wait_until='domcontentloaded')
+        front, wrist = camera_named('front'), camera_named('wrist')
+        self.until(page, f'{front} && !{front}.paused && {front}.currentTime > 1', 8000)
+        part(page, 'play').click()
+        built = self.until(page, f"{wrist}.parentElement.dataset.state === 'ready'", 20000)
+        time.sleep(1)
+        times = page.evaluate(f'[{front}.currentTime, {wrist}.currentTime, {front}.paused, {wrist}.paused]')
+        joined = abs(times[0] - times[1]) < 0.3 and times[2] and times[3]
+        self.check('a camera built under a paused lead takes its time and stays paused', built and joined, times)
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1273,6 +1300,7 @@ def main(headed: bool) -> int:
             probe.host_inputs,
             probe.undocked_link,
             probe.list_entries_and_link_param,
+            probe.take_over_and_join,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

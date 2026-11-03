@@ -239,10 +239,14 @@ export class EpisodePlayer {
   }
 
   async #playRecording(row, startVideo, wanted) {
+    // The video starts once: a later 202 of the recording keeps it, where a camera is not ready yet either.
+    let videoStarted = false;
     const fallBackToVideo = (note) => {
       this.#hideFrame();
       this.#setNote('replay', note);
-      if (!this.lead && startVideo) startVideo();
+      if (videoStarted || !startVideo) return;
+      videoStarted = true;
+      startVideo();
     };
     const state = await this.#settled(row.rrd, { building: () => fallBackToVideo(NOTES.replayBuilding), wanted });
     if (state === null) return;
@@ -307,7 +311,9 @@ export class EpisodePlayer {
     }).observe(canvas, { attributes: true });
   }
 
+  // The videos go with their retries and requests, also where the 3D replay takes their place.
   #clearVideos() {
+    this.#endWaits();
     for (const video of this.#stage.querySelectorAll('video')) {
       pause(video);
       video.removeAttribute('src');
@@ -445,7 +451,20 @@ export class EpisodePlayer {
     }
     this.#setNote('video', cameraNote(episode.cameras.map((camera) => [camera.name, camera.state])));
     const lead = episode.preferred.find((camera) => camera.state === MediaState.READY)?.video ?? null;
-    if (lead === episode.lead) return;
+    if (lead !== episode.lead) this.#lead(episode, lead);
+    // A camera that is ready under a lead it has not joined takes the lead's time and play state.
+    for (const camera of episode.cameras) {
+      if (camera.state !== MediaState.READY || camera.video === lead || camera.joined === lead) continue;
+      camera.joined = lead;
+      if (!lead) continue;
+      seek(camera.video, Math.min(lead.currentTime, camera.video.duration));
+      if (lead.paused) pause(camera.video);
+      else start(camera.video);
+    }
+  }
+
+  /** Hands the controls to `lead`, at the visitor's play state and time; none where `lead` is null. */
+  #lead(episode, lead) {
     episode.detach();
     episode.lead = lead;
     this.lead = lead;
@@ -462,7 +481,6 @@ export class EpisodePlayer {
     episode.detach = () => listening.abort();
     if (Math.abs(lead.currentTime - episode.moment) > DRIFT_S) seek(lead, Math.min(episode.moment, lead.duration));
     if (episode.playing) start(lead);
-    else for (const video of followers) pause(video);
   }
 
   // One control set for the episode, which drives `lead` until `signal` aborts. Without `durationS`, the length of
