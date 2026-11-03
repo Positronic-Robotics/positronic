@@ -1,4 +1,4 @@
-// Shared WebXR bootstrap and WebSocket utilities for Oculus/iPhone frontends
+// Shared WebXR bootstrap and WebSocket utilities for the headset and phone frontends
 // Provides XR setup, session lifecycle, render loop, and message sending.
 
 import { WebXRButton } from '/webxr-button.js';

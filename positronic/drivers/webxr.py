@@ -102,7 +102,7 @@ def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray, quality: int) 
 class Frontend(StrEnum):
     """The page that ``WebXR`` serves."""
 
-    OCULUS = 'oculus'
+    HEADSET = 'headset'
     IPHONE = 'iphone'
     # The phone page with the labels of ``positronic teleop``.
     IPHONE_TELEOP = 'iphone_teleop'
@@ -127,7 +127,7 @@ def _build_access_url(host: str, port: int, use_https: bool) -> str:
 
 
 class WebXR(pimm.ControlSystem):
-    """WebXR server for Oculus headset or iPhone AR controller.
+    """WebXR server for a headset or an iPhone AR controller.
 
     Serves a single frontend at a time and streams controller/pose data back
     to the application over WebSocket, with an optional JPEG video stream.
@@ -140,13 +140,13 @@ class WebXR(pimm.ControlSystem):
     - If HTTPS is required, provide a cert trusted by the device.
 
     Endpoints
-    - `/`                -> selected frontend; it redirects to `/?mode=teleop` for phone teleop and to `/?mode=vr`
-                            for a VR session
+    - `/`                -> selected frontend; it redirects to `/?mode=teleop` for phone teleop, to `/?mode=vr`
+                            for a VR session, and to `/` for any other `mode` query
     - `/state`           -> the last `page_state` value as JSON
     - `/ws`              -> JSON controller stream from client to server
     - `/video`           -> optional base64 JPEG frames (server to client)
     - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`
-    - Oculus-only: `/video-player.js`
+    - Headset-only: `/video-player.js`
 
     Parameters
     - port: TCP port to bind.
@@ -162,7 +162,7 @@ class WebXR(pimm.ControlSystem):
         port: int,
         ssl_keyfile: str = 'key.pem',
         ssl_certfile: str = 'cert.pem',
-        frontend: Frontend = Frontend.OCULUS,
+        frontend: Frontend = Frontend.HEADSET,
         session_mode: SessionMode = SessionMode.AR,
         use_https: bool = True,
         sensitivity: float = 1.0,
@@ -170,7 +170,7 @@ class WebXR(pimm.ControlSystem):
     ):
         if type(jpeg_quality) is not int or not 0 <= jpeg_quality <= 100:
             raise ValueError(f'jpeg_quality must be an integer between 0 and 100, got {jpeg_quality!r}')
-        if session_mode is SessionMode.VR and frontend is not Frontend.OCULUS:
+        if session_mode is SessionMode.VR and frontend is not Frontend.HEADSET:
             raise ValueError(f'session_mode VR needs the headset frontend, got {frontend!r}')
         self.port = port
         self.ssl_keyfile = ssl_keyfile
@@ -209,9 +209,9 @@ class WebXR(pimm.ControlSystem):
         @app.get('/')
         async def root(request: Request):
             query = self._page_query()
-            if query is not None and request.url.query != query:
-                return RedirectResponse(f'/?{query}')
-            if self.frontend is Frontend.OCULUS:
+            if request.url.query != (query or ''):
+                return RedirectResponse('/' if query is None else f'/?{query}')
+            if self.frontend is Frontend.HEADSET:
                 return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
             return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
 
@@ -232,7 +232,7 @@ class WebXR(pimm.ControlSystem):
         async def webxr_core():
             return FileResponse(utils.package_assets_path('assets/webxr/core.js'))
 
-        if self.frontend is Frontend.OCULUS:
+        if self.frontend is Frontend.HEADSET:
 
             @app.get('/video-player.js')
             async def video_player():

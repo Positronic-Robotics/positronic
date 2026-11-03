@@ -358,7 +358,7 @@ def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(wor
 
 
 @contextlib.contextmanager
-def _served_webxr(frontend: Frontend = Frontend.OCULUS, webxr: WebXR | None = None) -> Iterator[str]:
+def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = None) -> Iterator[str]:
     """A ``WebXR`` server of ``frontend`` on a free port, or ``webxr`` when given, and its base URL once it answers."""
     if webxr is None:
         webxr = WebXR(port=free_port(), frontend=frontend, use_https=False)
@@ -418,6 +418,12 @@ def test_the_headset_page_for_ar_opens_with_no_query():
         assert httpx.get(base + '/', timeout=1.0).status_code == 200
 
 
+def test_the_headset_page_for_ar_drops_the_vr_query():
+    with _served_webxr() as base:
+        stale = httpx.get(f'{base}/?{webxr.VR_QUERY}', timeout=1.0)
+        assert stale.status_code == 307 and stale.headers['location'] == '/'
+
+
 def test_a_vr_session_on_the_phone_page_is_refused():
     with pytest.raises(ValueError, match='session_mode VR needs the headset frontend'):
         WebXR(port=free_port(), frontend=Frontend.IPHONE, session_mode=SessionMode.VR)
@@ -453,6 +459,8 @@ def test_the_page_state_is_empty_until_something_sends_one(world):
 def test_the_phone_page_for_data_collection_keeps_its_own_mode():
     with _served_webxr(Frontend.IPHONE) as base:
         assert httpx.get(base + '/', timeout=1.0).status_code == 200
+        stale = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
+        assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
 def test_the_headset_video_keeps_the_colors_of_an_rgb_frame():

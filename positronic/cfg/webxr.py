@@ -5,7 +5,7 @@ from positronic.drivers.webxr import Frontend, SessionMode, WebXR
 webxr = cfn.Config(WebXR, port=5005)
 
 
-oculus = webxr.override(frontend=Frontend.OCULUS)
+oculus = webxr.override(frontend=Frontend.HEADSET)
 # PlayStation VR2: Chrome on the PC that runs the headset through SteamVR opens https://localhost:5005/?mode=vr
 psvr2 = oculus.override(session_mode=SessionMode.VR)
 
