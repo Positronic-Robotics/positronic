@@ -60,12 +60,16 @@ class AbcEnv(EnvProtocol):
         self._arms: list[_Arm] = []
         self._last_reported_apertures = np.zeros(0)
         self._scored = False
+        # The prompt of the built task, which ``tasks`` lists as its instruction.
+        self._instruction = ''
+        # The goal the client holds in this episode: the instruction, or the last prompt this env reported.
+        self._goal = ''
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """ABC's own catalogue, or the tasks ``spec`` names in it."""
         names = mapping.task_names(spec.get(mapping.SELECT_TASKS))
         specs = abc_sim.list_task_specs() if names is None else [abc_sim.get_task_spec(name) for name in names]
-        return [{mapping.TASK_NAME: s.name} for s in specs]
+        return [{mapping.TASK_NAME: s.name, protocol.TASK_INSTRUCTION: s.prompt} for s in specs]
 
     def _build(self, token: dict[str, Any]) -> None:
         key = (token[mapping.TOKEN_TASK], token[mapping.TOKEN_CAMERA_HEIGHT], token[mapping.TOKEN_CAMERA_WIDTH])
@@ -90,6 +94,7 @@ class AbcEnv(EnvProtocol):
                     raise
                 logger.warning(f'Building the ABC env for {spec.name} failed ({error}); building it again')
         self._key = key
+        self._instruction = spec.prompt
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         self._build(token)
@@ -102,8 +107,9 @@ class AbcEnv(EnvProtocol):
                 camera_fit.ZED_X_FIT, self._env.model, self._env.data, [arm.base_body_id for arm in self._arms]
             )
             obs = self._env.get_obs()  # The reset rendered the scene before the cameras moved.
+        self._goal = self._instruction
         return {
-            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._task_eval())}],
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._task_eval()), **self._moved_goal(obs)}],
             protocol.FRAME_META: self._meta(obs),
             protocol.FRAME_ROBOT_META: {protocol.MOUNTS: self._mounts()},
             protocol.FRAME_CONTROL_DT: self._control_dt(),
@@ -148,8 +154,7 @@ class AbcEnv(EnvProtocol):
                     protocol.FRAME_OBS: self._observe(obs, task_eval),
                     protocol.FRAME_DONE: bool(truncated or self._trial_over(task_eval)),
                     protocol.FRAME_SUCCESS: self._ever_success(task_eval),
-                    # A task such as multi_drawer_search moves its prompt to the next target as it goes.
-                    protocol.FRAME_META: self._meta(obs),
+                    **self._moved_goal(obs),
                 }
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt(),
@@ -158,6 +163,18 @@ class AbcEnv(EnvProtocol):
     @staticmethod
     def _meta(obs: dict[str, Any]) -> dict[str, Any]:
         return {mapping.META_TASK: obs[mapping.ABC_OBS_PROMPT]}
+
+    def _moved_goal(self, obs: dict[str, Any]) -> dict[str, Any]:
+        """The goal field of a frame whose prompt differs from the goal the client holds, or no field.
+
+        A seeded reset draws the prompt of some tasks, such as count_box, and multi_drawer_search moves its prompt to
+        the next target as it goes.
+        """
+        prompt = obs[mapping.ABC_OBS_PROMPT]
+        if prompt == self._goal:
+            return {}
+        self._goal = prompt
+        return {protocol.FRAME_GOAL: prompt}
 
     def _control_dt(self) -> float:
         # The scene sets the physics step and how many of them one action spans; ABC exposes neither.

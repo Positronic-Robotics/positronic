@@ -37,6 +37,7 @@ CAMERAS = {keys.EXTERIOR_IMAGE: 'agentview'}
 
 # The one scene this fixture serves.
 SCENE_NAME = 'stack_cubes'
+STACK_CUBES_INSTRUCTION = 'Pick up the green cube and place it on the red cube.'
 
 
 class _NeverStop(pimm.SignalReceiver):
@@ -110,7 +111,7 @@ class MujocoEnv(EnvProtocol):
         names = [selection] if isinstance(selection, str) else list(selection)
         if any(name != SCENE_NAME for name in names):
             raise ValueError(f'MujocoEnv serves {SCENE_NAME!r}, not {names}')
-        return [{'name': name} for name in names]
+        return [{'name': name, protocol.TASK_INSTRUCTION: STACK_CUBES_INSTRUCTION} for name in names]
 
     def reset(self, token: Any) -> dict[str, Any]:
         # Close the prior generator before rebuilding the scene, so its ``run`` cleanup tears down the old
@@ -215,5 +216,5 @@ def remote_stack_cubes_eval(host: str, port: int, *, camera_dict: dict[str, str]
     # The server is already up (the test fixture owns it), so the proxy just receives its address.
     proxy = RemoteEnvControlSystem(StackCubesAdapter(camera_dict), nullcontext((host, port)))
     embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.mujoco.franka')
-    plan = [Task(instruction_source='Pick up the green cube and place it on the red cube.', timeout_sec=15.0)]
+    plan = [Task(instruction=STACK_CUBES_INSTRUCTION, timeout_sec=15.0)]
     return Eval(embodiment, partial(iter, plan), privileged={SIM_STATE: proxy.privileged[SIM_STATE]}, done=proxy.done)

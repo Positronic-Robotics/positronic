@@ -336,11 +336,11 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
         caller = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](source)
         wire_call(world, caller, harness.perform_task)
         emitters = []
-        for receiver in (harness.manual_command, harness.done, harness.observations[POSITION]):
+        for receiver in (harness.manual_command, harness.done, harness.observations[POSITION], harness.goal):
             emitter, physical_receiver = world.local_pipe()
             receiver._bind(physical_receiver)
             emitters.append(emitter)
-        manual, done, observation = emitters
+        manual, done, observation, goal = emitters
         device_observations = {}
         for name in observed:
             emitter, physical_receiver = world.local_pipe()
@@ -362,6 +362,7 @@ def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = ()
             manual=manual,
             done=done,
             observation=observation,
+            goal=goal,
             device_observations=device_observations,
             privileged=privileged_emitters,
             serializer=serializer,
@@ -1012,21 +1013,23 @@ class ReadInstruction(Policy):
             obs = yield Step({}, runtime.time_ns + 5_000_000)
 
 
-def test_each_instruction_the_policy_gets_is_recorded_at_the_time_it_changes(episode_harness, tmp_path):
+def test_each_goal_the_embodiment_publishes_replaces_the_instruction_and_is_recorded_at_the_change(
+    episode_harness, tmp_path
+):
     h = episode_harness
-    current = ['open the top drawer']
     policy = ReadInstruction()
     h.observation.emit(np.array([0]))
-    answer = h.caller(Rollout(Task(lambda: current[0], None), policy, LocalDatasetWriter(tmp_path)))
+    answer = h.caller(Rollout(Task('open the top drawer', None), policy, LocalDatasetWriter(tmp_path)))
     next(h.loop)
-    for at_ns, instruction in [
-        (5_000_000, 'open the top drawer'),
+    for at_ns, goal in [
+        (5_000_000, None),
         (10_000_000, 'open the middle drawer'),
-        (15_000_000, 'open the middle drawer'),
+        (15_000_000, None),
         (20_000_000, 'open the bottom drawer'),
     ]:
-        current[0] = instruction
         h.world.clock.advance_to_ns(at_ns)
+        if goal is not None:
+            h.goal.emit(goal)
         next(h.loop)
     h.done.emit({eval_keys.SUCCESS: True})
     next(h.loop)
@@ -1047,7 +1050,55 @@ def test_each_instruction_the_policy_gets_is_recorded_at_the_time_it_changes(epi
     assert episode.static[keys.TASK] == 'open the bottom drawer'
 
 
-def test_an_instruction_that_never_changes_is_recorded_once_at_the_first_observation(episode_harness):
+def test_a_goal_published_while_the_scene_resets_replaces_the_instruction_from_the_first_observation(episode_harness):
+    h = episode_harness
+    policy = ReadInstruction()
+    h.observation.emit(np.array([0]))
+    task = Task('put the objects in the box', None, prepare_args={eval_keys.SCENE: 7})
+    answer = h.caller(Rollout(task, policy, h.dataset))
+    next(h.loop)
+    scene = next(h.prepare[eval_keys.SCENE].incoming())
+    h.goal.emit('put all red objects in the box')
+    scene.set_result(None)
+    for at_ns in (1_000_000, 6_000_000):
+        h.world.clock.advance_to_ns(at_ns)
+        next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED]
+    assert policy.instructions == ['put all red objects in the box', 'put all red objects in the box']
+
+
+def test_a_goal_from_an_earlier_episode_or_from_idle_time_does_not_reach_the_next_episode(episode_harness):
+    h = episode_harness
+    h.observation.emit(np.array([0]))
+    first = h.caller(Rollout(Task('first', None), ReadInstruction(), h.dataset))
+    next(h.loop)
+    h.world.clock.advance_to_ns(1_000_000)
+    h.goal.emit('first, moved')
+    h.world.clock.advance_to_ns(5_000_000)
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert first.result()[eval_keys.TERMINATED]
+    assert h.dataset.episodes[0].static[keys.TASK] == 'first, moved'
+
+    h.goal.emit('published between episodes')
+    h.world.clock.advance_to_ns(6_000_000)
+    next(h.loop)
+    policy = ReadInstruction()
+    second = h.caller(Rollout(Task('second', None), policy, h.dataset))
+    for at_ns in (7_000_000, 12_000_000):
+        h.world.clock.advance_to_ns(at_ns)
+        next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    assert second.result()[eval_keys.TERMINATED]
+    assert policy.instructions == ['second', 'second']
+    assert h.dataset.episodes[1].static[keys.TASK] == 'second'
+
+
+def test_with_no_goal_the_task_instruction_stays_and_is_recorded_once_at_the_first_observation(episode_harness):
     h = episode_harness
     h.world.clock.advance_to_ns(1_000_000)
     answer = h.caller(Rollout(Task('move', None), ReadInstruction(), h.dataset))

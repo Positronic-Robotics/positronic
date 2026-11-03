@@ -23,7 +23,7 @@ CAMERA = 'image.exterior_2'
 
 
 def _trial() -> Task:
-    return Task(instruction_source=CONFIGURED, timeout_sec=None)
+    return Task(instruction=CONFIGURED, timeout_sec=None)
 
 
 def _frame(i: int) -> np.ndarray:

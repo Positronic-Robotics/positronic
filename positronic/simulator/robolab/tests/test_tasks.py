@@ -21,7 +21,7 @@ from positronic import keys
 from positronic.cfg.eval.sim import robolab as robolab_cfg
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import keys as eval_keys
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
+from positronic.simulator.env_server.proxy import EnvTask, RemoteEnvControlSystem
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
 
@@ -31,11 +31,13 @@ def asked(monkeypatch) -> list[Any]:
     """The specs the eval sends the proxy; every spec is answered with two tasks of different budgets."""
     specs: list[Any] = []
 
-    def tasks(self, selection: Any) -> list[dict[str, Any]]:
+    def tasks(self, selection: Any) -> list[EnvTask]:
         specs.append(selection)
         return [
-            {eval_keys.TASK: 'BananaInBowlTask', robolab_keys.EPISODE_LENGTH: 50.0},
-            {eval_keys.TASK: 'CleanUpToysTask', robolab_keys.EPISODE_LENGTH: 300.0},
+            EnvTask(
+                'Put the banana in the bowl', {eval_keys.TASK: 'BananaInBowlTask', robolab_keys.EPISODE_LENGTH: 50.0}
+            ),
+            EnvTask('Clean up the toys', {eval_keys.TASK: 'CleanUpToysTask', robolab_keys.EPISODE_LENGTH: 300.0}),
         ]
 
     monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
@@ -77,7 +79,8 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
 
     trials = list(ev.tasks())
 
-    assert asked == [{'task': 'visual'}]
+    assert asked == [{'task': 'visual', robolab_keys.SELECT_INSTRUCTION_TYPE: 'specific'}]
+    assert [trial.instruction for trial in trials] == ['Put the banana in the bowl'] * 2 + ['Clean up the toys'] * 2
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
     assert [scene[eval_keys.TASK] for scene in scenes] == ['BananaInBowlTask'] * 2 + ['CleanUpToysTask'] * 2
     assert [trial.meta[eval_keys.TRIAL_INDEX] for trial in trials] == [0, 1, 2, 3]
@@ -91,7 +94,7 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
 def test_a_spec_that_names_no_task_narrows_nothing(asked):
     list(robolab_cfg.benchmark.instantiate().tasks())
 
-    assert asked == [{}]
+    assert asked == [{robolab_keys.SELECT_INSTRUCTION_TYPE: 'default'}]
 
 
 def test_each_task_runs_under_the_budget_the_benchmark_gives_it(asked):
@@ -112,7 +115,8 @@ def test_the_spec_reaches_the_env_unmapped(asked):
     list(robolab_cfg.procedural.instantiate().tasks())
     list(robolab_cfg.rubiks_cube_and_banana.instantiate().tasks())
 
-    assert asked == [{'task': 'procedural'}, {'task': 'RubiksCubeAndBananaTask'}]
+    phrasing = {robolab_keys.SELECT_INSTRUCTION_TYPE: 'default'}
+    assert asked == [{'task': 'procedural', **phrasing}, {'task': 'RubiksCubeAndBananaTask', **phrasing}]
 
 
 _GT_STATE = {

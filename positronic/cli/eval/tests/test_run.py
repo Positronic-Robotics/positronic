@@ -168,7 +168,7 @@ def test_a_home_that_stops_short_ends_an_unattended_run():
         control_systems=(arm,),
         simulated=True,
     )
-    tasks = [Task(instruction_source='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: 'home'})] * 2
+    tasks = [Task(instruction='stack', timeout_sec=0.05, prepare_args={eval_keys.ARM: 'home'})] * 2
     with pytest.raises(RuntimeError, match='stopped short'):
         main(policy=_IdlePolicy(), evals=[Eval(embodiment=embodiment, tasks=partial(iter, tasks))])
     assert arm.asked == 1
@@ -195,7 +195,7 @@ class _EpisodeStub(pimm.ControlSystem):
 def test_the_driver_asks_for_its_tasks_one_at_a_time():
     """The plan belongs to the driver: it asks for each task in turn, and only once the running episode has
     answered."""
-    tasks = [Task(instruction_source='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(2)]
+    tasks = [Task(instruction='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
     driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
@@ -235,7 +235,7 @@ def _drive(tasks: list[Task], episodes: _ScriptedEpisodes) -> None:
 
 
 def _tasks(count: int) -> list[Task]:
-    return [Task(instruction_source='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(count)]
+    return [Task(instruction='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(count)]
 
 
 @pytest.mark.timeout(3.0)
@@ -259,7 +259,7 @@ run_module = importlib.import_module('positronic.cli.eval.run')
 def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, states: dict, charged: bool):
     """A local run charges inference time unless it states otherwise, and stamps that on every task the
     eval makes."""
-    made = [Task(instruction_source='t', timeout_sec=1.0) for _ in range(2)]
+    made = [Task(instruction='t', timeout_sec=1.0) for _ in range(2)]
     seen: list[Task] = []
 
     def capture(policy, evals, output_dir, timing, dataset_factory):
@@ -459,8 +459,8 @@ def test_a_spec_carries_only_what_the_eval_binds():
 
 def test_a_sweep_numbers_its_trials_across_every_task():
     """Trials of tasks that differ are numbered once over the whole plan."""
-    quick = Task(instruction_source='quick', timeout_sec=1.0)
-    slow = Task(instruction_source='slow', timeout_sec=90.0)
+    quick = Task(instruction='quick', timeout_sec=1.0)
+    slow = Task(instruction='slow', timeout_sec=90.0)
     pairs = [(quick, {eval_keys.TASK: 'quick'}), (slow, {eval_keys.TASK: 'slow'}), (slow, {eval_keys.TASK: 'slow'})]
     trials = number_trials(pairs)
 

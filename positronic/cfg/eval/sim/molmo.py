@@ -6,7 +6,7 @@ import configuronic as cfn
 from positronic.cfg.eval import number_trials, require_finite_positive, spec
 from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
+from positronic.simulator.env_server.proxy import EnvTask, RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import MolmoAdapter, ShoulderSide, camera_dict
@@ -93,8 +93,8 @@ def benchmarks(
     )
     privileged = {mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE]}
 
-    def pinned_listing(pins: list[tuple[mapping.BenchmarkPath, int]]) -> list[dict]:
-        """The env's trial params of each pin, in pin order: one listing per benchmark."""
+    def pinned_listing(pins: list[tuple[mapping.BenchmarkPath, int]]) -> list[EnvTask]:
+        """The env's task of each pin, in pin order: one listing per benchmark."""
         by_bench: dict[mapping.BenchmarkPath, list[int]] = {}
         for bench, index in pins:
             by_bench.setdefault(bench, []).append(index)
@@ -108,12 +108,12 @@ def benchmarks(
                     mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
                 },
             )
-            for params in proxy.tasks(selection):
-                listed_bench = mapping.BenchmarkPath(*(params[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
-                found[listed_bench, params[molmo_keys.EPISODE_INDEX]] = params
+            for entry in proxy.tasks(selection):
+                listed_bench = mapping.BenchmarkPath(*(entry.params[key] for key in molmo_keys.BENCHMARK_DIMENSIONS))
+                found[listed_bench, entry.params[molmo_keys.EPISODE_INDEX]] = entry
         return [found[pin] for pin in pins]
 
-    def listed() -> list[dict]:
+    def listed() -> list[EnvTask]:
         if pins is not None:
             return pinned_listing(pins)
         selection = spec(
@@ -133,9 +133,10 @@ def benchmarks(
         if timeout is not None:
             logging.warning('--eval.timeout %ss replaces the benchmark horizon backstop', timeout)
         trials = []
-        for params in listed():
+        for entry in listed():
+            params = entry.params
             deadline = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON] + _TIMEOUT_MARGIN_SEC
-            task = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=deadline)
+            task = Task(instruction=entry.instruction, timeout_sec=deadline)
             scene = {**params, molmo_keys.EXTERIOR_SIDES: [side.value for side in exterior_sides]}
             trials += [
                 (task, {**scene, **({eval_keys.SEED: seed + t} if seed is not None else {})})

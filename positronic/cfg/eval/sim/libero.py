@@ -36,9 +36,8 @@ def _libero_eval(
 
     ``_libero_eval`` leaves ``suite`` unbound; each named config below is a ``.override`` binding it — to one
     suite, or to a list (``all``) swept in one run. An unbound ``task_id`` sweeps every task of each bound suite;
-    ``--eval.task_id`` pins one. The env resolves that selection when the run starts. The instruction is never
-    pinned: the task reads its language live from the env, which reports it (with ``suite`` and ``task_id``) in
-    every reset's meta.
+    ``--eval.task_id`` pins one. The env resolves that selection when the run starts, and lists each task's
+    language goal as its instruction.
 
     positronic launches a single task-agnostic env server in its own 3.10 interpreter; the proxy drives it over
     the socket and the whole scene spec — suite, task_id, camera_resolution, control_mode, settle_steps — rides
@@ -55,26 +54,27 @@ def _libero_eval(
         proxy, camera_dict, descriptor='remote.libero.franka', static_meta=bundled_panda_model()
     )
     privileged = {libero_keys.SIM_STATE: proxy.privileged[libero_keys.SIM_STATE]}
-    # rules-allow: hardcoded-keys — the env names this reset-meta field; it is not positronic's ``keys.TASK``
-    task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=timeout)
 
     def tasks() -> list[Task]:
         scenes = [
-            {
-                **params,
-                libero_keys.CAMERA_RESOLUTION: camera_resolution,
-                libero_keys.CONTROL_MODE: control_mode,
-                libero_keys.SETTLE_STEPS: settle_steps,
-            }
-            for params in proxy.tasks(spec(suite=suite, task_id=task_id))
+            (
+                Task(instruction=listed.instruction, timeout_sec=timeout),
+                {
+                    **listed.params,
+                    libero_keys.CAMERA_RESOLUTION: camera_resolution,
+                    libero_keys.CONTROL_MODE: control_mode,
+                    libero_keys.SETTLE_STEPS: settle_steps,
+                },
+            )
+            for listed in proxy.tasks(spec(suite=suite, task_id=task_id))
         ]
-        return build_tasks(task, seed, trial_count, scenes)
+        return build_tasks(scenes, seed, trial_count)
 
     return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
 
 
 # Each suite binds only its LIBERO ``suite``; an unbound ``task_id`` sweeps the whole suite, ``--eval.task_id``
-# pins one. The instruction is not pinned — the task reads it live from the env's reset meta.
+# pins one.
 spatial = _libero_eval.override(suite='libero_spatial')
 object = _libero_eval.override(suite='libero_object')
 goal = _libero_eval.override(suite='libero_goal')

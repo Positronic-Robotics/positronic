@@ -57,3 +57,9 @@ The env server and its harness send raw frames, and neither end accepts permessa
 the harness's machine, where deflate saves no time and costs ~140 ms of CPU per step on two 720p frames. A sim on
 another machine needs an image codec, as the policy wire has (`compress_images` sends JPEG frames,
 `positronic/policy/remote.py`): deflate shrinks camera frames only to about half.
+
+Each task record that an env lists carries `instruction`, the text the policy gets for that task. An eval builds each
+trial's `Task` from it before any reset, so the policy gets its instruction by the same route on a sim and on a rig.
+A sim whose goal moves away from that text, at a seeded reset or during an episode, sends the new text as `goal` in
+the frame. The proxy publishes it as the embodiment's goal signal, and the harness gives the policy the newest goal
+over the task's instruction.

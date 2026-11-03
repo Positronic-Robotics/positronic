@@ -140,6 +140,8 @@ class Harness(pimm.ControlSystem):
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
         # The last instruction this episode recorded, so a sample goes in only when the instruction changes.
         self._recorded_instruction: str | None = None
+        # The newest goal the embodiment published in this episode, which the policy gets over the task's instruction.
+        self._goal: str | None = None
         self._clock: pimm.Clock | None = None
         self._telemetry = _EpisodeTelemetry()
         # A ready call the harness made between episodes, by device name, until the device answers it.
@@ -156,6 +158,7 @@ class Harness(pimm.ControlSystem):
         self.deadline_ns = pimm.ControlSystemEmitter[int | None](self)
         self.robot_meta_in = pimm.DefaultingReceiver(self, default={})
         self.arm_meta_in = pimm.ReceiverDict(self, names=embodiment.arm_meta_sources)
+        self.goal = pimm.ControlSystemReceiver[str](self)
         self.done = pimm.DefaultingReceiver[dict](self, default={})
 
     def _yield(self, delay_sec: float = POLL_PERIOD_SEC) -> pimm.Command:
@@ -292,8 +295,12 @@ class Harness(pimm.ControlSystem):
         for k, v in policy_meta.items():
             meta[f'{policy_keys.POLICY_META}.{k}'] = v
         meta.update(task.meta)
-        meta[keys.TASK] = task.instruction
+        meta[keys.TASK] = self._instruction(task)
         return meta
+
+    def _instruction(self, task: Task) -> str:
+        """The text the policy gets: the newest goal that this episode read, or the task's instruction before any."""
+        return self._goal if self._goal is not None else task.instruction
 
     def _append(self, values: dict[str, Any], timestamps: pimm.Time) -> None:
         if self._writer is None:
@@ -367,8 +374,8 @@ class Harness(pimm.ControlSystem):
         Return ``None`` if a required signal has no message. Raise the ``pimm.SignalError`` a signal carries.
         Conversion errors propagate.
         Put each signal's read and conversion durations into ``step_ms``.
-        Record the task's instruction as the ``eval_keys.INSTRUCTION`` signal each time a returned observation
-        carries a new one.
+        Give the policy the newest goal of this episode, or the task's instruction before any. Record that text as
+        the ``eval_keys.INSTRUCTION`` signal each time a returned observation carries a new one.
         """
         self._sample(step_ms)
         inputs: dict[str, Any] = {}
@@ -385,7 +392,9 @@ class Harness(pimm.ControlSystem):
             return None
         for name in withheld_poses:
             inputs.pop(name, None)
-        inputs[keys.TASK] = instruction = task.instruction
+        if (goal := pimm.value_updated(self.goal)) is not None:
+            self._goal = goal
+        inputs[keys.TASK] = instruction = self._instruction(task)
         self._record_instruction(instruction)
         inputs[keys.DESCRIPTOR] = self._embodiment.descriptor
         return frozen_view(inputs)
@@ -497,6 +506,7 @@ class Harness(pimm.ControlSystem):
             self._recorded_privileged.clear()
             self._obs_by_signal.clear()
             self._recorded_instruction = None
+            self._goal = None
 
     def _rollout(
         self,
@@ -614,8 +624,9 @@ class Harness(pimm.ControlSystem):
             while not should_stop.value:
                 call = next(self.perform_task.incoming(), None)
                 manual = pimm.value_updated(self.manual_command)
-                # An idle done signal must not terminate the next episode.
+                # An idle done signal must not terminate the next episode, and an idle goal must not steer it.
                 pimm.read_updated(self.done)
+                pimm.read_updated(self.goal)
                 if call is not None:
                     payload = None
                     failure: BaseException = pimm.calls.HandlerStopped()

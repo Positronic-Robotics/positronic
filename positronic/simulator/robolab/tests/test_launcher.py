@@ -68,7 +68,7 @@ class _OneTaskEnv(EnvProtocol):
         return 2
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{'name': 'BananaInBowlTask', 'episode_length_s': 30.0}]
+        return [{'name': 'BananaInBowlTask', 'episode_length_s': 30.0, 'instruction': 'Put the banana in the bowl'}]
 
     def reset(self, token: Any) -> dict[str, Any]:
         raise AssertionError('the listing needs no reset')
