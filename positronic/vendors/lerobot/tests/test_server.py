@@ -7,12 +7,12 @@ from unittest.mock import Mock
 import configuronic as cfn
 import numpy as np
 import pytest
-import torch
 from positronic_model_server import server_wire, websocket_wire
 from positronic_wire import websocket, wire
 
 pytest.importorskip('lerobot', minversion='0.4')
 
+import torch
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.act.modeling_act import ACTPolicy
