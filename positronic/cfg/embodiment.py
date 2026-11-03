@@ -194,16 +194,11 @@ yam_bimanual_yambox = yam_bimanual.override(
     # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
     # The sim scene's plate is 0.011, so only z differs from the default: it is 0.011 higher.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3125], keys.RIGHT_ARM: [0.30, -0.305, 0.3125]},
-    # A fit to live data on this station gives these values. It fits the gravity factors and the mass of the end
-    # effector together. The friction of joint 2 is 80% of its fitted moving friction, 1.669 Nm. The friction of
-    # joints 3, 4 and 5 is below the lowest static friction measured on each joint: above it, the joint moves at rest.
+    # Fitted on this station to the rest error of holds at working poses: the mean of the two arms' fits.
     compensation=dict.fromkeys(
         keys.BIMANUAL_ARMS,
         positronic.cfg.hardware.roboarm.yam_compensation.override(
-            gravity_comp_factor=[1.0, 1.021, 1.024, 1.2, 1.133, 1.0],
-            ee_mass=1.020,
-            use_coulomb_friction=True,
-            coulomb_friction=[0.0, 1.335, 1.15, 0.05, 0.07, 0.0],
+            gravity_comp_factor=[1.0, 1.26, 1.245, 1.305, 1.405, 1.0]
         ),
     ),
     cameras={

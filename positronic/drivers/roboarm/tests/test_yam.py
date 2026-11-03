@@ -47,9 +47,10 @@ DEFAULT_TUNING = yam.PARK_SETTLE
 MAX_STREAMED_STEP = yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S / yam._CONTROL_HZ
 OPEN, CLOSED = 0.0, 1.0
 _GRIP_TOL = 0.05
-STATION_GRAVITY_COMP = [1.0, 1.021, 1.024, 1.2, 1.133, 1.0]
-STATION_EE_MASS = 1.020
-STATION_COULOMB_FRICTION = [0.0, 1.335, 1.15, 0.05, 0.07, 0.0]
+STATION_GRAVITY_COMP = [1.0, 1.26, 1.245, 1.305, 1.405, 1.0]  # the gravity factors of the yambox station
+# A station that measured its whole compensation
+STATION_EE_MASS = 0.9
+STATION_COULOMB_FRICTION = [0.0, 1.2, 1.1, 0.05, 0.07, 0.0]
 STATION_COMPENSATION = Compensation(
     gravity_comp_factor=STATION_GRAVITY_COMP,
     ee_mass=STATION_EE_MASS,
@@ -69,7 +70,8 @@ I2RT_YAM_RANGES = np.array([
 I2RT_YAM_LIMITS = I2RT_YAM_RANGES + np.array([-0.15, 0.15])
 I2RT_GRAVITY_COMP = [1.0, 1.1, 1.1, 1.2, 1.0, 1.0]  # i2rt's own factors for the YAM arm
 I2RT_COULOMB_FRICTION = [0.3, 0.3, 0.3, 0.06, 0.06, 0.06]  # i2rt's own Coulomb friction for the YAM arm, in Nm
-# The arm meta of a chain that runs the station's compensation, and of one that runs i2rt's own
+# The arm meta of a chain that runs that compensation, of one that runs i2rt's own, and of one that runs the
+# gravity factors of yambox
 STATION_ARM_META = {
     roboarm_keys.GRAVITY_COMP_FACTOR: [*STATION_GRAVITY_COMP, 1.0],
     roboarm_keys.EE_MASS: STATION_EE_MASS,
@@ -82,6 +84,7 @@ I2RT_ARM_META = {
     roboarm_keys.USE_COULOMB_FRICTION: False,
     roboarm_keys.COULOMB_FRICTION: [*I2RT_COULOMB_FRICTION, 0.0],
 }
+YAMBOX_ARM_META = {**I2RT_ARM_META, roboarm_keys.GRAVITY_COMP_FACTOR: [*STATION_GRAVITY_COMP, 1.0]}
 
 
 class FakeYam(yam._FakeYam):
@@ -2006,7 +2009,7 @@ def _record_an_episode(rig: Embodiment, root: Path) -> dict[str, Any]:
         (
             embodiment_cfg.yam_bimanual_yambox.override(cameras={}),
             [f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in keys.BIMANUAL_ARMS],
-            STATION_ARM_META,
+            YAMBOX_ARM_META,
         ),
         (embodiment_cfg.yam, [keys.JOINTS], I2RT_ARM_META),
     ],
@@ -2139,10 +2142,9 @@ def _asked_by_channel(monkeypatch, rig) -> dict[str, dict[str, Any]]:
     return asked
 
 
-def test_the_yambox_station_hands_its_gravity_model_to_both_chains(monkeypatch):
+def test_the_yambox_station_hands_its_gravity_compensation_to_both_chains(monkeypatch):
     for asked in _asked_by_channel(monkeypatch, embodiment_cfg.yam_bimanual_yambox).values():
         np.testing.assert_array_equal(asked['gravity_comp_factor'], STATION_GRAVITY_COMP)
-        assert asked['ee_mass'] == STATION_EE_MASS
 
 
 def test_each_bimanual_chain_gets_the_compensation_of_its_own_arm(monkeypatch):
