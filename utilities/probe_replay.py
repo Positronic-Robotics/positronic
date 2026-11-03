@@ -261,6 +261,26 @@ def null_cells() -> str:
     return f'<positronic-replay><script type="application/json">{data}</script></positronic-replay>'
 
 
+def fault_rows() -> str:
+    """One row whose camera address the page's `URL` refuses with a fault of the element, as `FAULT_IN_URL` sets."""
+    camera = {'camera': 'front', 'src': '/media/explode/1/front.webm', 'width': 64, 'height': 48}
+    data = json.dumps({'columns': [{'key': 'task', 'label': 'Task'}], 'rows': [{'id': '1', 'cameras': [camera]}]})
+    return f'<positronic-replay><script type="application/json">{data}</script></positronic-replay>'
+
+
+FAULT = 'a fault that the probe puts in the element'
+# A `URL` that throws a RangeError, which no input reader expects, for an address with `/explode/` in it.
+FAULT_IN_URL = f"""
+  const RealURL = window.URL;
+  window.URL = class extends RealURL {{
+    constructor(url, base) {{
+      if (String(url).includes('/explode/')) throw new RangeError('{FAULT}');
+      super(url, base);
+    }}
+  }};
+"""
+
+
 def zero_filter() -> str:
     """A column whose filter is 0, which is no filter the element reads."""
     data = json.dumps({
@@ -359,6 +379,7 @@ def pages() -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/nulls': page_html(null_cells()),
+        '/page/fault': page_html(fault_rows()),
         '/page/zero-filter': page_html(zero_filter()),
         '/page/dock-below': page_html(
             inline_element('mode="full" dock dock-below="#no-such-bar" link-param="episode"')
@@ -521,17 +542,26 @@ class Probe:
         return passed
 
     def open(
-        self, path: str, width: int = 1400, height: int = 900, expected: tuple[str, ...] = (), wait_until: str = 'load'
+        self,
+        path: str,
+        width: int = 1400,
+        height: int = 900,
+        expected: tuple[str, ...] = (),
+        wait_until: str = 'load',
+        before: str | None = None,
     ) -> Page:
-        """A page of `path`. A console error that holds one of `expected` is a result the check asks for. The `load`
-        of a page waits for its videos to answer; `domcontentloaded` does not."""
+        """A page of `path`. A console or page error that holds one of `expected` is a result the check asks for. The
+        `load` of a page waits for its videos to answer; `domcontentloaded` does not. `before` runs ahead of the
+        page's own scripts."""
         page = self.browser.new_page(viewport={'width': width, 'height': height})
+        if before:
+            page.add_init_script(before)
         # A check reads the expected errors of its own page only.
         self.expected_errors = []
         # A tall strip above the dock keeps the rows next to the open one clear of the dock.
         page.add_init_script(f"localStorage.setItem('{STRIP_KEY}', '{DOCK_STRIP_PX}')")
         page.on('console', lambda message: self.on_console(path, message, expected))
-        page.on('pageerror', lambda error: self.on_page_error(path, error))
+        page.on('pageerror', lambda error: self.on_page_error(path, error, expected))
         page.goto(self.base + path, wait_until=wait_until)
         page.wait_for_function("customElements.get('positronic-replay') !== undefined", timeout=WAIT_MS)
         return page
@@ -551,7 +581,10 @@ class Probe:
             return
         self.console_errors.append(f'{path}: {message.text} ({source})')
 
-    def on_page_error(self, path: str, error: Error):
+    def on_page_error(self, path: str, error: Error, expected: tuple[str, ...] = ()):
+        if any(text in error.message for text in expected):
+            self.expected_errors.append(error.message)
+            return
         if is_aborted_viewer_fetch(error.message, error.stack or ''):
             self.aborted_viewer_fetches.append(path)
             return
@@ -912,6 +945,7 @@ class Probe:
             'did not load' in status and rows == 0,
             (status, rows),
         )
+        self.check('a manifest that is no list logs one error', len(self.expected_errors) == 1, self.expected_errors)
         page.close()
 
     def row_link(self):
@@ -1496,7 +1530,8 @@ class Probe:
         print('A step from a shown recording to a row whose recording answers slowly:')
         page = self.open('/page/dock?episode=26')
         shown = self.until(page, "loads('/rrd/ok/26.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
-        page.keyboard.press('ArrowDown')
+        # The next button, not a key: a key can reach the viewer's frame before it takes the element's keys.
+        part(page, 'step').nth(1).click()
         time.sleep(0.5)
         pending = page.evaluate("[frameUrl(), frame()?.contentWindow.location.href ?? '', noteText()]")
         hidden = pending[0] == '' and '/rrd/ok/26.rrd' not in pending[1].replace('%2F', '/')
@@ -1505,6 +1540,18 @@ class Probe:
         self.check(
             'the viewer shows the new recording once it is there', self.until(page, "loads('/rrd/slow/27.rrd')", 15000)
         )
+        page.close()
+
+    def fault_is_not_input(self):
+        print('A fault of the element while it reads the rows:')
+        page = self.open('/page/fault', expected=(FAULT,), before=FAULT_IN_URL)
+        time.sleep(1)
+        status = page.evaluate("one('status')?.textContent ?? ''")
+        # The fault reaches the page uncaught, alone, and not inside the element's own message about bad data.
+        self.check(
+            'the fault reaches the page as an uncaught error', self.expected_errors == [FAULT], self.expected_errors
+        )
+        self.check('the element does not show it as data that did not load', 'did not load' not in status, status)
         page.close()
 
     def undocked_link(self):
@@ -1614,6 +1661,7 @@ def main(headed: bool) -> int:
             probe.link_to_no_row,
             probe.swap_reports_and_button_names,
             probe.viewer_between_rows,
+            probe.fault_is_not_input,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

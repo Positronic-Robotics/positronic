@@ -39,7 +39,23 @@ function entries(list, read) {
 
 /** Refuses a list whose shape the element cannot read; the element then shows that the replay did not load. */
 function refuse(input, value, wanted) {
-  throw new TypeError(`${input} is not ${wanted}: ${JSON.stringify(value)}`);
+  throw new InputError(`${input} is not ${wanted}: ${JSON.stringify(value)}`);
+}
+
+/** The replay data the element cannot read at all: a failed request, text that is not JSON, or a list of the
+ * wrong shape. Any other error is a fault of the element, and the element does not catch it. */
+export class InputError extends Error {
+  name = 'InputError';
+}
+
+/** The JSON of `text`. */
+export function parseJson(input, text) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    throw new InputError(`${input} is not JSON: ${error.message}`);
+  }
 }
 
 /** A media URL: a string, or an object with `src` (relative to `base`) or `url`. Null where the value is empty. */

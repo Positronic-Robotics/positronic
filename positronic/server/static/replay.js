@@ -52,6 +52,7 @@
 //   - A bad entry of a list: the element logs an error and drops the entry.
 //   - A field of the wrong shape: the element logs an error and leaves the field empty.
 //   - A column of an unknown type: the element logs an error and reads it as `text`.
+//   - Any other error while the element reads the data is a fault of the element. The element does not catch it.
 //
 // Media
 //   - The element loads only the URLs a row names. It builds no URL from another one.
@@ -111,6 +112,8 @@ import {
   ColumnType,
   DURATION_KEY,
   INDEX_KEY,
+  InputError,
+  parseJson,
   readInline,
   readManifest,
   wrongInput,
@@ -334,7 +337,7 @@ export class PositronicReplay extends HTMLElement {
         return;
       }
       this.#waitForScript?.disconnect();
-      this.#take(() => readInline(JSON.parse(script.textContent), document.baseURI), key);
+      this.#take(() => readInline(parseJson('the inline rows', script.textContent), document.baseURI), key);
       return;
     }
     this.#waitForScript?.disconnect();
@@ -350,30 +353,43 @@ export class PositronicReplay extends HTMLElement {
     const loading = new AbortController();
     this.#loading = loading;
     this.#status('Loading the replay…', key);
-    fetch(url, { signal: loading.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-        return response.json();
-      })
-      .then((manifest) => {
-        if (request === this.#request) this.#take(() => readManifest(manifest, url.href), key);
-      })
-      .catch((error) => {
-        // A new `src`, or a removal of the element, aborts the request of the old one.
-        if (error.name === 'AbortError' || request !== this.#request) return;
-        console.error(`The replay at ${url} did not load:`, error);
-        this.#status(`The replay did not load: ${error.message}`, key);
-      })
+    this.#fetchManifest(url, loading.signal)
       .finally(() => {
         if (this.#loading === loading) this.#loading = null;
-      });
+      })
+      .then(
+        (manifest) => {
+          if (request === this.#request) this.#take(() => readManifest(manifest, url.href), key);
+        },
+        (error) => {
+          // A new `src`, or a removal of the element, aborts the request of the old one.
+          if (error.name === 'AbortError' || request !== this.#request) return;
+          if (!(error instanceof InputError)) throw error;
+          console.error(`The replay at ${url} did not load:`, error);
+          this.#status(`The replay did not load: ${error.message}`, key);
+        },
+      );
   }
 
-  /** Reads the list of `source` and builds it. */
+  /** The manifest at `url`. A failed request, an error status or text that is not JSON is an `InputError`. */
+  async #fetchManifest(url, signal) {
+    let response;
+    try {
+      response = await fetch(url, { signal });
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new InputError(`the request failed: ${error.message}`);
+    }
+    if (!response.ok) throw new InputError(`${response.status} ${response.statusText}`);
+    return parseJson('the manifest', await response.text());
+  }
+
+  /** Reads the list of `source` and builds it. Only an `InputError` shows that the replay did not load. */
   #take(read, source) {
     try {
       this.#list = read();
     } catch (error) {
+      if (!(error instanceof InputError)) throw error;
       console.error('The replay data does not read as a list of episodes:', error);
       this.#status(`The replay did not load: ${error.message}`, source);
       return;
