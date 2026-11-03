@@ -62,6 +62,16 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     UV_OFFLINE=0 uv pip install --python /opt/gr00t-venv/bin/python --no-deps \
       /opt/positronic-packages/wire /opt/positronic-packages/model_server \
  && uv pip check --python /opt/gr00t-venv/bin/python
+# The base holds ca-certificates 20260601, and the step above keeps GR00T's certifi 2026.2.25. Both trust the leaked
+# eMudhra (emSign) intermediate CAs.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && UV_OFFLINE=0 uv pip install --no-config --no-cache --python /opt/gr00t-venv/bin/python certifi==2026.10.23
+# botocore and grpcio carry CA bundles of their own, which trust the same CAs.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /opt/positronic-vendors
 COPY --link positronic/vendors/gr00t/serving /opt/positronic-vendors/gr00t_serving
