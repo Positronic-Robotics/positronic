@@ -47,6 +47,11 @@ ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
 RUN UV_PROJECT_ENVIRONMENT=/.venv uv sync --frozen --project /openpi && uv cache clean
 # openpi's lock pins certifi 2025.4.26, which trusts the same CAs. UV_NO_SYNC below keeps this pin at start.
 RUN uv pip install --no-config --no-cache --python /.venv/bin/python certifi==2026.10.23
+# botocore and grpcio in /positronic/.venv carry CA bundles of their own, which trust the same CAs.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
 
 # The dependencies install from the lock alone, so a source change does not reinstall them.
 WORKDIR /positronic
