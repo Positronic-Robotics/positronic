@@ -21,17 +21,6 @@ from positronic import geom, utils
 
 logger = logging.getLogger(__name__)
 
-_LOG_CONFIG = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'file': {'class': 'logging.FileHandler', 'formatter': 'default', 'filename': '/tmp/webxr.log', 'mode': 'w'}
-    },
-    'loggers': {'': {'handlers': ['file'], 'level': 'INFO'}},
-    'formatters': {'default': {'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'}},
-}
-
-
 # The names of the controllers in the positions and the buttons that ``WebXR`` emits.
 LEFT, RIGHT = 'left', 'right'
 
@@ -305,13 +294,20 @@ class WebXR(pimm.ControlSystem):
                 logger.error(f'WebSocket error: {e}')
 
     def _server(self, app: FastAPI) -> uvicorn.Server:
-        ssl_kwargs = {}
+        keyfile = certfile = None
         if self.use_https:
             keyfile, certfile = _get_or_create_ssl_files(
                 port=self.port, keyfile=self.ssl_keyfile, certfile=self.ssl_certfile
             )
-            ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
-        config = uvicorn.Config(app, host='0.0.0.0', port=self.port, log_config=_LOG_CONFIG, **ssl_kwargs)
+        config = uvicorn.Config(
+            app,
+            host='0.0.0.0',
+            port=self.port,
+            log_level='warning',
+            access_log=False,
+            ssl_keyfile=keyfile,
+            ssl_certfile=certfile,
+        )
         return uvicorn.Server(config)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
