@@ -46,6 +46,8 @@ SETTLE_S = 6.0
 WAIT_MS = 20_000
 DOCK_STRIP_PX = 450
 SLOW_S = 2.0
+VIDEO_S = 10
+"""The length of every fixture video, long enough to play across a width change."""
 """How long the slow manifest takes, so a newer `src` answers first."""
 STRIP_KEY = 'positronic-replay.strip'
 """Where the element keeps the strip above its dock: `STRIP_KEY` in replay.js."""
@@ -77,12 +79,12 @@ class Requests:
 
 
 def make_video(path: Path) -> bytes:
-    """A 2 s VP8 video: Chromium plays WebM without the codecs a branded browser adds."""
+    """A VP8 video of `VIDEO_S`: Chromium plays WebM without the codecs a branded browser adds."""
     with av.open(str(path), 'w', format='webm') as container:
         stream = container.add_stream('libvpx', rate=10)
         stream.width, stream.height, stream.pix_fmt = 64, 48, 'yuv420p'
-        for i in range(20):
-            frame = av.VideoFrame.from_ndarray(np.full((48, 64, 3), i * 12, dtype=np.uint8), format='rgb24')
+        for i in range(10 * VIDEO_S):
+            frame = av.VideoFrame.from_ndarray(np.full((48, 64, 3), i * 2 % 256, dtype=np.uint8), format='rgb24')
             container.mux(stream.encode(frame))
         container.mux(stream.encode())
     return path.read_bytes()
@@ -127,7 +129,7 @@ def inline_rows() -> dict:
     rows = []
     for n in range(1, ROWS + 1):
         cameras = [
-            {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': 2.0}
+            {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
             for camera in ('front', 'wrist')
         ]
         row = {
@@ -143,7 +145,7 @@ def inline_rows() -> dict:
                 'reliability': 50 + n % 50,
                 'pace': n / 10,
             },
-            'duration_s': 2.0,
+            'duration_s': VIDEO_S,
             'cameras': cameras,
             'phone': f'/media/ok/{n}/phone.webm',
             'rrd': f'/rrd/ok/{n}.rrd',
@@ -287,6 +289,16 @@ class QuietServer(ThreadingHTTPServer):
             super().handle_error(request, client_address)
 
 
+def byte_span(header: str | None, body: bytes) -> tuple[int, bytes, dict[str, str]]:
+    """The status, the bytes and the headers of an answer to a `Range: bytes=A-B` header, or to none. A browser
+    seeks a video only where its server answers ranges."""
+    if not header or not header.startswith('bytes='):
+        return 200, body, {'Accept-Ranges': 'bytes'}
+    first, _, last = header.removeprefix('bytes=').split(',')[0].partition('-')
+    start, end = int(first or 0), min(int(last) if last else len(body) - 1, len(body) - 1)
+    return 206, body[start : end + 1], {'Accept-Ranges': 'bytes', 'Content-Range': f'bytes {start}-{end}/{len(body)}'}
+
+
 def static_file(path: str) -> Path | None:
     """The file of positronic's static folder that `path` names; None for any other path."""
     file = (STATIC / path.removeprefix('/static/')).resolve()
@@ -323,7 +335,8 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
                 return self.answer(404, b'gone')
             if '/building/' in path and asked <= BUILDING_ANSWERS:
                 return self.answer(202, headers={'Retry-After': str(RETRY_AFTER_S)})
-            return self.answer(200, body, content_type)
+            status, part, headers = byte_span(self.headers.get('Range'), body)
+            return self.answer(status, part, content_type, headers)
 
         def manifest_answer(self, path: str):
             if path == f'{SHARE}/slow.json':
@@ -701,8 +714,9 @@ class Probe:
         self.until(page, "all('row').length > 0")
         self.check('the element holds one media query listener', page.evaluate('queryListeners') == 1)
         page.locator('positronic-replay tr[data-id="12"] td').nth(2).click()
-        waiting = self.until(page, 'retryWaits.size > 0', 8000)
-        self.check('the row waits for its files', waiting, page.evaluate('retryWaits.size'))
+        # One wait for the replay and one for each camera, so every first request of the row has an answer.
+        waiting = self.until(page, 'retryWaits.size === 3', 8000)
+        self.check('the row waits for its replay and its two videos', waiting, page.evaluate('retryWaits.size'))
         mark = self.requests.mark()
         page.evaluate("host().setAttribute('mode', 'video')")
         left = page.evaluate('retryWaits.size')
@@ -752,6 +766,23 @@ class Probe:
         self.until(page, "all('row').length > 0")
         page.locator('positronic-replay tr[data-id="2"] td').nth(2).click()
         self.check('a click beside the link opens the row', self.until(page, "host().hasAttribute('open')", 5000))
+        page.close()
+
+    def width_change(self):
+        print('A width change while a row plays:')
+        page = self.open('/page/dock?episode=7')
+        lead = "all('camera').find((video) => video.dataset.camera === 'front')"
+        self.until(page, f'{lead} && !{lead}.paused && {lead}.currentTime > 1', 8000)
+        at = page.evaluate(f'{lead}.currentTime')
+        page.set_viewport_size({'width': 400, 'height': 800})
+        moved = f"one('phone') !== null && !one('phone').paused && one('phone').currentTime >= {at - 0.3}"
+        playing = self.until(page, moved, 5000)
+        moment = page.evaluate("one('phone')?.currentTime ?? 0")
+        self.check('the phone video plays on from the same moment', playing and moment >= at - 0.3, (at, moment))
+        page.set_viewport_size({'width': 1400, 'height': 900})
+        playing = self.until(page, f'{lead} && !{lead}.paused && {lead}.currentTime >= {moment - 0.3}', 5000)
+        back = page.evaluate(f'{lead}?.currentTime ?? 0')
+        self.check('the cameras play on from the same moment', playing and back >= moment - 0.3, (moment, back))
         page.close()
 
     def no_recording_row(self):
@@ -810,6 +841,7 @@ def main(headed: bool) -> int:
             probe.rebuild_frees_everything,
             probe.stale_and_broken_sources,
             probe.row_link,
+            probe.width_change,
             probe.no_recording_row,
             probe.video_mode,
             probe.phone,

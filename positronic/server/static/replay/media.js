@@ -56,6 +56,12 @@ function clock(value) {
 // started, and a file that is gone or building has no source; its note says which. None is a fault.
 const EXPECTED_PLAY_REFUSALS = new Set(['NotAllowedError', 'AbortError', 'NotSupportedError']);
 
+/** Moves `video` to `at` seconds once it knows its duration; a shorter video rests on its last frame. */
+function startAt(video, at) {
+  if (!at) return;
+  video.addEventListener('loadedmetadata', () => (video.currentTime = Math.min(at, video.duration)), { once: true });
+}
+
 /** Plays a video and names it in the console where it does not play. */
 export function start(video) {
   video.play().catch((error) => {
@@ -96,21 +102,21 @@ export class EpisodePlayer {
     root.replaceChildren(this.#stage, this.#note, this.#summary);
   }
 
-  /** Shows `row`, and plays it where `autoplay`. A row opened later stops the waits of this one. */
-  show(row, summary, { autoplay = false } = {}) {
+  /** Shows `row` from `at` seconds, and plays it where `autoplay`. A row opened later stops the waits of this one. */
+  show(row, summary, { autoplay = false, at = 0 } = {}) {
     this.#endWaits();
     const turn = ++this.#turn;
     const wanted = () => turn === this.#turn;
     this.#summary.textContent = summary;
     this.#clearVideos();
     this.#setNote('replay', null);
-    const video = this.#videoOf(row);
+    const startVideo = this.#videoStarter(row, { autoplay, at });
     if (this.#full && row.rrd && !this.#narrow.matches) {
-      this.#playRecording(row, video, autoplay, wanted);
+      this.#playRecording(row, startVideo, wanted);
       return;
     }
     this.#hideFrame();
-    if (video) video(autoplay);
+    if (startVideo) startVideo();
     else this.#setNote('replay', NOTES.none);
   }
 
@@ -159,23 +165,23 @@ export class EpisodePlayer {
     this.#frame.contentDocument?.getElementById('the_canvas_id')?.focus({ preventScroll: true });
   }
 
-  /** The video `row` plays on this screen, as a function of `autoplay`; null for a row with no video. */
-  #videoOf(row) {
-    if (row.phone && (this.#narrow.matches || !row.cameras.length)) return (autoplay) => this.#playPhone(row, autoplay);
-    if (row.cameras.length) return (autoplay) => this.#playCameras(row, autoplay);
+  /** The function that starts the video `row` plays on this screen; null for a row with no video. */
+  #videoStarter(row, playback) {
+    if (row.phone && (this.#narrow.matches || !row.cameras.length)) return () => this.#playPhone(row, playback);
+    if (row.cameras.length) return () => this.#playCameras(row, playback);
     return null;
   }
 
-  async #playRecording(row, video, autoplay, wanted) {
-    const playVideo = (note) => {
+  async #playRecording(row, startVideo, wanted) {
+    const fallBackToVideo = (note) => {
       this.#hideFrame();
       this.#setNote('replay', note);
-      if (!this.lead && video) video(autoplay);
+      if (!this.lead && startVideo) startVideo();
     };
-    const state = await this.#settled(row.rrd, { building: () => playVideo(NOTES.replayBuilding), wanted });
+    const state = await this.#settled(row.rrd, { building: () => fallBackToVideo(NOTES.replayBuilding), wanted });
     if (state === null) return;
     if (state !== MediaState.READY) {
-      playVideo(state === MediaState.GONE ? NOTES.replayGone : NOTES.replayFailed);
+      fallBackToVideo(state === MediaState.GONE ? NOTES.replayGone : NOTES.replayFailed);
       return;
     }
     this.#clearVideos();
@@ -265,17 +271,18 @@ export class EpisodePlayer {
     video.addEventListener('loadeddata', () => onNote(null, MediaState.READY));
   }
 
-  #playPhone(row, autoplay) {
+  #playPhone(row, { autoplay, at }) {
     const video = element('video', { part: 'phone', src: row.phone, controls: '', playsinline: '', muted: '' });
     video.muted = true;
     video.dataset.name = 'The phone video';
+    startAt(video, at);
     this.#watch(video, row.phone, (note) => this.#setNote('video', note));
     this.#stage.replaceChildren(video);
     this.lead = video;
     if (autoplay) start(video);
   }
 
-  #playCameras(row, autoplay) {
+  #playCameras(row, { autoplay, at }) {
     const longest = row.cameras.reduce(
       (best, camera, at) => (camera.durationS > row.cameras[best].durationS ? at : best),
       0,
@@ -308,6 +315,7 @@ export class EpisodePlayer {
       });
       video.muted = true;
       video.dataset.name = name;
+      startAt(video, at);
       video.addEventListener('click', () => this.#stage.querySelector('[part~="play"]')?.click());
       const caption = element('figcaption', { part: 'caption' }, [name]);
       const figure = element('figure', { part: 'figure' }, [video, caption]);

@@ -275,8 +275,11 @@ export class PositronicReplay extends HTMLElement {
       frameKeys: this.#onKey,
       cameraName: this.#cameraName,
     });
+    // The other width plays the other video of the row, from the same moment and in the same state.
     listen(this.#held, this.#narrow, 'change', () => {
-      if (this.#current) this.#play(this.#current, { autoplay: false });
+      if (!this.#current) return;
+      const lead = this.#player.lead;
+      this.#play(this.#current, { autoplay: lead !== null && !lead.paused, at: lead?.currentTime ?? 0 });
     });
     return player;
   }
