@@ -371,6 +371,17 @@ At capacity, the scheduler skips new samples and records `skipped_samples` in ep
 metadata. A pending `replan_now` survives skipped samples and remains available to the recipe's
 observation codecs. The first inference establishes the session before pipelining begins.
 
+In every scheduling mode, `InferenceSchedule` adds a `call_id` starting at zero and increasing
+with each accepted submission. IDs identify submission order, which can differ from arrival order.
+Each call also carries `call_timings`: a list of `{call_id, elapsed_sec}` records for completed calls,
+including those that returned `None`. Elapsed time runs from runtime submission to callable completion.
+Records accumulate until the next accepted submission; skipped samples do not discard them.
+There is no final flush after the run ends. These are ordinary observation fields: the server's
+recipe must preserve them if it uses them. Direct callers supply their own IDs and feedback.
+
+On `replan_now`, predictions from already submitted calls are ignored, but those calls still finish
+and contribute timing feedback. Their observations remain available to the server's history.
+
 ## Real-time chunking
 
 Real-time chunking (RTC) predicts a new action chunk while the client executes
@@ -378,8 +389,8 @@ queued commands. It combines local scheduling and remote prediction through the
 policy API's [composition model](../policy/DESIGN.md#composability).
 
 The client supplies the remaining planned actions at the observation moment,
-alongside measured and expected end-to-end call latency. The measured value is
-`None` before the first completed call. The server decides how
+alongside completed call timings. The timing batch is empty before the first
+completed call. The server estimates latency and decides how
 to use that context, including which actions to freeze or blend. Supplying the
 whole remaining plan lets models choose their own conditioning window.
 
@@ -392,6 +403,10 @@ prediction identifies its source actions; its start relative to the observation
 says when they are due. With the original action spacing preserved, the server
 knows the remaining times from its action rate. Relative offsets avoid requiring
 synchronized client and server clocks.
+
+With overlapping calls, the prefix is a snapshot at observation time. The server must account for
+predictions it has produced since that snapshot when choosing the continuation. `call_timings` lets
+it associate durations with its own results and estimate the delay relevant to prediction.
 
 Action codecs encode commands at a configured input path through ordinary
 `encode()` calls. Observation codecs, field selection and packing compose with

@@ -868,6 +868,12 @@ def test_periodic_jpeg_history_and_prediction_share_one_call(served, transport):
             observations = model.observations[episode * 3 :]
             assert [obs[policy_keys.SAMPLE_INDEX] for obs in observations] == [0, 1, 2]
             assert [obs[policy_keys.OBS_TIME_NS] for obs in observations] == [0, 100_000_000, 200_000_000]
+            assert [obs[policy_keys.CALL_ID] for obs in observations] == [0, 1, 2]
+            assert [obs[policy_keys.CALL_TIMINGS] for obs in observations] == [
+                [],
+                [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}],
+                [{policy_keys.CALL_ID: 1, policy_keys.ELAPSED_SEC: 0.0}],
+            ]
             for index, obs in enumerate(observations):
                 np.testing.assert_allclose(obs['image'], index * 50, atol=1)
                 assert obs['image'].shape == (16, 16, 3)
@@ -1144,8 +1150,8 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             run.close()
     assert inputs[0] == inputs[1] == inputs[2]
     assert outputs[0] == outputs[1] == outputs[2]
-    assert model.observations[0][policy_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.0
-    assert model.observations[0][policy_keys.RTC.MEASURED_LATENCY_SEC] is None
+    assert model.observations[0][policy_keys.CALL_ID] == 0
+    assert model.observations[0][policy_keys.CALL_TIMINGS] == []
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
