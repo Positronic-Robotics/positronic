@@ -3,6 +3,7 @@ import collections
 import contextlib
 import io
 import json
+import logging
 import socket
 import time
 import types
@@ -388,6 +389,13 @@ def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeyp
     monkeypatch.chdir(tmp_path)
     with _served_webxr() as base:
         assert httpx.get(base + route, timeout=1.0).status_code == 200
+
+
+def test_the_headset_server_logs_through_the_process_handlers():
+    root = logging.getLogger()
+    handlers = list(root.handlers)
+    with _served_webxr():
+        assert root.handlers == handlers
 
 
 def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
