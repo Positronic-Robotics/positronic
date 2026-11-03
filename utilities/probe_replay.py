@@ -6,12 +6,11 @@
 """Check `<positronic-replay>` in a browser, over fixture manifests and inline rows that a local server serves.
 
 It checks each layout and mode: the list, filters and paging, the player and its media states, the 3D replay with
-the browser history it leaves, and the `replay-action` events. In `video` mode, and on a row with no `rrd`, it checks
-that the page asks for no recording and shows no viewer. It prints each check with OK or FAIL, and exits 1 on a FAIL
-or on a console error of the page.
+the browser history it leaves, and the `replay-action` events. In `video` mode, and on a row with no `rrd`, the page
+must ask for no recording and show no viewer.
 
 Usage
-    uv run --script utilities/probe_replay.py
+    uv run --script utilities/probe_replay.py                 # exit 1 on a FAIL or a console error
     uv run --script utilities/probe_replay.py --headed        # watch it
     uv run --with playwright playwright install chromium        # once, for the browser
 """
@@ -46,6 +45,8 @@ SETTLE_S = 6.0
 """How long a replay gets to load: the viewer changes the history only after it loads."""
 WAIT_MS = 20_000
 DOCK_STRIP_PX = 450
+STRIP_KEY = 'positronic-replay.strip'
+"""Where the element keeps the strip above its dock: `STRIP_KEY` in replay.js."""
 
 
 @dataclass
@@ -120,7 +121,7 @@ def long_share() -> dict:
 
 def inline_rows() -> dict:
     """Rows of every cell type and media state. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media,
-    9 lost its videos, 10 builds them."""
+    9 lost its videos, 10 builds them, 11 lost its longest video only."""
     rows = []
     for n in range(1, ROWS + 1):
         cameras = [
@@ -159,6 +160,11 @@ def inline_rows() -> dict:
             state = 'gone' if n == 9 else 'building'
             row['cameras'] = [{**camera, 'src': camera['src'].replace('/ok/', f'/{state}/')} for camera in cameras]
             del row['phone']
+        if n == 11:
+            longest = {**cameras[0], 'src': cameras[0]['src'].replace('/ok/', '/gone/'), 'duration_s': 3.0}
+            row['cameras'] = [longest, cameras[1]]
+            for key in ('rrd', 'phone'):
+                del row[key]
         rows.append(row)
     columns = [
         {'key': 'task', 'label': 'Task', 'filter': True},
@@ -298,7 +304,6 @@ class Probe:
         self.requests = requests
         self.failures: list[str] = []
         self.console_errors: list[str] = []
-        self.fresh_tab_entries: int | None = None
 
     def check(self, name: str, passed: bool, seen: object = '') -> bool:
         print(f'  {"OK  " if passed else "FAIL"} {name}{f": {seen}" if seen != "" else ""}')
@@ -309,7 +314,7 @@ class Probe:
     def open(self, path: str, width: int = 1400, height: int = 900) -> Page:
         page = self.browser.new_page(viewport={'width': width, 'height': height})
         # A tall strip above the dock keeps the rows next to the open one clear of the dock.
-        page.add_init_script(f"localStorage.setItem('positronic-replay.strip', '{DOCK_STRIP_PX}')")
+        page.add_init_script(f"localStorage.setItem('{STRIP_KEY}', '{DOCK_STRIP_PX}')")
         page.on('console', lambda message: self.on_console(path, message))
         page.on('pageerror', lambda error: self.console_errors.append(f'{path}: {error}'))
         page.goto(self.base + path, wait_until='load')
@@ -548,7 +553,8 @@ class Probe:
         ]
         self.check('each control sends its action', actions == wanted, actions)
 
-    def dock_link(self):
+    def dock_link(self, fresh_tab_entries: int):
+        """`fresh_tab_entries` is the history length of a new tab with a page, from the control arm."""
         print('A link to a row on the third page (dock, full mode), and three replays:')
         page = self.open('/page/dock?episode=120')
         start = self.history_length(page)
@@ -573,8 +579,7 @@ class Probe:
         embedded = f'/rerun/{rerun_release()}/embedded.html?url='
         self.check('each replay loads the embedded viewer page', all(url and embedded in url for url in urls), urls)
         end = self.history_length(page)
-        # A new tab holds about:blank before the page; the control arm counts the entries of such a tab.
-        fresh = self.fresh_tab_entries
+        fresh = fresh_tab_entries
         self.check('three replays add no browser history entry', start == end == fresh, (fresh, start, end))
         page.keyboard.press('Escape')
         self.check('Escape closes the dock', self.until(page, "one('dock').hidden"))
@@ -588,7 +593,8 @@ class Probe:
         self.check('the steps and Escape send open/Step and close/Escape', actions == wanted, actions)
         page.close()
 
-    def history_control(self):
+    def history_control(self) -> int:
+        """The history length of a new tab with a page; a new tab holds about:blank before the page."""
         print('The control arm: the viewer page with history on, three times in a frame:')
         page = self.browser.new_page(viewport={'width': 1400, 'height': 900})
         page.goto(self.base + '/page/history-control', wait_until='load')
@@ -596,9 +602,39 @@ class Probe:
         for n in (1, 2, 3):
             page.evaluate(f'window.loadInFrame({n})')
             time.sleep(SETTLE_S)
-        self.fresh_tab_entries = start
         end = self.history_length(page)
         self.check('the viewer adds history entries, so the check below can fail', end > start, (start, end))
+        page.close()
+        return start
+
+    def lost_lead_camera(self):
+        print('A row whose longest camera is gone:')
+        page = self.open('/page/dock?episode=11')
+        survivor = "all('camera').find((video) => video.dataset.camera === 'wrist')"
+        self.check('the other camera plays', self.until(page, f'!{survivor}.paused', 8000), page.evaluate('noteText()'))
+        play = page.locator('positronic-replay [part~="play"]')
+        play.click()
+        self.check('Pause pauses the other camera', self.until(page, f'{survivor}.paused', 5000))
+        play.click()
+        self.check('Play plays the other camera', self.until(page, f'!{survivor}.paused', 5000))
+        page.close()
+
+    def rebuild_while_open(self):
+        print('An attribute change while the dock is open:')
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        page.locator('positronic-replay tr[data-id="2"] td').nth(2).click()
+        self.until(page, "host().hasAttribute('open')")
+        page.evaluate("host().setAttribute('mode', 'video')")
+        self.check('the rebuild closes the dock', not page.evaluate("host().hasAttribute('open')"))
+        self.check('the rebuild removes the link parameter', 'episode=' not in page.url, page.url)
+        padding = page.evaluate('getComputedStyle(host()).paddingBottom')
+        self.check('the rebuild leaves no dock padding', padding == '0px', padding)
+        page.locator('positronic-replay tr[data-id="3"] td').nth(2).click()
+        opened = self.until(page, "host().hasAttribute('open') && !one('dock').hidden && all('camera').length === 2")
+        self.check('a new open works', opened and 'episode=3' in page.url, page.url)
+        page.keyboard.press('Escape')
+        self.check('Escape closes the new dock', self.until(page, "!host().hasAttribute('open')", 5000))
         page.close()
 
     def no_recording_row(self):
@@ -648,12 +684,12 @@ def main(headed: bool) -> int:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=not headed, args=['--autoplay-policy=no-user-gesture-required'])
         probe = Probe(browser, base, requests)
+        for check in (probe.share_page, probe.compact, probe.dock):
+            check()
+        probe.dock_link(probe.history_control())
         for check in (
-            probe.share_page,
-            probe.compact,
-            probe.dock,
-            probe.history_control,
-            probe.dock_link,
+            probe.lost_lead_camera,
+            probe.rebuild_while_open,
             probe.no_recording_row,
             probe.video_mode,
             probe.phone,

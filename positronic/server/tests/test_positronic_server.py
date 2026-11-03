@@ -361,7 +361,7 @@ def test_the_embedded_viewer_page_is_the_viewer_page_with_browser_history_off():
 
 
 def test_the_replay_element_loads_the_viewer_of_the_rerun_release_installed():
-    script = (_VIEWER.parents[1] / 'replay.js').read_text()
+    script = (_VIEWER.parents[1] / 'replay' / 'media.js').read_text()
 
     assert f"export const RERUN_VERSION = '{rr.__version__}';" in script
 

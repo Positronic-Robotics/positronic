@@ -57,15 +57,12 @@
 //   --replay-surface-ink, --replay-success, --replay-failure (the compact runs strip), --replay-motion (the
 //   compact screen's open time), --replay-sticky-top (where the column names stick), and --list-max and
 //   --video-max (the most the compact list and its videos may take). Each element has a `part` to style.
-import { cellKey, cellText, DURATION_KEY, INDEX_KEY, readInline, readManifest } from './replay/data.js';
+import { cellKey, cellText, ColumnType, DURATION_KEY, INDEX_KEY, readInline, readManifest } from './replay/data.js';
 import { cellContent, element } from './replay/cells.js';
 import { EpisodePlayer } from './replay/media.js';
 import { STYLE } from './replay/style.js';
 
 const TAG = 'positronic-replay';
-// The rerun release whose viewer sits beside this file, under `rerun/<release>/`.
-export const RERUN_VERSION = '0.30.0';
-const VIEWER_URL = new URL(`rerun/${RERUN_VERSION}/embedded.html`, import.meta.url).href;
 const PAGE = 50;
 const NEXT_PAGE_AHEAD = '0px 0px 400px 0px';
 // The width under which the dock covers the page, as the styles say.
@@ -74,19 +71,6 @@ const STRIP_KEY = 'positronic-replay.strip';
 const STRIP_ROWS = 3;
 const DOCK_MIN_PX = 160;
 const HOLD_OPEN_MS = 10000;
-// The compact layout counts the runs whose `outcome` is `success`, and colours each run by its outcome.
-const OUTCOME_KEY = 'outcome';
-const SUCCESS = 'success';
-
-const slug = (text) =>
-  text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-const outcomePart = (row) => {
-  const outcome = slug(cellKey(row.values[OUTCOME_KEY]));
-  return outcome ? ` outcome-${outcome}` : '';
-};
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 const seconds = (value) => `${Number(value).toFixed(1)} s`;
 
@@ -109,23 +93,6 @@ window.addEventListener(
 
 // One dock is open on a page at a time.
 let openDock = null;
-
-function savedStrip() {
-  try {
-    const strip = Number(window.localStorage.getItem(STRIP_KEY));
-    return strip > 0 ? strip : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveStrip(strip) {
-  try {
-    window.localStorage.setItem(STRIP_KEY, String(strip));
-  } catch {
-    // A private window keeps the height for this page only.
-  }
-}
 
 function setLinkParam(name, value) {
   if (!name) return;
@@ -245,6 +212,7 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #status(message) {
+    this.#closeAll();
     this.shadowRoot.replaceChildren(element('style', {}, [STYLE]), element('p', { part: 'status' }, [message]));
   }
 
@@ -255,16 +223,18 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #cameraName = (key) => {
+    const names = this.getAttribute('camera-names') ?? '{}';
     try {
-      return JSON.parse(this.getAttribute('camera-names') ?? '{}')[key] ?? key;
-    } catch {
+      return JSON.parse(names)[key] ?? key;
+    } catch (error) {
+      // A camera's key is its name in the recording, so the visitor still sees which camera plays.
+      console.error(`camera-names is not a JSON object (${error.message}): ${names}`);
       return key;
     }
   };
 
   #newPlayer(root) {
     const player = new EpisodePlayer(root, {
-      viewerUrl: VIEWER_URL,
       full: this.#fullMode,
       narrow: this.#narrow,
       act: (action, detail) => this.#act(action, detail),
@@ -277,8 +247,16 @@ export class PositronicReplay extends HTMLElement {
     return player;
   }
 
-  #render() {
+  // A dock or a screen open before a rebuild leaves the host's attributes, its key listener and the link parameter.
+  #closeAll() {
+    this.#close();
+    this.removeAttribute('screen-open');
+    this.removeAttribute('playing');
     this.#player?.stop();
+  }
+
+  #render() {
+    this.#closeAll();
     this.#current = null;
     this.#shown = PAGE;
     this.#selects = [];
@@ -406,7 +384,7 @@ export class PositronicReplay extends HTMLElement {
         element('th', { scope: 'col', part: `head-cell ${column.type}`, title: column.hover }, [column.label]),
       ),
     );
-    const linkColumn = columns.find((column) => column.type === 'text');
+    const linkColumn = columns.find((column) => column.type === ColumnType.TEXT);
     this.#rows = new Map();
     const body = rows.map((row) => {
       const cells = columns.map((column) => {
@@ -578,6 +556,16 @@ export class PositronicReplay extends HTMLElement {
     ]);
   }
 
+  /** The strip a visitor set before, kept in the browser; null where none is kept. */
+  static #savedStrip() {
+    try {
+      const strip = Number(window.localStorage.getItem(STRIP_KEY));
+      return strip > 0 ? strip : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** `from` names what opened it: a row, a step from the open row, or a link that names the row. */
   #open(row, from, event = null) {
     if (from !== 'Row' || event?.isTrusted) this.#act('open', { row: row.id, from });
@@ -587,7 +575,7 @@ export class PositronicReplay extends HTMLElement {
     this.#reveal(row);
     this.#markCurrent(row);
     const [first, ...rest] = this.#list.columns;
-    const titled = first?.type === 'text';
+    const titled = first?.type === ColumnType.TEXT;
     this.#part('title').textContent = titled ? cellText(row.values[first.key]) : row.label;
     this.#part('facts').replaceChildren(...this.#facts(row, titled ? rest : this.#list.columns));
     const full = this.#part('full');
@@ -600,7 +588,11 @@ export class PositronicReplay extends HTMLElement {
       dock.hidden = false;
       this.setAttribute('open', '');
       document.addEventListener('keydown', this.#onKey);
-      this.#resize(this.#strip ?? savedStrip() ?? STRIP_ROWS * this.#rows.get(row).getBoundingClientRect().height);
+      this.#resize(
+        this.#strip ??
+          PositronicReplay.#savedStrip() ??
+          STRIP_ROWS * this.#rows.get(row).getBoundingClientRect().height,
+      );
     }
     this.#focus(row);
     if (!this.#narrow.matches) this.#player.focusViewer();
@@ -614,7 +606,7 @@ export class PositronicReplay extends HTMLElement {
       .filter((column) => column.key !== INDEX_KEY)
       .map((column) => {
         const content = cellContent(column, row.values[column.key]);
-        if (column.type !== 'number') return element('span', { part: `fact ${column.type}` }, content);
+        if (column.type !== ColumnType.NUMBER) return element('span', { part: `fact ${column.type}` }, content);
         return element('span', { part: 'fact number' }, [
           ...content,
           element('span', { part: 'fact-label' }, [column.label]),
@@ -623,9 +615,9 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #close() {
+    if (!this.hasAttribute('open')) return;
     const dock = this.#part('dock');
-    if (!dock || dock.hidden) return;
-    dock.hidden = true;
+    if (dock) dock.hidden = true;
     this.removeAttribute('open');
     this.#player.stop();
     this.#markCurrent(null);
@@ -706,6 +698,14 @@ export class PositronicReplay extends HTMLElement {
     setTimeout(stop, HOLD_OPEN_MS);
   }
 
+  static #saveStrip(strip) {
+    try {
+      window.localStorage.setItem(STRIP_KEY, String(strip));
+    } catch {
+      // A private window keeps the height for this page only.
+    }
+  }
+
   /** A drag of the dock's top edge, or an up or down arrow on it, sets the strip; the open row stays in its middle. */
   #dragResize(handle) {
     handle.addEventListener('pointerdown', (event) => {
@@ -724,7 +724,7 @@ export class PositronicReplay extends HTMLElement {
         () => {
           handle.removeEventListener('pointermove', move);
           this.removeAttribute('resizing');
-          saveStrip(this.#strip);
+          PositronicReplay.#saveStrip(this.#strip);
           if (this.#strip !== before) this.#act('resize', { via: 'Drag' });
         },
         { once: true },
@@ -737,7 +737,7 @@ export class PositronicReplay extends HTMLElement {
       const before = this.#strip;
       this.#resize(this.#strip + by * this.#rows.get(this.#current).getBoundingClientRect().height);
       this.#focus(this.#current, 'instant');
-      saveStrip(this.#strip);
+      PositronicReplay.#saveStrip(this.#strip);
       if (this.#strip !== before) this.#act('resize', { via: 'Key' });
     });
   }
@@ -745,6 +745,16 @@ export class PositronicReplay extends HTMLElement {
   // ── The compact layout ───────────────────────────────────────────────────
 
   #renderCompact() {
+    // The tally counts the runs whose `outcome` is `success`, and each run takes a part for its outcome.
+    const OUTCOME_KEY = 'outcome';
+    const SUCCESS = 'success';
+    const outcomePart = (row) => {
+      const outcome = cellKey(row.values[OUTCOME_KEY])
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+      return outcome ? ` outcome-${outcome}` : '';
+    };
     const { columns, rows } = this.#list;
     const shown = columns.filter((column) => column.key !== INDEX_KEY && column.key !== DURATION_KEY);
     const succeeded = rows.filter((row) => cellKey(row.values[OUTCOME_KEY]).toLowerCase() === SUCCESS).length;
@@ -799,6 +809,9 @@ export class PositronicReplay extends HTMLElement {
       list,
     );
     this.#player = this.#newPlayer(playerRoot);
+    // A media event does not bubble, so the screen catches the lead's play and pause in the capture phase.
+    const showState = () => this.toggleAttribute('playing', this.#player.lead?.paused === false);
+    for (const type of ['play', 'pause', 'ended', 'emptied']) playerRoot.addEventListener(type, showState, true);
     // A list that scrolls fades out at its lower edge until its last episode shows.
     const moreBelow = () => list.part.toggle('more-below', list.scrollTop + list.clientHeight < list.scrollHeight - 1);
     list.addEventListener('scroll', moreBelow, { passive: true });
@@ -819,11 +832,6 @@ export class PositronicReplay extends HTMLElement {
     for (const [each, nodes] of this.#rows) nodes.forEach((node) => node.part.toggle('current', each === row));
     this.#play(row, { autoplay: true });
     this.setAttribute('screen-open', '');
-    this.removeAttribute('playing');
-    const lead = this.#player.lead;
-    if (!lead) return;
-    const showState = () => this.toggleAttribute('playing', !lead.paused);
-    for (const type of ['play', 'pause', 'ended']) lead.addEventListener(type, showState);
   }
 
   #closeScreen() {

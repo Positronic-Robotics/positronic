@@ -10,6 +10,9 @@ const PLAY_LABEL = 'Play';
 const PAUSE_LABEL = 'Pause';
 // The wait before the next request for a file that is building, where the server names none.
 const DEFAULT_RETRY_S = 5;
+// The rerun release whose viewer sits beside the element, under `rerun/<release>/`.
+export const RERUN_VERSION = '0.30.0';
+const VIEWER_URL = new URL(`../rerun/${RERUN_VERSION}/embedded.html`, import.meta.url).href;
 
 export const MediaState = Object.freeze({ READY: 'ready', BUILDING: 'building', GONE: 'gone', FAILED: 'failed' });
 
@@ -72,7 +75,6 @@ export class EpisodePlayer {
   #notes = { replay: null, video: null };
   #summary;
   #frame = null;
-  #viewerUrl;
   #full;
   #narrow;
   #act;
@@ -82,9 +84,8 @@ export class EpisodePlayer {
   lead = null;
 
   /** `act(action, detail)` reports a visitor's use of a control, and `frameKeys` takes the viewer's key presses. */
-  constructor(root, { viewerUrl, full, narrow, act, frameKeys, cameraName }) {
+  constructor(root, { full, narrow, act, frameKeys, cameraName }) {
     this.#root = root;
-    this.#viewerUrl = viewerUrl;
     this.#full = full;
     this.#narrow = narrow;
     this.#act = act;
@@ -148,7 +149,7 @@ export class EpisodePlayer {
     }
     this.#clearVideos();
     this.#setNote('replay', null);
-    const url = new URL(this.#viewerUrl);
+    const url = new URL(VIEWER_URL);
     url.searchParams.set('url', row.rrd);
     url.searchParams.set('hide_welcome_screen', '');
     this.#showFrame(url.href);
@@ -243,10 +244,24 @@ export class EpisodePlayer {
   }
 
   #playCameras(row, autoplay) {
-    const lead = row.cameras.reduce(
+    const longest = row.cameras.reduce(
       (best, camera, at) => (camera.durationS > row.cameras[best].durationS ? at : best),
       0,
     );
+    const durationS = row.durationS ?? row.cameras[longest].durationS;
+    const lost = new Set();
+    // The controls drive one lead video, and `follow` moves the others with it.
+    const drive = (lead) => {
+      const controls = this.#controls(row, lead, durationS);
+      const old = this.#stage.querySelector('[part~="controls"]');
+      if (old) old.replaceWith(controls);
+      else this.#stage.append(controls);
+      follow(
+        lead,
+        videos.filter((video) => video !== lead && !lost.has(video)),
+      );
+      this.lead = lead;
+    };
     const figures = row.cameras.map((camera) => {
       const name = camera.label ?? this.#cameraName(camera.camera);
       const video = element('video', {
@@ -261,6 +276,7 @@ export class EpisodePlayer {
       });
       video.muted = true;
       video.dataset.name = name;
+      video.addEventListener('click', () => this.#stage.querySelector('[part~="play"]')?.click());
       const caption = element('figcaption', { part: 'caption' }, [name]);
       const figure = element('figure', { part: 'figure' }, [video, caption]);
       this.#watch(video, camera.src, (note, state) => {
@@ -270,23 +286,23 @@ export class EpisodePlayer {
         else if ([...this.#stage.querySelectorAll('figure')].every((each) => each.dataset.state === MediaState.READY)) {
           this.#setNote('video', null);
         }
+        if (state !== MediaState.GONE && state !== MediaState.FAILED) return;
+        lost.add(video);
+        // A lost lead hands the controls to a camera that can still play.
+        const next = video === this.lead ? videos.find((each) => !lost.has(each)) : null;
+        if (!next) return;
+        drive(next);
+        if (autoplay) start(next);
       });
       return figure;
     });
     const videos = figures.map((figure) => figure.querySelector('video'));
-    const durationS = row.durationS ?? row.cameras[lead].durationS;
-    const controls = this.#controls(row, videos[lead], durationS);
-    for (const video of videos) video.addEventListener('click', () => controls.querySelector('[part~="play"]').click());
-    this.#stage.replaceChildren(element('div', { part: 'cameras' }, figures), controls);
-    follow(
-      videos[lead],
-      videos.filter((_, at) => at !== lead),
-    );
-    this.lead = videos[lead];
-    if (autoplay) start(videos[lead]);
+    this.#stage.replaceChildren(element('div', { part: 'cameras' }, figures));
+    drive(videos[longest]);
+    if (autoplay) start(videos[longest]);
   }
 
-  // One control set for the episode. It drives the lead, the longest video, and `follow` moves the others.
+  // One control set for the episode, which drives `lead`.
   #controls(row, lead, durationS) {
     const play = element('button', { type: 'button', part: 'play', 'aria-label': PLAY_LABEL }, ['▶']);
     const seek = element('input', {

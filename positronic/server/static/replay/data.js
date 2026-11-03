@@ -8,7 +8,8 @@
 export const INDEX_KEY = '$index';
 export const DURATION_KEY = '$duration';
 
-const COLUMN_TYPES = new Set(['text', 'number', 'badge', 'icon']);
+export const ColumnType = Object.freeze({ TEXT: 'text', NUMBER: 'number', BADGE: 'badge', ICON: 'icon' });
+const COLUMN_TYPES = new Set(Object.values(ColumnType));
 
 /** A cell value as text: an object's `text`, else the value; null and undefined are empty. */
 export function cellText(value) {
@@ -52,7 +53,7 @@ function readFilter(filter) {
 }
 
 function readColumn(column) {
-  const type = column.type ?? 'text';
+  const type = column.type ?? ColumnType.TEXT;
   if (!COLUMN_TYPES.has(type)) throw new Error(`column ${column.key} has an unknown type ${type}`);
   return {
     key: String(column.key),
@@ -113,9 +114,9 @@ export function readManifest(manifest, base) {
     ),
   );
   const columns = [
-    { key: INDEX_KEY, label: '#', type: 'number' },
+    { key: INDEX_KEY, label: '#', type: ColumnType.NUMBER },
     ...manifest.columns,
-    { key: DURATION_KEY, label: 'Duration', type: 'number', decimals: 1, unit: ' s' },
+    { key: DURATION_KEY, label: 'Duration', type: ColumnType.NUMBER, decimals: 1, unit: ' s' },
   ].map(readColumn);
   return { title: manifest.title ?? null, about: readAbout(manifest.about), columns: withOptions(columns, rows), rows };
 }

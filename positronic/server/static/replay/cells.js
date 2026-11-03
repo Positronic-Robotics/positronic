@@ -1,5 +1,5 @@
 // The content of one cell of the episode list, by the type of its column.
-import { cellText } from './data.js';
+import { cellText, ColumnType } from './data.js';
 
 export function element(tag, attributes = {}, children = []) {
   const node = document.createElement(tag);
@@ -39,16 +39,16 @@ function numberText(column, value) {
 /** The nodes one cell holds. `link` wraps the text of a text cell, for the row's own page. */
 export function cellContent(column, value, link = null) {
   const title = value !== null && typeof value === 'object' ? value.title : undefined;
-  if (column.type === 'number') return [numberText(column, value)];
+  if (column.type === ColumnType.NUMBER) return [numberText(column, value)];
   const text = cellText(value);
-  if (column.type === 'badge') {
+  if (column.type === ColumnType.BADGE) {
     if (!text) return ['-'];
     const color = typeof value === 'object' ? value.color : undefined;
     if (!color) return [element('span', { part: 'badge', title }, [text])];
     const ink = value.ink ?? inkOn(color);
     return [element('span', { part: 'badge', title, style: `background: ${color}; color: ${ink}` }, [text])];
   }
-  if (column.type === 'icon') {
+  if (column.type === ColumnType.ICON) {
     const icon = typeof value === 'object' ? value.icon : undefined;
     const image = icon ? [element('img', { part: 'icon', src: icon, alt: '' })] : [];
     return [element('span', { part: 'with-icon', title }, [...image, text])];

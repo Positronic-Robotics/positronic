@@ -13,4 +13,4 @@ To update to a new version:
    so a replay adds no entry to the browser history of that page
 4. Remove the old version directory
 5. Update the rerun-sdk pin in pyproject.toml to match
-6. Update `RERUN_VERSION` in ../replay.js to match
+6. Update `RERUN_VERSION` in ../replay/media.js to match
