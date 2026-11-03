@@ -16,7 +16,18 @@ from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import WebsocketWire
 
 from . import recipe
-from .keys import ACTION_JOINTS, AUTH_TOKEN_ENV, CAMERAS, GRIP, JOINTS, MODEL_SOURCE_ENV, OBS_TIME_NS, PROMPT
+from .keys import (
+    ACTION_JOINTS,
+    AUTH_TOKEN_ENV,
+    CAMERAS,
+    CHECKPOINT_PATH,
+    GRIP,
+    JOINTS,
+    MODEL_SOURCE_ENV,
+    OBS_TIME_NS,
+    PROMPT,
+    TYPE,
+)
 from .recipe import Mode
 
 logger = logging.getLogger(__name__)
@@ -203,9 +214,7 @@ def load_model(model_source: str, revision: str | None = None) -> DreamZeroModel
     actions = policy.predict(observation)
     policy.reset()
     return DreamZeroModel(
-        policy,
-        action_horizon=len(actions[ACTION_JOINTS]),
-        metadata={'type': 'dreamzero', 'checkpoint_path': model_source},
+        policy, action_horizon=len(actions[ACTION_JOINTS]), metadata={TYPE: 'dreamzero', CHECKPOINT_PATH: model_source}
     )
 
 
