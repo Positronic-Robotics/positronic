@@ -147,6 +147,9 @@ export class EpisodePlayer {
   #notes = { replay: null, video: null };
   #summary;
   #frame = null;
+  // Whether the viewer takes the focus when it next shows a recording: it held the focus when it was hidden, or a
+  // host asked for it while it was hidden.
+  #viewerWantsFocus = false;
   #full;
   #narrow;
   #act;
@@ -178,6 +181,8 @@ export class EpisodePlayer {
     this.#note = element('p', { part: 'note', hidden: '' });
     this.#summary = element('p', { part: 'summary' });
     root.replaceChildren(this.#stage, this.#note, this.#summary);
+    // The root takes the focus from a viewer frame the element hides, so the element's keys still work.
+    root.tabIndex = -1;
   }
 
   /** Shows `row` in the `playback` state: whether it plays, from which time, at which rate. A row opened later stops
@@ -212,6 +217,8 @@ export class EpisodePlayer {
     this.#turn += 1;
     this.#clearVideos();
     this.#hideFrame();
+    // A stopped player shows no recording, so no later one takes the focus for it.
+    this.#viewerWantsFocus = false;
     this.lead = null;
   }
 
@@ -245,8 +252,12 @@ export class EpisodePlayer {
     }
   }
 
+  /** Gives the viewer the keyboard, at once where it shows, else when it next shows a recording. */
   focusViewer() {
-    if (!this.#frame || this.#frame.hidden) return;
+    if (!this.#frame || this.#frame.hidden) {
+      this.#viewerWantsFocus = true;
+      return;
+    }
     this.#frame.focus({ preventScroll: true });
     this.#frame.contentDocument?.getElementById('the_canvas_id')?.focus({ preventScroll: true });
   }
@@ -301,10 +312,17 @@ export class EpisodePlayer {
     }
     this.#frame.hidden = false;
     this.#frame.contentWindow.location.replace(url);
+    if (!this.#viewerWantsFocus) return;
+    this.#viewerWantsFocus = false;
+    this.focusViewer();
   }
 
   #hideFrame() {
     if (!this.#frame || this.#frame.hidden) return;
+    if (this.#root.getRootNode().activeElement === this.#frame) {
+      this.#viewerWantsFocus = true;
+      this.#root.focus({ preventScroll: true });
+    }
     this.#frame.hidden = true;
     this.#frame.contentWindow.location.replace('about:blank');
   }

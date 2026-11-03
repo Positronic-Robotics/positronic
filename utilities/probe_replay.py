@@ -140,8 +140,8 @@ def row_media(n: int) -> dict:
     its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
     names no length, 20 names no length and its second camera is the longest, 21 builds its replay, 22 builds it after
     slow answers, 23 has a phone video shorter than its cameras,
-    24 names no length for the row or its 15 s camera, and 10 s for its other camera, and 27 has a recording that
-    answers slowly."""
+    24 names no length for the row or its 15 s camera, and 10 s for its other camera, 27, 33 and 34 have recordings
+    that answer slowly."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -176,6 +176,8 @@ def row_media(n: int) -> dict:
         21: {'rrd': '/rrd/building/21.rrd'},
         23: {'rrd': None, 'phone': '/media/short/23/phone.webm'},
         27: {'rrd': '/rrd/slow/27.rrd'},
+        33: {'rrd': '/rrd/slow/33.rrd'},
+        34: {'rrd': '/rrd/slow/34.rrd'},
         24: {
             'rrd': None,
             'phone': None,
@@ -1530,8 +1532,7 @@ class Probe:
         print('A step from a shown recording to a row whose recording answers slowly:')
         page = self.open('/page/dock?episode=26')
         shown = self.until(page, "loads('/rrd/ok/26.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
-        # The next button, not a key: a key can reach the viewer's frame before it takes the element's keys.
-        part(page, 'step').nth(1).click()
+        page.keyboard.press('ArrowDown')
         time.sleep(0.5)
         pending = page.evaluate("[frameUrl(), frame()?.contentWindow.location.href ?? '', noteText()]")
         hidden = pending[0] == '' and '/rrd/ok/26.rrd' not in pending[1].replace('%2F', '/')
@@ -1552,6 +1553,27 @@ class Probe:
             'the fault reaches the page as an uncaught error', self.expected_errors == [FAULT], self.expected_errors
         )
         self.check('the element does not show it as data that did not load', 'did not load' not in status, status)
+        page.close()
+
+    def keys_from_the_viewer(self):
+        print('Two steps by key from inside the viewer, while the next recordings are pending:')
+        page = self.open('/page/dock?episode=32')
+        shown = self.until(page, "loads('/rrd/ok/32.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
+        page.locator('positronic-replay iframe').click()
+        focused = self.until(page, 'host().shadowRoot.activeElement === frame()', 5000)
+        self.actions(page)
+        page.keyboard.press('ArrowDown')
+        time.sleep(0.3)
+        page.keyboard.press('ArrowDown')
+        time.sleep(0.3)
+        actions = self.actions(page)
+        wanted = [
+            {'action': 'open', 'row': '33', 'from': 'Step', 'via': 'Key'},
+            {'action': 'open', 'row': '34', 'from': 'Step', 'via': 'Key'},
+        ]
+        self.check('both keys step while the viewer is hidden', shown and focused and actions == wanted, actions)
+        back = self.until(page, "loads('/rrd/slow/34.rrd') && host().shadowRoot.activeElement === frame()", 15000)
+        self.check('the viewer takes the focus back once it shows the recording', back)
         page.close()
 
     def undocked_link(self):
@@ -1662,6 +1684,7 @@ def main(headed: bool) -> int:
             probe.swap_reports_and_button_names,
             probe.viewer_between_rows,
             probe.fault_is_not_input,
+            probe.keys_from_the_viewer,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

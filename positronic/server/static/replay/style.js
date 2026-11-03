@@ -26,6 +26,7 @@ export const STYLE = `
   [part~='status'], [part~='note'] { opacity: 0.7; }
 
   [part~='stage'] { position: relative; }
+  [part~='player']:focus, [part~='dock-player']:focus, [part~='screen-player']:focus { outline: none; }
   [part~='cameras'] {
     display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   }
