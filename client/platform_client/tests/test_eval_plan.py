@@ -1066,6 +1066,19 @@ def test_a_token_is_refused_where_the_platform_cannot_present_it(token_file: Pat
     assert A_TOKEN not in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    'wire, address',
+    [
+        ('websocket', {'host': 'h.example', 'port': 8000, 'path': SESSION}),
+        ('grpc', {'host': 'h.example', 'port': 8001, 'path': SESSION}),
+        ('roboarena', {'host': 'h.example', 'port': 8000}),
+    ],
+)
+def test_a_token_is_taken_on_a_wire_with_no_tls(token_file: Path, wire: str, address: dict):
+    entry = {'name': 'baseline', 'wire': wire, 'address': address, 'auth_token_file': str(token_file)}
+    assert EndpointFile.model_validate(entry).states_a_token
+
+
 def test_a_plan_file_refuses_a_token_it_states():
     with pytest.raises(ValidationError, match=r'endpoints\.0\.auth_token\n') as caught:
         a_plan_file_of([remote('baseline', auth_token=A_TOKEN)])

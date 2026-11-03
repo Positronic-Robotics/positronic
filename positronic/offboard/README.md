@@ -71,8 +71,8 @@ broken secret and refuses to start. `InferenceClient(headers=...)` carries the h
 `positronic.cfg.policy.authed_remote` fills it in from the same variable.
 
 A plan file for the platform sends the token with `auth_token_file` on the endpoint (see
-[client/README.md](../../client/README.md)). The `websocket` and `grpc` wires have no TLS, so the token travels in
-clear on them. Keep such a server on a private network, such as a tailnet, or put it behind a TLS wire.
+[client/README.md](../../client/README.md)). The `websocket`, `grpc` and `roboarena` wires have no TLS, so the token
+travels in clear on them. Keep such a server on a private network, such as a tailnet, or put it behind a TLS wire.
 
 ### Endpoints
 

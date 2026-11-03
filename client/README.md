@@ -324,8 +324,8 @@ token when the run ends. The token is 1 to 4096 characters of visible ASCII, and
 ending of the file comes off. A plan file never states the token itself. `plan_with_secrets_read`
 reads the file, and the request carries the token as `auth_token`. A `served` or an `image`
 endpoint takes no token, and neither do the `websocket_unix` and `modal_websocket_tls` wires: no session
-on them carries the endpoint's headers. On the `websocket` and `grpc` wires, which have no TLS, the token
-travels in clear.
+on them carries the endpoint's headers. On the `websocket`, `grpc` and `roboarena` wires, which have no TLS, the
+token travels in clear.
 
 ```yaml
 endpoints:
