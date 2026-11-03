@@ -136,7 +136,7 @@ def row_media(n: int) -> dict:
         return [{**video, 'src': video['src'].replace('/ok/', f'/{state}/')} for video in videos]
 
     def lost_longest(state: str) -> list[dict]:
-        return [{**at(state, cameras[:1])[0], 'duration_s': 3.0}, cameras[1]]
+        return [{**at(state, cameras[:1])[0], 'duration_s': VIDEO_S + 1}, cameras[1]]
 
     variants = {
         5: {'rrd': '/rrd/building/5.rrd'},
@@ -427,14 +427,17 @@ class Probe:
             self.failures.append(name)
         return passed
 
-    def open(self, path: str, width: int = 1400, height: int = 900, expected: tuple[str, ...] = ()) -> Page:
-        """A page of `path`. A console error that holds one of `expected` is a result the check asks for."""
+    def open(
+        self, path: str, width: int = 1400, height: int = 900, expected: tuple[str, ...] = (), wait_until: str = 'load'
+    ) -> Page:
+        """A page of `path`. A console error that holds one of `expected` is a result the check asks for. The `load`
+        of a page waits for its videos to answer; `domcontentloaded` does not."""
         page = self.browser.new_page(viewport={'width': width, 'height': height})
         # A tall strip above the dock keeps the rows next to the open one clear of the dock.
         page.add_init_script(f"localStorage.setItem('{STRIP_KEY}', '{DOCK_STRIP_PX}')")
         page.on('console', lambda message: self.on_console(path, message, expected))
         page.on('pageerror', lambda error: self.on_page_error(path, error))
-        page.goto(self.base + path, wait_until='load')
+        page.goto(self.base + path, wait_until=wait_until)
         page.wait_for_function("customElements.get('positronic-replay') !== undefined", timeout=WAIT_MS)
         return page
 
@@ -1025,12 +1028,15 @@ class Probe:
         self.check('each typed cell renders empty', rendered and cells == [['', '-', '-', '']] * 2, cells)
         page.close()
 
-    def lead_lost_while(self, path: str, use_play: bool, wanted_playing: bool, name: str):
-        page = self.open(path)
+    def lead_lost_while(self, path: str, wanted_playing: bool, name: str):
+        """The visitor presses the play button while the lead still waits for its answer, which is a 404."""
+        page = self.open(path, wait_until='domcontentloaded')
+        lead = "all('camera').find((video) => video.dataset.camera === 'front')"
         survivor = "all('camera').find((video) => video.dataset.camera === 'wrist')"
-        self.until(page, f'{survivor} !== undefined', 8000)
-        if use_play:
-            part(page, 'play').click()
+        self.until(page, f'{lead} !== undefined && {lead}.error === null', 8000)
+        part(page, 'play').click()
+        failed = page.evaluate(f'{lead}.error !== null')
+        self.check('the visitor pressed play before the lead failed', not failed)
         self.until(page, "noteText().includes('gone')", 15000)
         time.sleep(1)
         playing = page.evaluate(f'!{survivor}.paused')
@@ -1039,8 +1045,8 @@ class Probe:
 
     def lead_lost_keeps_state(self):
         print('A lead camera lost after a visitor changed the play state:')
-        self.lead_lost_while('/page/dock?episode=15', True, False, 'an autoplay row the visitor paused stays paused')
-        self.lead_lost_while('/page/list?episode=15', True, True, 'a row the visitor played plays on')
+        self.lead_lost_while('/page/dock?episode=15', False, 'an autoplay row the visitor paused stays paused')
+        self.lead_lost_while('/page/list?episode=15', True, 'a row the visitor played plays on')
 
     def script_clicks(self):
         print('Script calls on the controls:')
