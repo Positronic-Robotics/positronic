@@ -162,10 +162,13 @@ function observe(held, observer) {
   return observer;
 }
 
+const Layout = Object.freeze({ FULL: 'full', COMPACT: 'compact' });
+const Mode = Object.freeze({ VIDEO: 'video', FULL: 'full' });
+
 // Each attribute, read once where it changes: the value the element uses, and the default it falls back to.
 const ATTRIBUTES = {
-  layout: (value) => oneOf('layout', value, ['full', 'compact']),
-  mode: (value) => oneOf('mode', value, ['video', 'full']),
+  layout: (value) => oneOf('layout', value, Object.values(Layout)),
+  mode: (value) => oneOf('mode', value, Object.values(Mode)),
   dock: (value) => value !== null,
   'dock-below': (value) => {
     if (value === null) return null;
@@ -262,7 +265,7 @@ export class PositronicReplay extends HTMLElement {
     const value = this.getAttribute('link-param');
     if (value === null) return null;
     if (!value.trim()) return wrongInput('link-param', value, null, 'no link');
-    if (this.#layout === 'compact')
+    if (this.#layout === Layout.COMPACT)
       return wrongInput('link-param', value, null, 'no link: the compact layout has none');
     return value;
   }
@@ -279,11 +282,11 @@ export class PositronicReplay extends HTMLElement {
   }
 
   get #fullMode() {
-    return this.#inputs.mode === 'full';
+    return this.#inputs.mode === Mode.FULL;
   }
 
   get #docked() {
-    return this.#layout === 'full' && this.#inputs.dock;
+    return this.#layout === Layout.FULL && this.#inputs.dock;
   }
 
   /** Sets the filters to `filters`, by column key: a string, a number or a boolean as its text, and null or an empty
@@ -440,13 +443,13 @@ export class PositronicReplay extends HTMLElement {
       );
       return;
     }
-    if (this.#layout === 'compact') this.#renderCompact();
+    if (this.#layout === Layout.COMPACT) this.#renderCompact();
     else this.#renderFull(header);
   }
 
   #header() {
     const { title, about } = this.#list;
-    if (!title || this.#layout === 'compact') return [];
+    if (!title || this.#layout === Layout.COMPACT) return [];
     const facts = about.map((fact) =>
       element('div', { 'data-key': fact.key }, [
         element('dt', {}, [fact.label]),
@@ -624,7 +627,7 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #refresh() {
-    if (this.#layout === 'compact') return;
+    if (this.#layout === Layout.COMPACT) return;
     const matches = this.#matches();
     const shown = new Set(matches.slice(0, this.#shown));
     for (const [row, tr] of this.#rows) tr.hidden = !shown.has(row);

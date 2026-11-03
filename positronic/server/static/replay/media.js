@@ -62,20 +62,6 @@ function episodeLength(episode, lead) {
   return episode.row.durationS ?? Math.max(0, ...episode.cameras.map((camera) => camera.durationS));
 }
 
-/** The longest ready camera: by the length of its video once it knows it, else by the length the row names, and
- * on a tie by the named length, then the first. Null while no camera is ready. */
-function longestReady(cameras) {
-  const length = (camera) => (Number.isFinite(camera.video.duration) ? camera.video.duration : camera.durationS);
-  const ready = cameras.filter((camera) => camera.state === MediaState.READY);
-  return ready.reduce(
-    (best, camera) =>
-      length(camera) > length(best) || (length(camera) === length(best) && camera.durationS > best.durationS)
-        ? camera
-        : best,
-    ready[0] ?? null,
-  );
-}
-
 /** The state of `url`, from one request for its first byte, and the wait a building file asks for.
  * Null where `signal` aborts the request. */
 async function probe(url, signal) {
@@ -152,12 +138,6 @@ function setRate(video, rate) {
   if (video.playbackRate === rate) return;
   expectOwn(video, 'ratechange');
   video.playbackRate = rate;
-}
-
-/** Moves `video` to `at` seconds once it knows its duration; a shorter video rests on its last frame. */
-function startAt(video, at) {
-  if (!at) return;
-  video.addEventListener('loadedmetadata', () => seek(video, Math.min(at, video.duration)), { once: true });
 }
 
 export class EpisodePlayer {
@@ -383,12 +363,18 @@ export class EpisodePlayer {
     video.addEventListener('loadedmetadata', () => onState(MediaState.READY));
   }
 
+  /** Moves `video` to `at` seconds once it knows its duration; a shorter video rests on its last frame. */
+  static #startAt(video, at) {
+    if (!at) return;
+    video.addEventListener('loadedmetadata', () => seek(video, Math.min(at, video.duration)), { once: true });
+  }
+
   #playPhone(row) {
     const state = this.#state;
     const video = element('video', { part: 'phone', src: row.phone, controls: '', playsinline: '', muted: '' });
     video.muted = true;
     video.dataset.name = 'The phone video';
-    startAt(video, state.at);
+    EpisodePlayer.#startAt(video, state.at);
     // A load sets the rate back to the default, so the video takes it once it knows its length.
     video.addEventListener('loadedmetadata', () => setRate(video, state.rate), { once: true });
     const listening = new AbortController();
@@ -460,14 +446,8 @@ export class EpisodePlayer {
       const figure = element('figure', { part: 'figure', 'data-state': MediaState.PENDING }, [video, caption]);
       return { name, video, caption, figure, durationS: camera.durationS, state: MediaState.PENDING };
     });
-    const episode = {
-      row,
-      cameras,
-      // The player's playback state, which a new lead takes over and every ready camera takes.
-      state: this.#state,
-      lead: null,
-      detach: () => {},
-    };
+    // `setLength` sets the end of the lead's seek bar, while a lead has controls.
+    const episode = { row, cameras, setLength: null };
     for (const camera of cameras) {
       camera.video.addEventListener('click', (event) => {
         if (this.lead) this.#toggle(row, this.lead, event.isTrusted ? 'Video' : null);
@@ -484,8 +464,21 @@ export class EpisodePlayer {
         cameras.map((camera) => camera.figure),
       ),
     );
-    this.#detachMedia = () => episode.detach();
     this.#settle(episode);
+  }
+
+  /** The longest ready camera: by the length of its video once it knows it, else by the length the row names, and
+   * on a tie by the named length, then the first. Null while no camera is ready. */
+  static #longestReady(cameras) {
+    const length = (camera) => (Number.isFinite(camera.video.duration) ? camera.video.duration : camera.durationS);
+    const ready = cameras.filter((camera) => camera.state === MediaState.READY);
+    return ready.reduce(
+      (best, camera) =>
+        length(camera) > length(best) || (length(camera) === length(best) && camera.durationS > best.durationS)
+          ? camera
+          : best,
+      ready[0] ?? null,
+    );
   }
 
   /** Derives from the state of every camera the lead (the preferred ready camera, none while none is ready) and the
@@ -497,11 +490,11 @@ export class EpisodePlayer {
       camera.caption.textContent = shown ? camera.name : `${camera.name} · ${camera.state}`;
     }
     this.#setNote('video', cameraNote(episode.cameras.map((camera) => [camera.name, camera.state])));
-    const lead = longestReady(episode.cameras)?.video ?? null;
-    if (lead !== episode.lead) this.#lead(episode, lead);
+    const lead = EpisodePlayer.#longestReady(episode.cameras)?.video ?? null;
+    if (lead !== this.lead) this.#lead(episode, lead);
     episode.setLength?.(episodeLength(episode, lead));
     for (const camera of episode.cameras) {
-      if (camera.state === MediaState.READY) setRate(camera.video, episode.state.rate);
+      if (camera.state === MediaState.READY) setRate(camera.video, this.#state.rate);
     }
     // A camera that is ready under a lead it has not joined takes the lead's time and play state.
     for (const camera of episode.cameras) {
@@ -516,15 +509,15 @@ export class EpisodePlayer {
 
   /** Hands the controls to `lead`, at the visitor's play state and time; none where `lead` is null. */
   #lead(episode, lead) {
-    episode.detach();
-    episode.lead = lead;
+    this.#detachMedia();
+    this.#detachMedia = () => {};
     episode.setLength = null;
     this.lead = lead;
     this.#stage.querySelector('[part~="controls"]')?.remove();
     if (!lead) return;
     const listening = new AbortController();
     const { signal } = listening;
-    const { state } = episode;
+    const state = this.#state;
     lead.addEventListener('play', () => (state.playing = true), { signal });
     lead.addEventListener('pause', () => lead.error || (state.playing = false), { signal });
     lead.addEventListener('timeupdate', () => lead.error || (state.at = lead.currentTime), { signal });
@@ -540,7 +533,7 @@ export class EpisodePlayer {
     const controls = this.#controls(episode.row, lead, episodeLength(episode, lead), speed, signal);
     episode.setLength = controls.setLength;
     this.#stage.append(controls.element);
-    episode.detach = () => listening.abort();
+    this.#detachMedia = () => listening.abort();
     if (Math.abs(lead.currentTime - state.at) > DRIFT_S) seek(lead, Math.min(state.at, lead.duration));
     if (state.playing) start(lead);
   }

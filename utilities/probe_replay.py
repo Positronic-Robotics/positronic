@@ -334,9 +334,9 @@ def inline_element(attributes: str) -> str:
     )
 
 
-def history_control(release: str) -> str:
+def history_control() -> str:
     """Loads the viewer's own page, history on, in place in a frame."""
-    viewer = f'/static/rerun/{release}/index.html'
+    viewer = f'/static/rerun/{rerun_release()}/index.html'
     return page_html(f"""<iframe id="viewer" style="width:800px;height:500px"></iframe>
 <script>
   window.loadInFrame = (n) => {{
@@ -346,7 +346,7 @@ def history_control(release: str) -> str:
 </script>""")
 
 
-def pages(release: str) -> dict[str, str]:
+def pages() -> dict[str, str]:
     compact = f'layout="compact" src="{SHARE}/replay.json" style="--list-max: 100px; --video-max: 130px"'
     return {
         '/page/share': page_html(f'<positronic-replay src="{SHARE}/long.json"></positronic-replay>'),
@@ -368,7 +368,7 @@ def pages(release: str) -> dict[str, str]:
         '/page/names': page_html(
             f'<positronic-replay src="{SHARE}/replay.json" camera-names=\'["Outside"]\'></positronic-replay>'
         ),
-        '/page/history-control': history_control(release),
+        '/page/history-control': history_control(),
         '/page/slow': page_html(f'<positronic-replay src="{SHARE}/slow.json"></positronic-replay>'),
         '/page/small': page_html(f'<positronic-replay src="{SHARE}/replay.json"></positronic-replay>'),
         # The page the row link of row 2 opens.
@@ -416,8 +416,8 @@ def static_file(path: str) -> Path | None:
     return file if path.startswith('/static/') and file.is_relative_to(STATIC) and file.is_file() else None
 
 
-def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer:
-    fixed = pages(release)
+def serve(media: Media, requests: Requests) -> ThreadingHTTPServer:
+    fixed = pages()
     slow = {**video_share(), 'title': 'The slow manifest'}
     manifests = {
         f'{SHARE}/replay.json': video_share(),
@@ -1171,7 +1171,7 @@ class Probe:
         between = self.until(
             page,
             f"{camera_named('front')}.parentElement.dataset.state === 'gone' && "
-            f"{camera_named('side')}.parentElement.dataset.state !== 'ready'",
+            f"{camera_named('side')}.parentElement.dataset.state === 'building'",
             10000,
         )
         self.check('the longest camera is gone while the next still builds', between)
@@ -1496,7 +1496,6 @@ class Probe:
 
 
 def main(headed: bool) -> int:
-    release = rerun_release()
     requests = Requests()
     with tempfile.TemporaryDirectory() as scratch:
         media = Media(
@@ -1505,7 +1504,7 @@ def main(headed: bool) -> int:
             short_video=make_video(Path(scratch, 'short.webm'), SHORT_VIDEO_S),
             rrd=make_recording(Path(scratch, 'replay.rrd')),
         )
-    server = serve(media, requests, release)
+    server = serve(media, requests)
     base = f'http://127.0.0.1:{server.server_port}'
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=not headed, args=['--autoplay-policy=no-user-gesture-required'])
