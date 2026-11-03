@@ -75,6 +75,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --constraint /galaxea/constraints.txt --requirement /galaxea/requirements-inference.txt
 # GalaxeaVLA's lock pins certifi 2025.10.5, which trusts the leaked eMudhra (emSign) intermediate CAs.
 RUN uv pip install --no-config --python /galaxea/.venv/bin/python certifi==2026.10.23
+# grpcio and pip carry CA bundles of their own, which trust the same CAs.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary:/positronic/evals \

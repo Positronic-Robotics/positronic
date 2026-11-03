@@ -6,6 +6,11 @@ FROM ${BASE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && uv pip install --no-config --python /.venv/bin/python certifi==2026.10.23
+# `uv run --project /openpi` makes /openpi/.venv at start from openpi's lock, so its clients read the upgraded store.
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
 
 # Set working directory
 WORKDIR /positronic
