@@ -17,6 +17,7 @@ Usage
 
 import argparse
 import json
+import socket
 import sys
 import tempfile
 import threading
@@ -140,8 +141,8 @@ def row_media(n: int) -> dict:
     its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
     names no length, 20 names no length and its second camera is the longest, 21 builds its replay, 22 builds it after
     slow answers, 23 has a phone video shorter than its cameras,
-    24 names no length for the row or its 15 s camera, and 10 s for its other camera, 27, 33 and 34 have recordings
-    that answer slowly."""
+    24 names no length for the row or its 15 s camera, and 10 s for its other camera, 27, 33, 34 and 36 have
+    recordings that answer slowly."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -178,6 +179,7 @@ def row_media(n: int) -> dict:
         27: {'rrd': '/rrd/slow/27.rrd'},
         33: {'rrd': '/rrd/slow/33.rrd'},
         34: {'rrd': '/rrd/slow/34.rrd'},
+        36: {'rrd': '/rrd/slow/36.rrd'},
         24: {
             'rrd': None,
             'phone': None,
@@ -381,6 +383,7 @@ def pages() -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/nulls': page_html(null_cells()),
+        '/page/cut': page_html(f'<positronic-replay src="{SHARE}/cut.json"></positronic-replay>'),
         '/page/fault': page_html(fault_rows()),
         '/page/zero-filter': page_html(zero_filter()),
         '/page/dock-below': page_html(
@@ -441,6 +444,10 @@ def static_file(path: str) -> Path | None:
     return file if path.startswith('/static/') and file.is_relative_to(STATIC) and file.is_file() else None
 
 
+MANIFEST_DELAYS_S = {f'{SHARE}/slow.json': SLOW_S}
+"""The manifests that answer after a wait, so a newer `src` answers first."""
+
+
 def serve(media: Media, requests: Requests) -> ThreadingHTTPServer:
     fixed = pages()
     slow = {**video_share(), 'title': 'The slow manifest'}
@@ -449,6 +456,7 @@ def serve(media: Media, requests: Requests) -> ThreadingHTTPServer:
         f'{SHARE}/long.json': long_share(),
         f'{SHARE}/slow.json': slow,
         f'{SHARE}/broken.json': {'title': 'A manifest with no episodes'},
+        f'{SHARE}/cut.json': video_share(),
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -465,6 +473,17 @@ def serve(media: Media, requests: Requests) -> ThreadingHTTPServer:
             self.end_headers()
             self.wfile.write(body)
 
+        def cut_answer(self, body: bytes):
+            """Sends the headers of `body` and its first bytes, then drops the connection."""
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body[:10])
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.close_connection = True
+
         def media_answer(self, path: str, body: bytes, content_type: str):
             status = media_status(path, requests.add(path))
             if status is not None:
@@ -473,8 +492,9 @@ def serve(media: Media, requests: Requests) -> ThreadingHTTPServer:
             return self.answer(status, part, content_type, headers)
 
         def manifest_answer(self, path: str):
-            if path == f'{SHARE}/slow.json':
-                time.sleep(SLOW_S)
+            if path == f'{SHARE}/cut.json':
+                return self.cut_answer(json.dumps(manifests[path]).encode())
+            time.sleep(MANIFEST_DELAYS_S.get(path, 0))
             return self.answer(200, json.dumps(manifests[path]).encode(), 'application/json')
 
         def do_GET(self):
@@ -577,6 +597,9 @@ class Probe:
         source = message.location.get('url', '')
         # A gone file answers 404, and the browser says so in the console of the page that asked for it.
         if message.text.startswith('Failed to load resource') and 'gone/' in source:
+            return
+        # The browser also reports the body that breaks off, which the element shows as a manifest that did not load.
+        if message.text.startswith('Failed to load resource') and source.endswith('/cut.json'):
             return
         if is_aborted_viewer_fetch(message.text, source):
             self.aborted_viewer_fetches.append(path)
@@ -1576,6 +1599,34 @@ class Probe:
         self.check('the viewer takes the focus back once it shows the recording', back)
         page.close()
 
+    def broken_body_and_focus_choice(self):
+        print('A manifest whose body breaks off, and a visitor who moves the focus while a recording is pending:')
+        before = len(self.console_errors)
+        page = self.open('/page/cut', expected=('did not load',))
+        loaded = self.until(page, "one('status')?.textContent.includes('did not load')", 8000)
+        time.sleep(0.5)
+        faults = self.console_errors[before:]
+        self.check(
+            'a broken-off body shows that the replay did not load',
+            loaded and len(self.expected_errors) == 1 and not faults,
+            (self.expected_errors, faults),
+        )
+        page.close()
+        page = self.open('/page/dock?episode=35')
+        shown = self.until(page, "loads('/rrd/ok/35.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
+        page.locator('positronic-replay iframe').click()
+        self.until(page, 'host().shadowRoot.activeElement === frame()', 5000)
+        page.keyboard.press('ArrowDown')
+        time.sleep(0.3)
+        page.locator('positronic-replay select[data-key="task"]').focus()
+        showed = self.until(page, "loads('/rrd/slow/36.rrd')", 15000)
+        time.sleep(1)
+        kept = page.evaluate('host().shadowRoot.activeElement?.matches(\'select[data-key="task"]\') ?? false')
+        self.check(
+            'the select the visitor chose keeps the focus once the recording shows', shown and showed and kept, kept
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1685,6 +1736,7 @@ def main(headed: bool) -> int:
             probe.viewer_between_rows,
             probe.fault_is_not_input,
             probe.keys_from_the_viewer,
+            probe.broken_body_and_focus_choice,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

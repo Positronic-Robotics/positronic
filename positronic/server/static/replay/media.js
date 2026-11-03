@@ -147,9 +147,10 @@ export class EpisodePlayer {
   #notes = { replay: null, video: null };
   #summary;
   #frame = null;
-  // Whether the viewer takes the focus when it next shows a recording: it held the focus when it was hidden, or a
-  // host asked for it while it was hidden.
-  #viewerWantsFocus = false;
+  // The element whose focus the viewer takes when it next shows a recording: the player root where the viewer held
+  // the focus when it was hidden, or the element that held it when a host asked for it while it was hidden. A focus
+  // that moved elsewhere in the meantime stays where the visitor put it.
+  #focusForViewer = null;
   #full;
   #narrow;
   #act;
@@ -218,7 +219,7 @@ export class EpisodePlayer {
     this.#clearVideos();
     this.#hideFrame();
     // A stopped player shows no recording, so no later one takes the focus for it.
-    this.#viewerWantsFocus = false;
+    this.#focusForViewer = null;
     this.lead = null;
   }
 
@@ -255,7 +256,7 @@ export class EpisodePlayer {
   /** Gives the viewer the keyboard, at once where it shows, else when it next shows a recording. */
   focusViewer() {
     if (!this.#frame || this.#frame.hidden) {
-      this.#viewerWantsFocus = true;
+      this.#focusForViewer = this.#focused();
       return;
     }
     this.#frame.focus({ preventScroll: true });
@@ -312,16 +313,21 @@ export class EpisodePlayer {
     }
     this.#frame.hidden = false;
     this.#frame.contentWindow.location.replace(url);
-    if (!this.#viewerWantsFocus) return;
-    this.#viewerWantsFocus = false;
-    this.focusViewer();
+    const holder = this.#focusForViewer;
+    this.#focusForViewer = null;
+    if (holder && holder === this.#focused()) this.focusViewer();
+  }
+
+  /** The element with the focus, in the element's own tree where the focus is there. */
+  #focused() {
+    return this.#root.getRootNode().activeElement ?? this.#root.ownerDocument.activeElement;
   }
 
   #hideFrame() {
     if (!this.#frame || this.#frame.hidden) return;
-    if (this.#root.getRootNode().activeElement === this.#frame) {
-      this.#viewerWantsFocus = true;
+    if (this.#focused() === this.#frame) {
       this.#root.focus({ preventScroll: true });
+      this.#focusForViewer = this.#root;
     }
     this.#frame.hidden = true;
     this.#frame.contentWindow.location.replace('about:blank');
@@ -348,7 +354,7 @@ export class EpisodePlayer {
     new view.MutationObserver((_, observer) => {
       if (!canvas.hasAttribute('tabindex') || canvas.classList.contains('hidden')) return;
       observer.disconnect();
-      if (this.#root.getRootNode().activeElement === this.#frame) this.focusViewer();
+      if (this.#focused() === this.#frame) this.focusViewer();
     }).observe(canvas, { attributes: true });
   }
 

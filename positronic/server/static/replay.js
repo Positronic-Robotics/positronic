@@ -371,7 +371,8 @@ export class PositronicReplay extends HTMLElement {
       );
   }
 
-  /** The manifest at `url`. A failed request, an error status or text that is not JSON is an `InputError`. */
+  /** The manifest at `url`. A failed request, an error status, a body that breaks off or text that is not JSON is an
+   * `InputError`. */
   async #fetchManifest(url, signal) {
     let response;
     try {
@@ -381,7 +382,14 @@ export class PositronicReplay extends HTMLElement {
       throw new InputError(`the request failed: ${error.message}`);
     }
     if (!response.ok) throw new InputError(`${response.status} ${response.statusText}`);
-    return parseJson('the manifest', await response.text());
+    let text;
+    try {
+      text = await response.text();
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new InputError(`the response broke off: ${error.message}`);
+    }
+    return parseJson('the manifest', text);
   }
 
   /** Reads the list of `source` and builds it. Only an `InputError` shows that the replay did not load. */
