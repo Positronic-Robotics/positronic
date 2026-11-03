@@ -35,6 +35,7 @@ from ..ik import qpos_from_site_pose
 from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
 from .compensation import I2RT_COMPENSATION, Compensation
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
+from .settle_trace import ChainReading, SettleEnd, SettleOutcome, SettleTrace, chain_reading, log_device_error
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,8 @@ _OPEN_GRIP = 0.0  # positronic grip convention: 0 is open
 _CONTROL_HZ = 100
 # The vendor's observation contract
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
+# The torque per joint and on the gripper motor, and the speed of the gripper motor, that the chain reports
+_JOINT_EFF, _GRIPPER_VEL, _GRIPPER_EFF = 'joint_eff', 'gripper_vel', 'gripper_eff'
 _JOINT_LIMITS = 'joint_limits'  # the arm's (lower, upper) per joint in the vendor's get_robot_info()
 _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the chain runs, in get_robot_info()
 # The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
@@ -241,9 +244,11 @@ class _Arm(DriverRun[command.CommandType]):
         move_tuning: SettleTuning,
         kinematics: _Kinematics,
         state: YamState,
+        name: str,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
+        self.name = name  # the CAN channel of the arm, which the run log names it by
         self.park_tuning = park_tuning
         self.move_tuning = move_tuning
         self.out = out
@@ -256,6 +261,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
+        self._last_reading: tuple[float, dict[str, np.ndarray]] | None = None  # (time, observations), for an error
+        self._last_settle: SettleEnd | None = None
 
     @functools.cached_property
     @_chain_call()
@@ -284,7 +291,32 @@ class _Arm(DriverRun[command.CommandType]):
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
-            return self.vendor.get_observations()
+            obs = self.vendor.get_observations()
+        self._last_reading = self.clock.now(), obs
+        return obs
+
+    def _reading(self, obs: dict[str, np.ndarray]) -> ChainReading:
+        return chain_reading(
+            obs[_JOINT_POS],
+            obs[_JOINT_VEL],
+            obs.get(_JOINT_EFF),
+            self.read_grip(obs),
+            obs.get(_GRIPPER_VEL),
+            obs.get(_GRIPPER_EFF),
+        )
+
+    def log_device_error(self, exc: BaseException, during: str) -> None:
+        """Log ``exc`` with the last reading of the chain before it and the last settle pass of the arm. It never
+        raises: it runs in the handlers that park the arm."""
+        reading, age_s = None, None
+        # rules-allow: swallowed-error — a bad reading must not stop the park; the record goes out without it
+        try:
+            if self._last_reading is not None:
+                read_at, obs = self._last_reading
+                reading, age_s = self._reading(obs), self.clock.now() - read_at
+        except Exception:
+            logger.exception('Could not read the last chain reading for the device error record')
+        log_device_error(self.name, during, exc, reading, age_s, self._last_settle)
 
     @staticmethod
     def read_grip(obs: dict[str, np.ndarray]) -> float:
@@ -382,11 +414,12 @@ class _Arm(DriverRun[command.CommandType]):
         self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, timeout_s: float, tolerance_rad: float
     ) -> TimeoutError:
         joint_error = np.max(np.abs(obs[_JOINT_POS] - target))
-        joint_speed = np.max(np.abs(obs[_JOINT_VEL]))
+        speeds = np.abs(np.asarray(obs[_JOINT_VEL], dtype=np.float64))
+        fastest = int(np.argmax(speeds))
         return TimeoutError(
             f'joint error {joint_error:.4f} rad (tolerance {tolerance_rad:.4f}) after '
             f'{timeout_s:g}s; target={target}, measured={obs[_JOINT_POS]}, '
-            f'max joint speed={joint_speed:.4f} rad/s; '
+            f'max joint speed={speeds[fastest]:.4f} rad/s ({YAM_JOINT_NAMES[fastest]}); '
             f'grip target={grip:.3f}, measured={self.read_grip(obs):.3f}'
         )
 
@@ -398,10 +431,18 @@ class _Arm(DriverRun[command.CommandType]):
         self.publish(obs, RobotStatus.BUSY)
 
     def _come_to_rest(
-        self, reference: np.ndarray, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool
+        self,
+        reference: np.ndarray,
+        goal: np.ndarray,
+        grip: float,
+        tuning: SettleTuning,
+        *,
+        interrupt_on_stop: bool,
+        move: str,
+        attempt: int,
     ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], MoveStatus] | None]:
         """Ramp to ``reference``, wait until the chain is still, and return the reading and how the pass ended:
-        ARRIVED on ``goal``, or GAVE_UP still and short of it.
+        ARRIVED on ``goal``, or GAVE_UP still and short of it. The run log gets the pass as ``SettleTrace`` writes it.
 
         The chain is still when each joint's position spans at most ``still_position_rad`` over ``still_time_s``.
         The velocity readings are not used: a real chain reports speed spikes at rest. Return None on a stop.
@@ -409,16 +450,20 @@ class _Arm(DriverRun[command.CommandType]):
         start = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
         travel_s = max(tuning.min_ramp_s, float(np.max(np.abs(reference - start))) / tuning.max_speed_rad_s)
         timeout_s = travel_s + tuning.settle_timeout_s
+        trace = SettleTrace(self.name, move, attempt, goal, reference, start, travel_s, timeout_s, tuning)
         window: deque[tuple[float, np.ndarray, bool]] = deque()  # (elapsed, joints, on goal) since the ramp ended
         started = self.clock.now()
         while True:
-            if self.should_stop.value and interrupt_on_stop:
-                return None
             elapsed = self.clock.now() - started
+            if self.should_stop.value and interrupt_on_stop:
+                self._end_trace(trace, 'stopped', elapsed, None, self._spread(window, elapsed, tuning))
+                return None
             obs = self.observations()
             if elapsed > timeout_s:
+                self._end_trace(trace, 'timeout', elapsed, obs, self._spread(window, elapsed, tuning))
                 raise self._move_timeout(obs, goal, grip, timeout_s, tuning.tolerance_rad)
 
+            spread = None
             if elapsed >= travel_s:
                 window.append((
                     elapsed,
@@ -427,25 +472,53 @@ class _Arm(DriverRun[command.CommandType]):
                 ))
                 while len(window) > 1 and window[1][0] <= elapsed - tuning.still_time_s:
                     window.popleft()
-                if self._still(window, elapsed, tuning):
+                spread = self._spread(window, elapsed, tuning)
+                if spread is not None and np.all(spread <= tuning.still_position_rad):
                     if all(on_goal for _, _, on_goal in window):
+                        self._end_trace(trace, 'arrived', elapsed, obs, spread)
                         return obs, MoveStatus.ARRIVED
                     if not window[-1][2]:
+                        self._end_trace(trace, 'gave_up', elapsed, obs, spread)
                         return obs, MoveStatus.GAVE_UP
 
+            trace.observe(elapsed, elapsed < travel_s, obs[_JOINT_POS], spread, functools.partial(self._reading, obs))
             self._ramp(start, reference, grip, elapsed / travel_s, obs)
             yield self.limiter.wait()
 
+    def _end_trace(
+        self,
+        trace: SettleTrace,
+        outcome: SettleOutcome,
+        elapsed: float,
+        obs: dict[str, np.ndarray] | None,
+        spread: np.ndarray | None,
+    ) -> None:
+        """End ``trace`` on ``obs``, or on the last reading when ``obs`` is None, and keep its record for an error."""
+        if obs is None:
+            if self._last_reading is None:
+                return
+            obs = self._last_reading[1]
+        ended = trace.end(outcome, elapsed, obs[_JOINT_POS], spread, functools.partial(self._reading, obs))
+        self._last_settle = ended or self._last_settle
+
     @staticmethod
-    def _still(window: deque[tuple[float, np.ndarray, bool]], elapsed: float, tuning: SettleTuning) -> bool:
-        """Whether the window spans ``still_time_s`` and each joint's spread is within ``still_position_rad``."""
-        if window[0][0] > elapsed - tuning.still_time_s:
-            return False
-        joints = np.stack([q for _, q, _ in window])
-        return bool(np.all(np.ptp(joints, axis=0) <= tuning.still_position_rad))
+    def _spread(
+        window: deque[tuple[float, np.ndarray, bool]], elapsed: float, tuning: SettleTuning
+    ) -> np.ndarray | None:
+        """Each joint's position span over ``window``, or None until the window spans ``still_time_s``."""
+        if not window or window[0][0] > elapsed - tuning.still_time_s:
+            return None
+        return np.ptp(np.stack([q for _, q, _ in window]), axis=0)
 
     def _settle_onto(
-        self, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool, within_joint_limits: bool
+        self,
+        goal: np.ndarray,
+        grip: float,
+        tuning: SettleTuning,
+        *,
+        interrupt_on_stop: bool,
+        within_joint_limits: bool,
+        move: str,
     ) -> Generator[pimm.Command, None, np.ndarray | None]:
         """Settle onto ``goal`` and return the reference that holds the chain there, or None on a stop.
 
@@ -454,8 +527,10 @@ class _Arm(DriverRun[command.CommandType]):
         """
         try:
             reference = np.clip(goal, *self._joint_range) if within_joint_limits else goal.copy()
-            for _ in range(tuning.attempts):
-                rest = yield from self._come_to_rest(reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop)
+            for attempt in range(tuning.attempts):
+                rest = yield from self._come_to_rest(
+                    reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop, move=move, attempt=attempt
+                )
                 if rest is None:
                     return None
                 obs, ended = rest
@@ -488,7 +563,12 @@ class _Arm(DriverRun[command.CommandType]):
         logger.info('Moving the arm to the parking pose')
         try:
             reference = yield from self._settle_onto(
-                _PARK_JOINTS, grip, self.park_tuning, interrupt_on_stop=interrupt_on_stop, within_joint_limits=False
+                _PARK_JOINTS,
+                grip,
+                self.park_tuning,
+                interrupt_on_stop=interrupt_on_stop,
+                within_joint_limits=False,
+                move='park',
             )
             if reference is not None:
                 logger.info('Arm parked')
@@ -499,7 +579,8 @@ class _Arm(DriverRun[command.CommandType]):
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; the run goes on
         except Exception as exc:
             self.moves.errored = True
-            logger.error(f'The arm did not reach the parking pose: {exc}')
+            logger.error(f'The arm on {self.name} did not reach the parking pose: {exc}')
+            self.log_device_error(exc, 'park')
         return *self.hold_where_it_stopped(), MoveStatus.GAVE_UP
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
@@ -510,12 +591,18 @@ class _Arm(DriverRun[command.CommandType]):
         # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
         try:
             reference = yield from self._settle_onto(
-                _START_JOINTS, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
+                _START_JOINTS,
+                _OPEN_GRIP,
+                self.move_tuning,
+                interrupt_on_stop=True,
+                within_joint_limits=True,
+                move='start',
             )
         except ChainFault:
             raise
         except Exception as exc:
-            logger.error(f'The arm did not reach the start pose: {exc}')
+            logger.error(f'The arm on {self.name} did not reach the start pose: {exc}')
+            self.log_device_error(exc, 'start')
             return *self.hold_where_it_stopped(), exc
         if reference is None:
             return *self.hold_where_it_stopped(), None
@@ -568,7 +655,7 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             target = self.to_joints(call.request, q)
             reference = yield from self._settle_onto(
-                target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
+                target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True, move='move'
             )
             if reference is not None:
                 self.publish(self.observations())
@@ -578,6 +665,9 @@ class _Arm(DriverRun[command.CommandType]):
             call.set_exception(_arm_fault(exc))
             raise
         except Exception as exc:
+            if target is not None:
+                logger.error(f'The arm on {self.name} did not finish a blocking move: {exc}')
+                self.log_device_error(exc, 'move')
             try:
                 held = self.hold_where_it_stopped()
             finally:  # Answer even if reading the hold position fails.
@@ -777,6 +867,7 @@ class Robot(pimm.ControlSystem):
             with _chain_call():
                 vendor = self._connect(self._channel, self._sim, self._compensation)
         except ChainFault as exc:
+            log_device_error(self._channel, 'connect', exc)
             lost = self._report_lost(exc)
             for call in asked:
                 call.set_exception(lost)
@@ -796,6 +887,7 @@ class Robot(pimm.ControlSystem):
                 self._move_tuning,
                 kinematics,
                 state,
+                self._channel,
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
@@ -806,13 +898,15 @@ class Robot(pimm.ControlSystem):
                 asked = []
                 yield from self._serve(arm, _Serving(joints, grip, missed, idle_since=clock.now()), should_stop, clock)
             except ChainFault as exc:
-                logger.exception('The chain failed during the run; parking the arm before it lets go')
+                logger.error(f'The chain of {self._channel} failed during the run; parking the arm before it lets go')
+                arm.log_device_error(exc, 'run')
                 lost = self._report_lost(exc)
                 for call in asked:
                     call.set_exception(lost)
             except Exception as exc:
                 fault = exc
-                logger.exception('The arm driver failed during the run; parking the arm before it lets go')
+                logger.error(f'The driver of {self._channel} failed during the run; parking the arm before it lets go')
+                arm.log_device_error(exc, 'run')
                 for call in asked:
                     call.set_exception(_arm_fault(exc))
             yield from arm.shutdown(withhold_readings=lost is not None)

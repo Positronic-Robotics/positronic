@@ -1,4 +1,5 @@
 import dataclasses
+import json
 import logging
 import subprocess
 import sys
@@ -28,6 +29,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, bun
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation
+from positronic.drivers.roboarm.yam.settle_trace import SETTLE_SAMPLES_PER_S
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
@@ -2090,3 +2092,139 @@ def test_the_settings_of_the_configs_import_without_the_driver(module):
         check=True,
     ).stdout
     assert 'positronic.drivers.roboarm.yam.driver' not in loaded
+
+
+_READING_FIELDS = {'q', 'dq', 'torque', 'grip', 'grip_dq', 'grip_torque'}
+_SETTLE_PASS_FIELDS = {
+    'arm',
+    'move',
+    'attempt',
+    'goal',
+    'reference',
+    'start',
+    'travel_s',
+    'timeout_s',
+    'tolerance_rad',
+    'still_position_rad',
+    'still_time_s',
+}
+_SETTLE_SAMPLE_FIELDS = {'arm', 'move', 'attempt', 't', 'ramping', 'reading', 'error', 'spread', 'unstill', 'off_goal'}
+_SETTLE_END_FIELDS = {
+    'arm',
+    'move',
+    'attempt',
+    'outcome',
+    't',
+    'reading',
+    'error',
+    'spread',
+    'unstill',
+    'off_goal',
+    'last_unstill_s',
+    'max_spread',
+}
+_DEVICE_ERROR_FIELDS = {'arm', 'during', 'errors', 'reading_age_s', 'reading', 'settle'}
+
+
+def _log_records(caplog, tag: str) -> list[dict[str, Any]]:
+    prefix = f'{tag} '
+    return [json.loads(r.getMessage()[len(prefix) :]) for r in caplog.records if r.getMessage().startswith(prefix)]
+
+
+class Joint2Dither:
+    """Readings of a real chain whose joint 2 swings by ``swing_rad`` at rest, with the torques that a real chain
+    reports."""
+
+    def __init__(self, rig, monkeypatch, swing_rad):
+        self.read, self.swing_rad, self.reads = rig.vendor.get_observations, swing_rad, 0
+        monkeypatch.setattr(rig.vendor, 'get_observations', self)
+
+    def __call__(self):
+        obs = self.read()
+        self.reads += 1
+        obs[yam._JOINT_POS][1] += (1.0 if self.reads % 2 else -1.0) * self.swing_rad / 2
+        obs[yam._JOINT_EFF] = np.arange(6, dtype=np.float64)
+        obs[yam._GRIPPER_EFF] = np.array([6.0])
+        return obs
+
+
+def test_a_start_pose_miss_logs_each_joint_of_the_settle_and_the_joint_that_kept_moving(rig, monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    Joint2Dither(rig, monkeypatch, swing_rad=0.004)
+    rig.ready()
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+
+    (started,) = [r for r in _log_records(caplog, 'YAM settle pass') if r['move'] == 'start']
+    assert set(started) == _SETTLE_PASS_FIELDS
+    assert started['arm'] == 'can0' and started['attempt'] == 0
+    assert started['goal'] == pytest.approx(RAISED.tolist())
+
+    samples = [r for r in _log_records(caplog, 'YAM settle sample') if r['move'] == 'start']
+    assert samples and all(set(r) == _SETTLE_SAMPLE_FIELDS for r in samples)
+    assert all(set(r['reading']) == _READING_FIELDS for r in samples)
+    assert len(samples[-1]['reading']['q']) == 6 and len(samples[-1]['error']) == 6
+    assert samples[-1]['reading']['torque'] == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    assert samples[-1]['reading']['grip_torque'] == 6.0 and samples[-1]['reading']['grip_dq'] is not None
+    times = [r['t'] for r in samples]
+    assert min(np.diff(times)) >= 1 / SETTLE_SAMPLES_PER_S - 1e-6
+    assert len(samples) <= started['timeout_s'] * SETTLE_SAMPLES_PER_S + 1
+    assert samples[0]['ramping'] and not samples[-1]['ramping']
+    assert samples[-1]['unstill'] == ['joint2']
+
+    (ended,) = [r for r in _log_records(caplog, 'YAM settle end') if r['move'] == 'start']
+    assert set(ended) == _SETTLE_END_FIELDS
+    assert ended['outcome'] == 'timeout' and ended['unstill'] == ['joint2'] and ended['off_goal'] == []
+    assert ended['last_unstill_s']['joint2'] == ended['t']
+    assert all(t < ended['t'] - 0.5 for joint, t in ended['last_unstill_s'].items() if joint != 'joint2')
+    assert ended['spread'][1] == pytest.approx(0.004, abs=1e-5)
+    assert max(ended['spread'][:1] + ended['spread'][2:]) <= yam.MOVE_SETTLE.still_position_rad
+    assert ended['max_spread'][1] >= ended['spread'][1]
+
+    (error,) = _log_records(caplog, 'YAM device error')
+    assert set(error) == _DEVICE_ERROR_FIELDS
+    assert error['arm'] == 'can0' and error['during'] == 'start'
+    assert error['errors'][0]['type'] == 'builtins.TimeoutError'
+    assert set(error['reading']) == _READING_FIELDS and error['reading_age_s'] >= 0.0
+    assert error['settle'] == ended
+    (record,) = [r for r in caplog.records if r.getMessage().startswith('YAM device error ')]
+    assert record.levelno == logging.ERROR and record.exc_info is not None
+
+
+def test_a_reached_start_pose_logs_an_arrived_settle_and_no_device_error(rig, caplog):
+    caplog.set_level(logging.INFO)
+    rig.ready()
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    (ended,) = [r for r in _log_records(caplog, 'YAM settle end') if r['move'] == 'start']
+    assert ended['outcome'] == 'arrived' and ended['unstill'] == [] and ended['off_goal'] == []
+    assert not _log_records(caplog, 'YAM device error')
+
+
+def test_a_chain_fault_logs_its_cause_chain_and_the_last_reading_before_it(caplog):
+    watch = Watch(Site.CHAIN_READ)
+    rig = Rig(watch=watch)
+    rig.raise_arm()
+    held = rig.vendor._pos[:6].copy()
+    watch.armed = True
+    rig.tick(10)
+
+    (error,) = _log_records(caplog, 'YAM device error')
+    assert error['arm'] == 'can0' and error['during'] == 'run'
+    assert [link['type'] for link in error['errors']] == [
+        'positronic.drivers.roboarm.yam.driver.ChainFault',
+        'builtins.OSError',
+    ]
+    assert error['errors'][1]['message'] == 'collaborator failed'
+    assert error['reading']['q'] == pytest.approx(held.tolist(), abs=1e-4)
+    rig.finish()
+
+
+def test_a_settle_record_that_fails_to_write_does_not_stop_the_park(rig, monkeypatch, caplog):
+    def broken(*args, **kwargs):
+        raise ValueError('cannot write')
+
+    monkeypatch.setattr(yam.SettleTrace, '_judge', broken)
+    rig.raise_arm()
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    failures = [r for r in caplog.records if r.getMessage() == 'Could not write the YAM settle sample record']
+    assert len(failures) == 2  # one per pass: the start and the park
