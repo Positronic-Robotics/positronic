@@ -3,12 +3,6 @@
 
 import { WebXRButton } from '/webxr-button.js';
 
-function sendControllers(ws, controllers) {
-  if (ws.readyState !== WebSocket.OPEN) return;
-  const payload = { controllers, timestamp: Date.now() };
-  ws.send(JSON.stringify(payload));
-}
-
 export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
   let websocket = null;
   let xrButton = null;
@@ -63,6 +57,12 @@ export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverl
     try { document.body && document.body.classList.remove('xr-active'); } catch {}
   }
 
+  function sendControllers(controllers) {
+    if (websocket.readyState !== WebSocket.OPEN) return;
+    const payload = { controllers, timestamp: Date.now() };
+    websocket.send(JSON.stringify(payload));
+  }
+
   function onXRFrame(t, frame) {
     const session = frame.session;
     const pose = frame.getViewerPose(xrRefSpace);
@@ -84,7 +84,7 @@ export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverl
 
       renderer.render(scene, camera);
       if (controllers) {
-        sendControllers(websocket, controllers);
+        sendControllers(controllers);
       }
     }
     session.requestAnimationFrame(onXRFrame);
