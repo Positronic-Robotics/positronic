@@ -47,6 +47,7 @@ DOCK_STRIP_PX = 450
 SLOW_S = 2.0
 VIDEO_S = 10
 LONG_VIDEO_S = 15
+SHORT_VIDEO_S = 2
 """The length of every fixture video, long enough to play across a width change."""
 """How long the slow manifest takes, so a newer `src` answers first."""
 STRIP_KEY = 'positronic-replay.strip'
@@ -55,9 +56,15 @@ STRIP_KEY = 'positronic-replay.strip'
 
 @dataclass
 class Media:
+    def of(self, path: str) -> bytes:
+        """The video a path serves, by its length folder."""
+        return self.long_video if '/long/' in path else self.short_video if '/short/' in path else self.video
+
     video: bytes
     long_video: bytes
     """A video of `LONG_VIDEO_S`, which a path with `/long/` serves."""
+    short_video: bytes
+    """A video of `SHORT_VIDEO_S`, which a path with `/short/` serves."""
     rrd: bytes
 
 
@@ -131,8 +138,8 @@ def row_media(n: int) -> dict:
     has a phone video only, which builds, 15 loses its longest video only after a wait,
     16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there, 17 builds
     its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
-    names no length, 20 names no length and its second camera is the longest, 21 builds its replay, and 22 builds it
-    after slow answers."""
+    names no length, 20 names no length and its second camera is the longest, 21 builds its replay, 22 builds it after
+    slow answers, and 23 has a phone video shorter than its cameras."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -165,6 +172,7 @@ def row_media(n: int) -> dict:
         16: {'rrd': None, 'phone': None, 'cameras': three_cameras()},
         17: {'rrd': '/rrd/building/17.rrd', 'phone': None, 'cameras': at('slowbuilding', cameras)},
         21: {'rrd': '/rrd/building/21.rrd'},
+        23: {'rrd': None, 'phone': '/media/short/23/phone.webm'},
         22: {'rrd': '/rrd/slowbuilding/22.rrd'},
         20: {
             'rrd': None,
@@ -238,6 +246,15 @@ def null_cells() -> str:
     ]
     rows = [{'id': '1', 'values': dict.fromkeys(('task', 'reliability', 'result', 'model'))}, {'id': '2', 'values': {}}]
     data = json.dumps({'columns': columns, 'rows': rows})
+    return f'<positronic-replay><script type="application/json">{data}</script></positronic-replay>'
+
+
+def zero_filter() -> str:
+    """A column whose filter is 0, which is no filter the element reads."""
+    data = json.dumps({
+        'columns': [{'key': 'task', 'label': 'Task', 'filter': 0}],
+        'rows': [{'id': '1', 'values': {'task': 'x'}}],
+    })
     return f'<positronic-replay><script type="application/json">{data}</script></positronic-replay>'
 
 
@@ -330,6 +347,7 @@ def pages(release: str) -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/nulls': page_html(null_cells()),
+        '/page/zero-filter': page_html(zero_filter()),
         '/page/dock-below': page_html(
             inline_element('mode="full" dock dock-below="#no-such-bar" link-param="episode"')
         ),
@@ -429,7 +447,7 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
             if path.endswith('.rrd'):
                 return self.media_answer(path, media.rrd, 'application/octet-stream')
             if path.endswith(('.mp4', '.webm')):
-                return self.media_answer(path, media.long_video if '/long/' in path else media.video, 'video/webm')
+                return self.media_answer(path, media.of(path), 'video/webm')
             requests.add(path)
             if path in fixed:
                 return self.answer(200, fixed[path].encode(), 'text/html; charset=utf-8')
@@ -491,6 +509,8 @@ class Probe:
         """A page of `path`. A console error that holds one of `expected` is a result the check asks for. The `load`
         of a page waits for its videos to answer; `domcontentloaded` does not."""
         page = self.browser.new_page(viewport={'width': width, 'height': height})
+        # A check reads the expected errors of its own page only.
+        self.expected_errors = []
         # A tall strip above the dock keeps the rows next to the open one clear of the dock.
         page.add_init_script(f"localStorage.setItem('{STRIP_KEY}', '{DOCK_STRIP_PX}')")
         page.on('console', lambda message: self.on_console(path, message, expected))
@@ -1361,6 +1381,28 @@ class Probe:
         )
         page.close()
 
+    def end_and_zero_filter(self):
+        print('A phone video that ends before a width change, and a filter of 0:')
+        page = self.open('/page/dock?episode=23', width=400, height=800)
+        ended = self.until(page, "one('phone') !== null && one('phone').ended", 15000)
+        page.set_viewport_size({'width': 1400, 'height': 900})
+        front = camera_named('front')
+        settled = self.until(
+            page, f'{front} && {front}.readyState >= 1 && Math.abs({front}.currentTime - {SHORT_VIDEO_S}) < 0.3', 8000
+        )
+        time.sleep(0.5)
+        state = page.evaluate(f'[{front}?.paused, {front}?.currentTime]')
+        self.check('the cameras show the end of the phone video, paused', ended and settled and state[0] is True, state)
+        page.close()
+        page = self.open('/page/zero-filter', expected=('filter',))
+        self.until(page, "all('row').length > 0", 5000)
+        errors = [text for text in self.expected_errors if 'columns[0].filter' in text]
+        selects = page.evaluate("host().shadowRoot.querySelectorAll('select').length")
+        self.check(
+            'a filter of 0 logs one error and gives no filter', len(errors) == 1 and selects == 0, (errors, selects)
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1436,6 +1478,7 @@ def main(headed: bool) -> int:
         media = Media(
             video=make_video(Path(scratch, 'clip.webm')),
             long_video=make_video(Path(scratch, 'long.webm'), LONG_VIDEO_S),
+            short_video=make_video(Path(scratch, 'short.webm'), SHORT_VIDEO_S),
             rrd=make_recording(Path(scratch, 'replay.rrd')),
         )
     server = serve(media, requests, release)
@@ -1463,6 +1506,7 @@ def main(headed: bool) -> int:
             probe.rate_and_keyboard,
             probe.rate_across_widths_and_real_length,
             probe.width_change_around_the_viewer,
+            probe.end_and_zero_filter,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

@@ -387,7 +387,8 @@ export class EpisodePlayer {
     const listening = new AbortController();
     const { signal } = listening;
     video.addEventListener('play', () => (state.playing = true), { signal });
-    video.addEventListener('pause', () => video.error || video.ended || (state.playing = false), { signal });
+    // A failed load pauses the video with no choice of the visitor's; the end of the video stops the episode.
+    video.addEventListener('pause', () => video.error || (state.playing = false), { signal });
     video.addEventListener('timeupdate', () => video.error || (state.at = video.currentTime), { signal });
     video.addEventListener('ratechange', () => video.readyState && (state.rate = video.playbackRate), { signal });
     this.#detachMedia = () => listening.abort();
@@ -517,7 +518,7 @@ export class EpisodePlayer {
     const { signal } = listening;
     const { state } = episode;
     lead.addEventListener('play', () => (state.playing = true), { signal });
-    lead.addEventListener('pause', () => lead.error || lead.ended || (state.playing = false), { signal });
+    lead.addEventListener('pause', () => lead.error || (state.playing = false), { signal });
     lead.addEventListener('timeupdate', () => lead.error || (state.at = lead.currentTime), { signal });
     const followers = episode.cameras.map((camera) => camera.video).filter((video) => video !== lead);
     follow(lead, followers, signal);

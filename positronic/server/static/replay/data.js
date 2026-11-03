@@ -76,7 +76,7 @@ function readCamera(input, camera, base) {
 }
 
 function readFilter(input, filter) {
-  if (!filter) return null;
+  if (isEmpty(filter)) return null;
   if (filter !== true && !isObject(filter)) return wrongInput(input, filter, null, 'no filter');
   const spelled = filter === true ? {} : filter;
   if (!isEmpty(spelled.options) && !Array.isArray(spelled.options)) {
