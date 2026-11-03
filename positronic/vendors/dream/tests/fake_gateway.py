@@ -21,13 +21,6 @@ NAMES = {
 }
 
 
-def _retryable(status: dict[str, Any]) -> bool:
-    """Whether a caller may send the request again, as the envelope of DreamAPI derives it."""
-    if status['code'] == 'DA-5000':
-        return True
-    return status['code'] == 'DA-2000' and status.get('reason') != 'max_serves'
-
-
 def hold(observation: dict[str, Any]) -> dict[str, Any]:
     """A chunk that holds each arm at its measured state."""
     return {
@@ -76,6 +69,13 @@ class FakeGateway:
     def calls(self) -> list[dict[str, Any]]:
         return [request for request in self.requests if request['path'] == GET_ACTION]
 
+    @staticmethod
+    def _retryable(status: dict[str, Any]) -> bool:
+        """Whether a caller may send the request again, as the envelope of DreamAPI derives it."""
+        if status['code'] == 'DA-5000':
+            return True
+        return status['code'] == 'DA-2000' and status.get('reason') != 'max_serves'
+
     def _answer(self, path: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         trace = f'trace-{len(self.requests) + 1}'
         self.requests.append({'path': path, 'body': body, 'headers': headers, 'trace_id': trace})
@@ -86,7 +86,7 @@ class FakeGateway:
         if session is None or status['code'] == 'DA-0001':
             self._sessions += 1
             session = f'session-{self._sessions}'
-        envelope = {'name': NAMES[status['code']], 'retryable': _retryable(status), 'trace_id': trace, **status}
+        envelope = {'name': NAMES[status['code']], 'retryable': self._retryable(status), 'trace_id': trace, **status}
         reply: dict[str, Any] = {'status': envelope, 'session_id': session}
         if status['code'] == 'DA-0000':
             reply['actions'] = self.chunk(body['observation'])

@@ -50,24 +50,6 @@ JPEG_QUALITY = 85
 UPLOAD_SIZE = (640, 400)
 
 
-def _watch_traces(client: dream_client.DreamClient) -> list[str | None]:
-    """The trace id of each reply that `client` gets from now on, in order, `None` for a reply with none."""
-    traces: list[str | None] = []
-    # HACK: `DreamClient` drops `status.trace_id` from a reply, and Dream Labs needs it to name the model that
-    # answered. This reads it off the private transport of dreamlabs-client 1.0.9, which the `dream` extra pins.
-    transport = client._policy._transport
-    request = transport.request
-
-    def traced(*args: Any, **kwargs: Any) -> Any:
-        response = request(*args, **kwargs)
-        status = response.get('status') if isinstance(response, dict) else None
-        traces.append(status.get('trace_id') if isinstance(status, dict) else None)
-        return response
-
-    transport.request = traced
-    return traces
-
-
 def _canary_request() -> dict[str, Any]:
     """A fixed observation: a gradient with a red block that moves right over the window, and both arms raised."""
     width, height = codecs.FRAME_SIZE
@@ -90,15 +72,22 @@ def _canary_request() -> dict[str, Any]:
     }
 
 
-def _measured(observation: dict[str, Any]) -> dict[str, np.ndarray]:
-    """The state of each arm in a Dream observation, as one row: 6 joints, then the gripper opening."""
-    return {
-        arm: np.concatenate([
-            observation[dream.JOINT_POS.format(slot=slot)],
-            observation[dream.GRIPPER_POS.format(slot=slot)],
-        ])
-        for arm, slot in dream.ARM_SLOTS.items()
-    }
+def _watch_traces(client: dream_client.DreamClient) -> list[str | None]:
+    """The trace id of each reply that `client` gets from now on, in order, `None` for a reply with none."""
+    traces: list[str | None] = []
+    # HACK: `DreamClient` drops `status.trace_id` from a reply, and Dream Labs needs it to name the model that
+    # answered. This reads it off the private transport of dreamlabs-client 1.0.9, which the `dream` extra pins.
+    transport = client._policy._transport
+    request = transport.request
+
+    def traced(*args: Any, **kwargs: Any) -> Any:
+        response = request(*args, **kwargs)
+        status = response.get('status') if isinstance(response, dict) else None
+        traces.append(status.get('trace_id') if isinstance(status, dict) else None)
+        return response
+
+    transport.request = traced
+    return traces
 
 
 class _Session:
@@ -122,6 +111,17 @@ class _Session:
 
     def close(self) -> None:
         self.client.close()
+
+
+def _measured(observation: dict[str, Any]) -> dict[str, np.ndarray]:
+    """The state of each arm in a Dream observation, as one row: 6 joints, then the gripper opening."""
+    return {
+        arm: np.concatenate([
+            observation[dream.JOINT_POS.format(slot=slot)],
+            observation[dream.GRIPPER_POS.format(slot=slot)],
+        ])
+        for arm, slot in dream.ARM_SLOTS.items()
+    }
 
 
 class DreamModel(Model):
@@ -172,12 +172,17 @@ class DreamModel(Model):
             session.frame_s += codecs.FRAME_PERIOD_S
             frames = {key: window[index] for key, window in windows.items()}
             session.client.set_observation(frames, observation, timestamp=session.frame_s)
+        reply = self._get_action(session)
+        session.answered_s = time.monotonic()
+        return {arm: np.asarray(reply[dream.CHUNKS[arm]], dtype=np.float64) for arm in keys.BIMANUAL_ARMS}
+
+    def _get_action(self, session: _Session) -> dict[str, Any]:
+        """DreamAPI's reply to the observation that `session` holds."""
         deadline = time.monotonic() + self._retry_deadline_s
         stale_sent = False
         while True:
             try:
-                reply = session.client.get_action()
-                break
+                return session.client.get_action()
             except dream_client.DreamProtocolError as error:
                 # dreamlabs-client 1.0.9 sends a call again on a fresh connection when the gateway has closed its idle
                 # keep-alive one, but over TLS that close raises `ssl.SSLEOFError`, which it reports as a gateway it
@@ -203,8 +208,6 @@ class DreamModel(Model):
                 wait = error.retry_after_s or 1.0
                 logger.warning('DreamAPI refused a call (%s); sending it again in %.1f s', error, wait)
                 time.sleep(wait)
-        session.answered_s = time.monotonic()
-        return {arm: np.asarray(reply[dream.CHUNKS[arm]], dtype=np.float64) for arm in keys.BIMANUAL_ARMS}
 
     def _call_record(self, session: _Session, rows: int, reports: dict[str, LimitReport]) -> dict[str, Any]:
         timing = session.client.last_timing or {}
@@ -340,10 +343,7 @@ def dream_model(
 
 @cfn.config(rows=48, crop_to_aspect=True)
 def pipeline(rows: int, crop_to_aspect: bool) -> PolicyDeployment:
-    """The client keeps 9 frames of each camera, 0.2 s apart, and plays `rows` rows of each chunk at 20 Hz.
-
-    Each chunk has 48 rows. The codec runs on this server.
-    """
+    """The client keeps 9 frames of each camera, 0.2 s apart, and plays `rows` rows of each chunk at 20 Hz."""
     offsets = tuple(codecs.FRAME_PERIOD_S * (index + 1 - codecs.WINDOW_FRAMES) for index in range(codecs.WINDOW_FRAMES))
     stack = TemporalStack(
         keys=(keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE), offsets_sec=offsets, pad_start=False

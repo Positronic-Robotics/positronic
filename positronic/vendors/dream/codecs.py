@@ -9,6 +9,7 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
+from positronic.drivers.roboarm.models import YAM_JOINTS
 from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
 from positronic.vendors import dream
 
@@ -19,7 +20,6 @@ FRAME_SIZE = (320, 176)
 # Dream-1 reads the last 9 frames of each camera, 0.2 s apart.
 WINDOW_FRAMES = 9
 FRAME_PERIOD_S = 0.2
-YAM_JOINTS = 6
 
 # The session metadata field that states whether the codec cuts each frame to the aspect ratio of `FRAME_SIZE`.
 CROP_META = 'dream.crop_to_aspect'
@@ -43,11 +43,23 @@ class DreamObservationCodec(Codec):
         self._crop_to_aspect = crop_to_aspect
         self._cameras = {dream.TOP_CAMERA: top_camera, dream.LEFT_CAMERA: left_camera, dream.RIGHT_CAMERA: right_camera}
 
+    @staticmethod
+    def _centre_crop(frame: np.ndarray, aspect: float) -> np.ndarray:
+        """The largest centred part of `frame` with a width-to-height ratio of `aspect`."""
+        height, width = frame.shape[:2]
+        if width / height > aspect:
+            cut = round(height * aspect)
+            left = (width - cut) // 2
+            return frame[:, left : left + cut]
+        cut = round(width / aspect)
+        top = (height - cut) // 2
+        return frame[top : top + cut]
+
     def _frame(self, frame: np.ndarray, key: str) -> np.ndarray:
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
         if self._crop_to_aspect:
-            frame = _centre_crop(frame, FRAME_SIZE[0] / FRAME_SIZE[1])
+            frame = self._centre_crop(frame, FRAME_SIZE[0] / FRAME_SIZE[1])
         return image.transform_frame(frame, *FRAME_SIZE, mode=image.ResizeMode.STRETCH)
 
     def _window(self, value: Any, key: str) -> np.ndarray:
@@ -72,18 +84,6 @@ class DreamObservationCodec(Codec):
     @property
     def meta(self) -> dict[str, Any]:
         return {CROP_META: self._crop_to_aspect}
-
-
-def _centre_crop(frame: np.ndarray, aspect: float) -> np.ndarray:
-    """The largest centred part of `frame` with a width-to-height ratio of `aspect`."""
-    height, width = frame.shape[:2]
-    if width / height > aspect:
-        cut = round(height * aspect)
-        left = (width - cut) // 2
-        return frame[:, left : left + cut]
-    cut = round(width / aspect)
-    top = (height - cut) // 2
-    return frame[top : top + cut]
 
 
 @cfn.config(training_fps=FPS, crop_to_aspect=True)

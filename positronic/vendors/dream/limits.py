@@ -9,10 +9,8 @@ from dataclasses import dataclass
 import mujoco as mj
 import numpy as np
 
-from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH
+from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_JOINTS, YAM_MJCF_PATH
 from positronic.utils import package_assets_path
-
-YAM_JOINTS = len(YAM_JOINT_NAMES)
 
 
 @dataclass(frozen=True)
