@@ -38,18 +38,20 @@ function numberText(column, value) {
 
 /** The nodes one cell holds. `link` wraps the text of a text cell, for the row's own page. */
 export function cellContent(column, value, link = null) {
-  const title = value !== null && typeof value === 'object' ? value.title : undefined;
+  // A null or absent value is an empty cell of any type.
+  const fields = value !== null && typeof value === 'object' ? value : {};
+  const title = fields.title;
   if (column.type === ColumnType.NUMBER) return [numberText(column, value)];
   const text = cellText(value);
   if (column.type === ColumnType.BADGE) {
     if (!text) return ['-'];
-    const color = typeof value === 'object' ? value.color : undefined;
+    const color = fields.color;
     if (!color) return [element('span', { part: 'badge', title }, [text])];
-    const ink = value.ink ?? inkOn(color);
+    const ink = fields.ink ?? inkOn(color);
     return [element('span', { part: 'badge', title, style: `background: ${color}; color: ${ink}` }, [text])];
   }
   if (column.type === ColumnType.ICON) {
-    const icon = typeof value === 'object' ? value.icon : undefined;
+    const icon = fields.icon;
     const image = icon ? [element('img', { part: 'icon', src: icon, alt: '' })] : [];
     return [element('span', { part: 'with-icon', title }, [...image, text])];
   }

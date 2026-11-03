@@ -551,7 +551,7 @@ export class PositronicReplay extends HTMLElement {
       const button = element('button', { type: 'button', part: 'step', 'aria-label': label, title }, [
         by < 0 ? '↑' : '↓',
       ]);
-      button.addEventListener('click', () => this.#step(by, 'Button'));
+      button.addEventListener('click', (event) => this.#step(by, 'Button', event));
       return button;
     };
     const details = element('div', { part: 'details', hidden: '' }, [element('slot', { name: 'details' })]);
@@ -623,7 +623,8 @@ export class PositronicReplay extends HTMLElement {
   /** `from` names what opened it: a row, a step from the open row, or a link that names the row. A step names
    * its `via`: a button or a key. */
   #open(row, from, event = null, via = null) {
-    if (from !== 'Row' || event?.isTrusted) this.#act('open', { row: row.id, from, ...(via && { via }) });
+    // A link names the row in the page's own address, so its open counts as the visitor's.
+    if (from === 'Link' || event?.isTrusted) this.#act('open', { row: row.id, from, ...(via && { via }) });
     if (openDock && openDock !== this) openDock.#close();
     openDock = this;
     this.#current = row;
@@ -682,10 +683,10 @@ export class PositronicReplay extends HTMLElement {
     setLinkParam(this.getAttribute('link-param'), null);
   }
 
-  #step(by, via) {
+  #step(by, via, event) {
     const matches = this.#matches();
     const next = matches[matches.indexOf(this.#current) + by];
-    if (next) this.#open(next, 'Step', null, via);
+    if (next) this.#open(next, 'Step', event, via);
   }
 
   #showPosition(matches) {
@@ -706,10 +707,10 @@ export class PositronicReplay extends HTMLElement {
     event.preventDefault();
     event.stopPropagation();
     if (by) {
-      this.#step(by, 'Key');
+      this.#step(by, 'Key', event);
       return;
     }
-    this.#act('close', { row: this.#current?.id, via: 'Escape' });
+    if (event.isTrusted) this.#act('close', { row: this.#current?.id, via: 'Escape' });
     this.#close();
   };
 
@@ -785,7 +786,7 @@ export class PositronicReplay extends HTMLElement {
           handle.removeEventListener('pointermove', move);
           this.removeAttribute('resizing');
           PositronicReplay.#saveStrip(this.#strip);
-          if (this.#strip !== before) this.#act('resize', { via: 'Drag' });
+          if (event.isTrusted && this.#strip !== before) this.#act('resize', { via: 'Drag' });
         },
         { once: true },
       );
@@ -798,7 +799,7 @@ export class PositronicReplay extends HTMLElement {
       this.#resize(this.#strip + by * this.#rows.get(this.#current).getBoundingClientRect().height);
       this.#focus(this.#current, 'instant');
       PositronicReplay.#saveStrip(this.#strip);
-      if (this.#strip !== before) this.#act('resize', { via: 'Key' });
+      if (event.isTrusted && this.#strip !== before) this.#act('resize', { via: 'Key' });
     });
   }
 

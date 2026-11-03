@@ -123,18 +123,43 @@ def long_share() -> dict:
     return manifest
 
 
+def row_media(n: int) -> dict:
+    """The media of row `n`. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media, 9 lost its videos, 10
+    builds them, 11 lost its longest video only, 12 builds its replay and its videos, 13 builds its videos only, 14
+    has a phone video only, which builds, and 15 loses its longest video only after a wait."""
+    cameras = [
+        {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
+        for camera in ('front', 'wrist')
+    ]
+
+    def at(state: str, videos: list[dict]) -> list[dict]:
+        return [{**video, 'src': video['src'].replace('/ok/', f'/{state}/')} for video in videos]
+
+    def lost_longest(state: str) -> list[dict]:
+        return [{**at(state, cameras[:1])[0], 'duration_s': 3.0}, cameras[1]]
+
+    variants = {
+        5: {'rrd': '/rrd/building/5.rrd'},
+        6: {'rrd': '/rrd/gone/6.rrd'},
+        7: {'rrd': None},
+        8: {'rrd': None, 'cameras': None, 'phone': None},
+        9: {'rrd': None, 'phone': None, 'cameras': at('gone', cameras)},
+        10: {'rrd': None, 'phone': None, 'cameras': at('building', cameras)},
+        11: {'rrd': None, 'phone': None, 'cameras': lost_longest('gone')},
+        12: {'rrd': '/rrd/building/12.rrd', 'phone': None, 'cameras': at('building', cameras)},
+        13: {'rrd': None, 'phone': None, 'cameras': at('building', cameras)},
+        14: {'rrd': None, 'cameras': None, 'phone': '/media/building/14/phone.webm'},
+        15: {'rrd': None, 'phone': None, 'cameras': lost_longest('slowgone')},
+    }
+    media = {'cameras': cameras, 'phone': f'/media/ok/{n}/phone.webm', 'rrd': f'/rrd/ok/{n}.rrd'}
+    media |= variants.get(n, {})
+    return {key: value for key, value in media.items() if value is not None}
+
+
 def inline_rows() -> dict:
-    """Rows of every cell type and media state. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media,
-    9 lost its videos, 10 builds them, 11 lost its longest video only, 12 builds its replay and its videos,
-    13 builds its videos only,
-    14 has a phone video only, which builds."""
-    rows = []
-    for n in range(1, ROWS + 1):
-        cameras = [
-            {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
-            for camera in ('front', 'wrist')
-        ]
-        row = {
+    """Rows of every cell type and every media state of `row_media`."""
+    rows = [
+        {
             'id': str(n),
             'values': {
                 'task': f'Task {n % 3}',
@@ -148,42 +173,11 @@ def inline_rows() -> dict:
                 'pace': n / 10,
             },
             'duration_s': VIDEO_S,
-            'cameras': cameras,
-            'phone': f'/media/ok/{n}/phone.webm',
-            'rrd': f'/rrd/ok/{n}.rrd',
             'href': f'/episode/{n}',
+            **row_media(n),
         }
-        if n == 5:
-            row['rrd'] = '/rrd/building/5.rrd'
-        if n == 6:
-            row['rrd'] = '/rrd/gone/6.rrd'
-        if n in (7, 9, 10):
-            del row['rrd']
-        if n == 8:
-            for key in ('rrd', 'cameras', 'phone'):
-                del row[key]
-        if n in (9, 10):
-            state = 'gone' if n == 9 else 'building'
-            row['cameras'] = [{**camera, 'src': camera['src'].replace('/ok/', f'/{state}/')} for camera in cameras]
-            del row['phone']
-        if n == 11:
-            longest = {**cameras[0], 'src': cameras[0]['src'].replace('/ok/', '/gone/'), 'duration_s': 3.0}
-            row['cameras'] = [longest, cameras[1]]
-            for key in ('rrd', 'phone'):
-                del row[key]
-        if n == 14:
-            row['phone'] = row['phone'].replace('/ok/', '/building/')
-            for key in ('rrd', 'cameras'):
-                del row[key]
-        if n == 13:
-            row['cameras'] = [{**camera, 'src': camera['src'].replace('/ok/', '/building/')} for camera in cameras]
-            for key in ('rrd', 'phone'):
-                del row[key]
-        if n == 12:
-            row['rrd'] = '/rrd/building/12.rrd'
-            row['cameras'] = [{**camera, 'src': camera['src'].replace('/ok/', '/building/')} for camera in cameras]
-            del row['phone']
-        rows.append(row)
+        for n in range(1, ROWS + 1)
+    ]
     columns = [
         {'key': 'task', 'label': 'Task', 'filter': True},
         {'key': 'model', 'label': 'Model', 'type': 'icon', 'filter': {'all': 'All models'}},
@@ -197,6 +191,19 @@ def inline_rows() -> dict:
         {'key': 'pace', 'label': 'Pace', 'type': 'number', 'decimals': 1, 'unit': ' s'},
     ]
     return {'columns': columns, 'rows': rows}
+
+
+def null_cells() -> str:
+    """A column of each type, and two rows whose values are null or absent."""
+    columns = [
+        {'key': 'task', 'label': 'Task'},
+        {'key': 'reliability', 'label': 'Reliability', 'type': 'number', 'decimals': 0},
+        {'key': 'result', 'label': 'Result', 'type': 'badge'},
+        {'key': 'model', 'label': 'Model', 'type': 'icon'},
+    ]
+    rows = [{'id': '1', 'values': dict.fromkeys(('task', 'reliability', 'result', 'model'))}, {'id': '2', 'values': {}}]
+    data = json.dumps({'columns': columns, 'rows': rows})
+    return f'<positronic-replay><script type="application/json">{data}</script></positronic-replay>'
 
 
 SCRIPT = '<script type="module" src="/static/replay.js"></script>'
@@ -279,6 +286,8 @@ def pages(release: str) -> dict[str, str]:
         ),
         '/page/dock': page_html(inline_element('mode="full" dock link-param="episode"')),
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
+        '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
+        '/page/nulls': page_html(null_cells()),
         '/page/history-control': history_control(release),
         '/page/slow': page_html(f'<positronic-replay src="{SHARE}/slow.json"></positronic-replay>'),
         '/page/small': page_html(f'<positronic-replay src="{SHARE}/replay.json"></positronic-replay>'),
@@ -297,6 +306,18 @@ class QuietServer(ThreadingHTTPServer):
         # The browser drops a download when the page moves on, as a visitor does.
         if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
             super().handle_error(request, client_address)
+
+
+def media_status(path: str, asked: int) -> int | None:
+    """The status of a media file that is not there: 404 for a gone one, after a wait for a slow one, and 202 for the
+    first answers of a building one. None for a file that is there."""
+    if '/slowgone/' in path:
+        time.sleep(SLOW_S)
+    if 'gone/' in path:
+        return 404
+    if '/building/' in path and asked <= BUILDING_ANSWERS:
+        return 202
+    return None
 
 
 def byte_span(header: str | None, body: bytes) -> tuple[int, bytes, dict[str, str]]:
@@ -340,11 +361,9 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
             self.wfile.write(body)
 
         def media_answer(self, path: str, body: bytes, content_type: str):
-            asked = requests.add(path)
-            if '/gone/' in path:
-                return self.answer(404, b'gone')
-            if '/building/' in path and asked <= BUILDING_ANSWERS:
-                return self.answer(202, headers={'Retry-After': str(RETRY_AFTER_S)})
+            status = media_status(path, requests.add(path))
+            if status is not None:
+                return self.answer(status, headers={'Retry-After': str(RETRY_AFTER_S)} if status == 202 else None)
             status, part, headers = byte_span(self.headers.get('Range'), body)
             return self.answer(status, part, content_type, headers)
 
@@ -424,7 +443,7 @@ class Probe:
             return
         source = message.location.get('url', '')
         # A gone file answers 404, and the browser says so in the console of the page that asked for it.
-        if message.text.startswith('Failed to load resource') and '/gone/' in source:
+        if message.text.startswith('Failed to load resource') and 'gone/' in source:
             return
         if is_aborted_viewer_fetch(message.text, source):
             self.aborted_viewer_fetches.append(path)
@@ -998,6 +1017,56 @@ class Probe:
             self.used(page, control, lambda call=call: page.evaluate(f"one('phone').{call}"), wanted)
         page.close()
 
+    def null_values(self):
+        print('Rows whose values are null or absent:')
+        page = self.open('/page/nulls')
+        rendered = self.until(page, "all('row').length === 2", 5000)
+        cells = page.evaluate("all('row').map((row) => [...row.cells].map((cell) => cell.textContent))")
+        self.check('each typed cell renders empty', rendered and cells == [['', '-', '-', '']] * 2, cells)
+        page.close()
+
+    def lead_lost_while(self, path: str, use_play: bool, wanted_playing: bool, name: str):
+        page = self.open(path)
+        survivor = "all('camera').find((video) => video.dataset.camera === 'wrist')"
+        self.until(page, f'{survivor} !== undefined', 8000)
+        if use_play:
+            part(page, 'play').click()
+        self.until(page, "noteText().includes('gone')", 15000)
+        time.sleep(1)
+        playing = page.evaluate(f'!{survivor}.paused')
+        self.check(name, playing == wanted_playing, f'the other camera plays: {playing}')
+        page.close()
+
+    def lead_lost_keeps_state(self):
+        print('A lead camera lost after a visitor changed the play state:')
+        self.lead_lost_while('/page/dock?episode=15', True, False, 'an autoplay row the visitor paused stays paused')
+        self.lead_lost_while('/page/list?episode=15', True, True, 'a row the visitor played plays on')
+
+    def script_clicks(self):
+        print('Script calls on the controls:')
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        cell(page, 20).click()
+        self.until(page, "host().hasAttribute('open')")
+        self.actions(page)
+        page.evaluate("all('step')[1].click()")
+        page.evaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown'}))")
+        time.sleep(0.5)
+        actions = self.actions(page)
+        position = page.evaluate("one('position').textContent")
+        self.check(
+            'a script click and a script key step and send no action',
+            actions == [] and position.startswith('22 '),
+            (actions, position),
+        )
+        self.used(
+            page,
+            'a visitor click on the next button',
+            lambda: part(page, 'step').nth(1).click(),
+            {'action': 'open', 'row': '23', 'from': 'Step', 'via': 'Button'},
+        )
+        page.close()
+
     def width_change(self):
         print('A width change while a row plays:')
         page = self.open('/page/dock?episode=7')
@@ -1076,6 +1145,9 @@ def main(headed: bool) -> int:
             probe.stale_and_broken_sources,
             probe.row_link,
             probe.width_change,
+            probe.null_values,
+            probe.lead_lost_keeps_state,
+            probe.script_clicks,
             probe.building_video_autoplays,
             probe.every_control_reports_once,
             probe.no_recording_row,

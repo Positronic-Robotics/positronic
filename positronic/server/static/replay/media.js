@@ -336,18 +336,14 @@ export class EpisodePlayer {
   // drag of the seek bar fires many seeks, so a seek reports once it has settled.
   #reportNativeControls(row, video) {
     const report = (action, detail) => this.#act(action, { row: row.id, ...detail, via: 'Native' });
-    video.addEventListener('play', () => takeOwn(video, 'play') || report('play', { playing: true }));
+    // A media event that a script dispatches is no visitor's, and it takes no count of an own call.
+    const listen = (type, handle) => video.addEventListener(type, (event) => event.isTrusted && handle());
+    listen('play', () => takeOwn(video, 'play') || report('play', { playing: true }));
     // A video ends, or fails to load, with a `pause` that no visitor made.
-    video.addEventListener('pause', () => {
-      if (takeOwn(video, 'pause') || video.ended || video.error) return;
-      report('play', { playing: false });
-    });
-    video.addEventListener(
-      'ratechange',
-      () => takeOwn(video, 'ratechange') || report('speed', { value: String(video.playbackRate) }),
-    );
+    listen('pause', () => takeOwn(video, 'pause') || video.ended || video.error || report('play', { playing: false }));
+    listen('ratechange', () => takeOwn(video, 'ratechange') || report('speed', { value: String(video.playbackRate) }));
     let settling = null;
-    video.addEventListener('seeking', () => {
+    listen('seeking', () => {
       if (takeOwn(video, 'seeking')) return;
       clearTimeout(settling);
       this.#timers.delete(settling);
@@ -373,8 +369,14 @@ export class EpisodePlayer {
     );
     const durationS = row.durationS ?? row.cameras[longest].durationS;
     const lost = new Set();
+    // Whether the episode plays, and where, by the lead's last play or pause; a failed load also pauses the lead.
+    let playing = autoplay;
+    let moment = at;
     // The controls drive one lead video, and `follow` moves the others with it.
     const drive = (lead) => {
+      lead.addEventListener('play', () => (playing = true));
+      lead.addEventListener('pause', () => lead.error || lead.ended || (playing = false));
+      lead.addEventListener('timeupdate', () => lead.error || (moment = lead.currentTime));
       const controls = this.#controls(row, lead, durationS);
       const old = this.#stage.querySelector('[part~="controls"]');
       if (old) old.replaceWith(controls);
@@ -403,7 +405,7 @@ export class EpisodePlayer {
       video.addEventListener('click', (event) => this.#toggle(row, this.lead, event.isTrusted ? 'Video' : null));
       const caption = element('figcaption', { part: 'caption' }, [name]);
       const figure = element('figure', { part: 'figure' }, [video, caption]);
-      const wantsPlay = () => autoplay && video === this.lead;
+      const wantsPlay = () => playing && video === this.lead;
       this.#watch(
         video,
         camera.src,
@@ -422,7 +424,8 @@ export class EpisodePlayer {
           const next = video === this.lead ? videos.find((each) => !lost.has(each)) : null;
           if (!next) return;
           drive(next);
-          if (autoplay) start(next);
+          if (moment) seek(next, Math.min(moment, Number.isNaN(next.duration) ? moment : next.duration));
+          if (playing) start(next);
         },
         wantsPlay,
       );
