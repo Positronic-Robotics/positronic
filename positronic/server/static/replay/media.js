@@ -79,7 +79,7 @@ function clock(value) {
 }
 
 // The browser refuses to play a video with no visitor gesture, a new `src` interrupts a play that has not
-// started, and a file that is gone or building has no source; its note says which. None is a fault.
+// started, and a file that is gone or building has no source; its note says which.
 const EXPECTED_PLAY_REFUSALS = new Set(['NotAllowedError', 'AbortError', 'NotSupportedError']);
 
 // The element's own calls on each video, counted by the event each one fires, so a listener on a video with
