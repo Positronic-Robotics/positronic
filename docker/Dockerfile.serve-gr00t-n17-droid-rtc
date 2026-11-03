@@ -8,4 +8,4 @@
 
 ARG BASE_IMAGE=positro/gr00t-n17-droid:latest
 FROM ${BASE_IMAGE}
-ENTRYPOINT ["/opt/gr00t-venv/bin/python", "-m", "gr00t_serving.server", "droid_rtc"]
+CMD ["droid_rtc"]
