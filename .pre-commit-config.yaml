@@ -22,14 +22,15 @@ repos:
         # entries, and the shrunk baseline makes CI flag them as new errors.
         entry: env UV_PROJECT_ENVIRONMENT=.venv-typecheck uv run --locked --exact basedpyright
         language: system
-        # Whole-project checker (pass_filenames: false), so run on every commit —
-        # a pyproject/baseline-only change or a module deletion can still shift the
-        # type-check result, and a python-only filter would skip those.
-        always_run: true
+        # Whole-project checker (pass_filenames: false). It runs when a commit stages a
+        # path that can move its result: Python source, a stub, a pyproject, the lock,
+        # or the baseline. pre-commit selects no deleted path, so a deletion-only commit
+        # is checked by CI.
+        files: '(\.pyi?|(^|/)pyproject\.toml|(^|/)uv\.lock|^\.basedpyright/baseline\.json)$'
         pass_filenames: false
         # Only pre-commit can block the commit; the repo also installs commit-msg
-        # and post-commit hooks, where always_run would re-run the whole-project
-        # check pointlessly (and too late to fail the commit).
+        # and post-commit hooks, where the whole-project check would run pointlessly
+        # (and too late to fail the commit).
         stages: [pre-commit]
       - id: check-tests-location
         name: tests live in per-package tests/ dirs
