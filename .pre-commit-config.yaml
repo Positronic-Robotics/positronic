@@ -25,7 +25,7 @@ repos:
         # Whole-project checker (pass_filenames: false). It runs when a commit stages a
         # path that can move its result: Python source, a stub, a pyproject, the lock,
         # or the baseline. pre-commit selects no deleted path, so a deletion-only commit
-        # is checked by CI.
+        # skips it.
         files: '(\.pyi?|(^|/)pyproject\.toml|(^|/)uv\.lock|^\.basedpyright/baseline\.json)$'
         pass_filenames: false
         # Only pre-commit can block the commit; the repo also installs commit-msg
