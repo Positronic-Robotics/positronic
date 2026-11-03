@@ -231,6 +231,7 @@ export class PositronicReplay extends HTMLElement {
   #inputs = Object.fromEntries(Object.entries(ATTRIBUTES).map(([name, read]) => [name, read(null)]));
   // Read once, at the first connect.
   #linkParam = undefined;
+  #unmatchedDockBelow = null;
 
   constructor() {
     super();
@@ -837,7 +838,15 @@ export class PositronicReplay extends HTMLElement {
 
   #top() {
     const selector = this.#inputs['dock-below'];
-    return (selector && document.querySelector(selector)?.getBoundingClientRect().bottom) || 0;
+    if (!selector) return 0;
+    const bar = document.querySelector(selector);
+    if (bar) return bar.getBoundingClientRect().bottom;
+    // The host's bar can come later, so the check runs where the dock needs it, and logs each value once.
+    if (this.#unmatchedDockBelow !== selector) {
+      this.#unmatchedDockBelow = selector;
+      wrongInput('dock-below', selector, null, 'the top of the window, as no element matches it');
+    }
+    return 0;
   }
 
   /** The list's strip above the dock, in px: the dock takes the rest of the window under the host's bar. */

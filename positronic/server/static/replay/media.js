@@ -503,15 +503,14 @@ export class EpisodePlayer {
       SPEEDS.map((rate) => element('option', { value: String(rate), selected: rate === 1 ? '' : null }, [`${rate}×`])),
     );
     let total = durationS;
-    lead.addEventListener(
-      'loadedmetadata',
-      () => {
-        if (total) return;
-        total = lead.duration;
-        slider.max = String(total);
-      },
-      { signal },
-    );
+    // A row that names no length takes the lead's, which the lead can know before the controls attach.
+    const takeLength = () => {
+      if (total || !Number.isFinite(lead.duration)) return;
+      total = lead.duration;
+      slider.max = String(total);
+      showTime();
+    };
+    lead.addEventListener('loadedmetadata', takeLength, { signal });
     const showState = () => {
       play.textContent = lead.paused ? '▶' : '❚❚';
       play.setAttribute('aria-label', lead.paused ? PLAY_LABEL : PAUSE_LABEL);
@@ -533,6 +532,7 @@ export class EpisodePlayer {
     for (const type of ['timeupdate', 'seeked']) lead.addEventListener(type, showTime, { signal });
     showState();
     showTime();
+    takeLength();
     return element('div', { part: 'controls' }, [play, slider, time, speed]);
   }
 }

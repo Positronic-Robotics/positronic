@@ -128,7 +128,8 @@ def row_media(n: int) -> dict:
     builds them, 11 lost its longest video only, 12 builds its replay and its videos, 13 builds its videos only, 14
     has a phone video only, which builds, 15 loses its longest video only after a wait,
     16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there, 17 builds
-    its replay and, more slowly, its videos, and 18 has a longest camera that is there and one built after waits."""
+    its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
+    names no length."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -160,13 +161,19 @@ def row_media(n: int) -> dict:
         15: {'rrd': None, 'phone': None, 'cameras': lost_longest('slowgone')},
         16: {'rrd': None, 'phone': None, 'cameras': three_cameras()},
         17: {'rrd': '/rrd/building/17.rrd', 'phone': None, 'cameras': at('slowbuilding', cameras)},
+        19: {
+            'rrd': None,
+            'phone': None,
+            'duration_s': None,
+            'cameras': [{key: value for key, value in camera.items() if key != 'duration_s'} for camera in cameras],
+        },
         18: {
             'rrd': None,
             'phone': None,
             'cameras': [{**cameras[0], 'duration_s': VIDEO_S + 1}, *at('slowbuilding', cameras[1:])],
         },
     }
-    media = {'cameras': cameras, 'phone': f'/media/ok/{n}/phone.webm', 'rrd': f'/rrd/ok/{n}.rrd'}
+    media = {'cameras': cameras, 'phone': f'/media/ok/{n}/phone.webm', 'rrd': f'/rrd/ok/{n}.rrd', 'duration_s': VIDEO_S}
     media |= variants.get(n, {})
     return {key: value for key, value in media.items() if value is not None}
 
@@ -187,7 +194,6 @@ def inline_rows() -> dict:
                 'reliability': 50 + n % 50,
                 'pace': n / 10,
             },
-            'duration_s': VIDEO_S,
             'href': f'/episode/{n}',
             **row_media(n),
         }
@@ -310,6 +316,9 @@ def pages(release: str) -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/nulls': page_html(null_cells()),
+        '/page/dock-below': page_html(
+            inline_element('mode="full" dock dock-below="#no-such-bar" link-param="episode"')
+        ),
         '/page/bad-option': page_html(bad_option()),
         '/page/compact-link': page_html(
             f'<positronic-replay layout="compact" link-param="episode" src="{SHARE}/replay.json"></positronic-replay>'
@@ -1208,6 +1217,24 @@ class Probe:
         self.check('a camera built under a paused lead takes its time and stays paused', built and joined, times)
         page.close()
 
+    def dock_below_and_length(self):
+        print('A dock-below that matches nothing, and a row that names no length:')
+        page = self.open('/page/dock-below?episode=7', expected=('dock-below',))
+        self.until(page, "host().hasAttribute('open')", 5000)
+        for size in ((1300, 850), (1400, 900)):
+            page.set_viewport_size({'width': size[0], 'height': size[1]})
+            time.sleep(0.3)
+        errors = [text for text in self.expected_errors if 'dock-below' in text]
+        self.check('a dock-below that matches nothing logs one error', len(errors) == 1, errors)
+        page.close()
+        page = self.open('/page/dock?episode=19')
+        lengthed = self.until(page, f"Math.abs(Number(one('seek').max) - {VIDEO_S}) < 0.2", 8000)
+        clock = page.evaluate("[one('seek').max, one('clock').textContent]")
+        self.check(
+            'a row with no length takes the length of its video', lengthed and clock[1].endswith('0:10.0'), clock
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1301,6 +1328,7 @@ def main(headed: bool) -> int:
             probe.undocked_link,
             probe.list_entries_and_link_param,
             probe.take_over_and_join,
+            probe.dock_below_and_length,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,
