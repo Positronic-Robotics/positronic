@@ -13,14 +13,14 @@ from huggingface_hub import snapshot_download
 from tianshou.data import Batch
 from torch.distributed.device_mesh import init_device_mesh
 
-from .keys import ACTION_GRIP, ACTION_JOINTS
+from .keys import ACTION_GRIP, ACTION_JOINTS, ATTENTION_BACKEND_ENV, ENABLE_DIT_CACHE_ENV, TORCH_COMPILE_DISABLE_ENV
 
 
 class Policy:
     def __init__(self, model_source: str, revision: str | None):
-        os.environ['ENABLE_DIT_CACHE'] = 'true'
-        os.environ['ATTENTION_BACKEND'] = 'TE'
-        os.environ['TORCH_COMPILE_DISABLE'] = '1'
+        os.environ[ENABLE_DIT_CACHE_ENV] = 'true'
+        os.environ[ATTENTION_BACKEND_ENV] = 'TE'
+        os.environ[TORCH_COMPILE_DISABLE_ENV] = '1'
         from groot.vla.data.schema import EmbodimentTag  # noqa: PLC0415
         from groot.vla.model.n1_5.sim_policy import GrootSimPolicy  # noqa: PLC0415
 
