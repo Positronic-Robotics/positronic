@@ -52,6 +52,23 @@ function cameraNote(videos) {
   return notes.length ? notes.join(' ') : null;
 }
 
+// The playback state of a new episode: paused, at its start, at the normal rate.
+const START = Object.freeze({ playing: false, at: 0, rate: 1 });
+
+/** The longest ready camera: by the length of its video once it knows it, else by the length the row names, and
+ * on a tie by the named length, then the first. Null while no camera is ready. */
+function longestReady(cameras) {
+  const length = (camera) => (Number.isFinite(camera.video.duration) ? camera.video.duration : camera.durationS);
+  const ready = cameras.filter((camera) => camera.state === MediaState.READY);
+  return ready.reduce(
+    (best, camera) =>
+      length(camera) > length(best) || (length(camera) === length(best) && camera.durationS > best.durationS)
+        ? camera
+        : best,
+    ready[0] ?? null,
+  );
+}
+
 /** The state of `url`, from one request for its first byte, and the wait a building file asks for.
  * Null where `signal` aborts the request. */
 async function probe(url, signal) {
@@ -149,6 +166,7 @@ export class EpisodePlayer {
   #frameKeys;
   #cameraName;
   #turn = 0;
+  #playback = () => START;
   // The waits and the requests of the episode on show; `stop` and the next `show` end them.
   #timers = new Set();
   #requests = new AbortController();
@@ -168,15 +186,17 @@ export class EpisodePlayer {
     root.replaceChildren(this.#stage, this.#note, this.#summary);
   }
 
-  /** Shows `row` from `at` seconds, and plays it where `autoplay`. A row opened later stops the waits of this one. */
-  show(row, summary, { autoplay = false, at = 0 } = {}) {
+  /** Shows `row` in the `playback` state: whether it plays, from which time, at which rate. A row opened later stops
+   * the waits of this one. */
+  show(row, summary, playback = {}) {
+    const state = { ...START, ...playback };
     this.#endWaits();
     const turn = ++this.#turn;
     const wanted = () => turn === this.#turn;
     this.#summary.textContent = summary;
     this.#clearVideos();
     this.#setNote('replay', null);
-    const startVideo = this.#videoStarter(row, { autoplay, at });
+    const startVideo = this.#videoStarter(row, state);
     if (this.#full && row.rrd && !this.#narrow.matches) {
       this.#playRecording(row, startVideo, wanted);
       return;
@@ -184,6 +204,11 @@ export class EpisodePlayer {
     this.#hideFrame();
     if (startVideo) startVideo();
     else this.#setNote('replay', NOTES.none);
+  }
+
+  /** The playback state of the episode on show, which a new player for the same row takes whole. */
+  playback() {
+    return this.#playback();
   }
 
   /** Stops every video and empties the viewer. */
@@ -323,6 +348,7 @@ export class EpisodePlayer {
     this.#stage.replaceChildren();
     this.#setNote('video', null);
     this.lead = null;
+    this.#playback = () => START;
   }
 
   // A video that fails is asked for once more: a 202 means it is building, and it loads again after the wait.
@@ -345,20 +371,23 @@ export class EpisodePlayer {
     video.addEventListener('loadedmetadata', () => onState(MediaState.READY));
   }
 
-  #playPhone(row, { autoplay, at }) {
+  #playPhone(row, { playing, at, rate }) {
     const video = element('video', { part: 'phone', src: row.phone, controls: '', playsinline: '', muted: '' });
     video.muted = true;
     video.dataset.name = 'The phone video';
     startAt(video, at);
+    // A load sets the rate back to the default, so the video takes it once it knows its length.
+    video.addEventListener('loadedmetadata', () => setRate(video, rate), { once: true });
     this.#reportNativeControls(row, video);
     this.#watch(video, row.phone, (state) => {
       this.#setNote('video', cameraNote([[null, state]]));
       // A row that opened playing plays once its building video is there.
-      if (state === MediaState.READY && autoplay) start(video);
+      if (state === MediaState.READY && playing) start(video);
     });
     this.#stage.replaceChildren(video);
     this.lead = video;
-    if (autoplay) start(video);
+    this.#playback = () => ({ playing: !video.paused, at: video.currentTime, rate: video.playbackRate });
+    if (playing) start(video);
   }
 
   // The browser's own controls fire only media events. An event the element did not cause is a visitor's use; a
@@ -392,7 +421,7 @@ export class EpisodePlayer {
   }
 
   // Each camera holds its own state, and `#settle` derives from all of them which camera leads and the note.
-  #playCameras(row, { autoplay, at }) {
+  #playCameras(row, { playing, at, rate }) {
     const cameras = row.cameras.map((camera) => {
       const name = camera.label ?? this.#cameraName(camera.camera);
       const video = element('video', {
@@ -414,13 +443,11 @@ export class EpisodePlayer {
     const episode = {
       row,
       cameras,
-      // The longest camera leads where it is ready, then the next longest.
-      preferred: [...cameras].sort((a, b) => b.durationS - a.durationS),
       durationS: row.durationS ?? Math.max(...cameras.map((camera) => camera.durationS)),
       // The visitor's play state, time and rate, which a new lead takes over and every ready camera takes.
-      playing: autoplay,
+      playing,
       moment: at,
-      rate: 1,
+      rate,
       lead: null,
       detach: () => {},
     };
@@ -440,6 +467,7 @@ export class EpisodePlayer {
         cameras.map((camera) => camera.figure),
       ),
     );
+    this.#playback = () => ({ playing: episode.playing, at: episode.moment, rate: episode.rate });
     this.#settle(episode);
   }
 
@@ -452,7 +480,7 @@ export class EpisodePlayer {
       camera.caption.textContent = shown ? camera.name : `${camera.name} · ${camera.state}`;
     }
     this.#setNote('video', cameraNote(episode.cameras.map((camera) => [camera.name, camera.state])));
-    const lead = episode.preferred.find((camera) => camera.state === MediaState.READY)?.video ?? null;
+    const lead = longestReady(episode.cameras)?.video ?? null;
     if (lead !== episode.lead) this.#lead(episode, lead);
     for (const camera of episode.cameras) {
       if (camera.state === MediaState.READY) setRate(camera.video, episode.rate);

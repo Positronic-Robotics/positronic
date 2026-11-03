@@ -46,6 +46,7 @@ WAIT_MS = 20_000
 DOCK_STRIP_PX = 450
 SLOW_S = 2.0
 VIDEO_S = 10
+LONG_VIDEO_S = 15
 """The length of every fixture video, long enough to play across a width change."""
 """How long the slow manifest takes, so a newer `src` answers first."""
 STRIP_KEY = 'positronic-replay.strip'
@@ -55,6 +56,8 @@ STRIP_KEY = 'positronic-replay.strip'
 @dataclass
 class Media:
     video: bytes
+    long_video: bytes
+    """A video of `LONG_VIDEO_S`, which a path with `/long/` serves."""
     rrd: bytes
 
 
@@ -77,12 +80,12 @@ class Requests:
             return len(self.paths)
 
 
-def make_video(path: Path) -> bytes:
-    """A VP8 video of `VIDEO_S`: Chromium plays WebM without the codecs a branded browser adds."""
+def make_video(path: Path, seconds: int = VIDEO_S) -> bytes:
+    """A VP8 video of `seconds`: Chromium plays WebM without the codecs a branded browser adds."""
     with av.open(str(path), 'w', format='webm') as container:
         stream = container.add_stream('libvpx', rate=10)
         stream.width, stream.height, stream.pix_fmt = 64, 48, 'yuv420p'
-        for i in range(10 * VIDEO_S):
+        for i in range(10 * seconds):
             frame = av.VideoFrame.from_ndarray(np.full((48, 64, 3), i * 2 % 256, dtype=np.uint8), format='rgb24')
             container.mux(stream.encode(frame))
         container.mux(stream.encode())
@@ -128,7 +131,7 @@ def row_media(n: int) -> dict:
     has a phone video only, which builds, 15 loses its longest video only after a wait,
     16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there, 17 builds
     its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
-    names no length."""
+    names no length, and 20 names no length and its second camera is the longest."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -160,6 +163,15 @@ def row_media(n: int) -> dict:
         15: {'rrd': None, 'phone': None, 'cameras': lost_longest('slowgone')},
         16: {'rrd': None, 'phone': None, 'cameras': three_cameras()},
         17: {'rrd': '/rrd/building/17.rrd', 'phone': None, 'cameras': at('slowbuilding', cameras)},
+        20: {
+            'rrd': None,
+            'phone': None,
+            'duration_s': None,
+            'cameras': [
+                {key: value for key, value in camera.items() if key != 'duration_s'}
+                for camera in [cameras[0], at('long', cameras[1:])[0]]
+            ],
+        },
         19: {
             'rrd': None,
             'phone': None,
@@ -414,7 +426,7 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
             if path.endswith('.rrd'):
                 return self.media_answer(path, media.rrd, 'application/octet-stream')
             if path.endswith(('.mp4', '.webm')):
-                return self.media_answer(path, media.video, 'video/webm')
+                return self.media_answer(path, media.long_video if '/long/' in path else media.video, 'video/webm')
             requests.add(path)
             if path in fixed:
                 return self.answer(200, fixed[path].encode(), 'text/html; charset=utf-8')
@@ -1301,6 +1313,30 @@ class Probe:
         )
         page.close()
 
+    def rate_across_widths_and_real_length(self):
+        print('The speed across a width change, and the lead of a row that names no length:')
+        page = self.open('/page/dock?episode=7')
+        front = camera_named('front')
+        self.until(page, f'{front} && !{front}.paused', 8000)
+        part(page, 'speed').press('ArrowDown')
+        page.set_viewport_size({'width': 400, 'height': 800})
+        narrow = self.until(page, "one('phone') !== null && one('phone').playbackRate === 2", 5000)
+        self.check(
+            'the phone video plays at the rate the visitor chose', narrow, page.evaluate("one('phone')?.playbackRate")
+        )
+        page.set_viewport_size({'width': 1400, 'height': 900})
+        wide = self.until(page, f"{front} && {front}.playbackRate === 2 && one('speed').value === '2'", 5000)
+        self.check(
+            'the cameras and their control keep that rate',
+            wide,
+            page.evaluate(f"[{front}?.playbackRate, one('speed')?.value]"),
+        )
+        page.close()
+        page = self.open('/page/dock?episode=20')
+        longest = self.until(page, f"Math.abs(Number(one('seek').max) - {LONG_VIDEO_S}) < 0.2", 8000)
+        self.check('the longest video leads once the lengths are known', longest, page.evaluate("one('seek').max"))
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1373,7 +1409,11 @@ def main(headed: bool) -> int:
     release = rerun_release()
     requests = Requests()
     with tempfile.TemporaryDirectory() as scratch:
-        media = Media(video=make_video(Path(scratch, 'clip.webm')), rrd=make_recording(Path(scratch, 'replay.rrd')))
+        media = Media(
+            video=make_video(Path(scratch, 'clip.webm')),
+            long_video=make_video(Path(scratch, 'long.webm'), LONG_VIDEO_S),
+            rrd=make_recording(Path(scratch, 'replay.rrd')),
+        )
     server = serve(media, requests, release)
     base = f'http://127.0.0.1:{server.server_port}'
     with sync_playwright() as playwright:
@@ -1397,6 +1437,7 @@ def main(headed: bool) -> int:
             probe.dock_below_and_length,
             probe.src_removed,
             probe.rate_and_keyboard,
+            probe.rate_across_widths_and_real_length,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

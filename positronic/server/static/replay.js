@@ -401,11 +401,9 @@ export class PositronicReplay extends HTMLElement {
       frameKeys: this.#onKey,
       cameraName: this.#cameraName,
     });
-    // The other width plays the other video of the row, from the same moment and in the same state.
+    // The other width plays the other video of the row, in the whole playback state of the player.
     listen(this.#held, this.#narrow, 'change', () => {
-      if (!this.#current) return;
-      const lead = this.#player.lead;
-      this.#play(this.#current, { autoplay: lead !== null && !lead.paused, at: lead?.currentTime ?? 0 });
+      if (this.#current) this.#play(this.#current, this.#player.playback());
     });
     return player;
   }
@@ -667,7 +665,7 @@ export class PositronicReplay extends HTMLElement {
     this.#current = row;
     this.#reveal(row);
     this.#markCurrent(row);
-    this.#play(row, { autoplay: false });
+    this.#play(row, { playing: false });
     if (event?.isTrusted) {
       this.#act('open', { row: row.id, from: 'Row', ...(via && { via }) });
       setLinkParam(this.#linkParam, row.id);
@@ -771,7 +769,7 @@ export class PositronicReplay extends HTMLElement {
     const full = this.#part('full');
     full.hidden = !row.href;
     if (row.href) full.href = row.href;
-    this.#play(row, { autoplay: true });
+    this.#play(row, { playing: true });
     this.#showPosition(this.#matches());
     const dock = this.#part('dock');
     if (dock.hidden) {
@@ -1038,7 +1036,7 @@ export class PositronicReplay extends HTMLElement {
     if (event.isTrusted) this.#act('open', { row: row.id, from: via });
     this.#current = row;
     for (const [each, nodes] of this.#rows) nodes.forEach((node) => node.part.toggle('current', each === row));
-    this.#play(row, { autoplay: true });
+    this.#play(row, { playing: true });
     this.setAttribute('screen-open', '');
   }
 
