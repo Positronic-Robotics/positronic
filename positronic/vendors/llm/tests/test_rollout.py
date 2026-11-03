@@ -239,6 +239,8 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
         assert after['position_m'][0] == pytest.approx(target_x, abs=1e-7)
         assert after['gripper'] == pytest.approx(0.2)
         assert list(episode[keys.EE_POSE].values())[-1][0] == pytest.approx(target_x)
-        # The client plays the move at the local cadence, so the episode lasts as long as the local one does.
+        # The client plays the move at the local cadence. A charged run also counts the real round trips to the server.
         first, last = episode.bounds(RECEIVED_WORLD)
-        assert move_sec <= (last - first) / 1e9 <= move_sec + 0.1
+        assert move_sec <= (last - first) / 1e9
+        if not charge:
+            assert (last - first) / 1e9 <= move_sec + 0.1
