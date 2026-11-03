@@ -27,6 +27,7 @@ from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
+from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
@@ -39,7 +40,15 @@ DEFAULT_TUNING = yam.PARK_SETTLE
 MAX_STREAMED_STEP = yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S / yam._CONTROL_HZ
 OPEN, CLOSED = 0.0, 1.0
 _GRIP_TOL = 0.05
-STATION_GRAVITY_COMP = [1.0, 1.26, 1.245, 1.305, 1.405, 1.0]
+STATION_GRAVITY_COMP = [1.0, 1.113, 1.096, 1.089, 1.133, 1.0]
+STATION_EE_MASS = 0.834
+STATION_COULOMB_FRICTION = [0.0, 1.335, 1.15, 0.05, 0.07, 0.0]
+STATION_COMPENSATION = Compensation(
+    gravity_comp_factor=STATION_GRAVITY_COMP,
+    ee_mass=STATION_EE_MASS,
+    use_coulomb_friction=True,
+    coulomb_friction=STATION_COULOMB_FRICTION,
+)
 # The joint ranges of the i2rt YAM arm model, and the limits an i2rt chain reports: those ranges widened by
 # 0.15 rad (i2rt get_robot.py:196).
 I2RT_YAM_RANGES = np.array([
@@ -52,6 +61,20 @@ I2RT_YAM_RANGES = np.array([
 ])
 I2RT_YAM_LIMITS = I2RT_YAM_RANGES + np.array([-0.15, 0.15])
 I2RT_GRAVITY_COMP = [1.0, 1.1, 1.1, 1.2, 1.0, 1.0]  # i2rt's own factors for the YAM arm
+I2RT_COULOMB_FRICTION = [0.3, 0.3, 0.3, 0.06, 0.06, 0.06]  # i2rt's own Coulomb friction for the YAM arm, in Nm
+# The arm meta of a chain that runs the station's compensation, and of one that runs i2rt's own
+STATION_ARM_META = {
+    roboarm_keys.GRAVITY_COMP_FACTOR: [*STATION_GRAVITY_COMP, 1.0],
+    roboarm_keys.EE_MASS: STATION_EE_MASS,
+    roboarm_keys.USE_COULOMB_FRICTION: True,
+    roboarm_keys.COULOMB_FRICTION: [*STATION_COULOMB_FRICTION, 0.0],
+}
+I2RT_ARM_META = {
+    roboarm_keys.GRAVITY_COMP_FACTOR: [*I2RT_GRAVITY_COMP, 1.0],
+    roboarm_keys.EE_MASS: None,
+    roboarm_keys.USE_COULOMB_FRICTION: False,
+    roboarm_keys.COULOMB_FRICTION: [*I2RT_COULOMB_FRICTION, 0.0],
+}
 
 
 class FakeYam(yam._FakeYam):
@@ -144,7 +167,14 @@ class Watched:
 
 
 class Rig:
-    def __init__(self, park_tuning=DEFAULT_TUNING, move_tuning=yam.MOVE_SETTLE, watch=None, park_after_idle_s=1.0):
+    def __init__(
+        self,
+        park_tuning=DEFAULT_TUNING,
+        move_tuning=yam.MOVE_SETTLE,
+        watch=None,
+        park_after_idle_s=1.0,
+        compensation=I2RT_COMPENSATION,
+    ):
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
@@ -161,7 +191,8 @@ class Rig:
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
         self.driver = yam.Robot(
-            connect=lambda channel, sim, gravity_comp_factor: ports['vendor'],
+            connect=lambda channel, sim, compensation: ports['vendor'],
+            compensation=compensation,
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
@@ -913,7 +944,7 @@ def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
 
 def test_world_exit_parks_a_foreground_yam_before_closing():
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, compensation: vendor)
     with pimm.World(virtual_time=True) as world:
         loop = world.start(driver)
         for _ in range(150):
@@ -925,7 +956,7 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
 
 def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it(monkeypatch):
     vendor = FakeYam()
-    driver = yam.Robot(connect=lambda channel, sim, gravity_comp_factor: vendor)
+    driver = yam.Robot(connect=lambda channel, sim, compensation: vendor)
     fk = yam._Kinematics.fk
     armed = []
 
@@ -1221,7 +1252,7 @@ def test_commands_do_not_interrupt_shutdown_parking(world, rig):
 def test_unstarted_foreground_yam_does_not_connect_on_world_exit():
     connections = []
 
-    def connect(channel, sim, gravity_comp_factor):
+    def connect(channel, sim, compensation):
         vendor = FakeYam()
         connections.append(vendor)
         return vendor
@@ -1346,7 +1377,7 @@ def _lose_the_chain(rig: Rig) -> FakeYam:
     chain.get_observations = read_once_failing
     rig.tick(10)
     reopened = FakeYam()
-    rig.driver._connect = lambda channel, sim, gravity_comp_factor: reopened
+    rig.driver._connect = lambda channel, sim, compensation: reopened
     return reopened
 
 
@@ -1483,7 +1514,7 @@ def test_a_ready_call_whose_chain_does_not_open_answers_its_error_and_the_next_o
     _lose_the_chain(rig)
     reopened = FakeYam()
 
-    def refuse(channel, sim, gravity_comp_factor):
+    def refuse(channel, sim, compensation):
         raise OSError('CAN interface can0 is down')
 
     rig.driver._connect = refuse
@@ -1497,7 +1528,7 @@ def test_a_ready_call_whose_chain_does_not_open_answers_its_error_and_the_next_o
     assert isinstance(answered.value.__cause__, yam.ChainFault)
     assert isinstance(_last(rig.states), pimm.SignalError)
 
-    rig.driver._connect = lambda channel, sim, gravity_comp_factor: reopened
+    rig.driver._connect = lambda channel, sim, compensation: reopened
     second = ready(None)
     rig.tick(5)
     assert second.result() is None
@@ -1507,7 +1538,7 @@ def test_a_ready_call_whose_reopened_arm_misses_its_start_pose_answers_the_miss(
     _lose_the_chain(rig)
     reopened = FakeYam()
     reopened.stuck = True
-    rig.driver._connect = lambda channel, sim, gravity_comp_factor: reopened
+    rig.driver._connect = lambda channel, sim, compensation: reopened
     answer = _readier(world, rig)(None)
     _until_answered(rig, answer, within_s=120)
 
@@ -1522,7 +1553,7 @@ def test_a_chain_that_does_not_open_at_start_holds_an_error_until_a_ready_call_o
     reopened = FakeYam()
     attempts = []
 
-    def connect(channel, sim, gravity_comp_factor):
+    def connect(channel, sim, compensation):
         attempts.append(channel)
         if len(attempts) == 1:
             raise OSError('CAN interface can0 is down')
@@ -1775,17 +1806,26 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     assert 'Publishing the arm state failed during shutdown' in caplog.text
 
 
+def _i2rt_chain(gravity_comp_factor, use_coulomb_friction) -> yam._FakeYam:
+    """A fake chain that i2rt opens with these arguments. As i2rt does, it reports the gravity compensation that the
+    driver passed, or i2rt's own if the driver passed none, and 1.0 for the gripper motor. It takes the friction flag
+    with i2rt's own friction values."""
+    chain = yam._FakeYam()
+    arm = I2RT_GRAVITY_COMP if gravity_comp_factor is None else gravity_comp_factor
+    chain.gravity_comp_factor = np.append(arm, 1.0)
+    chain.use_coulomb_friction = use_coulomb_friction
+    chain._coulomb_friction = np.append(I2RT_COULOMB_FRICTION, 0.0)
+    return chain
+
+
 @pytest.fixture
 def chains(monkeypatch) -> dict[str, yam._FakeYam]:
-    """The fake chain each driver opens, keyed by its CAN channel. As i2rt does, it reports the gravity compensation
-    that the driver passed, or i2rt's own if the driver passed none, and 1.0 for the gripper motor."""
+    """The fake chain that i2rt opens for each driver, keyed by its CAN channel."""
     opened: dict[str, yam._FakeYam] = {}
 
-    def get_yam_robot(channel, gravity_comp_factor, **_):
-        chain = opened.setdefault(channel, yam._FakeYam())
-        arm = I2RT_GRAVITY_COMP if gravity_comp_factor is None else gravity_comp_factor
-        chain.gravity_comp_factor = np.append(arm, 1.0)
-        return chain
+    def get_yam_robot(channel, gravity_comp_factor, use_coulomb_friction, **_):
+        opened[channel] = _i2rt_chain(gravity_comp_factor, use_coulomb_friction)
+        return opened[channel]
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     return opened
@@ -1883,29 +1923,28 @@ def _record_an_episode(rig: Embodiment, root: Path) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    'rig, recorded',
+    'rig, signals, arm_meta',
     [
         (
             embodiment_cfg.yam_bimanual_yambox.override(cameras={}),
-            {
-                f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}': [*STATION_GRAVITY_COMP, 1.0]
-                for side in keys.BIMANUAL_ARMS
-            },
+            [f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in keys.BIMANUAL_ARMS],
+            STATION_ARM_META,
         ),
-        (embodiment_cfg.yam, {keys.JOINTS: [*I2RT_GRAVITY_COMP, 1.0]}),
+        (embodiment_cfg.yam, [keys.JOINTS], I2RT_ARM_META),
     ],
     ids=['yambox', 'one-arm'],
 )
-def test_an_episode_records_the_gravity_compensation_that_each_chain_runs(chains, tmp_path, rig, recorded):
-    assert _record_an_episode(rig.instantiate(), tmp_path)[roboarm_keys.GRAVITY_COMP_FACTOR] == recorded
+def test_an_episode_records_the_compensation_that_each_chain_runs(chains, tmp_path, rig, signals, arm_meta):
+    static = _record_an_episode(rig.instantiate(), tmp_path)
+    assert {key: static[key] for key in arm_meta} == {key: dict.fromkeys(signals, v) for key, v in arm_meta.items()}
 
 
 def _opened_with(**kwargs) -> dict:
     """Start a ``Robot`` built with ``kwargs`` and return what it asked its vendor factory for."""
     seen = {}
 
-    def connect(channel, sim, gravity_comp_factor):
-        seen.update(channel=channel, sim=sim, gravity_comp_factor=gravity_comp_factor)
+    def connect(channel, sim, compensation):
+        seen.update(channel=channel, sim=sim, compensation=compensation)
         return yam._FakeYam()
 
     robot = yam.Robot('can0', connect=connect, **kwargs)
@@ -1915,31 +1954,95 @@ def _opened_with(**kwargs) -> dict:
     return seen
 
 
-def test_a_station_hands_its_gravity_compensation_to_the_chain():
+def test_the_driver_hands_its_compensation_to_the_chain_factory():
+    assert _opened_with(compensation=STATION_COMPENSATION)['compensation'] is STATION_COMPENSATION
+
+
+def test_a_driver_given_no_compensation_asks_for_the_compensation_of_i2rt():
+    assert _opened_with()['compensation'] is I2RT_COMPENSATION
+
+
+def _connected(monkeypatch, compensation: Compensation) -> tuple[dict[str, Any], yam._FakeYam]:
+    """Open a hardware chain through the factory of the driver. Return what it asked i2rt for, and the chain."""
+    asked = {}
+
+    def get_yam_robot(channel, **kwargs):
+        asked.update(kwargs)
+        return _i2rt_chain(kwargs['gravity_comp_factor'], kwargs['use_coulomb_friction'])
+
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
+    return asked, yam._connect('can0', False, compensation)
+
+
+def test_a_station_hands_its_gravity_model_to_i2rt(monkeypatch):
     """i2rt holds a joint against a gravity model of its own, and a joint that model reads short settles below
-    where it is sent. The factors a station measured are no use to it unless the driver passes them on."""
-    passed = _opened_with(gravity_comp_factor=STATION_GRAVITY_COMP)['gravity_comp_factor']
-    np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+    where it is sent. The factors and the mass a station measured are no use to it unless the driver passes them."""
+    asked, _ = _connected(monkeypatch, STATION_COMPENSATION)
+    np.testing.assert_array_equal(asked['gravity_comp_factor'], STATION_GRAVITY_COMP)
+    assert asked['ee_mass'] == STATION_EE_MASS
 
 
-def test_the_arm_meta_carries_the_gravity_compensation_that_the_chain_reports(rig):
-    rig.vendor.gravity_comp_factor = np.array([*STATION_GRAVITY_COMP, 1.0])
-    rig.ready()
-    assert _last(rig.arm_metas) == {roboarm_keys.GRAVITY_COMP_FACTOR: [*STATION_GRAVITY_COMP, 1.0]}
-
-
-def test_a_station_that_measured_none_leaves_the_vendor_its_own():
-    """Every YAM shares i2rt's factors until a station measures better ones; naming none has to mean that,
+def test_a_compensation_that_names_nothing_leaves_i2rt_its_own(monkeypatch):
+    """Every YAM shares i2rt's model until a station measures a better one; naming none has to mean that,
     rather than a vector of ones that would turn the compensation off."""
-    assert _opened_with()['gravity_comp_factor'] is None
+    asked, chain = _connected(monkeypatch, I2RT_COMPENSATION)
+    assert asked['gravity_comp_factor'] is None and asked['ee_mass'] is None
+    assert not chain.use_coulomb_friction
+    np.testing.assert_array_equal(chain._coulomb_friction, [*I2RT_COULOMB_FRICTION, 0.0])
 
 
-def _gravity_by_channel(monkeypatch, rig) -> dict:
-    """Start a bimanual ``rig`` and return the gravity compensation each CAN channel asked i2rt for."""
-    factors = {}
+def test_a_station_runs_its_own_coulomb_friction_from_the_start(monkeypatch):
+    """i2rt takes the friction flag but reads the values from its arm config. A chain that opened with the flag on
+    would run those values until the driver set the station's."""
+    asked, chain = _connected(monkeypatch, STATION_COMPENSATION)
+    assert asked['use_coulomb_friction'] is False
+    assert chain.use_coulomb_friction
+    np.testing.assert_array_equal(chain._coulomb_friction, [*STATION_COULOMB_FRICTION, 0.0])
 
-    def get_yam_robot(channel, gravity_comp_factor, **_):
-        factors[channel] = gravity_comp_factor
+
+def test_coulomb_friction_with_no_values_runs_the_values_of_i2rt(monkeypatch):
+    _, chain = _connected(monkeypatch, Compensation(use_coulomb_friction=True))
+    assert chain.use_coulomb_friction
+    np.testing.assert_array_equal(chain._coulomb_friction, [*I2RT_COULOMB_FRICTION, 0.0])
+
+
+def test_coulomb_friction_with_a_value_for_the_gripper_motor_is_refused(monkeypatch):
+    with pytest.raises(ValueError, match='one value per arm joint'):
+        _connected(monkeypatch, Compensation(coulomb_friction=[*STATION_COULOMB_FRICTION, 0.0]))
+
+
+def test_the_sim_chain_gets_no_friction(monkeypatch):
+    """i2rt's sim chain runs no friction and has no friction values to set."""
+    sim_chain = types.SimpleNamespace()
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: sim_chain)
+    assert yam._connect('can0', True, STATION_COMPENSATION) is sim_chain
+    assert vars(sim_chain) == {}
+
+
+def test_the_arm_meta_carries_the_compensation_that_the_chain_reports_and_the_mass_it_was_given():
+    rig = Rig(compensation=Compensation(ee_mass=STATION_EE_MASS))
+    rig.vendor.gravity_comp_factor = np.array([*STATION_GRAVITY_COMP, 1.0])
+    rig.vendor.use_coulomb_friction = True
+    rig.vendor._coulomb_friction = np.array([*STATION_COULOMB_FRICTION, 0.0])
+    rig.ready()
+    assert _last(rig.arm_metas) == STATION_ARM_META
+
+
+def test_the_arm_meta_of_the_sim_chain_carries_no_friction(rig, monkeypatch):
+    """i2rt's sim chain runs no friction, and its report names none."""
+    reported = rig.vendor.get_robot_info()
+    del reported[yam._USE_COULOMB_FRICTION], reported[yam._COULOMB_FRICTION]
+    monkeypatch.setattr(rig.vendor, 'get_robot_info', lambda: reported)
+    rig.ready()
+    assert _last(rig.arm_metas) == {roboarm_keys.GRAVITY_COMP_FACTOR: [1.0] * 7, roboarm_keys.EE_MASS: None}
+
+
+def _asked_by_channel(monkeypatch, rig) -> dict[str, dict[str, Any]]:
+    """Start a bimanual ``rig`` and return what each CAN channel asked i2rt for."""
+    asked = {}
+
+    def get_yam_robot(channel, **kwargs):
+        asked[channel] = kwargs
         return yam._FakeYam()
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
@@ -1947,35 +2050,41 @@ def _gravity_by_channel(monkeypatch, rig) -> dict:
         loop = world.start(
             list(rig.override(cameras={}, video_encoder=video_encoder.libx264_veryfast).instantiate().control_systems)
         )
-        _run_until(loop, lambda: len(factors) == 2)
-    return factors
+        _run_until(loop, lambda: len(asked) == 2)
+    return asked
 
 
-def test_the_yambox_station_hands_its_gravity_compensation_to_both_chains(monkeypatch):
-    for passed in _gravity_by_channel(monkeypatch, embodiment_cfg.yam_bimanual_yambox).values():
-        np.testing.assert_array_equal(passed, STATION_GRAVITY_COMP)
+def test_the_yambox_station_hands_its_gravity_model_to_both_chains(monkeypatch):
+    for asked in _asked_by_channel(monkeypatch, embodiment_cfg.yam_bimanual_yambox).values():
+        np.testing.assert_array_equal(asked['gravity_comp_factor'], STATION_GRAVITY_COMP)
+        assert asked['ee_mass'] == STATION_EE_MASS
 
 
-def test_each_bimanual_chain_gets_the_gravity_compensation_of_its_own_arm(monkeypatch):
+def test_each_bimanual_chain_gets_the_compensation_of_its_own_arm(monkeypatch):
     left_channel, right_channel = 'can-left', 'can-right'
     left, right = [1.0, 1.1, 1.4, 1.4, 1.0, 1.0], [1.0, 1.2, 1.3, 1.5, 1.0, 1.0]
     rig = embodiment_cfg.yam_bimanual_yambox.override(
         left_channel=left_channel,
         right_channel=right_channel,
-        gravity_comp_factor={keys.LEFT_ARM: left, keys.RIGHT_ARM: right},
+        compensation={
+            keys.LEFT_ARM: roboarm_cfg.yam_compensation.override(gravity_comp_factor=left, ee_mass=0.7),
+            keys.RIGHT_ARM: roboarm_cfg.yam_compensation.override(gravity_comp_factor=right, ee_mass=0.9),
+        },
     )
-    factors = _gravity_by_channel(monkeypatch, rig)
-    np.testing.assert_array_equal(factors[left_channel], left)
-    np.testing.assert_array_equal(factors[right_channel], right)
+    asked = _asked_by_channel(monkeypatch, rig)
+    np.testing.assert_array_equal(asked[left_channel]['gravity_comp_factor'], left)
+    np.testing.assert_array_equal(asked[right_channel]['gravity_comp_factor'], right)
+    assert (asked[left_channel]['ee_mass'], asked[right_channel]['ee_mass']) == (0.7, 0.9)
 
 
 def test_the_yam_package_hands_out_the_driver():
     assert yam_package.Robot is yam.Robot
 
 
-def test_the_settle_tuning_imports_without_the_driver():
+@pytest.mark.parametrize('module', ['settle', 'compensation'])
+def test_the_settings_of_the_configs_import_without_the_driver(module):
     loaded = subprocess.run(
-        [sys.executable, '-c', 'import sys, positronic.drivers.roboarm.yam.settle; print(sorted(sys.modules))'],
+        [sys.executable, '-c', f'import sys, positronic.drivers.roboarm.yam.{module}; print(sorted(sys.modules))'],
         capture_output=True,
         text=True,
         check=True,

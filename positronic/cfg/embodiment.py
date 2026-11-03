@@ -13,6 +13,7 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
 if TYPE_CHECKING:
+    from positronic.drivers.roboarm.yam.compensation import Compensation
     from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 
@@ -103,7 +104,10 @@ def yam(robot_arm, cameras, video_encoder):
     # World-frame arm-base mount positions of the sim scene the training data uses: tabletop z=0.30 plus the
     # 0.011 base plate, arms at (0.30, ±0.305) facing +x.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.311], keys.RIGHT_ARM: [0.30, -0.305, 0.311]},
-    gravity_comp_factor=None,
+    compensation={
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
+    },
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
@@ -115,7 +119,7 @@ def yam_bimanual(
     left_channel: str,
     right_channel: str,
     mounts: dict[str, list[float]],
-    gravity_comp_factor: dict[str, list[float]] | None,
+    compensation: dict[str, 'Compensation'],
     cameras,
     video_encoder,
     park_after_idle_s: float | None,
@@ -128,8 +132,8 @@ def yam_bimanual(
     ``robot_state.{side}.q/.dq/.ee_pose`` on record and commands are ``robot_command.{side}`` +
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
-    signal that drives it. ``gravity_comp_factor[side]`` is that arm's i2rt gravity compensation; None keeps
-    i2rt's own factors on both arms. Each arm's meta carries the factors its chain reports.
+    signal that drives it. ``compensation[side]`` is the gravity model and the friction that i2rt adds to the PD of
+    that arm. Each arm's meta carries the settings that its chain reports.
     """
     from positronic import geom
     from positronic.drivers.roboarm.yam import driver as yam_driver
@@ -138,7 +142,7 @@ def yam_bimanual(
         side: yam_driver.Robot(
             channel,
             base_pose=geom.Transform3D(mounts[side]),
-            gravity_comp_factor=None if gravity_comp_factor is None else gravity_comp_factor[side],
+            compensation=compensation[side],
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning[side],
             move_tuning=move_tuning[side],
@@ -194,8 +198,18 @@ yam_bimanual_yambox = yam_bimanual.override(
     # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
     # The sim scene's plate is 0.011, so only z differs from the default.
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.322], keys.RIGHT_ARM: [0.30, -0.305, 0.322]},
-    # Fitted on this station to the rest error of recorded holds at working poses: the mean of the two arms' fits.
-    gravity_comp_factor=dict.fromkeys(keys.BIMANUAL_ARMS, [1.0, 1.26, 1.245, 1.305, 1.405, 1.0]),
+    # A fit to live data on this station gives these values. It fits the gravity factors and the mass of the end
+    # effector together. The friction of joint 2 is 80% of its fitted moving friction, 1.669 Nm. The friction of
+    # joints 3, 4 and 5 is below the lowest static friction measured on each joint: above it, the joint moves at rest.
+    compensation=dict.fromkeys(
+        keys.BIMANUAL_ARMS,
+        positronic.cfg.hardware.roboarm.yam_compensation.override(
+            gravity_comp_factor=[1.0, 1.113, 1.096, 1.089, 1.133, 1.0],
+            ee_mass=0.834,
+            use_coulomb_friction=True,
+            coulomb_friction=[0.0, 1.335, 1.15, 0.05, 0.07, 0.0],
+        ),
+    ),
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
