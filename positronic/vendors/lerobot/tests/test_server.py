@@ -1,4 +1,6 @@
 import threading
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -15,6 +17,8 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.utils.constants import ACTION as LEROBOT_ACTION
+from lerobot.utils.constants import OBS_ENV_STATE, OBS_STATE
 
 from positronic import keys
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -69,7 +73,6 @@ def test_warmup_observation_matches_the_features_the_policy_declares():
     assert obs[TASK_FIELD] == ''
 
 
-_STATE, _ENV = 'observation.state', 'observation.environment_state'
 _CHUNK = 4
 
 
@@ -78,10 +81,10 @@ def act_checkpoint(tmp_path_factory) -> Path:
     """A small random ACT checkpoint that plays each chunk of ``_CHUNK`` actions one call at a time."""
     config = ACTConfig(
         input_features={
-            _STATE: PolicyFeature(type=FeatureType.STATE, shape=(3,)),
-            _ENV: PolicyFeature(type=FeatureType.ENV, shape=(3,)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(3,)),
+            OBS_ENV_STATE: PolicyFeature(type=FeatureType.ENV, shape=(3,)),
         },
-        output_features={'action': PolicyFeature(type=FeatureType.ACTION, shape=(2,))},
+        output_features={LEROBOT_ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(2,))},
         chunk_size=_CHUNK,
         n_action_steps=_CHUNK,
         dim_model=16,
@@ -107,7 +110,7 @@ def act_model(act_checkpoint) -> LerobotModel:
 
 
 def _obs(value: float) -> dict:
-    return {_STATE: np.full(3, value, np.float32), _ENV: np.zeros(3, np.float32), TASK_FIELD: ''}
+    return {OBS_STATE: np.full(3, value, np.float32), OBS_ENV_STATE: np.zeros(3, np.float32), TASK_FIELD: ''}
 
 
 def _played(model: LerobotModel, obs: dict, session_id: str, calls: int) -> list[np.ndarray]:
@@ -135,10 +138,10 @@ def test_overlapping_sessions_each_play_their_own_action_chunk(act_model):
     np.testing.assert_allclose(played_b, expected_b)
 
 
-def test_the_server_answers_overlapping_sessions_each_from_its_own_chunk(act_model):
-    a, b = _obs(1.0), _obs(-1.0)
-    expected_a, expected_b = _alone(act_model, a, _CHUNK), _alone(act_model, b, _CHUNK)
-    policy_server = PolicyServer(lambda: act_model, PolicyDeployment(ChunkedSchedule(fps=15)))
+@contextmanager
+def _serving(model: LerobotModel) -> Iterator[InferenceClient]:
+    """A client of ``model`` served over the WebSocket wire. The server stops when the block ends."""
+    policy_server = PolicyServer(lambda: model, PolicyDeployment(ChunkedSchedule(fps=15)))
     wires = [websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))]
     ready = threading.Event()
     thread = threading.Thread(target=policy_server.serve, args=(wires, ready.set), daemon=True)
@@ -147,21 +150,27 @@ def test_the_server_answers_overlapping_sessions_each_from_its_own_chunk(act_mod
         assert ready.wait(timeout=30)
         served = wires[0].served_address
         assert isinstance(served, server_wire.ServedHostPort)
-        address = wire.HostPortAddress('127.0.0.1', served.port, wire.SESSION_PATH, '')
-        client = InferenceClient(websocket.WebsocketClientWire(), address)
-        session_a, session_b = client.new_session(), client.new_session()
-        try:
-            played_a, played_b = [], []
-            for _ in range(_CHUNK):
-                played_a.append(session_a.infer(a)[0][ACTION])
-                played_b.append(session_b.infer(b)[0][ACTION])
-        finally:
-            session_a.close()
-            session_b.close()
+        yield InferenceClient(
+            websocket.WebsocketClientWire(), wire.HostPortAddress('127.0.0.1', served.port, wire.SESSION_PATH, '')
+        )
     finally:
         policy_server.shutdown()
         thread.join(timeout=30)
         assert not thread.is_alive()
+
+
+def test_the_server_answers_overlapping_sessions_each_from_its_own_chunk(act_model):
+    a, b = _obs(1.0), _obs(-1.0)
+    expected_a, expected_b = _alone(act_model, a, _CHUNK), _alone(act_model, b, _CHUNK)
+    with (
+        _serving(act_model) as client,
+        closing(client.new_session()) as session_a,
+        closing(client.new_session()) as session_b,
+    ):
+        played_a, played_b = [], []
+        for _ in range(_CHUNK):
+            played_a.append(session_a.infer(a)[0][ACTION])
+            played_b.append(session_b.infer(b)[0][ACTION])
 
     np.testing.assert_allclose(played_a, expected_a)
     np.testing.assert_allclose(played_b, expected_b)
