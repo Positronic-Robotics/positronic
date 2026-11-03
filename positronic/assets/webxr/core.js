@@ -1,12 +1,8 @@
 // Shared WebXR bootstrap and WebSocket utilities for the headset and phone frontends
 // Provides XR setup, session lifecycle, render loop, and message sending.
 
+import { SESSION_MODE } from '/session-mode.js';
 import { WebXRButton } from '/webxr-button.js';
-
-// The `mode` query of the page URL. `PHONE_TELEOP_QUERY` and `VR_QUERY` in `positronic/drivers/webxr.py` write it.
-export const PAGE_MODE = new URLSearchParams(window.location.search).get('mode');
-export const TELEOP_MODE = 'teleop';
-export const VR_MODE = 'vr';
 
 export function initWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -22,7 +18,6 @@ export function sendControllers(ws, controllers) {
 }
 
 export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
-  const sessionMode = PAGE_MODE === VR_MODE ? 'immersive-vr' : 'immersive-ar';
   let xrButton = null;
   let xrRefSpace = null;
   let scene = null, camera = null, renderer = null, gl = null;
@@ -52,7 +47,7 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
     if (domOverlayRoot) {
       sessionInit.domOverlay = { root: domOverlayRoot };
     }
-    return navigator.xr.requestSession(sessionMode, sessionInit).then((session) => {
+    return navigator.xr.requestSession(SESSION_MODE, sessionInit).then((session) => {
       xrButton.setSession(session);
       onSessionStarted(session);
     });
@@ -106,7 +101,7 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
   xrButton = new WebXRButton({ onRequestSession, onEndSession: (s) => s.end() });
   document.querySelector('header')?.appendChild(xrButton.domElement);
   if (navigator.xr) {
-    navigator.xr.isSessionSupported(sessionMode).then((supported) => {
+    navigator.xr.isSessionSupported(SESSION_MODE).then((supported) => {
       xrButton.enabled = supported;
     });
   }

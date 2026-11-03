@@ -87,7 +87,7 @@
     </div>
 
     <script type="module">
-      import { initWebSocket, PAGE_MODE, startXRApp, TELEOP_MODE } from '/core.js';
+      import { initWebSocket, startXRApp } from '/core.js';
 
       let websocket = null;
 
@@ -95,7 +95,7 @@
       const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
       // `?mode=teleop` labels the buttons for `positronic teleop`. Every button then sends its value only while it is
       // touched.
-      const TELEOP = PAGE_MODE === TELEOP_MODE;
+      const TELEOP = new URLSearchParams(window.location.search).get('mode') === 'teleop';
       const buttons = new Array(8).fill(0.0);
 
       // Gripper slider state

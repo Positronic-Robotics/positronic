@@ -37,7 +37,7 @@ The plain form of the policy works too:
 | iPhone | XR Browser | `--webxr=@positronic.cfg.webxr.iphone_teleop` (http) | `http://<laptop>:5005/?mode=teleop` |
 | Android phone | Chrome | `--webxr=@positronic.cfg.webxr.android_teleop` (https) | `https://<laptop>:5005/?mode=teleop` |
 | Meta Quest | Oculus Browser | `--webxr=@positronic.cfg.webxr.oculus` (https, the default) | `https://<laptop>:5005/` |
-| PlayStation VR2 | Chrome on the PC | `--webxr=@positronic.cfg.webxr.psvr2` (https) | `https://localhost:5005/?mode=vr` |
+| PlayStation VR2 | Chrome on the PC | `--webxr=@positronic.cfg.webxr.psvr2` (https) | `https://localhost:5005/` |
 
 The PlayStation VR2 has no browser of its own. It connects to a PC through the PC adapter and SteamVR, and Chrome on
 that PC opens the page. The address above is for a service that runs on the same PC; on another machine, use its

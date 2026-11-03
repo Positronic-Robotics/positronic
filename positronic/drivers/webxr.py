@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import logging
 import os
 import subprocess
@@ -13,7 +14,7 @@ import numpy as np
 import turbojpeg
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 import pimm
 from positronic import geom, utils
@@ -99,6 +100,10 @@ def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray, quality: int) 
     return base64.b64encode(buffer).decode('utf-8')
 
 
+# The query that shows the phone page with the labels of ``positronic teleop``.
+PHONE_TELEOP_QUERY = 'mode=teleop'
+
+
 class Frontend(StrEnum):
     """The page that ``WebXR`` serves."""
 
@@ -107,18 +112,17 @@ class Frontend(StrEnum):
     # The phone page with the labels of ``positronic teleop``.
     IPHONE_TELEOP = 'iphone_teleop'
 
+    @property
+    def url_query(self) -> str:
+        """The query of the page URL, empty when the page has none."""
+        return PHONE_TELEOP_QUERY if self is Frontend.IPHONE_TELEOP else ''
+
 
 class SessionMode(StrEnum):
-    """The WebXR session that the headset page requests."""
+    """The WebXR session that the page requests."""
 
     AR = 'immersive-ar'
     VR = 'immersive-vr'
-
-
-# The query that shows the phone page with the labels of ``positronic teleop``.
-PHONE_TELEOP_QUERY = 'mode=teleop'
-# The query that makes the headset page request ``SessionMode.VR``.
-VR_QUERY = 'mode=vr'
 
 
 def _build_access_url(host: str, port: int, use_https: bool) -> str:
@@ -140,19 +144,19 @@ class WebXR(pimm.ControlSystem):
     - If HTTPS is required, provide a cert trusted by the device.
 
     Endpoints
-    - `/`                -> selected frontend; it redirects to `/?mode=teleop` for phone teleop, to `/?mode=vr`
-                            for a VR session, and to `/` for any other `mode` query
+    - `/`                -> selected frontend; it redirects to `/?mode=teleop` for phone teleop, and to `/` for
+                            any other query
     - `/state`           -> the last `page_state` value as JSON
     - `/ws`              -> JSON controller stream from client to server
     - `/video`           -> optional base64 JPEG frames (server to client)
-    - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`
+    - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`, `/session-mode.js`
     - Headset-only: `/video-player.js`
 
     Parameters
     - port: TCP port to bind.
     - ssl_keyfile, ssl_certfile: TLS files if `use_https=True`.
     - frontend: the page to serve, a ``Frontend``.
-    - session_mode: the WebXR session that the headset page requests, a ``SessionMode``.
+    - session_mode: the WebXR session that the page requests, a ``SessionMode``.
     - use_https: enable HTTPS; set False for iPhone dev.
     - jpeg_quality: the JPEG quality of the video stream.
     """
@@ -195,22 +199,14 @@ class WebXR(pimm.ControlSystem):
             return None
         return msg
 
-    def _page_query(self) -> str | None:
-        """The query that the page needs in its URL, or ``None``."""
-        if self.frontend is Frontend.IPHONE_TELEOP:
-            return PHONE_TELEOP_QUERY
-        if self.session_mode is SessionMode.VR:
-            return VR_QUERY
-        return None
-
     def _add_page_routes(self, app: FastAPI) -> None:
         """The page and its scripts, from the package assets."""
 
         @app.get('/')
         async def root(request: Request):
-            query = self._page_query()
-            if request.url.query != (query or ''):
-                return RedirectResponse('/' if query is None else f'/?{query}')
+            query = self.frontend.url_query
+            if request.url.query != query:
+                return RedirectResponse(f'/?{query}' if query else '/')
             if self.frontend is Frontend.HEADSET:
                 return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
             return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
@@ -231,6 +227,12 @@ class WebXR(pimm.ControlSystem):
         @app.get('/core.js')
         async def webxr_core():
             return FileResponse(utils.package_assets_path('assets/webxr/core.js'))
+
+        @app.get('/session-mode.js')
+        async def session_mode():
+            return Response(
+                f'export const SESSION_MODE = {json.dumps(self.session_mode.value)};\n', media_type='text/javascript'
+            )
 
         if self.frontend is Frontend.HEADSET:
 
@@ -322,9 +324,8 @@ class WebXR(pimm.ControlSystem):
 
         primary_host = utils.resolve_host_ip()
         url = _build_access_url(primary_host, self.port, self.use_https)
-        query = self._page_query()
-        if query is not None:
-            url += f'?{query}'
+        if self.frontend.url_query:
+            url += f'?{self.frontend.url_query}'
         banner = '=' * 80
         print(banner)
         print(f' >>> WEBXR interface available at: {url} <<<')

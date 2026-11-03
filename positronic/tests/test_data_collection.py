@@ -18,6 +18,7 @@ import turbojpeg
 
 import pimm
 from positronic import data_collection, keys, utils, wire
+from positronic.cfg import webxr as cfg_webxr
 from positronic.data_collection import DataCollectionController, OperatorPosition, controller_positions_serializer
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
@@ -394,33 +395,27 @@ def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
         bare = httpx.get(base + '/', timeout=1.0)
         assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
         page = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
-        assert page.status_code == 200 and 'const TELEOP = PAGE_MODE === TELEOP_MODE;' in page.text
-        core = httpx.get(base + '/core.js', timeout=1.0).text
-        assert f"TELEOP_MODE = '{webxr.PHONE_TELEOP_QUERY.removeprefix('mode=')}'" in core
+        assert page.status_code == 200 and "get('mode') === 'teleop'" in page.text
         assert 'id="phase"' in page.text and "STATE_ROUTE = '/state'" in page.text and 'btn--control-on' in page.text
         assert 'PHASES_THAT_OPEN_THE_GRIP = [PHASE.readyWait, PHASE.ended]' in page.text and 'setGrip(0.0)' in page.text
 
 
-def test_the_headset_page_for_vr_requests_an_immersive_vr_session():
-    served = WebXR(port=free_port(), session_mode=SessionMode.VR, use_https=False)
+@pytest.mark.parametrize(('preset', 'session'), [(cfg_webxr.oculus, 'immersive-ar'), (cfg_webxr.psvr2, 'immersive-vr')])
+def test_the_headset_page_requests_the_session_of_its_preset(preset, session):
+    served = preset.override(port=free_port(), use_https=False).instantiate()
     with _served_webxr(webxr=served) as base:
-        bare = httpx.get(base + '/', timeout=1.0)
-        assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.VR_QUERY}'
-        page = httpx.get(f'{base}/?{webxr.VR_QUERY}', timeout=1.0)
-        assert page.status_code == 200 and "from '/core.js'" in page.text
-        core = httpx.get(base + '/core.js', timeout=1.0).text
-        assert f"VR_MODE = '{webxr.VR_QUERY.removeprefix('mode=')}'" in core
-        assert "PAGE_MODE === VR_MODE ? 'immersive-vr' : 'immersive-ar'" in core
-
-
-def test_the_headset_page_for_ar_opens_with_no_query():
-    with _served_webxr() as base:
         assert httpx.get(base + '/', timeout=1.0).status_code == 200
+        script = httpx.get(base + '/session-mode.js', timeout=1.0)
+        assert script.headers['content-type'].startswith('text/javascript')
+        assert script.text == f'export const SESSION_MODE = "{session}";\n'
+        core = httpx.get(base + '/core.js', timeout=1.0).text
+        assert "import { SESSION_MODE } from '/session-mode.js';" in core
+        assert 'requestSession(SESSION_MODE,' in core and 'isSessionSupported(SESSION_MODE)' in core
 
 
-def test_the_headset_page_for_ar_drops_the_vr_query():
+def test_the_headset_page_drops_a_query():
     with _served_webxr() as base:
-        stale = httpx.get(f'{base}/?{webxr.VR_QUERY}', timeout=1.0)
+        stale = httpx.get(f'{base}/?mode=vr', timeout=1.0)
         assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
