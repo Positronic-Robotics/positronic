@@ -10,6 +10,8 @@ const PLAY_LABEL = 'Play';
 const PAUSE_LABEL = 'Pause';
 // The wait before the next request for a file that is building, where the server names none.
 const DEFAULT_RETRY_S = 5;
+// The quiet time after a visitor's last seek on the native seek bar, before it reports the seek.
+const SEEK_SETTLE_MS = 300;
 // The rerun release whose viewer sits beside the element, under `rerun/<release>/`.
 export const RERUN_VERSION = '0.30.0';
 const VIEWER_URL = new URL(`../rerun/${RERUN_VERSION}/embedded.html`, import.meta.url).href;
@@ -56,18 +58,58 @@ function clock(value) {
 // started, and a file that is gone or building has no source; its note says which. None is a fault.
 const EXPECTED_PLAY_REFUSALS = new Set(['NotAllowedError', 'AbortError', 'NotSupportedError']);
 
-/** Moves `video` to `at` seconds once it knows its duration; a shorter video rests on its last frame. */
-function startAt(video, at) {
-  if (!at) return;
-  video.addEventListener('loadedmetadata', () => (video.currentTime = Math.min(at, video.duration)), { once: true });
+// The element's own calls on each video, counted by the event each one fires, so a listener on a video with
+// native controls tells them from a visitor's use of those controls. A call that fires no event counts none.
+const ownCalls = new WeakMap();
+
+function expectOwn(video, event) {
+  const calls = ownCalls.get(video) ?? new Map();
+  calls.set(event, (calls.get(event) ?? 0) + 1);
+  ownCalls.set(video, calls);
+}
+
+/** Whether `event` on `video` is the element's own; it takes the count of that call. */
+function takeOwn(video, event) {
+  const calls = ownCalls.get(video);
+  if (!calls?.get(event)) return false;
+  calls.set(event, calls.get(event) - 1);
+  return true;
 }
 
 /** Plays a video and names it in the console where it does not play. */
 export function start(video) {
+  if (!video.paused) return;
+  expectOwn(video, 'play');
   video.play().catch((error) => {
     const log = EXPECTED_PLAY_REFUSALS.has(error.name) ? console.warn : console.error;
     log(`${video.dataset.name} did not play: ${error.message}`);
   });
+  // A play the browser refuses at once leaves the video paused and fires no `play` event.
+  if (video.paused) takeOwn(video, 'play');
+}
+
+export function pause(video) {
+  if (video.paused) return;
+  expectOwn(video, 'pause');
+  video.pause();
+}
+
+// A seek before the video knows its duration fires no `seeking` until the load seeks to a later start.
+function seek(video, seconds) {
+  if (video.readyState > HTMLMediaElement.HAVE_NOTHING || seconds > 0) expectOwn(video, 'seeking');
+  video.currentTime = seconds;
+}
+
+function setRate(video, rate) {
+  if (video.playbackRate === rate) return;
+  expectOwn(video, 'ratechange');
+  video.playbackRate = rate;
+}
+
+/** Moves `video` to `at` seconds once it knows its duration; a shorter video rests on its last frame. */
+function startAt(video, at) {
+  if (!at) return;
+  video.addEventListener('loadedmetadata', () => seek(video, Math.min(at, video.duration)), { once: true });
 }
 
 export class EpisodePlayer {
@@ -243,7 +285,7 @@ export class EpisodePlayer {
 
   #clearVideos() {
     for (const video of this.#stage.querySelectorAll('video')) {
-      video.pause();
+      pause(video);
       video.removeAttribute('src');
       video.load();
     }
@@ -273,29 +315,55 @@ export class EpisodePlayer {
     video.addEventListener('loadeddata', () => onNote(null, MediaState.READY));
   }
 
-  // The phone video takes the element's own controls, so each control a visitor uses reports one action.
   #playPhone(row, { autoplay, at }) {
-    const video = element('video', { part: 'phone', src: row.phone, playsinline: '', muted: '' });
+    const video = element('video', { part: 'phone', src: row.phone, controls: '', playsinline: '', muted: '' });
     video.muted = true;
     video.dataset.name = 'The phone video';
     startAt(video, at);
-    video.addEventListener('click', (event) => this.#toggle(row, video, event.isTrusted ? 'Video' : null));
+    this.#reportNativeControls(row, video);
     this.#watch(
       video,
       row.phone,
       (note) => this.#setNote('video', note),
       () => autoplay,
     );
-    this.#stage.replaceChildren(video, this.#controls(row, video, row.durationS));
+    this.#stage.replaceChildren(video);
     this.lead = video;
     if (autoplay) start(video);
+  }
+
+  // The browser's own controls fire only media events. An event the element did not cause is a visitor's use; a
+  // drag of the seek bar fires many seeks, so a seek reports once it has settled.
+  #reportNativeControls(row, video) {
+    const report = (action, detail) => this.#act(action, { row: row.id, ...detail, via: 'Native' });
+    video.addEventListener('play', () => takeOwn(video, 'play') || report('play', { playing: true }));
+    // A video ends, or fails to load, with a `pause` that no visitor made.
+    video.addEventListener('pause', () => {
+      if (takeOwn(video, 'pause') || video.ended || video.error) return;
+      report('play', { playing: false });
+    });
+    video.addEventListener(
+      'ratechange',
+      () => takeOwn(video, 'ratechange') || report('speed', { value: String(video.playbackRate) }),
+    );
+    let settling = null;
+    video.addEventListener('seeking', () => {
+      if (takeOwn(video, 'seeking')) return;
+      clearTimeout(settling);
+      this.#timers.delete(settling);
+      settling = setTimeout(() => {
+        this.#timers.delete(settling);
+        report('seek', {});
+      }, SEEK_SETTLE_MS);
+      this.#timers.add(settling);
+    });
   }
 
   /** Plays or pauses `lead`, and reports it as the visitor's use of the control `via`; null reports nothing. */
   #toggle(row, lead, via) {
     if (via) this.#act('play', { row: row.id, playing: lead.paused, via });
     if (lead.paused) start(lead);
-    else lead.pause();
+    else pause(lead);
   }
 
   #playCameras(row, { autoplay, at }) {
@@ -369,7 +437,7 @@ export class EpisodePlayer {
   // One control set for the episode, which drives `lead`. Without `durationS`, the length of `lead` sets the end.
   #controls(row, lead, durationS) {
     const play = element('button', { type: 'button', part: 'play', 'aria-label': PLAY_LABEL }, ['▶']);
-    const seek = element('input', {
+    const slider = element('input', {
       type: 'range',
       part: 'seek',
       min: '0',
@@ -388,28 +456,28 @@ export class EpisodePlayer {
     lead.addEventListener('loadedmetadata', () => {
       if (total) return;
       total = lead.duration;
-      seek.max = String(total);
+      slider.max = String(total);
     });
     const showState = () => {
       play.textContent = lead.paused ? '▶' : '❚❚';
       play.setAttribute('aria-label', lead.paused ? PLAY_LABEL : PAUSE_LABEL);
     };
     const showTime = () => {
-      seek.value = String(lead.currentTime);
+      slider.value = String(lead.currentTime);
       time.textContent = `${clock(lead.currentTime)} / ${clock(total)}`;
     };
     play.addEventListener('click', (event) => this.#toggle(row, lead, event.isTrusted ? 'Button' : null));
-    seek.addEventListener('input', () => {
-      lead.currentTime = Number(seek.value);
+    slider.addEventListener('input', () => {
+      seek(lead, Number(slider.value));
     });
-    seek.addEventListener('change', (event) => event.isTrusted && this.#act('seek', { row: row.id }));
+    slider.addEventListener('change', (event) => event.isTrusted && this.#act('seek', { row: row.id }));
     speed.addEventListener('change', (event) => {
-      lead.playbackRate = Number(speed.value);
+      setRate(lead, Number(speed.value));
       if (event.isTrusted) this.#act('speed', { row: row.id, value: speed.value });
     });
     for (const type of ['play', 'pause', 'ended']) lead.addEventListener(type, showState);
     for (const type of ['timeupdate', 'seeked']) lead.addEventListener(type, showTime);
-    return element('div', { part: 'controls' }, [play, seek, time, speed]);
+    return element('div', { part: 'controls' }, [play, slider, time, speed]);
   }
 }
 
@@ -421,7 +489,7 @@ function follow(lead, followers) {
       if (Number.isNaN(video.duration)) continue;
       // Past its own end, a shorter camera rests on its last frame.
       const wanted = Math.min(lead.currentTime, video.duration);
-      if (Math.abs(video.currentTime - wanted) > DRIFT_S) video.currentTime = wanted;
+      if (Math.abs(video.currentTime - wanted) > DRIFT_S) seek(video, wanted);
       if (!lead.paused && video.paused && wanted < video.duration) start(video);
     }
   };
@@ -429,11 +497,11 @@ function follow(lead, followers) {
   lead.addEventListener('pause', () => {
     // A paused episode shows one moment on every camera, so each follower takes the lead's time exactly.
     for (const video of followers) {
-      video.pause();
-      if (!Number.isNaN(video.duration)) video.currentTime = Math.min(lead.currentTime, video.duration);
+      pause(video);
+      if (!Number.isNaN(video.duration)) seek(video, Math.min(lead.currentTime, video.duration));
     }
   });
   lead.addEventListener('ratechange', () => {
-    for (const video of followers) video.playbackRate = lead.playbackRate;
+    for (const video of followers) setRate(video, lead.playbackRate);
   });
 }

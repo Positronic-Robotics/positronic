@@ -29,7 +29,7 @@ from pathlib import Path
 import av
 import numpy as np
 import rerun as rr
-from playwright.sync_api import Browser, ConsoleMessage, Page, sync_playwright
+from playwright.sync_api import Browser, ConsoleMessage, Error, Page, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 STATIC = Path(__file__).resolve().parents[1] / 'positronic' / 'server' / 'static'
@@ -126,7 +126,8 @@ def long_share() -> dict:
 def inline_rows() -> dict:
     """Rows of every cell type and media state. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media,
     9 lost its videos, 10 builds them, 11 lost its longest video only, 12 builds its replay and its videos,
-    13 builds its videos only."""
+    13 builds its videos only,
+    14 has a phone video only, which builds."""
     rows = []
     for n in range(1, ROWS + 1):
         cameras = [
@@ -169,6 +170,10 @@ def inline_rows() -> dict:
             longest = {**cameras[0], 'src': cameras[0]['src'].replace('/ok/', '/gone/'), 'duration_s': 3.0}
             row['cameras'] = [longest, cameras[1]]
             for key in ('rrd', 'phone'):
+                del row[key]
+        if n == 14:
+            row['phone'] = row['phone'].replace('/ok/', '/building/')
+            for key in ('rrd', 'cameras'):
                 del row[key]
         if n == 13:
             row['cameras'] = [{**camera, 'src': camera['src'].replace('/ok/', '/building/')} for camera in cameras]
@@ -372,6 +377,12 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
 # ── The checks ───────────────────────────────────────────────────────────────
 
 
+def is_aborted_viewer_fetch(text: str, source: str) -> bool:
+    """Whether an error is the rerun viewer's own report of a recording fetch that stopped when the element replaced
+    the viewer page with the next episode or with a blank page. The probe counts these apart."""
+    return 'Failed to fetch' in text and '/rerun/' in source
+
+
 def part(page: Page, name: str):
     """The element's nodes that carry the part `name`."""
     return page.locator(f'positronic-replay [part~="{name}"]')
@@ -389,6 +400,7 @@ class Probe:
         self.requests = requests
         self.failures: list[str] = []
         self.console_errors: list[str] = []
+        self.aborted_viewer_fetches: list[str] = []
 
     def check(self, name: str, passed: bool, seen: object = '') -> bool:
         print(f'  {"OK  " if passed else "FAIL"} {name}{f": {seen}" if seen != "" else ""}')
@@ -402,7 +414,7 @@ class Probe:
         # A tall strip above the dock keeps the rows next to the open one clear of the dock.
         page.add_init_script(f"localStorage.setItem('{STRIP_KEY}', '{DOCK_STRIP_PX}')")
         page.on('console', lambda message: self.on_console(path, message, expected))
-        page.on('pageerror', lambda error: self.console_errors.append(f'{path}: {error}'))
+        page.on('pageerror', lambda error: self.on_page_error(path, error))
         page.goto(self.base + path, wait_until='load')
         page.wait_for_function("customElements.get('positronic-replay') !== undefined", timeout=WAIT_MS)
         return page
@@ -414,7 +426,16 @@ class Probe:
         # A gone file answers 404, and the browser says so in the console of the page that asked for it.
         if message.text.startswith('Failed to load resource') and '/gone/' in source:
             return
+        if is_aborted_viewer_fetch(message.text, source):
+            self.aborted_viewer_fetches.append(path)
+            return
         self.console_errors.append(f'{path}: {message.text} ({source})')
+
+    def on_page_error(self, path: str, error: Error):
+        if is_aborted_viewer_fetch(error.message, error.stack or ''):
+            self.aborted_viewer_fetches.append(path)
+            return
+        self.console_errors.append(f'{path}: {error}')
 
     @staticmethod
     def actions(page: Page) -> list[dict]:
@@ -794,11 +815,21 @@ class Probe:
         playing = self.until(page, f'{lead} && !{lead}.paused && {lead}.currentTime > 0.2', 15000)
         self.check('the video plays once the server has built it', playing, page.evaluate('noteText()'))
         page.close()
+        page = self.open('/page/dock?episode=14')
+        playing = self.until(
+            page, "one('phone') !== null && !one('phone').paused && one('phone').currentTime > 0.2", 15000
+        )
+        actions = self.actions(page)
+        self.check('a building phone video plays once built', playing, page.evaluate('noteText()'))
+        self.check(
+            'its retry sends no play action', actions == [{'action': 'open', 'row': '14', 'from': 'Link'}], actions
+        )
+        page.close()
 
     def used(self, page: Page, control: str, use, wanted: dict):
         """Uses one control, and checks that it sends `wanted` and nothing else."""
         use()
-        time.sleep(0.4)
+        time.sleep(0.8)
         actions = self.actions(page)
         self.check(f'{control} sends one action', actions == [wanted], actions)
 
@@ -942,19 +973,29 @@ class Probe:
 
         page = self.open('/page/dock?episode=7', width=400, height=800)
         self.until(page, "one('phone') !== null && !one('phone').paused", 8000)
-        self.actions(page)
-        self.used(
-            page,
-            'the phone play button',
-            lambda: part(page, 'play').click(),
-            {'action': 'play', 'row': '7', 'playing': False, 'via': 'Button'},
+        self.check('the phone video keeps the browser controls', page.evaluate("one('phone').hasAttribute('controls')"))
+        actions = self.actions(page)
+        self.check(
+            'its autoplay sends no play action', actions == [{'action': 'open', 'row': '7', 'from': 'Link'}], actions
         )
-        self.used(
-            page,
-            'the phone video',
-            lambda: part(page, 'phone').click(),
-            {'action': 'play', 'row': '7', 'playing': True, 'via': 'Video'},
-        )
+        # The browser's controls change the video as a call from the page does: the element made neither call.
+        native = [
+            ('a pause on its controls', 'pause()', {'action': 'play', 'row': '7', 'playing': False, 'via': 'Native'}),
+            ('a play on its controls', 'play()', {'action': 'play', 'row': '7', 'playing': True, 'via': 'Native'}),
+            ('a seek on its controls', 'currentTime = 3', {'action': 'seek', 'row': '7', 'via': 'Native'}),
+            (
+                'a drag of its seek bar',
+                'currentTime = 4; one("phone").currentTime = 5; one("phone").currentTime = 6',
+                {'action': 'seek', 'row': '7', 'via': 'Native'},
+            ),
+            (
+                'a speed on its controls',
+                'playbackRate = 2',
+                {'action': 'speed', 'row': '7', 'value': '2', 'via': 'Native'},
+            ),
+        ]
+        for control, call, wanted in native:
+            self.used(page, control, lambda call=call: page.evaluate(f"one('phone').{call}"), wanted)
         page.close()
 
     def width_change(self):
@@ -972,6 +1013,10 @@ class Probe:
         playing = self.until(page, f'{lead} && !{lead}.paused && {lead}.currentTime >= {moment - 0.3}', 5000)
         back = page.evaluate(f'{lead}?.currentTime ?? 0')
         self.check('the cameras play on from the same moment', playing and back >= moment - 0.3, (moment, back))
+        actions = self.actions(page)
+        self.check(
+            'the width swaps send no play action', actions == [{'action': 'open', 'row': '7', 'from': 'Link'}], actions
+        )
         page.close()
 
     def no_recording_row(self):
@@ -1040,6 +1085,7 @@ def main(headed: bool) -> int:
             check()
         browser.close()
     server.shutdown()
+    print(f'Aborted viewer fetches, which a replaced viewer page reports: {len(probe.aborted_viewer_fetches)}')
     print('Console errors:')
     for error in probe.console_errors:
         print(f'  FAIL {error}')

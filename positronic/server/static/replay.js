@@ -46,10 +46,12 @@
 // Events and methods
 //   A `replay-action` event, with `detail.action`, reports each use of a control by a visitor, one event a use:
 //   open {row, from: Row|Button|Run|Link|Step, via: Button|Key for a step}, close {row, via: Button|Escape},
-//   play {row, playing, via: Button|Video|Row|Run}, seek {row}, speed {row, value}, filter {column, value},
-//   more {via: Button|Scroll}, resize {via: Drag|Key}, details {open}, full {row}, link {row}.
-//   A link open is reported first, so the host can show the element. The keys inside the 3D viewer step and
-//   close as on the page; the viewer's own controls report nothing.
+//   play {row, playing, via: Button|Video|Row|Run|Native}, seek {row, via?}, speed {row, value, via?},
+//   filter {column, value}, more {via: Button|Scroll}, resize {via: Drag|Key}, details {open}, full {row},
+//   link {row}.
+//   A link open is reported first, so the host can show the element. The phone video keeps the browser's
+//   controls, and their use reports `via: Native`. The keys inside the 3D viewer step and close as on the page;
+//   the viewer's own controls report nothing.
 //   `show({column key: value, …})` sets the filters; a value the column does not offer shows all.
 //   The `details` slot shows in the dock beside the player, behind a Details button.
 //   The `actions` slot shows in the compact head.
@@ -61,7 +63,7 @@
 //   --video-max (the most the compact list and its videos may take). Each element has a `part` to style.
 import { cellKey, cellText, ColumnType, DURATION_KEY, INDEX_KEY, readInline, readManifest } from './replay/data.js';
 import { cellContent, element } from './replay/cells.js';
-import { EpisodePlayer, start } from './replay/media.js';
+import { EpisodePlayer, pause, start } from './replay/media.js';
 import { STYLE } from './replay/style.js';
 
 const TAG = 'positronic-replay';
@@ -887,7 +889,7 @@ export class PositronicReplay extends HTMLElement {
     if (this.#current === row && playing) {
       if (event.isTrusted) this.#act('play', { row: row.id, playing: playing.paused, via });
       if (playing.paused) start(playing);
-      else playing.pause();
+      else pause(playing);
       return;
     }
     if (event.isTrusted) this.#act('open', { row: row.id, from: via });
