@@ -73,8 +73,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --index https://pypi.org/simple --default-index https://download.pytorch.org/whl/cu128 \
         --index-strategy unsafe-best-match \
         --constraint /galaxea/constraints.txt --requirement /galaxea/requirements-inference.txt
-# GalaxeaVLA's lock pins certifi 2025.10.5, which trusts the leaked eMudhra (emSign) intermediate CAs.
-RUN uv pip install --no-config --python /galaxea/.venv/bin/python certifi==2026.10.23
+# GalaxeaVLA's lock pins certifi 2025.10.5, and a cached apt layer can hold an older ca-certificates. Both trust
+# the leaked eMudhra (emSign) intermediate CAs.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv pip install --no-config --python /galaxea/.venv/bin/python certifi==2026.10.23
 # grpcio and pip carry CA bundles of their own, which trust the same CAs.
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
