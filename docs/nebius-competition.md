@@ -269,6 +269,7 @@ that you used for `positronic account register`.
 - You can make one submission per day. [Submissions per day](#submissions-per-day) says what counts.
 - [Read the outcome](#read-the-outcome) says what the status tells you.
 - To run another eval, add `--eval=<name>`. `positronic eval catalog` lists the evals that you can name.
+  Such a submission counts for the day, and the leaderboard does not rank it.
 
 ### Choose your final entry
 
@@ -529,6 +530,8 @@ You can make one submission per day. The count starts again at 00:00 UTC each da
   submission back. That submission ends `errored` with `internal_error`.
 - A submission that fails also counts. If the fault is the platform's, the organizers give the submission
   back.
+- A submission to an eval that the leaderboard does not rank, such as `molmo.franka_pick_mini_smoke`,
+  counts too.
 - A retry with the same `--transaction-key` returns the first submission, and it does not count again.
 - The platform refuses a submission over the limit with `quota_exceeded`.
 - The competition can change the limit during the season. It announces each change on the
