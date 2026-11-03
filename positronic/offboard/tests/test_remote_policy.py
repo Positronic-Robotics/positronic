@@ -868,6 +868,12 @@ def test_periodic_jpeg_history_and_prediction_share_one_call(served, transport):
             observations = model.observations[episode * 3 :]
             assert [obs[policy_keys.SAMPLE_INDEX] for obs in observations] == [0, 1, 2]
             assert [obs[policy_keys.OBS_TIME_NS] for obs in observations] == [0, 100_000_000, 200_000_000]
+            assert [obs[policy_keys.CALL_ID] for obs in observations] == [0, 1, 2]
+            assert [obs[policy_keys.CALL_TIMINGS] for obs in observations] == [
+                [],
+                [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}],
+                [{policy_keys.CALL_ID: 1, policy_keys.ELAPSED_SEC: 0.0}],
+            ]
             for index, obs in enumerate(observations):
                 np.testing.assert_allclose(obs['image'], index * 50, atol=1)
                 assert obs['image'].shape == (16, 16, 3)

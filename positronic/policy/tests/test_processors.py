@@ -23,7 +23,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, Step
+from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, QueueFull, Step
 from positronic.policy.codecs import (
     ACTION,
     BinarizeGripInference,
@@ -56,7 +56,7 @@ from positronic.policy.codecs.observation import (
 )
 from positronic.policy.compatibility import ObservationCodecV1
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.keys import END, RTC
+from positronic.policy.keys import CALL_ID, CALL_TIMINGS, ELAPSED_SEC, END, RTC
 from positronic.policy.processors import (
     ChunkedSchedule,
     ConstantDuration,
@@ -412,6 +412,9 @@ def test_periodic_capacity_skips_samples_and_preserves_recovery_intent(max_in_fl
         runtime.close()
         run.close()
     assert [obs[policy_keys.SAMPLE_INDEX] for obs in calls] == [0, 1, 3, 4]
+    assert [obs[CALL_ID] for obs in calls] == [0, 1, 2, 3]
+    assert calls[2][CALL_TIMINGS] == [{CALL_ID: 0, ELAPSED_SEC: 0.0}, {CALL_ID: 1, ELAPSED_SEC: 0.0}]
+    assert calls[3][CALL_TIMINGS] == [{CALL_ID: 2, ELAPSED_SEC: 0.0}]
     assert calls[2][policy_keys.REPLAN_NOW] is True
     assert not calls[3].get(policy_keys.REPLAN_NOW, False)
 
@@ -545,6 +548,101 @@ class _FutureAnswer(Answer):
 
     def cancel(self):
         self._future.cancel()
+
+
+def test_call_timings_are_batched_without_loss_when_submission_is_full(execution, monkeypatch):
+    runtime, clock = execution
+    requests, futures = [], []
+    full = False
+
+    def submit(function, obs):
+        if full:
+            raise QueueFull()
+        requests.append(dict(obs))
+        future = Future()
+        futures.append(future)
+        return _FutureAnswer(future, runtime)
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    schedule = InferenceSchedule(
+        10,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+        max_in_flight=3,
+    )
+    run = runtime.start(schedule, Mock())
+    try:
+        for now_ns in (0, 100_000_000, 200_000_000):
+            clock.advance_to_ns(now_ns)
+            run.send({})
+        for index, result in enumerate(([{MOTOR: 1}], None, [])):
+            clock.advance_to_ns(210_000_000 + index * 10_000_000)
+            futures[index].set_result(result)
+            run.send({})
+        full = True
+        clock.advance_to_ns(300_000_000)
+        run.send({})
+        full = False
+        clock.advance_to_ns(400_000_000)
+        run.send({})
+        assert [request[CALL_ID] for request in requests] == [0, 1, 2, 3]
+        assert requests[3][CALL_TIMINGS] == [
+            {CALL_ID: 0, ELAPSED_SEC: 0.21},
+            {CALL_ID: 1, ELAPSED_SEC: 0.12},
+            {CALL_ID: 2, ELAPSED_SEC: 0.03},
+        ]
+        assert all(request[CALL_TIMINGS] == [] for request in requests[:3])
+        clock.advance_to_ns(450_000_000)
+        futures[3].set_result(None)
+        run.send({})
+        clock.advance_to_ns(500_000_000)
+        run.send({})
+        assert requests[4][CALL_TIMINGS] == [{CALL_ID: 3, ELAPSED_SEC: 0.05}]
+        assert len(requests[3][CALL_TIMINGS]) == 3
+    finally:
+        run.close()
+
+
+def test_replan_preserves_all_submitted_observations_but_discards_old_predictions(execution, monkeypatch):
+    runtime, clock = execution
+    requests, futures = [], []
+
+    def submit(function, obs):
+        requests.append(dict(obs))
+        future = Future()
+        futures.append(future)
+        return _FutureAnswer(future, runtime)
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    schedule = InferenceSchedule(
+        10,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+        max_in_flight=3,
+    )
+    run = runtime.start(schedule, Mock())
+    try:
+        run.send({POSITION: 0})
+        clock.advance_to_ns(100_000_000)
+        run.send({POSITION: 1})
+        clock.advance_to_ns(150_000_000)
+        run.send({POSITION: 2, policy_keys.REPLAN_NOW: True})
+        assert [request[POSITION] for request in requests] == [0, 1, 2]
+        assert all(not future.cancelled() for future in futures)
+        for index in range(2):
+            futures[index].set_result([{MOTOR: 'obsolete'}])
+            assert run.send({POSITION: 2}).commands == {}
+        futures[2].set_result([{MOTOR: 'fresh'}])
+        update = Trajectory(**run.send({POSITION: 2}).commands)
+        assert update.commands == [{MOTOR: 'fresh'}]
+        assert update.start_ns == 150_000_000
+        clock.advance_to_ns(200_000_000)
+        run.send({POSITION: 3})
+        assert [entry[CALL_ID] for entry in requests[-1][CALL_TIMINGS]] == [0, 1, 2]
+    finally:
+        run.close()
 
 
 def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, monkeypatch):
@@ -1187,14 +1285,21 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, mon
         clock.advance_to_ns(PERIOD_NS)
         obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE.value, channel: status.value, POSITION: 42}
         step = run.send(obs)
-        initial = {RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
+        initial = {CALL_ID: 0, CALL_TIMINGS: [], RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
         if replan_on_error and status is RobotStatus.ERROR:
             model.answer_with([{MOTOR: (2, index)} for index in range(5)])
             step = run.send(obs)
             assert step == Step({MOTOR: (2, 0)}, 2 * PERIOD_NS)
             assert model.requests == [
                 initial,
-                {**obs, policy_keys.REPLAN_NOW: True, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0},
+                {
+                    **obs,
+                    policy_keys.REPLAN_NOW: True,
+                    CALL_ID: 1,
+                    CALL_TIMINGS: [{CALL_ID: 0, ELAPSED_SEC: 0.0}],
+                    RTC.ESTIMATED_LATENCY_SEC: 0.0,
+                    RTC.MEASURED_LATENCY_SEC: 0.0,
+                },
             ]
             assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         else:
@@ -1233,7 +1338,7 @@ def test_repeated_errors_keep_one_recovery_request_and_play_its_answer(execution
 
 
 @pytest.mark.parametrize('ready_at_error', [False, True])
-def test_errors_keep_an_existing_request_and_execute_its_answer_immediately(execution, monkeypatch, ready_at_error):
+def test_errors_keep_an_existing_request_but_discard_its_prediction(execution, monkeypatch, ready_at_error):
     runtime, clock = execution
     model = ObservingModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
@@ -1262,10 +1367,13 @@ def test_errors_keep_an_existing_request_and_execute_its_answer_immediately(exec
             assert run.send(fault).commands == {}
             model.answer('b')
             step = run.send(fault)
-        assert step.commands == {MOTOR: 'b0'}
-        assert model.seen == [0, 2]
+        assert step.commands == {}
+        assert model.seen == [0, 2, 25]
+        assert model.requests[-1][policy_keys.REPLAN_NOW] is True
+        assert [entry[CALL_ID] for entry in model.requests[-1][CALL_TIMINGS]] == [1]
         clock.advance_to_ns(4 * PERIOD_NS)
-        assert run.send(fault).commands == {}
+        model.answer('fresh')
+        assert run.send(fault).commands == {MOTOR: 'fresh0'}
         assert len(model.calls) == 3
     finally:
         run.close()
@@ -1353,7 +1461,9 @@ def test_chunked_schedule_starts_the_first_trajectory_when_the_answer_is_read(ex
         step = run.send({POSITION: 43})
         assert Trajectory(**step.commands) == Trajectory(chunk, 350_000_000, 10, 550_000_000)
         assert step.resume_at_ns == 550_000_000
-        assert model.requests == [{**obs, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}]
+        assert model.requests == [
+            {**obs, CALL_ID: 0, CALL_TIMINGS: [], RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
+        ]
     finally:
         run.close()
 
@@ -1375,11 +1485,18 @@ def test_scheduler_replans_only_when_requested_by_the_observation(execution, mon
         clock.advance_to_ns(PERIOD_NS)
         fault = {keys.ROBOT_STATUS: RobotStatus.ERROR}
         step = run.send({**fault, **override})
-        initial = {RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
+        initial = {CALL_ID: 0, CALL_TIMINGS: [], RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
         if override.get(policy_keys.REPLAN_NOW, False):
             assert model.requests == [
                 initial,
-                {**fault, policy_keys.REPLAN_NOW: True, RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: 0.0},
+                {
+                    **fault,
+                    policy_keys.REPLAN_NOW: True,
+                    CALL_ID: 1,
+                    CALL_TIMINGS: [{CALL_ID: 0, ELAPSED_SEC: 0.0}],
+                    RTC.ESTIMATED_LATENCY_SEC: 0.0,
+                    RTC.MEASURED_LATENCY_SEC: 0.0,
+                },
             ]
             assert step.commands == {}
             clock.advance_to_ns(2 * PERIOD_NS)
