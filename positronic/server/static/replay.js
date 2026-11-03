@@ -19,6 +19,8 @@
 //   dock-below   (dock) a selector of the host's bar; the dock and the list share the window below it.
 //   link-param   the URL search parameter that names the open row, so a link opens it.
 //   camera-names a JSON object that maps a camera key to the name the visitor sees.
+//   A value of the wrong shape logs an error, and the element uses the default: `full`, `video`, the top of the
+//   window, no link parameter, the camera keys. A `src` that is not a URL shows that the replay did not load.
 //
 // Manifest (`src`)
 //   {title, url, about: [{key, label, value}], columns: [{key, label}], episodes: [{index, values: {key: value},
@@ -35,6 +37,8 @@
 //   A value is a scalar, or {text, key?, color?, ink?, icon?, title?}: `key` is what a filter compares,
 //   `color` paints a badge, `icon` is the image of an icon cell.
 //   `filter` is `true` or {all?, options?: [[value, label], …]}; without options, every value of the column.
+//   A list of the wrong shape shows that the replay did not load; a field of the wrong shape logs an error, and
+//   the element leaves it empty.
 //
 // Media
 //   The element loads only the URLs a row names, and builds no URL from another one. A row with no media
@@ -52,7 +56,8 @@
 //   A link open is reported first, so the host can show the element. The phone video keeps the browser's
 //   controls, and their use reports `via: Native`. The keys inside the 3D viewer step and close as on the page;
 //   the viewer's own controls report nothing.
-//   `show({column key: value, …})` sets the filters; a value the column does not offer shows all.
+//   `show({column key: value, …})` sets the filters. A number or a boolean counts as its text, and null or a value
+//   the column does not offer shows all. A key no filter has, or a value of another type, logs an error.
 //   The `details` slot shows in the dock beside the player, behind a Details button.
 //   The `actions` slot shows in the compact head.
 //
@@ -61,7 +66,16 @@
 //   --replay-surface-ink, --replay-success, --replay-failure (the compact runs strip), --replay-motion (the
 //   compact screen's open time), --replay-sticky-top (where the column names stick), and --list-max and
 //   --video-max (the most the compact list and its videos may take). Each element has a `part` to style.
-import { cellKey, cellText, ColumnType, DURATION_KEY, INDEX_KEY, readInline, readManifest } from './replay/data.js';
+import {
+  cellKey,
+  cellText,
+  ColumnType,
+  DURATION_KEY,
+  INDEX_KEY,
+  readInline,
+  readManifest,
+  wrongInput,
+} from './replay/data.js';
 import { cellContent, element } from './replay/cells.js';
 import { EpisodePlayer, pause, start } from './replay/media.js';
 import { STYLE } from './replay/style.js';
@@ -109,6 +123,46 @@ function observe(held, observer) {
   return observer;
 }
 
+// Each attribute, read once where it changes: the value the element uses, and the default it falls back to.
+const ATTRIBUTES = {
+  layout: (value) => oneOf('layout', value, ['full', 'compact']),
+  mode: (value) => oneOf('mode', value, ['video', 'full']),
+  dock: (value) => value !== null,
+  'dock-below': (value) => {
+    if (value === null) return null;
+    try {
+      document.querySelector(value);
+      return value;
+    } catch (error) {
+      if (!(error instanceof DOMException)) throw error;
+      return wrongInput('dock-below', value, null, 'the top of the window');
+    }
+  },
+  'link-param': (value) => {
+    if (value === null) return null;
+    return value.trim() ? value : wrongInput('link-param', value, null, 'no link');
+  },
+  'camera-names': (value) => {
+    if (value === null) return {};
+    let names;
+    try {
+      names = JSON.parse(value);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      return wrongInput('camera-names', value, {}, 'the camera keys');
+    }
+    const isNames = names !== null && typeof names === 'object' && !Array.isArray(names);
+    if (isNames && Object.values(names).every((name) => typeof name === 'string')) return names;
+    return wrongInput('camera-names', value, {}, 'the camera keys');
+  },
+};
+
+/** The attribute `value` where it is one of `allowed`; the first of them where it is absent or another. */
+function oneOf(input, value, allowed) {
+  if (value === null || allowed.includes(value)) return value ?? allowed[0];
+  return wrongInput(input, value, allowed[0], allowed[0]);
+}
+
 function setLinkParam(name, value) {
   if (!name) return;
   const url = new URL(window.location);
@@ -118,7 +172,7 @@ function setLinkParam(name, value) {
 }
 
 export class PositronicReplay extends HTMLElement {
-  static observedAttributes = ['src', 'layout', 'mode'];
+  static observedAttributes = ['src', ...Object.keys(ATTRIBUTES)];
 
   #list = null;
   #request = 0;
@@ -140,6 +194,7 @@ export class PositronicReplay extends HTMLElement {
   #strip = null;
   #end = null;
   #narrow = window.matchMedia(NARROW);
+  #inputs = Object.fromEntries(Object.entries(ATTRIBUTES).map(([name, read]) => [name, read(null)]));
 
   constructor() {
     super();
@@ -163,29 +218,45 @@ export class PositronicReplay extends HTMLElement {
     this.#release();
   }
 
-  attributeChangedCallback(name) {
+  attributeChangedCallback(name, previous, value) {
+    if (name in ATTRIBUTES) this.#inputs[name] = ATTRIBUTES[name](value);
     if (!this.#connected) return;
     if (name === 'src' || !this.#list) this.#load();
     else this.#render();
   }
 
   get #layout() {
-    return this.getAttribute('layout') === 'compact' ? 'compact' : 'full';
+    return this.#inputs.layout;
   }
 
   get #fullMode() {
-    return this.getAttribute('mode') === 'full';
+    return this.#inputs.mode === 'full';
   }
 
   get #docked() {
-    return this.#layout === 'full' && this.hasAttribute('dock');
+    return this.#layout === 'full' && this.#inputs.dock;
   }
 
-  /** Sets the filters to `filters`, by column key. A value a filter does not offer shows all. */
+  /** Sets the filters to `filters`, by column key: a string, a number or a boolean as its text, and null or an empty
+   * string for all. A value a filter does not offer shows all. */
   show(filters) {
+    if (filters === null || typeof filters !== 'object' || Array.isArray(filters)) {
+      wrongInput('show()', filters, undefined, 'no change');
+      return;
+    }
+    const keys = new Set(this.#selects.map((select) => select.dataset.key));
+    for (const key of Object.keys(filters)) {
+      if (!keys.has(key))
+        wrongInput(`show() key ${key}`, filters[key], undefined, 'no change to it, as no filter has it');
+    }
     for (const select of this.#selects) {
-      const value = filters[select.dataset.key];
-      if (value === undefined) continue;
+      const given = filters[select.dataset.key];
+      if (given === undefined) continue;
+      if (given !== null && !['string', 'number', 'boolean'].includes(typeof given)) {
+        wrongInput(`show() ${select.dataset.key}`, given, undefined, 'no change to it');
+        continue;
+      }
+      const value = given === null ? '' : String(given);
       select.value = [...select.options].some((option) => option.value === value) ? value : '';
     }
     this.#shown = PAGE;
@@ -215,7 +286,15 @@ export class PositronicReplay extends HTMLElement {
       return;
     }
     this.#loaded = key;
-    const url = new URL(src, document.baseURI);
+    let url;
+    try {
+      url = new URL(src, document.baseURI);
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      wrongInput('src', src, null, 'no replay');
+      this.#status('The replay did not load: its address is not a URL.');
+      return;
+    }
     const loading = new AbortController();
     this.#loading = loading;
     this.#status('Loading the replay…');
@@ -260,16 +339,8 @@ export class PositronicReplay extends HTMLElement {
     );
   }
 
-  #cameraName = (key) => {
-    const names = this.getAttribute('camera-names') ?? '{}';
-    try {
-      return JSON.parse(names)[key] ?? key;
-    } catch (error) {
-      // A camera's key is its name in the recording, so the visitor still sees which camera plays.
-      console.error(`camera-names is not a JSON object (${error.message}): ${names}`);
-      return key;
-    }
-  };
+  // A camera's key is its name in the recording, so a camera the names leave out shows its key.
+  #cameraName = (key) => this.#inputs['camera-names'][key] ?? key;
 
   #newPlayer(root) {
     const player = new EpisodePlayer(root, {
@@ -388,13 +459,16 @@ export class PositronicReplay extends HTMLElement {
     const linked = this.#linkedRow();
     if (this.#docked) {
       if (linked) this.#open(linked, 'Link');
+    } else if (linked) {
+      this.#act('open', { row: linked.id, from: 'Link' });
+      this.#select(linked);
     } else {
-      this.#select(linked ?? this.#list.rows[0]);
+      this.#select(this.#list.rows[0]);
     }
   }
 
   #linkedRow() {
-    const name = this.getAttribute('link-param');
+    const name = this.#inputs['link-param'];
     const id = name ? new URLSearchParams(window.location.search).get(name) : null;
     return id === null ? null : (this.#list.rows.find((row) => row.id === id) ?? null);
   }
@@ -536,7 +610,7 @@ export class PositronicReplay extends HTMLElement {
     this.#play(row, { autoplay: false });
     if (event?.isTrusted) {
       this.#act('open', { row: row.id, from: 'Row' });
-      setLinkParam(this.getAttribute('link-param'), row.id);
+      setLinkParam(this.#inputs['link-param'], row.id);
     }
   }
 
@@ -652,7 +726,7 @@ export class PositronicReplay extends HTMLElement {
     }
     this.#focus(row);
     if (!this.#narrow.matches) this.#player.focusViewer();
-    setLinkParam(this.getAttribute('link-param'), row.id);
+    setLinkParam(this.#inputs['link-param'], row.id);
     if (from === 'Link') this.#holdOpenRow();
   }
 
@@ -680,7 +754,7 @@ export class PositronicReplay extends HTMLElement {
     this.#markCurrent(null);
     this.#current = null;
     if (openDock === this) openDock = null;
-    setLinkParam(this.getAttribute('link-param'), null);
+    setLinkParam(this.#inputs['link-param'], null);
   }
 
   #step(by, via, event) {
@@ -715,7 +789,7 @@ export class PositronicReplay extends HTMLElement {
   };
 
   #top() {
-    const selector = this.getAttribute('dock-below');
+    const selector = this.#inputs['dock-below'];
     return (selector && document.querySelector(selector)?.getBoundingClientRect().bottom) || 0;
   }
 

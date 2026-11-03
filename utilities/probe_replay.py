@@ -126,7 +126,8 @@ def long_share() -> dict:
 def row_media(n: int) -> dict:
     """The media of row `n`. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media, 9 lost its videos, 10
     builds them, 11 lost its longest video only, 12 builds its replay and its videos, 13 builds its videos only, 14
-    has a phone video only, which builds, and 15 loses its longest video only after a wait."""
+    has a phone video only, which builds, 15 loses its longest video only after a wait,
+    and 16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -134,6 +135,12 @@ def row_media(n: int) -> dict:
 
     def at(state: str, videos: list[dict]) -> list[dict]:
         return [{**video, 'src': video['src'].replace('/ok/', f'/{state}/')} for video in videos]
+
+    def three_cameras() -> list[dict]:
+        front, wrist = cameras
+        side = {**at('slowbuilding', [{**front, 'camera': 'side'}])[0], 'duration_s': VIDEO_S + 0.5}
+        side['src'] = side['src'].replace('front', 'side')
+        return [{**at('slowgone', [front])[0], 'duration_s': VIDEO_S + 1}, side, wrist]
 
     def lost_longest(state: str) -> list[dict]:
         return [{**at(state, cameras[:1])[0], 'duration_s': VIDEO_S + 1}, cameras[1]]
@@ -150,6 +157,7 @@ def row_media(n: int) -> dict:
         13: {'rrd': None, 'phone': None, 'cameras': at('building', cameras)},
         14: {'rrd': None, 'cameras': None, 'phone': '/media/building/14/phone.webm'},
         15: {'rrd': None, 'phone': None, 'cameras': lost_longest('slowgone')},
+        16: {'rrd': None, 'phone': None, 'cameras': three_cameras()},
     }
     media = {'cameras': cameras, 'phone': f'/media/ok/{n}/phone.webm', 'rrd': f'/rrd/ok/{n}.rrd'}
     media |= variants.get(n, {})
@@ -187,7 +195,7 @@ def inline_rows() -> dict:
             'type': 'badge',
             'filter': {'options': [['success', 'Success'], ['partial', 'Partial']]},
         },
-        {'key': 'reliability', 'label': 'Reliability', 'type': 'number', 'decimals': 0},
+        {'key': 'reliability', 'label': 'Reliability', 'type': 'number', 'decimals': 0, 'filter': True},
         {'key': 'pace', 'label': 'Pace', 'type': 'number', 'decimals': 1, 'unit': ' s'},
     ]
     return {'columns': columns, 'rows': rows}
@@ -288,6 +296,9 @@ def pages(release: str) -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/nulls': page_html(null_cells()),
+        '/page/names': page_html(
+            f'<positronic-replay src="{SHARE}/replay.json" camera-names=\'["Outside"]\'></positronic-replay>'
+        ),
         '/page/history-control': history_control(release),
         '/page/slow': page_html(f'<positronic-replay src="{SHARE}/slow.json"></positronic-replay>'),
         '/page/small': page_html(f'<positronic-replay src="{SHARE}/replay.json"></positronic-replay>'),
@@ -311,11 +322,11 @@ class QuietServer(ThreadingHTTPServer):
 def media_status(path: str, asked: int) -> int | None:
     """The status of a media file that is not there: 404 for a gone one, after a wait for a slow one, and 202 for the
     first answers of a building one. None for a file that is there."""
-    if '/slowgone/' in path:
+    if '/slowgone/' in path or '/slowbuilding/' in path:
         time.sleep(SLOW_S)
     if 'gone/' in path:
         return 404
-    if '/building/' in path and asked <= BUILDING_ANSWERS:
+    if 'building/' in path and asked <= BUILDING_ANSWERS:
         return 202
     return None
 
@@ -402,6 +413,11 @@ def is_aborted_viewer_fetch(text: str, source: str) -> bool:
     return 'Failed to fetch' in text and '/rerun/' in source
 
 
+def camera_named(name: str) -> str:
+    """The script that finds the camera video `name` in the element."""
+    return f"all('camera').find((video) => video.dataset.camera === '{name}')"
+
+
 def part(page: Page, name: str):
     """The element's nodes that carry the part `name`."""
     return page.locator(f'positronic-replay [part~="{name}"]')
@@ -420,6 +436,7 @@ class Probe:
         self.failures: list[str] = []
         self.console_errors: list[str] = []
         self.aborted_viewer_fetches: list[str] = []
+        self.expected_errors: list[str] = []
 
     def check(self, name: str, passed: bool, seen: object = '') -> bool:
         print(f'  {"OK  " if passed else "FAIL"} {name}{f": {seen}" if seen != "" else ""}')
@@ -442,7 +459,10 @@ class Probe:
         return page
 
     def on_console(self, path: str, message: ConsoleMessage, expected: tuple[str, ...]):
-        if message.type != 'error' or any(text in message.text for text in expected):
+        if message.type != 'error':
+            return
+        if any(text in message.text for text in expected):
+            self.expected_errors.append(message.text)
             return
         source = message.location.get('url', '')
         # A gone file answers 404, and the browser says so in the console of the page that asked for it.
@@ -1073,6 +1093,55 @@ class Probe:
         )
         page.close()
 
+    def three_cameras(self):
+        print('Three cameras: the longest lost after a wait, the next built after waits, one there at once:')
+        page = self.open('/page/dock?episode=16', wait_until='domcontentloaded')
+        mixed = self.until(page, "noteText().includes('is gone') && noteText().includes('is building')", 10000)
+        self.check('the note names the lost and the building camera', mixed, page.evaluate('noteText()'))
+        before = page.evaluate(f"[Number(one('seek').value), {camera_named('wrist')}.currentTime]")
+        time.sleep(1)
+        after = page.evaluate(
+            f"[Number(one('seek').value), {camera_named('wrist')}.currentTime, !{camera_named('wrist')}.paused]"
+        )
+        drives = after[1] - before[1] > 0.5 and abs(after[0] - after[1]) < 0.3 and after[2]
+        self.check('the camera that is there leads and plays meanwhile', drives, (before, after))
+        built = self.until(page, f"{camera_named('side')}.parentElement.dataset.state === 'ready'", 15000)
+        time.sleep(1)
+        side = page.evaluate(
+            f"[Number(one('seek').value), {camera_named('side')}.currentTime, !{camera_named('side')}.paused]"
+        )
+        self.check('the built camera leads once it is there', built and abs(side[0] - side[1]) < 0.3 and side[2], side)
+        page.close()
+
+    def host_inputs(self):
+        print('Host inputs of the wrong shape:')
+        page = self.open('/page/names', expected=('camera-names',))
+        self.until(page, "all('caption').length > 0")
+        captions = page.evaluate("all('caption').map((caption) => caption.textContent)")
+        keys = [video['camera'] for video in video_share()['episodes'][0]['videos']]
+        errors = [text for text in self.expected_errors if 'camera-names' in text]
+        self.check('a camera-names that is no object logs one error', len(errors) == 1, errors)
+        self.check('the cameras then show their keys', captions == keys, captions)
+        page.close()
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        as_number = page.evaluate("host().show({reliability: 52}), one('count').textContent")
+        as_text = page.evaluate("host().show({reliability: '52'}), one('count').textContent")
+        self.check(
+            'show() takes a number as its text', as_number == as_text != f'{ROWS} episodes', (as_number, as_text)
+        )
+        page.close()
+
+    def undocked_link(self):
+        print('A link to a row of a replay with no dock:')
+        page = self.open('/page/list?episode=30')
+        self.until(page, "row('30').part.contains('current')", 5000)
+        actions = self.actions(page)
+        self.check(
+            'the link open sends open/Link', actions[:1] == [{'action': 'open', 'row': '30', 'from': 'Link'}], actions
+        )
+        page.close()
+
     def width_change(self):
         print('A width change while a row plays:')
         page = self.open('/page/dock?episode=7')
@@ -1151,6 +1220,9 @@ def main(headed: bool) -> int:
             probe.stale_and_broken_sources,
             probe.row_link,
             probe.width_change,
+            probe.three_cameras,
+            probe.host_inputs,
+            probe.undocked_link,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

@@ -23,27 +23,60 @@ export function cellKey(value) {
   return cellText(value);
 }
 
-/** A media URL: a string, or an object with `src` (relative to `base`) or `url`. Null where the value is empty. */
-function mediaUrl(value, base) {
-  if (value === null || value === undefined || value === '') return null;
-  const spelled = typeof value === 'object' ? (value.src ?? value.url) : value;
-  return spelled ? new URL(spelled, base).href : null;
+const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isEmpty = (value) => value === null || value === undefined;
+
+/** Logs a host input of the wrong shape, and returns the default the element uses in its place. */
+export function wrongInput(input, value, fallback, fallbackText) {
+  console.error(`${input} has the wrong shape (${JSON.stringify(value)}); the element uses ${fallbackText}`);
+  return fallback;
 }
 
-function readCamera(camera, base) {
+/** Refuses a list whose shape the element cannot read; the element then shows that the replay did not load. */
+function refuse(input, value, wanted) {
+  throw new TypeError(`${input} is not ${wanted}: ${JSON.stringify(value)}`);
+}
+
+/** A media URL: a string, or an object with `src` (relative to `base`) or `url`. Null where the value is empty. */
+function mediaUrl(input, value, base) {
+  if (isEmpty(value) || value === '') return null;
+  const spelled = isObject(value) ? (value.src ?? value.url) : value;
+  if (typeof spelled !== 'string') return wrongInput(input, value, null, 'no media');
+  try {
+    return new URL(spelled, base).href;
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return wrongInput(input, value, null, 'no media');
+  }
+}
+
+/** A number, or null where the value is empty. */
+function number(input, value) {
+  if (isEmpty(value)) return null;
+  return Number.isFinite(value) ? value : wrongInput(input, value, null, 'no number');
+}
+
+function readCamera(input, camera, base) {
+  if (!isObject(camera) || isEmpty(camera.camera)) return wrongInput(input, camera, null, 'no camera');
+  const src = mediaUrl(input, camera, base);
+  if (src === null) return null;
   return {
     camera: String(camera.camera),
-    label: camera.label === undefined ? null : String(camera.label),
-    src: mediaUrl(camera, base),
-    width: Number(camera.width) || null,
-    height: Number(camera.height) || null,
-    durationS: Number(camera.duration_s) || 0,
+    label: isEmpty(camera.label) ? null : String(camera.label),
+    src,
+    width: number(`${input}.width`, camera.width),
+    height: number(`${input}.height`, camera.height),
+    durationS: number(`${input}.duration_s`, camera.duration_s) ?? 0,
   };
 }
 
-function readFilter(filter) {
+function readFilter(input, filter) {
   if (!filter) return null;
+  if (filter !== true && !isObject(filter)) return wrongInput(input, filter, null, 'no filter');
   const spelled = filter === true ? {} : filter;
+  if (!isEmpty(spelled.options) && !Array.isArray(spelled.options)) {
+    return wrongInput(`${input}.options`, spelled.options, null, 'no filter');
+  }
   const options = spelled.options?.map((option) =>
     Array.isArray(option)
       ? { value: String(option[0]), label: String(option[1]) }
@@ -52,17 +85,19 @@ function readFilter(filter) {
   return { all: spelled.all === undefined ? 'All' : String(spelled.all), options: options ?? null };
 }
 
-function readColumn(column) {
+function readColumn(column, at) {
+  const input = `columns[${at}]`;
+  if (!isObject(column) || isEmpty(column.key)) refuse(input, column, 'an object with a key');
   const type = column.type ?? ColumnType.TEXT;
-  if (!COLUMN_TYPES.has(type)) throw new Error(`column ${column.key} has an unknown type ${type}`);
+  if (!COLUMN_TYPES.has(type)) refuse(`${input}.type`, type, `one of ${[...COLUMN_TYPES].join(', ')}`);
   return {
     key: String(column.key),
     label: String(column.label ?? column.key),
     type,
-    decimals: column.decimals === undefined ? null : Number(column.decimals),
-    unit: column.unit === undefined ? '' : String(column.unit),
-    hover: column.hover === undefined ? null : String(column.hover),
-    filter: readFilter(column.filter),
+    decimals: number(`${input}.decimals`, column.decimals),
+    unit: isEmpty(column.unit) ? '' : String(column.unit),
+    hover: isEmpty(column.hover) ? null : String(column.hover),
+    filter: readFilter(`${input}.filter`, column.filter),
   };
 }
 
@@ -81,49 +116,75 @@ function withOptions(columns, rows) {
   });
 }
 
-function readRow(row, base, fallbackId) {
+function readRow(row, base, at) {
+  const input = `rows[${at}]`;
+  if (!isObject(row)) refuse(input, row, 'an object');
+  const id = String(row.id ?? at);
+  const values =
+    isEmpty(row.values) || isObject(row.values)
+      ? (row.values ?? {})
+      : wrongInput(`${input}.values`, row.values, {}, 'no values');
+  let cameras = row.cameras ?? [];
+  if (!Array.isArray(cameras)) cameras = wrongInput(`${input}.cameras`, cameras, [], 'no cameras');
   return {
-    id: String(row.id ?? fallbackId),
-    label: String(row.label ?? `Episode ${row.id ?? fallbackId}`),
-    values: row.values ?? {},
-    durationS: row.duration_s === undefined ? null : Number(row.duration_s),
-    cameras: (row.cameras ?? []).map((camera) => readCamera(camera, base)),
-    phone: mediaUrl(row.phone, base),
-    rrd: mediaUrl(row.rrd, base),
-    href: mediaUrl(row.href, base),
+    id,
+    label: String(row.label ?? `Episode ${id}`),
+    values,
+    durationS: number(`${input}.duration_s`, row.duration_s),
+    cameras: cameras.map((camera, each) => readCamera(`${input}.cameras[${each}]`, camera, base)).filter(Boolean),
+    phone: mediaUrl(`${input}.phone`, row.phone, base),
+    rrd: mediaUrl(`${input}.rrd`, row.rrd, base),
+    href: mediaUrl(`${input}.href`, row.href, base),
   };
 }
 
 function readAbout(about) {
-  return (about ?? []).map((fact) => ({ key: String(fact.key), label: String(fact.label), value: fact.value }));
+  if (isEmpty(about)) return [];
+  if (!Array.isArray(about)) return wrongInput('about', about, [], 'no facts');
+  return about
+    .filter((fact) => isObject(fact) || wrongInput('about[]', fact, false, 'no fact'))
+    .map((fact) => ({ key: String(fact.key), label: String(fact.label ?? fact.key), value: fact.value }));
 }
 
 /** A manifest, read from `base`: its episodes are the rows, between an index and a duration column. */
 export function readManifest(manifest, base) {
-  const rows = manifest.episodes.map((episode) =>
-    readRow(
+  if (!isObject(manifest)) refuse('the manifest', manifest, 'an object');
+  if (!Array.isArray(manifest.episodes)) refuse('the manifest episodes', manifest.episodes, 'an array');
+  if (!Array.isArray(manifest.columns)) refuse('the manifest columns', manifest.columns, 'an array');
+  const rows = manifest.episodes.map((episode, at) => {
+    if (!isObject(episode)) refuse(`episodes[${at}]`, episode, 'an object');
+    const values = isObject(episode.values)
+      ? episode.values
+      : wrongInput(`episodes[${at}].values`, episode.values, {}, 'no values');
+    return readRow(
       {
         id: episode.index,
-        values: { ...episode.values, [INDEX_KEY]: episode.index, [DURATION_KEY]: episode.duration_s },
+        values: { ...values, [INDEX_KEY]: episode.index, [DURATION_KEY]: episode.duration_s },
         duration_s: episode.duration_s,
         cameras: episode.videos,
         phone: episode.phone,
         rrd: episode.rrd,
       },
       base,
-    ),
-  );
+      at,
+    );
+  });
   const columns = [
     { key: INDEX_KEY, label: '#', type: ColumnType.NUMBER },
     ...manifest.columns,
     { key: DURATION_KEY, label: 'Duration', type: ColumnType.NUMBER, decimals: 1, unit: ' s' },
   ].map(readColumn);
-  return { title: manifest.title ?? null, about: readAbout(manifest.about), columns: withOptions(columns, rows), rows };
+  const title = isEmpty(manifest.title) ? null : String(manifest.title);
+  return { title, about: readAbout(manifest.about), columns: withOptions(columns, rows), rows };
 }
 
 /** The host's own rows, read from `base`. A row with no `id` takes its position. */
 export function readInline(data, base) {
+  if (!isObject(data)) refuse('the inline rows', data, 'an object');
+  if (!Array.isArray(data.rows)) refuse('the inline rows', data.rows, 'an array');
+  if (!Array.isArray(data.columns)) refuse('the inline columns', data.columns, 'an array');
   const rows = data.rows.map((row, position) => readRow(row, base, position));
   const columns = data.columns.map(readColumn);
-  return { title: data.title ?? null, about: readAbout(data.about), columns: withOptions(columns, rows), rows };
+  const title = isEmpty(data.title) ? null : String(data.title);
+  return { title, about: readAbout(data.about), columns: withOptions(columns, rows), rows };
 }

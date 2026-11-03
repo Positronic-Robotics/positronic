@@ -16,17 +16,41 @@ const SEEK_SETTLE_MS = 300;
 export const RERUN_VERSION = '0.30.0';
 const VIEWER_URL = new URL(`../rerun/${RERUN_VERSION}/embedded.html`, import.meta.url).href;
 
-export const MediaState = Object.freeze({ READY: 'ready', BUILDING: 'building', GONE: 'gone', FAILED: 'failed' });
+export const MediaState = Object.freeze({
+  PENDING: 'pending',
+  READY: 'ready',
+  BUILDING: 'building',
+  GONE: 'gone',
+  FAILED: 'failed',
+});
 
 const NOTES = {
   none: 'The replay of this episode is not available.',
-  videoBuilding: 'The video is building. It plays when it is ready.',
-  videoGone: 'The video of this episode is gone.',
-  videoFailed: 'The video did not load.',
   replayBuilding: 'Preparing the 3D replay…',
   replayGone: 'The 3D replay of this episode is gone.',
   replayFailed: 'The 3D replay did not load.',
 };
+
+// The note for each state of a video that is not there, for all the videos of an episode and for some of them.
+const VIDEO_NOTES = [
+  [MediaState.GONE, 'The video of this episode is gone.', (names) => `The video of ${names} is gone.`],
+  [MediaState.FAILED, 'The video did not load.', (names) => `The video of ${names} did not load.`],
+  [
+    MediaState.BUILDING,
+    'The video is building. It plays when it is ready.',
+    (names) => `The video of ${names} is building. It plays when it is ready.`,
+  ],
+];
+
+/** The note for a set of `[name, state]` videos, from the states of all of them; null where none is missing. */
+function cameraNote(videos) {
+  const notes = VIDEO_NOTES.map(([state, all, some]) => {
+    const named = videos.filter(([, each]) => each === state).map(([name]) => name);
+    if (!named.length) return null;
+    return named.length === videos.length ? all : some(named.join(' and '));
+  }).filter(Boolean);
+  return notes.length ? notes.join(' ') : null;
+}
 
 /** The state of `url`, from one request for its first byte, and the wait a building file asks for.
  * Null where `signal` aborts the request. */
@@ -295,24 +319,23 @@ export class EpisodePlayer {
   }
 
   // A video that fails is asked for once more: a 202 means it is building, and it loads again after the wait.
-  // `wantsPlay()` says whether the video plays once it loads again.
-  #watch(video, url, onNote, wantsPlay) {
+  // `onState` takes each state of the video: building, ready, gone or failed.
+  #watch(video, url, onState) {
     video.addEventListener('error', async () => {
       if (video.getAttribute('src') !== url) return;
       const turn = this.#turn;
       const answer = await probe(url, this.#requests.signal);
       if (answer === null || turn !== this.#turn) return;
-      if (answer.state === MediaState.BUILDING) {
-        onNote(NOTES.videoBuilding, 'building');
-        await this.#pause(answer.retryS);
-        if (turn !== this.#turn) return;
-        if (wantsPlay()) video.addEventListener('loadeddata', () => start(video), { once: true });
-        video.src = url;
+      if (answer.state !== MediaState.BUILDING) {
+        onState(answer.state === MediaState.READY ? MediaState.FAILED : answer.state);
         return;
       }
-      onNote(answer.state === MediaState.GONE ? NOTES.videoGone : NOTES.videoFailed, answer.state);
+      onState(MediaState.BUILDING);
+      await this.#pause(answer.retryS);
+      if (turn !== this.#turn) return;
+      video.src = url;
     });
-    video.addEventListener('loadeddata', () => onNote(null, MediaState.READY));
+    video.addEventListener('loadedmetadata', () => onState(MediaState.READY));
   }
 
   #playPhone(row, { autoplay, at }) {
@@ -321,12 +344,11 @@ export class EpisodePlayer {
     video.dataset.name = 'The phone video';
     startAt(video, at);
     this.#reportNativeControls(row, video);
-    this.#watch(
-      video,
-      row.phone,
-      (note) => this.#setNote('video', note),
-      () => autoplay,
-    );
+    this.#watch(video, row.phone, (state) => {
+      this.#setNote('video', cameraNote([[null, state]]));
+      // A row that opened playing plays once its building video is there.
+      if (state === MediaState.READY && autoplay) start(video);
+    });
     this.#stage.replaceChildren(video);
     this.lead = video;
     if (autoplay) start(video);
@@ -362,32 +384,9 @@ export class EpisodePlayer {
     else pause(lead);
   }
 
+  // Each camera holds its own state, and `#settle` derives from all of them which camera leads and the note.
   #playCameras(row, { autoplay, at }) {
-    const longest = row.cameras.reduce(
-      (best, camera, at) => (camera.durationS > row.cameras[best].durationS ? at : best),
-      0,
-    );
-    const durationS = row.durationS ?? row.cameras[longest].durationS;
-    const lost = new Set();
-    // Whether the episode plays, and where, by the lead's last play or pause; a failed load also pauses the lead.
-    let playing = autoplay;
-    let moment = at;
-    // The controls drive one lead video, and `follow` moves the others with it.
-    const drive = (lead) => {
-      lead.addEventListener('play', () => (playing = true));
-      lead.addEventListener('pause', () => lead.error || lead.ended || (playing = false));
-      lead.addEventListener('timeupdate', () => lead.error || (moment = lead.currentTime));
-      const controls = this.#controls(row, lead, durationS);
-      const old = this.#stage.querySelector('[part~="controls"]');
-      if (old) old.replaceWith(controls);
-      else this.#stage.append(controls);
-      follow(
-        lead,
-        videos.filter((video) => video !== lead && !lost.has(video)),
-      );
-      this.lead = lead;
-    };
-    const figures = row.cameras.map((camera) => {
+    const cameras = row.cameras.map((camera) => {
       const name = camera.label ?? this.#cameraName(camera.camera);
       const video = element('video', {
         part: 'camera',
@@ -401,44 +400,74 @@ export class EpisodePlayer {
       });
       video.muted = true;
       video.dataset.name = name;
-      startAt(video, at);
-      video.addEventListener('click', (event) => this.#toggle(row, this.lead, event.isTrusted ? 'Video' : null));
       const caption = element('figcaption', { part: 'caption' }, [name]);
-      const figure = element('figure', { part: 'figure' }, [video, caption]);
-      const wantsPlay = () => playing && video === this.lead;
-      this.#watch(
-        video,
-        camera.src,
-        (note, state) => {
-          figure.dataset.state = state;
-          caption.textContent = note ? `${name} · ${state}` : name;
-          if (note) this.#setNote('video', note);
-          else if (
-            [...this.#stage.querySelectorAll('figure')].every((each) => each.dataset.state === MediaState.READY)
-          ) {
-            this.#setNote('video', null);
-          }
-          if (state !== MediaState.GONE && state !== MediaState.FAILED) return;
-          lost.add(video);
-          // A lost lead hands the controls to a camera that can still play.
-          const next = video === this.lead ? videos.find((each) => !lost.has(each)) : null;
-          if (!next) return;
-          drive(next);
-          if (moment) seek(next, Math.min(moment, Number.isNaN(next.duration) ? moment : next.duration));
-          if (playing) start(next);
-        },
-        wantsPlay,
-      );
-      return figure;
+      const figure = element('figure', { part: 'figure', 'data-state': MediaState.PENDING }, [video, caption]);
+      return { name, video, caption, figure, durationS: camera.durationS, state: MediaState.PENDING };
     });
-    const videos = figures.map((figure) => figure.querySelector('video'));
-    this.#stage.replaceChildren(element('div', { part: 'cameras' }, figures));
-    drive(videos[longest]);
-    if (autoplay) start(videos[longest]);
+    const episode = {
+      row,
+      cameras,
+      // The longest camera leads where it is ready, then the next longest.
+      preferred: [...cameras].sort((a, b) => b.durationS - a.durationS),
+      durationS: row.durationS ?? Math.max(...cameras.map((camera) => camera.durationS)),
+      // The visitor's play state and time, which a new lead takes over.
+      playing: autoplay,
+      moment: at,
+      lead: null,
+      detach: () => {},
+    };
+    for (const camera of cameras) {
+      camera.video.addEventListener('click', (event) => {
+        if (this.lead) this.#toggle(row, this.lead, event.isTrusted ? 'Video' : null);
+      });
+      this.#watch(camera.video, camera.video.getAttribute('src'), (state) => {
+        camera.state = state;
+        this.#settle(episode);
+      });
+    }
+    this.#stage.replaceChildren(
+      element(
+        'div',
+        { part: 'cameras' },
+        cameras.map((camera) => camera.figure),
+      ),
+    );
+    this.#settle(episode);
   }
 
-  // One control set for the episode, which drives `lead`. Without `durationS`, the length of `lead` sets the end.
-  #controls(row, lead, durationS) {
+  /** Derives from the state of every camera the lead (the preferred ready camera, none while none is ready) and the
+   * note, and hands the controls to a new lead at the visitor's play state and time. */
+  #settle(episode) {
+    for (const camera of episode.cameras) {
+      camera.figure.dataset.state = camera.state;
+      const shown = camera.state === MediaState.PENDING || camera.state === MediaState.READY;
+      camera.caption.textContent = shown ? camera.name : `${camera.name} · ${camera.state}`;
+    }
+    this.#setNote('video', cameraNote(episode.cameras.map((camera) => [camera.name, camera.state])));
+    const lead = episode.preferred.find((camera) => camera.state === MediaState.READY)?.video ?? null;
+    if (lead === episode.lead) return;
+    episode.detach();
+    episode.lead = lead;
+    this.lead = lead;
+    this.#stage.querySelector('[part~="controls"]')?.remove();
+    if (!lead) return;
+    const listening = new AbortController();
+    const { signal } = listening;
+    lead.addEventListener('play', () => (episode.playing = true), { signal });
+    lead.addEventListener('pause', () => lead.error || lead.ended || (episode.playing = false), { signal });
+    lead.addEventListener('timeupdate', () => lead.error || (episode.moment = lead.currentTime), { signal });
+    const followers = episode.cameras.map((camera) => camera.video).filter((video) => video !== lead);
+    follow(lead, followers, signal);
+    this.#stage.append(this.#controls(episode.row, lead, episode.durationS, signal));
+    episode.detach = () => listening.abort();
+    if (Math.abs(lead.currentTime - episode.moment) > DRIFT_S) seek(lead, Math.min(episode.moment, lead.duration));
+    if (episode.playing) start(lead);
+    else for (const video of followers) pause(video);
+  }
+
+  // One control set for the episode, which drives `lead` until `signal` aborts. Without `durationS`, the length of
+  // `lead` sets the end.
+  #controls(row, lead, durationS, signal = undefined) {
     const play = element('button', { type: 'button', part: 'play', 'aria-label': PLAY_LABEL }, ['▶']);
     const slider = element('input', {
       type: 'range',
@@ -456,11 +485,15 @@ export class EpisodePlayer {
       SPEEDS.map((rate) => element('option', { value: String(rate), selected: rate === 1 ? '' : null }, [`${rate}×`])),
     );
     let total = durationS;
-    lead.addEventListener('loadedmetadata', () => {
-      if (total) return;
-      total = lead.duration;
-      slider.max = String(total);
-    });
+    lead.addEventListener(
+      'loadedmetadata',
+      () => {
+        if (total) return;
+        total = lead.duration;
+        slider.max = String(total);
+      },
+      { signal },
+    );
     const showState = () => {
       play.textContent = lead.paused ? '▶' : '❚❚';
       play.setAttribute('aria-label', lead.paused ? PLAY_LABEL : PAUSE_LABEL);
@@ -478,33 +511,40 @@ export class EpisodePlayer {
       setRate(lead, Number(speed.value));
       if (event.isTrusted) this.#act('speed', { row: row.id, value: speed.value });
     });
-    for (const type of ['play', 'pause', 'ended']) lead.addEventListener(type, showState);
-    for (const type of ['timeupdate', 'seeked']) lead.addEventListener(type, showTime);
+    for (const type of ['play', 'pause', 'ended']) lead.addEventListener(type, showState, { signal });
+    for (const type of ['timeupdate', 'seeked']) lead.addEventListener(type, showTime, { signal });
+    showState();
+    showTime();
     return element('div', { part: 'controls' }, [play, slider, time, speed]);
   }
 }
 
 // Every video of an episode starts on one clock, so each other video plays, pauses and seeks with the lead
 // until its own end.
-function follow(lead, followers) {
+function follow(lead, followers, signal) {
   const align = () => {
     for (const video of followers) {
-      if (Number.isNaN(video.duration)) continue;
+      if (Number.isNaN(video.duration) || video.error) continue;
       // Past its own end, a shorter camera rests on its last frame.
       const wanted = Math.min(lead.currentTime, video.duration);
       if (Math.abs(video.currentTime - wanted) > DRIFT_S) seek(video, wanted);
       if (!lead.paused && video.paused && wanted < video.duration) start(video);
     }
   };
-  for (const type of ['play', 'seeking', 'timeupdate']) lead.addEventListener(type, align);
-  lead.addEventListener('pause', () => {
+  for (const type of ['play', 'seeking', 'timeupdate']) lead.addEventListener(type, align, { signal });
+  const rest = () => {
     // A paused episode shows one moment on every camera, so each follower takes the lead's time exactly.
     for (const video of followers) {
       pause(video);
       if (!Number.isNaN(video.duration)) seek(video, Math.min(lead.currentTime, video.duration));
     }
-  });
-  lead.addEventListener('ratechange', () => {
-    for (const video of followers) setRate(video, lead.playbackRate);
-  });
+  };
+  lead.addEventListener('pause', rest, { signal });
+  lead.addEventListener(
+    'ratechange',
+    () => {
+      for (const video of followers) setRate(video, lead.playbackRate);
+    },
+    { signal },
+  );
 }
