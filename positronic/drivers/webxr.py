@@ -294,14 +294,19 @@ class WebXR(pimm.ControlSystem):
                 logger.error(f'WebSocket error: {e}')
 
     def _server(self, app: FastAPI) -> uvicorn.Server:
-        ssl_kwargs = {}
+        keyfile = certfile = None
         if self.use_https:
             keyfile, certfile = _get_or_create_ssl_files(
                 port=self.port, keyfile=self.ssl_keyfile, certfile=self.ssl_certfile
             )
-            ssl_kwargs = {'ssl_keyfile': keyfile, 'ssl_certfile': certfile}
         config = uvicorn.Config(
-            app, host='0.0.0.0', port=self.port, log_level='warning', access_log=False, **ssl_kwargs
+            app,
+            host='0.0.0.0',
+            port=self.port,
+            log_level='warning',
+            access_log=False,
+            ssl_keyfile=keyfile,
+            ssl_certfile=certfile,
         )
         return uvicorn.Server(config)
 
