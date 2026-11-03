@@ -325,7 +325,7 @@ export class EpisodePlayer {
       blank = view.location.href === 'about:blank';
     } catch (error) {
       if (error.name !== 'SecurityError') throw error;
-      // A cross-origin host refuses this step on every open, so it is a warning, not an error.
+      // A cross-origin host refuses this step on every open.
       console.warn(`The viewer on another origin keeps its own keys: ${error.message}`);
       return;
     }
