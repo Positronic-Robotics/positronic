@@ -11,7 +11,7 @@ IMAGE_NAME_ROBOLAB := positro/robolab
 IMAGE_NAME_MOLMOSPACES := positro/molmospaces
 # One serving image per checkpoint, including weights and starting offline: positro/<name>.
 # Dockerfile.serve-<name> is the default path; vendor-local files override it. Not in `build` or `push`.
-SERVE_IMAGES := pi05-droid gr00t-n17-droid molmoact2-droid flux3-action cosmos3-nano dreamzero-droid
+SERVE_IMAGES := pi05-droid gr00t-n17-droid gr00t-n17-droid-rtc molmoact2-droid flux3-action cosmos3-nano dreamzero-droid
 SERVE_DOCKERFILE_dreamzero-droid := ../positronic/vendors/dreamzero/Dockerfile.serve-droid
 
 VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' ../pyproject.toml | head -n 1)
@@ -161,6 +161,12 @@ $(foreach name,$(SERVE_IMAGES),$(eval $(call SERVE_IMAGE,$(name),positro/$(name)
 # A docker-container builder reads a base from the registry only, so the push needs the base published.
 build-serve-pi05-droid: build-openpi-base
 push-serve-pi05-droid: push-openpi-base
+
+# The RTC image is the GR00T image of the same commit with another start command. Its push reads the GR00T image
+# from the registry, so the CI job that pushes the GR00T image runs first.
+SERVE_BUILD_FLAGS_gr00t-n17-droid-rtc := --build-arg BASE_IMAGE=positro/gr00t-n17-droid:$(GIT_SHA)
+build-serve-gr00t-n17-droid-rtc: SERVE_BUILD_FLAGS_gr00t-n17-droid-rtc := --build-arg BASE_IMAGE=positro/gr00t-n17-droid:local
+build-serve-gr00t-n17-droid-rtc: build-serve-gr00t-n17-droid
 
 # Galaxea's weights are gated and its licence allows internal evaluation only, so its image goes to a private
 # registry, built and pushed by hand. It is not in SERVE_IMAGES, which CI publishes to Docker Hub.

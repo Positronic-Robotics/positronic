@@ -1,0 +1,11 @@
+# GR00T N1.7 DROID with real-time chunking: `positro/gr00t-n17-droid`, started with the `droid_rtc` preset.
+# The server warms the RTC path only when it starts with `droid_rtc`, and the platform starts an image with the
+# image's own start command. The recipe adds no layer. CI builds it from the GR00T image of the same commit.
+#
+# Usage (from the repository root)
+#   HF_TOKEN=<a read token> make -C docker build-serve-gr00t-n17-droid-rtc     # positro/gr00t-n17-droid-rtc:local
+#   docker run --rm --network none --gpus all positro/gr00t-n17-droid-rtc:local    # the offline pre-flight
+
+ARG BASE_IMAGE=positro/gr00t-n17-droid:latest
+FROM ${BASE_IMAGE}
+ENTRYPOINT ["/opt/gr00t-venv/bin/python", "-m", "gr00t_serving.server", "droid_rtc"]

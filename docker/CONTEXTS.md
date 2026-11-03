@@ -22,7 +22,8 @@
 `Dockerfile.serve-<name>` builds `positro/<name>`, a policy image the platform runs: one
 checkpoint, its weights inside, offline, serving on `:8000`. `pi05-droid` and `gr00t-n17-droid`
 build on `positro/openpi-base` and `positro/gr00t-base`, `molmoact2-droid` on a Python 3.13
-image with uv, and `flux3-action` and `cosmos3-nano` build the vendor stack themselves. CI
+image with uv, and `flux3-action` and `cosmos3-nano` build the vendor stack themselves.
+`gr00t-n17-droid-rtc` is `gr00t-n17-droid` with the `droid_rtc` start command. CI
 publishes each one; `make build-serve-<name>` builds it. See
 [Submit a policy image](../docs/submit-a-policy-image.md).
 

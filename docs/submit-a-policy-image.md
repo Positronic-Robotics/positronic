@@ -29,6 +29,11 @@ to Docker Hub. Build from the root of a positronic checkout:
 | FLUX 3 Action DROID | [`docker/Dockerfile.serve-flux3-action`](../docker/Dockerfile.serve-flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
 | Cosmos3-Nano DROID | [`docker/Dockerfile.serve-cosmos3-nano`](../docker/Dockerfile.serve-cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
+`positro/gr00t-n17-droid-rtc` is the GR00T image with the `droid_rtc` start command, which serves
+[real-time chunking](../positronic/vendors/gr00t/README.md#real-time-chunking). Its recipe,
+[`docker/Dockerfile.serve-gr00t-n17-droid-rtc`](../docker/Dockerfile.serve-gr00t-n17-droid-rtc), adds no
+layer to `positro/gr00t-n17-droid`.
+
 CI builds each image when its recipe or the code it installs changes, and tags each build `main`, `latest`
 and the commit. A release also tags each of them `v<version>`. CI does not test an
 image: run the checks in [Test the image before you submit](#test-the-image-before-you-submit).

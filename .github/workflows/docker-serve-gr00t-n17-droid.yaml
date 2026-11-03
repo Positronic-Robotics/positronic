@@ -1,13 +1,14 @@
-name: Build and Push the GR00T N1.7 DROID Serving Image
+name: Build and Push the GR00T N1.7 DROID Serving Images
 
-# Main republishes positro/gr00t-n17-droid on a change to its recipe, its build,
-# or the packages and manifests it installs.
+# Main republishes positro/gr00t-n17-droid and positro/gr00t-n17-droid-rtc on a change
+# to their recipes, their build, or the packages and manifests they install.
 on:
   push:
     branches:
       - main
     paths:
       - docker/Dockerfile.serve-gr00t-n17-droid
+      - docker/Dockerfile.serve-gr00t-n17-droid-rtc
       - docker/install-model-server-deps.sh
       - docker/Makefile
       - .dockerignore
@@ -39,4 +40,12 @@ jobs:
     uses: ./.github/workflows/docker-serve-image.yaml
     with:
       name: gr00t-n17-droid
+    secrets: inherit
+
+  # The RTC image starts the image above with `droid_rtc`, and its build reads that image from the registry.
+  serve-image-rtc:
+    needs: serve-image
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: gr00t-n17-droid-rtc
     secrets: inherit

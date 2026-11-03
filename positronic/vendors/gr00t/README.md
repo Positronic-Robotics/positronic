@@ -190,6 +190,8 @@ Use `droid_rtc` to predict the next chunk while the client executes the current 
 docker compose run --rm --service-ports groot-server droid_rtc
 ```
 
+The policy image `positro/gr00t-n17-droid-rtc` starts with this preset.
+
 The client sends its remaining planned joints and grip, time offsets and completed call timings.
 GR00T estimates latency as the maximum of the last five calls in the session to select frozen steps,
 and uses its session settings to choose the blend overlap.
