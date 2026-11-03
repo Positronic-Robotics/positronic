@@ -1,5 +1,6 @@
 import dataclasses
 import logging
+import math
 import subprocess
 import sys
 import types
@@ -2093,8 +2094,11 @@ def test_coulomb_friction_with_no_values_runs_the_values_of_i2rt(monkeypatch):
         [*STATION_COULOMB_FRICTION, 0.0],
         [[value] for value in STATION_COULOMB_FRICTION],
         [*STATION_COULOMB_FRICTION[:5], 'x'],
+        [*STATION_COULOMB_FRICTION[:5], math.nan],
+        [*STATION_COULOMB_FRICTION[:5], math.inf],
+        [*STATION_COULOMB_FRICTION[:5], -0.05],
     ],
-    ids=['gripper-motor', 'nested', 'not-a-number'],
+    ids=['gripper-motor', 'nested', 'not-a-number', 'nan', 'infinite', 'negative'],
 )
 def test_coulomb_friction_that_the_chain_cannot_take_is_refused_before_a_chain_opens(friction):
     with pytest.raises(ValueError):

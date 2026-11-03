@@ -702,11 +702,13 @@ class Robot(pimm.ControlSystem):
         """
         if park_after_idle_s is not None and (not math.isfinite(park_after_idle_s) or park_after_idle_s <= 0):
             raise ValueError('park_after_idle_s must be finite and positive, or None')
-        # The chain is open when the friction is set, and a chain that faults before it parks stays open. So the
-        # conversion that the setter does runs here first.
+        # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
+        # it does, those checks and a check that each value is finite run here first.
         friction = compensation.coulomb_friction
-        if friction is not None and np.asarray(friction, np.float64).shape != (len(YAM_JOINT_NAMES),):
-            raise ValueError(f'coulomb_friction needs one value per arm joint, not {friction}')
+        if friction is not None:
+            values = np.asarray(friction, np.float64)
+            if values.shape != (len(YAM_JOINT_NAMES),) or not np.all(np.isfinite(values) & (values >= 0)):
+                raise ValueError(f'coulomb_friction needs one finite, non-negative value per arm joint, not {friction}')
         self._park_after_idle_s = park_after_idle_s
         self._park_tuning = park_tuning
         self._move_tuning = move_tuning
