@@ -55,6 +55,13 @@ function cameraNote(videos) {
 // The playback state of a new episode: paused, at its start, at the normal rate.
 const START = Object.freeze({ playing: false, at: 0, rate: 1 });
 
+/** The length of the episode: the lead's own length once it knows it, else the length the row names, else the
+ * largest length a camera names. */
+function episodeLength(episode, lead) {
+  if (lead && Number.isFinite(lead.duration)) return lead.duration;
+  return episode.row.durationS ?? Math.max(0, ...episode.cameras.map((camera) => camera.durationS));
+}
+
 /** The longest ready camera: by the length of its video once it knows it, else by the length the row names, and
  * on a tie by the named length, then the first. Null while no camera is ready. */
 function longestReady(cameras) {
@@ -456,7 +463,6 @@ export class EpisodePlayer {
     const episode = {
       row,
       cameras,
-      durationS: row.durationS ?? Math.max(...cameras.map((camera) => camera.durationS)),
       // The player's playback state, which a new lead takes over and every ready camera takes.
       state: this.#state,
       lead: null,
@@ -493,6 +499,7 @@ export class EpisodePlayer {
     this.#setNote('video', cameraNote(episode.cameras.map((camera) => [camera.name, camera.state])));
     const lead = longestReady(episode.cameras)?.video ?? null;
     if (lead !== episode.lead) this.#lead(episode, lead);
+    episode.setLength?.(episodeLength(episode, lead));
     for (const camera of episode.cameras) {
       if (camera.state === MediaState.READY) setRate(camera.video, episode.state.rate);
     }
@@ -511,6 +518,7 @@ export class EpisodePlayer {
   #lead(episode, lead) {
     episode.detach();
     episode.lead = lead;
+    episode.setLength = null;
     this.lead = lead;
     this.#stage.querySelector('[part~="controls"]')?.remove();
     if (!lead) return;
@@ -529,14 +537,16 @@ export class EpisodePlayer {
         this.#settle(episode);
       },
     };
-    this.#stage.append(this.#controls(episode.row, lead, episode.durationS, speed, signal));
+    const controls = this.#controls(episode.row, lead, episodeLength(episode, lead), speed, signal);
+    episode.setLength = controls.setLength;
+    this.#stage.append(controls.element);
     episode.detach = () => listening.abort();
     if (Math.abs(lead.currentTime - state.at) > DRIFT_S) seek(lead, Math.min(state.at, lead.duration));
     if (state.playing) start(lead);
   }
 
-  // One control set for the episode, which drives `lead` until `signal` aborts. Without `durationS`, the length of
-  // `lead` sets the end. The speed control shows `speed.rate`, and `speed.choose` sets the episode's rate.
+  // One control set for the episode, which drives `lead` until `signal` aborts, with its element and `setLength`,
+  // which sets the end of its seek bar. The speed control shows `speed.rate`, and `speed.choose` sets the rate.
   #controls(row, lead, durationS, speed, signal) {
     const play = element('button', { type: 'button', part: 'play', 'aria-label': PLAY_LABEL }, ['▶']);
     const slider = element('input', {
@@ -557,14 +567,6 @@ export class EpisodePlayer {
       ),
     );
     let total = durationS;
-    // A row that names no length takes the lead's, which the lead can know before the controls attach.
-    const takeLength = () => {
-      if (total || !Number.isFinite(lead.duration)) return;
-      total = lead.duration;
-      slider.max = String(total);
-      showTime();
-    };
-    lead.addEventListener('loadedmetadata', takeLength, { signal });
     const showState = () => {
       play.textContent = lead.paused ? '▶' : '❚❚';
       play.setAttribute('aria-label', lead.paused ? PLAY_LABEL : PAUSE_LABEL);
@@ -586,8 +588,13 @@ export class EpisodePlayer {
     for (const type of ['timeupdate', 'seeked']) lead.addEventListener(type, showTime, { signal });
     showState();
     showTime();
-    takeLength();
-    return element('div', { part: 'controls' }, [play, slider, time, rates]);
+    const setLength = (seconds) => {
+      if (seconds === total) return;
+      total = seconds;
+      slider.max = String(total);
+      showTime();
+    };
+    return { element: element('div', { part: 'controls' }, [play, slider, time, rates]), setLength };
   }
 }
 

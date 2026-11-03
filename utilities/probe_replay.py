@@ -139,7 +139,8 @@ def row_media(n: int) -> dict:
     16 has three cameras: the longest lost after a wait, the next built after waits, and one that is there, 17 builds
     its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
     names no length, 20 names no length and its second camera is the longest, 21 builds its replay, 22 builds it after
-    slow answers, and 23 has a phone video shorter than its cameras."""
+    slow answers, 23 has a phone video shorter than its cameras,
+    and 24 names no length for the row or its 15 s camera, and 10 s for its other camera."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -173,6 +174,15 @@ def row_media(n: int) -> dict:
         17: {'rrd': '/rrd/building/17.rrd', 'phone': None, 'cameras': at('slowbuilding', cameras)},
         21: {'rrd': '/rrd/building/21.rrd'},
         23: {'rrd': None, 'phone': '/media/short/23/phone.webm'},
+        24: {
+            'rrd': None,
+            'phone': None,
+            'duration_s': None,
+            'cameras': [
+                cameras[0],
+                {key: value for key, value in at('long', cameras[1:])[0].items() if key != 'duration_s'},
+            ],
+        },
         22: {'rrd': '/rrd/slowbuilding/22.rrd'},
         20: {
             'rrd': None,
@@ -1403,6 +1413,20 @@ class Probe:
         )
         page.close()
 
+    def src_restored_and_mixed_length(self):
+        print('A src removed and restored, and a row whose longest camera names no length:')
+        page = self.open('/page/small')
+        self.until(page, "all('row').length > 0")
+        page.evaluate("window.first = host().getAttribute('src'); host().removeAttribute('src')")
+        self.until(page, "one('status')?.textContent.includes('Waiting')", 5000)
+        page.evaluate("host().setAttribute('src', window.first)")
+        self.check('the restored src renders again', self.until(page, "all('row').length > 0", 5000))
+        page.close()
+        page = self.open('/page/dock?episode=24')
+        reaches = self.until(page, f"Math.abs(Number(one('seek').max) - {LONG_VIDEO_S}) < 0.2", 8000)
+        self.check('the seek bar reaches the end of the longest camera', reaches, page.evaluate("one('seek').max"))
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1507,6 +1531,7 @@ def main(headed: bool) -> int:
             probe.rate_across_widths_and_real_length,
             probe.width_change_around_the_viewer,
             probe.end_and_zero_filter,
+            probe.src_restored_and_mixed_length,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

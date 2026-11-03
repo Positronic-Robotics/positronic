@@ -212,7 +212,10 @@ export class PositronicReplay extends HTMLElement {
   #list = null;
   #request = 0;
   #loading = null;
+  // The source of the build on screen: a URL, `inline`, or null for none. A release clears it, and each build
+  // sets it after its release.
   #loaded = null;
+  #listSource = null;
   // What the current build holds outside its shadow DOM, and what the open dock holds; `#release` and `#close`
   // free them.
   #held = [];
@@ -249,11 +252,8 @@ export class PositronicReplay extends HTMLElement {
   disconnectedCallback() {
     this.#connected = false;
     this.#waitForScript?.disconnect();
-    if (this.#loading) {
-      this.#loading.abort();
-      this.#loading = null;
-      this.#loaded = null;
-    }
+    this.#loading?.abort();
+    this.#loading = null;
     this.#release();
   }
 
@@ -331,56 +331,58 @@ export class PositronicReplay extends HTMLElement {
         return;
       }
       this.#waitForScript?.disconnect();
-      this.#loaded = key;
-      this.#take(() => readInline(JSON.parse(script.textContent), document.baseURI));
+      this.#take(() => readInline(JSON.parse(script.textContent), document.baseURI), key);
       return;
     }
     this.#waitForScript?.disconnect();
-    this.#loaded = key;
     let url;
     try {
       url = new URL(src, document.baseURI);
     } catch (error) {
       if (!(error instanceof TypeError)) throw error;
       wrongInput('src', src, null, 'no replay');
-      this.#status('The replay did not load: its address is not a URL.');
+      this.#status('The replay did not load: its address is not a URL.', key);
       return;
     }
     const loading = new AbortController();
     this.#loading = loading;
-    this.#status('Loading the replay…');
+    this.#status('Loading the replay…', key);
     fetch(url, { signal: loading.signal })
       .then((response) => {
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
         return response.json();
       })
       .then((manifest) => {
-        if (request === this.#request) this.#take(() => readManifest(manifest, url.href));
+        if (request === this.#request) this.#take(() => readManifest(manifest, url.href), key);
       })
       .catch((error) => {
         // A new `src`, or a removal of the element, aborts the request of the old one.
         if (error.name === 'AbortError' || request !== this.#request) return;
         console.error(`The replay at ${url} did not load:`, error);
-        this.#status(`The replay did not load: ${error.message}`);
+        this.#status(`The replay did not load: ${error.message}`, key);
       })
       .finally(() => {
         if (this.#loading === loading) this.#loading = null;
       });
   }
 
-  #take(read) {
+  /** Reads the list of `source` and builds it. */
+  #take(read, source) {
     try {
       this.#list = read();
     } catch (error) {
       console.error('The replay data does not read as a list of episodes:', error);
-      this.#status(`The replay did not load: ${error.message}`);
+      this.#status(`The replay did not load: ${error.message}`, source);
       return;
     }
+    this.#listSource = source;
     this.#render();
   }
 
-  #status(message) {
+  /** Shows `message` in place of a build; `source` is the source it stands for, and null for none. */
+  #status(message, source = null) {
     this.#release();
+    this.#loaded = source;
     this.shadowRoot.replaceChildren(element('style', {}, [STYLE]), element('p', { part: 'status' }, [message]));
   }
 
@@ -419,10 +421,12 @@ export class PositronicReplay extends HTMLElement {
     for (const free of this.#held.splice(0)) free();
     this.#end = null;
     this.#current = null;
+    this.#loaded = null;
   }
 
   #render() {
     this.#release();
+    this.#loaded = this.#listSource;
     this.#shown = PAGE;
     this.#selects = [];
     this.#count = null;
