@@ -1427,6 +1427,27 @@ class Probe:
         self.check('the seek bar reaches the end of the longest camera', reaches, page.evaluate("one('seek').max"))
         page.close()
 
+    def link_to_no_row(self):
+        print('A link that names no row of the list:')
+        for path, docked in (('/page/dock?episode=999', True), ('/page/list?episode=999', False)):
+            warnings = []
+            page = self.browser.new_page(viewport={'width': 1400, 'height': 900})
+            page.on('console', lambda message, seen=warnings: message.type == 'warning' and seen.append(message.text))
+            page.goto(self.base + path, wait_until='load')
+            self.until(page, "all('row').length > 0", 8000)
+            time.sleep(0.3)
+            named = [text for text in warnings if 'episode=999' in text]
+            actions = self.actions(page)
+            layout = 'dock' if docked else 'list'
+            self.check(f'the {layout} logs one warning', len(named) == 1, warnings)
+            self.check(f'the {layout} drops the parameter', 'episode=' not in page.url, page.url)
+            self.check(f'the {layout} sends no open', not [a for a in actions if a['action'] == 'open'], actions)
+            if docked:
+                self.check('the dock stays closed', not page.evaluate("host().hasAttribute('open')"))
+            else:
+                self.check('the list selects its first row', page.evaluate("row('1').part.contains('current')"))
+            page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1531,6 +1552,7 @@ def main(headed: bool) -> int:
             probe.width_change_around_the_viewer,
             probe.end_and_zero_filter,
             probe.src_restored_and_mixed_length,
+            probe.link_to_no_row,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

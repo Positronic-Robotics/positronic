@@ -523,10 +523,18 @@ export class PositronicReplay extends HTMLElement {
     }
   }
 
+  /** The row the page's address names; null where it names none. An address that names a row the list does not
+   * hold loses the parameter. */
   #linkedRow() {
     const name = this.#linkParam;
     const id = name ? new URLSearchParams(window.location.search).get(name) : null;
-    return id === null ? null : (this.#list.rows.find((row) => row.id === id) ?? null);
+    if (id === null) return null;
+    const row = this.#list.rows.find((each) => each.id === id);
+    if (row) return row;
+    // The address comes from the visitor, as an old link or an episode the list no longer holds: no host fault.
+    console.warn(`The link parameter ${name}=${id} names no row of this list; the element opens none.`);
+    setLinkParam(name, null);
+    return null;
   }
 
   #filters() {
