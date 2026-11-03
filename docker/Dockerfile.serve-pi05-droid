@@ -31,8 +31,9 @@ RUN mkdir -p /assets/openpi-data/big_vision \
 
 FROM ${BASE_IMAGE}
 # openpi's `serve_policy.py` resolves the container's hostname. Under `--network none`, /etc/hosts has no
-# record of it, and nss-myhostname resolves it to a local address.
-RUN apt-get update && apt-get install -y --no-install-recommends libnss-myhostname \
+# record of it, and nss-myhostname resolves it to a local address. The base holds ca-certificates 20230311,
+# which trusts the leaked eMudhra (emSign) intermediate CAs.
+RUN apt-get update && apt-get install -y --no-install-recommends libnss-myhostname ca-certificates \
  && rm -rf /var/lib/apt/lists/* && grep -E '^hosts:.*myhostname' /etc/nsswitch.conf
 
 ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
@@ -44,6 +45,8 @@ ENV CHECKPOINTS_DIR=/opt/positronic/checkpoints/pi05_droid_jointpos \
 # the environment the base resolved openpi into, /.venv. Left to its default, uv builds a second
 # copy at /openpi/.venv.
 RUN UV_PROJECT_ENVIRONMENT=/.venv uv sync --frozen --project /openpi && uv cache clean
+# openpi's lock pins certifi 2025.4.26, which trusts the same CAs. UV_NO_SYNC below keeps this pin at start.
+RUN uv pip install --no-config --no-cache --python /.venv/bin/python certifi==2026.10.23
 
 # The dependencies install from the lock alone, so a source change does not reinstall them.
 WORKDIR /positronic

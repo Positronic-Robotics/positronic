@@ -3,9 +3,11 @@ FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 # Copy uv for fast Python package management
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Install minimal system dependencies
+# Install minimal system dependencies. The CUDA base holds ca-certificates 20230311, which trusts the leaked
+# eMudhra (emSign) intermediate CAs, so the list names it to upgrade it.
 RUN apt-get update && apt-get install -y \
     build-essential \
+    ca-certificates \
     curl \
     git \
     ffmpeg \
