@@ -3,20 +3,14 @@
 
 import { WebXRButton } from '/webxr-button.js';
 
-export function initWebSocket() {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws`;
-  const ws = new WebSocket(wsUrl);
-  return ws;
-}
-
-export function sendControllers(ws, controllers) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+function sendControllers(ws, controllers) {
+  if (ws.readyState !== WebSocket.OPEN) return;
   const payload = { controllers, timestamp: Date.now() };
   ws.send(JSON.stringify(payload));
 }
 
-export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
+export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
+  let websocket = null;
   let xrButton = null;
   let xrRefSpace = null;
   let scene = null, camera = null, renderer = null, gl = null;
@@ -95,6 +89,17 @@ export function startXRApp({ websocket, onInit, onFrame, referenceSpace = 'local
     }
     session.requestAnimationFrame(onXRFrame);
   }
+
+  function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    websocket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    websocket.onclose = () => {
+      console.log('Controller WebSocket closed, attempting to reconnect...');
+      setTimeout(connectWebSocket, 1000);
+    };
+  }
+
+  connectWebSocket();
 
   // Attach button and enable
   xrButton = new WebXRButton({ onRequestSession, onEndSession: (s) => s.end() });
