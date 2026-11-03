@@ -24,9 +24,11 @@ def test_the_fake_droid_builds_without_the_vendor_packages():
     assert set(built.ready_handlers) == {eval_keys.ARM, eval_keys.GRIPPER, *camera.droid}
 
 
-def test_the_fake_droid_declares_what_the_real_droid_declares():
+def test_the_fake_droid_declares_what_the_real_droid_declares(monkeypatch):
     for vendor in ('positronic_franka', 'pymodbus', 'pyzed'):
         pytest.importorskip(vendor)
+    for serial_env in (camera.FRANKA_WRIST_ZED_SERIAL_ENV, camera.FRANKA_LEFT_ZED_SERIAL_ENV):
+        monkeypatch.setenv(serial_env, '1')
     real = embodiment.droid.override(robot_arm=roboarm.franka_droid.override(manage_desk=False)).instantiate()
     fake = embodiment.droid_fake.instantiate()
 
