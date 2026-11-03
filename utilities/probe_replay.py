@@ -140,7 +140,8 @@ def row_media(n: int) -> dict:
     its replay and, more slowly, its videos, 18 has a longest camera that is there and one built after waits, and 19
     names no length, 20 names no length and its second camera is the longest, 21 builds its replay, 22 builds it after
     slow answers, 23 has a phone video shorter than its cameras,
-    and 24 names no length for the row or its 15 s camera, and 10 s for its other camera."""
+    24 names no length for the row or its 15 s camera, and 10 s for its other camera, and 27 has a recording that
+    answers slowly."""
     cameras = [
         {'camera': camera, 'src': f'/media/ok/{n}/{camera}.webm', 'width': 64, 'height': 48, 'duration_s': VIDEO_S}
         for camera in ('front', 'wrist')
@@ -174,6 +175,7 @@ def row_media(n: int) -> dict:
         17: {'rrd': '/rrd/building/17.rrd', 'phone': None, 'cameras': at('slowbuilding', cameras)},
         21: {'rrd': '/rrd/building/21.rrd'},
         23: {'rrd': None, 'phone': '/media/short/23/phone.webm'},
+        27: {'rrd': '/rrd/slow/27.rrd'},
         24: {
             'rrd': None,
             'phone': None,
@@ -391,7 +393,7 @@ class QuietServer(ThreadingHTTPServer):
 def media_status(path: str, asked: int) -> int | None:
     """The status of a media file that is not there: 404 for a gone one, after a wait for a slow one, and 202 for the
     first answers of a building one. None for a file that is there."""
-    if '/slowgone/' in path or '/slowbuilding/' in path:
+    if '/slowgone/' in path or '/slowbuilding/' in path or '/slow/' in path:
         time.sleep(SLOW_S)
     if 'gone/' in path:
         return 404
@@ -1490,6 +1492,21 @@ class Probe:
         )
         page.close()
 
+    def viewer_between_rows(self):
+        print('A step from a shown recording to a row whose recording answers slowly:')
+        page = self.open('/page/dock?episode=26')
+        shown = self.until(page, "loads('/rrd/ok/26.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
+        page.keyboard.press('ArrowDown')
+        time.sleep(0.5)
+        pending = page.evaluate("[frameUrl(), frame()?.contentWindow.location.href ?? '', noteText()]")
+        hidden = pending[0] == '' and '/rrd/ok/26.rrd' not in pending[1].replace('%2F', '/')
+        self.check('while the next recording is pending, no viewer shows the old one', shown and hidden, pending)
+        self.check('the note says the replay is on its way', 'Preparing' in pending[2], pending[2])
+        self.check(
+            'the viewer shows the new recording once it is there', self.until(page, "loads('/rrd/slow/27.rrd')", 15000)
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1596,6 +1613,7 @@ def main(headed: bool) -> int:
             probe.src_restored_and_mixed_length,
             probe.link_to_no_row,
             probe.swap_reports_and_button_names,
+            probe.viewer_between_rows,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,

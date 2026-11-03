@@ -189,13 +189,14 @@ export class EpisodePlayer {
     const wanted = () => turn === this.#turn;
     this.#summary.textContent = summary;
     this.#clearVideos();
+    // The recording of the row before goes at once, so it never shows under this row's title.
+    this.#hideFrame();
     this.#setNote('replay', null);
     const startVideo = this.#videoStarter(row);
     if (this.#full && row.rrd && !this.#narrow.matches) {
       this.#playRecording(row, startVideo, wanted);
       return;
     }
-    this.#hideFrame();
     if (startVideo) startVideo();
     else this.#setNote('replay', NOTES.none);
   }
@@ -267,6 +268,8 @@ export class EpisodePlayer {
       videoStarted = true;
       startVideo();
     };
+    // The row's note shows while the element asks for the recording.
+    this.#setNote('replay', NOTES.replayBuilding);
     const state = await this.#settled(row.rrd, { building: () => fallBackToVideo(NOTES.replayBuilding), wanted });
     if (state === null) return;
     if (state !== MediaState.READY) {
