@@ -103,8 +103,6 @@ class SLCamera(pimm.ControlSystem):
     STALE_FRAME_SEC = 1.0
     # An open is dark only when all of this many frames are dark: one dark frame does not reopen the camera.
     DARK_CHECK_FRAMES = 30
-    # Each open logs the ones of these that the camera model reports.
-    OPEN_LOG_SETTINGS = ('AEC_AGC', 'EXPOSURE_TIME', 'ANALOG_GAIN', 'DIGITAL_GAIN', 'EXPOSURE', 'GAIN')
 
     @staticmethod
     def _is_listed(serial: int) -> bool:
@@ -195,6 +193,9 @@ class SLCamera(pimm.ControlSystem):
         if camera.grab() != sl.ERROR_CODE.SUCCESS or camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
             return None
         return float(image.get_data()[:, :, :3].mean())
+
+    # Each open logs the ones of these that the camera model reports.
+    OPEN_LOG_SETTINGS = ('AEC_AGC', 'EXPOSURE_TIME', 'ANALOG_GAIN', 'DIGITAL_GAIN', 'EXPOSURE', 'GAIN')
 
     @staticmethod
     def _exposure_and_gain(camera) -> str:

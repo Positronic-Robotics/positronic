@@ -295,9 +295,7 @@ def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter, **settings):
         DEPTH_MODE=types.SimpleNamespace(NONE='none'),
         UNIT=types.SimpleNamespace(METER='meter'),
         TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
-        VIDEO_SETTINGS=types.SimpleNamespace(**{
-            name: name for name in ('AEC_AGC', 'EXPOSURE_TIME', 'ANALOG_GAIN', 'DIGITAL_GAIN', 'EXPOSURE', 'GAIN')
-        }),
+        VIDEO_SETTINGS=types.SimpleNamespace(**{name: name for name in module.SLCamera.OPEN_LOG_SETTINGS}),
     )
     camera = module.SLCamera(serial_number=SERIAL, **settings)
     camera.frame._bind(frames, clock=sdk.clock)
