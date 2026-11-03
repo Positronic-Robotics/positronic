@@ -12,7 +12,7 @@ from positronic_model_server.spec import ARGS, SEQ, resolve_params
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
-from positronic.policy.processors import DelayEstimate, RTCSchedule
+from positronic.policy.processors import RTCSchedule
 from positronic.utils.versions import Version
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import keys, server
@@ -57,7 +57,17 @@ def test_s3_selection_downloads_only_the_selected_checkpoint(monkeypatch, tmp_pa
 def test_standalone_checkpoint_metadata_contract():
     assert model_settings.MODEL_SETTINGS_PATH == MODEL_SETTINGS_PATH
     assert keys.PLAN == policy_keys.PLAN
-    for name in ('CHECKPOINT_ID', 'CHECKPOINT_PATH', 'EXPERIMENT_NAME', 'TYPE', 'JPEG_QUALITY', 'COMPRESS_IMAGES'):
+    for name in (
+        'CHECKPOINT_ID',
+        'CHECKPOINT_PATH',
+        'EXPERIMENT_NAME',
+        'TYPE',
+        'JPEG_QUALITY',
+        'COMPRESS_IMAGES',
+        'CALL_ID',
+        'CALL_TIMINGS',
+        'ELAPSED_SEC',
+    ):
         assert getattr(keys, name) == getattr(policy_keys, name)
 
 
@@ -210,14 +220,14 @@ def rtc_settings():
     return {keys.RTC.CALL_AFTER_SEC: 0.5, keys.RTC.BLEND_SEC: 0.5, keys.RTC.MAX_DELAY_SEC: 1.0, keys.RTC.RAMP_RATE: 5.0}
 
 
-def _rtc_request(actions, *, chunk_offset=0.0, observation_offset=0.0, latency=0.0):
+def _rtc_request(actions, *, chunk_offset=0.0, observation_offset=0.0, call_id=0, timings=()):
     return {
         keys.RTC.FIELD: {
             gr00t.ACTION: actions,
             keys.RTC.CHUNK_OFFSET_SEC: chunk_offset,
             keys.RTC.OBSERVATION_OFFSET_SEC: observation_offset,
-            keys.RTC.ESTIMATED_LATENCY_SEC: latency,
-            keys.RTC.MEASURED_LATENCY_SEC: None,
+            keys.CALL_ID: call_id,
+            keys.CALL_TIMINGS: list(timings),
         }
     }
 
@@ -233,7 +243,11 @@ def test_rtc_uses_cached_poses_and_client_targets_for_frozen_and_blended_actions
         values[:] = np.arange(40)[None, :, None]
     session.infer(_rtc_request([]))
     targets = _targets(8)
-    session.infer(_rtc_request(targets, chunk_offset=0.5, observation_offset=-0.02, latency=0.1))
+    session.infer(
+        _rtc_request(
+            targets, chunk_offset=0.5, observation_offset=-0.02, timings=[{keys.CALL_ID: 0, keys.ELAPSED_SEC: 0.1}]
+        )
+    )
     options = native_policy.get_action.call_args.kwargs['options']
     assert options[keys.RTC.FROZEN_STEPS] == 1
     assert options[keys.RTC.OVERLAP_STEPS] == options[keys.RTC.ACTION_HORIZON] == 6
@@ -265,10 +279,33 @@ def test_rtc_cache_is_session_local_and_copies_model_buffers(native_policy, rtc_
 def test_rtc_freezes_from_latency_and_limits_overlap_to_available_actions(native_policy, rtc_settings, latency, frozen):
     session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
     session.infer(_rtc_request([]))
-    session.infer(_rtc_request(_targets(2), chunk_offset=3.8, latency=latency))
+    session.infer(_rtc_request(_targets(2), chunk_offset=3.8, timings=[{keys.CALL_ID: 0, keys.ELAPSED_SEC: latency}]))
     options = native_policy.get_action.call_args.kwargs['options']
     assert options[keys.RTC.FROZEN_STEPS] == frozen
     assert options[keys.RTC.OVERLAP_STEPS] == 2
+
+
+def test_rtc_estimates_from_batched_timings_and_expires_old_samples(native_policy, rtc_settings):
+    session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
+    session.infer(_rtc_request([], timings=[{keys.CALL_ID: 0, keys.ELAPSED_SEC: 0.8}]))
+    session.infer(_rtc_request(_targets(20)))
+    assert native_policy.get_action.call_args.kwargs['options'][keys.RTC.FROZEN_STEPS] == 8
+    session.infer(_rtc_request(_targets(20), timings=[{keys.CALL_ID: i, keys.ELAPSED_SEC: 0.1} for i in range(1, 5)]))
+    assert native_policy.get_action.call_args.kwargs['options'][keys.RTC.FROZEN_STEPS] == 8
+    session.infer(_rtc_request(_targets(20), timings=[{keys.CALL_ID: 5, keys.ELAPSED_SEC: 0.2}]))
+    assert native_policy.get_action.call_args.kwargs['options'][keys.RTC.FROZEN_STEPS] == 2
+
+
+def test_rtc_caps_server_estimate_and_keeps_history_session_local(native_policy, rtc_settings):
+    settings = {**rtc_settings, keys.RTC.MAX_DELAY_SEC: 0.3}
+    first = server.Gr00tSession(native_policy, {}, settings, fps=10)
+    second = server.Gr00tSession(native_policy, {}, settings, fps=10)
+    first.infer(_rtc_request([], timings=[{keys.CALL_ID: 0, keys.ELAPSED_SEC: 2.0}]))
+    first.infer(_rtc_request(_targets(20)))
+    assert native_policy.get_action.call_args.kwargs['options'][keys.RTC.FROZEN_STEPS] == 3
+    second.infer(_rtc_request([]))
+    second.infer(_rtc_request(_targets(20)))
+    assert native_policy.get_action.call_args.kwargs['options'][keys.RTC.FROZEN_STEPS] == 0
 
 
 @pytest.mark.parametrize(
@@ -279,7 +316,7 @@ def test_rtc_uses_session_rate_and_blend_settings(
 ):
     session = server.Gr00tSession(native_policy, {}, {**rtc_settings, keys.RTC.BLEND_SEC: blend_sec}, fps=fps)
     session.infer(_rtc_request([]))
-    session.infer(_rtc_request(_targets(10), latency=0.1))
+    session.infer(_rtc_request(_targets(10), timings=[{keys.CALL_ID: 0, keys.ELAPSED_SEC: 0.1}]))
     options = native_policy.get_action.call_args.kwargs['options']
     assert options[keys.RTC.FROZEN_STEPS] == expected_frozen
     assert options[keys.RTC.OVERLAP_STEPS] == expected_overlap
@@ -289,7 +326,11 @@ def test_rtc_aligns_actions_to_the_observation_using_seconds(native_policy, rtc_
     session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
     native_policy.get_action.return_value[0][gr00t.EE_POSE][:] = np.arange(40)[None, :, None]
     session.infer(_rtc_request([]))
-    session.infer(_rtc_request(_targets(8), chunk_offset=0.3, observation_offset=-0.22, latency=0.1))
+    session.infer(
+        _rtc_request(
+            _targets(8), chunk_offset=0.3, observation_offset=-0.22, timings=[{keys.CALL_ID: 0, keys.ELAPSED_SEC: 0.1}]
+        )
+    )
     actions = native_policy.get_action.call_args.kwargs['options'][gr00t.ACTION]
     np.testing.assert_array_equal(actions[gr00t.EE_POSE][:6, 0], np.arange(5, 11))
     np.testing.assert_array_equal(actions[gr00t.JOINT_POSITION][:6, 0], np.arange(3, 9) / 4)
@@ -298,8 +339,8 @@ def test_rtc_aligns_actions_to_the_observation_using_seconds(native_policy, rtc_
 @pytest.mark.parametrize('latency', [None, True, -0.1, float('nan'), float('inf')])
 def test_rtc_rejects_invalid_latency_before_native_inference(native_policy, rtc_settings, latency):
     session = server.Gr00tSession(native_policy, {}, rtc_settings, fps=10)
-    with pytest.raises(ValueError, match='estimated_latency_sec'):
-        session.infer(_rtc_request([], latency=latency))
+    with pytest.raises(ValueError, match=keys.ELAPSED_SEC):
+        session.infer(_rtc_request([], timings=[{keys.CALL_ID: 0, keys.ELAPSED_SEC: latency}]))
     native_policy.get_action.assert_not_called()
 
 
@@ -353,10 +394,10 @@ def test_rtc_launch_warms_native_overlap_before_sessions_are_ready(native_policy
     session = model.prepare_session(resolve_params(model.parameters, {}))
     assert session._previous_poses is None
     schedule = spec.from_spec(json.loads(json.dumps(session.client_stack))).to_spec()[SEQ][1]
-    assert (
-        schedule[ARGS][RTCSchedule.LATENCY_ESTIMATE_ARG]
-        == DelayEstimate.max(last=5, max_sec=rtc_settings[keys.RTC.MAX_DELAY_SEC]).to_spec()
-    )
+    assert schedule[ARGS][RTCSchedule.LATENCY_ESTIMATE_ARG] == 0.0
+    session.infer(_rtc_request([]))
+    session.infer(_rtc_request(_targets(8), call_id=1))
+    assert native_policy.get_action.call_args.kwargs['options'][keys.RTC.FROZEN_STEPS] == 0
 
 
 def test_rtc_stack_rejects_clients_without_trajectory_scheduling(native_policy, rtc_settings, monkeypatch):
