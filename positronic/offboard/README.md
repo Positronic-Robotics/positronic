@@ -388,8 +388,8 @@ queued commands. It combines local scheduling and remote prediction through the
 policy API's [composition model](../policy/DESIGN.md#composability).
 
 The client supplies the remaining planned actions at the observation moment,
-alongside measured and expected end-to-end call latency. The measured value is
-`None` before the first completed call. The server decides how
+alongside completed call timings. The timing batch is empty before the first
+completed call. The server estimates latency and decides how
 to use that context, including which actions to freeze or blend. Supplying the
 whole remaining plan lets models choose their own conditioning window.
 

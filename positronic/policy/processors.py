@@ -634,36 +634,24 @@ class InferenceSchedule(Policy):
         self._max_in_flight = max_in_flight
 
     def _call_obs(
-        self,
-        obs: Obs,
-        trajectory: Trajectory | None,
-        obs_time_ns: int,
-        estimated_latency_sec: float,
-        measured_sec: float | None,
-        *,
-        call_id: int,
-        call_timings: list[dict[str, int | float]],
+        self, obs: Obs, trajectory: Trajectory | None, obs_time_ns: int, *, update: Trajectory | None, replan: bool
     ) -> Obs:
-        context: dict[str, Any] = {
-            policy_keys.CALL_ID: call_id,
-            policy_keys.CALL_TIMINGS: call_timings,
-            policy_keys.RTC.ESTIMATED_LATENCY_SEC: estimated_latency_sec,
-            policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
-        }
+        if replan:
+            obs = OverlayMapping(obs, add={policy_keys.REPLAN_NOW: True})
         if policy_keys.PLAN not in obs:
-            return OverlayMapping(obs, add=context)
-        plan = obs[policy_keys.PLAN]
+            return obs
+        plan = update.waypoints() if update is not None else obs[policy_keys.PLAN]
         start_ns = obs_time_ns if trajectory is None else trajectory.start_ns
         end_ns = obs_time_ns if trajectory is None else trajectory.end_ns
         running = max(0, bisect_right(plan, obs_time_ns, key=lambda point: point.due_ns) - 1)
         remaining = plan[running:] if obs_time_ns < end_ns else ()
         due_ns = remaining[0].due_ns if remaining else end_ns
-        context[policy_keys.RTC.ACTION_PREFIX] = {
+        prefix = {
             policy_keys.RTC.PREFIX_ACTIONS: [dict(point.commands) for point in remaining],
             policy_keys.RTC.CHUNK_OFFSET_SEC: round((due_ns - start_ns) * self._fps / 1e9) / self._fps,
             policy_keys.RTC.OBSERVATION_OFFSET_SEC: (due_ns - obs_time_ns) / 1e9,
         }
-        return OverlayMapping(obs, add=context, remove=(policy_keys.PLAN,))
+        return OverlayMapping(obs, add={policy_keys.RTC.ACTION_PREFIX: prefix}, remove=(policy_keys.PLAN,))
 
     @staticmethod
     def _replan_if_needed(
@@ -675,23 +663,61 @@ class InferenceSchedule(Policy):
                 next_call_ns = now_ns
         return previous, next_call_ns
 
-    @dataclass(frozen=True)
-    class _PendingCall:
-        answer: Answer[Sequence[Commands] | None]
-        observation_time_ns: int
-        call_id: int
+    class _CallQueue:
+        """Bound outstanding calls and carry completed timings into accepted submissions."""
+
+        @dataclass(frozen=True)
+        class _PendingCall:
+            answer: Answer[Sequence[Commands] | None]
+            observation_time_ns: int
+            call_id: int
+
+        def __init__(self, runtime: Runtime, max_in_flight: int):
+            self._runtime = runtime
+            self._max_in_flight = max_in_flight
+            self._pending: deque[InferenceSchedule._CallQueue._PendingCall] = deque()
+            self._timings: list[dict[str, int | float]] = []
+            self.next_call_id = 0
+
+        def __bool__(self) -> bool:
+            return bool(self._pending)
+
+        def submit(self, infer: Callable[[Obs], Sequence[Commands] | None], obs: Obs, observation_time_ns: int) -> None:
+            if len(self._pending) >= self._max_in_flight:
+                raise QueueFull('Inference schedule is at capacity')
+            obs = OverlayMapping(
+                obs, add={policy_keys.CALL_ID: self.next_call_id, policy_keys.CALL_TIMINGS: self._timings}
+            )
+            self._pending.append(
+                self._PendingCall(
+                    answer=self._runtime.submit(infer, obs),
+                    observation_time_ns=observation_time_ns,
+                    call_id=self.next_call_id,
+                )
+            )
+            self.next_call_id += 1
+            self._timings = []
+
+        def pop_ready(self) -> _PendingCall | None:
+            if not self._pending or not self._pending[0].answer.done():
+                return None
+            call = self._pending.popleft()
+            self._timings.append({policy_keys.CALL_ID: call.call_id, policy_keys.ELAPSED_SEC: call.answer.elapsed_sec})
+            return call
+
+        def close(self) -> None:
+            for call in self._pending:
+                call.answer.cancel()
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._latency_estimate.run()
         timing = self._request_timing.run()
         estimated_latency_sec = 0.0
-        measured_latency_sec: float | None = None
-        pending: deque[InferenceSchedule._PendingCall] = deque()
-        call_timings: list[dict[str, int | float]] = []
-        next_call_id = first_valid_call_id = 0
+        calls = self._CallQueue(runtime, self._max_in_flight)
+        first_valid_call_id = 0
         previous: Trajectory | None = None
         next_call_ns: int | None = 0
-        fresh_observation_ns = 0
+        last_obs_ns: int | None = None
         skipped = 0
         replan = False
         obs = yield
@@ -700,21 +726,15 @@ class InferenceSchedule(Policy):
                 now_ns = runtime.time_ns
                 update = None
                 if obs.get(policy_keys.REPLAN_NOW, False):
-                    first_valid_call_id = next_call_id
+                    first_valid_call_id = calls.next_call_id
                 previous, next_call_ns = self._replan_if_needed(obs, previous, next_call_ns, now_ns)
                 replan = replan or obs.get(policy_keys.REPLAN_NOW, False)
                 sample_time_ns: int = obs.get(self._obs_time_key, now_ns)
 
-                if pending and pending[0].answer.done():
-                    call = pending.popleft()
-                    measured_latency_sec = call.answer.elapsed_sec
-                    estimated_latency_sec = duration.update(measured_latency_sec)
+                if (call := calls.pop_ready()) is not None:
+                    estimated_latency_sec = duration.update(call.answer.elapsed_sec)
                     check_finite_nonnegative(estimated_latency_sec, 'duration estimate')
                     chunk = call.answer.result()
-                    call_timings.append({
-                        policy_keys.CALL_ID: call.call_id,
-                        policy_keys.ELAPSED_SEC: measured_latency_sec,
-                    })
                     if chunk is not None and call.call_id >= first_valid_call_id:
                         update = self._merge.plan(chunk, self._fps, previous, now_ns, call.observation_time_ns)
                         previous = update
@@ -723,49 +743,26 @@ class InferenceSchedule(Policy):
                         if next_call_ns is None:
                             next_call_ns = now_ns
 
-                if next_call_ns is not None and sample_time_ns >= max(next_call_ns, fresh_observation_ns):
-                    if update is not None and policy_keys.PLAN in obs:
-                        obs = OverlayMapping(obs, add={policy_keys.PLAN: update.waypoints()})
-                    if replan:
-                        obs = OverlayMapping(obs, add={policy_keys.REPLAN_NOW: True})
+                inference_due = next_call_ns is not None and sample_time_ns >= next_call_ns
+                new_obs = last_obs_ns is None or sample_time_ns > last_obs_ns
+                if inference_due and new_obs:
                     try:
-                        if len(pending) >= self._max_in_flight:
-                            raise QueueFull('Inference schedule is at capacity')
-                        call_obs = self._call_obs(
-                            obs,
-                            previous,
-                            sample_time_ns,
-                            estimated_latency_sec,
-                            measured_latency_sec,
-                            call_id=next_call_id,
-                            call_timings=call_timings,
-                        )
-                        pending.append(
-                            self._PendingCall(
-                                answer=runtime.submit(infer, call_obs),
-                                observation_time_ns=sample_time_ns,
-                                call_id=next_call_id,
-                            )
-                        )
-                        next_call_id += 1
-                        call_timings = []
+                        call_obs = self._call_obs(obs, previous, sample_time_ns, update=update, replan=replan)
+                        calls.submit(infer, call_obs, sample_time_ns)
                         replan = False
                     except QueueFull:
                         skipped += 1
                         runtime.set_metadata(policy_keys.SKIPPED_SAMPLES, skipped)
-                    fresh_observation_ns = sample_time_ns + 1 if self._obs_time_key in obs else 0
+                    last_obs_ns = sample_time_ns if self._obs_time_key in obs else None
                     next_call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
-                    if next_call_ns is None and not pending:
+                    if next_call_ns is None and not calls:
                         next_call_ns = now_ns
                 if update is not None and now_ns >= update.end_ns:
                     update = Trajectory([], update.start_ns, update.fps, update.start_ns)
                 commands = {} if update is None else asdict(update, recurse=False)
-                obs = yield Step(
-                    commands, now_ns if pending or next_call_ns is None else max(next_call_ns, fresh_observation_ns)
-                )
+                obs = yield Step(commands, now_ns if calls or next_call_ns is None else next_call_ns)
         finally:
-            for call in pending:
-                call.answer.cancel()
+            calls.close()
 
     def meta(self) -> dict[str, Any]:
         meta = {ACTION_FPS: self._fps}
@@ -832,7 +829,7 @@ class ChunkedSchedule(InferenceSchedule):
     episode. An early answer waits behind the remaining commands; the new chunk starts from its first
     action. The observation is read at the request, before commands emitted in that same round.
 
-    Inference observations include measured call latency and the estimate used for the lead.
+    Inference observations include completed call timings; the lead estimate stays local.
 
     The optional observation argument ``replan_now`` defaults to ``False``. When true, inference is due
     immediately and its answer can start immediately. An existing pending call is kept. The argument
@@ -902,9 +899,8 @@ class RTCSchedule(InferenceSchedule):
     time minus T1: zero in the drawing. If T1 falls 0.02 seconds after o5 became due, the prefix
     still starts with o5 and this offset is -0.02. The scheduler does not resample the plan.
 
-    Measured latency is the duration of the preceding completed call; estimated latency comes
-    from ``latency_estimate``. Both travel separately from the prefix, in seconds. Before the
-    first answer, measured latency is None and the estimate is zero; the prefix is empty.
+    Completed call timings travel separately from the prefix, in seconds. The server estimates
+    how long to freeze actions. Before the first answer, the timings and prefix are empty.
 
     Until the answer arrives, the player executes the old chunk. On arrival, it switches to the
     new chunk at the action due now: n0 through n2 have elapsed, so it starts with n3. If the old

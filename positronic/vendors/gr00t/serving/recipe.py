@@ -21,10 +21,7 @@ def inference(settings: dict[str, Any], *, rtc: bool = False) -> dict[str, Any]:
     timing = (
         [
             component(
-                'select_observation_fields',
-                mapping={
-                    name: name for name in (obs_keys.RTC.ESTIMATED_LATENCY_SEC, obs_keys.RTC.MEASURED_LATENCY_SEC)
-                },
+                'select_observation_fields', mapping={name: name for name in (obs_keys.CALL_ID, obs_keys.CALL_TIMINGS)}
             )
         ]
         if rtc
@@ -42,8 +39,8 @@ def inference(settings: dict[str, Any], *, rtc: bool = False) -> dict[str, Any]:
                             obs_keys.RTC.ACTION_PREFIX,
                             obs_keys.RTC.OBSERVATION_OFFSET_SEC,
                         ],
-                        obs_keys.RTC.ESTIMATED_LATENCY_SEC: [obs_keys.RTC.ESTIMATED_LATENCY_SEC],
-                        obs_keys.RTC.MEASURED_LATENCY_SEC: [obs_keys.RTC.MEASURED_LATENCY_SEC],
+                        obs_keys.CALL_ID: [obs_keys.CALL_ID],
+                        obs_keys.CALL_TIMINGS: [obs_keys.CALL_TIMINGS],
                     }
                 },
                 decode_layout={},
@@ -148,7 +145,7 @@ def client_stack(
                 version=2,
                 fps=fps,
                 call_after_sec=rtc[obs_keys.RTC.CALL_AFTER_SEC],
-                latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.RTC.MAX_DELAY_SEC]},
+                latency_estimate=0.0,
             ),
         )
     parts = [schedule, codec, component('metadata', values={model_settings.ACTION_FPS: fps})]

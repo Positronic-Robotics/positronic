@@ -254,8 +254,11 @@ def test_rtc_targets_survive_observation_packing_and_image_compression(observati
     result = codec.wrap(infer)({
         **observation,
         policy_keys.RTC.ACTION_PREFIX: prefix,
-        policy_keys.RTC.ESTIMATED_LATENCY_SEC: 0.2,
-        policy_keys.RTC.MEASURED_LATENCY_SEC: 0.15,
+        policy_keys.CALL_ID: 2,
+        policy_keys.CALL_TIMINGS: [
+            {policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.2},
+            {policy_keys.CALL_ID: 1, policy_keys.ELAPSED_SEC: 0.15},
+        ],
     })
     assert len(result) == 40
     restored = received[0][serving_keys.RTC.FIELD]
@@ -263,6 +266,9 @@ def test_rtc_targets_survive_observation_packing_and_image_compression(observati
     assert restored[serving_keys.RTC.OBSERVATION_OFFSET_SEC] == -0.01
     np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.JOINT_POSITION], np.ones(7, dtype=np.float32))
     np.testing.assert_array_equal(restored[gr00t.ACTION][0][gr00t.GRIP], [1.0])
-    assert restored[serving_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.2
-    assert restored[serving_keys.RTC.MEASURED_LATENCY_SEC] == 0.15
+    assert restored[serving_keys.CALL_ID] == 2
+    assert restored[serving_keys.CALL_TIMINGS] == [
+        {serving_keys.CALL_ID: 0, serving_keys.ELAPSED_SEC: 0.2},
+        {serving_keys.CALL_ID: 1, serving_keys.ELAPSED_SEC: 0.15},
+    ]
     assert set(received[0]) == {gr00t.VIDEO, gr00t.STATE, gr00t.LANGUAGE, serving_keys.RTC.FIELD}

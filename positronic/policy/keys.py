@@ -54,5 +54,3 @@ class RTC:
     PREFIX_ACTIONS = 'actions'
     CHUNK_OFFSET_SEC = 'chunk_offset_sec'
     OBSERVATION_OFFSET_SEC = 'observation_offset_sec'
-    ESTIMATED_LATENCY_SEC = 'estimated_latency_sec'
-    MEASURED_LATENCY_SEC = 'measured_latency_sec'

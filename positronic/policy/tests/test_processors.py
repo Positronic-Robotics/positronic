@@ -1285,21 +1285,14 @@ def test_errors_bring_inference_and_playback_forward_when_enabled(execution, mon
         clock.advance_to_ns(PERIOD_NS)
         obs = {keys.ROBOT_STATUS: RobotStatus.AVAILABLE.value, channel: status.value, POSITION: 42}
         step = run.send(obs)
-        initial = {CALL_ID: 0, CALL_TIMINGS: [], RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
+        initial = {CALL_ID: 0, CALL_TIMINGS: []}
         if replan_on_error and status is RobotStatus.ERROR:
             model.answer_with([{MOTOR: (2, index)} for index in range(5)])
             step = run.send(obs)
             assert step == Step({MOTOR: (2, 0)}, 2 * PERIOD_NS)
             assert model.requests == [
                 initial,
-                {
-                    **obs,
-                    policy_keys.REPLAN_NOW: True,
-                    CALL_ID: 1,
-                    CALL_TIMINGS: [{CALL_ID: 0, ELAPSED_SEC: 0.0}],
-                    RTC.ESTIMATED_LATENCY_SEC: 0.0,
-                    RTC.MEASURED_LATENCY_SEC: 0.0,
-                },
+                {**obs, policy_keys.REPLAN_NOW: True, CALL_ID: 1, CALL_TIMINGS: [{CALL_ID: 0, ELAPSED_SEC: 0.0}]},
             ]
             assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.DROPPED}'] == 4
         else:
@@ -1461,9 +1454,7 @@ def test_chunked_schedule_starts_the_first_trajectory_when_the_answer_is_read(ex
         step = run.send({POSITION: 43})
         assert Trajectory(**step.commands) == Trajectory(chunk, 350_000_000, 10, 550_000_000)
         assert step.resume_at_ns == 550_000_000
-        assert model.requests == [
-            {**obs, CALL_ID: 0, CALL_TIMINGS: [], RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
-        ]
+        assert model.requests == [{**obs, CALL_ID: 0, CALL_TIMINGS: []}]
     finally:
         run.close()
 
@@ -1485,18 +1476,11 @@ def test_scheduler_replans_only_when_requested_by_the_observation(execution, mon
         clock.advance_to_ns(PERIOD_NS)
         fault = {keys.ROBOT_STATUS: RobotStatus.ERROR}
         step = run.send({**fault, **override})
-        initial = {CALL_ID: 0, CALL_TIMINGS: [], RTC.ESTIMATED_LATENCY_SEC: 0.0, RTC.MEASURED_LATENCY_SEC: None}
+        initial = {CALL_ID: 0, CALL_TIMINGS: []}
         if override.get(policy_keys.REPLAN_NOW, False):
             assert model.requests == [
                 initial,
-                {
-                    **fault,
-                    policy_keys.REPLAN_NOW: True,
-                    CALL_ID: 1,
-                    CALL_TIMINGS: [{CALL_ID: 0, ELAPSED_SEC: 0.0}],
-                    RTC.ESTIMATED_LATENCY_SEC: 0.0,
-                    RTC.MEASURED_LATENCY_SEC: 0.0,
-                },
+                {**fault, policy_keys.REPLAN_NOW: True, CALL_ID: 1, CALL_TIMINGS: [{CALL_ID: 0, ELAPSED_SEC: 0.0}]},
             ]
             assert step.commands == {}
             clock.advance_to_ns(2 * PERIOD_NS)
@@ -1927,7 +1911,7 @@ def test_estimator_histories_are_episode_local(execution, monkeypatch, rtc, esti
                 clock.advance_to_ns(now_ns)
                 run.send({})
             assert model.calls[-1][0] == call_ns
-            assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(delay_ns / 1e9)
+            assert model.requests[-1][CALL_TIMINGS] == [{CALL_ID: 0, ELAPSED_SEC: pytest.approx(delay_ns / 1e9)}]
             if rtc:
                 assert len(model.calls[-1][1]) == 5
         finally:
@@ -2088,7 +2072,7 @@ def test_rtc_discards_an_answer_whose_entire_prediction_has_elapsed(execution, m
         run.close()
 
 
-def test_rtc_history_only_answer_keeps_playback_and_updates_latency(execution, monkeypatch):
+def test_rtc_history_only_answer_keeps_playback_and_reports_timing(execution, monkeypatch):
     model, run, step = _rtc(execution, monkeypatch, 0.2, DelayEstimate.mean(last=1))
     _, clock = execution
     try:
@@ -2107,8 +2091,7 @@ def test_rtc_history_only_answer_keeps_playback_and_updates_latency(execution, m
             (4 * PERIOD_NS, [f'old{i}' for i in range(2, 10)]),
             (5 * PERIOD_NS, [f'old{i}' for i in range(3, 10)]),
         ]
-        assert model.requests[-1][RTC.MEASURED_LATENCY_SEC] == pytest.approx(0.1)
-        assert model.requests[-1][RTC.ESTIMATED_LATENCY_SEC] == pytest.approx(0.1)
+        assert model.requests[-1][CALL_TIMINGS] == [{CALL_ID: 2, ELAPSED_SEC: pytest.approx(0.1)}]
     finally:
         run.close()
 
@@ -2862,7 +2845,7 @@ def test_the_rtc_prefix_carries_end_like_any_other_command(execution):
     assert model.prefixes == [[], [{MOTOR: 1}, _ending(2), {MOTOR: 3}]]
 
 
-def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(execution, monkeypatch):
+def test_rtc_sends_completed_call_timings_with_the_remaining_plan(execution, monkeypatch):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
@@ -2883,10 +2866,8 @@ def test_rtc_sends_measured_and_expected_latency_with_the_remaining_plan(executi
         assert first[RTC.PREFIX_ACTIONS] == []
         assert second[RTC.CHUNK_OFFSET_SEC] == 0.5
         assert second[RTC.OBSERVATION_OFFSET_SEC] == 0.0
-        assert model.requests[0][RTC.MEASURED_LATENCY_SEC] is None
-        assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
-        assert model.requests[0][RTC.ESTIMATED_LATENCY_SEC] == 0.0
-        assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.2
+        assert model.requests[0][CALL_TIMINGS] == []
+        assert model.requests[1][CALL_TIMINGS] == [{CALL_ID: 0, ELAPSED_SEC: 0.1}]
         assert [action[MOTOR] for action in second[RTC.PREFIX_ACTIONS]] == [f'old{i}' for i in range(5, 10)]
     finally:
         run.close()
@@ -2920,10 +2901,8 @@ def test_late_answer_reads_do_not_inflate_duration_estimates(execution, monkeypa
         clock.advance_to_ns(next_call_ns)
         run.send({})
         assert [time_ns for time_ns, _ in model.calls] == [0, next_call_ns]
-        assert model.requests[0][RTC.MEASURED_LATENCY_SEC] is None
-        assert model.requests[0][RTC.ESTIMATED_LATENCY_SEC] == 0.0
-        assert model.requests[1][RTC.MEASURED_LATENCY_SEC] == 0.1
-        assert model.requests[1][RTC.ESTIMATED_LATENCY_SEC] == 0.1
+        assert model.requests[0][CALL_TIMINGS] == []
+        assert model.requests[1][CALL_TIMINGS] == [{CALL_ID: 0, ELAPSED_SEC: 0.1}]
         if not rtc:
             assert RTC.ACTION_PREFIX not in model.requests[1]
     finally:

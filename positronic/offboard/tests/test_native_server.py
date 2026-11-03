@@ -451,9 +451,7 @@ def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, versi
         spec.parallel(
             spec.component(
                 'select_observation_fields',
-                mapping={
-                    name: name for name in (policy_keys.RTC.ESTIMATED_LATENCY_SEC, policy_keys.RTC.MEASURED_LATENCY_SEC)
-                },
+                mapping={name: name for name in (policy_keys.CALL_ID, policy_keys.CALL_TIMINGS)},
             ),
             spec.component(
                 'joint_position_action',
@@ -494,8 +492,8 @@ def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, versi
             assert prefix[policy_keys.RTC.CHUNK_OFFSET_SEC] == pytest.approx(0.2)
             assert prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] == pytest.approx(-0.05)
             assert policy_keys.PLAN not in seen[1]
-            assert seen[1][policy_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.1
-            assert seen[1][policy_keys.RTC.MEASURED_LATENCY_SEC] == 0.0
+            assert seen[1][policy_keys.CALL_ID] == 1
+            assert seen[1][policy_keys.CALL_TIMINGS] == [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}]
         finally:
             runtime.close()
             run.close()

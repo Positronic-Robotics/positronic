@@ -1150,8 +1150,8 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             run.close()
     assert inputs[0] == inputs[1] == inputs[2]
     assert outputs[0] == outputs[1] == outputs[2]
-    assert model.observations[0][policy_keys.RTC.ESTIMATED_LATENCY_SEC] == 0.0
-    assert model.observations[0][policy_keys.RTC.MEASURED_LATENCY_SEC] is None
+    assert model.observations[0][policy_keys.CALL_ID] == 0
+    assert model.observations[0][policy_keys.CALL_TIMINGS] == []
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
