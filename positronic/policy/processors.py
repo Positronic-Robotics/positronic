@@ -515,25 +515,43 @@ class RequestTiming:
         def __init__(self, strategy: 'RequestTiming') -> None:
             self._strategy = strategy
             self._first_call_ns: int | None = None
+            self._last_obs_ns: int | None = None
+            self.next_call_ns: int | None = 0
 
-        def next_call_ns(self, trajectory: Trajectory | None, estimated_latency_sec: float, now_ns: int) -> int | None:
-            """Return the next deadline from a prediction, or advance periodic timing from the submission time."""
-            if self._strategy._reference is RequestTiming.Reference.EVERY:
-                if self._first_call_ns is None:
-                    self._first_call_ns = now_ns
-                periods = int((now_ns - self._first_call_ns) / self._strategy.duration_ns) + 1
-                deadline_ns = self._first_call_ns + round(periods * self._strategy.duration_ns)
-                if deadline_ns <= now_ns:
-                    deadline_ns = self._first_call_ns + round((periods + 1) * self._strategy.duration_ns)
-                return deadline_ns
+        def is_due(self, obs_time_ns: int) -> bool:
+            inference_due = self.next_call_ns is not None and obs_time_ns >= self.next_call_ns
+            new_obs = self._last_obs_ns is None or obs_time_ns > self._last_obs_ns
+            return inference_due and new_obs
+
+        def update_after_attempt(self, obs_time_ns: int | None, now_ns: int, *, pending: bool) -> None:
+            """Advance timing after a submission attempt, including a skipped sample."""
+            self._last_obs_ns = obs_time_ns
+            self.next_call_ns = None if pending else now_ns
+            if self._strategy._reference is not RequestTiming.Reference.EVERY:
+                return
+            sample_time_ns = now_ns if obs_time_ns is None else obs_time_ns
+            if self._first_call_ns is None:
+                self._first_call_ns = sample_time_ns
+            periods = int((sample_time_ns - self._first_call_ns) / self._strategy.duration_ns) + 1
+            self.next_call_ns = self._first_call_ns + round(periods * self._strategy.duration_ns)
+            if self.next_call_ns <= sample_time_ns:
+                self.next_call_ns = self._first_call_ns + round((periods + 1) * self._strategy.duration_ns)
+
+        def update_after_answer(self, trajectory: Trajectory | None, estimated_latency_sec: float, now_ns: int) -> None:
+            if self.next_call_ns is not None:
+                return
+            self.next_call_ns = now_ns
             if trajectory is None:
-                return None
+                return
             if self._strategy._reference is RequestTiming.Reference.AFTER_START:
-                return trajectory.start_ns + round(self._strategy.duration_ns)
-            if not trajectory.commands:
-                return None
-            lead_ns = min(estimated_latency_sec * 1e9, trajectory.end_ns - trajectory.start_ns)
-            return trajectory.end_ns - round(lead_ns)
+                self.next_call_ns = trajectory.start_ns + round(self._strategy.duration_ns)
+            elif self._strategy._reference is RequestTiming.Reference.BEFORE_END and trajectory.commands:
+                lead_ns = min(estimated_latency_sec * 1e9, trajectory.end_ns - trajectory.start_ns)
+                self.next_call_ns = trajectory.end_ns - round(lead_ns)
+
+        def request_now(self, now_ns: int) -> None:
+            if self.next_call_ns is not None:
+                self.next_call_ns = now_ns
 
     def run(self) -> _Run:
         """Create timing for one episode, anchoring periodic calls at the first submission."""
@@ -653,16 +671,6 @@ class InferenceSchedule(Policy):
         }
         return OverlayMapping(obs, add={policy_keys.RTC.ACTION_PREFIX: prefix}, remove=(policy_keys.PLAN,))
 
-    @staticmethod
-    def _replan_if_needed(
-        obs: Obs, previous: Trajectory | None, next_call_ns: int | None, now_ns: int
-    ) -> tuple[Trajectory | None, int | None]:
-        if obs.get(policy_keys.REPLAN_NOW, False):
-            previous = None
-            if next_call_ns is not None:
-                next_call_ns = now_ns
-        return previous, next_call_ns
-
     class _CallQueue:
         """Bound outstanding calls and carry completed timings into accepted submissions."""
 
@@ -712,12 +720,9 @@ class InferenceSchedule(Policy):
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._latency_estimate.run()
         timing = self._request_timing.run()
-        estimated_latency_sec = 0.0
         calls = self._CallQueue(runtime, self._max_in_flight)
         first_valid_call_id = 0
         previous: Trajectory | None = None
-        next_call_ns: int | None = 0
-        last_obs_ns: int | None = None
         skipped = 0
         replan = False
         obs = yield
@@ -727,8 +732,9 @@ class InferenceSchedule(Policy):
                 update = None
                 if obs.get(policy_keys.REPLAN_NOW, False):
                     first_valid_call_id = calls.next_call_id
-                previous, next_call_ns = self._replan_if_needed(obs, previous, next_call_ns, now_ns)
-                replan = replan or obs.get(policy_keys.REPLAN_NOW, False)
+                    previous = None
+                    timing.request_now(now_ns)
+                    replan = True
                 sample_time_ns: int = obs.get(self._obs_time_key, now_ns)
 
                 if (call := calls.pop_ready()) is not None:
@@ -738,14 +744,9 @@ class InferenceSchedule(Policy):
                     if chunk is not None and call.call_id >= first_valid_call_id:
                         update = self._merge.plan(chunk, self._fps, previous, now_ns, call.observation_time_ns)
                         previous = update
-                    if next_call_ns is None:
-                        next_call_ns = timing.next_call_ns(update, estimated_latency_sec, now_ns)
-                        if next_call_ns is None:
-                            next_call_ns = now_ns
+                    timing.update_after_answer(update, estimated_latency_sec, now_ns)
 
-                inference_due = next_call_ns is not None and sample_time_ns >= next_call_ns
-                new_obs = last_obs_ns is None or sample_time_ns > last_obs_ns
-                if inference_due and new_obs:
+                if timing.is_due(sample_time_ns):
                     try:
                         call_obs = self._call_obs(obs, previous, sample_time_ns, update=update, replan=replan)
                         calls.submit(infer, call_obs, sample_time_ns)
@@ -753,14 +754,14 @@ class InferenceSchedule(Policy):
                     except QueueFull:
                         skipped += 1
                         runtime.set_metadata(policy_keys.SKIPPED_SAMPLES, skipped)
-                    last_obs_ns = sample_time_ns if self._obs_time_key in obs else None
-                    next_call_ns = timing.next_call_ns(None, estimated_latency_sec, sample_time_ns)
-                    if next_call_ns is None and not calls:
-                        next_call_ns = now_ns
+                    timing.update_after_attempt(obs.get(self._obs_time_key), now_ns, pending=bool(calls))
                 if update is not None and now_ns >= update.end_ns:
                     update = Trajectory([], update.start_ns, update.fps, update.start_ns)
                 commands = {} if update is None else asdict(update, recurse=False)
-                obs = yield Step(commands, now_ns if calls or next_call_ns is None else next_call_ns)
+                resume_at_ns = timing.next_call_ns
+                if calls or resume_at_ns is None:
+                    resume_at_ns = now_ns
+                obs = yield Step(commands, resume_at_ns)
         finally:
             calls.close()
 
