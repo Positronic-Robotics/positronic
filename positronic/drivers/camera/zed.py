@@ -189,46 +189,12 @@ class SLCamera(pimm.ControlSystem):
             emitter.emit(error)
         return error
 
-    def _open_once_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, bool]:
-        """Open a new camera and clear the error, or hold the error that the open path raises."""
-        try:
-            self._camera = yield from self._open_camera(should_stop)
-        except CameraOpenError as e:
-            self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
-            return False
-        self._error = None
-        return True
-
-    def _open_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
-        """Open a new camera, and reopen it once when it opens dark. Hold the error when an open fails."""
-        if not (yield from self._open_once_or_hold(should_stop)) or not self._check_dark_open():
-            return
-        assert self._camera is not None
-        logger.warning('Camera %s opened dark; reopening it once', self._serial_number)
-        self._camera.close()
-        self._camera = None
-        if (yield from self._open_once_or_hold(should_stop)) and self._check_dark_open():
-            logger.warning('Camera %s is still dark after its reopen; it stays open', self._serial_number)
-
     def _grab_frame_mean(self, camera) -> float | None:
         """Grab one frame and return its mean pixel value, of 255, or ``None`` when the camera gives no image."""
         image = sl.Mat()
         if camera.grab() != sl.ERROR_CODE.SUCCESS or camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
             return None
         return float(image.get_data()[:, :, :3].mean())
-
-    def _check_dark_open(self) -> bool:
-        """Log the exposure, gain and frame mean of the camera that just opened. Return whether it opened dark."""
-        camera = self._camera
-        assert camera is not None, 'a camera that holds no error is open'
-        frame_mean = None
-        for _ in range(self.DARK_CHECK_FRAMES):
-            frame_mean = self._grab_frame_mean(camera)
-            if frame_mean is None or frame_mean >= self._dark_frame_mean:
-                break
-        brightness = 'no frame' if frame_mean is None else f'frame mean {frame_mean:.1f} of 255'
-        logger.info('Camera %s opened: %s; %s', self._serial_number, brightness, self._exposure_and_gain(camera))
-        return frame_mean is not None and frame_mean < self._dark_frame_mean
 
     @staticmethod
     def _exposure_and_gain(camera) -> str:
@@ -238,6 +204,44 @@ class SLCamera(pimm.ControlSystem):
             if error_code == sl.ERROR_CODE.SUCCESS:
                 settings.append(f'{name.lower()} {value}')
         return ', '.join(settings)
+
+    def _measure_open(self) -> float | None:
+        """Log the frame mean, exposure and gain of the camera that just opened, and return the frame mean."""
+        camera = self._camera
+        assert camera is not None, 'a camera that holds no error is open'
+        frame_mean = None
+        for _ in range(self.DARK_CHECK_FRAMES):
+            frame_mean = self._grab_frame_mean(camera)
+            if frame_mean is None or frame_mean >= self._dark_frame_mean:
+                break
+        brightness = 'no frame' if frame_mean is None else f'frame mean {frame_mean:.1f} of 255'
+        logger.info('Camera %s opened: %s; %s', self._serial_number, brightness, self._exposure_and_gain(camera))
+        return frame_mean
+
+    def _is_dark(self, frame_mean: float | None) -> bool:
+        return frame_mean is not None and frame_mean < self._dark_frame_mean
+
+    def _open_once_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
+        """Open a new camera and clear the error, or hold the error that the open path raises."""
+        try:
+            self._camera = yield from self._open_camera(should_stop)
+        except CameraOpenError as e:
+            self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
+            return
+        self._error = None
+
+    def _open_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
+        """Open a new camera, and reopen it once when it opens dark. Hold the error when an open fails."""
+        yield from self._open_once_or_hold(should_stop)
+        if self._error is not None or not self._is_dark(self._measure_open()):
+            return
+        assert self._camera is not None
+        logger.warning('Camera %s opened dark; reopening it once', self._serial_number)
+        self._camera.close()
+        self._camera = None
+        yield from self._open_once_or_hold(should_stop)
+        if self._error is None and self._is_dark(self._measure_open()):
+            logger.warning('Camera %s is still dark after its reopen; it stays open', self._serial_number)
 
     def _make_ready(
         self, call: pimm.calls.Call[None, None], clock: pimm.Clock, should_stop: pimm.SignalReceiver

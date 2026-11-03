@@ -206,7 +206,6 @@ class DroppingSdk:
         return ErrorCode.INVALID_FUNCTION_CALL
 
 
-VIDEO_SETTINGS = ('AEC_AGC', 'EXPOSURE_TIME', 'ANALOG_GAIN', 'DIGITAL_GAIN', 'EXPOSURE', 'GAIN')
 # The settings the fake camera reports: a ZED X with auto-exposure on, as it reads after a normal open.
 REPORTED_SETTINGS = {'AEC_AGC': 1, 'EXPOSURE_TIME': 4389, 'ANALOG_GAIN': 7609, 'DIGITAL_GAIN': 1}
 
@@ -296,7 +295,9 @@ def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter, **settings):
         DEPTH_MODE=types.SimpleNamespace(NONE='none'),
         UNIT=types.SimpleNamespace(METER='meter'),
         TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
-        VIDEO_SETTINGS=types.SimpleNamespace(**{name: name for name in VIDEO_SETTINGS}),
+        VIDEO_SETTINGS=types.SimpleNamespace(**{
+            name: name for name in ('AEC_AGC', 'EXPOSURE_TIME', 'ANALOG_GAIN', 'DIGITAL_GAIN', 'EXPOSURE', 'GAIN')
+        }),
     )
     camera = module.SLCamera(serial_number=SERIAL, **settings)
     camera.frame._bind(frames, clock=sdk.clock)
