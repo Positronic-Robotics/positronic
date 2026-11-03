@@ -255,6 +255,8 @@ def bundled_franka_model() -> dict:
 
 YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
 YAM_WRIST_LINK = 'link6'
+# The vendored YAM MJCF, relative to the package: the model the driver solves FK and IK on, at ``GRIPPER_SITE``.
+YAM_MJCF_PATH = 'assets/i2rt_yam/yam.xml'
 # The base frame of the bundled YAM model, measured from the base frame of the earlier YAM model that ABC's arms
 # carry: 9.5mm lower. There, the bundled model reports the ``ee_pose`` of the earlier one for the same joints.
 YAM_BASE_IN_EARLIER_BASE = geom.Transform3D(np.array([0.0, 0.0, -0.0095]))

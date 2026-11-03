@@ -144,6 +144,10 @@ llm = [
 llm-openai = ["positronic[llm]", "pydantic-ai-slim[openai]"]
 llm-anthropic = ["positronic[llm]", "pydantic-ai-slim[anthropic]"]
 llm-google = ["positronic[llm]", "pydantic-ai-slim[google]"]
+# Dream-1 of Dream Labs (`positronic/vendors/dream`). Its server reads the trace id of a reply off a private part of
+# the client, so the version is pinned. The client has no release older than `exclude-newer`, so it has a date of its
+# own below.
+dream = ["dreamlabs-client==1.0.9"]
 
 # A dependency group rather than an extra, so `uv run` and `uv sync` include it without being asked.
 # An extra has to be named on every invocation, and one command that forgets uninstalls the tools the
@@ -213,6 +217,8 @@ positronic = false
 configuronic = false
 pos3 = false
 positronic-franka = false
+# One week before the release of the pinned `dreamlabs-client`; no release of it is older than `exclude-newer`.
+dreamlabs-client = "2026-10-27T00:00:00Z"
 
 [tool.uv.sources]
 positronic-platform-client = { workspace = true }

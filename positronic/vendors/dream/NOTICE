@@ -1,0 +1,18 @@
+This adapter calls Dream-1, a hosted policy of Dream Labs, Inc., through DreamAPI (https://platform.dreamlabs.ai).
+This repository holds no Dream-1 weights. Dream Labs does not release them.
+
+The Dreamlabs SDK, `dreamlabs-client` included, is under the Apache License 2.0. The adapter uses its client and its
+face blurring (`shared.faceblur`, a YuNet detector under the MIT licence).
+
+The Dreamlabs API Terms of Service, the Acceptable Use Policy and the Privacy Policy govern every call. A user of this
+adapter accepts them with a DreamAPI key. Some of their terms:
+- The Services are for research, evaluation and development only. Production and commercial use need a separate
+  written agreement (API Terms 10.7).
+- No one may provide the Services to third parties, or use them to develop a competing foundation model. Model
+  extraction and distillation are not permitted (API Terms 7.1, AUP 3 and 6).
+- Dream Labs uses all Submitted Data to train its models: camera frames, robot state, prompts and Output. No opt-out
+  exists without a written agreement, and the data stays after the account closes (API Terms 8.4, Privacy Policy 6).
+- A client other than the unmodified SDK must blur faces and limit motion itself (API Terms 4.7(d), 10.5). This
+  adapter blurs faces on its server and limits each chunk (`limits.py`).
+- No person may be in the reach of a robot that is powered under Output. The operator keeps a hardwired emergency
+  stop and a local stop on loss of connectivity (API Terms 10.2, 10.3, 10.7).
