@@ -156,8 +156,11 @@ export class EpisodePlayer {
   // The playback state of the episode on show: set when a row opens, updated by the visitor and the element, and
   // kept while its media elements change, also while the 3D viewer, whose time is not readable, owns the episode.
   #state = { ...START };
-  // Stops the listeners that update `#state` from the media elements, before the element clears them.
+  // Stops the listeners of the lead camera that update `#state`, before a lead change or a clear.
   #detachMedia = () => {};
+  // The signal of every listener on the videos on show that updates `#state` or reports a visitor's action. A
+  // clear aborts it before it changes the videos, so their own events report nothing.
+  #media = new AbortController();
   // The waits and the requests of the episode on show; `stop` and the next `show` end them.
   #timers = new Set();
   #requests = new AbortController();
@@ -333,6 +336,8 @@ export class EpisodePlayer {
     this.#endWaits();
     this.#detachMedia();
     this.#detachMedia = () => {};
+    this.#media.abort();
+    this.#media = new AbortController();
     for (const video of this.#stage.querySelectorAll('video')) {
       pause(video);
       video.removeAttribute('src');
@@ -377,15 +382,13 @@ export class EpisodePlayer {
     EpisodePlayer.#startAt(video, state.at);
     // A load sets the rate back to the default, so the video takes it once it knows its length.
     video.addEventListener('loadedmetadata', () => setRate(video, state.rate), { once: true });
-    const listening = new AbortController();
-    const { signal } = listening;
+    const { signal } = this.#media;
     video.addEventListener('play', () => (state.playing = true), { signal });
     // A failed load pauses the video with no choice of the visitor's; the end of the video stops the episode.
     video.addEventListener('pause', () => video.error || (state.playing = false), { signal });
     video.addEventListener('timeupdate', () => video.error || (state.at = video.currentTime), { signal });
     video.addEventListener('ratechange', () => video.readyState && (state.rate = video.playbackRate), { signal });
-    this.#detachMedia = () => listening.abort();
-    this.#reportNativeControls(row, video);
+    this.#reportNativeControls(row, video, signal);
     this.#watch(video, row.phone, (each) => {
       this.#setNote('video', cameraNote([[null, each]]));
       // A row that opened playing plays once its building video is there.
@@ -398,10 +401,10 @@ export class EpisodePlayer {
 
   // The browser's own controls fire only media events. An event the element did not cause is a visitor's use; a
   // drag of the seek bar fires many seeks, so a seek reports once it has settled.
-  #reportNativeControls(row, video) {
+  #reportNativeControls(row, video, signal) {
     const report = (action, detail) => this.#act(action, { row: row.id, ...detail, via: 'Native' });
     // A media event that a script dispatches is no visitor's, and it takes no count of an own call.
-    const listen = (type, handle) => video.addEventListener(type, (event) => event.isTrusted && handle());
+    const listen = (type, handle) => video.addEventListener(type, (event) => event.isTrusted && handle(), { signal });
     listen('play', () => takeOwn(video, 'play') || report('play', { playing: true }));
     // A video ends, or fails to load, with a `pause` that no visitor made.
     listen('pause', () => takeOwn(video, 'pause') || video.ended || video.error || report('play', { playing: false }));
@@ -449,9 +452,11 @@ export class EpisodePlayer {
     // `setLength` sets the end of the lead's seek bar, while a lead has controls.
     const episode = { row, cameras, setLength: null };
     for (const camera of cameras) {
-      camera.video.addEventListener('click', (event) => {
-        if (this.lead) this.#toggle(row, this.lead, event.isTrusted ? 'Video' : null);
-      });
+      camera.video.addEventListener(
+        'click',
+        (event) => this.lead && this.#toggle(row, this.lead, event.isTrusted ? 'Video' : null),
+        { signal: this.#media.signal },
+      );
       this.#watch(camera.video, camera.video.getAttribute('src'), (state) => {
         camera.state = state;
         this.#settle(episode);

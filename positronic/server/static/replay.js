@@ -1030,8 +1030,9 @@ export class PositronicReplay extends HTMLElement {
     );
     this.#player = this.#newPlayer(playerRoot);
     // A media event does not bubble, so the screen catches the lead's play and pause in the capture phase.
-    const showState = () => this.toggleAttribute('playing', this.#player.lead?.paused === false);
-    for (const type of ['play', 'pause', 'ended', 'emptied']) playerRoot.addEventListener(type, showState, true);
+    for (const type of ['play', 'pause', 'ended', 'emptied']) {
+      playerRoot.addEventListener(type, () => this.#showPlaying(), true);
+    }
     // A list that scrolls fades out at its lower edge until its last episode shows.
     const moreBelow = () => list.part.toggle('more-below', list.scrollTop + list.clientHeight < list.scrollHeight - 1);
     list.addEventListener('scroll', moreBelow, { passive: true });
@@ -1053,14 +1054,25 @@ export class PositronicReplay extends HTMLElement {
     for (const [each, nodes] of this.#rows) nodes.forEach((node) => node.part.toggle('current', each === row));
     this.#play(row, { playing: true });
     this.setAttribute('screen-open', '');
+    this.#showPlaying();
+  }
+
+  /** The host's `playing` attribute and the name of each play button, by whether the open row plays. */
+  #showPlaying() {
+    const playing = this.#current !== null && this.#player.lead?.paused === false;
+    this.toggleAttribute('playing', playing);
+    for (const [row, [item]] of this.#rows) {
+      const verb = playing && row === this.#current ? 'Pause' : 'Play';
+      item.querySelector('[part~="episode-play"]').setAttribute('aria-label', `${verb} ${row.label}`);
+    }
   }
 
   #closeScreen() {
     this.#player.stop();
     this.removeAttribute('screen-open');
-    this.removeAttribute('playing');
     this.#current = null;
     for (const nodes of this.#rows.values()) nodes.forEach((node) => node.part.remove('current'));
+    this.#showPlaying();
   }
 }
 

@@ -482,6 +482,11 @@ def is_aborted_viewer_fetch(text: str, source: str) -> bool:
     return 'Failed to fetch' in text and '/rerun/' in source
 
 
+def button_label(page: Page, at: int) -> str:
+    """The accessible name of the play button of compact row `at`."""
+    return page.evaluate(f"all('episode-play')[{at}].getAttribute('aria-label')")
+
+
 def camera_named(name: str) -> str:
     """The script that finds the camera video `name` in the element."""
     return f"all('camera').find((video) => video.dataset.camera === '{name}')"
@@ -1448,6 +1453,43 @@ class Probe:
                 self.check('the list selects its first row', page.evaluate("row('1').part.contains('current')"))
             page.close()
 
+    def swap_reports_and_button_names(self):
+        print('No action from a swap of the phone video, and the names of the compact play buttons:')
+        page = self.open('/page/dock?episode=7', width=400, height=800)
+        self.until(page, "one('phone') !== null && !one('phone').paused", 8000)
+        page.evaluate("one('phone').playbackRate = 2")
+        time.sleep(0.4)
+        self.actions(page)
+        page.set_viewport_size({'width': 1400, 'height': 900})
+        self.until(page, "all('camera').length === 2", 5000)
+        part(page, 'close').click()
+        time.sleep(0.5)
+        actions = self.actions(page)
+        self.check(
+            'a width swap and a close send no speed action', not [a for a in actions if a['action'] == 'speed'], actions
+        )
+        page.close()
+        page = self.open('/page/compact')
+        self.until(page, "all('episode').length > 0")
+        part(page, 'episode-values').nth(1).click()
+        self.until(page, "host().hasAttribute('playing')", 8000)
+        self.check(
+            'a playing row names its button Pause', button_label(page, 1).startswith('Pause'), button_label(page, 1)
+        )
+        part(page, 'episode-play').nth(1).click()
+        self.until(page, "!host().hasAttribute('playing')", 5000)
+        self.check(
+            'a paused row names its button Play', button_label(page, 1).startswith('Play'), button_label(page, 1)
+        )
+        part(page, 'episode-values').nth(2).click()
+        self.until(page, "host().hasAttribute('playing')", 8000)
+        self.check(
+            'another row names the old button Play',
+            button_label(page, 1).startswith('Play') and button_label(page, 2).startswith('Pause'),
+            (button_label(page, 1), button_label(page, 2)),
+        )
+        page.close()
+
     def undocked_link(self):
         print('A link to a row of a replay with no dock:')
         page = self.open('/page/list?episode=30')
@@ -1553,6 +1595,7 @@ def main(headed: bool) -> int:
             probe.end_and_zero_filter,
             probe.src_restored_and_mixed_length,
             probe.link_to_no_row,
+            probe.swap_reports_and_button_names,
             probe.null_values,
             probe.lead_lost_keeps_state,
             probe.script_clicks,
