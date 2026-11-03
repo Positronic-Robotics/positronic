@@ -35,6 +35,21 @@ def test_an_unknown_slug_is_rejected(value: str):
         Holder.model_validate({'stage': value})
 
 
+@pytest.mark.parametrize('value', ['nonsense', 30, Outcome.safety])
+def test_an_unknown_value_gets_one_error_that_lists_the_slugs(value: object):
+    with pytest.raises(ValidationError) as refusal:
+        Holder.model_validate({'stage': value})
+    (error,) = refusal.value.errors()
+    assert error['loc'] == ('stage',)
+    assert all(repr(slug) in error['msg'] for slug in members_by_slug(Stage))
+
+
+def test_the_sentinel_is_refused_as_an_unset_value():
+    with pytest.raises(ValidationError, match='Stage.INVALID is an unset sentinel') as refusal:
+        Holder(stage=Stage.INVALID)
+    assert len(refusal.value.errors()) == 1
+
+
 def test_the_sentinel_is_not_a_wire_value():
     with pytest.raises(ValidationError):
         Holder.model_validate({'stage': 'invalid'})

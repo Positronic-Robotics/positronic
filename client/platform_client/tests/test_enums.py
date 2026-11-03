@@ -102,7 +102,7 @@ CAMERA_VANTAGE_VALUES = {'INVALID': 0, 'droid': 1, 'phail': 2}
 
 REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 
-RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'sim': 3}
+RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'molmospaces': 4, 'robolab': 5}
 
 START_POSE_VALUES = {'INVALID': 0, 'nominal': 1, 'droid_reset': 2, 'abc_init': 3}
 
@@ -168,3 +168,11 @@ def test_billing_modes_keep_the_stored_numbers_and_publish_unambiguous_names():
         'packaged': BillingMode.packaged,
         'pay_as_you_go': BillingMode.pay_as_you_go,
     }
+
+
+def test_rig_shapes_keep_their_stored_numbers_and_leave_the_retired_number_unread():
+    assert RigShape(1) is RigShape.franka
+    assert RigShape(2) is RigShape.yam
+    with pytest.raises(ValueError, match='3 is not a valid RigShape'):
+        RigShape(3)
+    assert set(members_by_slug(RigShape)) == {'franka', 'yam', 'molmospaces', 'robolab'}
