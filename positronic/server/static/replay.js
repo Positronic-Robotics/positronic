@@ -10,65 +10,100 @@
 //   </positronic-replay>
 //
 // Attributes
-//   src          a manifest URL. Without it, the element reads its child <script type="application/json">.
-//   layout       `full` (default): the list as a table, with the player above it or in a dock.
-//                `compact`: a tally, a strip of runs, a screen that opens above the list, and the list.
-//   mode         `video` (default): the cameras only. `full`: a row with `rrd` also plays its 3D replay.
-//                A row with no `rrd` plays as video in either mode.
-//   dock         (full layout) the player opens at the bottom of the window when a visitor opens a row.
-//   dock-below   (dock) a selector of the host's bar; the dock and the list share the window below it.
-//   link-param   (full layout) the URL search parameter that names the open row, so a link opens it. The element
-//                reads it once, when it first connects.
-//   camera-names a JSON object that maps a camera key to the name the visitor sees.
-//   A value of the wrong shape logs an error, and the element uses the default: `full`, `video`, the top of the
-//   window, no link parameter (also with `layout="compact"`), the camera keys. A `src` that is not a URL shows
-//   that the replay did not load.
+//   - `src`: a manifest URL. Without it, the element reads its child <script type="application/json">.
+//   - `layout`: `full` (default) or `compact`.
+//     - `full`: the list as a table, with the player above it or in a dock.
+//     - `compact`: a tally, a strip of runs, a screen above the list, and the list.
+//   - `mode`: `video` (default) or `full`.
+//     - `video`: the cameras only.
+//     - `full`: a row with `rrd` also plays its 3D replay. A row with no `rrd` plays as video.
+//   - `dock` (full layout): the player opens at the bottom of the window when a visitor opens a row.
+//   - `dock-below` (dock): a selector of the host's bar. The dock and the list share the window below it.
+//   - `link-param` (full layout): the URL search parameter that names the open row. A link opens that row.
+//   - `link-param` is read once, at the first connect.
+//   - `camera-names`: a JSON object that maps a camera key to the name the visitor sees.
+//   - A value of the wrong shape logs an error, and the element uses the default.
+//   - The defaults: `full`, `video`, the top of the window, no link parameter, the camera keys.
+//   - `link-param` with `layout="compact"` logs an error, and the element uses no link parameter.
+//   - A `src` that is not a URL shows that the replay did not load.
 //
 // Manifest (`src`)
 //   {title, url, about: [{key, label, value}], columns: [{key, label}], episodes: [{index, values: {key: value},
 //    duration_s, videos: [{camera, url, src, width, height, duration_s}], phone?, rrd?}]}
-//   A video's `src`, `phone` and `rrd` are relative to the manifest. `phone` is a video object or a URL.
-//   The list shows an index column, the manifest's columns, and a duration column.
+//   - A video's `src`, `phone` and `rrd` are relative to the manifest.
+//   - `phone` is a video object or a URL.
+//   - The list shows an index column, the manifest's columns, and a duration column.
 //
 // Inline rows
 //   {title?, about?, columns: [{key, label, type?, decimals?, unit?, hover?, filter?}],
 //    rows: [{id, label?, values: {key: value}, duration_s?, cameras?: [{camera, label?, src, width, height,
 //    duration_s}], phone?, rrd?, href?}]}
-//   URLs are relative to the document. `href` is the row's own page: the first text cell links it.
-//   A column `type` is `text` (default), `number` (with `decimals` and `unit`), `badge` or `icon`.
-//   A value is a scalar, or {text, key?, color?, ink?, icon?, title?}: `key` is what a filter compares,
-//   `color` paints a badge, `icon` is the image of an icon cell.
-//   `filter` is `true` or {all?, options?: [[value, label], …]}; without options, every value of the column.
-//   A list that is not an array shows that the replay did not load. An entry of a list or a field of the wrong
-//   shape logs an error; the element drops the entry, leaves the field empty, or reads an unknown column type
-//   as `text`.
+//   - URLs are relative to the document.
+//   - `href` is the row's own page. The first text cell links it.
+//   - A column `type` is `text` (default), `number` (with `decimals` and `unit`), `badge` or `icon`.
+//   - A value is a scalar, or {text, key?, color?, ink?, icon?, title?}.
+//   - `key` is the text a filter compares. `color` paints a badge. `icon` is the image of an icon cell.
+//   - `filter` is `true` or {all?, options?: [[value, label], …]}.
+//   - A filter with no options offers every value of its column.
+//   - A null or absent value is an empty cell.
+//
+// Input of the wrong shape (manifest and inline rows)
+//   - A list that is not an array: the element shows that the replay did not load.
+//   - A bad entry of a list: the element logs an error and drops the entry.
+//   - A field of the wrong shape: the element logs an error and leaves the field empty.
+//   - A column of an unknown type: the element logs an error and reads it as `text`.
 //
 // Media
-//   The element loads only the URLs a row names, and builds no URL from another one. A row with no media
-//   shows "not available". A file that answers 404 shows "gone"; one that answers 202 shows "building" and
-//   is asked for again after its `Retry-After`. The 3D replay plays in the rerun viewer beside this file,
-//   whose page adds no browser history entry. A screen under 961 px wide plays a row's `phone` video in
-//   place of its cameras and its 3D replay, and the dock covers the page there.
+//   - The element loads only the URLs a row names. It builds no URL from another one.
+//   - A row with no media shows "not available".
+//   - A file that answers 404 shows "gone".
+//   - A file that answers 202 shows "building". The element asks for it again after its `Retry-After`.
+//   - The 3D replay plays in the rerun viewer beside this file. The viewer page adds no browser history entry.
+//   - A screen under 961 px wide plays the row's `phone` video in place of its cameras and its 3D replay.
+//   - On such a screen, the dock covers the page.
+//   - The longest camera that is ready leads the controls. The other cameras follow it.
 //
-// Events and methods
-//   A `replay-action` event, with `detail.action`, reports each use of a control by a visitor, one event a use:
-//   open {row, from: Row|Button|Run|Link|Step, via: Button|Key for a step}, close {row, via: Button|Escape},
-//   play {row, playing, via: Button|Video|Row|Run|Native}, seek {row, via?}, speed {row, value, via?},
-//   filter {column, value}, more {via: Button|Scroll}, resize {via: Drag|Key}, details {open}, full {row},
-//   link {row}.
-//   A link open is reported first, so the host can show the element. The phone video keeps the browser's
-//   controls, and their use reports `via: Native`. The keys inside the 3D viewer step and close as on the page;
-//   the viewer's own controls report nothing.
-//   `show({column key: value, …})` sets the filters. A number or a boolean counts as its text, and null or a value
-//   the column does not offer shows all. A key no filter has, or a value of another type, logs an error.
-//   The `details` slot shows in the dock beside the player, behind a Details button.
-//   The `actions` slot shows in the compact head.
+// Compact layout
+//   - The tally counts the episodes, and the runs whose `outcome` value is `success`.
+//   - Each run in the strip takes the part `outcome-<value>`.
+//
+// Events
+//   - A `replay-action` event reports each use of a control by a visitor. Each use sends one event.
+//   - `detail.action` names the action. The fields of each action:
+//     - open {row, from: Row|Button|Run|Link|Step, via: Button|Key for a step}
+//     - close {row, via: Button|Escape}
+//     - play {row, playing, via: Button|Video|Row|Run|Native}
+//     - seek {row, via?}
+//     - speed {row, value, via?}
+//     - filter {column, value}
+//     - more {via: Button|Scroll}
+//     - resize {via: Drag|Key}
+//     - details {open}
+//     - full {row}
+//     - link {row}
+//   - A script event sends no action.
+//   - A link open is reported first, so the host can show the element.
+//   - The phone video keeps the browser's controls. A use of them sends `via: Native`.
+//   - The keys inside the 3D viewer step and close as on the page. The viewer's own controls send nothing.
+//
+// Methods and slots
+//   - `show({column key: value, …})` sets the filters.
+//   - In `show()`, a number or a boolean counts as its text.
+//   - In `show()`, null or a value the column does not offer shows all.
+//   - In `show()`, a key no filter has, or a value of another type, logs an error.
+//   - The `details` slot shows in the dock beside the player, behind a Details button.
+//   - The `actions` slot shows in the compact head.
 //
 // Theme
-//   --replay-accent, --replay-border, --replay-muted, --replay-hover, --replay-current, --replay-surface,
-//   --replay-surface-ink, --replay-success, --replay-failure (the compact runs strip), --replay-motion (the
-//   compact screen's open time), --replay-sticky-top (where the column names stick), and --list-max and
-//   --video-max (the most the compact list and its videos may take). Each element has a `part` to style.
+//   - --replay-accent: the current row and the seek bar.
+//   - --replay-border, --replay-muted, --replay-hover, --replay-current: the lines, the second text, a row under
+//     the pointer, the current row.
+//   - --replay-surface, --replay-surface-ink: the dock and the compact screen, and their text.
+//   - --replay-success, --replay-failure: the runs of the compact strip.
+//   - --replay-motion: the open time of the compact screen.
+//   - --replay-sticky-top: where the copy of the column names sticks.
+//   - --list-max, --video-max: the most height the compact list and its videos take.
+//   - Each node has a `part` to style.
 import {
   cellKey,
   cellText,
