@@ -26,13 +26,16 @@ const NOTES = {
   replayFailed: 'The 3D replay did not load.',
 };
 
-/** The state of `url`, from one request for its first byte, and the wait a building file asks for. */
-export async function probe(url) {
+/** The state of `url`, from one request for its first byte, and the wait a building file asks for.
+ * Null where `signal` aborts the request. */
+async function probe(url, signal) {
   let answer;
   try {
-    answer = await fetch(url, { headers: { Range: 'bytes=0-0' } });
+    answer = await fetch(url, { headers: { Range: 'bytes=0-0' }, signal });
   } catch (error) {
-    console.warn(`${url} did not answer: ${error.message}`);
+    // The player aborts the requests of an episode it no longer shows.
+    if (error.name === 'AbortError') return null;
+    console.error(`The request for ${url} failed: ${error.message}`);
     return { state: MediaState.FAILED };
   }
   answer.body?.cancel();
@@ -43,29 +46,22 @@ export async function probe(url) {
   return { state: answer.ok ? MediaState.READY : MediaState.FAILED };
 }
 
-const pause = (seconds) => new Promise((done) => setTimeout(done, 1000 * seconds));
-
-/** The final state of `url`: it asks again while the server builds the file. Null once `wanted()` turns false. */
-async function settled(url, { building, wanted }) {
-  for (;;) {
-    const answer = await probe(url);
-    if (!wanted()) return null;
-    if (answer.state !== MediaState.BUILDING) return answer.state;
-    building();
-    await pause(answer.retryS);
-    if (!wanted()) return null;
-  }
-}
-
 function clock(value) {
   const whole = Math.max(0, Number(value) || 0);
   const minutes = Math.floor(whole / 60);
   return `${minutes}:${(whole - minutes * 60).toFixed(1).padStart(4, '0')}`;
 }
 
-/** Plays a video and names it in the console where the browser refuses. */
-function start(video) {
-  video.play().catch((error) => console.warn(`${video.dataset.name} did not play: ${error.message}`));
+// The browser refuses to play a video with no visitor gesture, a new `src` interrupts a play that has not
+// started, and a file that is gone or building has no source; its note says which. None is a fault.
+const EXPECTED_PLAY_REFUSALS = new Set(['NotAllowedError', 'AbortError', 'NotSupportedError']);
+
+/** Plays a video and names it in the console where it does not play. */
+export function start(video) {
+  video.play().catch((error) => {
+    const log = EXPECTED_PLAY_REFUSALS.has(error.name) ? console.warn : console.error;
+    log(`${video.dataset.name} did not play: ${error.message}`);
+  });
 }
 
 export class EpisodePlayer {
@@ -81,6 +77,9 @@ export class EpisodePlayer {
   #frameKeys;
   #cameraName;
   #turn = 0;
+  // The waits and the requests of the episode on show; `stop` and the next `show` end them.
+  #timers = new Set();
+  #requests = new AbortController();
   lead = null;
 
   /** `act(action, detail)` reports a visitor's use of a control, and `frameKeys` takes the viewer's key presses. */
@@ -99,6 +98,7 @@ export class EpisodePlayer {
 
   /** Shows `row`, and plays it where `autoplay`. A row opened later stops the waits of this one. */
   show(row, summary, { autoplay = false } = {}) {
+    this.#endWaits();
     const turn = ++this.#turn;
     const wanted = () => turn === this.#turn;
     this.#summary.textContent = summary;
@@ -116,10 +116,41 @@ export class EpisodePlayer {
 
   /** Stops every video and empties the viewer. */
   stop() {
+    this.#endWaits();
     this.#turn += 1;
     this.#clearVideos();
     this.#hideFrame();
     this.lead = null;
+  }
+
+  #endWaits() {
+    for (const timer of this.#timers) clearTimeout(timer);
+    this.#timers.clear();
+    this.#requests.abort();
+    this.#requests = new AbortController();
+  }
+
+  /** A wait of `seconds` that `#endWaits` cancels, so it never resolves. */
+  #pause(seconds) {
+    return new Promise((done) => {
+      const timer = setTimeout(() => {
+        this.#timers.delete(timer);
+        done();
+      }, 1000 * seconds);
+      this.#timers.add(timer);
+    });
+  }
+
+  /** The final state of `url`: it asks again while the server builds the file. Null once `wanted()` turns false. */
+  async #settled(url, { building, wanted }) {
+    for (;;) {
+      const answer = await probe(url, this.#requests.signal);
+      if (answer === null || !wanted()) return null;
+      if (answer.state !== MediaState.BUILDING) return answer.state;
+      building();
+      await this.#pause(answer.retryS);
+      if (!wanted()) return null;
+    }
   }
 
   focusViewer() {
@@ -141,7 +172,7 @@ export class EpisodePlayer {
       this.#setNote('replay', note);
       if (!this.lead && video) video(autoplay);
     };
-    const state = await settled(row.rrd, { building: () => playVideo(NOTES.replayBuilding), wanted });
+    const state = await this.#settled(row.rrd, { building: () => playVideo(NOTES.replayBuilding), wanted });
     if (state === null) return;
     if (state !== MediaState.READY) {
       playVideo(state === MediaState.GONE ? NOTES.replayGone : NOTES.replayFailed);
@@ -188,8 +219,9 @@ export class EpisodePlayer {
     try {
       blank = view.location.href === 'about:blank';
     } catch (error) {
-      if (error.name === 'SecurityError') return;
-      throw error;
+      if (error.name !== 'SecurityError') throw error;
+      console.warn(`The viewer on another origin keeps its own keys: ${error.message}`);
+      return;
     }
     if (blank) return;
     view.addEventListener('keydown', this.#frameKeys, true);
@@ -219,11 +251,11 @@ export class EpisodePlayer {
     video.addEventListener('error', async () => {
       if (video.getAttribute('src') !== url) return;
       const turn = this.#turn;
-      const answer = await probe(url);
-      if (turn !== this.#turn) return;
+      const answer = await probe(url, this.#requests.signal);
+      if (answer === null || turn !== this.#turn) return;
       if (answer.state === MediaState.BUILDING) {
         onNote(NOTES.videoBuilding, 'building');
-        await pause(answer.retryS);
+        await this.#pause(answer.retryS);
         if (turn !== this.#turn) return;
         video.src = url;
         return;

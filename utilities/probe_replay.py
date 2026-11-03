@@ -45,6 +45,8 @@ SETTLE_S = 6.0
 """How long a replay gets to load: the viewer changes the history only after it loads."""
 WAIT_MS = 20_000
 DOCK_STRIP_PX = 450
+SLOW_S = 2.0
+"""How long the slow manifest takes, so a newer `src` answers first."""
 STRIP_KEY = 'positronic-replay.strip'
 """Where the element keeps the strip above its dock: `STRIP_KEY` in replay.js."""
 
@@ -121,7 +123,7 @@ def long_share() -> dict:
 
 def inline_rows() -> dict:
     """Rows of every cell type and media state. Row 5 builds its replay, 6 lost it, 7 has none, 8 has no media,
-    9 lost its videos, 10 builds them, 11 lost its longest video only."""
+    9 lost its videos, 10 builds them, 11 lost its longest video only, 12 builds its replay and its videos."""
     rows = []
     for n in range(1, ROWS + 1):
         cameras = [
@@ -165,6 +167,10 @@ def inline_rows() -> dict:
             row['cameras'] = [longest, cameras[1]]
             for key in ('rrd', 'phone'):
                 del row[key]
+        if n == 12:
+            row['rrd'] = '/rrd/building/12.rrd'
+            row['cameras'] = [{**camera, 'src': camera['src'].replace('/ok/', '/building/')} for camera in cameras]
+            del row['phone']
         rows.append(row)
     columns = [
         {'key': 'task', 'label': 'Task', 'filter': True},
@@ -184,6 +190,7 @@ def inline_rows() -> dict:
 SCRIPT = '<script type="module" src="/static/replay.js"></script>'
 # The page's own record of the element's actions, and short names for what the checks read in its shadow root.
 HELPERS = """<script>
+  const RETRY_MS = %RETRY_MS%;
   window.actions = [];
   document.addEventListener('replay-action', (event) => window.actions.push(event.detail));
   window.host = () => document.querySelector('positronic-replay');
@@ -195,12 +202,40 @@ HELPERS = """<script>
   window.frame = () => host().shadowRoot.querySelector('iframe');
   window.frameUrl = () => (frame() && !frame().hidden ? frame().contentWindow.location.href : '');
   window.loads = (rrd) => frameUrl().includes(encodeURIComponent(rrd));
+  // The media query listeners the page holds, and the waits of the length the fixture server's Retry-After asks.
+  window.queryListeners = 0;
+  const addToQuery = MediaQueryList.prototype.addEventListener;
+  const removeFromQuery = MediaQueryList.prototype.removeEventListener;
+  MediaQueryList.prototype.addEventListener = function (type, ...rest) {
+    if (type === 'change') window.queryListeners += 1;
+    return addToQuery.call(this, type, ...rest);
+  };
+  MediaQueryList.prototype.removeEventListener = function (type, ...rest) {
+    if (type === 'change') window.queryListeners -= 1;
+    return removeFromQuery.call(this, type, ...rest);
+  };
+  window.retryWaits = new Set();
+  const setTimer = window.setTimeout;
+  const clearTimer = window.clearTimeout;
+  window.setTimeout = (callback, ms, ...rest) => {
+    const timer = setTimer(() => {
+      window.retryWaits.delete(timer);
+      callback(...rest);
+    }, ms);
+    if (ms === RETRY_MS) window.retryWaits.add(timer);
+    return timer;
+  };
+  window.clearTimeout = (timer) => {
+    window.retryWaits.delete(timer);
+    clearTimer(timer);
+  };
   window.viewerStarted = () => !!frame()?.contentDocument?.getElementById('the_canvas_id')?.hasAttribute('tabindex');
 </script>"""
 
 
 def page_html(body: str) -> str:
-    return f'<!doctype html><html><head><meta charset="utf-8">{HELPERS}{SCRIPT}</head><body>{body}</body></html>'
+    helpers = HELPERS.replace('%RETRY_MS%', str(1000 * RETRY_AFTER_S))
+    return f'<!doctype html><html><head><meta charset="utf-8">{helpers}{SCRIPT}</head><body>{body}</body></html>'
 
 
 def inline_element(attributes: str) -> str:
@@ -233,6 +268,10 @@ def pages(release: str) -> dict[str, str]:
         '/page/dock': page_html(inline_element('mode="full" dock link-param="episode"')),
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/history-control': history_control(release),
+        '/page/slow': page_html(f'<positronic-replay src="{SHARE}/slow.json"></positronic-replay>'),
+        '/page/small': page_html(f'<positronic-replay src="{SHARE}/replay.json"></positronic-replay>'),
+        # The page the row link of row 2 opens.
+        '/episode/2': '<!doctype html><title>An episode page</title>',
     }
 
 
@@ -241,9 +280,28 @@ def pages(release: str) -> dict[str, str]:
 CONTENT_TYPES = {'.js': 'text/javascript', '.html': 'text/html', '.wasm': 'application/wasm', '.svg': 'image/svg+xml'}
 
 
+class QuietServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # The browser drops a download when the page moves on, as a visitor does.
+        if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            super().handle_error(request, client_address)
+
+
+def static_file(path: str) -> Path | None:
+    """The file of positronic's static folder that `path` names; None for any other path."""
+    file = (STATIC / path.removeprefix('/static/')).resolve()
+    return file if path.startswith('/static/') and file.is_relative_to(STATIC) and file.is_file() else None
+
+
 def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer:
     fixed = pages(release)
-    manifests = {f'{SHARE}/replay.json': video_share(), f'{SHARE}/long.json': long_share()}
+    slow = {**video_share(), 'title': 'The slow manifest'}
+    manifests = {
+        f'{SHARE}/replay.json': video_share(),
+        f'{SHARE}/long.json': long_share(),
+        f'{SHARE}/slow.json': slow,
+        f'{SHARE}/broken.json': {'title': 'A manifest with no episodes'},
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -267,6 +325,11 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
                 return self.answer(202, headers={'Retry-After': str(RETRY_AFTER_S)})
             return self.answer(200, body, content_type)
 
+        def manifest_answer(self, path: str):
+            if path == f'{SHARE}/slow.json':
+                time.sleep(SLOW_S)
+            return self.answer(200, json.dumps(manifests[path]).encode(), 'application/json')
+
         def do_GET(self):
             path = self.path.split('?')[0]
             if path.endswith('.rrd'):
@@ -277,19 +340,13 @@ def serve(media: Media, requests: Requests, release: str) -> ThreadingHTTPServer
             if path in fixed:
                 return self.answer(200, fixed[path].encode(), 'text/html; charset=utf-8')
             if path in manifests:
-                return self.answer(200, json.dumps(manifests[path]).encode(), 'application/json')
-            file = (STATIC / path.removeprefix('/static/')).resolve()
-            if path.startswith('/static/') and file.is_relative_to(STATIC) and file.is_file():
-                return self.answer(200, file.read_bytes(), CONTENT_TYPES.get(file.suffix, 'application/octet-stream'))
-            return self.answer(404)
+                return self.manifest_answer(path)
+            file = static_file(path)
+            if file is None:
+                return self.answer(404)
+            return self.answer(200, file.read_bytes(), CONTENT_TYPES.get(file.suffix, 'application/octet-stream'))
 
-    class Server(ThreadingHTTPServer):
-        def handle_error(self, request, client_address):
-            # The browser drops a download when the page moves on, as a visitor does.
-            if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
-                super().handle_error(request, client_address)
-
-    server = Server(('127.0.0.1', 0), Handler)
+    server = QuietServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -311,18 +368,19 @@ class Probe:
             self.failures.append(name)
         return passed
 
-    def open(self, path: str, width: int = 1400, height: int = 900) -> Page:
+    def open(self, path: str, width: int = 1400, height: int = 900, expected: tuple[str, ...] = ()) -> Page:
+        """A page of `path`. A console error that holds one of `expected` is a result the check asks for."""
         page = self.browser.new_page(viewport={'width': width, 'height': height})
         # A tall strip above the dock keeps the rows next to the open one clear of the dock.
         page.add_init_script(f"localStorage.setItem('{STRIP_KEY}', '{DOCK_STRIP_PX}')")
-        page.on('console', lambda message: self.on_console(path, message))
+        page.on('console', lambda message: self.on_console(path, message, expected))
         page.on('pageerror', lambda error: self.console_errors.append(f'{path}: {error}'))
         page.goto(self.base + path, wait_until='load')
         page.wait_for_function("customElements.get('positronic-replay') !== undefined", timeout=WAIT_MS)
         return page
 
-    def on_console(self, path: str, message: ConsoleMessage):
-        if message.type != 'error':
+    def on_console(self, path: str, message: ConsoleMessage, expected: tuple[str, ...]):
+        if message.type != 'error' or any(text in message.text for text in expected):
             return
         source = message.location.get('url', '')
         # A gone file answers 404, and the browser says so in the console of the page that asked for it.
@@ -637,6 +695,65 @@ class Probe:
         self.check('Escape closes the new dock', self.until(page, "!host().hasAttribute('open')", 5000))
         page.close()
 
+    def rebuild_frees_everything(self):
+        print('Rebuilds while a row waits for its replay and its videos:')
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        self.check('the element holds one media query listener', page.evaluate('queryListeners') == 1)
+        page.locator('positronic-replay tr[data-id="12"] td').nth(2).click()
+        waiting = self.until(page, 'retryWaits.size > 0', 8000)
+        self.check('the row waits for its files', waiting, page.evaluate('retryWaits.size'))
+        mark = self.requests.mark()
+        page.evaluate("host().setAttribute('mode', 'video')")
+        left = page.evaluate('retryWaits.size')
+        self.check('a rebuild ends every wait', left == 0, left)
+        for mode in ('full', 'video', 'full'):
+            page.evaluate(f"host().setAttribute('mode', '{mode}')")
+        listeners = page.evaluate('queryListeners')
+        self.check('after four rebuilds the element holds one media query listener', listeners == 1, listeners)
+        time.sleep(3 * RETRY_AFTER_S)
+        asked = [path for path in self.requests.since(mark) if '/building/12' in path]
+        self.check('no request for the old row follows the rebuild', not asked, asked)
+        page.close()
+
+    def stale_and_broken_sources(self):
+        print('A new src while the old one loads, and a broken src after a good one:')
+        page = self.open('/page/slow')
+        page.evaluate(f"host().setAttribute('src', '{SHARE}/replay.json')")
+        self.until(page, "all('row').length > 0")
+        time.sleep(SLOW_S + 1)
+        title = page.evaluate("one('header')?.querySelector('h1').textContent")
+        self.check('the answer for the old src does not render', title == video_share()['title'], title)
+        page.close()
+        page = self.open('/page/small', expected=('does not read as a list of episodes',))
+        self.until(page, "all('row').length > 0")
+        page.evaluate(f"host().setAttribute('src', '{SHARE}/broken.json')")
+        self.until(page, "one('status')?.textContent.includes('did not load')", 5000)
+        page.evaluate("host().setAttribute('layout', 'compact')")
+        time.sleep(0.5)
+        status = page.evaluate("one('status')?.textContent ?? ''")
+        rows = page.evaluate("all('row').length + all('episode').length")
+        self.check(
+            'a layout change after a broken src shows the error, not the old rows',
+            'did not load' in status and rows == 0,
+            (status, rows),
+        )
+        page.close()
+
+    def row_link(self):
+        print('The link in a row, and a click beside it:')
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        with page.expect_navigation(timeout=WAIT_MS):
+            page.locator('positronic-replay tr[data-id="2"] [part~="row-link"]').click()
+        self.check('a plain click on the row link follows it', page.url == f'{self.base}/episode/2', page.url)
+        page.close()
+        page = self.open('/page/dock')
+        self.until(page, "all('row').length > 0")
+        page.locator('positronic-replay tr[data-id="2"] td').nth(2).click()
+        self.check('a click beside the link opens the row', self.until(page, "host().hasAttribute('open')", 5000))
+        page.close()
+
     def no_recording_row(self):
         print('A row with no recording, in full mode:')
         mark = self.requests.mark()
@@ -690,6 +807,9 @@ def main(headed: bool) -> int:
         for check in (
             probe.lost_lead_camera,
             probe.rebuild_while_open,
+            probe.rebuild_frees_everything,
+            probe.stale_and_broken_sources,
+            probe.row_link,
             probe.no_recording_row,
             probe.video_mode,
             probe.phone,

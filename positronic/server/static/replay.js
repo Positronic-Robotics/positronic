@@ -59,7 +59,7 @@
 //   --video-max (the most the compact list and its videos may take). Each element has a `part` to style.
 import { cellKey, cellText, ColumnType, DURATION_KEY, INDEX_KEY, readInline, readManifest } from './replay/data.js';
 import { cellContent, element } from './replay/cells.js';
-import { EpisodePlayer } from './replay/media.js';
+import { EpisodePlayer, start } from './replay/media.js';
 import { STYLE } from './replay/style.js';
 
 const TAG = 'positronic-replay';
@@ -94,6 +94,17 @@ window.addEventListener(
 // One dock is open on a page at a time.
 let openDock = null;
 
+// A listener or an observer that outlives the shadow DOM it serves, held with the step that frees it.
+function listen(held, target, type, handler, options) {
+  target.addEventListener(type, handler, options);
+  held.push(() => target.removeEventListener(type, handler, options));
+}
+
+function observe(held, observer) {
+  held.push(() => observer.disconnect());
+  return observer;
+}
+
 function setLinkParam(name, value) {
   if (!name) return;
   const url = new URL(window.location);
@@ -107,7 +118,14 @@ export class PositronicReplay extends HTMLElement {
 
   #list = null;
   #request = 0;
+  #loading = null;
   #loaded = null;
+  // What the current build holds outside its shadow DOM, and what the open dock holds; `#release` and `#close`
+  // free them.
+  #held = [];
+  #dockHeld = [];
+  // An upgrade reports each attribute before it connects the element, and the first connect loads it.
+  #connected = false;
   #waitForScript = null;
   #shown = PAGE;
   #selects = [];
@@ -122,23 +140,27 @@ export class PositronicReplay extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    window.addEventListener('resize', () => {
-      if (this.#docked && this.#current) this.#resize(this.#strip);
-    });
   }
 
   connectedCallback() {
-    this.#load();
+    this.#connected = true;
+    if (this.#list) this.#render();
+    else this.#load();
   }
 
   disconnectedCallback() {
-    this.#player?.stop();
-    if (openDock === this) openDock = null;
-    document.removeEventListener('keydown', this.#onKey);
+    this.#connected = false;
+    this.#waitForScript?.disconnect();
+    if (this.#loading) {
+      this.#loading.abort();
+      this.#loading = null;
+      this.#loaded = null;
+    }
+    this.#release();
   }
 
   attributeChangedCallback(name) {
-    if (!this.isConnected) return;
+    if (!this.#connected) return;
     if (name === 'src' || !this.#list) this.#load();
     else this.#render();
   }
@@ -172,6 +194,9 @@ export class PositronicReplay extends HTMLElement {
     const key = src ?? 'inline';
     if (key === this.#loaded) return;
     const request = ++this.#request;
+    this.#loading?.abort();
+    this.#loading = null;
+    this.#list = null;
     if (!src) {
       const script = this.querySelector(':scope > script[type="application/json"]');
       if (!script) {
@@ -187,8 +212,10 @@ export class PositronicReplay extends HTMLElement {
     }
     this.#loaded = key;
     const url = new URL(src, document.baseURI);
+    const loading = new AbortController();
+    this.#loading = loading;
     this.#status('Loading the replay…');
-    fetch(url)
+    fetch(url, { signal: loading.signal })
       .then((response) => {
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
         return response.json();
@@ -197,7 +224,13 @@ export class PositronicReplay extends HTMLElement {
         if (request === this.#request) this.#take(() => readManifest(manifest, url.href));
       })
       .catch((error) => {
-        if (request === this.#request) this.#status(`The replay did not load: ${error.message}`);
+        // A new `src`, or a removal of the element, aborts the request of the old one.
+        if (error.name === 'AbortError' || request !== this.#request) return;
+        console.error(`The replay at ${url} did not load:`, error);
+        this.#status(`The replay did not load: ${error.message}`);
+      })
+      .finally(() => {
+        if (this.#loading === loading) this.#loading = null;
       });
   }
 
@@ -205,6 +238,7 @@ export class PositronicReplay extends HTMLElement {
     try {
       this.#list = read();
     } catch (error) {
+      console.error('The replay data does not read as a list of episodes:', error);
       this.#status(`The replay did not load: ${error.message}`);
       return;
     }
@@ -212,7 +246,7 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #status(message) {
-    this.#closeAll();
+    this.#release();
     this.shadowRoot.replaceChildren(element('style', {}, [STYLE]), element('p', { part: 'status' }, [message]));
   }
 
@@ -241,28 +275,30 @@ export class PositronicReplay extends HTMLElement {
       frameKeys: this.#onKey,
       cameraName: this.#cameraName,
     });
-    this.#narrow.addEventListener('change', () => {
-      if (this.#current && this.#player === player) this.#play(this.#current, { autoplay: false });
+    listen(this.#held, this.#narrow, 'change', () => {
+      if (this.#current) this.#play(this.#current, { autoplay: false });
     });
     return player;
   }
 
-  // A dock or a screen open before a rebuild leaves the host's attributes, its key listener and the link parameter.
-  #closeAll() {
+  /** Frees what a build holds: the open dock or screen, the player with its waits and requests, the listeners on
+   * the window, the document and the media query, and the observers. */
+  #release() {
     this.#close();
     this.removeAttribute('screen-open');
     this.removeAttribute('playing');
     this.#player?.stop();
+    this.#player = null;
+    for (const free of this.#held.splice(0)) free();
+    this.#end = null;
+    this.#current = null;
   }
 
   #render() {
-    this.#closeAll();
-    this.#current = null;
+    this.#release();
     this.#shown = PAGE;
     this.#selects = [];
     this.#count = null;
-    this.#end?.disconnect();
-    this.#end = null;
     const { rows } = this.#list;
     const header = this.#header();
     if (!rows.length) {
@@ -327,12 +363,18 @@ export class PositronicReplay extends HTMLElement {
     );
     this.#stickyHead(scroller, table);
     this.#player = this.#newPlayer(playerRoot);
+    if (this.#docked) {
+      listen(this.#held, window, 'resize', () => {
+        if (this.#current) this.#resize(this.#strip);
+      });
+    }
     if (window.IntersectionObserver) {
-      this.#end = new IntersectionObserver(
-        (entries) => entries.some((entry) => entry.isIntersecting) && this.#showMore('Scroll'),
-        {
-          rootMargin: NEXT_PAGE_AHEAD,
-        },
+      this.#end = observe(
+        this.#held,
+        new IntersectionObserver(
+          (entries) => entries.some((entry) => entry.isIntersecting) && this.#showMore('Scroll'),
+          { rootMargin: NEXT_PAGE_AHEAD },
+        ),
       );
     }
     this.#refresh();
@@ -399,10 +441,9 @@ export class PositronicReplay extends HTMLElement {
     return element('table', { part: 'table' }, [element('thead', {}, [head]), element('tbody', {}, body)]);
   }
 
+  /** A click on the row's link follows it; a click anywhere else in the row opens the row. */
   #rowClicked(event, row) {
-    const link = event.composedPath().find((node) => node instanceof HTMLAnchorElement);
-    if (link && (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return;
-    event.preventDefault();
+    if (event.composedPath().some((node) => node instanceof HTMLAnchorElement)) return;
     if (this.#docked) this.#open(row, 'Row', event);
     else this.#select(row, event);
   }
@@ -426,7 +467,7 @@ export class PositronicReplay extends HTMLElement {
       head.style.marginBottom = `-${height}px`;
       head.scrollLeft = scroller.scrollLeft;
     };
-    const observer = new ResizeObserver(fit);
+    const observer = observe(this.#held, new ResizeObserver(fit));
     columns.forEach((column) => observer.observe(column));
     scroller.addEventListener('scroll', () => (head.scrollLeft = scroller.scrollLeft), { passive: true });
   }
@@ -556,12 +597,15 @@ export class PositronicReplay extends HTMLElement {
     ]);
   }
 
-  /** The strip a visitor set before, kept in the browser; null where none is kept. */
+  /** The strip a visitor set before, kept in the browser; null where none is kept or the browser refuses. */
   static #savedStrip() {
     try {
       const strip = Number(window.localStorage.getItem(STRIP_KEY));
       return strip > 0 ? strip : null;
-    } catch {
+    } catch (error) {
+      if (!(error instanceof DOMException)) throw error;
+      // The dock then opens at its default strip, which only changes its first height.
+      console.error(`The browser refuses to read the saved strip from its storage: ${error.message}`);
       return null;
     }
   }
@@ -587,7 +631,7 @@ export class PositronicReplay extends HTMLElement {
     if (dock.hidden) {
       dock.hidden = false;
       this.setAttribute('open', '');
-      document.addEventListener('keydown', this.#onKey);
+      listen(this.#dockHeld, document, 'keydown', this.#onKey);
       this.#resize(
         this.#strip ??
           PositronicReplay.#savedStrip() ??
@@ -615,15 +659,15 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #close() {
+    for (const free of this.#dockHeld.splice(0)) free();
     if (!this.hasAttribute('open')) return;
     const dock = this.#part('dock');
     if (dock) dock.hidden = true;
     this.removeAttribute('open');
-    this.#player.stop();
+    this.#player?.stop();
     this.#markCurrent(null);
     this.#current = null;
     if (openDock === this) openDock = null;
-    document.removeEventListener('keydown', this.#onKey);
     setLinkParam(this.getAttribute('link-param'), null);
   }
 
@@ -687,22 +731,27 @@ export class PositronicReplay extends HTMLElement {
   /** Content above the list can grow after a link opens a row: keep the row in view until the visitor acts. */
   #holdOpenRow() {
     if (!window.ResizeObserver) return;
-    const observer = new ResizeObserver(() => this.#current && this.#focus(this.#current, 'instant'));
-    const acts = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+    const held = [];
     const stop = () => {
-      observer.disconnect();
-      acts.forEach((type) => window.removeEventListener(type, stop, true));
+      for (const free of held.splice(0)) free();
     };
+    const observer = observe(held, new ResizeObserver(() => this.#current && this.#focus(this.#current, 'instant')));
     observer.observe(document.body);
-    acts.forEach((type) => window.addEventListener(type, stop, { capture: true, passive: true }));
-    setTimeout(stop, HOLD_OPEN_MS);
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
+      listen(held, window, type, stop, { capture: true, passive: true });
+    }
+    const timer = setTimeout(stop, HOLD_OPEN_MS);
+    held.push(() => clearTimeout(timer));
+    this.#dockHeld.push(stop);
   }
 
   static #saveStrip(strip) {
     try {
       window.localStorage.setItem(STRIP_KEY, String(strip));
-    } catch {
-      // A private window keeps the height for this page only.
+    } catch (error) {
+      if (!(error instanceof DOMException)) throw error;
+      // The strip then holds for this page only, which changes nothing but the height of a later visit.
+      console.error(`The browser refuses to save the strip in its storage: ${error.message}`);
     }
   }
 
@@ -815,7 +864,7 @@ export class PositronicReplay extends HTMLElement {
     // A list that scrolls fades out at its lower edge until its last episode shows.
     const moreBelow = () => list.part.toggle('more-below', list.scrollTop + list.clientHeight < list.scrollHeight - 1);
     list.addEventListener('scroll', moreBelow, { passive: true });
-    new ResizeObserver(moreBelow).observe(list);
+    observe(this.#held, new ResizeObserver(moreBelow)).observe(list);
   }
 
   /** A row opens the screen and plays; the open row plays or pauses. */
@@ -823,7 +872,7 @@ export class PositronicReplay extends HTMLElement {
     const playing = this.#player.lead;
     if (this.#current === row && playing) {
       if (event.isTrusted) this.#act('play', { row: row.id, playing: playing.paused });
-      if (playing.paused) playing.play().catch((error) => console.warn(`${row.label} did not play: ${error.message}`));
+      if (playing.paused) start(playing);
       else playing.pause();
       return;
     }
