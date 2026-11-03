@@ -83,10 +83,8 @@ def _set_coulomb_friction(chain: Any, compensation: Compensation) -> None:
     HACK: i2rt's get_yam_robot takes the flag but reads the values only from its arm config.
     """
     if compensation.coulomb_friction is not None:
-        friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)  # none on the gripper motor
-        if friction.shape != chain._coulomb_friction.shape:
-            raise ValueError(f'coulomb_friction needs one value per arm joint, not {compensation.coulomb_friction}')
-        chain._coulomb_friction = friction
+        # The gripper motor gets no friction
+        chain._coulomb_friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)
     chain.use_coulomb_friction = compensation.use_coulomb_friction
 
 
@@ -704,6 +702,10 @@ class Robot(pimm.ControlSystem):
         """
         if park_after_idle_s is not None and (not math.isfinite(park_after_idle_s) or park_after_idle_s <= 0):
             raise ValueError('park_after_idle_s must be finite and positive, or None')
+        # The chain is open by the time the friction is set, and a chain that faults before it parks stays open.
+        friction = compensation.coulomb_friction
+        if friction is not None and len(friction) != len(YAM_JOINT_NAMES):
+            raise ValueError(f'coulomb_friction needs one value per arm joint, not {friction}')
         self._park_after_idle_s = park_after_idle_s
         self._park_tuning = park_tuning
         self._move_tuning = move_tuning

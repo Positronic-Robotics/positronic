@@ -2084,9 +2084,9 @@ def test_coulomb_friction_with_no_values_runs_the_values_of_i2rt(monkeypatch):
     np.testing.assert_array_equal(chain._coulomb_friction, [*I2RT_COULOMB_FRICTION, 0.0])
 
 
-def test_coulomb_friction_with_a_value_for_the_gripper_motor_is_refused(monkeypatch):
+def test_coulomb_friction_with_a_value_for_the_gripper_motor_is_refused_before_a_chain_opens():
     with pytest.raises(ValueError, match='one value per arm joint'):
-        _connected(monkeypatch, Compensation(coulomb_friction=[*STATION_COULOMB_FRICTION, 0.0]))
+        yam.Robot(compensation=Compensation(coulomb_friction=[*STATION_COULOMB_FRICTION, 0.0]))
 
 
 def test_the_sim_chain_gets_no_friction(monkeypatch):
