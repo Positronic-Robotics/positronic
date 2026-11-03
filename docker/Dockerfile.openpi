@@ -1,6 +1,12 @@
 ARG BASE_IMAGE=positro/openpi-base:latest
 FROM ${BASE_IMAGE}
 
+# The base holds ca-certificates 20230311 and openpi's lock pins certifi 2025.4.26. Both trust the leaked eMudhra
+# (emSign) intermediate CAs.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv pip install --no-config --python /.venv/bin/python certifi==2026.10.23
+
 # Set working directory
 WORKDIR /positronic
 
