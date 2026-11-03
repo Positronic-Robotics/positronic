@@ -1,6 +1,6 @@
 """Which tasks a RoboLab eval runs and what it records: the adapter maps the env's records, the config sweeps them.
 
-``RemoteEnvControlSystem.tasks`` is stubbed, since a real task list needs RoboLab's Isaac Lab interpreter;
+The env server's task listing is stubbed, since a real task list needs RoboLab's Isaac Lab interpreter;
 ``e2e.py`` runs the same command against the real benchmark.
 """
 
@@ -21,38 +21,61 @@ from positronic import keys
 from positronic.cfg.eval.sim import robolab as robolab_cfg
 from positronic.dataset.serializers import expand_suffixed
 from positronic.eval import keys as eval_keys
-from positronic.simulator.env_server.proxy import EnvTask, RemoteEnvControlSystem
+from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabAdapter
 
 
-@pytest.fixture
-def asked(monkeypatch) -> list[Any]:
-    """The specs the eval sends the proxy; every spec is answered with two tasks of different budgets."""
-    specs: list[Any] = []
+class _Listing:
+    """The env server's task listing: two tasks of different budgets for every spec. The records state the phrasing
+    that the spec asks for, or ``phrasing`` when a test sets it."""
 
-    def tasks(self, selection: Any) -> list[EnvTask]:
-        specs.append(selection)
+    def __init__(self) -> None:
+        self.asked: list[Any] = []
+        self.phrasing: str | None = None
+
+    def tasks(self, selection: dict[str, Any]) -> list[dict[str, Any]]:
+        self.asked.append(selection)
+        phrasing = self.phrasing or selection[robolab_keys.SELECT_INSTRUCTION_TYPE]
         return [
-            EnvTask(
-                'Put the banana in the bowl', {eval_keys.TASK: 'BananaInBowlTask', robolab_keys.EPISODE_LENGTH: 50.0}
-            ),
-            EnvTask('Clean up the toys', {eval_keys.TASK: 'CleanUpToysTask', robolab_keys.EPISODE_LENGTH: 300.0}),
+            _record('BananaInBowlTask', 50.0, 'Put the banana in the bowl', phrasing),
+            _record('CleanUpToysTask', 300.0, 'Clean up the toys', phrasing),
         ]
 
-    monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
-    return specs
+
+def _record(name: str, episode_length_s: float, instruction: str, phrasing: str) -> dict[str, Any]:
+    return {
+        robolab_keys.RECORD_NAME: name,
+        robolab_keys.RECORD_EPISODE_LENGTH_S: episode_length_s,
+        protocol.TASK_INSTRUCTION: instruction,
+        robolab_keys.RECORD_INSTRUCTION_TYPE: phrasing,
+    }
+
+
+@pytest.fixture
+def listing(monkeypatch) -> _Listing:
+    """The listing that the proxy reads through the real adapter."""
+    fake = _Listing()
+    monkeypatch.setattr(RemoteEnvControlSystem, '_connect', lambda self: fake)
+    return fake
+
+
+@pytest.fixture
+def asked(listing) -> list[Any]:
+    """The specs the eval sends the env server."""
+    return listing.asked
 
 
 def test_the_adapter_names_a_task_the_way_the_reset_token_does():
     adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
 
-    params = adapter.task_params([
-        {robolab_keys.RECORD_NAME: 'AnimalsInBinTask', robolab_keys.RECORD_EPISODE_LENGTH_S: 90.0}
-    ])
+    params = adapter.task_params([_record('AnimalsInBinTask', 90.0, 'Put the animals in the bin', 'vague')])
 
-    assert params == [{eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.EPISODE_LENGTH: 90.0}]
-    token = adapter.reset_token({**params[0], robolab_keys.INSTRUCTION_TYPE: 'vague'})
+    assert params == [
+        {eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.EPISODE_LENGTH: 90.0, robolab_keys.INSTRUCTION_TYPE: 'vague'}
+    ]
+    token = adapter.reset_token(params[0])
     assert token == {robolab_keys.TOKEN_TASK: 'AnimalsInBinTask', robolab_keys.TOKEN_INSTRUCTION_TYPE: 'vague'}
 
 
@@ -72,8 +95,8 @@ def test_the_reset_token_carries_an_episode_length_only_when_one_replaces_the_bu
 
 
 def test_the_env_answers_which_tasks_the_sweep_runs(asked):
-    """The sweep is asked for when the run starts, and the config's instruction phrasing joins each task the
-    env names."""
+    """The sweep is asked for when the run starts, and the env names each task in the phrasing the config asks
+    for."""
     ev = robolab_cfg.visual.override(trial_count=2, instruction_type='specific').instantiate()
     assert asked == []
 
@@ -89,6 +112,25 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
         robolab_keys.EPISODE_LENGTH: 50.0,
         robolab_keys.INSTRUCTION_TYPE: 'specific',
     }
+
+
+def test_the_reset_builds_the_phrasing_that_the_listed_instruction_states(asked):
+    trials = list(robolab_cfg.visual.override(instruction_type='vague').instantiate().tasks())
+    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+
+    tokens = [adapter.reset_token(trial.prepare_args[eval_keys.SCENE]) for trial in trials]
+    assert [token[robolab_keys.TOKEN_INSTRUCTION_TYPE] for token in tokens] == ['vague', 'vague']
+
+
+def test_the_config_passes_no_phrasing_apart_from_the_listing(listing):
+    """The listed instruction is in the phrasing that the record names, so the reset follows the record even where
+    the config asked for another."""
+    listing.phrasing = 'default'
+    trials = list(robolab_cfg.visual.override(instruction_type='vague').instantiate().tasks())
+    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+
+    tokens = [adapter.reset_token(trial.prepare_args[eval_keys.SCENE]) for trial in trials]
+    assert [token[robolab_keys.TOKEN_INSTRUCTION_TYPE] for token in tokens] == ['default', 'default']
 
 
 def test_a_spec_that_names_no_task_narrows_nothing(asked):

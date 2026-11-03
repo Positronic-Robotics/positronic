@@ -87,7 +87,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, cam
             length = params[robolab_keys.EPISODE_LENGTH] if horizon_sec is None else horizon_sec
             deadline = timeout if timeout is not None else length + 10.0
             trial = Task(instruction=listed.instruction, timeout_sec=deadline)
-            trials += [(trial, {**params, robolab_keys.INSTRUCTION_TYPE: instruction_type}) for _ in range(trial_count)]
+            trials += [(trial, params) for _ in range(trial_count)]
         return number_trials(trials)
 
     privileged = {

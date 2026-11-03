@@ -109,7 +109,7 @@ class AbcEnv(EnvProtocol):
             obs = self._env.get_obs()  # The reset rendered the scene before the cameras moved.
         self._goal = self._instruction
         return {
-            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._task_eval()), **self._moved_goal(obs)}],
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(obs, self._task_eval()), **self._advance_goal(obs)}],
             protocol.FRAME_META: self._meta(obs),
             protocol.FRAME_ROBOT_META: {protocol.MOUNTS: self._mounts()},
             protocol.FRAME_CONTROL_DT: self._control_dt(),
@@ -154,7 +154,7 @@ class AbcEnv(EnvProtocol):
                     protocol.FRAME_OBS: self._observe(obs, task_eval),
                     protocol.FRAME_DONE: bool(truncated or self._trial_over(task_eval)),
                     protocol.FRAME_SUCCESS: self._ever_success(task_eval),
-                    **self._moved_goal(obs),
+                    **self._advance_goal(obs),
                 }
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt(),
@@ -164,8 +164,9 @@ class AbcEnv(EnvProtocol):
     def _meta(obs: dict[str, Any]) -> dict[str, Any]:
         return {mapping.META_TASK: obs[mapping.ABC_OBS_PROMPT]}
 
-    def _moved_goal(self, obs: dict[str, Any]) -> dict[str, Any]:
-        """The goal field of a frame whose prompt differs from the goal the client holds, or no field.
+    def _advance_goal(self, obs: dict[str, Any]) -> dict[str, Any]:
+        """Move the goal the client holds to the frame's prompt. Return the goal field when the prompt differs, else
+        no field.
 
         A seeded reset draws the prompt of some tasks, such as count_box, and multi_drawer_search moves its prompt to
         the next target as it goes.

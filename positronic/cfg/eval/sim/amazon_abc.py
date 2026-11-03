@@ -42,7 +42,7 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     }
 
     def tasks() -> list[Task]:
-        scenes = [
+        task_scenes = [
             (
                 Task(instruction=listed.instruction, timeout_sec=timeout),
                 {
@@ -54,7 +54,7 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
             )
             for listed in proxy.tasks(spec(**{mapping.SELECT_TASKS: task}))
         ]
-        return build_tasks(scenes, seed, trial_count)
+        return build_tasks(task_scenes, seed, trial_count)
 
     return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
 

@@ -56,7 +56,7 @@ def _libero_eval(
     privileged = {libero_keys.SIM_STATE: proxy.privileged[libero_keys.SIM_STATE]}
 
     def tasks() -> list[Task]:
-        scenes = [
+        task_scenes = [
             (
                 Task(instruction=listed.instruction, timeout_sec=timeout),
                 {
@@ -68,7 +68,7 @@ def _libero_eval(
             )
             for listed in proxy.tasks(spec(suite=suite, task_id=task_id))
         ]
-        return build_tasks(scenes, seed, trial_count)
+        return build_tasks(task_scenes, seed, trial_count)
 
     return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
 

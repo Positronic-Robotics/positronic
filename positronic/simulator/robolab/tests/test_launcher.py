@@ -12,6 +12,7 @@ import pytest
 from positronic.cfg.eval.sim import robolab as robolab_cfg
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import launcher as env_launcher
+from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.robolab import keys as robolab_keys
@@ -68,7 +69,14 @@ class _OneTaskEnv(EnvProtocol):
         return 2
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{'name': 'BananaInBowlTask', 'episode_length_s': 30.0, 'instruction': 'Put the banana in the bowl'}]
+        return [
+            {
+                robolab_keys.RECORD_NAME: 'BananaInBowlTask',
+                robolab_keys.RECORD_EPISODE_LENGTH_S: 30.0,
+                protocol.TASK_INSTRUCTION: 'Put the banana in the bowl',
+                robolab_keys.RECORD_INSTRUCTION_TYPE: spec[robolab_keys.SELECT_INSTRUCTION_TYPE],
+            }
+        ]
 
     def reset(self, token: Any) -> dict[str, Any]:
         raise AssertionError('the listing needs no reset')
