@@ -356,6 +356,12 @@ def test_a_plan_file_stating_a_token_is_refused_at_it(tmp_path: Path):
     assert not [run_of_the_token for run_of_the_token in runs_of_four(ENDPOINT_TOKEN) if run_of_the_token in message]
 
 
+def test_a_plan_file_naming_the_sim_rig_shape_is_refused_with_the_shapes_it_takes(tmp_path: Path):
+    with pytest.raises(CommandFailed, match=r"rig_shape: .*'franka', 'yam', 'molmospaces' or 'robolab'") as refusal:
+        read_plan(Path(a_plan_file(tmp_path, 'plan.yaml', f'rig_shape: sim\n{PLAN_YAML}')))
+    assert refusal.value.fault is Fault.USAGE
+
+
 def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path: Path):
     with pytest.raises(SystemExit, match='absent.yaml'):
         run_command(run, from_file=str(tmp_path / 'absent.yaml'))
