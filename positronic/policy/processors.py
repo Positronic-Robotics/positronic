@@ -640,8 +640,13 @@ class InferenceSchedule(Policy):
         obs_time_ns: int,
         estimated_latency_sec: float,
         measured_sec: float | None,
+        *,
+        call_id: int,
+        call_timings: list[dict[str, int | float]],
     ) -> Obs:
         context: dict[str, Any] = {
+            policy_keys.CALL_ID: call_id,
+            policy_keys.CALL_TIMINGS: call_timings,
             policy_keys.RTC.ESTIMATED_LATENCY_SEC: estimated_latency_sec,
             policy_keys.RTC.MEASURED_LATENCY_SEC: measured_sec,
         }
@@ -727,10 +732,13 @@ class InferenceSchedule(Policy):
                         if len(pending) >= self._max_in_flight:
                             raise QueueFull('Inference schedule is at capacity')
                         call_obs = self._call_obs(
-                            obs, previous, sample_time_ns, estimated_latency_sec, measured_latency_sec
-                        )
-                        call_obs = OverlayMapping(
-                            call_obs, add={policy_keys.CALL_ID: next_call_id, policy_keys.CALL_TIMINGS: call_timings}
+                            obs,
+                            previous,
+                            sample_time_ns,
+                            estimated_latency_sec,
+                            measured_latency_sec,
+                            call_id=next_call_id,
+                            call_timings=call_timings,
                         )
                         pending.append(
                             self._PendingCall(
