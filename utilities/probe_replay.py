@@ -410,6 +410,7 @@ def pages() -> dict[str, str]:
         '/page/dock-panel': page_html(inline_element('mode="full" dock link-param="episode"') + PANEL),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/two-lists': page_html(other_list() + inline_element('dock link-param="episode"')),
+        '/page/empty': page_html(''),
         '/page/two-lists-in-shadow': page_html(
             in_shadow_tree(other_list() + inline_element('dock link-param="episode"'))
         ),
@@ -1761,6 +1762,22 @@ class Probe:
         self.check('the list that holds the row opens it', self.until(page, f"{holder}?.hasAttribute('open')", 8000))
         self.check('the address keeps the parameter', 'episode=30' in page.url, page.url)
         self.check('and logs no warning', not warnings, warnings)
+        page.close()
+        print('A list the host removes, and the address it moves on to, in the same task:')
+        page = self.browser.new_page(viewport={'width': 1400, 'height': 900})
+        page.goto(self.base + '/page/empty?episode=no-such-row', wait_until='load')
+        page.evaluate(
+            """(markup) => {
+              const holder = document.createElement('div');
+              holder.innerHTML = markup;
+              document.body.append(holder);
+              holder.remove();
+              history.replaceState(null, '', '?episode=next');
+            }""",
+            inline_element('mode="full" link-param="episode"'),
+        )
+        time.sleep(0.5)
+        self.check('the address keeps the new parameter', 'episode=next' in page.url, page.url)
         page.close()
 
     def width_change(self):

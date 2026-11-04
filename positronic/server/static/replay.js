@@ -558,7 +558,7 @@ export class PositronicReplay extends HTMLElement {
   }
 
   /** The row the page's address names; null where it names none. An address that names a row the list does not
-   * hold loses the parameter, unless another list on the page has the same link parameter. */
+   * hold loses the parameter, unless another connected list has the same link parameter. */
   #linkedRow() {
     const name = this.#linkParam;
     const id = name ? new URLSearchParams(window.location.search).get(name) : null;
@@ -567,6 +567,8 @@ export class PositronicReplay extends HTMLElement {
     if (row) return row;
     // A peer connected by the same insertion upgrades after this one, before the microtask runs.
     queueMicrotask(() => {
+      // The host can remove the list or move the address on before this runs.
+      if (!this.isConnected || new URLSearchParams(window.location.search).get(name) !== id) return;
       if ([...CONNECTED].some((other) => other !== this && other.#linkParam === name)) return;
       // The address comes from the visitor, as an old link or an episode the list no longer holds: no host fault.
       console.warn(`The link parameter ${name}=${id} names no row of this list; the element opens none.`);
