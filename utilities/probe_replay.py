@@ -294,6 +294,15 @@ def other_list() -> str:
     )
 
 
+def in_shadow_tree(body: str) -> str:
+    """`body` inside the shadow tree of another component, where the page's own queries do not reach."""
+    markup = json.dumps(body).replace('</', '<\\/')
+    return (
+        '<probe-shadow></probe-shadow><script>customElements.define("probe-shadow", class extends HTMLElement {'
+        f' connectedCallback() {{ this.attachShadow({{ mode: "open" }}).innerHTML = {markup}; }} }});</script>'
+    )
+
+
 def zero_filter() -> str:
     """A column whose filter is 0, which is no filter the element reads."""
     data = json.dumps({
@@ -401,6 +410,9 @@ def pages() -> dict[str, str]:
         '/page/dock-panel': page_html(inline_element('mode="full" dock link-param="episode"') + PANEL),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
         '/page/two-lists': page_html(other_list() + inline_element('dock link-param="episode"')),
+        '/page/two-lists-in-shadow': page_html(
+            in_shadow_tree(other_list() + inline_element('dock link-param="episode"'))
+        ),
         '/page/nulls': page_html(null_cells()),
         '/page/cut': page_html(f'<positronic-replay src="{SHARE}/cut.json"></positronic-replay>'),
         '/page/fault': page_html(fault_rows()),
@@ -1738,6 +1750,16 @@ class Probe:
         self.check('the list that holds the row opens it', opened)
         self.check('the address keeps the parameter', 'episode=30' in page.url, page.url)
         self.check('the other list opens nothing', not page.evaluate("host().hasAttribute('open')"))
+        self.check('and logs no warning', not warnings, warnings)
+        page.close()
+        print('The same two lists inside the shadow tree of another component:')
+        warnings.clear()
+        page = self.browser.new_page(viewport={'width': 1400, 'height': 900})
+        page.on('console', lambda message: message.type == 'warning' and warnings.append(message.text))
+        page.goto(self.base + '/page/two-lists-in-shadow?episode=30', wait_until='load')
+        holder = "document.querySelector('probe-shadow').shadowRoot.querySelectorAll('positronic-replay')[1]"
+        self.check('the list that holds the row opens it', self.until(page, f"{holder}?.hasAttribute('open')", 8000))
+        self.check('the address keeps the parameter', 'episode=30' in page.url, page.url)
         self.check('and logs no warning', not warnings, warnings)
         page.close()
 

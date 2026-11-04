@@ -127,6 +127,8 @@ import { EpisodePlayer, pause, start } from './replay/media.js';
 import { STYLE } from './replay/style.js';
 
 const TAG = 'positronic-replay';
+// Every connected element, so a list finds its peers inside any shadow tree.
+const CONNECTED = new Set();
 const PAGE = 50;
 const NEXT_PAGE_AHEAD = '0px 0px 400px 0px';
 // The width under which the dock covers the page, as the styles say.
@@ -257,12 +259,14 @@ export class PositronicReplay extends HTMLElement {
   connectedCallback() {
     this.#connected = true;
     if (this.#linkParam === undefined) this.#linkParam = this.#readLinkParam();
+    CONNECTED.add(this);
     if (this.#list) this.#render();
     else this.#load();
   }
 
   disconnectedCallback() {
     this.#connected = false;
+    CONNECTED.delete(this);
     this.#waitForScript?.disconnect();
     this.#loading?.abort();
     this.#loading = null;
@@ -561,14 +565,13 @@ export class PositronicReplay extends HTMLElement {
     if (id === null) return null;
     const row = this.#list.rows.find((each) => each.id === id);
     if (row) return row;
-    // Another list can hold the row, and it reads the address after this one.
-    const shared = [...document.querySelectorAll(TAG)].some(
-      (other) => other !== this && other.getAttribute('link-param') === name,
-    );
-    if (shared) return null;
-    // The address comes from the visitor, as an old link or an episode the list no longer holds: no host fault.
-    console.warn(`The link parameter ${name}=${id} names no row of this list; the element opens none.`);
-    setLinkParam(name, null);
+    // A peer connected by the same insertion upgrades after this one, before the microtask runs.
+    queueMicrotask(() => {
+      if ([...CONNECTED].some((other) => other !== this && other.#linkParam === name)) return;
+      // The address comes from the visitor, as an old link or an episode the list no longer holds: no host fault.
+      console.warn(`The link parameter ${name}=${id} names no row of this list; the element opens none.`);
+      setLinkParam(name, null);
+    });
     return null;
   }
 
