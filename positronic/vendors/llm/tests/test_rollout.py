@@ -65,8 +65,8 @@ class Camera(pimm.ControlSystem):
             yield pimm.Sleep(0.05)
 
 
-def script_move_then_end(monkeypatch, distance: float, ending: str) -> list[dict]:
-    """Make the model move by ``distance`` along x and then call ``ending``; return the states it was shown."""
+def script_move_then_end(monkeypatch, distance: float) -> list[dict]:
+    """Make the model move by ``distance`` along x and then call ``done``; return the states it was shown."""
     states = []
 
     def request(endpoint, runner, model, messages, tools):
@@ -104,7 +104,9 @@ def script_move_then_end(monkeypatch, distance: float, ending: str) -> list[dict
             ])
         return ModelResponse([
             ToolCallPart(
-                ending, {'reason': 'Finish smoke test.', 'hindsight': 'Small move observed.'}, tool_call_id='finish'
+                Tool.DONE.value,
+                {'reason': 'Finish smoke test.', 'hindsight': 'Small move observed.'},
+                tool_call_id='finish',
             )
         ])
 
@@ -134,11 +136,10 @@ def arm_with_wrist_camera() -> Embodiment:
 
 
 @pytest.mark.timeout(30)
-@pytest.mark.parametrize('ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
 @pytest.mark.parametrize('charge', [False, True])
 @pytest.mark.parametrize('distance', [0.01, 0.2])
-def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_path, ending, end, charge, distance):
-    states = script_move_then_end(monkeypatch, distance, ending)
+def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_path, charge, distance):
+    states = script_move_then_end(monkeypatch, distance)
     embodiment = arm_with_wrist_camera()
     policy = LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
@@ -152,9 +153,9 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
         assert isinstance(episode, Episode)
         assert episode[eval_keys.TERMINATED] is True
         assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
-        assert episode[eval_keys.POLICY_END] == end
+        assert episode[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
         assert eval_keys.SUCCESS not in episode
-        assert episode[f'{policy_keys.POLICY_META}.{policy_keys.STOP_REASON}'] == ending
+        assert episode[f'{policy_keys.POLICY_META}.{policy_keys.STOP_REASON}'] == Tool.DONE
         assert episode[f'{policy_keys.POLICY_META}.{policy_keys.HINDSIGHT}'] == 'Small move observed.'
         transcript = episode.static[f'{policy_keys.POLICY_META}.{policy_keys.TRANSCRIPT}']
         assert isinstance(transcript, list)
@@ -168,7 +169,7 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
             before[policy_keys.OBS_TIME_NS],
             after[policy_keys.OBS_TIME_NS],
         ]
-        assert [e['tools'][0]['name'] for e in responses] == [Tool.MOVE_PATH.value, ending]
+        assert [e['tools'][0]['name'] for e in responses] == [Tool.MOVE_PATH.value, Tool.DONE.value]
         assert all(e['cameras'] == [keys.WRIST_IMAGE] for e in requests)
         assert [e['call'] for e in transcript if e['event'] == 'accepted'] == [1, 2]
         # The run returns at the decision after the move, long before the time limit.
@@ -206,10 +207,9 @@ def served(policy: LLMPolicy, sessions_dir: Path) -> Iterator[RemotePolicy]:
 
 
 @pytest.mark.timeout(60)
-@pytest.mark.parametrize('ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
 @pytest.mark.parametrize('charge', [False, True])
-def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch, tmp_path, ending, end, charge):
-    states = script_move_then_end(monkeypatch, 0.01, ending)
+def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch, tmp_path, charge):
+    states = script_move_then_end(monkeypatch, 0.01)
     task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     sessions_dir, dataset_dir = tmp_path / 'sessions', tmp_path / 'dataset'
     sessions_dir.mkdir()
@@ -221,13 +221,13 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
     for index, episode in enumerate(dataset):
         assert isinstance(episode, Episode)
         assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
-        assert episode[eval_keys.POLICY_END] == end
+        assert episode[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
         assert episode[f'{policy_keys.SERVER_META}.{policy_keys.TYPE}'] == policy_keys.LLM_TYPE
         assert episode[f'{policy_keys.SERVER_META}.{policy_keys.MODEL}'] == 'test'
         assert analysis.model(episode) == 'test'
         session_id = episode[f'{policy_keys.POLICY_META}.{policy_keys.SESSION_ID}']
         record = json.loads((sessions_dir / f'{session_id}.json').read_text())
-        assert record[policy_keys.STOP_REASON] == ending
+        assert record[policy_keys.STOP_REASON] == Tool.DONE
         assert record[policy_keys.HINDSIGHT] == 'Small move observed.'
         assert [e['call'] for e in record[policy_keys.TRANSCRIPT] if e['event'] == 'request'] == [1, 2]
         move_sec = next(e['duration_s'] for e in record[policy_keys.TRANSCRIPT] if 'duration_s' in e)

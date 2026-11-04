@@ -53,7 +53,6 @@ class Tool(StrEnum):
     MOVE_PATH = 'move_path'
     REVEAL_FRAMES = 'reveal_frames'
     DONE = 'done'
-    GIVE_UP = 'give_up'
 
 
 class Finish(BaseModel):
@@ -135,12 +134,7 @@ class _Observation:
         return ModelRequest([UserPromptPart(content)])
 
 
-_SCHEMAS: dict[Tool, type[BaseModel]] = {
-    Tool.MOVE_PATH: MovePath,
-    Tool.REVEAL_FRAMES: RevealFrames,
-    Tool.DONE: Finish,
-    Tool.GIVE_UP: Finish,
-}
+_SCHEMAS: dict[Tool, type[BaseModel]] = {Tool.MOVE_PATH: MovePath, Tool.REVEAL_FRAMES: RevealFrames, Tool.DONE: Finish}
 
 
 class Conversation:
@@ -185,10 +179,8 @@ class Conversation:
             'Camera frames remain fixed during a decision. '
             f'{Tool.REVEAL_FRAMES.value} only reveals a frame; it does not move a camera. '
             'A note should briefly describe what you see and why you chose the motion. '
-            'Use done when you believe the task is complete, or give_up when you cannot continue. '
-            'Both stop further actions and model calls; '
-            'the episode continues until external completion or timeout. '
-            'Both require hindsight for inspection; no advice is carried into another episode. '
+            'Use done when you believe the task is complete. It ends the episode at once. '
+            'It requires hindsight for inspection; no advice is carried into another episode. '
             f'Motion limits: {json.dumps(asdict(self._policy.motion))}. '
             f'API call budget, including corrections and pictures: {self._policy.max_calls}.'
         )
@@ -365,7 +357,7 @@ class Conversation:
             })
             self._set_metadata(policy_keys.STOP_REASON, call.tool_name)
             self._set_metadata(policy_keys.HINDSIGHT, data.hindsight)
-            return PolicyEnd.COMPLETE if call.tool_name == Tool.DONE else PolicyEnd.GIVE_UP
+            return PolicyEnd.COMPLETE
         start = _Observation.measured_pose(obs)
         grip = float(obs[keys.GRIP]) if self._target is None else self._target.gripper
         waypoints, parts = self._policy.motion.trajectory(start, grip, data.waypoints)
