@@ -15,5 +15,12 @@ class Compensation:
     use_coulomb_friction: bool = False
     coulomb_friction: Sequence[float] | None = None  # Nm per arm joint, in the direction that the joint moves
 
+    def __post_init__(self) -> None:
+        # Keep tuple copies: a list that the caller changes later must not reach the chain
+        if self.gravity_comp_factor is not None:
+            object.__setattr__(self, 'gravity_comp_factor', tuple(self.gravity_comp_factor))
+        if self.coulomb_friction is not None:
+            object.__setattr__(self, 'coulomb_friction', tuple(self.coulomb_friction))
+
 
 I2RT_COMPENSATION = Compensation()  # what i2rt adds when it is asked for nothing

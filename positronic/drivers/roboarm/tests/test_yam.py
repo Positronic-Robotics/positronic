@@ -2105,6 +2105,16 @@ def test_coulomb_friction_that_the_chain_cannot_take_is_refused_before_a_chain_o
         yam.Robot(compensation=Compensation(coulomb_friction=friction))
 
 
+def test_a_list_that_the_caller_changes_after_the_driver_is_built_does_not_reach_the_chain(monkeypatch):
+    gravity, friction = list(STATION_GRAVITY_COMP), list(STATION_COULOMB_FRICTION)
+    compensation = Compensation(gravity_comp_factor=gravity, use_coulomb_friction=True, coulomb_friction=friction)
+    yam.Robot(compensation=compensation)
+    gravity[1], friction[1] = 9.0, -1.0
+    asked, chain = _connected(monkeypatch, compensation)
+    np.testing.assert_array_equal(asked['gravity_comp_factor'], STATION_GRAVITY_COMP)
+    np.testing.assert_array_equal(chain._coulomb_friction, [*STATION_COULOMB_FRICTION, 0.0])
+
+
 @pytest.mark.parametrize('compensation', [I2RT_COMPENSATION, STATION_COMPENSATION], ids=['i2rt', 'station'])
 def test_the_sim_chain_opens_with_the_compensation_of_its_caller(monkeypatch, compensation):
     asked, sim_chain = {}, types.SimpleNamespace()
