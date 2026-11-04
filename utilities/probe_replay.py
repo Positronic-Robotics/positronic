@@ -285,7 +285,7 @@ FAULT_IN_URL = f"""
 """
 
 
-def other_list() -> str:
+def docked_list_without_the_linked_row() -> str:
     """A docked list that shares the link parameter `episode` and holds none of the rows of `inline_rows`."""
     data = json.dumps({'columns': [{'key': 'task', 'label': 'Task'}], 'rows': [{'id': 'other-1', 'values': {}}]})
     return (
@@ -409,10 +409,12 @@ def pages() -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/dock-panel': page_html(inline_element('mode="full" dock link-param="episode"') + PANEL),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
-        '/page/two-lists': page_html(other_list() + inline_element('dock link-param="episode"')),
+        '/page/two-lists': page_html(
+            docked_list_without_the_linked_row() + inline_element('dock link-param="episode"')
+        ),
         '/page/empty': page_html(''),
         '/page/two-lists-in-shadow': page_html(
-            in_shadow_tree(other_list() + inline_element('dock link-param="episode"'))
+            in_shadow_tree(docked_list_without_the_linked_row() + inline_element('dock link-param="episode"'))
         ),
         '/page/nulls': page_html(null_cells()),
         '/page/cut': page_html(f'<positronic-replay src="{SHARE}/cut.json"></positronic-replay>'),

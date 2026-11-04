@@ -127,8 +127,6 @@ import { EpisodePlayer, pause, start } from './replay/media.js';
 import { STYLE } from './replay/style.js';
 
 const TAG = 'positronic-replay';
-// Every connected element, so a list finds its peers inside any shadow tree.
-const CONNECTED = new Set();
 const PAGE = 50;
 const NEXT_PAGE_AHEAD = '0px 0px 400px 0px';
 // The width under which the dock covers the page, as the styles say.
@@ -137,8 +135,6 @@ const STRIP_KEY = 'positronic-replay.strip';
 const STRIP_ROWS = 3;
 const DOCK_MIN_PX = 160;
 const HOLD_OPEN_MS = 10000;
-// The part that names a column's type on its cells, its name and its dock facts. No node inside a cell has it.
-const columnPart = (column) => `column-${column.type}`;
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 const seconds = (value) => `${Number(value).toFixed(1)} s`;
 
@@ -221,6 +217,8 @@ function setLinkParam(name, value) {
 }
 
 export class PositronicReplay extends HTMLElement {
+  // Every connected element, so a list finds its peers inside any shadow tree.
+  static #peers = new Set();
   static observedAttributes = ['src', ...Object.keys(ATTRIBUTES)];
 
   #list = null;
@@ -259,14 +257,14 @@ export class PositronicReplay extends HTMLElement {
   connectedCallback() {
     this.#connected = true;
     if (this.#linkParam === undefined) this.#linkParam = this.#readLinkParam();
-    CONNECTED.add(this);
+    PositronicReplay.#peers.add(this);
     if (this.#list) this.#render();
     else this.#load();
   }
 
   disconnectedCallback() {
     this.#connected = false;
-    CONNECTED.delete(this);
+    PositronicReplay.#peers.delete(this);
     this.#waitForScript?.disconnect();
     this.#loading?.abort();
     this.#loading = null;
@@ -569,7 +567,7 @@ export class PositronicReplay extends HTMLElement {
     queueMicrotask(() => {
       // The host can remove the list or move the address on before this runs.
       if (!this.isConnected || new URLSearchParams(window.location.search).get(name) !== id) return;
-      if ([...CONNECTED].some((other) => other !== this && other.#linkParam === name)) return;
+      if ([...PositronicReplay.#peers].some((other) => other !== this && other.#linkParam === name)) return;
       // The address comes from the visitor, as an old link or an episode the list no longer holds: no host fault.
       console.warn(`The link parameter ${name}=${id} names no row of this list; the element opens none.`);
       setLinkParam(name, null);
@@ -602,13 +600,20 @@ export class PositronicReplay extends HTMLElement {
     return element('div', { part: 'filters' }, [...controls, this.#count]);
   }
 
+  // The part that names a column's type on its cells, its name and its dock facts. No node inside a cell has it.
+  #columnPart(column) {
+    return `column-${column.type}`;
+  }
+
   #table() {
     const { columns, rows } = this.#list;
     const head = element(
       'tr',
       {},
       columns.map((column) =>
-        element('th', { scope: 'col', part: `head-cell ${columnPart(column)}`, title: column.hover }, [column.label]),
+        element('th', { scope: 'col', part: `head-cell ${this.#columnPart(column)}`, title: column.hover }, [
+          column.label,
+        ]),
       ),
     );
     const linkColumn = columns.find((column) => column.type === ColumnType.TEXT);
@@ -616,7 +621,7 @@ export class PositronicReplay extends HTMLElement {
     const body = rows.map((row) => {
       const cells = columns.map((column) => {
         const content = cellContent(column, row.values[column.key], column === linkColumn ? row.href : null);
-        return element('td', { part: `cell ${columnPart(column)}`, 'data-label': column.label }, content);
+        return element('td', { part: `cell ${this.#columnPart(column)}`, 'data-label': column.label }, content);
       });
       const tr = element('tr', { part: 'row', 'data-id': row.id, tabindex: '0', 'aria-label': row.label }, cells);
       tr.addEventListener('click', (event) => this.#rowClicked(event, row));
@@ -850,7 +855,7 @@ export class PositronicReplay extends HTMLElement {
       .filter((column) => column.key !== INDEX_KEY)
       .map((column) => {
         const content = cellContent(column, row.values[column.key]);
-        const part = `fact ${columnPart(column)}`;
+        const part = `fact ${this.#columnPart(column)}`;
         if (column.type !== ColumnType.NUMBER) return element('span', { part }, content);
         return element('span', { part }, [
           ...content,
