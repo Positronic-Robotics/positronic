@@ -331,6 +331,10 @@ description = sequence(
 # Session.infer returns [{"robot_command": [7 joint positions], "target_grip": grip}, ...]
 ```
 
+A two-arm session declares `component("bimanual_joints_action", num_joints=6)` in place of
+`joint_position_action`, and answers `[{"action": [14 values]}, ...]`: per arm, the joints and then the
+grip, left arm first.
+
 The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
 
 ## See Also

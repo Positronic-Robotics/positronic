@@ -22,6 +22,7 @@ from positronic.policy.codecs import (
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
+    BimanualJointsAction,
     CartesianDeltaAction,
     JointDeltaAction,
     JointPositionAction,
@@ -78,6 +79,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         AbsolutePositionAction,
         CartesianDeltaAction,
         AbsoluteJointsAction,
+        BimanualJointsAction,
         JointDeltaAction,
         JointPositionAction,
         SetControlMode,

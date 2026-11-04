@@ -53,19 +53,15 @@ class SplitActionChunk(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-class JointPositionAction(Codec):
-    """Convert named joint and grip predictions to and from absolute robot commands.
+class _CommandsPathAction(Codec):
+    """An action decoder that also encodes the command sequence at ``commands_path`` into model values.
 
-    ``commands_path`` selects a command sequence to encode. Encoding contributes only its top-level
-    field, preserving sibling values inside that field. With no path or an absent top-level field,
-    encoding contributes nothing. Missing nested fields raise. Decoding always produces commands.
+    Encoding contributes only the path's top-level field, preserving sibling values inside that field. With no path or
+    an absent top-level field, encoding contributes nothing. Missing nested fields raise. Decoding always produces
+    commands.
     """
 
-    WIRE_NAME = 'joint_position_action'
-
-    def __init__(
-        self, joints_key: str, grip_key: str, num_joints: int = 7, *, commands_path: tuple[str | int, ...] | None = None
-    ):
+    def __init__(self, commands_path: tuple[str | int, ...] | None):
         if commands_path is not None and (
             not isinstance(commands_path, tuple)
             or not commands_path
@@ -73,28 +69,52 @@ class JointPositionAction(Codec):
             or any(type(part) not in (str, int) for part in commands_path)
         ):
             raise ValueError('commands_path must be a non-empty tuple of keys and indices starting with a field name')
-        self._joints_key = joints_key
-        self._grip_key = grip_key
-        self._num_joints = num_joints
         self._commands_path = commands_path
 
-    def _encode_commands(self, commands):
-        result = []
-        for values in commands:
-            target = values[keys.ROBOT_COMMAND]
-            if not isinstance(target, command.JointPosition):
-                raise ValueError('JointPositionAction requires absolute joint targets')
-            result.append({
-                self._joints_key: np.asarray(target.positions, dtype=np.float32).reshape(self._num_joints),
-                self._grip_key: np.asarray([values[keys.TARGET_GRIP]], dtype=np.float32),
-            })
-        return result
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        raise NotImplementedError
 
     def encode(self, data: dict) -> dict:
         if self._commands_path is None or self._commands_path[0] not in data:
             return {}
-        name = self._commands_path[0]
-        return {name: tree.update_at(data[name], self._commands_path[1:], self._encode_commands)}
+        name, rest = self._commands_path[0], self._commands_path[1:]
+        return {name: tree.update_at(data[name], rest, lambda commands: [self._encode_command(c) for c in commands])}
+
+    def _commands_path_args(self) -> dict[str, Any]:
+        return {} if self._commands_path is None else {'commands_path': list(self._commands_path)}
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        if isinstance(args.get('commands_path'), list):
+            args['commands_path'] = tuple(args['commands_path'])
+        return cls(**args)
+
+
+def _joint_targets(values: Mapping[str, Any], channel: str, num_joints: int) -> np.ndarray:
+    target = values[channel]
+    if not isinstance(target, command.JointPosition):
+        raise ValueError(f'{channel} must hold absolute joint targets')
+    return np.asarray(target.positions, dtype=np.float32).reshape(num_joints)
+
+
+class JointPositionAction(_CommandsPathAction):
+    """Convert named joint and grip predictions to and from absolute robot commands."""
+
+    WIRE_NAME = 'joint_position_action'
+
+    def __init__(
+        self, joints_key: str, grip_key: str, num_joints: int = 7, *, commands_path: tuple[str | int, ...] | None = None
+    ):
+        super().__init__(commands_path)
+        self._joints_key = joints_key
+        self._grip_key = grip_key
+        self._num_joints = num_joints
+
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        return {
+            self._joints_key: _joint_targets(values, keys.ROBOT_COMMAND, self._num_joints),
+            self._grip_key: np.asarray([values[keys.TARGET_GRIP]], dtype=np.float32),
+        }
 
     def _decode_single(self, data: dict) -> dict:
         if not data:
@@ -107,20 +127,13 @@ class JointPositionAction(Codec):
         }
 
     def to_spec(self):
-        args: dict[str, Any] = {
+        args = {
             'joints_key': self._joints_key,
             'grip_key': self._grip_key,
             'num_joints': self._num_joints,
+            **self._commands_path_args(),
         }
-        if self._commands_path is not None:
-            args['commands_path'] = list(self._commands_path)
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
-
-    @classmethod
-    def from_spec_args(cls, **args: Any) -> Self:
-        if isinstance(args.get('commands_path'), list):
-            args['commands_path'] = tuple(args['commands_path'])
-        return cls(**args)
 
 
 class CartesianDeltaAction(Codec):
@@ -245,15 +258,25 @@ class AbsoluteJointsAction(Codec):
         }
 
 
-class BimanualJointsAction(Codec):
-    """Decodes a two-arm action into one ``JointPosition`` and one grip target per arm.
+class BimanualJointsAction(_CommandsPathAction):
+    """Converts a two-arm action to and from one ``JointPosition`` and one grip target per arm.
 
     Per arm, the action holds ``num_joints`` joints and then the grip, left arm first. The grip passes through, so a
     model that predicts a gripper width composes ``FlipGrip(arms=...)``.
     """
 
-    def __init__(self, num_joints: int = 6):
+    WIRE_NAME = 'bimanual_joints_action'
+
+    def __init__(self, num_joints: int = 6, *, commands_path: tuple[str | int, ...] | None = None):
+        super().__init__(commands_path)
         self.num_joints = num_joints
+
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        parts = []
+        for arm in keys.BIMANUAL_ARMS:
+            parts.append(_joint_targets(values, keys.arm_channel(keys.ROBOT_COMMAND, arm), self.num_joints))
+            parts.append(np.asarray([values[keys.arm_channel(keys.TARGET_GRIP, arm)]], dtype=np.float32))
+        return {ACTION: np.concatenate(parts)}
 
     def _decode_single(self, data: dict) -> dict:
         if not data:
@@ -268,6 +291,10 @@ class BimanualJointsAction(Codec):
             out[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=arm_vector[:-1])
             out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(arm_vector[-1])
         return out
+
+    def to_spec(self):
+        args = {'num_joints': self.num_joints, **self._commands_path_args()}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
 class IKJointsAction(Codec):
