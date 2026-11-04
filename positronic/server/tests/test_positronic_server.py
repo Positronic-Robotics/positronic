@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import psutil
 import pytest
+import rerun as rr
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
@@ -29,6 +30,8 @@ from positronic.server.positronic_server import (
     GROUP_FILTERS,
     GROUP_INDEX_FILE,
     MAX_COMPONENT_BYTES,
+    VIEWER_DIR,
+    VIEWER_PAGES,
     Attribution,
     ColumnConfig,
     GroupFile,
@@ -339,6 +342,36 @@ def test_a_base_href_gains_the_trailing_slash_a_relative_link_needs(viewer):
         configure_pages(base_href='/v/tok')
 
         assert '<base href="/v/tok/" />' in viewer.get('/').text
+
+
+_VIEWER = Path(positronic_server.__file__).parent / 'static' / VIEWER_DIR / rr.__version__
+_HISTORY_ON = 'enable_history: true,'
+
+
+def test_the_embedded_viewer_page_is_the_viewer_page_with_browser_history_off():
+    page = (_VIEWER / 'index.html').read_text().splitlines()
+    embedded = (_VIEWER / 'embedded.html').read_text().splitlines()
+
+    assert len(embedded) == len(page)
+    changed = [(ours, theirs) for ours, theirs in zip(page, embedded, strict=True) if ours != theirs]
+    assert changed == [
+        (line, line.replace(_HISTORY_ON, 'enable_history: false,')) for line in page if _HISTORY_ON in line
+    ]
+    assert len(changed) == 1
+
+
+def test_the_replay_element_loads_the_viewer_of_the_rerun_release_installed():
+    script = (_VIEWER.parents[1] / 'replay' / 'media.js').read_text()
+
+    assert f"export const RERUN_VERSION = '{rr.__version__}';" in script
+
+
+@pytest.mark.parametrize('page', VIEWER_PAGES)
+def test_a_browser_asks_again_for_a_viewer_page_and_keeps_the_other_viewer_files(viewer, page):
+    viewer_link = asset_link(f'{VIEWER_DIR}/{rr.__version__}')
+
+    assert viewer.get(f'{viewer_link}/{page}').headers['Cache-Control'] == 'no-cache'
+    assert 'immutable' in viewer.get(f'{viewer_link}/re_viewer.js').headers['Cache-Control']
 
 
 def test_a_static_export_tells_the_page_to_read_the_files_it_wrote(viewer, monkeypatch):

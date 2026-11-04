@@ -170,6 +170,9 @@ templates = Jinja2Templates(directory=_pkg_path('templates'))
 
 # The rerun viewer sits under `<asset directory>/rerun/<release>/`, one directory per release.
 VIEWER_DIR = 'rerun'
+# The viewer's pages, which this repository edits, so a browser asks for them again. `embedded.html` is
+# `index.html` with rerun's browser history off, for a viewer in an iframe.
+VIEWER_PAGES = ('index.html', 'embedded.html')
 
 
 def validated_asset_dir(value: PurePosixPath) -> PurePosixPath:
@@ -196,7 +199,9 @@ async def cache_rerun_assets(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith(asset_link(f'{VIEWER_DIR}/')):
         response.headers['Cache-Control'] = (
-            'no-cache' if request.url.path.endswith('/index.html') else 'public, max-age=31536000, immutable'
+            'no-cache'
+            if PurePosixPath(request.url.path).name in VIEWER_PAGES
+            else 'public, max-age=31536000, immutable'
         )
     return response
 

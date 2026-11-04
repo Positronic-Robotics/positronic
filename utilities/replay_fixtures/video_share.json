@@ -1,0 +1,145 @@
+{
+ "title": "Sim board \u2014 c0ffee",
+ "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/",
+ "about": [
+  {
+   "key": "board",
+   "label": "Board",
+   "value": "sim.board_v1"
+  },
+  {
+   "key": "eval",
+   "label": "Eval",
+   "value": "sim.board_v1"
+  },
+  {
+   "key": "tag",
+   "label": "Tag",
+   "value": "c0ffee"
+  },
+  {
+   "key": "submission_id",
+   "label": "Submission",
+   "value": "0123456789abcdef"
+  },
+  {
+   "key": "primary_score",
+   "label": "success_rate",
+   "value": 0.6667
+  }
+ ],
+ "columns": [
+  {
+   "key": "task",
+   "label": "Task"
+  },
+  {
+   "key": "outcome",
+   "label": "Outcome"
+  }
+ ],
+ "episodes": [
+  {
+   "index": 0,
+   "values": {
+    "task": "pick up the red cube.",
+    "outcome": "Success"
+   },
+   "duration_s": 5.742,
+   "videos": [
+    {
+     "camera": "image.exterior",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/0/image.exterior.mp4",
+     "src": "episodes/0/image.exterior.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 5.742
+    },
+    {
+     "camera": "image.exterior_2",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/0/image.exterior_2.mp4",
+     "src": "episodes/0/image.exterior_2.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 5.742
+    },
+    {
+     "camera": "image.wrist",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/0/image.wrist.mp4",
+     "src": "episodes/0/image.wrist.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 5.742
+    }
+   ]
+  },
+  {
+   "index": 1,
+   "values": {
+    "task": "put the cup in the bin.",
+    "outcome": "Failure"
+   },
+   "duration_s": 12.31,
+   "videos": [
+    {
+     "camera": "image.exterior",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/1/image.exterior.mp4",
+     "src": "episodes/1/image.exterior.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 12.31
+    },
+    {
+     "camera": "image.exterior_2",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/1/image.exterior_2.mp4",
+     "src": "episodes/1/image.exterior_2.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 12.31
+    },
+    {
+     "camera": "image.wrist",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/1/image.wrist.mp4",
+     "src": "episodes/1/image.wrist.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 12.31
+    }
+   ]
+  },
+  {
+   "index": 2,
+   "values": {
+    "task": "open the drawer.",
+    "outcome": "Success"
+   },
+   "duration_s": 8.4,
+   "videos": [
+    {
+     "camera": "image.exterior",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/2/image.exterior.mp4",
+     "src": "episodes/2/image.exterior.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 8.4
+    },
+    {
+     "camera": "image.exterior_2",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/2/image.exterior_2.mp4",
+     "src": "episodes/2/image.exterior_2.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 8.4
+    },
+    {
+     "camera": "image.wrist",
+     "url": "https://share.example.org/v/Zm9vYmFyMTIzNDU2/episodes/2/image.wrist.mp4",
+     "src": "episodes/2/image.wrist.mp4",
+     "width": 624,
+     "height": 352,
+     "duration_s": 8.4
+    }
+   ]
+  }
+ ]
+}
