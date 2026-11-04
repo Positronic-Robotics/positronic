@@ -89,6 +89,7 @@ def test_flip_grip():
 
 _LEFT, _RIGHT = (obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS)
 _TARGETS = [obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS]
+_LEFT_COMMAND = obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, obs_keys.LEFT_ARM)
 
 
 def test_flip_grip_with_arms_flips_the_grip_of_each_arm():
@@ -128,15 +129,13 @@ def test_flip_grip_with_a_commands_path_publishes_version_2_with_the_path():
 
 def test_flip_grip_with_a_commands_path_flips_the_target_grips_of_each_command():
     flip = FlipGrip(arms=obs_keys.BIMANUAL_ARMS, commands_path=('plan', 'commands'))
-    commands = [{_TARGETS[0]: 0.25, _TARGETS[1]: 1.0, 'robot_command.left': 'kept'}]
+    commands = [{_TARGETS[0]: 0.25, _TARGETS[1]: 1.0, _LEFT_COMMAND: 'kept'}]
 
     encoded = flip.encode({'plan': {'commands': commands, 'offset': 0.2}, _LEFT: 0.2, obs_keys.TASK: 'fold'})
 
     assert encoded == {
         'plan': {
-            'commands': [
-                {_TARGETS[0]: pytest.approx(0.75), _TARGETS[1]: pytest.approx(0.0), 'robot_command.left': 'kept'}
-            ],
+            'commands': [{_TARGETS[0]: pytest.approx(0.75), _TARGETS[1]: pytest.approx(0.0), _LEFT_COMMAND: 'kept'}],
             'offset': 0.2,
         },
         _LEFT: pytest.approx(0.8),
