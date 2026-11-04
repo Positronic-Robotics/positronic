@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import Executor as WorkerExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -22,7 +23,8 @@ T = TypeVar('T')
 class _UnchargedAnswer(Answer[T]):
     """A function's result, readable as soon as its worker finishes."""
 
-    def __init__(self, pool: ThreadPoolExecutor, function: Callable[[], T], *, charge_time: bool = True) -> None:
+    def __init__(self, pool: WorkerExecutor, function: Callable[[], T], *, charge_time: bool = True) -> None:
+        self.workers = pool
         self._charge_time = charge_time
         self._submitted_wall_ns = time.monotonic_ns()
         self._elapsed_ns = 0
@@ -89,7 +91,7 @@ class _UnchargedAnswer(Answer[T]):
 class _ChargedAnswer(_UnchargedAnswer[T]):
     """A worker result visible after the episode clock pays for queueing and execution."""
 
-    def __init__(self, pool: ThreadPoolExecutor, clock: Callable[[], int], function: Callable[[], T]) -> None:
+    def __init__(self, pool: WorkerExecutor, clock: Callable[[], int], function: Callable[[], T]) -> None:
         self._clock = clock
         self._submitted_ns = clock()
         super().__init__(pool, function)
@@ -122,6 +124,47 @@ class WaitResult:
     completed: tuple[Answer[Any], ...] = ()
 
 
+class ExecutionRuntime(Runtime):
+    """Own workers and a call limit while sharing the enclosing runtime's episode state."""
+
+    def __init__(self, runtime: Runtime, *, max_in_flight: int):
+        if type(max_in_flight) is not int or max_in_flight < 1:
+            raise ValueError('max_in_flight must be a positive integer')
+        self._runtime = runtime
+        self._limit = max_in_flight
+        self._workers = ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix='policy-fn')
+        self._closed = False
+
+    @property
+    def time_ns(self) -> int:
+        return self._runtime.time_ns
+
+    @property
+    def tick(self) -> int:
+        return self._runtime.tick
+
+    def set_metadata(self, name: str, value: Any) -> None:
+        self._runtime.set_metadata(name, value)
+
+    def has_ready_answers(self) -> bool:
+        return self._runtime.has_ready_answers()
+
+    def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        if self._closed:
+            raise RuntimeError('Policy execution is closed')
+        return self._runtime._submit_on(self._workers, self._limit, function, *args, **kwargs)
+
+    def _submit_on(
+        self, workers: WorkerExecutor, limit: int, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Answer[T]:
+        return self._runtime._submit_on(workers, limit, function, *args, **kwargs)
+
+    def close(self) -> None:
+        """Drain this execution's workers before its resources close."""
+        self._closed = True
+        self._workers.shutdown(wait=True, cancel_futures=True)
+
+
 class Executor(Runtime):
     """Run submitted functions on worker threads and expose their answers on ``clock``.
 
@@ -130,9 +173,9 @@ class Executor(Runtime):
     until the worker finishes. Submission and result reads belong to the control thread; submitted
     functions must not mutate episode state.
 
-    ``max_in_flight`` bounds calls until their results are read or cancelled calls finish.
-    The same limit determines worker count; there is no additional admission queue.
-    ``submit`` raises ``QueueFull`` at capacity, including when completed answers remain unread.
+    ``max_in_flight`` bounds local calls until their results are read or cancelled calls finish.
+    Each ``ExecutionRuntime`` owns an independent limit and workers; every answer participates in
+    this runtime's timing, completion delivery and shutdown.
     """
 
     def __init__(
@@ -143,18 +186,10 @@ class Executor(Runtime):
         self._charge_inference_time = charge_inference_time
         self._tick = -1
         self._tick_time_ns: int | None = None
-        self._pool: ThreadPoolExecutor | None = None
         self._closed = False
-        self.set_max_in_flight(max_in_flight)
+        self._execution = ExecutionRuntime(self, max_in_flight=max_in_flight)
         self._answers: set[_UnchargedAnswer[Any]] = set()
         self._metadata: dict[str, Any] = {}
-
-    def set_max_in_flight(self, limit: int) -> None:
-        if type(limit) is not int or limit < 1:
-            raise ValueError('max_in_flight must be a positive integer')
-        if self._closed or (self._pool is not None and limit != self._max_in_flight):
-            raise RuntimeError('Change max_in_flight before submitting work')
-        self._max_in_flight = limit
 
     def set_metadata(self, name: str, value: Any) -> None:
         self._metadata[name] = deepcopy(value)
@@ -206,15 +241,20 @@ class Executor(Runtime):
         return completed
 
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
+        return self._execution.submit(function, *args, **kwargs)
+
+    def _submit_on(
+        self, workers: WorkerExecutor, limit: int, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Answer[T]:
         if self._closed:
             raise RuntimeError('Policy execution is closed')
         outstanding = sum(
-            not answer.call.done() or not (answer.result_read or answer.cancel_requested) for answer in self._answers
+            not answer.call.done() or not (answer.result_read or answer.cancel_requested)
+            for answer in self._answers
+            if answer.workers is workers
         )
-        if outstanding >= self._max_in_flight:
+        if outstanding >= limit:
             raise QueueFull('Policy execution is at capacity')
-        if self._pool is None:
-            self._pool = ThreadPoolExecutor(max_workers=self._max_in_flight, thread_name_prefix='policy-fn')
         context = contextvars.copy_context()
 
         def invoke() -> T:
@@ -224,9 +264,9 @@ class Executor(Runtime):
             invoke = telemetry.traced(telemetry_keys.SPAN_POLICY_SUBMIT)(invoke)
         work = partial(context.run, invoke)
         answer = (
-            _ChargedAnswer(self._pool, self._clock, work)
+            _ChargedAnswer(workers, self._clock, work)
             if self._simulated and self._charge_inference_time
-            else _UnchargedAnswer(self._pool, work, charge_time=not self._simulated)
+            else _UnchargedAnswer(workers, work, charge_time=not self._simulated)
         )
         self._answers.add(answer)
         return answer
@@ -262,8 +302,10 @@ class Executor(Runtime):
     def close(self) -> None:
         """Cancel queued calls, drain running calls, and report failures whose results were never read."""
         self._closed = True
-        if self._pool is not None:
-            self._pool.shutdown(wait=True, cancel_futures=True)
+        for answer in self._answers:
+            answer.call.cancel()
+        self._execution.close()
+        concurrent.futures.wait([answer.call for answer in self._answers if not answer.call.done()])
         for answer in self._answers:
             answer.discard()
         self._answers.clear()

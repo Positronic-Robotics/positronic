@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator, Mapping
+from concurrent.futures import Executor as WorkerExecutor
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, Self
 
@@ -143,12 +144,14 @@ class Runtime(ABC):
         return timed
 
     @abstractmethod
-    def set_max_in_flight(self, limit: int) -> None:
-        """Configure shared capacity; changing it requires no submissions yet. Unread answers occupy slots."""
-
-    @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
         """Submit without waiting; raise ``QueueFull`` if the runtime's admission capacity is exhausted."""
+
+    @abstractmethod
+    def _submit_on(
+        self, workers: WorkerExecutor, limit: int, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
+    ) -> Answer[T]:
+        """Track a call on an execution owner's workers, sharing episode timing and completion delivery."""
 
     @abstractmethod
     def has_ready_answers(self) -> bool:

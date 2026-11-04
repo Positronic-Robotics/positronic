@@ -50,7 +50,7 @@ from positronic.offboard.client import (
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, PolicyEnd, QueueFull, Step
+from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
@@ -1203,35 +1203,45 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
 
 
 @pytest.mark.parametrize('limit', [None, 3, 20])
-def test_session_metadata_controls_runtime_capacity_and_workers(runtime, limit):
-    metadata = dict(CHUNKED_STACK)
+def test_session_metadata_controls_its_own_capacity_and_workers(runtime, limit):
+    schedule = InferenceSchedule(
+        10,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+    )
+    metadata = {offboard_keys.LOCAL_STACK: schedule.to_spec()}
     if limit is not None:
         metadata[policy_keys.MAX_IN_FLIGHT] = limit
-    policy, _ = _mock_remote_policy(metadata)
-    run = runtime.start(policy)
+    policy, session = _mock_remote_policy(metadata)
+    session.protocol_version = protocol.ProtocolVersion.V3
     capacity = 1 if limit is None else limit
     started = [threading.Event() for _ in range(capacity)]
     release = threading.Event()
 
-    def work(index):
-        started[index].set()
+    def infer(obs):
+        started[obs[policy_keys.CALL_ID]].set()
         assert release.wait(timeout=5)
 
+    session.infer.side_effect = infer
+    occupied = runtime.submit(release.wait, 5)
+    run = runtime.start(policy)
     try:
-        answers = [runtime.submit(work, index) for index in range(capacity)]
+        for index in range(capacity):
+            run.send({policy_keys.OBS_TIME_NS: index * 100_000_000})
         assert all(event.wait(timeout=2) for event in started)
-        with pytest.raises(QueueFull):
-            runtime.submit(lambda: None)
+        run.send({policy_keys.OBS_TIME_NS: capacity * 100_000_000})
+        assert runtime.metadata_snapshot()[policy_keys.SKIPPED_SAMPLES] == 1
+        assert session.infer.call_count == capacity
         release.set()
         completed = 0
-        while completed < capacity:
+        while completed < capacity + 1:
             result = runtime.wait(timeout_sec=2)
             assert result.status is WaitStatus.ANSWERS_READY
             completed += len(result.completed)
-        with pytest.raises(QueueFull):
-            runtime.submit(lambda: None)
-        answers[0].result()
-        runtime.submit(lambda: None)
+        occupied.result()
+        while runtime.has_ready_answers():
+            run.send({policy_keys.OBS_TIME_NS: capacity * 100_000_000})
     finally:
         release.set()
         runtime.close()

@@ -364,8 +364,9 @@ checkpoints, start one server for each.
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
 Servers can set session metadata `max_in_flight` above its default of one to pipeline ordinary calls.
-This configures the shared client runtime: the limit counts submitted calls until their answers are
-read, and also determines worker count, without an additional waiting queue.
+Each remote session owns its workers and limit: calls occupy capacity until their answers are read
+or cancelled calls finish. Sessions share episode timing and completion delivery, without a shared
+worker limit or an additional waiting queue.
 Replies must arrive in actual send order, including `None`
 and errors; observation timestamps need not arrive in order and are the server's responsibility.
 At capacity, the scheduler skips new samples and records `skipped_samples` in episode

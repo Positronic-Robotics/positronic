@@ -2,6 +2,7 @@
 
 import contextvars
 import threading
+from contextlib import closing
 from typing import cast
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from positronic import telemetry, telemetry_keys
 from positronic.policy import executor as module
 from positronic.policy.base import NotAnswered, Policy, PolicyEnd, QueueFull, Step
-from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
+from positronic.policy.executor import ExecutionRuntime, Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 
 @pytest.fixture
@@ -400,8 +401,6 @@ def test_close_before_submission_prevents_opening_workers(executors):
     runtime.close()
     with pytest.raises(RuntimeError):
         runtime.submit(lambda: None)
-    with pytest.raises(RuntimeError):
-        runtime.set_max_in_flight(2)
 
 
 @pytest.mark.parametrize('capacity', [1, 3, 20])
@@ -484,17 +483,106 @@ def test_capacity_must_be_a_positive_integer(executors, capacity):
         executors(max_in_flight=capacity)
     runtime, _ = executors()
     with pytest.raises(ValueError, match='max_in_flight'):
-        runtime.set_max_in_flight(capacity)
+        ExecutionRuntime(runtime, max_in_flight=capacity)
 
 
-def test_capacity_can_only_change_before_first_submission(executors):
-    runtime, _ = executors(max_in_flight=16)
-    runtime.set_max_in_flight(1)
-    answer = runtime.submit(lambda: 42)
-    assert runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY
-    with pytest.raises(QueueFull):
-        runtime.submit(lambda: None)
-    assert answer.result() == 42
-    runtime.set_max_in_flight(1)
-    with pytest.raises(RuntimeError, match='before submitting'):
-        runtime.set_max_in_flight(2)
+def test_execution_limits_are_independent_and_share_completions(executors):
+    runtime, now = executors(max_in_flight=1)
+    started = [threading.Event() for _ in range(4)]
+    release = threading.Event()
+
+    def work(index):
+        started[index].set()
+        assert release.wait(timeout=5)
+        return index
+
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as first:
+        with closing(ExecutionRuntime(runtime, max_in_flight=2)) as second:
+            answers = []
+            try:
+                answers.append(runtime.submit(work, 0))
+                answers.append(first.submit(work, 1))
+                answers.extend(second.submit(work, index) for index in (2, 3))
+                assert all(event.wait(timeout=1) for event in started)
+                for execution in (runtime, first, second):
+                    with pytest.raises(QueueFull):
+                        execution.submit(lambda: None)
+                now[0] = 123
+                runtime.start_tick()
+                assert first.time_ns == second.time_ns == runtime.time_ns == 123
+                assert first.tick == second.tick == runtime.tick
+                second.set_metadata('value', 42)
+                assert runtime.metadata_snapshot()['value'] == 42
+            finally:
+                release.set()
+            completed = 0
+            while completed < 4:
+                result = runtime.wait(timeout_sec=2)
+                assert result.status is WaitStatus.ANSWERS_READY
+                completed += len(result.completed)
+            assert runtime.has_ready_answers() and first.has_ready_answers() and second.has_ready_answers()
+            assert answers[1].result() == 1
+            first.submit(lambda: None)
+            with pytest.raises(QueueFull):
+                second.submit(lambda: None)
+
+
+@pytest.mark.parametrize('simulated, charged', [(False, False), (True, False), (True, True)])
+def test_execution_inherits_episode_time_accounting(executors, monkeypatch, simulated, charged):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(simulated=simulated, charged=charged, max_in_flight=1)
+
+    def work():
+        wall[0] = 20_000_000
+        return 42
+
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
+        answer = cast(_UnchargedAnswer[int], execution.submit(work))
+        assert answer.call.result(timeout=1) == 42
+        if simulated and charged:
+            assert not answer.done()
+            assert not runtime.has_ready_answers()
+        now[0] = 20_000_000
+        assert answer.done()
+        assert runtime.has_ready_answers()
+        expected = 0.0 if simulated and not charged else 0.02
+        assert answer.elapsed_sec == answer.execution_sec == expected
+        assert answer.result() == 42
+        assert not runtime.has_ready_answers()
+
+
+def test_closing_runtime_drains_every_execution(executors):
+    runtime, _ = executors()
+    started, release, closed = threading.Event(), threading.Event(), threading.Event()
+
+    def work():
+        started.set()
+        assert release.wait(timeout=5)
+
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
+        answer = execution.submit(work)
+        assert started.wait(timeout=1)
+        closer = threading.Thread(target=lambda: (runtime.close(), closed.set()))
+        closer.start()
+        try:
+            assert not closed.wait(timeout=0.01)
+        finally:
+            release.set()
+            closer.join(timeout=2)
+        assert closed.is_set()
+        assert answer.result() is None
+        with pytest.raises(RuntimeError):
+            execution.submit(lambda: None)
+
+
+def test_closing_an_execution_leaves_other_executions_usable(executors):
+    runtime, _ = executors()
+    first = ExecutionRuntime(runtime, max_in_flight=1)
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as second:
+        first.close()
+        with pytest.raises(RuntimeError):
+            first.submit(lambda: None)
+        answer = second.submit(lambda: 42)
+        assert runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY
+        assert answer.result() == 42
