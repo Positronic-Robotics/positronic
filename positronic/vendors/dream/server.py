@@ -353,11 +353,12 @@ def dream_model(
 ) -> Model:
     """Dream-1 checkpoint `checkpoint` behind DreamAPI, warm before it serves.
 
-    `sessions_dir` is relative to the working directory unless absolute. `_record` off asks DreamAPI not to save
-    the sessions to the account. The terms of the API still let Dream Labs train on every request.
+    `sessions_dir` is relative to the working directory unless absolute, and a leading `~` is the home directory.
+    `_record` off asks DreamAPI not to save the sessions to the account. The terms of the API still let Dream Labs
+    train on every request.
     """
     config = {'checkpoint': checkpoint, 'timeout_ms': timeout_ms, 'strict': False, '_record': False}
-    directory = Path(sessions_dir).resolve()
+    directory = Path(sessions_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True)
     logger.info('Session records go to %s', directory)
     meta = {

@@ -337,6 +337,16 @@ def test_warm_up_asks_again_after_a_call_that_timed_out(gateway, monkeypatch):
     assert len(gateway.calls) == 1
 
 
+def test_a_sessions_dir_under_the_home_directory_is_expanded(gateway, tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    built = server.dream_model.override(sessions_dir='~/records', timeout_ms=5000).instantiate()
+    built.close()
+
+    assert (tmp_path / 'records').is_dir() and not (tmp_path / '~').exists()
+
+
 def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks():
     deployment = server.pipeline.instantiate()
 
