@@ -315,6 +315,10 @@ def _wait_until_warm(config: dict[str, Any], deadline_s: float) -> None:
                     raise
                 stale_sent = True
                 logger.info('The gateway closed an idle connection; asking again on a new one')
+            except dream_client.DreamTimeout:
+                if not _ends_by(deadline, call_timeout_s):
+                    raise
+                logger.info('Dream-1 did not answer in time while it starts; asking again')
             except dream_client.DreamSessionExpired as error:
                 # A wait for a cold model outlasts DreamAPI's idle limit of a session, and the client takes the new one.
                 if not _ends_by(deadline, call_timeout_s):

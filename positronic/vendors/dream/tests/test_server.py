@@ -320,6 +320,23 @@ def test_warm_up_asks_again_in_the_new_session_when_its_session_expired(gateway)
     assert gateway.calls[-1]['body']['session_id'] != gateway.calls[-2]['body']['session_id']
 
 
+def test_warm_up_asks_again_after_a_call_that_timed_out(gateway, monkeypatch):
+    get_action = server.dream_client.DreamClient.get_action
+    timed_out = [False]
+
+    def first_times_out(self):
+        if not timed_out[0]:
+            timed_out[0] = True
+            raise server.dream_client.DreamTimeout('no answer')
+        return get_action(self)
+
+    monkeypatch.setattr(server.dream_client.DreamClient, 'get_action', first_times_out)
+
+    server._wait_until_warm(CONFIG, deadline_s=30.0)
+
+    assert len(gateway.calls) == 1
+
+
 def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks():
     deployment = server.pipeline.instantiate()
 
