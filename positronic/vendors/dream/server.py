@@ -124,6 +124,15 @@ def _measured(observation: dict[str, Any]) -> dict[str, np.ndarray]:
     }
 
 
+def _ends_by(deadline: float, duration_s: float) -> bool:
+    """Whether `duration_s` from now ends by `deadline`, on the monotonic clock.
+
+    A call that cannot end by its deadline would only delay the error, and every other session with it, as the
+    server makes one call at a time.
+    """
+    return time.monotonic() + duration_s <= deadline
+
+
 class DreamModel(Model):
     """Dream-1 behind DreamAPI, one DreamAPI session per session.
 
@@ -283,15 +292,6 @@ class DreamModel(Model):
     def close(self) -> None:
         for session_id in list(self._sessions):
             self.end_session(session_id)
-
-
-def _ends_by(deadline: float, duration_s: float) -> bool:
-    """Whether `duration_s` from now ends by `deadline`, on the monotonic clock.
-
-    A call that cannot end by its deadline would only delay the error, and every other session with it, as the
-    server makes one call at a time.
-    """
-    return time.monotonic() + duration_s <= deadline
 
 
 def _wait_until_warm(config: dict[str, Any], deadline_s: float) -> None:

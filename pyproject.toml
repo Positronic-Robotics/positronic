@@ -146,7 +146,7 @@ llm-anthropic = ["positronic[llm]", "pydantic-ai-slim[anthropic]"]
 llm-google = ["positronic[llm]", "pydantic-ai-slim[google]"]
 # Dream-1 of Dream Labs (`positronic/vendors/dream`). Its server reads the trace id of a reply off a private part of
 # the client, so the version is pinned. The client has no release older than `exclude-newer`, so it has a date of its
-# own below.
+# own below. The client wheel also carries `shared.faceblur`, the face blurrer that the server runs.
 dream = ["dreamlabs-client==1.0.9"]
 
 # A dependency group rather than an extra, so `uv run` and `uv sync` include it without being asked.
