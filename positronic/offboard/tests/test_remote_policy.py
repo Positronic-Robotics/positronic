@@ -115,6 +115,7 @@ _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 def _mock_session(metadata=None):
     session = MagicMock()
     session.metadata = metadata or {}
+    session.max_in_flight = 1
     session.infer.return_value = {'action': 'test'}
     return session
 
@@ -359,13 +360,18 @@ class TestNewSessionRetriesRefusedConnects:
 
 
 def _ready(
-    session_id: str, meta: dict | None = None, *, version: protocol.ProtocolVersion = protocol.ProtocolVersion.V2
+    session_id: str,
+    meta: dict | None = None,
+    *,
+    version: protocol.ProtocolVersion = protocol.ProtocolVersion.V2,
+    max_in_flight: int | None = None,
 ) -> bytes:
     return legacy_protocol.serialise({
         protocol.STATUS: protocol.ServerStatus.READY,
         protocol.PROTOCOL_VERSION: version.value,
         protocol.META: meta if meta is not None else {'model_name': 'test'},
         protocol.SESSION_ID: session_id,
+        **({protocol.MAX_IN_FLIGHT: max_in_flight} if max_in_flight is not None else {}),
     })
 
 
@@ -386,6 +392,15 @@ def _observations_sent(conn: MagicMock) -> list:
         for request in (legacy_protocol.deserialise(call.args[0]) for call in conn.send.call_args_list)
         if protocol.OBSERVATION in request
     ]
+
+
+@pytest.mark.parametrize('version', list(protocol.ProtocolVersion))
+@pytest.mark.parametrize('limit', [None, 1, 20])
+def test_session_reads_capacity_separately_from_metadata(version, limit):
+    conn = _connection(_ready('test', version=version, max_in_flight=limit))
+    session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
+    assert session.max_in_flight == (1 if limit is None else limit)
+    assert protocol.MAX_IN_FLIGHT not in session.metadata
 
 
 class TestADroppedConnectionReconnects:
@@ -500,9 +515,22 @@ class TestADroppedConnectionReconnects:
         reopened = _connection(_ready('second', second_meta, version=version), end_ack)
         session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
 
-        with pytest.raises(wire.PeerDisconnected, match='other metadata'):
+        with pytest.raises(wire.PeerDisconnected, match='other session settings'):
             session.infer({'image': 'test'})
 
+        assert _observations_sent(reopened) == []
+        reopened.close.assert_called_once()
+
+    def test_changed_capacity_refuses_a_reconnect(self):
+        dropped = _connection(_ready('first', max_in_flight=3), wire.PeerDisconnected('dropped'))
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        reopened = _connection(_ready('second', max_in_flight=2), end_ack)
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+
+        with pytest.raises(wire.PeerDisconnected, match='other session settings'):
+            session.infer({'image': 'test'})
+
+        assert session.max_in_flight == 3
         assert _observations_sent(reopened) == []
         reopened.close.assert_called_once()
 
@@ -547,7 +575,7 @@ class TestADroppedConnectionReconnects:
         fake = _FakeWire(_connection(_ready('first'), wire.PeerDisconnected('dropped')), reopened)
         session = InferenceClient(fake, _ADDRESS).new_session()
 
-        with pytest.raises(wire.PeerDisconnected, match='other metadata'):
+        with pytest.raises(wire.PeerDisconnected, match='other session settings'):
             session.infer({'image': 'test'})
 
         assert _observations_sent(reopened) == []
@@ -1200,6 +1228,61 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+@pytest.mark.parametrize('capacity', [1, 3, 20])
+def test_session_controls_its_own_capacity_and_workers(runtime, capacity):
+    schedule = InferenceSchedule(
+        10,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+    )
+    metadata = {offboard_keys.LOCAL_STACK: schedule.to_spec()}
+    policy, session = _mock_remote_policy(metadata)
+    session.protocol_version = protocol.ProtocolVersion.V3
+    session.max_in_flight = capacity
+    started = [threading.Event() for _ in range(capacity)]
+    release = threading.Event()
+
+    def infer(obs):
+        started[obs[policy_keys.CALL_ID]].set()
+        assert release.wait(timeout=5)
+
+    session.infer.side_effect = infer
+    occupied = runtime.submit(release.wait, 5)
+    run = runtime.start(policy)
+    try:
+        for index in range(capacity):
+            run.send({policy_keys.OBS_TIME_NS: index * 100_000_000})
+        assert all(event.wait(timeout=2) for event in started)
+        run.send({policy_keys.OBS_TIME_NS: capacity * 100_000_000})
+        assert runtime.metadata_snapshot()[policy_keys.SKIPPED_SAMPLES] == 1
+        assert session.infer.call_count == capacity
+        release.set()
+        completed = 0
+        while completed < capacity + 1:
+            result = runtime.wait(timeout_sec=2)
+            assert result.status is WaitStatus.ANSWERS_READY
+            completed += len(result.completed)
+        occupied.result()
+        while runtime.has_ready_answers():
+            run.send({policy_keys.OBS_TIME_NS: capacity * 100_000_000})
+    finally:
+        release.set()
+        runtime.close()
+        run.close()
+
+
+@pytest.mark.parametrize('limit', [None, 0, -1, True, 2.5, '2'])
+def test_invalid_session_capacity_refuses_the_handshake(limit):
+    ready = legacy_protocol.deserialise(_ready('test'))
+    ready[protocol.MAX_IN_FLIGHT] = limit
+    conn = _connection(legacy_protocol.serialise(ready))
+    with pytest.raises(ValueError, match='max_in_flight'):
+        InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
+    conn.send.assert_not_called()
+    conn.close.assert_called_once()
 
 
 def test_a_failed_session_close_reaches_the_caller(runtime):

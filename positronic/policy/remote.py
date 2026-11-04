@@ -1,7 +1,6 @@
 import collections.abc as cabc
 import logging
 from concurrent.futures import Future, wait
-from contextlib import closing
 from functools import partial
 from threading import Thread
 from typing import Any
@@ -30,6 +29,7 @@ from .base import Policy, PolicyRun, Processor, Runtime, Step
 from .codecs import PolicyCommandError
 from .codecs.action import JointPositionAction
 from .compatibility import from_v1_spec
+from .executor import ExecutionRuntime
 from .spec import from_spec
 
 
@@ -190,11 +190,22 @@ class RemotePolicy(Policy):
                     'plain mapping.'
                 )
 
+    @staticmethod
+    def _close_stack(execution: ExecutionRuntime | None, run: PolicyRun | None) -> None:
+        """Drain calls before closing the run that owns their resources."""
+        if execution is not None:
+            execution.close()
+        if run is not None:
+            run.close()
+
     def run(self, runtime: Runtime) -> PolicyRun:
         session = self._client.new_session()
+        execution = None
+        run = None
         try:
             try:
                 server_meta = dict(session.metadata)
+                execution = ExecutionRuntime(runtime, max_in_flight=session.max_in_flight)
                 stack = declared_stack(server_meta, session.protocol_version)
                 client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
@@ -227,28 +238,29 @@ class RemotePolicy(Policy):
                 answered_session_id = session.session_id
                 return answer
 
-            with closing(runtime.start(stack, infer)) as run:
-                obs = yield
-                while True:
-                    try:
-                        step = run.send(obs)
-                        if isinstance(step, Step):
-                            self._require_robot_commands(step)
-                    except StopIteration as end:
-                        return end.value
-                    except PolicyCommandError:
-                        raise
-                    # A data error from the declared stack or its step is the policy's; a transport error is not one.
-                    except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
-                        raise PolicyCommandError(
-                            f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
-                        ) from e
-                    finally:
-                        # A connection that drops before its first answer reopens under a new session ID. The episode
-                        # names that session once it answered, so the ID it records has a session that served it.
-                        if answered_session_id != recorded_session_id:
-                            recorded_session_id = answered_session_id
-                            runtime.set_metadata(policy_keys.SESSION_ID, recorded_session_id)
-                    obs = yield step
+            run = execution.start(stack, infer)
+            obs = yield
+            while True:
+                try:
+                    step = run.send(obs)
+                    if isinstance(step, Step):
+                        self._require_robot_commands(step)
+                except StopIteration as end:
+                    return end.value
+                except PolicyCommandError:
+                    raise
+                # A data error from the declared stack or its step is the policy's; a transport error is not one.
+                except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
+                    raise PolicyCommandError(
+                        f'The client stack that the server declares cannot use the answer or the observation: {e!r}'
+                    ) from e
+                finally:
+                    # A connection that drops before its first answer reopens under a new session ID. The episode
+                    # names that session once it answered, so the ID it records has a session that served it.
+                    if answered_session_id != recorded_session_id:
+                        recorded_session_id = answered_session_id
+                        runtime.set_metadata(policy_keys.SESSION_ID, recorded_session_id)
+                obs = yield step
         finally:
+            self._close_stack(execution, run)
             _close_within_bound(session)

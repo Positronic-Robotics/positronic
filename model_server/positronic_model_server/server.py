@@ -27,16 +27,21 @@ class Session(ABC):
     """A prepared, warm session that owns its state while sharing loaded weights.
 
     ``close`` releases that state. ``output_images`` selects result values for JPEG serialization.
+    ``max_in_flight`` bounds the client's outstanding calls and worker count.
     """
 
     def __init__(
         self,
         client_stack: dict[str, Any],
         *,
+        max_in_flight: int = 1,
         metadata: dict[str, Any] | None = None,
         output_images: Sequence[serialization.JpegEncoding] = (),
     ):
+        if type(max_in_flight) is not int or max_in_flight < 1:
+            raise ValueError('max_in_flight must be a positive integer')
         self.client_stack = client_stack
+        self.max_in_flight = max_in_flight
         self.metadata = {} if metadata is None else metadata
         self.output_images = output_images
 
@@ -262,6 +267,7 @@ class ModelServer:
                     protocol.STATUS: protocol.ServerStatus.READY,
                     protocol.PROTOCOL_VERSION: protocol.ProtocolVersion.V3,
                     protocol.SESSION_ID: session_id,
+                    protocol.MAX_IN_FLIGHT: session.max_in_flight,
                     protocol.META: metadata,
                 })
             )

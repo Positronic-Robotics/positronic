@@ -2,7 +2,7 @@
 
 import contextvars
 import threading
-from concurrent.futures import CancelledError
+from contextlib import closing
 from typing import cast
 
 import pytest
@@ -10,21 +10,17 @@ import pytest
 from positronic import telemetry, telemetry_keys
 from positronic.policy import executor as module
 from positronic.policy.base import NotAnswered, Policy, PolicyEnd, QueueFull, Step
-from positronic.policy.executor import Executor, WaitResult, WaitStatus, _UnchargedAnswer
+from positronic.policy.executor import ExecutionRuntime, Executor, WaitResult, WaitStatus, _UnchargedAnswer
 
 
 @pytest.fixture
 def executors():
     created = []
 
-    def make(*, simulated=True, charged=False, workers=1, max_queue_size=16):
+    def make(*, simulated=True, charged=False, max_in_flight=16):
         now = [0]
         runtime = Executor(
-            lambda: now[0],
-            simulated=simulated,
-            charge_inference_time=charged,
-            max_workers=workers,
-            max_queue_size=max_queue_size,
+            lambda: now[0], simulated=simulated, charge_inference_time=charged, max_in_flight=max_in_flight
         )
         created.append(runtime)
         return runtime, now
@@ -159,7 +155,7 @@ def test_submission_and_bounded_wait_do_not_wait_out_a_worker(executors):
 
 
 def test_fast_call_completes_while_another_worker_is_pending(executors):
-    runtime, _ = executors(workers=2)
+    runtime, _ = executors(max_in_flight=2)
     release = threading.Event()
     slow = runtime.submit(lambda: release.wait(timeout=2))
     try:
@@ -168,6 +164,8 @@ def test_fast_call_completes_while_another_worker_is_pending(executors):
         assert runtime.has_ready_answers()
         assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (fast,))
         assert runtime.has_ready_answers()
+        with pytest.raises(QueueFull):
+            runtime.submit(lambda: None)
         assert fast.result() == 42
         assert not runtime.has_ready_answers()
         assert runtime.has_pending
@@ -207,43 +205,34 @@ def test_charged_completion_is_hidden_until_its_episode_time(executors, monkeypa
 
 
 @pytest.mark.parametrize('simulated, charged', [(False, False), (False, True), (True, True), (True, False)])
-def test_durations_separate_queueing_from_execution_and_ignore_late_reads(executors, monkeypatch, simulated, charged):
+def test_durations_measure_the_call_and_ignore_late_reads(executors, monkeypatch, simulated, charged):
     wall = [0]
     monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
     runtime, now = executors(simulated=simulated, charged=charged)
     started, release = threading.Event(), threading.Event()
 
-    def first():
+    def work():
         started.set()
         assert release.wait(timeout=2)
-
-    def second():
         wall[0] = 50_000_000
         return 42
 
-    first_answer = cast(_UnchargedAnswer[None], runtime.submit(first))
+    answer = cast(_UnchargedAnswer[int], runtime.submit(work))
     try:
         assert started.wait(timeout=1)
-        wall[0] = now[0] = 10_000_000
-        second_answer = cast(_UnchargedAnswer[int], runtime.submit(second))
-        assert not second_answer.done()
-        wall[0] = 30_000_000
     finally:
         release.set()
-    assert second_answer.call.result(timeout=1) == 42
+    assert answer.call.result(timeout=1) == 42
     now[0] = 50_000_000
-    expected = (0.0, 0.0) if simulated and not charged else (0.04, 0.02)
-    assert (second_answer.elapsed_sec, second_answer.execution_sec) == expected
-    assert first_answer.elapsed_sec == (0.0 if simulated and not charged else 0.03)
+    expected = 0.0 if simulated and not charged else 0.05
+    assert answer.elapsed_sec == answer.execution_sec == expected
     runtime.take_completed()
     assert runtime.has_ready_answers()
     wall[0] = now[0] = 1_000_000_000
-    assert (second_answer.elapsed_sec, second_answer.execution_sec) == expected
-    assert second_answer.result() == 42
-    assert runtime.has_ready_answers()
-    assert first_answer.result() is None
+    assert answer.elapsed_sec == answer.execution_sec == expected
+    assert answer.result() == 42
     assert not runtime.has_ready_answers()
-    assert (second_answer.elapsed_sec, second_answer.execution_sec) == expected
+    assert answer.elapsed_sec == answer.execution_sec == expected
 
 
 def test_charged_wait_is_bounded_by_the_time_still_owed(executors, monkeypatch):
@@ -291,25 +280,53 @@ def test_real_execution_never_waits_for_simulated_time(executors, charged, monke
     assert answer.result() == 42
 
 
-def test_cancellation_notifies_once(executors):
-    runtime, _ = executors()
-    release = threading.Event()
-    running = runtime.submit(lambda: release.wait(timeout=2))
+def test_cancelling_running_work_releases_capacity_only_when_it_finishes(executors):
+    runtime, _ = executors(max_in_flight=1)
+    started, release = threading.Event(), threading.Event()
+
+    def work():
+        started.set()
+        assert release.wait(timeout=2)
+
+    answer = runtime.submit(work)
     try:
-        queued = runtime.submit(lambda: 42)
-        queued.cancel()
-        assert not runtime.has_ready_answers()
-        with pytest.raises(CancelledError):
-            _ = queued.elapsed_sec
-        with pytest.raises(CancelledError):
-            _ = queued.execution_sec
-        assert runtime.take_completed() == (queued,)
-        assert runtime.take_completed() == ()
-        with pytest.raises(CancelledError):
-            queued.result()
+        assert started.wait(timeout=1)
+        answer.cancel()
+        assert not answer.done()
+        with pytest.raises(QueueFull):
+            runtime.submit(lambda: None)
     finally:
         release.set()
-    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (running,))
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert not runtime.has_ready_answers()
+    runtime.submit(lambda: None)
+
+
+@pytest.mark.parametrize('completed_first', [False, True])
+def test_cancelled_failure_is_reported_once(executors, caplog, completed_first):
+    runtime, _ = executors(max_in_flight=1)
+    started, release = threading.Event(), threading.Event()
+
+    def work():
+        started.set()
+        assert release.wait(timeout=2)
+        raise ValueError('cancelled failure')
+
+    answer = runtime.submit(work)
+    try:
+        assert started.wait(timeout=1)
+        if completed_first:
+            release.set()
+            assert runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY
+        answer.cancel()
+    finally:
+        release.set()
+    if not completed_first:
+        assert runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY
+    assert not runtime.has_ready_answers()
+    runtime.take_completed()
+    runtime.close()
+    assert caplog.text.count('cancelled failure') == 1
 
 
 def test_failure_notifies_and_is_raised_by_result(executors, caplog):
@@ -355,68 +372,72 @@ def test_submission_preserves_context_and_keyword_arguments(executors):
     assert answer.result() == ('episode', 42)
 
 
-def test_close_waits_for_running_work_and_cancels_queued_work(executors):
+def test_close_waits_for_running_work_and_refuses_new_calls(executors):
     runtime, _ = executors()
     started, release, closed = threading.Event(), threading.Event(), threading.Event()
-    calls = []
-
-    def first():
-        started.set()
-        assert release.wait(timeout=2)
-        calls.append('first')
-
-    runtime.submit(first)
-    assert started.wait(timeout=1)
-    queued = runtime.submit(lambda: calls.append('second'))
-    assert not queued.done()
-    closer = threading.Thread(target=lambda: (runtime.close(), closed.set()))
-    closer.start()
-    try:
-        with pytest.raises(CancelledError):
-            cast(_UnchargedAnswer, queued).call.result(timeout=1)
-        assert not closed.is_set()
-        assert calls == []
-    finally:
-        release.set()
-        closer.join(timeout=2)
-    assert closed.is_set()
-    assert calls == ['first']
-    with pytest.raises(CancelledError):
-        queued.result()
-    with pytest.raises(RuntimeError):
-        runtime.submit(lambda: None)
-
-
-@pytest.mark.parametrize('capacity', [0, 1, 3])
-def test_full_queue_refuses_work_and_cancellation_frees_capacity(executors, capacity):
-    runtime, _ = executors(max_queue_size=capacity)
-    started, release = threading.Event(), threading.Event()
 
     def work():
         started.set()
         assert release.wait(timeout=2)
 
-    running = runtime.submit(work)
+    answer = runtime.submit(work)
+    assert started.wait(timeout=1)
+    closer = threading.Thread(target=lambda: (runtime.close(), closed.set()))
+    closer.start()
     try:
-        assert started.wait(timeout=1)
-        queued = [runtime.submit(lambda: 42) for _ in range(capacity)]
-        with pytest.raises(QueueFull):
-            runtime.submit(lambda: pytest.fail('Rejected work ran'))
-        if queued:
-            queued[0].cancel()
-            replacement = runtime.submit(lambda: 43)
-            with pytest.raises(QueueFull):
-                runtime.submit(lambda: None)
-            replacement.cancel()
+        assert not closed.wait(timeout=0.01)
     finally:
         release.set()
-    assert cast(_UnchargedAnswer, running).call.result(timeout=1) is None
+        closer.join(timeout=2)
+    assert closed.is_set()
+    assert answer.result() is None
+    with pytest.raises(RuntimeError):
+        runtime.submit(lambda: None)
 
 
-def test_finished_calls_free_capacity_before_visibility_or_consumption(executors, monkeypatch):
+def test_close_before_submission_prevents_opening_workers(executors):
+    runtime, _ = executors()
+    runtime.close()
+    runtime.close()
+    with pytest.raises(RuntimeError):
+        runtime.submit(lambda: None)
+
+
+@pytest.mark.parametrize('capacity', [1, 3, 20])
+def test_all_admitted_calls_can_start_and_unread_answers_hold_capacity(executors, capacity):
+    runtime, _ = executors(max_in_flight=capacity)
+    started = [threading.Event() for _ in range(capacity)]
+    release = threading.Event()
+
+    def work(index):
+        started[index].set()
+        assert release.wait(timeout=5)
+        return index
+
+    answers = [runtime.submit(work, index) for index in range(capacity)]
+    try:
+        assert all(event.wait(timeout=2) for event in started)
+        with pytest.raises(QueueFull):
+            runtime.submit(lambda: pytest.fail('Rejected work ran'))
+    finally:
+        release.set()
+    completed = 0
+    while completed < capacity:
+        result = runtime.wait(timeout_sec=2)
+        assert result.status is WaitStatus.ANSWERS_READY
+        completed += len(result.completed)
+    with pytest.raises(QueueFull):
+        runtime.submit(lambda: None)
+    assert answers[0].result() == 0
+    runtime.submit(lambda: None)
+    with pytest.raises(QueueFull):
+        runtime.submit(lambda: None)
+
+
+def test_invisible_or_unread_answer_keeps_capacity(executors, monkeypatch):
     wall = [0]
     monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
-    runtime, _ = executors(charged=True, max_queue_size=0)
+    runtime, now = executors(charged=True, max_in_flight=1)
 
     def work():
         wall[0] += 100_000_000
@@ -425,11 +446,143 @@ def test_finished_calls_free_capacity_before_visibility_or_consumption(executors
     first = cast(_UnchargedAnswer, runtime.submit(work))
     assert first.call.result(timeout=1) == 42
     assert not first.done()
-    second = cast(_UnchargedAnswer, runtime.submit(work))
-    assert second.call.result(timeout=1) == 42
+    with pytest.raises(QueueFull):
+        runtime.submit(work)
+    now[0] = 100_000_000
+    runtime.take_completed()
+    assert first.done()
+    with pytest.raises(QueueFull):
+        runtime.submit(work)
+    assert first.result() == 42
+    runtime.submit(work)
 
 
-@pytest.mark.parametrize('capacity', [-1, True, 1.5])
-def test_queue_capacity_must_be_a_nonnegative_integer(executors, capacity):
-    with pytest.raises(ValueError, match='max_queue_size'):
-        executors(max_queue_size=capacity)
+@pytest.mark.parametrize('fails', [False, True])
+def test_consuming_none_or_failure_frees_capacity(executors, fails):
+    runtime, _ = executors(max_in_flight=1)
+
+    def work():
+        if fails:
+            raise ValueError('failed')
+
+    answer = runtime.submit(work)
+    assert runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY
+    with pytest.raises(QueueFull):
+        runtime.submit(lambda: None)
+    if fails:
+        with pytest.raises(ValueError, match='failed'):
+            answer.result()
+    else:
+        assert answer.result() is None
+    runtime.submit(lambda: None)
+
+
+@pytest.mark.parametrize('capacity', [0, -1, True, 1.5])
+def test_capacity_must_be_a_positive_integer(executors, capacity):
+    with pytest.raises(ValueError, match='max_in_flight'):
+        executors(max_in_flight=capacity)
+    runtime, _ = executors()
+    with pytest.raises(ValueError, match='max_in_flight'):
+        ExecutionRuntime(runtime, max_in_flight=capacity)
+
+
+def test_execution_limits_are_independent_and_share_completions(executors):
+    runtime, now = executors(max_in_flight=1)
+    started = [threading.Event() for _ in range(4)]
+    release = threading.Event()
+
+    def work(index):
+        started[index].set()
+        assert release.wait(timeout=5)
+        return index
+
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as first:
+        with closing(ExecutionRuntime(runtime, max_in_flight=2)) as second:
+            answers = []
+            try:
+                answers.append(runtime.submit(work, 0))
+                answers.append(first.submit(work, 1))
+                answers.extend(second.submit(work, index) for index in (2, 3))
+                assert all(event.wait(timeout=1) for event in started)
+                for execution in (runtime, first, second):
+                    with pytest.raises(QueueFull):
+                        execution.submit(lambda: None)
+                now[0] = 123
+                runtime.start_tick()
+                assert first.time_ns == second.time_ns == runtime.time_ns == 123
+                assert first.tick == second.tick == runtime.tick
+                second.set_metadata('value', 42)
+                assert runtime.metadata_snapshot()['value'] == 42
+            finally:
+                release.set()
+            completed = 0
+            while completed < 4:
+                result = runtime.wait(timeout_sec=2)
+                assert result.status is WaitStatus.ANSWERS_READY
+                completed += len(result.completed)
+            assert runtime.has_ready_answers() and first.has_ready_answers() and second.has_ready_answers()
+            assert answers[1].result() == 1
+            first.submit(lambda: None)
+            with pytest.raises(QueueFull):
+                second.submit(lambda: None)
+
+
+@pytest.mark.parametrize('simulated, charged', [(False, False), (True, False), (True, True)])
+def test_execution_inherits_episode_time_accounting(executors, monkeypatch, simulated, charged):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(simulated=simulated, charged=charged, max_in_flight=1)
+
+    def work():
+        wall[0] = 20_000_000
+        return 42
+
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
+        answer = cast(_UnchargedAnswer[int], execution.submit(work))
+        assert answer.call.result(timeout=1) == 42
+        if simulated and charged:
+            assert not answer.done()
+            assert not runtime.has_ready_answers()
+        now[0] = 20_000_000
+        assert answer.done()
+        assert runtime.has_ready_answers()
+        expected = 0.0 if simulated and not charged else 0.02
+        assert answer.elapsed_sec == answer.execution_sec == expected
+        assert answer.result() == 42
+        assert not runtime.has_ready_answers()
+
+
+def test_closing_runtime_drains_every_execution(executors):
+    runtime, _ = executors()
+    started, release, closed = threading.Event(), threading.Event(), threading.Event()
+
+    def work():
+        started.set()
+        assert release.wait(timeout=5)
+
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
+        answer = execution.submit(work)
+        assert started.wait(timeout=1)
+        closer = threading.Thread(target=lambda: (runtime.close(), closed.set()))
+        closer.start()
+        try:
+            assert not closed.wait(timeout=0.01)
+        finally:
+            release.set()
+            closer.join(timeout=2)
+        assert closed.is_set()
+        assert answer.result() is None
+        with pytest.raises(RuntimeError):
+            execution.submit(lambda: None)
+
+
+def test_closing_an_execution_leaves_other_executions_usable(executors):
+    runtime, _ = executors()
+    first = ExecutionRuntime(runtime, max_in_flight=1)
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as second:
+        first.close()
+        with pytest.raises(RuntimeError):
+            first.submit(lambda: None)
+        answer = second.submit(lambda: 42)
+        assert runtime.wait(timeout_sec=1).status is WaitStatus.ANSWERS_READY
+        assert answer.result() == 42

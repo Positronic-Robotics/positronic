@@ -240,7 +240,6 @@ def test_remote_calls_match_responses_when_encoding_reorders_observations(servin
             request_timing=RequestTiming.every(0.1),
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=ConstantDuration(),
-            max_in_flight=3,
         ),
         SlowCodec(),
         from_spec(
@@ -261,7 +260,7 @@ def test_remote_calls_match_responses_when_encoding_reorders_observations(servin
 
     class ObservingModel(Model):
         def prepare_session(self, params):
-            return ObservingSession(spec.component('chunked_schedule', version=2, fps=10))
+            return ObservingSession(spec.component('chunked_schedule', version=2, fps=10), max_in_flight=3)
 
     monkeypatch.setattr('positronic.policy.remote.declared_stack', lambda *_: stack)
     now = [0]

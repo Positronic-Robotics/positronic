@@ -364,8 +364,12 @@ checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
-Periodic recipes can set `InferenceSchedule(max_in_flight=...)` above its default of one to pipeline
-ordinary calls over the session connection. Replies must arrive in actual send order, including `None`
+Servers can set `Session(max_in_flight=...)` above its default of one to pipeline ordinary calls.
+The ready handshake carries this setting separately from metadata.
+Each remote session owns its workers and limit: calls occupy capacity until their answers are read
+or cancelled calls finish. Sessions share episode timing and completion delivery, without a shared
+worker limit or an additional waiting queue.
+Replies must arrive in actual send order, including `None`
 and errors; observation timestamps need not arrive in order and are the server's responsibility.
 At capacity, the scheduler skips new samples and records `skipped_samples` in episode
 metadata. A pending `replan_now` survives skipped samples and remains available to the recipe's
@@ -388,11 +392,25 @@ Real-time chunking (RTC) predicts a new action chunk while the client executes
 queued commands. It combines local scheduling and remote prediction through the
 policy API's [composition model](../policy/DESIGN.md#composability).
 
-The client supplies the remaining planned actions at the observation moment,
-alongside completed call timings. The timing batch is empty before the first
-completed call. The server estimates latency and decides how
-to use that context, including which actions to freeze or blend. Supplying the
-whole remaining plan lets models choose their own conditioning window.
+The division of responsibility follows where the information is available:
+
+- **The client owns the timeline.** It samples observations and plays commands on its clock.
+  The recipe chooses how predictions are placed on that timeline; playback follows their assigned
+  times, skipping elapsed actions.
+- **The server owns model semantics.** An ordinary inference call can contribute history, produce
+  a prediction, or return `None` to leave the plan unchanged. This lets a periodic server choose
+  its prediction moments without a separate caching protocol.
+- **Submission order governs replacement.** The scheduler consumes answers in `call_id` order,
+  so encoding or network delays do not decide which prediction supersedes another. Transport
+  replies still follow actual send order to match each answer to its request.
+- **Timing feedback reports facts about calls.** The client reports completed calls without
+  classifying their purpose. The server knows which timings matter for its model and how to use
+  them for conditioning. `elapsed_sec` ends at callable completion; handling the answer and
+  playing its commands happen separately.
+
+For RTC, the client supplies the whole remaining plan as a snapshot at observation time, alongside
+completed call timings. The server chooses its conditioning window and which actions to freeze or
+blend. Predictions produced after that snapshot are known to the server through its own results.
 
 The prefix represents planned commands in model action units. If command
 preparation changes a grip prediction from `0.7` to `1.0`, the prefix reflects
@@ -403,10 +421,6 @@ prediction identifies its source actions; its start relative to the observation
 says when they are due. With the original action spacing preserved, the server
 knows the remaining times from its action rate. Relative offsets avoid requiring
 synchronized client and server clocks.
-
-With overlapping calls, the prefix is a snapshot at observation time. The server must account for
-predictions it has produced since that snapshot when choosing the continuation. `call_timings` lets
-it associate durations with its own results and estimate the delay relevant to prediction.
 
 Action codecs encode commands at a configured input path through ordinary
 `encode()` calls. Observation codecs, field selection and packing compose with

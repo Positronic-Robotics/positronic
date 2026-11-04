@@ -64,6 +64,9 @@ class InferenceSession:
             'policy protocol',
         )
         self._metadata = ready[protocol.META]
+        self._max_in_flight = ready.get(protocol.MAX_IN_FLIGHT, 1)
+        if type(self._max_in_flight) is not int or self._max_in_flight < 1:
+            raise ValueError('max_in_flight must be a positive integer')
         self._session_id = None if self._protocol is protocol.ProtocolVersion.V1 else ready[protocol.SESSION_ID]
         self._closed = False
         self._closing = False
@@ -142,6 +145,11 @@ class InferenceSession:
     def metadata(self) -> dict[str, Any]:
         return self._metadata
 
+    @property
+    def max_in_flight(self) -> int:
+        """Server-declared client capacity, including completed answers not yet read."""
+        return self._max_in_flight
+
     def infer(self, obs: dict[str, Any]) -> Any:
         """Send an observation and receive native v3 data, or typed robot commands for legacy versions.
 
@@ -189,11 +197,13 @@ class InferenceSession:
     def _adopt(self, reopened: 'InferenceSession') -> None:
         """Carry on over ``reopened``'s connection, which must serve what this session opened on."""
         # The caller built its rig-side stack from this session's handshake, and the episode records that handshake.
-        if reopened.protocol_version is not self._protocol or not self._wire_values_equal(
-            reopened.metadata, self._metadata
+        if (
+            reopened.protocol_version is not self._protocol
+            or reopened.max_in_flight != self._max_in_flight
+            or not self._wire_values_equal(reopened.metadata, self._metadata)
         ):
             reopened.close()
-            raise wire.PeerDisconnected('The server this session reconnected to declares other metadata')
+            raise wire.PeerDisconnected('The server this session reconnected to declares other session settings')
         with self._send_lock:
             if not self._closing:
                 self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False

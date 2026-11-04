@@ -53,6 +53,14 @@ def observation(index):
     }
 
 
+@pytest.mark.parametrize('settings, capacity', [({}, 16), ({'max_in_flight': 24}, 24)])
+def test_session_declares_client_capacity(settings, capacity):
+    model = DreamZeroModel(NativePolicy(), **settings)
+    session = model.prepare_session(model.parameters)
+    assert session.max_in_flight == capacity
+    session.close()
+
+
 def test_history_only_calls_and_selected_frames():
     native = NativePolicy()
     model = DreamZeroModel(native, width=3, height=2)
