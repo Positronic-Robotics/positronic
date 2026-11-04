@@ -9,6 +9,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.models import DROID_EE_FRAME
 
 if TYPE_CHECKING:
+    from positronic.drivers.roboarm.yam.compensation import Compensation
     from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
@@ -88,11 +89,18 @@ def yam_move_tuning(**fields: float) -> 'SettleTuning':
     return dataclasses.replace(MOVE_SETTLE, **fields)
 
 
+@cfn.config()
+def yam_compensation(**fields) -> 'Compensation':
+    from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION
+
+    return dataclasses.replace(I2RT_COMPENSATION, **fields)
+
+
 @cfn.config(
     channel='can0',
     sim=False,
     base_pose=None,
-    gravity_comp_factor=None,
+    compensation=yam_compensation,
     park_after_idle_s=60.0,
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
@@ -101,7 +109,7 @@ def yam(
     channel: str,
     sim: bool,
     base_pose,
-    gravity_comp_factor,
+    compensation: 'Compensation',
     park_after_idle_s: float | None,
     park_tuning: 'SettleTuning',
     move_tuning: 'SettleTuning',
@@ -112,7 +120,7 @@ def yam(
         channel,
         base_pose=base_pose,
         sim=sim,
-        gravity_comp_factor=gravity_comp_factor,
+        compensation=compensation,
         park_after_idle_s=park_after_idle_s,
         park_tuning=park_tuning,
         move_tuning=move_tuning,
