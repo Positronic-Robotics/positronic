@@ -308,6 +308,18 @@ def test_warm_up_asks_again_on_a_new_connection_when_the_gateway_closed_the_idle
     assert len(gateway.calls) == 2
 
 
+def test_warm_up_asks_again_in_the_new_session_when_its_session_expired(gateway):
+    gateway.statuses.extend([
+        {'code': 'DA-2000', 'reason': 'pool_warming', 'retry_after_s': 0.01},
+        {'code': 'DA-0001', 'reason': 'expired'},
+    ])
+
+    server._wait_until_warm(CONFIG, deadline_s=30.0)
+
+    assert len(gateway.calls) == 3
+    assert gateway.calls[-1]['body']['session_id'] != gateway.calls[-2]['body']['session_id']
+
+
 def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks():
     deployment = server.pipeline.instantiate()
 
