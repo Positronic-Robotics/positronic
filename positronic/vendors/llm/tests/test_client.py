@@ -123,7 +123,7 @@ def test_openai_compatible_endpoint_round_trip(monkeypatch):
     assert requests[0].headers['authorization'] == 'Bearer test-secret-do-not-record'
     body = json.loads(requests[0].content)
     assert 'data:image/png;base64,' in str(body['messages'])
-    assert {tool['function']['name'] for tool in body['tools']} == {'move_path', 'done', 'give_up'}
+    assert {tool['function']['name'] for tool in body['tools']} == {'move_path', 'done'}
     assert meta[policy_keys.STOP_REASON] == 'done'
     recorded = json.dumps(meta)
     assert 'test-secret-do-not-record' not in recorded

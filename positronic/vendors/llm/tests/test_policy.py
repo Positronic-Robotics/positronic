@@ -53,9 +53,13 @@ def move(*xs: float | str):
     ])
 
 
-def finish(tool='done'):
+def finish():
     return ModelResponse([
-        ToolCallPart(tool, {'reason': 'Attempt ended.', 'hindsight': 'Inspect the final image.'}, tool_call_id='finish')
+        ToolCallPart(
+            Tool.DONE.value,
+            {'reason': 'Attempt ended.', 'hindsight': 'Inspect the final image.'},
+            tool_call_id='finish',
+        )
     ])
 
 
@@ -142,8 +146,8 @@ def test_history_keeps_the_frames_of_the_last_observations_and_reports_actual_po
     assert 'privileged-value-never-send' not in json.dumps(events)
     with execution(policy) as (fresh, runtime, clock):
         assert runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] == []
-        replies.append(finish('give_up'))
-        assert complete(fresh, runtime, clock, observation()) is PolicyEnd.GIVE_UP
+        replies.append(finish())
+        assert complete(fresh, runtime, clock, observation()) is PolicyEnd.COMPLETE
         assert len(frames(requests[-1][0])) == 2
         assert 'Inspect the final image.' not in str(requests[-1][0])
         assert [e['call'] for e in runtime.metadata_snapshot()[policy_keys.TRANSCRIPT] if e['event'] == 'request'] == [
@@ -263,7 +267,8 @@ def test_follow_up_needs_another_tick_and_uses_the_frozen_observation(model, rep
         ModelResponse([TextPart('I will move.')]),
         ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, '{broken')]),
         move(*[0.01] * 6),
-        ModelResponse([ToolCallPart('done', {}), ToolCallPart('give_up', {})]),
+        ModelResponse([ToolCallPart(Tool.DONE.value, {}), ToolCallPart(Tool.DONE.value, {})]),
+        ModelResponse([ToolCallPart('give_up', {'reason': 'x', 'hindsight': 'x'})]),
         ModelResponse([ToolCallPart('run_code', {'code': 'print(1)'})]),
         ModelResponse([ToolCallPart('done', {'reason': 'x', 'hindsight': 'x'})], finish_reason='length'),
     ],
@@ -278,15 +283,13 @@ def test_invalid_reply_gets_correction_and_has_finite_retry_budget(model, bad):
     assert 'Rejected' in str(requests[-1][0])
 
 
-@pytest.mark.parametrize(
-    'ending,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP), ('call_budget', PolicyEnd.GIVE_UP)]
-)
+@pytest.mark.parametrize('ending,end', [('done', PolicyEnd.COMPLETE), ('call_budget', PolicyEnd.GIVE_UP)])
 def test_a_finished_run_returns_its_end_and_a_new_run_starts_fresh(model, ending, end):
     requests, replies = model
     replies.append(
         ModelResponse([ToolCallPart(Tool.REVEAL_FRAMES.value, {'cameras': [], 'note': 'Look.'})])
         if ending == 'call_budget'
-        else finish(ending)
+        else finish()
     )
     policy = llm(model='test', images='on_demand', max_calls=1)
     with execution(policy) as (run, runtime, clock):

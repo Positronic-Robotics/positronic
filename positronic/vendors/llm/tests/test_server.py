@@ -122,13 +122,12 @@ def test_a_path_answers_one_part_per_call_and_asks_the_model_only_after_the_last
     llm_model.close()
 
 
-@pytest.mark.parametrize('tool,end', [('done', PolicyEnd.COMPLETE), ('give_up', PolicyEnd.GIVE_UP)])
-def test_a_finish_answers_with_its_end_and_every_later_call_repeats_it_without_a_request(model, make_model, tool, end):
+def test_a_finish_answers_with_its_end_and_every_later_call_repeats_it_without_a_request(model, make_model):
     requests, replies = model
-    replies.append(finish(tool))
+    replies.append(finish())
     llm_model = make_model()
-    assert llm_model(observation(), session_id='a') == [{policy_keys.END: end.value}]
-    assert llm_model(observation(), session_id='a') == [{policy_keys.END: end.value}]
+    assert llm_model(observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
+    assert llm_model(observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
     assert len(requests) == 1
 
 
@@ -181,13 +180,13 @@ def test_an_ended_session_drops_its_conversation(model, make_model):
 
 def test_a_decided_end_writes_the_session_record_as_a_local_episode_records_it(model, make_model, tmp_path):
     _, replies = model
-    replies.extend([move('invalid'), finish('give_up')])
+    replies.extend([move('invalid'), finish()])
     llm_model = make_model()
     llm_model(observation(), session_id='a')
     record = session_record(tmp_path, 'a')
     assert record[policy_keys.SESSION_ID] == 'a'
     assert record[policy_keys.MODEL] == 'test'
-    assert record[policy_keys.STOP_REASON] == 'give_up'
+    assert record[policy_keys.STOP_REASON] == Tool.DONE
     assert record[policy_keys.HINDSIGHT] == 'Inspect the final image.'
     transcript = record[policy_keys.TRANSCRIPT]
     assert [e['call'] for e in transcript if e['event'] == 'response'] == [1, 2]
