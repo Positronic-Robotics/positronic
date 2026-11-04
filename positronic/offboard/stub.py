@@ -14,7 +14,8 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import Codec
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.sequential import Sequential
 
 
 class StubModel(Model):
@@ -41,7 +42,9 @@ class Delay(Codec):
 
 @cfn.config(delay_sec=0.0)
 def pipeline(delay_sec: float) -> PolicyDeployment:
-    return PolicyDeployment(ChunkedSchedule(fps=15), Delay(delay_sec))
+    return PolicyDeployment(
+        Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=15)), Delay(delay_sec)
+    )
 
 
 if __name__ == '__main__':

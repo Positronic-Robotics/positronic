@@ -13,7 +13,7 @@ The service runs on the same machine as the run, or on another machine (see
 The service prepares each session until the person presses Ready. Each session declares stock components in its
 client stack:
 - `end_on_field` ends the run when a reply carries the Complete or the Give up of the person;
-- `chunked_schedule` asks for one frame at a time, and plays each reply at once;
+- `inference_schedule` asks for one frame at a time; `trajectory_player` plays each reply at once;
 - `observation_codec` sends the task, the pose, the grip and the camera images of the robot;
 - `absolute_position_action` turns each reply into a command, and `end_command` gives the `end` of a reply to
   `end_on_field`.

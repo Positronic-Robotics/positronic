@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import partial
 from typing import TypeVar
 
+K = TypeVar('K')
 T = TypeVar('T')
 U = TypeVar('U')
 
@@ -103,6 +104,32 @@ class LazyDict(dict):
         eager_data = {k: dict.__getitem__(self, k) for k in dict.__iter__(self)}
         unevaluated = {k: v for k, v in self._lazy_getters.items() if k not in eager_data}
         return LazyDict(eager_data, unevaluated)
+
+
+class OverlayMapping(Mapping[K, T]):
+    """A read-only live view; ``add`` values take precedence over ``remove`` keys and source values."""
+
+    def __init__(self, data: Mapping[K, T], *, add: Mapping[K, T] | None = None, remove: Iterable[K] = ()) -> None:
+        self._data = data
+        self._added = {} if add is None else add
+        self._excluded = frozenset(remove)
+
+    def __getitem__(self, key: K) -> T:
+        if key in self._added:
+            return self._added[key]
+        if key in self._excluded:
+            raise KeyError(key)
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[K]:
+        yield from self._added
+        yield from (key for key in self._data if key not in self._added and key not in self._excluded)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._added or (key not in self._excluded and key in self._data)
 
 
 class LazySequence(Sequence[U]):

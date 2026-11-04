@@ -5,9 +5,9 @@ The wrapper owns transport, sessions, serialization and cleanup. Vendor scripts 
 model directly in the same process and describe the client pipeline as plain data.
 
 ```bash
-uv pip install "positronic-model-server==0.3.1"
-uv pip install "positronic-model-server[websocket]==0.3.1"
-uv pip install "positronic-model-server[grpc]==0.3.1"
+uv pip install "positronic-model-server==0.3.5"
+uv pip install "positronic-model-server[websocket]==0.3.5"
+uv pip install "positronic-model-server[grpc]==0.3.5"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
@@ -23,12 +23,17 @@ This test server returns each observation as a one-element result list:
 ```python
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
-from positronic_model_server.spec import component
+from positronic_model_server.spec import component, sequence
 from positronic_model_server.websocket_wire import WebsocketWire
 
 class EchoSession(Session):
     def __init__(self, fps):
-        super().__init__(component("chunked_schedule", fps=fps))
+        super().__init__(sequence(
+            component("trajectory_player", replan_on_error=True),
+            component("inference_schedule", fps=fps,
+                      request_timing={"reference": "before_end"},
+                      merge={"start": "after_previous"}, latency_estimate=0.0),
+        ))
 
     def infer(self, observation):
         return [observation]
@@ -83,6 +88,8 @@ model. It then sends `ready` with a session ID, protocol v3, the pipeline descri
 
 The client may report any additional metadata and owns how it records or combines that information.
 The server checks description structure without importing client components.
+`Session(max_in_flight=...)` sets the client’s outstanding-call limit and worker count (default one),
+sent as a separate field in the ready handshake. Completed answers occupy capacity until the client reads them.
 
 All model operations run on one worker thread in the server process: load, preparation, inference,
 session cleanup and model cleanup. Each session retains its own settings and history.
@@ -90,6 +97,10 @@ Inference is serialized across all listeners. Queue time is reported separately 
 time. The event loop answers keepalive while the worker is busy; no waiting messages interrupt an
 inference response. A failed inference reports an error and keeps the session open. A malformed
 session request ends that session.
+
+Clients may pipeline inference requests. Each request receives exactly one response, in request
+order, including `None` results and inference errors. No unsolicited application messages may
+interrupt these replies. Pipelining does not require concurrent model execution.
 
 Clients own recovery from reported inference errors. The recommended client behavior is to close
 the affected session and, if retrying, open a fresh session and wait for `ready`. Continuing in the
@@ -128,7 +139,10 @@ and instantiates their implementations:
 from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
-    component("chunked_schedule", fps=20),
+    component("trajectory_player", replan_on_error=True),
+    component("inference_schedule", fps=20,
+              request_timing={"reference": "before_end"},
+              merge={"start": "after_previous"}, latency_estimate=0.0),
     parallel(
         component("restrict_image_size", width=320, height=180),
         component("metadata", values={"model": "example"}),

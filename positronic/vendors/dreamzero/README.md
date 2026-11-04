@@ -1,77 +1,80 @@
 # DreamZero in Positronic
 
-> **Status: Work in Progress** – DreamZero integration is functional for inference and training but
-> has not been validated in production evaluations. Not included in PhAIL v1.0 results.
+[DreamZero](https://github.com/dreamzero0/dreamzero) predicts actions and future video from recent
+observations. The standalone server supports the public `GEAR-Dreams/DreamZero-DROID` checkpoint
+(wan2.1, 14B): seven joint targets and gripper commands, using two exterior cameras and a wrist camera.
 
-## What is DreamZero?
+## Self-contained DROID image
 
-[DreamZero](https://github.com/dreamzero0/dreamzero) is NVIDIA's World Action Model: it jointly
-predicts actions and future video frames, conditioning on a short window of past frames (an
-autoregressive video context). Two backbones are wired up here:
-
-| Backbone | Params | Image (W×H) | Notes |
-|----------|--------|-------------|-------|
-| `wan2.1` | 14B | 320×180 | Public pretrained `GEAR-Dreams/DreamZero-DROID` checkpoint (the `droid` server preset); DiT caching supported |
-| `wan2.2` | 5B | 320×160 | Causal chunked inference; what the Positronic fine-tunes below use |
-
-Pick the backbone with `--backbone` at train time and `--model.backbone` at serve time; **it must
-match between the two**.
-
-## Hardware Requirements
-
-| Phase | Requirement | Notes |
-|-------|-------------|-------|
-| **Inference** | 1× H100 (80GB) | wan2.2 (5B) ≈ half the VRAM of wan2.1 (14B, ~52GB bf16) |
-| **Training** | 1× or 8× H100 | Full fine-tune or LoRA, DeepSpeed ZeRO-2. Single-H100 full fine-tune works (see presets) |
-
-Train and serve run on an H100 box you reach through a Docker context. Examples use `<h100>` for the Docker
-**context** name and `<h100-host>` for the box's **hostname/IP** (what the inference client connects to on
-`:8000`) — the same machine, often the same string if your context targets the host by name. (The Nebius
-serverless alternative is in the [Appendix](#appendix-nebius-serverless).)
-
-## Zero-shot inference (wan2.1 DROID checkpoint)
-
-To try the pretrained DROID model with no training. `positronic` comes from `uv sync` (see
-[Installation](../../../README.md#installation)). Replace `<user>` with your username on the H100 box —
-`CACHE_ROOT` is that box's home, where the mounted `~/.cache` and `~/.aws` live (more in
-[Prerequisites](#full-pipeline-fine-tune-your-own-checkpoint) below).
+The serving image includes the checkpoint, encoder/VAE weights and tokenizer. It needs no cache mount
+or network access to load the model. The native CUDA environment comes from `positro/dreamzero-base`.
+Build from the repository root:
 
 ```bash
-# Serve the public pretrained DROID checkpoint on your H100 box (auto-downloaded on first start,
-# ~10-20 min via HuggingFace). The `droid` preset pins the checkpoint, wan2.1 backbone, and serving pipeline.
-cd docker
-CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server droid
+make -C docker build-serve-dreamzero-droid
 
-# Run sim inference locally (only inference is remote; MuJoCo runs on your machine).
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.address.host=<h100-host> --policy.address.port=8000 \
+docker run --rm --gpus all --ipc=host -p 8000:8000 positro/dreamzero-droid:local
+
+# Check that model loading and warmup work without network access.
+docker run --rm --network none --gpus all --ipc=host positro/dreamzero-droid:local
+```
+
+[`Dockerfile.serve-droid`](./Dockerfile.serve-droid) pins each model repository to a commit. Its independent
+weights stage downloads only inference assets; the full DROID checkpoint supplies the diffusion weights,
+so the native loader skips preloading a second WAN backbone. `COPY --link` keeps weights separate from
+serving code. Code-only rebuilds reuse the weight blobs, including when pushing to the same registry.
+`make -C docker push-serve-dreamzero-droid IMAGE_TAG=<tag>` imports and exports registry build cache.
+
+The image serves one model on one GPU, with one active session. Allow room for native inference caches
+as well as weights. Inference speed must be measured on the intended GPU; a large enough GPU is not
+necessarily fast enough to keep up with playback.
+
+## Run an evaluation
+
+```bash
+uv run --locked positronic eval run --eval=.sim.robolab.banana_in_bowl \
+  --policy=.remote --policy.address.host=<gpu-host> --policy.address.port=8000 \
   --eval.trial_count=2
 ```
 
-The server owns the whole policy pipeline: it runs the codec (raw observations in, decoded joint
-commands out) and declares the rig-side half — the model's autoregressive video context
-(`TemporalStack`, which must run every control tick to record frames) plus chunk scheduling — in its
-handshake. The client builds that declared stack automatically.
-(Server config and defaults: [`server.py`](./server.py); layers: [`codecs.py`](./codecs.py);
-remote-policy protocol: [Inference Guide](../../../docs/inference.md).)
+RoboLab also needs an NVIDIA GPU for rendering. It can share a sufficiently large GPU with the policy.
 
-## Full pipeline (fine-tune your own checkpoint)
+Image resizing, JPEG encoding and action decoding run on the client. Every `sampling_period_sec`
+(default `1/15`), the client sends the latest observation through ordinary inference. The recipe names
+the timestamp field explicitly. The server retains a bounded FIFO history; new arrivals evict old
+frames, and closing the session releases history and native caches. Between predictions it returns
+`None`, leaving playback unchanged. Each prediction request includes its latest frame.
 
-The end-to-end loop — [convert → train → serve → infer](../../../docs/training-workflow.md) — runs through
-the Docker Compose services in [`docker/docker-compose.yml`](../../../docker/docker-compose.yml) on your
-H100 box. Run the `docker compose` commands from the `docker/` directory.
+History offsets are in seconds: `[-23/15, -16/15, -8/15, 0]`. The first prediction uses only the current
+frame. The camera mapping can send one exterior camera to both exterior slots on a two-camera rig.
 
-**Prerequisites:**
-- An H100 box reachable via a Docker context. The compose services mount `~/.cache` and `~/.aws` from
-  `CACHE_ROOT` (defaults to `$HOME`). With a **remote** context `$HOME` expands to *your* machine, so set
-  `CACHE_ROOT` to the box's home — `/home/<user>` for your account on the box (e.g. `/home/ubuntu`). Run the
-  commands on the box itself and you can omit it. S3 credentials come from the mounted `~/.aws`.
-- **Images**: the commands pull the public prebuilt images by default — `positro/positronic` (convert) and
-  `positro/dreamzero` (train/serve) at the production `:latest` tag — so there is nothing to build. Only if
-  you have **local repo changes** to test do you build and push your own image and pass `IMAGE_TAG=<your-tag>`;
-  otherwise omit it. A `codecs.py` change affects both images. (Maintainer build targets:
-  [`docker/Makefile`](../../../docker/Makefile).)
-- The `s3://interim/…` / `s3://checkpoints/…` paths below are Positronic-internal buckets — substitute your own.
+The session query selects `mode=chunked` (default) or `mode=rtc`. Both use the same scheduler and player.
+Chunked playback appends after the previous trajectory. After its first chunk, RTC-like playback starts
+at the observation time and skips elapsed actions. This is video continuation; it does not freeze
+previous actions like GR00T RTC.
+
+`prediction_period_sec` defaults to 1.6 seconds (24 actions at 15 Hz). For overlapping continuations:
+
+```bash
+# Add to the evaluation command:
+--policy.address.query='mode=rtc&prediction_period_sec=0.8'
+```
+
+Chunked playback is limited to the prediction period to keep the future plan bounded. At the outstanding
+call limit or runtime capacity, the client skips new samples and counts them in `skipped_samples` metadata.
+To compare behavior on slower hardware, `--charge_inference_time=False` pauses simulation during inference;
+that comparison does not establish real-time performance.
+
+## Training
+
+Training is separate from the DROID serving image. [`Dockerfile.training`](./Dockerfile.training)
+includes the Positronic training stack; `make -C docker build-dreamzero` builds it. The native base is
+built with `make -C docker build-dreamzero-base` from [`Dockerfile`](./Dockerfile).
+
+The following examples use the Docker Compose training services on an H100 host. With a remote Docker
+context, set `CACHE_ROOT` to that host's home directory so its Hugging Face and AWS caches are mounted.
+Replace the internal S3 paths with your own. Fine-tuned checkpoints are training outputs; this vendor's
+serving image supports the public DROID checkpoint only.
 
 ### 1. Convert the dataset
 
@@ -92,9 +95,7 @@ CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm lerobot-0_3_3-c
 `dreamzero-train` runs `python -m positronic.vendors.dreamzero.train`, streaming the dataset from
 `--input_path`. Presets (defined in [`train.py`](./train.py)) fix backbone + architecture + GPU count:
 
-> **Only `wan22_full` (wan2.2 full fine-tune) is validated** — that is the configuration these docs were
-> built from. We did **not** get LoRA working, and the `wan2.1` presets are untested here. The other presets
-> exist in code but should be treated as unverified.
+> Only `wan22_full` (wan2.2 full fine-tune) is validated. LoRA and `wan2.1` training presets are unverified.
 
 | Preset | Backbone | Arch | GPUs | Resumable |
 |--------|----------|------|------|-----------|
@@ -128,125 +129,3 @@ loads the weights and accepts a fresh optimizer + schedule, so aim to reach `--m
 ```
 
 Multi-GPU presets (`*_h100x8`) run `torchrun --nproc_per_node=8`, so use them on an 8-GPU box.
-
-### 3. Serve a checkpoint
-
-`dreamzero-server <pipeline>` downloads `--model.model_path` (an `s3://` checkpoint or HF repo) and
-**needs `--model.backbone` to match training** (see [Codecs](#codecs); config + defaults:
-[`server.py`](./server.py)). `--service-ports` publishes the WebSocket API on `8000`:
-
-```bash
-cd docker
-CACHE_ROOT=/home/<user> docker --context <h100> compose run --rm --service-ports dreamzero-server joints \
-  --model.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
-  --model.backbone=wan2.2
-```
-
-Sanity-check once warm: `curl -X POST http://<h100-host>:8000/api/v1/keepalive` answers.
-
-### 4. Run sim inference
-
-```bash
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.address.host=<h100-host> --policy.address.port=8000 \
-  --eval.trial_count=<N> --output_dir=<dir-or-s3-path>
-```
-
-Sim runs locally on your machine; only inference is remote. Each episode records 3 camera views +
-joint/EE/grip signals under `<output_dir>`. See the [Inference Guide](../../../docs/inference.md) for the
-remote-policy protocol and options.
-
-### 5. View results
-
-```bash
-uv run --locked python -m positronic.cfg.analysis sim \
-  --dataset.base.path=<output_dir> --port=5001 --https --reset_cache
-# → https://localhost:5001
-```
-
-Point `--dataset.base.path` at a parent directory to compare several runs side by side.
-
-## Codecs
-
-A [codec](../../policy/codecs/README.md) maps raw recordings into the state/action space a model expects.
-DreamZero's codecs (source: [`codecs.py`](./codecs.py)) all share the same observation encoder
-(3 cameras + joint state) and the same inference decode — the model emits a flat `(joints+grip)` vector
-that decodes to a `JointPosition` command. They differ only in how **training labels** are built:
-
-| Codec | Training label | Use case |
-|-------|----------------|----------|
-| `joints` | Commanded joints (`robot_command.joints`) + grip | Default; commanded-action targets |
-| `joints_traj` | Recorded state (`robot_state.q`) + grip | Trajectory / executed-state targets |
-| `joints_ik` | Joints solved from recorded EE-pose targets via IK (`dls_limits` solver) | EE-driven datasets |
-| `joints_ik_sim` | `joints_ik` with the `dm_control` IK solver | Sim datasets (used for `sim_stack_cubes`) |
-
-Each codec has a same-named serving pipeline (see [`server.py`](./server.py)), selected as the serve
-subcommand. Since the four `joints*` codecs decode inference identically, `joints` serves any of their
-checkpoints; the `droid` subcommand serves the pretrained DROID model through the `droid` pipeline, which
-sends its required 320×180 frames and executes each chunk under DROID's impedance gains (`codecs.droid_execution`; see
-[Control mode](../../policy/codecs/README.md#control-mode)).
-
-## Session parameters
-
-A client can tune the serving pipeline per connection: session query params become dotted overrides into the
-pipeline config, applied server-side (values are literals; the model checkpoint and backbone are fixed at
-launch). With `positronic eval run`, pass them through the remote policy:
-
-```bash
-# At episode start, send only the observed history (a growing frame stack) instead of
-# padding the window with the current frame repeated.
-uv run --locked positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.address.host=<h100-host> --policy.address.port=8000 --policy.address.query='local.pad_start=false' \
-  --eval.trial_count=2
-```
-
-`local` is the rig-side video-context stack, `codec` the server-side codec (cadence is `local.fps`);
-protocol details in the [Inference Guide](../../../docs/inference.md).
-
-## Technical Details
-
-- **Action space**: 7-DoF joint targets + gripper. DreamZero predicts the joints **relative to the current
-  state** (`relative_action: true` on `joint_position` in the `droid_relative_wan22` data config); the
-  absolute joint target is reconstructed from the current state at serve time and decoded to a `JointPosition`.
-- **Observation**: 3 cameras (2 exterior + 1 wrist) + joint state + language prompt. The wan2.2 fine-tunes
-  use the `(320, 176)` codec and the trainer resizes to 160 at load; the pretrained DROID model (wan2.1)
-  asserts exactly `(320, 180)`, so the `droid` codec (`codecs.droid`) feeds that resolution.
-- **Action horizon**: 24 timesteps per inference; the server-declared `dreamzero_layers` re-query
-  aligns the chunk schedule with the AR frame-stack window
-- **Wire protocol**: Positronic's standard WebSocket protocol — see [Connect Your Model](../../../docs/connect-your-model.md)
-- **A roboarena server with no Positronic server in front**: `roboarena_policy.RoboarenaPolicy(address, headers)` dials
-  the server on the `roboarena` wire and runs the `droid_3cam` codec on the robot side.
-- **No Positronic fork**: upstream DreamZero is used unmodified (pinned SHA in [`Dockerfile`](./Dockerfile));
-  configs are injected via Hydra YAML. No sibling `../dreamzero` checkout is needed — the image bakes it in.
-
-## Appendix: Nebius serverless
-
-If you run on Nebius serverless instead of your own H100 box, the **same recipe** (same presets, codec, and
-args) goes through the `workflows/nebius/*.sh` wrappers — Jobs for convert/train, an Endpoint for serving.
-See [`workflows/nebius/README.md`](../../../workflows/nebius/README.md) for the one-time setup (Nebius CLI
-auth, S3 / MysteryBox credentials, the shared cache filesystem) and `NEBIUS_*` overrides. It uses the
-production image by default; set `NEBIUS_IMAGE_TAG=<tag>` only to test a specific build.
-
-```bash
-# Convert (CPU job)
-bash workflows/nebius/convert.sh lerobot_0_3_3 \
-  --dataset.dataset=@positronic.cfg.ds.sim.sim_stack_cubes \
-  --dataset.codec=@positronic.vendors.dreamzero.codecs.joints_ik_sim \
-  --output_dir=s3://interim/sim_stack/dreamzero/joints_ik/
-
-# Train (H100 job; ~3 days for 30k steps on one H100 — size the timeout accordingly)
-NEBIUS_JOB_TIMEOUT=96h \
-bash workflows/nebius/train.sh dreamzero wan22_full_h100x1 \
-  --input_path=s3://interim/sim_stack/dreamzero/joints_ik \
-  --output_path=s3://checkpoints/sim_stack/dreamzero/ \
-  --exp_name=<exp_name> \
-  --max_steps=30000 --save_steps=2500 --gradient_accumulation_steps=4 --save_total_limit=9999
-
-# Serve (H100 endpoint, reachable at the managed https:// URL the banner prints)
-bash workflows/nebius/serve.sh dreamzero <endpoint-name> joints \
-  --model.model_path=s3://checkpoints/sim_stack/dreamzero/<exp_name>/checkpoint-<step> \
-  --model.backbone=wan2.2
-# ... infer with --policy=.authed_remote --policy.wire=websocket_tls --policy.address.host=<managed-host> --policy.address.port=443 (export AUTH_TOKEN first,
-# see workflows/nebius/README.md), then tear down:
-bash workflows/nebius/stop.sh <endpoint-name>
-```

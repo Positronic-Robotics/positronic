@@ -347,6 +347,15 @@ Where a change must be referenced, cite something durable — a ticket, a tag, a
 that look like history and stay: a footgun the reader can still walk into, and a current limitation
 with its workaround.
 
+### document-scope
+
+Preserve each document's purpose and level of abstraction. Before adding material, read the surrounding
+document and check whether it belongs there. A feature does not automatically warrant documentation.
+Update existing explanations when they become incorrect; add material only when the reader needs it
+to understand an architectural decision, a public contract, or a user workflow. Do not turn a design
+document into a catalogue of components or duplicate implementation details readily available in code
+or docstrings. Shortening an out-of-scope section does not make it belong.
+
 ### grandfathered-violation
 
 Don't silence a violation in code you write or touch — fix it. An exception list — a type-check
@@ -413,3 +422,13 @@ _PARK_MAX_CORRECTION_RAD = 0.05
 class SettleTuning:
     max_correction_rad: float = 0.05
 ```
+
+### implementation-bound-tests
+
+Test the API's promised behavior, not incidental implementation choices. Assert observable results,
+errors and guarantees; don't freeze private call order, helper structure or same-invocation completion
+unless the API promises them. A refactor that preserves the contract should not require rewriting
+assertions.
+
+Use controlled asynchronous completion when testing asynchronous behavior. Assert timing, call counts
+or ordering when they are part of the contract—for example, keeping at most one request pending.

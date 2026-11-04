@@ -21,10 +21,7 @@ def inference(settings: dict[str, Any], *, rtc: bool = False) -> dict[str, Any]:
     timing = (
         [
             component(
-                'select_observation_fields',
-                mapping={
-                    name: name for name in (obs_keys.RTC.ESTIMATED_LATENCY_SEC, obs_keys.RTC.MEASURED_LATENCY_SEC)
-                },
+                'select_observation_fields', mapping={name: name for name in (obs_keys.CALL_ID, obs_keys.CALL_TIMINGS)}
             )
         ]
         if rtc
@@ -42,8 +39,8 @@ def inference(settings: dict[str, Any], *, rtc: bool = False) -> dict[str, Any]:
                             obs_keys.RTC.ACTION_PREFIX,
                             obs_keys.RTC.OBSERVATION_OFFSET_SEC,
                         ],
-                        obs_keys.RTC.ESTIMATED_LATENCY_SEC: [obs_keys.RTC.ESTIMATED_LATENCY_SEC],
-                        obs_keys.RTC.MEASURED_LATENCY_SEC: [obs_keys.RTC.MEASURED_LATENCY_SEC],
+                        obs_keys.CALL_ID: [obs_keys.CALL_ID],
+                        obs_keys.CALL_TIMINGS: [obs_keys.CALL_TIMINGS],
                     }
                 },
                 decode_layout={},
@@ -135,14 +132,27 @@ def client_stack(
     """Describe scheduling, observation preparation and native-result decoding for one session."""
     settings = deepcopy(settings)
     settings[model_settings.IMAGE_MAPPINGS] = image_mappings
-    schedule = component('chunked_schedule', fps=fps, horizon_sec=horizon_sec)
+    schedule = sequence(
+        component('trajectory_player', replan_on_error=True),
+        component(
+            'inference_schedule',
+            fps=fps,
+            request_timing={'reference': 'before_end'},
+            merge={'start': 'after_previous', 'horizon_sec': horizon_sec},
+            latency_estimate=0.0,
+        ),
+    )
     codec = inference(settings, rtc=rtc is not None)
     if rtc is not None:
-        schedule = component(
-            'rtc_schedule',
-            fps=fps,
-            call_after_sec=rtc[obs_keys.RTC.CALL_AFTER_SEC],
-            latency_estimate={'statistic': 'max', 'last': 5, 'max_sec': rtc[obs_keys.RTC.MAX_DELAY_SEC]},
+        schedule = sequence(
+            component('trajectory_player', plan_key=obs_keys.PLAN, record_stats=False),
+            component(
+                'inference_schedule',
+                fps=fps,
+                request_timing={'reference': 'after_start', 'seconds': rtc[obs_keys.RTC.CALL_AFTER_SEC]},
+                merge={'start': 'observation'},
+                latency_estimate=0.0,
+            ),
         )
     parts = [schedule, codec, component('metadata', values={model_settings.ACTION_FPS: fps})]
     if compress_images:

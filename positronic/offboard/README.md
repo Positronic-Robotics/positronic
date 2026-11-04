@@ -19,12 +19,12 @@ shared message fields, pipeline descriptions and neutral value serialization liv
 [`positronic-model-server`](../../model_server/README.md). Robot-command encoding and protocol
 v1/v2 support remain in `positronic.offboard.protocol`.
 
-| Wire | `--policy.wire` | Where it answers |
-|---|---|---|
-| WebSocket | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the keepalive route |
-| WebSocket on a Unix socket | `websocket_unix` | the websocket wire's socket path, beside the same keepalive route |
-| gRPC | `grpc` | the gRPC wire's own port, beside the keepalive method |
-| gRPC over TLS | `grpc_tls` | a TLS edge in front of that same port |
+| Wire                       | `--policy.wire`                                   | Where it answers                                                  |
+| -------------------------- | ------------------------------------------------- | ----------------------------------------------------------------- |
+| WebSocket                  | `websocket`, or `websocket_tls` behind a TLS edge | the websocket wire's port, beside the keepalive route             |
+| WebSocket on a Unix socket | `websocket_unix`                                  | the websocket wire's socket path, beside the same keepalive route |
+| gRPC                       | `grpc`                                            | the gRPC wire's own port, beside the keepalive method             |
+| gRPC over TLS              | `grpc_tls`                                        | a TLS edge in front of that same port                             |
 
 - A client names its wire; nothing reads one off a URL. The WebSocket wire is the default, and a server
   serves gRPC only where `--grpc` names that wire.
@@ -85,8 +85,9 @@ curl -X POST http://localhost:8000/api/v1/keepalive
 ```
 
 **Response:**
+
 ```json
-{"alive_seconds": 1800}
+{ "alive_seconds": 1800 }
 ```
 
 `alive_seconds` is the number of seconds the server stays alive after the call, if nothing else calls
@@ -101,11 +102,13 @@ A server without the call answers `404` on HTTP and `UNIMPLEMENTED` on gRPC, and
 answers there, no positronic server is at the address, and the client raises `wire.ConnectRefused`.
 
 #### `/api/v1/session`
+
 Establishes an inference session with the server's model. The server loads one checkpoint at startup:
 the configured one, or the latest available at that moment. To serve another checkpoint, start another
 server.
 
 **Example:**
+
 - `ws://localhost:8000/api/v1/session` → over the WebSocket wire
 - `localhost:9000/api/v1/session` → over gRPC
 
@@ -141,6 +144,7 @@ separate `headers` argument.
 ### Session Flow
 
 #### 1. Handshake
+
 Upon connection, the server sends a ready packet with metadata:
 
 ```json
@@ -156,10 +160,30 @@ Upon connection, the server sends a ready packet with metadata:
     "checkpoint_id": "10000",
     "action_fps": 15.0,
     "action_horizon_sec": 1.0,
-    "local_stack": {"seq": [
-      {"name": "chunked_schedule", "version": 3, "args": {"fps": 15.0, "horizon_sec": 1.0}},
-      {"name": "restrict_image_size", "version": 1, "args": {"width": 224, "height": 224}}
-    ]},
+    "local_stack": {
+      "seq": [
+        {
+          "name": "trajectory_player",
+          "version": 1,
+          "args": { "replan_on_error": true }
+        },
+        {
+          "name": "inference_schedule",
+          "version": 1,
+          "args": {
+            "fps": 15.0,
+            "request_timing": { "reference": "before_end" },
+            "merge": { "start": "after_previous", "horizon_sec": 1.0 },
+            "latency_estimate": 0.0
+          }
+        },
+        {
+          "name": "restrict_image_size",
+          "version": 1,
+          "args": { "width": 224, "height": 224 }
+        }
+      ]
+    },
     "compress_images": true,
     "positronic_version": "0.2.1"
   }
@@ -173,13 +197,14 @@ owns the session, includes its ID in each inference request, and records it in t
 `inference.policy.session_id`.
 
 This metadata tells the client:
+
 - Which checkpoint is loaded
 - Server connection details
 - Scheduler cadence (`action_fps`, `action_horizon_sec`).
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
-  `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
-  the chunk's execution horizon. The harness emits each step's commands immediately.
+  `InferenceSchedule` submits that callable and places the returned trajectories in time.
+  `TrajectoryPlayer` emits their commands as they become due; the harness delivers them immediately.
   A codec outside the scheduler runs on every policy call and decodes each emitted command set,
   preserving the step's wake-up time. A codec inside the scheduler runs with submitted inference
   and decodes whole chunks. Codec specs also support `"par"` composition.
@@ -201,6 +226,8 @@ uses the session-ID envelope and explicit end-session acknowledgement described 
 
 Each component leaf declares its own `version`. `seq` and `par` belong to the protocol grammar.
 The client preserves the behavior of the requested version, translating older configurations when needed.
+Published `chunked_schedule` v2/v3 and `rtc_schedule` v1 include playback, including when selected as
+`latest`. New compositions declare `trajectory_player` and `inference_schedule` separately.
 Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 
@@ -278,10 +305,15 @@ scheduler supplies timing; commands carry no timestamps or end-of-chunk sentinel
 
 ```json
 {
-  "result": [{
-    "robot_command": {"type": "cartesian_pos", "pose": [0.51, 0.21, 0.31, 1, 0, 0, 0, 1, 0, 0, 0, 1]},
-    "target_grip": 0.02
-  }]
+  "result": [
+    {
+      "robot_command": {
+        "type": "cartesian_pos",
+        "pose": [0.51, 0.21, 0.31, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+      },
+      "target_grip": 0.02
+    }
+  ]
 }
 ```
 
@@ -290,6 +322,7 @@ A command's `type` selects the fields beside it: `cartesian_pos` (`pose`), `join
 Every command may carry a `mode`, itself a tagged mapping naming the control law to execute under: `{"type": "position_control", "stiffness": [...]}` or `{"type": "impedance", "kq": [...], "kqd": [...], "kx": [...], "kxd": [...], "frame": [...]}`. Omit `stiffness` to take the arm's own gains — an empty list is refused. An impedance `frame` is a pose in the same form, measured from the rig's control frame: the point where the Cartesian stiffness acts. Omit it and the stiffness acts at the control frame. The Franka arm refuses a `frame` with a rotation. Omit `mode` entirely and the arm runs its native law. `positronic.offboard.protocol` reads that mapping into the typed command the drivers dispatch on, so a server written against another stack sends it as plain data; one built on positronic may instead put a `positronic.drivers.roboarm.command` instance here and let `serialise` encode it.
 
 **Server → Client (Error):**
+
 ```json
 {
   "error": "Shape mismatch: expected (7,) but got (6,)"
@@ -305,7 +338,7 @@ before invoking the model. The other session stays open; no replacement session 
 After inference finishes, closing the policy run sends:
 
 ```json
-{"session_id": "<server-issued ID>", "end_session": true}
+{ "session_id": "<server-issued ID>", "end_session": true }
 ```
 
 The server calls `model.end_session(id)` and acknowledges with the same message. The client then
@@ -338,17 +371,53 @@ checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
+Servers can set `Session(max_in_flight=...)` above its default of one to pipeline ordinary calls.
+The ready handshake carries this setting separately from metadata.
+Each remote session owns its workers and limit: calls occupy capacity until their answers are read
+or cancelled calls finish. Sessions share episode timing and completion delivery, without a shared
+worker limit or an additional waiting queue.
+Replies must arrive in actual send order, including `None`
+and errors; observation timestamps need not arrive in order and are the server's responsibility.
+At capacity, the scheduler skips new samples and records `skipped_samples` in episode
+metadata. A pending `replan_now` survives skipped samples and remains available to the recipe's
+observation codecs. The first inference establishes the session before pipelining begins.
+
+In every scheduling mode, `InferenceSchedule` adds a `call_id` starting at zero and increasing
+with each accepted submission. IDs identify submission order, which can differ from arrival order.
+Each call also carries `call_timings`: a list of `{call_id, elapsed_sec}` records for completed calls,
+including those that returned `None`. Elapsed time runs from runtime submission to callable completion.
+Records accumulate until the next accepted submission; skipped samples do not discard them.
+There is no final flush after the run ends. These are ordinary observation fields: the server's
+recipe must preserve them if it uses them. Direct callers supply their own IDs and feedback.
+
+On `replan_now`, predictions from already submitted calls are ignored, but those calls still finish
+and contribute timing feedback. Their observations remain available to the server's history.
+
 ## Real-time chunking
 
 Real-time chunking (RTC) predicts a new action chunk while the client executes
 queued commands. It combines local scheduling and remote prediction through the
 policy API's [composition model](../policy/DESIGN.md#composability).
 
-The client supplies the remaining planned actions at the observation moment,
-alongside measured and expected end-to-end call latency. The measured value is
-`None` before the first completed call. The server decides how
-to use that context, including which actions to freeze or blend. Supplying the
-whole remaining plan lets models choose their own conditioning window.
+The division of responsibility follows where the information is available:
+
+- **The client owns the timeline.** It samples observations and plays commands on its clock.
+  The recipe chooses how predictions are placed on that timeline; playback follows their assigned
+  times, skipping elapsed actions.
+- **The server owns model semantics.** An ordinary inference call can contribute history, produce
+  a prediction, or return `None` to leave the plan unchanged. This lets a periodic server choose
+  its prediction moments without a separate caching protocol.
+- **Submission order governs replacement.** The scheduler consumes answers in `call_id` order,
+  so encoding or network delays do not decide which prediction supersedes another. Transport
+  replies still follow actual send order to match each answer to its request.
+- **Timing feedback reports facts about calls.** The client reports completed calls without
+  classifying their purpose. The server knows which timings matter for its model and how to use
+  them for conditioning. `elapsed_sec` ends at callable completion; handling the answer and
+  playing its commands happen separately.
+
+For RTC, the client supplies the whole remaining plan as a snapshot at observation time, alongside
+completed call timings. The server chooses its conditioning window and which actions to freeze or
+blend. Predictions produced after that snapshot are known to the server through its own results.
 
 The prefix represents planned commands in model action units. If command
 preparation changes a grip prediction from `0.7` to `1.0`, the prefix reflects
@@ -373,6 +442,7 @@ predictions alongside client-supplied joint and grip targets.
 ## Classes
 
 ### `server.PolicyServer`
+
 Serves one `Model` through a `PolicyDeployment` with explicit `local` and `codec` arguments. The server
 calls `build_model` once, when `serve` starts, and the model it returns owns the loaded resources and
 reports its checkpoint in `meta()`. `build_model` warms the model before it returns: it runs one inference
@@ -386,10 +456,14 @@ from positronic_model_server.websocket_wire import WebsocketWire
 from positronic.policy import Sequential
 from positronic.policy.codecs import ResizeMode, TransformImages
 from positronic.offboard.spec import PolicyDeployment
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 
 pipeline = PolicyDeployment(
-    local=Sequential(ChunkedSchedule(fps=15, horizon_sec=1.0), TransformImages(224, 224, mode=ResizeMode.BOUND)),
+    local=Sequential(
+        TrajectoryPlayer(),
+        ChunkedSchedule(fps=15, horizon_sec=1.0),
+        TransformImages(224, 224, mode=ResizeMode.BOUND),
+    ),
     codec=my_model_codec,
 )
 server = PolicyServer(build_my_model, pipeline)
@@ -420,12 +494,14 @@ an instantiated pipeline serves exactly as launched. `idle_timeout_min` ends the
 many minutes with no session and no keepalive call.
 
 ### `server.serve`
+
 The CLI entry point for `PolicyServer` deployments. A vendor binds `model` and `pipeline` and exposes named configurations as subcommands.
 `--model.checkpoints_dir=...` names the checkpoint for LeRobot and OpenPI. `--pipeline.*` configures the client stack and server codec.
 `--websocket.served_address.port=9000` moves the WebSocket listener. `--grpc=@positronic.offboard.server.grpc` adds a gRPC listener.
 GR00T has its own [standalone CLI](../vendors/gr00t/README.md#serve), with `--model.model_source=...` and `--grpc=@gr00t_serving.server.grpc`.
 
 ### `client.InferenceClient`
+
 A Python client for connecting to an inference server. It takes the wire and the address that wire
 dials (`positronic_wire.registry.CLIENT_WIRES` lists every wire by name); the address fixes the server
 and the session params. Each wire names its own address type, and the client refuses one built for
@@ -478,7 +554,7 @@ Vendors provide their own launch configurations and share the inference protocol
 - **LeRobot (0.3.3)**: `positronic.vendors.lerobot_0_3_3.server` - Serves ACT checkpoints
 - **GR00T**: [`vendors/gr00t/serving/server.py`](../vendors/gr00t/serving/server.py) serves a native checkpoint through the lightweight wrapper.
 - **OpenPI**: `positronic.vendors.openpi.server` - Serves OpenPI checkpoints with config name
-- **DreamZero**: `positronic.vendors.dreamzero.server` - Serves DreamZero checkpoints through a torchrun subprocess
+- **DreamZero**: `positronic.vendors.dreamzero.serving.server` - Serves the public DROID checkpoint directly through the standalone model server
 - **MolmoAct2**: `positronic.vendors.molmoact2.server` - Serves the pretrained MolmoAct2 DROID model
 - **LLM**: `positronic.vendors.llm.server` - Serves an API-backed LLM policy, one conversation per session
 
