@@ -7,6 +7,7 @@ import heapq
 import importlib
 import logging
 import multiprocessing as mp
+import multiprocessing.connection
 import multiprocessing.shared_memory
 import os
 import pickle
@@ -21,6 +22,7 @@ from enum import IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.context import BaseContext
 from multiprocessing.managers import SyncManager
+from multiprocessing.process import BaseProcess
 from multiprocessing.synchronize import Lock as LockClass
 from queue import Empty, Queue
 from types import FrameType
@@ -543,6 +545,7 @@ def _bg_wrapper(
         print(traceback.format_exc(), file=sys.stderr)
         print(f'{"=" * 60}\n', file=sys.stderr)
         logger.error(f'Error in control system {name}:\n{traceback.format_exc()}')
+        sys.exit(1)
     finally:
         # Whatever ended this loop — a return, a raise, an interrupt — ends the WORLD: every other
         # control system reads this flag, in this process and in the parent.
@@ -573,6 +576,23 @@ class _PipeManager(SyncManager):
 _PipeManager.register('deque', deque)
 
 
+class BackgroundProcessError(RuntimeError):
+    """The process of a background control system ended with a non-zero exit code or by a signal."""
+
+    def __init__(self, name: str, pid: int, exitcode: int):
+        super().__init__(name, pid, exitcode)
+        self.name = name
+        self.pid = pid
+        self.exitcode = exitcode
+
+    def __str__(self) -> str:
+        process = f'Background process {self.name!r} (pid {self.pid})'
+        if self.exitcode < 0:
+            signum = -self.exitcode
+            return f'{process} ended by signal {signum} ({signal.strsignal(signum)})'
+        return f'{process} exited with code {self.exitcode}'
+
+
 class World:
     """Utility class to bind and run control loops."""
 
@@ -582,8 +602,6 @@ class World:
         # is disallowed (catching many cross-process foot-guns early).
         self._mp_ctx = mp.get_context('spawn')
 
-        # TODO: stop_signal should be a shared variable, since we should be able to track if background
-        # processes are still running
         # virtual_time runs a VirtualClock the world advances itself (simulation); otherwise a SystemClock
         # follows wall time (real hardware). This single flag is the only sim-vs-real switch.
         self._clock: Clock = VirtualClock() if virtual_time else SystemClock()
@@ -591,6 +609,7 @@ class World:
         self._stop_flag = _StopFlag(self._mp_ctx)
         self.background_processes = []
         self._shutdown_policies = {}
+        self._exit_watchers: dict[BaseProcess, threading.Thread] = {}
         self._protected_foreground_loops: list[Iterator[Command]] = []
         self._foreground_cleanup: list[Callable[[], None]] = []
         self._cleanup_emitters_readers = []
@@ -684,6 +703,7 @@ class World:
 
     def _join_background_processes(self) -> None:
         logger.info(f'Waiting for {len(self.background_processes)} background processes to terminate...')
+        errors: list[BackgroundProcessError] = []
         for process in self.background_processes:
             policy = self._shutdown_policies[process]
             process.join(timeout=None if policy is ShutdownPolicy.WAIT_FOR_COMPLETION else 90.0)
@@ -695,8 +715,16 @@ class World:
                     logger.warning(f'Process {process.name} (pid {process.pid}) still alive, killing...')
                     process.kill()
                     process.join()
+            # A stop signal ends a process with no error, as it ends the World.
+            elif (exitcode := process.exitcode) and -exitcode not in _STOP_SIGNALS:
+                errors.append(BackgroundProcessError(process.name, process.pid, exitcode))
+            self._exit_watchers[process].join()
             logger.info(f'Process {process.name} (pid {process.pid}) finished')
             process.close()
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup('Background processes failed', errors)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def close_foreground() -> None:
@@ -782,8 +810,8 @@ class World:
 
         When a loop finishes (``StopIteration``) the stop flag is set so the others can
         observe ``should_stop`` and exit. The iterator ends once no loop is left. A BACKGROUND
-        control system finishing sets the same flag (``_bg_wrapper``), so any control system —
-        background or foreground — ending by returning, raising or being interrupted stops the world.
+        process ending sets the same flag, however it ends, so any control system — background or
+        foreground — ending by returning, raising, being interrupted or crashing stops the world.
 
         A ``Yield`` is only legitimate when another loop in the same instant sleeps to pace it.
         A round where every due loop yields and none sleeps cannot move the clock; finite yield-only
@@ -1123,6 +1151,20 @@ class World:
         """
         self._drive(self.start(main_process, background))
 
+    def _stop_when_ended(self, process: BaseProcess) -> threading.Thread:
+        """Stop the World once ``process`` ends, however it ends."""
+        name, sentinel = process.name, process.sentinel
+
+        def watch() -> None:
+            multiprocessing.connection.wait([sentinel])
+            if not self._stop_flag.is_set():
+                logger.warning(f'{name}: the background process ended without a stop; stopping the World')
+                self.request_stop()
+
+        watcher = threading.Thread(target=watch, name=f'{name}.exit-watch', daemon=True)
+        watcher.start()
+        return watcher
+
     def start_in_subprocess(
         self, *background_loops: ControlLoop, shutdown_policy: ShutdownPolicy = ShutdownPolicy.BEST_EFFORT
     ):
@@ -1166,6 +1208,7 @@ class World:
                     'inside the background process or run them in the main process.'
                 ) from e
             self.background_processes.append(p)
+            self._exit_watchers[p] = self._stop_when_ended(p)
             logger.info(f'Started background process {name} (pid {p.pid})')
 
     def local_pipe(self, maxsize: int = 1) -> tuple[SignalEmitter[T], SignalReceiver[T]]:

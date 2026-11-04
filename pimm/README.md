@@ -79,6 +79,10 @@ things happened under the hood:
   loop through the `should_stop` signal so they can exit gracefully.
 - A control system RETURNING raises that same signal, background or foreground alike. So stopping
   a world is a supervisor loop returning when it decides the run is over.
+- A background process that fails also stops the world. It fails when it raises, exits with a
+  non-zero code, or ends by a signal such as SIGSEGV. The world runs its normal teardown and then
+  raises `pimm.BackgroundProcessError`, which names the process. SIGINT and SIGTERM are stop
+  requests, so a process that ends by one of them causes no error.
 
 That is the whole workflow: build small `ControlSystem` classes, `connect` their
 signals, and `start` whichever group you want to supervise directly. Everything
