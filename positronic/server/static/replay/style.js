@@ -53,10 +53,12 @@ export const STYLE = `
     position: sticky; top: var(--replay-sticky-top, 0px); z-index: 2; overflow: hidden; background: var(--surface);
   }
   [part~='sticky-head'] table { table-layout: fixed; }
+  /* The element sets each copied name to the width of its column's border box. */
+  [part~='sticky-head'] th { box-sizing: border-box; }
   table { border-collapse: collapse; width: 100%; font-size: 0.95em; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   th { font-weight: 600; }
-  [part~='number'] { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  [part~='column-number'] { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   [part~='badge'] {
     display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.85em; font-weight: 600;
     white-space: nowrap;
@@ -103,7 +105,7 @@ export const STYLE = `
     grid-row: 1; grid-column: 4; padding: 0.35rem 0.9rem; border: 1px solid var(--border); border-radius: 8px;
     font-size: 0.85em; font-weight: 600;
   }
-  [part~='details-toggle'][aria-pressed='true'] { background: var(--accent); }
+  [part~='details-toggle'][part~='pressed'] { background: var(--accent); }
   [part~='full'] { grid-row: 1; grid-column: 5; font-size: 0.85em; color: var(--muted); text-decoration: none; }
   [part~='title'] {
     grid-row: 1; grid-column: 2; margin: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis;
