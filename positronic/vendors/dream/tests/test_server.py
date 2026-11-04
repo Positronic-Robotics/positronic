@@ -373,5 +373,6 @@ def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks()
     layers = {layer['name']: layer['args'] for layer in spec['seq']}
     assert layers['temporal_stack']['keys'] == [keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE]
     np.testing.assert_allclose(layers['temporal_stack']['offsets_sec'], np.arange(-1.6, 0.01, 0.2), atol=1e-9)
+    assert layers['trajectory_player']['replan_on_error'] is True
     # The limiter's ramp counts every row of a chunk as played.
-    assert layers['chunked_schedule'].get('horizon_sec') is None
+    assert layers['inference_schedule']['merge']['horizon_sec'] is None

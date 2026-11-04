@@ -37,7 +37,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import ACTION, ResizeMode, TransformImages
-from positronic.policy.processors import ChunkedSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, TemporalStack, TrajectoryPlayer
 from positronic.vendors import dream
 from positronic.vendors.dream import codecs
 from positronic.vendors.dream.limits import ChunkLimits, LimitReport, YamChunkLimiter
@@ -386,7 +386,12 @@ def pipeline(crop_to_aspect: bool) -> PolicyDeployment:
     stack = TemporalStack(
         keys=(keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE), offsets_sec=offsets, pad_start=False
     )
-    local = Sequential(stack, ChunkedSchedule(codecs.FPS), TransformImages(*UPLOAD_SIZE, mode=ResizeMode.BOUND))
+    local = Sequential(
+        stack,
+        TrajectoryPlayer(replan_on_error=True),
+        ChunkedSchedule(codecs.FPS),
+        TransformImages(*UPLOAD_SIZE, mode=ResizeMode.BOUND),
+    )
     return PolicyDeployment(local, codecs.yam_bimanual.override(crop_to_aspect=crop_to_aspect).instantiate())
 
 
