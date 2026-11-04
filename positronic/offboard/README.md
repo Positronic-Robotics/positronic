@@ -168,9 +168,14 @@ Upon connection, the server sends a ready packet with metadata:
           "args": { "replan_on_error": true }
         },
         {
-          "name": "chunked_schedule",
-          "version": 4,
-          "args": { "fps": 15.0, "horizon_sec": 1.0 }
+          "name": "inference_schedule",
+          "version": 1,
+          "args": {
+            "fps": 15.0,
+            "request_timing": { "reference": "before_end" },
+            "merge": { "start": "after_previous", "horizon_sec": 1.0 },
+            "latency_estimate": 0.0
+          }
         },
         {
           "name": "restrict_image_size",
@@ -198,8 +203,8 @@ This metadata tells the client:
 - Scheduler cadence (`action_fps`, `action_horizon_sec`).
 - `local_stack` — processors and codecs composed by `"seq"`, with the first outermost.
   `RemotePolicy.run` starts these generators and supplies an ordinary remote inference callable.
-  `ChunkedSchedule` submits that callable, turns its ordered commands into timed steps, and limits
-  the chunk's execution horizon. The harness emits each step's commands immediately.
+  `InferenceSchedule` submits that callable and places the returned trajectories in time.
+  `TrajectoryPlayer` emits their commands as they become due; the harness delivers them immediately.
   A codec outside the scheduler runs on every policy call and decodes each emitted command set,
   preserving the step's wake-up time. A codec inside the scheduler runs with submitted inference
   and decodes whole chunks. Codec specs also support `"par"` composition.
@@ -221,6 +226,8 @@ uses the session-ID envelope and explicit end-session acknowledgement described 
 
 Each component leaf declares its own `version`. `seq` and `par` belong to the protocol grammar.
 The client preserves the behavior of the requested version, translating older configurations when needed.
+Published `chunked_schedule` v2/v3 and `rtc_schedule` v1 include playback, including when selected as
+`latest`. New compositions declare `trajectory_player` and `inference_schedule` separately.
 Unsupported versions fail with supported-version information.
 `positronic_version` identifies the server build for diagnostics, not compatibility selection.
 

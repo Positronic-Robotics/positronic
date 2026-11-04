@@ -829,8 +829,6 @@ class ChunkedSchedule(InferenceSchedule):
     remains available to inference codecs.
     """
 
-    WIRE_NAME = 'chunked_schedule'
-    WIRE_VERSION = 4
     FPS_ARG = 'fps'
     HORIZON_SEC_ARG = 'horizon_sec'
     INFERENCE_LEAD_ARG = 'inference_lead'
@@ -844,20 +842,6 @@ class ChunkedSchedule(InferenceSchedule):
             merge=TrajectoryMerge.after_previous(horizon_sec),
             latency_estimate=ConstantDuration() if inference_lead is None else inference_lead,
         )
-
-    def to_spec(self) -> dict[str, Any]:
-        args: dict[str, Any] = {self.FPS_ARG: self._fps}
-        if self._merge.horizon_sec is not None:
-            args[self.HORIZON_SEC_ARG] = self._merge.horizon_sec
-        lead = self._latency_estimate.to_spec()
-        if lead != 0:
-            args[self.INFERENCE_LEAD_ARG] = lead
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
-
-    @classmethod
-    def from_spec_args(cls, **args: Any) -> Self:
-        args[cls.INFERENCE_LEAD_ARG] = DurationEstimate.from_spec(args.get(cls.INFERENCE_LEAD_ARG, 0.0))
-        return cls(**args)
 
 
 class RTCSchedule(InferenceSchedule):
@@ -907,8 +891,6 @@ class RTCSchedule(InferenceSchedule):
     excluding the held command once its prediction has expired. Without ``PLAN``, no prefix is added.
     """
 
-    WIRE_NAME = 'rtc_schedule'
-    WIRE_VERSION = 2
     CALL_AFTER_ARG = 'call_after_sec'
     LATENCY_ESTIMATE_ARG = 'latency_estimate'
 
@@ -919,19 +901,6 @@ class RTCSchedule(InferenceSchedule):
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=latency_estimate,
         )
-
-    def to_spec(self) -> dict[str, Any]:
-        args = {
-            ChunkedSchedule.FPS_ARG: self._fps,
-            self.CALL_AFTER_ARG: self._request_timing.duration_ns / 1e9,
-            self.LATENCY_ESTIMATE_ARG: self._latency_estimate.to_spec(),
-        }
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
-
-    @classmethod
-    def from_spec_args(cls, **args: Any) -> Self:
-        args[cls.LATENCY_ESTIMATE_ARG] = DurationEstimate.from_spec(args[cls.LATENCY_ESTIMATE_ARG])
-        return cls(**args)
 
 
 class _StackedObs(Mapping[str, Any]):

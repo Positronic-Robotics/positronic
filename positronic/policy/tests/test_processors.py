@@ -54,7 +54,7 @@ from positronic.policy.codecs.observation import (
     SelectObservationFields,
     StateObservationCodec,
 )
-from positronic.policy.compatibility import ObservationCodecV1
+from positronic.policy.compatibility import CHUNKED_SCHEDULE, ObservationCodecV1, RTCScheduleV1
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import CALL_ID, CALL_TIMINGS, ELAPSED_SEC, END, RTC
 from positronic.policy.processors import (
@@ -1510,7 +1510,8 @@ def test_serialized_error_replanning_preserves_the_behavior(execution, monkeypat
     monkeypatch.setattr(runtime, 'submit', model.submit)
     definition = Sequential(TrajectoryPlayer(replan_on_error=replan_on_error), ChunkedSchedule(fps=10))
     encoded = json.loads(json.dumps(definition.to_spec()))
-    assert encoded[SEQ][1][VERSION] == 4
+    assert encoded[SEQ][1][NAME] == InferenceSchedule.WIRE_NAME
+    assert encoded[SEQ][1][VERSION] == 1
     rebuilt = spec.from_spec(encoded)
     assert rebuilt.to_spec() == encoded
     run = runtime.start(rebuilt, Mock())
@@ -1529,7 +1530,7 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution, monkeypat
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
+    declared = {NAME: CHUNKED_SCHEDULE, VERSION: 2, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
     schedule = spec.from_spec(declared)
     assert schedule.to_spec() == Sequential(TrajectoryPlayer(replan_on_error=False), ChunkedSchedule(fps=10)).to_spec()
     run = runtime.start(schedule, Mock())
@@ -1551,11 +1552,12 @@ def test_v2_keeps_its_chunk_and_inference_deadline_on_error(execution, monkeypat
     'options',
     [{}, {'record_stats': False}, {'replan_on_error': False}, {'record_stats': False, 'replan_on_error': False}],
 )
-def test_v3_specs_preserve_playback_and_recovery_options(execution, monkeypatch, options):
+@pytest.mark.parametrize('version', [3, LATEST])
+def test_v3_specs_preserve_playback_and_recovery_options(execution, monkeypatch, options, version):
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    declared = component(ChunkedSchedule.WIRE_NAME, version=3, fps=10, horizon_sec=0.15, inference_lead=0.05, **options)
+    declared = component(CHUNKED_SCHEDULE, version=version, fps=10, horizon_sec=0.15, inference_lead=0.05, **options)
     schedule = spec.from_spec(declared)
     expected = Sequential(
         TrajectoryPlayer(
@@ -1582,6 +1584,53 @@ def test_v3_specs_preserve_playback_and_recovery_options(execution, monkeypatch,
         )
     finally:
         run.close()
+
+
+def test_legacy_rtc_reports_measured_delays_and_resets_its_estimate_between_runs(execution, monkeypatch):
+    runtime, clock = execution
+    pending = []
+    seen = []
+
+    def submit(function, obs):
+        future = Future()
+        pending.append((future, function, obs))
+        return _FutureAnswer(future, runtime)
+
+    def infer(obs):
+        seen.append(dict(obs))
+        return [{MOTOR: i} for i in range(10)]
+
+    monkeypatch.setattr(runtime, 'submit', submit)
+    stack = spec.from_spec(
+        component(
+            'rtc_schedule',
+            fps=10,
+            call_after_sec=0.0,
+            latency_estimate=DelayEstimate.mean(last=2, max_sec=0.25).to_spec(),
+        )
+    )
+    for _ in range(2):
+        seen.clear()
+        run = runtime.start(stack, infer)
+        try:
+            run.send({})
+            for delay in (0.1, 0.6, 0.2, 0.1, 0.1):
+                future, function, obs = pending.pop(0)
+                commands = function(obs)
+                clock.advance_to_ns(runtime.time_ns + round(delay * 1e9))
+                future.set_result(commands)
+                run.send({})
+            assert [obs[RTCScheduleV1.MEASURED_LATENCY_SEC] for obs in seen] == [None, 0.1, 0.6, 0.2, 0.1]
+            assert [obs[RTCScheduleV1.ESTIMATED_LATENCY_SEC] for obs in seen] == pytest.approx([
+                0.0,
+                0.1,
+                0.25,
+                0.25,
+                0.15,
+            ])
+        finally:
+            run.close()
+            pending.clear()
 
 
 def test_a_slow_answer_is_asked_for_when_the_last_waypoint_is_due(execution, monkeypatch):
@@ -2331,9 +2380,8 @@ def test_a_spec_without_a_lead_waits_until_the_chunk_end_even_after_a_slow_answe
     runtime, clock = execution
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
-    declared = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 4, ARGS: {ChunkedSchedule.FPS_ARG: 10}}
+    declared = ChunkedSchedule(fps=10).to_spec()
     schedule = spec.from_spec(declared)
-    assert type(schedule) is ChunkedSchedule
     assert schedule.to_spec() == declared
     run = runtime.start(Sequential(TrajectoryPlayer(), schedule), Mock())
     try:
@@ -2405,7 +2453,6 @@ def test_wire_names_match_the_registered_components():
             latency_estimate=DelayEstimate.max(),
         ),
         'trajectory_player': TrajectoryPlayer(),
-        'chunked_schedule': ChunkedSchedule(fps=10),
         'encode_images': EncodeImages([['camera']]),
         'end_on_field': EndOnField(),
         'end_command': EndCommand(),
@@ -2418,7 +2465,7 @@ def test_wire_names_match_the_registered_components():
         'observation_codec': ObservationCodecV1(state={}, images={}),
         'pack_fields': PackFields(encode_layout={'state': ['input']}),
         'split_action_chunk': SplitActionChunk(),
-        'rtc_schedule': RTCSchedule(fps=10, call_after_sec=0.5, latency_estimate=DelayEstimate.max()),
+        'rtc_schedule': RTCScheduleV1(fps=10, call_after_sec=0.5, latency_estimate=DelayEstimate.max().to_spec()),
         'state_observation': StateObservationCodec(state={}),
         'select_observation_fields': SelectObservationFields(mapping={}),
         'rename_observation_fields': RenameObservationFields({'state': 'input'}),
@@ -2433,6 +2480,7 @@ def test_wire_names_match_the_registered_components():
     }
     registered = spec.COMPONENTS
     assert set(instances) | {
+        CHUNKED_SCHEDULE,
         'stop_on_fault',
         'restrict_image_size',
         'pack_observation_fields',
@@ -2497,12 +2545,10 @@ def test_legacy_translation_pins_its_replacement_version(monkeypatch):
 
 @pytest.mark.parametrize('lead', [0.0, 0.25, {'statistic': 'max', 'last': 3, 'max_sec': 0.4}])
 def test_scheduler_translation_preserves_explicit_settings(lead):
-    old = component(
-        ChunkedSchedule.WIRE_NAME, version=2, fps=20, horizon_sec=0.3, record_stats=False, inference_lead=lead
-    )
+    old = component(CHUNKED_SCHEDULE, version=2, fps=20, horizon_sec=0.3, record_stats=False, inference_lead=lead)
     current = sequence(
-        component(TrajectoryPlayer.WIRE_NAME, record_stats=False),
-        component(ChunkedSchedule.WIRE_NAME, version=4, fps=20, horizon_sec=0.3, inference_lead=lead),
+        component(TrajectoryPlayer.WIRE_NAME, record_stats=False, replan_on_error=False),
+        ChunkedSchedule(fps=20, horizon_sec=0.3, inference_lead=DurationEstimate.from_spec(lead)).to_spec(),
     )
     assert spec.from_spec(old).to_spec() == spec.from_spec(current).to_spec()
     assert old[VERSION] == 2
@@ -2522,15 +2568,15 @@ def test_latest_follows_client_upgrades_while_numeric_versions_stay_pinned(monke
 
 
 def test_latest_skips_removed_versions_and_fails_when_none_are_supported(monkeypatch):
-    name = ChunkedSchedule.WIRE_NAME
+    name = Metadata.WIRE_NAME
     notice = Deprecation(date(2020, 1, 1), date(2020, 7, 1), 'Use another scheduler.')
-    versions = {4: spec.COMPONENTS[name][4], 5: Version(None, notice, removed_on=date(2020, 7, 1))}
+    versions = {1: spec.COMPONENTS[name][1], 2: Version(None, notice, removed_on=date(2020, 7, 1))}
     monkeypatch.setitem(spec.COMPONENTS, name, versions)
-    latest = component(name, fps=20)
-    assert spec.from_spec(latest).to_spec()[VERSION] == 4
+    latest = component(name, values={})
+    assert spec.from_spec(latest).to_spec()[VERSION] == 1
     with pytest.raises(ValueError, match='has been removed.*Use another scheduler'):
-        spec.from_spec(component(name, version=5, fps=20))
-    del versions[4]
+        spec.from_spec(component(name, version=2, values={}))
+    del versions[1]
     with pytest.raises(ValueError, match='No supported versions'):
         spec.from_spec(latest)
 
@@ -2538,7 +2584,7 @@ def test_latest_skips_removed_versions_and_fails_when_none_are_supported(monkeyp
 def test_unversioned_wire_specs_still_select_v1():
     assert isinstance(spec.from_spec({NAME: Metadata.WIRE_NAME, ARGS: {'values': {}}}), Metadata)
     with pytest.raises(ValueError, match='Unsupported .* version 1'):
-        spec.from_spec({NAME: ChunkedSchedule.WIRE_NAME, ARGS: {ChunkedSchedule.FPS_ARG: 20}})
+        spec.from_spec({NAME: CHUNKED_SCHEDULE, ARGS: {ChunkedSchedule.FPS_ARG: 20}})
 
 
 class _EndingModel:
@@ -2691,7 +2737,7 @@ def test_a_declared_end_on_field_ends_a_declared_stack(execution, monkeypatch):
     declared = sequence(
         component(EndOnField.WIRE_NAME),
         component(TrajectoryPlayer.WIRE_NAME, replan_on_error=True),
-        component(ChunkedSchedule.WIRE_NAME, fps=10),
+        ChunkedSchedule(fps=10).to_spec(),
         parallel(
             component(AbsolutePositionAction.WIRE_NAME, tgt_ee_pose_key='pose', tgt_grip_key='grip'),
             component(EndCommand.WIRE_NAME),

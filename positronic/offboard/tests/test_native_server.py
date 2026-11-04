@@ -18,6 +18,7 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import Codec, EncodeImages, PolicyCommandError
+from positronic.policy.compatibility import RTCScheduleV1
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
@@ -25,6 +26,7 @@ from positronic.policy.processors import (
     InferenceSchedule,
     Periodic,
     RequestTiming,
+    RTCSchedule,
     TemporalStack,
     TrajectoryMerge,
     TrajectoryPlayer,
@@ -421,10 +423,11 @@ def test_a_v3_command_mapping_that_the_declared_stack_does_not_decode_fails_as_a
             first_step(*endpoint)
 
 
-def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a_command(serving):
+@pytest.mark.parametrize('version', [2, 3, spec.LATEST])
+def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a_command(serving, version):
     answer = [{obs_keys.ROBOT_COMMAND: JOINT_TARGET, obs_keys.TARGET_GRIP: 0.0}]
     description = spec.sequence(
-        spec.component('chunked_schedule', version=2, fps=20),
+        spec.component('chunked_schedule', version=version, fps=20),
         spec.parallel(
             spec.component('rename_observation_fields', mapping={}),
             spec.component('joint_position_action', joints_key=obs_keys.ROBOT_COMMAND, grip_key=obs_keys.TARGET_GRIP),
@@ -436,22 +439,25 @@ def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a
     assert isinstance(step.commands[obs_keys.ROBOT_COMMAND], command.JointPosition)
 
 
-@pytest.mark.parametrize('version', [None, 1, 2])
+@pytest.mark.parametrize('version', [None, 1, spec.LATEST, 'current'])
 def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, version):
-    schedule = spec.component('rtc_schedule', version=version or 1, fps=10, call_after_sec=0.2, latency_estimate=0.1)
-    if version is None:
-        del schedule[spec.VERSION]
-    if version == 2:
+    timing_fields = (RTCScheduleV1.MEASURED_LATENCY_SEC, RTCScheduleV1.ESTIMATED_LATENCY_SEC)
+    if version == 'current':
         schedule = spec.sequence(
-            spec.component('trajectory_player', plan_key=policy_keys.PLAN, record_stats=False), schedule
+            spec.component('trajectory_player', plan_key=policy_keys.PLAN, record_stats=False),
+            RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration(0.1)).to_spec(),
         )
+        timing_fields = (policy_keys.CALL_ID, policy_keys.CALL_TIMINGS)
+    else:
+        schedule = spec.component(
+            'rtc_schedule', version=version or 1, fps=10, call_after_sec=0.2, latency_estimate=0.1
+        )
+        if version is None:
+            del schedule[spec.VERSION]
     description = spec.sequence(
         schedule,
         spec.parallel(
-            spec.component(
-                'select_observation_fields',
-                mapping={name: name for name in (policy_keys.CALL_ID, policy_keys.CALL_TIMINGS)},
-            ),
+            spec.component('select_observation_fields', mapping={name: name for name in timing_fields}),
             spec.component(
                 'joint_position_action',
                 joints_key=obs_keys.ROBOT_COMMAND,
@@ -491,8 +497,14 @@ def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, versi
             assert prefix[policy_keys.RTC.CHUNK_OFFSET_SEC] == pytest.approx(0.2)
             assert prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] == pytest.approx(-0.05)
             assert policy_keys.PLAN not in seen[1]
-            assert seen[1][policy_keys.CALL_ID] == 1
-            assert seen[1][policy_keys.CALL_TIMINGS] == [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}]
+            if version == 'current':
+                assert seen[1][policy_keys.CALL_ID] == 1
+                assert seen[1][policy_keys.CALL_TIMINGS] == [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}]
+            else:
+                assert seen[0][RTCScheduleV1.MEASURED_LATENCY_SEC] is None
+                assert seen[0][RTCScheduleV1.ESTIMATED_LATENCY_SEC] == 0.0
+                assert seen[1][RTCScheduleV1.MEASURED_LATENCY_SEC] == 0.0
+                assert seen[1][RTCScheduleV1.ESTIMATED_LATENCY_SEC] == 0.1
         finally:
             runtime.close()
             run.close()

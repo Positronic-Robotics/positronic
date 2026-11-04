@@ -25,12 +25,13 @@ from positronic.policy.codecs import Codec, ResizeMode, TransformImages
 from positronic.policy.compatibility import (
     V1_SERVER_DEFAULT_ACTION_FPS,
     PauseOnUnavailable,
+    RTCScheduleV1,
     StampObservationTimes,
     from_v1_spec,
 )
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration, RTCSchedule, TrajectoryPlayer
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.sequential import Sequential
 from positronic.utils import flatten_dict
@@ -180,7 +181,7 @@ def test_v1_server_without_action_fps_runs_at_the_default_rate_and_warns(caplog)
 
 
 def test_v1_stack_rejects_an_rtc_schedule():
-    rtc = RTCSchedule(fps=15, call_after_sec=0.8, latency_estimate=ConstantDuration()).to_spec()
+    rtc = RTCScheduleV1(fps=15, call_after_sec=0.8, latency_estimate=0.0).to_spec()
     with pytest.raises(ValueError, match='over protocol v2'):
         from_v1_spec({'seq': [{'name': 'stop_on_fault'}, rtc]}, {ACTION_FPS: 15.0}, spec.from_spec)
 

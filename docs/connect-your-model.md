@@ -321,7 +321,8 @@ from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
     component("trajectory_player", replan_on_error=True),
-    component("chunked_schedule", fps=15.0),
+    component("inference_schedule", fps=15.0, request_timing={"reference": "before_end"},
+              merge={"start": "after_previous", "horizon_sec": None}, latency_estimate=0.0),
     parallel(
         component("rename_observation_fields", mapping={}),
         component("joint_position_action", joints_key="robot_command", grip_key="target_grip"),

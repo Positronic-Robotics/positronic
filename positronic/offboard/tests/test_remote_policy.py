@@ -1719,7 +1719,7 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
     for parent_name in (
         telemetry_keys.SPAN_POLICY_INFER,
         telemetry_keys.SPAN_POLICY_SUBMIT,
-        'chunked_schedule',
+        'inference_schedule',
         'trajectory_player',
         'sequential',
         'remote_policy',

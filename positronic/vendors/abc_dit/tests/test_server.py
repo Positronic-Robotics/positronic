@@ -279,12 +279,10 @@ def test_a_session_query_sets_the_crop_the_schedule_and_the_prompt_prefix_and_th
 
     player, schedule = meta['local_stack']['seq'][:2]
     assert player['name'] == 'trajectory_player'
-    assert schedule['name'] == 'chunked_schedule'
-    assert schedule['args'] == {
-        'fps': 30.0,
-        'horizon_sec': pytest.approx(16 / 30),
-        'inference_lead': pytest.approx(7 / 30),
-    }
+    assert schedule['name'] == 'inference_schedule'
+    assert schedule['args']['fps'] == 30.0
+    assert schedule['args']['merge']['horizon_sec'] == pytest.approx(16 / 30)
+    assert schedule['args']['latency_estimate'] == pytest.approx(7 / 30)
     assert meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == [0.0, 0.0, 1.0, 1.0]
     assert meta[codecs.PROMPT_PREFIX_META] == ''
     assert meta[codecs.PREFIX_LENGTH_META] == 4
@@ -312,7 +310,9 @@ def test_a_session_with_no_query_gets_the_launch_pipeline(tmp_path):
     assert meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == pytest.approx([4 / 15, 0.32, 5 / 6, 1.0])
     assert meta[codecs.PROMPT_PREFIX_META] == codecs.SIM_PROMPT_PREFIX
     assert meta[codecs.PREFIX_LENGTH_META] == 0
-    assert meta['local_stack']['seq'][1]['args'] == {'fps': 30.0, 'horizon_sec': 0.5}
+    schedule = meta['local_stack']['seq'][1]['args']
+    assert schedule['fps'] == 30.0
+    assert schedule['merge']['horizon_sec'] == 0.5
     assert len(reply) == len(abc_stand_in.CHUNK)
     request = _log(tmp_path)[-1]['request']
     assert request[abc_dit.PROMPT] == 'sim load plates into tabletop dish rack'

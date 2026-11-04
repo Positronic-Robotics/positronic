@@ -33,7 +33,8 @@ from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
     component('trajectory_player', replan_on_error=True),
-    component('chunked_schedule', fps=20),
+    component('inference_schedule', fps=20, request_timing={'reference': 'before_end'},
+              merge={'start': 'after_previous'}, latency_estimate=0.0),
     parallel(
         component('transform_images', width=320, height=180, mode='bound'),
         component('metadata', values={'model': 'example'}),

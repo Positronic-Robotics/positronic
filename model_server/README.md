@@ -30,7 +30,9 @@ class EchoSession(Session):
     def __init__(self, fps):
         super().__init__(sequence(
             component("trajectory_player", replan_on_error=True),
-            component("chunked_schedule", fps=fps),
+            component("inference_schedule", fps=fps,
+                      request_timing={"reference": "before_end"},
+                      merge={"start": "after_previous"}, latency_estimate=0.0),
         ))
 
     def infer(self, observation):
@@ -138,7 +140,9 @@ from positronic_model_server.spec import component, parallel, sequence
 
 description = sequence(
     component("trajectory_player", replan_on_error=True),
-    component("chunked_schedule", fps=20),
+    component("inference_schedule", fps=20,
+              request_timing={"reference": "before_end"},
+              merge={"start": "after_previous"}, latency_estimate=0.0),
     parallel(
         component("restrict_image_size", width=320, height=180),
         component("metadata", values={"model": "example"}),

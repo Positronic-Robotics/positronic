@@ -452,7 +452,7 @@ def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_fram
     assert end['name'] == EndOnField.WIRE_NAME
     assert player['name'] == TrajectoryPlayer.WIRE_NAME
     assert schedule['name'] == ChunkedSchedule.WIRE_NAME
-    assert schedule['args']['inference_lead'] >= 1 / schedule['args']['fps']
+    assert schedule['args']['latency_estimate'] >= 1 / schedule['args']['fps']
     assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][3])
 
 

@@ -36,24 +36,17 @@ from positronic.policy.codecs.observation import (
     StateObservationCodec,
 )
 from positronic.policy.compatibility import (
+    CHUNKED_SCHEDULE,
     ObservationCodecV1,
     PauseOnUnavailable,
+    RTCScheduleV1,
     chunked_schedule_v2,
     chunked_schedule_v3,
     pack_observation_fields_v1,
     restrict_image_size_v1,
-    rtc_schedule_v1,
     unpack_action_chunk_v1,
 )
-from positronic.policy.processors import (
-    ChunkedSchedule,
-    EndOnField,
-    InferenceSchedule,
-    Periodic,
-    RTCSchedule,
-    TemporalStack,
-    TrajectoryPlayer,
-)
+from positronic.policy.processors import EndOnField, InferenceSchedule, Periodic, TemporalStack, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
 
@@ -63,13 +56,11 @@ ComponentFactory = Callable[..., Processor | Codec | dict[str, Any]]
 COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
     for component in (
-        ChunkedSchedule,
         EncodeImages,
         EndCommand,
         EndOnField,
         InferenceSchedule,
         Periodic,
-        RTCSchedule,
         TemporalStack,
         TrajectoryPlayer,
         BinarizeGripTraining,
@@ -101,8 +92,8 @@ COMPONENTS.update({
     'unpack_action_chunk': {1: Version(unpack_action_chunk_v1)},
     'restrict_image_size': {1: Version(restrict_image_size_v1)},
 })
-COMPONENTS[ChunkedSchedule.WIRE_NAME].update({2: Version(chunked_schedule_v2), 3: Version(chunked_schedule_v3)})
-COMPONENTS[RTCSchedule.WIRE_NAME][1] = Version(rtc_schedule_v1)
+COMPONENTS[CHUNKED_SCHEDULE] = {2: Version(chunked_schedule_v2), 3: Version(chunked_schedule_v3)}
+COMPONENTS[RTCScheduleV1.WIRE_NAME] = {1: Version(RTCScheduleV1.from_spec_args)}
 # Version 1 takes no arguments and flips the one-arm channels.
 COMPONENTS[FlipGrip.WIRE_NAME][FlipGrip.ONE_ARM_VERSION] = Version(lambda: FlipGrip())
 

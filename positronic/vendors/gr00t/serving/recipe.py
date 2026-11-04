@@ -134,17 +134,23 @@ def client_stack(
     settings[model_settings.IMAGE_MAPPINGS] = image_mappings
     schedule = sequence(
         component('trajectory_player', replan_on_error=True),
-        component('chunked_schedule', fps=fps, horizon_sec=horizon_sec),
+        component(
+            'inference_schedule',
+            fps=fps,
+            request_timing={'reference': 'before_end'},
+            merge={'start': 'after_previous', 'horizon_sec': horizon_sec},
+            latency_estimate=0.0,
+        ),
     )
     codec = inference(settings, rtc=rtc is not None)
     if rtc is not None:
         schedule = sequence(
             component('trajectory_player', plan_key=obs_keys.PLAN, record_stats=False),
             component(
-                'rtc_schedule',
-                version=2,
+                'inference_schedule',
                 fps=fps,
-                call_after_sec=rtc[obs_keys.RTC.CALL_AFTER_SEC],
+                request_timing={'reference': 'after_start', 'seconds': rtc[obs_keys.RTC.CALL_AFTER_SEC]},
+                merge={'start': 'observation'},
                 latency_estimate=0.0,
             ),
         )
