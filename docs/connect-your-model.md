@@ -331,14 +331,8 @@ description = sequence(
 # Session.infer returns [{"robot_command": [7 joint positions], "target_grip": grip}, ...]
 ```
 
-A two-arm session declares `component("bimanual_joints_action", num_joints=6)` in place of
-`joint_position_action`, and answers `[{"action": [14 values]}, ...]`: per arm, the joints and then the
-grip, left arm first.
-
-A model that predicts a gripper width (1 = open) declares `component("flip_grip", arms=["left", "right"])` to
-the left of the action codec. With RTC, the action codec takes `commands_path=["action_prefix", "actions"]`, and
-the client sends the prefix in model values. Give `flip_grip` the same `commands_path`, so that the prefix grips
-also reach the model as widths.
+The [Codecs Guide](../positronic/policy/codecs/README.md) lists the other action codecs, such as
+`bimanual_joints_action` for two arms.
 
 The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
 

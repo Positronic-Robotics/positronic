@@ -105,13 +105,16 @@ Decoding runs right-to-left: unpack fields, split timesteps, then construct comm
 
 ### Actions
 
+Each action codec that builds commands from model values also takes `commands_path`. It then encodes the commands at
+that path back into model values, such as an RTC prefix.
+
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
 | [`SplitActionChunk`](action.py) | Splits prediction arrays into one record per timestep. | Feed a chunk of predictions to action decoders. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
-| [`BimanualJointsAction`](action.py) | Decodes a two-arm action into one `JointPosition` command and one grip target per arm; optionally encodes commands at `commands_path`. Per arm, the action holds the joints and then the grip, left arm first. | The model predicts absolute joints for two arms, as MolmoAct2-BimanualYAM and ABC-DiT do. [`bimanual_joints_state`](observation.py) packs the state in the same layout. Compose `FlipGrip(arms=…)` with the same `commands_path` for a model that speaks a gripper width. |
-| [`JointPositionAction`](action.py) | Decodes named joint and grip predictions; optionally encodes commands at `commands_path`. | Convert between model values and absolute robot commands, including planned actions sent with a request. |
+| [`BimanualJointsAction`](action.py) | Inference: decodes a two-arm action into one `JointPosition` command and one grip target per arm. Per arm, the action holds the joints and then the grip, left arm first. | The model predicts absolute joints for two arms, as MolmoAct2-BimanualYAM and ABC-DiT do. [`bimanual_joints_state`](observation.py) packs the state in the same layout. Compose `FlipGrip(arms=…)` for a model that speaks a gripper width. |
+| [`JointPositionAction`](action.py) | Decodes named joint and grip predictions into `JointPosition` commands plus grip. | Convert between model values and absolute robot commands, including planned actions sent with a request. |
 | [`CartesianDeltaAction`](action.py) | Inference: decodes translation in metres, rotation in the selected `rotation_rep` format (default `rotvec`) and grip closure into a `CartesianDelta` command plus absolute grip. | Predictions describe per-step Cartesian deltas in physical units. |
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |
 | [`JointDeltaAction`](action.py) | Inference: clips and scales normalized DROID joint velocities into `JointDelta` commands, and thresholds grip. | Serve a checkpoint using the DROID joint-delta action convention. |

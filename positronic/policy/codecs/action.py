@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
@@ -18,6 +18,7 @@ from .base import Codec, CommandsPathCodec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
 
 RotRep = geom.Rotation.Representation
+_Command = TypeVar('_Command')
 
 
 class SplitActionChunk(Codec):
@@ -52,11 +53,23 @@ class SplitActionChunk(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-def _joint_targets(values: Mapping[str, Any], channel: str, num_joints: int) -> np.ndarray:
+def _command(values: Mapping[str, Any], channel: str, kind: type[_Command], description: str) -> _Command:
     target = values[channel]
-    if not isinstance(target, command.JointPosition):
-        raise ValueError(f'{channel} must hold absolute joint targets')
+    if not isinstance(target, kind):
+        raise ValueError(f'{channel} must hold {description}')
+    return target
+
+
+def _joint_targets(values: Mapping[str, Any], channel: str, num_joints: int) -> np.ndarray:
+    target = _command(values, channel, command.JointPosition, 'absolute joint targets')
     return np.asarray(target.positions, dtype=np.float32).reshape(num_joints)
+
+
+def _with_grip(vector: np.ndarray, values: Mapping[str, Any]) -> np.ndarray:
+    return np.concatenate([
+        np.asarray(vector, dtype=np.float32),
+        np.asarray([values[keys.TARGET_GRIP]], dtype=np.float32),
+    ])
 
 
 class JointPositionAction(CommandsPathCodec):
@@ -98,7 +111,7 @@ class JointPositionAction(CommandsPathCodec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
-class CartesianDeltaAction(Codec):
+class CartesianDeltaAction(CommandsPathCodec):
     """Decode ``[translation(3), rotation, grip(1)]`` into a Cartesian delta and absolute grip.
 
     ``rotation_rep`` selects the rotation format; the default is a rotation vector.
@@ -108,9 +121,20 @@ class CartesianDeltaAction(Codec):
 
     WIRE_NAME = 'cartesian_delta_action'
 
-    def __init__(self, *, action_key: str = ACTION, rotation_rep: str = RotRep.ROTVEC.value):
+    def __init__(
+        self,
+        *,
+        action_key: str = ACTION,
+        rotation_rep: str = RotRep.ROTVEC.value,
+        commands_path: tuple[str | int, ...] | None = None,
+    ):
+        super().__init__(commands_path)
         self._action_key = action_key
         self._rotation_rep = RotRep(rotation_rep)
+
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        target = _command(values, keys.ROBOT_COMMAND, command.CartesianDelta, 'Cartesian deltas')
+        return {self._action_key: _with_grip(target.delta.as_vector(self._rotation_rep), values)}
 
     def _decode_single(self, data: dict) -> dict:
         if not data:
@@ -126,14 +150,26 @@ class CartesianDeltaAction(Codec):
         return {
             NAME: self.WIRE_NAME,
             VERSION: self.WIRE_VERSION,
-            ARGS: {'action_key': self._action_key, 'rotation_rep': self._rotation_rep.value},
+            ARGS: {
+                'action_key': self._action_key,
+                'rotation_rep': self._rotation_rep.value,
+                **self._commands_path_args(),
+            },
         }
 
 
-class AbsolutePositionAction(Codec):
+class AbsolutePositionAction(CommandsPathCodec):
     WIRE_NAME = 'absolute_position_action'
 
-    def __init__(self, tgt_ee_pose_key: str, tgt_grip_key: str, rotation_rep: RotRep | str = RotRep.QUAT):
+    def __init__(
+        self,
+        tgt_ee_pose_key: str,
+        tgt_grip_key: str,
+        rotation_rep: RotRep | str = RotRep.QUAT,
+        *,
+        commands_path: tuple[str | int, ...] | None = None,
+    ):
+        super().__init__(commands_path)
         self.rot_rep = RotRep(rotation_rep)
         self.tgt_ee_pose_key = tgt_ee_pose_key
         self.tgt_grip_key = tgt_grip_key
@@ -141,8 +177,9 @@ class AbsolutePositionAction(Codec):
         ee_dim = self.rot_rep.size + 3
         self._training_meta = {LEROBOT_FEATURES: {ACTION: lerobot_action(ee_dim + 1)}}
 
-    def encode(self, data):
-        return {}
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        target = _command(values, keys.ROBOT_COMMAND, command.CartesianPosition, 'absolute Cartesian targets')
+        return {ACTION: _with_grip(target.pose.as_vector(self.rot_rep), values)}
 
     def _decode_single(self, data: dict) -> dict:
         if not data:
@@ -171,22 +208,31 @@ class AbsolutePositionAction(Codec):
                 'tgt_ee_pose_key': self.tgt_ee_pose_key,
                 'tgt_grip_key': self.tgt_grip_key,
                 'rotation_rep': self.rot_rep.value,
+                **self._commands_path_args(),
             },
         }
 
 
-class AbsoluteJointsAction(Codec):
+class AbsoluteJointsAction(CommandsPathCodec):
     WIRE_NAME = 'absolute_joints_action'
 
-    def __init__(self, tgt_joints_key: str, tgt_grip_key: str, num_joints: int = 7):
+    def __init__(
+        self,
+        tgt_joints_key: str,
+        tgt_grip_key: str,
+        num_joints: int = 7,
+        *,
+        commands_path: tuple[str | int, ...] | None = None,
+    ):
+        super().__init__(commands_path)
         self.tgt_joints_key = tgt_joints_key
         self.tgt_grip_key = tgt_grip_key
         self.num_joints = num_joints
 
         self._training_meta = {LEROBOT_FEATURES: {ACTION: lerobot_action(num_joints + 1)}}
 
-    def encode(self, data):
-        return {}
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        return {ACTION: _with_grip(_joint_targets(values, keys.ROBOT_COMMAND, self.num_joints), values)}
 
     def _decode_single(self, data: dict) -> dict:
         if not data:
@@ -216,6 +262,7 @@ class AbsoluteJointsAction(Codec):
                 'tgt_joints_key': self.tgt_joints_key,
                 'tgt_grip_key': self.tgt_grip_key,
                 'num_joints': self.num_joints,
+                **self._commands_path_args(),
             },
         }
 
@@ -296,7 +343,7 @@ class IKJointsAction(Codec):
         )
 
 
-class JointDeltaAction(Codec):
+class JointDeltaAction(CommandsPathCodec):
     """DROID-style joint-delta action decoder (inference only).
 
     Scales the model's per-step joint velocities (clipped to ``[-1, 1]``) by ``MAX_JOINT_DELTA``
@@ -318,11 +365,14 @@ class JointDeltaAction(Codec):
     # multiply by the scalar below.
     MAX_JOINT_DELTA = 0.2
 
-    def __init__(self, num_joints: int = 7):
+    def __init__(self, num_joints: int = 7, *, commands_path: tuple[str | int, ...] | None = None):
+        super().__init__(commands_path)
         self.num_joints = num_joints
 
-    def encode(self, data):
-        return {}
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        target = _command(values, keys.ROBOT_COMMAND, command.JointDelta, 'joint deltas')
+        velocities = np.asarray(target.velocities, dtype=np.float32).reshape(self.num_joints)
+        return {ACTION: _with_grip(velocities / self.MAX_JOINT_DELTA, values)}
 
     def _decode_single(self, data: dict) -> dict:
         if not data:
@@ -337,7 +387,8 @@ class JointDeltaAction(Codec):
         return {keys.ROBOT_COMMAND: command.JointDelta(velocities=velocities), keys.TARGET_GRIP: grip}
 
     def to_spec(self):
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'num_joints': self.num_joints}}
+        args = {'num_joints': self.num_joints, **self._commands_path_args()}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
 class SetControlMode(Codec):

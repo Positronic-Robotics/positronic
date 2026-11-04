@@ -107,8 +107,12 @@ def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input()
         lambda path: JointPositionAction('joints', 'grip', commands_path=path),
         lambda path: BimanualJointsAction(commands_path=path),
         lambda path: FlipGrip(commands_path=path),
+        lambda path: AbsoluteJointsAction('joints', 'grip', commands_path=path),
+        lambda path: AbsolutePositionAction('pose', 'grip', commands_path=path),
+        lambda path: CartesianDeltaAction(commands_path=path),
+        lambda path: JointDeltaAction(commands_path=path),
     ],
-    ids=['one_arm', 'two_arms', 'flip_grip'],
+    ids=['one_arm', 'two_arms', 'flip_grip', 'absolute_joints', 'absolute_position', 'cartesian_delta', 'joint_delta'],
 )
 @pytest.mark.parametrize('path', [[], (), ('plan', False), (0,), 'plan'])
 def test_joint_command_encoding_requires_a_named_tuple_path(build, path):
@@ -119,6 +123,46 @@ def test_joint_command_encoding_requires_a_named_tuple_path(build, path):
 def test_joint_command_wire_path_rejects_a_string():
     with pytest.raises(ValueError, match='commands_path'):
         from_spec(component('joint_position_action', joints_key='joints', grip_key='grip', commands_path='plan'))
+
+
+VECTOR_ACTION_CODECS = [
+    (AbsoluteJointsAction, {'tgt_joints_key': 'joints', 'tgt_grip_key': 'grip', 'num_joints': 2}, [0.1, -0.2, 0.75]),
+    (
+        AbsolutePositionAction,
+        {'tgt_ee_pose_key': 'pose', 'tgt_grip_key': 'grip'},
+        [0.1, 0.2, 0.3, 0.5, 0.5, 0.5, 0.5, 1],
+    ),
+    (CartesianDeltaAction, {}, [0.01, -0.02, 0.03, 0.1, 0.0, -0.2, 0.5]),
+    (JointDeltaAction, {'num_joints': 2}, [0.5, -0.25, 1.0]),
+]
+
+
+@pytest.mark.parametrize(('cls', 'args', 'action'), VECTOR_ACTION_CODECS, ids=lambda v: getattr(v, 'WIRE_NAME', ''))
+def test_vector_action_codecs_encode_their_decoded_commands_back_to_the_model_action(cls, args, action):
+    codec = from_spec(json.loads(json.dumps(cls(**args, commands_path=('plan', 'commands')).to_spec())))
+    assert type(codec) is cls
+    assert isinstance(codec, Codec)
+    commands = codec.decode([{ACTION: np.asarray(action, dtype=np.float32)}])
+
+    encoded = codec.encode({'plan': {'commands': commands, 'offset_sec': 0.1}, 'unselected': 'omit'})
+    encoded = serialization.deserialise(serialization.serialise(encoded))
+
+    assert set(encoded) == {'plan'}
+    assert encoded['plan']['offset_sec'] == 0.1
+    np.testing.assert_allclose(encoded['plan']['commands'][0][ACTION], action, rtol=1e-6, atol=1e-6)
+    assert cls(**args).encode({'plan': {'commands': commands}}) == {}
+
+
+@pytest.mark.parametrize(('cls', 'args', 'action'), VECTOR_ACTION_CODECS, ids=lambda v: getattr(v, 'WIRE_NAME', ''))
+def test_vector_action_codecs_refuse_to_encode_another_command_type(cls, args, action):
+    codec = cls(**args, commands_path=('plan', 'commands'))
+    other = (
+        cmd_module.CartesianPosition(Transform3D.identity)
+        if cls is not AbsolutePositionAction
+        else JointDelta(np.zeros(2))
+    )
+    with pytest.raises(ValueError, match=obs_keys.ROBOT_COMMAND):
+        codec.encode({'plan': {'commands': [{obs_keys.ROBOT_COMMAND: other, obs_keys.TARGET_GRIP: 0.0}]}})
 
 
 @pytest.mark.parametrize('positions', [False, True])
