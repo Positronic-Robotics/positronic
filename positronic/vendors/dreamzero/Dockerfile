@@ -4,7 +4,7 @@
 # Build (from repo root):
 #   docker build -t positro/dreamzero-base:latest -f positronic/vendors/dreamzero/Dockerfile .
 #
-# The thin wrapper (docker/Dockerfile.dreamzero) layers positronic on top of this.
+# Dockerfile.serve-droid adds the standalone server; Dockerfile.training adds the training stack.
 
 FROM nvidia/cuda:12.9.0-cudnn-devel-ubuntu22.04
 

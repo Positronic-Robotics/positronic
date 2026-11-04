@@ -31,7 +31,8 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.sequential import Sequential
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.env_server import launcher, protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, WireCommandAdapter, _in_env_control_frame, _wire_command
@@ -875,7 +876,11 @@ class _JointposChunks(Policy):
         self.chunks = 0
 
     def run(self, runtime):
-        return (yield from ChunkedSchedule(self.fps).run(runtime, self.infer))
+        return (
+            yield from Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(self.fps)).run(
+                runtime, self.infer
+            )
+        )
 
     def infer(self, obs):
         self.chunks += 1

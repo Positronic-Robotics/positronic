@@ -1,3 +1,5 @@
+import os
+
 import configuronic as cfn
 
 from positronic import keys
@@ -32,13 +34,30 @@ def zed(**kwargs):
     return SLCamera(**kwargs)
 
 
-zed_m = zed.override(serial_number=17521925)
-zed_2i = zed.override(serial_number=39567055)
-zed_2i_second = zed.override(serial_number=39058547)
+# Each Franka DROID rig carries its own cameras, so the rig's environment names their serial numbers.
+FRANKA_WRIST_ZED_SERIAL_ENV = 'FRANKA_WRIST_ZED_SERIAL'
+FRANKA_LEFT_ZED_SERIAL_ENV = 'FRANKA_LEFT_ZED_SERIAL'
+FRANKA_RIGHT_ZED_SERIAL_ENV = 'FRANKA_RIGHT_ZED_SERIAL'
 
-# The station's two sideviews, by side, read off the rig (Positronic-Robotics/internal#1131).
-sideview_left = zed_2i
-sideview_right = zed_2i_second
+
+@cfn.config()
+def zed_from_env(serial_env: str, **kwargs):
+    """A ZED camera whose serial number is the value of the environment variable `serial_env`."""
+    serial = os.environ.get(serial_env)
+    if serial is None or not serial.isdigit():
+        found = 'is not set' if serial is None else f'is {serial!r}, which is not a serial number'
+        raise RuntimeError(
+            f'{serial_env} {found}. Set {serial_env} in the environment to the serial number of the ZED camera, '
+            f'for example {serial_env}=12345678.'
+        )
+    from positronic.drivers.camera.zed import SLCamera
+
+    return SLCamera(serial_number=int(serial), **kwargs)
+
+
+zed_m = zed_from_env.override(serial_env=FRANKA_WRIST_ZED_SERIAL_ENV)
+sideview_left = zed_from_env.override(serial_env=FRANKA_LEFT_ZED_SERIAL_ENV)
+sideview_right = zed_from_env.override(serial_env=FRANKA_RIGHT_ZED_SERIAL_ENV)
 
 _DROID_STREAM = {'view': 'left', 'resolution': 'hd720', 'fps': 30, 'image_enhancement': False}
 

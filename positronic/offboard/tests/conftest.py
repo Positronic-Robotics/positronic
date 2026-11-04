@@ -14,7 +14,8 @@ from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWi
 
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, PolicyDeployment
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.sequential import Sequential
 
 
 class Served(NamedTuple):
@@ -118,5 +119,7 @@ def inference_server(start_server: StartServer, mock_model: MagicMock) -> tuple[
     Returns:
         tuple[str, int]: (host, port)
     """
-    host, port, *_ = start_server(mock_model, PolicyDeployment(ChunkedSchedule(fps=10)))
+    host, port, *_ = start_server(
+        mock_model, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
+    )
     return host, port
