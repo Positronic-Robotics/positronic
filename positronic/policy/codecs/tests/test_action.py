@@ -106,8 +106,9 @@ def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input()
     [
         lambda path: JointPositionAction('joints', 'grip', commands_path=path),
         lambda path: BimanualJointsAction(commands_path=path),
+        lambda path: FlipGrip(commands_path=path),
     ],
-    ids=['one_arm', 'two_arms'],
+    ids=['one_arm', 'two_arms', 'flip_grip'],
 )
 @pytest.mark.parametrize('path', [[], (), ('plan', False), (0,), 'plan'])
 def test_joint_command_encoding_requires_a_named_tuple_path(build, path):
@@ -526,6 +527,42 @@ def test_bimanual_joints_action_encodes_the_executed_commands_as_model_actions()
             np.testing.assert_array_equal(restored[channel].positions, original[channel].positions)
         assert restored[LEFT_GRIP] == original[LEFT_GRIP]
         assert restored[RIGHT_GRIP] == original[RIGHT_GRIP]
+
+
+@pytest.mark.parametrize(
+    ('stack', 'predicted'),
+    [
+        (
+            FlipGrip(commands_path=RTC_PREFIX_PATH)
+            | JointPositionAction('joints', 'grip', num_joints=2, commands_path=RTC_PREFIX_PATH),
+            [
+                {'joints': np.array([1, 2], dtype=np.float32), 'grip': np.array([0.8], dtype=np.float32)},
+                {'joints': np.array([3, 4], dtype=np.float32), 'grip': np.array([0.0], dtype=np.float32)},
+            ],
+        ),
+        (
+            FlipGrip(arms=obs_keys.BIMANUAL_ARMS, commands_path=RTC_PREFIX_PATH)
+            | BimanualJointsAction(num_joints=2, commands_path=RTC_PREFIX_PATH),
+            [
+                {ACTION: np.array([1, 2, 0.8, 3, 4, 0.1], dtype=np.float32)},
+                {ACTION: np.array([5, 6, 0.0, 7, 8, 1.0], dtype=np.float32)},
+            ],
+        ),
+    ],
+    ids=['one_arm', 'two_arms'],
+)
+def test_a_flip_grip_stack_sends_the_rtc_prefix_back_as_the_model_predicted_it(stack, predicted):
+    played = [stack.decode(prediction) for prediction in predicted]
+    grips = [dict(command) for command in played]
+
+    encoded = stack.encode({policy_keys.RTC.ACTION_PREFIX: {policy_keys.RTC.PREFIX_ACTIONS: played}})
+
+    sent = encoded[policy_keys.RTC.ACTION_PREFIX][policy_keys.RTC.PREFIX_ACTIONS]
+    for model_values, prediction in zip(sent, predicted, strict=True):
+        assert set(model_values) == set(prediction)
+        for name, value in prediction.items():
+            np.testing.assert_allclose(model_values[name], value, atol=1e-6)
+    assert played == grips
 
 
 def test_bimanual_command_encoding_distinguishes_empty_absent_and_malformed_input():

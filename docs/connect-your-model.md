@@ -335,6 +335,11 @@ A two-arm session declares `component("bimanual_joints_action", num_joints=6)` i
 `joint_position_action`, and answers `[{"action": [14 values]}, ...]`: per arm, the joints and then the
 grip, left arm first.
 
+A model that predicts a gripper width (1 = open) declares `component("flip_grip", arms=["left", "right"])` to
+the left of the action codec. With RTC, the action codec takes `commands_path=["action_prefix", "actions"]`, and
+the client sends the prefix in model values. Give `flip_grip` the same `commands_path`, so that the prefix grips
+also reach the model as widths.
+
 The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
 
 ## See Also

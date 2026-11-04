@@ -2,6 +2,7 @@ import collections.abc as cabc
 from typing import Any, ClassVar, Self, final, overload
 
 import numpy as np
+from positronic_model_server import tree
 from positronic_model_server.spec import PAR, SEQ
 
 from positronic import telemetry, telemetry_keys
@@ -116,6 +117,43 @@ class Codec:
         if isinstance(other, Codec):
             return _ParallelCodec(self, other)
         return NotImplemented
+
+
+class CommandsPathCodec(Codec):
+    """A codec that also encodes each command of the sequence at ``commands_path``: the reverse of its decode.
+
+    Encoding contributes only the path's top-level field, preserving sibling values inside that field. With no path or
+    an absent top-level field, encoding contributes nothing. Missing nested fields raise. Decoding always produces
+    commands.
+    """
+
+    def __init__(self, commands_path: tuple[str | int, ...] | None):
+        if commands_path is not None and (
+            not isinstance(commands_path, tuple)
+            or not commands_path
+            or not isinstance(commands_path[0], str)
+            or any(type(part) not in (str, int) for part in commands_path)
+        ):
+            raise ValueError('commands_path must be a non-empty tuple of keys and indices starting with a field name')
+        self._commands_path = commands_path
+
+    def _encode_command(self, values: cabc.Mapping[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def encode(self, data: dict) -> dict:
+        if self._commands_path is None or self._commands_path[0] not in data:
+            return {}
+        name, rest = self._commands_path[0], self._commands_path[1:]
+        return {name: tree.update_at(data[name], rest, lambda commands: [self._encode_command(c) for c in commands])}
+
+    def _commands_path_args(self) -> dict[str, Any]:
+        return {} if self._commands_path is None else {'commands_path': list(self._commands_path)}
+
+    @classmethod
+    def from_spec_args(cls, **args: Any) -> Self:
+        if isinstance(args.get('commands_path'), list):
+            args['commands_path'] = tuple(args['commands_path'])
+        return cls(**args)
 
 
 def _meta_conflicts(left: dict, right: dict, prefix: str = '') -> list[str]:

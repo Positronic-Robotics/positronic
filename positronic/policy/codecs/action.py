@@ -1,10 +1,9 @@
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any, Self
+from typing import Any
 
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
-from positronic_model_server import tree
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import geom, keys
@@ -15,7 +14,7 @@ from positronic.dataset.transforms.episode import Derive, Group, Identity
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.ik import ik_joints_from_episode
 
-from .base import Codec
+from .base import Codec, CommandsPathCodec
 from .metadata import ACTION, LEROBOT_FEATURES, lerobot_action
 
 RotRep = geom.Rotation.Representation
@@ -53,43 +52,6 @@ class SplitActionChunk(Codec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
 
 
-class _CommandsPathAction(Codec):
-    """An action decoder that also encodes the command sequence at ``commands_path`` into model values.
-
-    Encoding contributes only the path's top-level field, preserving sibling values inside that field. With no path or
-    an absent top-level field, encoding contributes nothing. Missing nested fields raise. Decoding always produces
-    commands.
-    """
-
-    def __init__(self, commands_path: tuple[str | int, ...] | None):
-        if commands_path is not None and (
-            not isinstance(commands_path, tuple)
-            or not commands_path
-            or not isinstance(commands_path[0], str)
-            or any(type(part) not in (str, int) for part in commands_path)
-        ):
-            raise ValueError('commands_path must be a non-empty tuple of keys and indices starting with a field name')
-        self._commands_path = commands_path
-
-    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
-        raise NotImplementedError
-
-    def encode(self, data: dict) -> dict:
-        if self._commands_path is None or self._commands_path[0] not in data:
-            return {}
-        name, rest = self._commands_path[0], self._commands_path[1:]
-        return {name: tree.update_at(data[name], rest, lambda commands: [self._encode_command(c) for c in commands])}
-
-    def _commands_path_args(self) -> dict[str, Any]:
-        return {} if self._commands_path is None else {'commands_path': list(self._commands_path)}
-
-    @classmethod
-    def from_spec_args(cls, **args: Any) -> Self:
-        if isinstance(args.get('commands_path'), list):
-            args['commands_path'] = tuple(args['commands_path'])
-        return cls(**args)
-
-
 def _joint_targets(values: Mapping[str, Any], channel: str, num_joints: int) -> np.ndarray:
     target = values[channel]
     if not isinstance(target, command.JointPosition):
@@ -97,7 +59,7 @@ def _joint_targets(values: Mapping[str, Any], channel: str, num_joints: int) -> 
     return np.asarray(target.positions, dtype=np.float32).reshape(num_joints)
 
 
-class JointPositionAction(_CommandsPathAction):
+class JointPositionAction(CommandsPathCodec):
     """Convert named joint and grip predictions to and from absolute robot commands."""
 
     WIRE_NAME = 'joint_position_action'
@@ -258,7 +220,7 @@ class AbsoluteJointsAction(Codec):
         }
 
 
-class BimanualJointsAction(_CommandsPathAction):
+class BimanualJointsAction(CommandsPathCodec):
     """Converts a two-arm action to and from one ``JointPosition`` and one grip target per arm.
 
     Per arm, the action holds ``num_joints`` joints and then the grip, left arm first. The grip passes through, so a
