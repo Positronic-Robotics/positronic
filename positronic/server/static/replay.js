@@ -21,8 +21,8 @@
 //   - `dock-below` (dock): a selector of the host's bar. The dock and the list share the window below it.
 //   - `link-param` (full layout): the URL search parameter that names the open row. A link opens that row.
 //   - `link-param` is read once, at the first connect.
-//   - A link that names no row of the list loses the parameter, unless another list on the page has the same
-//     `link-param`.
+//   - A link that names no row of the list loses the parameter, unless another connected list, in any shadow tree,
+//     has the same `link-param`.
 //   - `camera-names`: a JSON object that maps a camera key to the name the visitor sees.
 //   - A value of the wrong shape logs an error, and the element uses the default.
 //   - The defaults: `full`, `video`, the top of the window, no link parameter, the camera keys.
