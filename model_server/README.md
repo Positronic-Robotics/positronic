@@ -5,9 +5,9 @@ The wrapper owns transport, sessions, serialization and cleanup. Vendor scripts 
 model directly in the same process and describe the client pipeline as plain data.
 
 ```bash
-uv pip install "positronic-model-server==0.3.1"
-uv pip install "positronic-model-server[websocket]==0.3.1"
-uv pip install "positronic-model-server[grpc]==0.3.1"
+uv pip install "positronic-model-server==0.3.5"
+uv pip install "positronic-model-server[websocket]==0.3.5"
+uv pip install "positronic-model-server[grpc]==0.3.5"
 ```
 
 The core depends on NumPy, Pillow, msgpack and `positronic-wire`'s dependency-free transport
@@ -86,8 +86,8 @@ model. It then sends `ready` with a session ID, protocol v3, the pipeline descri
 
 The client may report any additional metadata and owns how it records or combines that information.
 The server checks description structure without importing client components.
-Model/session metadata `max_in_flight` sets that session’s client-side outstanding-call limit
-and worker count (default one). Completed answers occupy capacity until the client reads them.
+`Session(max_in_flight=...)` sets the client’s outstanding-call limit and worker count (default one),
+sent as a separate field in the ready handshake. Completed answers occupy capacity until the client reads them.
 
 All model operations run on one worker thread in the server process: load, preparation, inference,
 session cleanup and model cleanup. Each session retains its own settings and history.

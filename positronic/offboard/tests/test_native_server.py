@@ -260,9 +260,7 @@ def test_remote_calls_match_responses_when_encoding_reorders_observations(servin
 
     class ObservingModel(Model):
         def prepare_session(self, params):
-            return ObservingSession(
-                spec.component('chunked_schedule', version=2, fps=10), metadata={policy_keys.MAX_IN_FLIGHT: 3}
-            )
+            return ObservingSession(spec.component('chunked_schedule', version=2, fps=10), max_in_flight=3)
 
     monkeypatch.setattr('positronic.policy.remote.declared_stack', lambda *_: stack)
     now = [0]

@@ -72,8 +72,8 @@ class Probe(Model):
 
 
 class ProbeSession(Session):
-    def __init__(self, probe: Probe, scale: int):
-        super().__init__(spec.component('chunked_schedule', version=2, fps=20))
+    def __init__(self, probe: Probe, scale: int, *, max_in_flight: int = 1):
+        super().__init__(spec.component('chunked_schedule', version=2, fps=20), max_in_flight=max_in_flight)
         self._probe = probe
         self._scale = scale
         self._count = 0
@@ -97,6 +97,7 @@ class Peer:
     connection: wire.ClientConnection
     session_id: str
     metadata: dict
+    max_in_flight: int
 
     def infer(self, observation: Any) -> dict:
         self.connection.send(
@@ -140,7 +141,9 @@ class Running:
                 raise RuntimeError(message[protocol.ERROR])
             if message[protocol.STATUS] == protocol.ServerStatus.READY:
                 assert message[protocol.PROTOCOL_VERSION] == protocol.ProtocolVersion.V3
-                return Peer(connection, message[protocol.SESSION_ID], message[protocol.META])
+                return Peer(
+                    connection, message[protocol.SESSION_ID], message[protocol.META], message[protocol.MAX_IN_FLIGHT]
+                )
             assert message[protocol.STATUS] == protocol.ServerStatus.WAITING
 
 
@@ -188,6 +191,24 @@ def start(transport_types):
         assert not running.errors
 
 
+@pytest.mark.parametrize('limit', [None, 0, -1, True, 2.5, '2'])
+def test_session_requires_positive_integer_capacity(limit):
+    with pytest.raises(ValueError, match='max_in_flight'):
+        ProbeSession(Probe(), 1, max_in_flight=limit)
+
+
+@pytest.mark.parametrize('limit', [1, 20])
+def test_capacity_is_a_separate_handshake_field(start, limit):
+    class LimitedProbe(Probe):
+        def prepare_session(self, params):
+            return ProbeSession(self, params['scale'], max_in_flight=limit)
+
+    peer = start(LimitedProbe()).session()
+    assert peer.max_in_flight == limit
+    assert protocol.MAX_IN_FLIGHT not in peer.metadata
+    peer.close()
+
+
 def test_sessions_keep_parameters_history_and_native_results(start):
     running = start()
     first = running.session('scale=3')
@@ -196,6 +217,7 @@ def test_sessions_keep_parameters_history_and_native_results(start):
     assert first.metadata[keys.EFFECTIVE_PARAMS] == {'scale': 3}
     assert second.metadata[keys.SESSION_PARAMS] == {}
     assert second.metadata[keys.EFFECTIVE_PARAMS] == {'scale': 1}
+    assert first.max_in_flight == second.max_in_flight == 1
     assert first.session_id != second.session_id
     native = {'value': 2, 'robot_command': {'vendor': 'opaque'}, b'__cmd__': 'opaque', 'array': np.arange(6)}
     answer = first.infer(native)
@@ -341,7 +363,7 @@ def test_waiting_keeps_preparation_alive_and_keepalive_answers(start):
         message = serialization.deserialise(connection.recv(timeout=5))
         if message[protocol.STATUS] == protocol.ServerStatus.READY:
             break
-    peer = Peer(connection, message[protocol.SESSION_ID], message[protocol.META])
+    peer = Peer(connection, message[protocol.SESSION_ID], message[protocol.META], message[protocol.MAX_IN_FLIGHT])
     assert peer.infer({})[protocol.RESULT]['count'] == 1
     peer.close()
 

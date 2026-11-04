@@ -23,7 +23,6 @@ from .keys import (
     CHECKPOINT_PATH,
     GRIP,
     JOINTS,
-    MAX_IN_FLIGHT,
     MODEL_SOURCE_ENV,
     OBS_TIME_NS,
     PROMPT,
@@ -48,6 +47,7 @@ class DreamZeroSession(Session):
         policy: Any,
         client_stack: dict,
         *,
+        max_in_flight: int,
         sampling_period_sec: float,
         prediction_period_sec: float,
         history_offsets_sec: tuple[float, ...],
@@ -55,7 +55,7 @@ class DreamZeroSession(Session):
         height: int,
         release: Callable[[], None],
     ):
-        super().__init__(client_stack)
+        super().__init__(client_stack, max_in_flight=max_in_flight)
         self._policy = policy
         self._period_ns = round(prediction_period_sec * 1e9)
         self._sampling_period_ns = sampling_period_sec * 1e9
@@ -123,6 +123,7 @@ class DreamZeroModel(Model):
         policy: Any,
         *,
         action_horizon: int = 24,
+        max_in_flight: int = 16,
         metadata: dict | None = None,
         width: int = 320,
         height: int = 180,
@@ -137,9 +138,10 @@ class DreamZeroModel(Model):
                 'image_mappings': recipe.droid_cameras(),
                 'jpeg_quality': 90,
             },
-            metadata={MAX_IN_FLIGHT: 16, **(metadata or {})},
+            metadata=metadata,
         )
         self._policy = policy
+        self._max_in_flight = max_in_flight
         self._width, self._height = width, height
         self._active = False
 
@@ -187,6 +189,7 @@ class DreamZeroModel(Model):
         session = DreamZeroSession(
             self._policy,
             stack,
+            max_in_flight=self._max_in_flight,
             sampling_period_sec=params['sampling_period_sec'],
             prediction_period_sec=params['prediction_period_sec'],
             history_offsets_sec=offsets,

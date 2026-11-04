@@ -363,7 +363,8 @@ checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
-Servers can set session metadata `max_in_flight` above its default of one to pipeline ordinary calls.
+Servers can set `Session(max_in_flight=...)` above its default of one to pipeline ordinary calls.
+The ready handshake carries this setting separately from metadata.
 Each remote session owns its workers and limit: calls occupy capacity until their answers are read
 or cancelled calls finish. Sessions share episode timing and completion delivery, without a shared
 worker limit or an additional waiting queue.
