@@ -187,6 +187,25 @@ def test_a_call_on_a_closed_connection_is_not_sent_again_when_a_whole_call_does_
     assert len(gateway.calls) == calls
 
 
+def test_a_call_may_find_its_connection_closed_again_after_a_wait_that_dreamapi_asked_for(model, gateway, monkeypatch):
+    model(_request(), session_id='a')
+    calls = len(gateway.calls)
+    gateway.statuses.append({'code': 'DA-2000', 'reason': 'rate_limited', 'retry_after_s': 0.01})
+    _close_idle_connections(monkeypatch, times=1)
+    sleep = server.time.sleep
+
+    def wait_then_close(seconds):
+        sleep(seconds)
+        _close_idle_connections(monkeypatch, times=1)
+
+    monkeypatch.setattr(server, 'time', types.SimpleNamespace(monotonic=time.monotonic, sleep=wait_then_close))
+
+    actions = model(_request(), session_id='a')
+
+    # The refusal and the answer reach the gateway; the two calls on closed connections do not.
+    assert len(actions) == ROWS and len(gateway.calls) == calls + 2
+
+
 def test_a_call_after_an_idle_gap_starts_a_new_session(model, gateway, tmp_path, monkeypatch):
     model(_request(), session_id='a')
     clock = server.time.monotonic() + 61.0

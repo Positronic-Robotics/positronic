@@ -212,6 +212,8 @@ class DreamModel(Model):
                     raise
                 logger.warning('DreamAPI refused a call (%s); sending it again in %.1f s', error, wait)
                 time.sleep(wait)
+                # The gateway may close the new connection during the wait too.
+                stale_sent = False
 
     def _call_record(self, session: _Session, rows: int, reports: dict[str, LimitReport]) -> dict[str, Any]:
         timing = session.client.last_timing or {}
