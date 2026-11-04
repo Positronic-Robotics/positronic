@@ -102,8 +102,6 @@ class _Session:
         self.frame_s = 0.0
         # The time played since the ramp started, at the first row of the next chunk.
         self.elapsed_s = 0.0
-        # The duration of the last chunk.
-        self.chunk_s = 0.0
         # When the last call answered, on the monotonic clock.
         self.answered_s: float | None = None
         # Each chunk as DreamAPI answered it and as the client plays it, `(rows, 14)`, left arm first.
@@ -113,17 +111,6 @@ class _Session:
 
     def close(self) -> None:
         self.client.close()
-
-
-def _measured(observation: dict[str, Any]) -> dict[str, np.ndarray]:
-    """The state of each arm in a Dream observation, as one row: 6 joints, then the gripper opening."""
-    return {
-        arm: np.concatenate([
-            observation[dream.JOINT_POS.format(slot=slot)],
-            observation[dream.GRIPPER_POS.format(slot=slot)],
-        ])
-        for arm, slot in dream.ARM_SLOTS.items()
-    }
 
 
 def _ends_by(deadline: float, duration_s: float) -> bool:
@@ -142,8 +129,7 @@ class DreamModel(Model):
     that times out, finds its session expired or its connection closed, or that DreamAPI refuses as retryable, is
     sent again only while the wait asked for and a whole call timeout still end inside `retry_deadline_s`; otherwise
     it raises at once. A call more than `session_idle_s` after the last one starts a new DreamAPI session, as
-    DreamAPI ends an idle session. A call that comes before the last chunk can have played whole starts the ramp of
-    the limiter again.
+    DreamAPI ends an idle session. A call with `policy_keys.REPLAN_NOW` starts the ramp of the limiter again.
     """
 
     def __init__(
@@ -251,25 +237,34 @@ class DreamModel(Model):
         logger.info('Dream canary %s (trace %s)', record['hash'], record['trace_id'])
         return record
 
+    @staticmethod
+    def _measured(observation: dict[str, Any]) -> dict[str, np.ndarray]:
+        """The state of each arm in a Dream observation, as one row: 6 joints, then the gripper opening."""
+        return {
+            arm: np.concatenate([
+                observation[dream.JOINT_POS.format(slot=slot)],
+                observation[dream.GRIPPER_POS.format(slot=slot)],
+            ])
+            for arm, slot in dream.ARM_SLOTS.items()
+        }
+
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         session = self._sessions.get(session_id)
         if session is None:
             canary = self._canary()
             session = self._sessions[session_id] = _Session(self._config)
             session.record['canary'] = canary
-        # The client asks for the next chunk when the last one ends. It asks earlier only after it drops the rest of
-        # the chunk on an arm error, and the rows it played are unknown.
-        if session.answered_s is not None and time.monotonic() - session.answered_s < session.chunk_s:
+        # On an arm error the client drops the rest of the chunk and replans, and the rows it played are unknown.
+        if obs.get(policy_keys.REPLAN_NOW, False):
             session.elapsed_s = 0.0
             session.record['replans'] += 1
         chunks = self._send(session, dict(obs))
-        measured = _measured(obs[dream.OBSERVATION])
+        measured = self._measured(obs[dream.OBSERVATION])
         limited, reports = {}, {}
         for arm in keys.BIMANUAL_ARMS:
             limited[arm], reports[arm] = self._limiter.limit(chunks[arm], measured[arm], session.elapsed_s)
         rows = len(limited[keys.LEFT_ARM])
-        session.chunk_s = rows / codecs.FPS
-        session.elapsed_s += session.chunk_s
+        session.elapsed_s += rows / codecs.FPS
         call = self._call_record(session, rows, reports)
         session.record['calls'].append(call)
         logger.info('Dream call: trace %s, %s ms round trip', call['trace_id'], call['rtt_ms'])

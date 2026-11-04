@@ -10,6 +10,7 @@ from positronic import keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
 from positronic.drivers.roboarm.models import YAM_JOINTS
+from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
 from positronic.vendors import dream
 
@@ -30,7 +31,8 @@ class DreamObservationCodec(Codec):
 
     Each camera is a frame stack, oldest frame first, or one frame. Each frame goes to `FRAME_SIZE` as RGB `uint8`.
     With `crop_to_aspect`, a centred crop to the aspect ratio of `FRAME_SIZE` comes first. The grip of each arm must
-    be the gripper opening (1 = open), so `FlipGrip(arms=...)` composes to the left.
+    be the gripper opening (1 = open), so `FlipGrip(arms=...)` composes to the left. `policy_keys.REPLAN_NOW` passes
+    through.
     """
 
     def __init__(
@@ -79,7 +81,8 @@ class DreamObservationCodec(Codec):
             dream.FRAME_WINDOW.format(camera=camera): self._window(inputs[key], key)
             for camera, key in self._cameras.items()
         }
-        return {dream.OBSERVATION: observation, dream.FRAMES: frames}
+        replan = bool(inputs.get(policy_keys.REPLAN_NOW, False))
+        return {dream.OBSERVATION: observation, dream.FRAMES: frames, policy_keys.REPLAN_NOW: replan}
 
     @property
     def meta(self) -> dict[str, Any]:

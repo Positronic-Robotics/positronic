@@ -11,6 +11,7 @@ import pytest
 from shared.faceblur import FaceBlurrer, _self_check_frame
 
 from positronic import keys
+from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION
 from positronic.vendors import dream
 from positronic.vendors.dream import codecs, server
@@ -48,7 +49,7 @@ def model(gateway, blurrer, tmp_path):
     built.close()
 
 
-def _request(frames: int = 3, view: np.ndarray | None = None) -> dict:
+def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = False) -> dict:
     if view is None:
         view = np.full((176, 320, 3), 120, np.uint8)
     observation = {dream.PROMPT: 'fold the towel', **dream.STATION_ROBOT}
@@ -59,6 +60,7 @@ def _request(frames: int = 3, view: np.ndarray | None = None) -> dict:
     return {
         dream.OBSERVATION: observation,
         dream.FRAMES: {dream.FRAME_WINDOW.format(camera=camera): window for camera in dream.CAMERAS},
+        policy_keys.REPLAN_NOW: replan,
     }
 
 
@@ -284,21 +286,19 @@ def test_a_chunk_past_the_limits_is_limited(gateway, model):
     assert actions[:, 0].max() < 1.5
 
 
-def test_a_call_before_the_last_chunk_can_end_starts_the_ramp_again(gateway, model, tmp_path, monkeypatch):
+def test_a_replan_starts_the_ramp_again(gateway, model, tmp_path):
     def far(observation):
         chunks = hold(observation)
         return {name: (np.asarray(rows) + [1.5, 0, 0, 0, 0, 0, 0]).tolist() for name, rows in chunks.items()}
 
     gateway.chunk = far
     model(_request(), session_id='a')
-    replan = np.array([action[ACTION] for action in model(_request(), session_id='a')])
-    clock = server.time.monotonic() + ROWS / codecs.FPS + 1.0
-    monkeypatch.setattr(server.time, 'monotonic', lambda: clock)
-    whole = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    after_whole = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    replan = np.array([action[ACTION] for action in model(_request(replan=True), session_id='a')])
     model.end_session('a')
 
+    assert after_whole[0, 0] > 1.1 * 0.5 / codecs.FPS
     assert replan[0, 0] == pytest.approx(0.5 / codecs.FPS)
-    assert whole[0, 0] > 1.1 * 0.5 / codecs.FPS
     assert _record(tmp_path, 'a')['replans'] == 1
 
 

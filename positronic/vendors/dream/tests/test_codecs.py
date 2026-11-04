@@ -2,6 +2,7 @@ import numpy as np
 
 from positronic import keys
 from positronic.drivers.roboarm import command
+from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION
 from positronic.vendors import dream
 from positronic.vendors.dream import codecs
@@ -48,6 +49,11 @@ def test_the_observation_carries_the_task_and_the_station_robot():
 
     assert observation[dream.PROMPT] == TASK
     assert {name: observation[name] for name in dream.STATION_ROBOT} == dream.STATION_ROBOT
+
+
+def test_a_replan_of_the_client_passes_through():
+    assert _encode(_obs(**{policy_keys.REPLAN_NOW: True}))[policy_keys.REPLAN_NOW] is True
+    assert _encode(_obs())[policy_keys.REPLAN_NOW] is False
 
 
 def test_each_camera_goes_at_dreams_frame_size_under_its_station_window():
