@@ -553,8 +553,8 @@ export class PositronicReplay extends HTMLElement {
     }
   }
 
-  /** The row the page's address names; null where it names none. Where the page holds no other list with the same
-   * link parameter, an address that names a row the list does not hold loses the parameter. */
+  /** The row the page's address names; null where it names none. An address that names a row the list does not
+   * hold loses the parameter, unless another list on the page has the same link parameter. */
   #linkedRow() {
     const name = this.#linkParam;
     const id = name ? new URLSearchParams(window.location.search).get(name) : null;
