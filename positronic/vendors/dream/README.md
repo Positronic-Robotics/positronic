@@ -24,8 +24,9 @@ runs only behind DreamAPI. Dream Labs does not release the weights. Each call se
 - Each session first sends a canary: a fixed observation. A change of its hash means that the model changed. DreamAPI
   gives no model version, and `dreamlabs/dream-1-beta` can change at any time.
 - Each session writes `<sessions_dir>/<session_id>.json` (the canary, and the trace id, timing and limits of each
-  call) and `<session_id>.npz` (each chunk as DreamAPI answered it and as the client played it). Dream Labs can find
-  a call from its trace id.
+  call) and `<session_id>.npz` (`answered`: each chunk as DreamAPI answered it; `limited`: each chunk as the limiter
+  sent it). A replan drops the rest of a chunk, so `limited` can hold rows that the client did not run. Dream Labs can
+  find a call from its trace id.
 
 ## Run in simulation
 

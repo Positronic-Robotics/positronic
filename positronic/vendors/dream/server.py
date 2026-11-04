@@ -4,7 +4,7 @@ The policy runs at Dream Labs, behind DreamAPI. `dreamlabs-client` reads the API
 `~/.dreamlabs/credentials`. Every face in a frame is blurred before the frame leaves this server, and each chunk keeps
 `limits.ChunkLimits`. Each session first sends a canary: a fixed observation whose reply changes only when the model
 changes. Each session writes `<sessions_dir>/<session_id>.json`: the canary, and the trace id, timing and limits of
-each call. `<session_id>.npz` beside it holds each chunk as DreamAPI answered it and as the client plays it.
+each call. `<session_id>.npz` beside it holds each chunk as DreamAPI answered it and as the limiter sent it.
 
 Usage
   uv run --locked --extra dream python -m positronic.vendors.dream.server yam_bimanual
@@ -104,9 +104,10 @@ class _Session:
         self.elapsed_s = 0.0
         # When the last call answered, on the monotonic clock.
         self.answered_s: float | None = None
-        # Each chunk as DreamAPI answered it and as the client plays it, `(rows, 14)`, left arm first.
+        # Each chunk as DreamAPI answered it and as the limiter sent it, `(rows, 14)`, left arm first. The server
+        # does not see which rows the client runs: a replan drops the rest of a chunk.
         self.answered: list[np.ndarray] = []
-        self.played: list[np.ndarray] = []
+        self.limited: list[np.ndarray] = []
         self.record: dict[str, Any] = {'calls': [], 'expired': 0, 'renewed': 0, 'replans': 0}
 
     def close(self) -> None:
@@ -270,7 +271,7 @@ class DreamModel(Model):
         logger.info('Dream call: trace %s, %s ms round trip', call['trace_id'], call['rtt_ms'])
         session.answered.append(np.concatenate([chunks[arm] for arm in keys.BIMANUAL_ARMS], axis=1))
         actions = np.concatenate([limited[arm] for arm in keys.BIMANUAL_ARMS], axis=1)
-        session.played.append(actions)
+        session.limited.append(actions)
         return [{ACTION: action} for action in actions]
 
     def end_session(self, session_id: str) -> None:
@@ -285,7 +286,7 @@ class DreamModel(Model):
             pending.replace(path)
             if session.answered:
                 np.savez_compressed(
-                    path.with_suffix('.npz'), answered=np.stack(session.answered), played=np.stack(session.played)
+                    path.with_suffix('.npz'), answered=np.stack(session.answered), limited=np.stack(session.limited)
                 )
         finally:
             session.close()

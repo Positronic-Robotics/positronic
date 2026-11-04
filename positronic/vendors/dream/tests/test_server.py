@@ -221,7 +221,7 @@ def test_a_call_after_an_idle_gap_starts_a_new_session(model, gateway, tmp_path,
     assert _record(tmp_path, 'a')['renewed'] == 1
 
 
-def test_the_session_keeps_each_chunk_as_answered_and_as_played(gateway, model, tmp_path):
+def test_the_session_keeps_each_chunk_as_answered_and_as_limited(gateway, model, tmp_path):
     def far(observation):
         return {name: (np.asarray(rows) + [1.5, 0, 0, 0, 0, 0, 0]).tolist() for name, rows in hold(observation).items()}
 
@@ -230,8 +230,8 @@ def test_the_session_keeps_each_chunk_as_answered_and_as_played(gateway, model, 
     model.end_session('a')
 
     chunks = np.load(tmp_path / 'a.npz')
-    assert chunks['answered'].shape == chunks['played'].shape == (1, ROWS, 14)
-    assert chunks['answered'][0, 0, 0] == pytest.approx(1.5) and chunks['played'][0, 0, 0] < 1.0
+    assert chunks['answered'].shape == chunks['limited'].shape == (1, ROWS, 14)
+    assert chunks['answered'][0, 0, 0] == pytest.approx(1.5) and chunks['limited'][0, 0, 0] < 1.0
 
 
 def test_a_refusal_that_is_not_retryable_raises(model, gateway):
