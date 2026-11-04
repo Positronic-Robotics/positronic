@@ -207,6 +207,16 @@ def test_a_refusal_that_is_not_retryable_raises(model, gateway):
         model(_request(), session_id='a')
 
 
+def test_a_retryable_refusal_that_asks_to_wait_past_the_deadline_raises_at_once(model, gateway):
+    model(_request(), session_id='a')
+    gateway.statuses.append({'code': 'DA-2000', 'reason': 'rate_limited', 'retry_after_s': 60.0})
+    calls = len(gateway.calls)
+
+    with pytest.raises(server.dream_client.DreamServerError):
+        model(_request(), session_id='a')
+    assert len(gateway.calls) == calls + 1
+
+
 def test_a_chunk_past_the_limits_is_limited(gateway, model):
     def far(observation):
         chunks = hold(observation)
@@ -239,6 +249,14 @@ def test_warm_up_asks_again_until_the_model_answers(gateway):
     server._wait_until_warm(CONFIG, deadline_s=5.0)
 
     assert len(gateway.calls) == 3
+
+
+def test_warm_up_raises_when_the_model_asks_to_wait_past_the_deadline(gateway):
+    gateway.statuses.append({'code': 'DA-2000', 'reason': 'pool_warming', 'retry_after_s': 60.0})
+
+    with pytest.raises(server.dream_client.DreamServerError):
+        server._wait_until_warm(CONFIG, deadline_s=5.0)
+    assert len(gateway.calls) == 1
 
 
 def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks():

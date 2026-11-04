@@ -128,8 +128,9 @@ class DreamModel(Model):
     """Dream-1 behind DreamAPI, one DreamAPI session per session.
 
     A call sends the frame windows of its request, and answers the chunk, limited, as one action per row. A refusal
-    that DreamAPI marks retryable is sent again until `retry_deadline_s` passes. A call more than `session_idle_s`
-    after the last one starts a new DreamAPI session, as DreamAPI ends an idle session.
+    that DreamAPI marks retryable is sent again until `retry_deadline_s` passes, and raises at once when the wait it
+    asks for ends past that. A call more than `session_idle_s` after the last one starts a new DreamAPI session, as
+    DreamAPI ends an idle session.
     """
 
     def __init__(
@@ -203,9 +204,10 @@ class DreamModel(Model):
                 session.record['expired'] += 1
                 logger.warning('%s; sending the call again in the new session', error)
             except dream_client.DreamServerError as error:
-                if not error.retryable or time.monotonic() >= deadline:
-                    raise
                 wait = error.retry_after_s or 1.0
+                # A wait past the deadline would only delay the error, and every other session with it.
+                if not error.retryable or time.monotonic() + wait > deadline:
+                    raise
                 logger.warning('DreamAPI refused a call (%s); sending it again in %.1f s', error, wait)
                 time.sleep(wait)
 
@@ -294,9 +296,9 @@ def _wait_until_warm(config: dict[str, Any], deadline_s: float) -> None:
                 client.get_action()
                 return
             except dream_client.DreamServerError as error:
-                if not error.retryable or time.monotonic() >= deadline:
-                    raise
                 wait = error.retry_after_s or 30.0
+                if not error.retryable or time.monotonic() + wait > deadline:
+                    raise
                 logger.info('Dream-1 is starting (%s); asking again in %.0f s', error.reason, wait)
                 time.sleep(wait)
 
