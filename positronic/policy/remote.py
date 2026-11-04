@@ -487,6 +487,13 @@ class RemotePolicy(Policy):
         if not (compress_images and streams and self._frame_codec in declared_codecs(meta)):
             logger.warning('The session offers no %s frame stream; requests go in full', self._frame_codec.value)
             return declared_stack(meta, version), None, self._jpeg_quality
+        if session.max_in_flight != 1:
+            # The streamer plans the rows of one next call: with overlapping calls a row has no one call to go to.
+            logger.warning(
+                'The session allows %d calls in flight; the frame stream predicts one at a time; requests go in full',
+                session.max_in_flight,
+            )
+            return declared_stack(meta, version), None, self._jpeg_quality
         # The streamer mirrors the declared temporal stack, and transforms each row as the stack transforms its
         # frames. The stack's transforms share one cache with the streamer, so a frame is resized once. A declared
         # encode_images leaves the stack's frames as arrays; the streamer and the request encode them at its quality.

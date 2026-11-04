@@ -2014,6 +2014,17 @@ def test_requests_go_in_full_unless_the_policy_asks_for_a_frame_stream_the_sessi
     assert ('frame stream' in caplog.text) == (frame_stream is not None)
 
 
+def test_a_session_that_allows_several_calls_in_flight_goes_in_full(caplog):
+    policy, session = _mock_remote_policy(_stream_meta(), frame_stream='jpeg')
+    session.protocol_version = protocol.ProtocolVersion.V1
+    session.max_in_flight = 4
+    with caplog.at_level(logging.WARNING, logger='positronic.policy.remote'):
+        stack, streamer, _ = policy._stack_and_streamer(session, True, threading.Lock(), MagicMock())
+    assert streamer is None
+    assert stack is not None
+    assert '4 calls in flight' in caplog.text
+
+
 @pytest.mark.parametrize('frame_stream, cached', [(None, False), ('jpeg', True)], ids=['no-stream', 'a-stream'])
 @pytest.mark.parametrize(
     'resize',
