@@ -91,14 +91,14 @@ class Echo(Policy):
 @pytest.fixture
 def periodic_execution():
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_workers=1)
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
     try:
         yield runtime, now
     finally:
         runtime.close()
 
 
-def _sampled_policy(*, action_fps=50, sample_fps=10, obs_time_key=policy_keys.OBS_TIME_NS, max_in_flight=16):
+def _sampled_policy(*, action_fps=50, sample_fps=10, obs_time_key=policy_keys.OBS_TIME_NS):
     return Sequential(
         TrajectoryPlayer(),
         Periodic(sample_fps, obs_time_key=obs_time_key),
@@ -108,7 +108,6 @@ def _sampled_policy(*, action_fps=50, sample_fps=10, obs_time_key=policy_keys.OB
             merge=TrajectoryMerge.at_observation(),
             latency_estimate=DelayEstimate.max(),
             obs_time_key=obs_time_key,
-            max_in_flight=max_in_flight,
         ),
     )
 
@@ -193,7 +192,7 @@ def test_answer_wakeup_keeps_sampled_plan_without_replaying_replan_signal(period
         run.close()
 
 
-def test_queued_samples_preserve_data_and_deliver_every_trajectory(periodic_execution):
+def test_overlapping_samples_preserve_data_and_deliver_trajectories_in_submission_order(periodic_execution):
     runtime, now = periodic_execution
     started, release = threading.Event(), threading.Event()
     requests = []
@@ -232,6 +231,7 @@ def test_queued_samples_preserve_data_and_deliver_every_trajectory(periodic_exec
             if runtime.has_ready_answers():
                 assert step.resume_at_ns == now[0]
         assert commands == [(0, 0), (2, 2)]
+        requests.sort(key=lambda obs: obs[policy_keys.SAMPLE_INDEX])
         assert [obs['image'][0] for obs in requests] == [0, 1, 2]
         assert [obs['state']['position'][0] for obs in requests] == [0, 1, 2]
         assert [obs[policy_keys.OBS_TIME_NS] for obs in requests] == [0, 100_000_000, 200_000_000]
@@ -367,12 +367,9 @@ def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_
         run.close()
 
 
-@pytest.mark.parametrize('max_in_flight,max_queue_size', [(2, 16), (16, 1)])
-def test_periodic_capacity_skips_samples_and_preserves_recovery_intent(max_in_flight, max_queue_size):
+def test_periodic_capacity_skips_samples_and_preserves_recovery_intent():
     now = [0]
-    runtime = Executor(
-        lambda: now[0], simulated=True, charge_inference_time=False, max_workers=1, max_queue_size=max_queue_size
-    )
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_in_flight=2)
     started, release = threading.Event(), threading.Event()
     calls = []
 
@@ -381,7 +378,7 @@ def test_periodic_capacity_skips_samples_and_preserves_recovery_intent(max_in_fl
         started.set()
         assert release.wait(timeout=2)
 
-    run = runtime.start(_sampled_policy(max_in_flight=max_in_flight), infer)
+    run = runtime.start(_sampled_policy(), infer)
     try:
         run.send({})
         assert started.wait(timeout=1)
@@ -426,7 +423,7 @@ def test_periodic_rejects_unrepresentable_sampling_rates(fps):
 
 
 def test_periodic_stack_spec_round_trip():
-    stack = _sampled_policy(max_in_flight=3)
+    stack = _sampled_policy()
     encoded = json.loads(json.dumps(stack.to_spec()))
     assert spec.from_spec(encoded).to_spec() == encoded
 
@@ -435,7 +432,7 @@ def test_periodic_stack_spec_round_trip():
 def test_schedule_retries_after_another_branch_releases_runtime_capacity(rtc):
     now = [0]
     release = threading.Event()
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_workers=1, max_queue_size=0)
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_in_flight=1)
     occupied = runtime.submit(release.wait, 2)
     schedule = RTCSchedule(10, call_after_sec=0.5, latency_estimate=ConstantDuration()) if rtc else ChunkedSchedule(10)
     calls = []
@@ -454,12 +451,6 @@ def test_schedule_retries_after_another_branch_releases_runtime_capacity(rtc):
         release.set()
         runtime.close()
         run.close()
-
-
-@pytest.mark.parametrize('limit', [0, -1, 1.5, True])
-def test_schedule_rejects_invalid_outstanding_call_limit(limit):
-    with pytest.raises(ValueError, match='max_in_flight'):
-        _sampled_policy(max_in_flight=limit)
 
 
 @pytest.mark.parametrize('wrapper', [TemporalStack((MOTOR,), (0.0,)), EndOnField()])
@@ -569,7 +560,6 @@ def test_call_timings_are_batched_without_loss_when_submission_is_full(execution
         request_timing=RequestTiming.every(0.1),
         merge=TrajectoryMerge.at_observation(),
         latency_estimate=ConstantDuration(),
-        max_in_flight=3,
     )
     run = runtime.start(schedule, Mock())
     try:
@@ -620,7 +610,6 @@ def test_replan_preserves_all_submitted_observations_but_discards_old_prediction
         request_timing=RequestTiming.every(0.1),
         merge=TrajectoryMerge.at_observation(),
         latency_estimate=ConstantDuration(),
-        max_in_flight=3,
     )
     run = runtime.start(schedule, Mock())
     try:

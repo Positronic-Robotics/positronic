@@ -86,6 +86,8 @@ model. It then sends `ready` with a session ID, protocol v3, the pipeline descri
 
 The client may report any additional metadata and owns how it records or combines that information.
 The server checks description structure without importing client components.
+Model/session metadata `max_in_flight` sets the Positronic client runtime’s outstanding-call limit
+and worker count (default one). Completed answers occupy capacity until the client reads them.
 
 All model operations run on one worker thread in the server process: load, preparation, inference,
 session cleanup and model cleanup. Each session retains its own settings and history.

@@ -50,7 +50,7 @@ from positronic.offboard.client import (
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Obs, PolicyEnd, Step
+from positronic.policy.base import Obs, PolicyEnd, QueueFull, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
@@ -1197,6 +1197,51 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
     metadata = {} if declaration is None else {offboard_keys.LOCAL_STACK: declaration}
     policy, session = _mock_remote_policy(metadata)
     with pytest.raises(PolicyCommandError):
+        runtime.start(policy)
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
+@pytest.mark.parametrize('limit', [None, 3, 20])
+def test_session_metadata_controls_runtime_capacity_and_workers(runtime, limit):
+    metadata = dict(CHUNKED_STACK)
+    if limit is not None:
+        metadata[policy_keys.MAX_IN_FLIGHT] = limit
+    policy, _ = _mock_remote_policy(metadata)
+    run = runtime.start(policy)
+    capacity = 1 if limit is None else limit
+    started = [threading.Event() for _ in range(capacity)]
+    release = threading.Event()
+
+    def work(index):
+        started[index].set()
+        assert release.wait(timeout=5)
+
+    try:
+        answers = [runtime.submit(work, index) for index in range(capacity)]
+        assert all(event.wait(timeout=2) for event in started)
+        with pytest.raises(QueueFull):
+            runtime.submit(lambda: None)
+        release.set()
+        completed = 0
+        while completed < capacity:
+            result = runtime.wait(timeout_sec=2)
+            assert result.status is WaitStatus.ANSWERS_READY
+            completed += len(result.completed)
+        with pytest.raises(QueueFull):
+            runtime.submit(lambda: None)
+        answers[0].result()
+        runtime.submit(lambda: None)
+    finally:
+        release.set()
+        runtime.close()
+        run.close()
+
+
+@pytest.mark.parametrize('limit', [None, 0, -1, True, 2.5, '2'])
+def test_invalid_session_capacity_fails_before_inference(runtime, limit):
+    policy, session = _mock_remote_policy({**CHUNKED_STACK, policy_keys.MAX_IN_FLIGHT: limit})
+    with pytest.raises(PolicyCommandError, match='max_in_flight'):
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()

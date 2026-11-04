@@ -441,6 +441,9 @@ class Runtime(ABC):
         self, processor: Processor[InputT, OutputT, ReturnT], /, *args: Any, **kwargs: Any
     ) -> ProcessorRun[InputT, OutputT, ReturnT]: ...
 
+    # Configure before submitting; completed, unread answers still occupy capacity.
+    def set_max_in_flight(self, limit: int) -> None: ...
+
     def submit(
         self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs
     ) -> Answer[T]: ...

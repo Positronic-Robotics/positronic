@@ -622,7 +622,7 @@ class InferenceSchedule(Policy):
     most one call outstanding. Answers are consumed in submission order, one per resumption.
     ``obs_time_key`` selects the observation timestamp in nanoseconds for request eligibility and
     trajectory placement; without that field, the current runtime time is used.
-    ``max_in_flight`` bounds outstanding calls. Samples at capacity are skipped and counted in
+    Runtime capacity bounds outstanding calls. Samples at capacity are skipped and counted in
     episode metadata; recovery intent is retained until a call can carry it.
     Replanning ignores predictions from earlier calls while letting those calls finish.
     Each accepted call carries a per-run ``call_id`` and unreported completions in ``call_timings``.
@@ -639,17 +639,13 @@ class InferenceSchedule(Policy):
         merge: TrajectoryMerge,
         latency_estimate: DurationEstimate,
         obs_time_key: str = policy_keys.OBS_TIME_NS,
-        max_in_flight: int = 1,
     ) -> None:
         check_finite_positive(fps, 'fps')
-        if type(max_in_flight) is not int or max_in_flight < 1:
-            raise ValueError('max_in_flight must be a positive integer')
         self._fps = fps
         self._request_timing = request_timing
         self._merge = merge
         self._latency_estimate = latency_estimate
         self._obs_time_key = obs_time_key
-        self._max_in_flight = max_in_flight
 
     def _call_obs(
         self, obs: Obs, trajectory: Trajectory | None, obs_time_ns: int, *, update: Trajectory | None, replan: bool
@@ -672,7 +668,7 @@ class InferenceSchedule(Policy):
         return OverlayMapping(obs, add={policy_keys.RTC.ACTION_PREFIX: prefix}, remove=(policy_keys.PLAN,))
 
     class _CallQueue:
-        """Bound outstanding calls and carry completed timings into accepted submissions."""
+        """Consume calls in submission order and carry completed timings into accepted submissions."""
 
         @dataclass(frozen=True)
         class _PendingCall:
@@ -680,9 +676,8 @@ class InferenceSchedule(Policy):
             observation_time_ns: int
             call_id: int
 
-        def __init__(self, runtime: Runtime, max_in_flight: int):
+        def __init__(self, runtime: Runtime):
             self._runtime = runtime
-            self._max_in_flight = max_in_flight
             self._pending: deque[InferenceSchedule._CallQueue._PendingCall] = deque()
             self._timings: list[dict[str, int | float]] = []
             self.next_call_id = 0
@@ -691,8 +686,6 @@ class InferenceSchedule(Policy):
             return bool(self._pending)
 
         def submit(self, infer: Callable[[Obs], Sequence[Commands] | None], obs: Obs, observation_time_ns: int) -> None:
-            if len(self._pending) >= self._max_in_flight:
-                raise QueueFull('Inference schedule is at capacity')
             obs = OverlayMapping(
                 obs, add={policy_keys.CALL_ID: self.next_call_id, policy_keys.CALL_TIMINGS: self._timings}
             )
@@ -720,7 +713,7 @@ class InferenceSchedule(Policy):
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
         duration = self._latency_estimate.run()
         timing = self._request_timing.run()
-        calls = self._CallQueue(runtime, self._max_in_flight)
+        calls = self._CallQueue(runtime)
         first_valid_call_id = 0
         previous: Trajectory | None = None
         skipped = 0
@@ -781,7 +774,6 @@ class InferenceSchedule(Policy):
                 'merge': self._merge.to_spec(),
                 'latency_estimate': self._latency_estimate.to_spec(),
                 'obs_time_key': self._obs_time_key,
-                'max_in_flight': self._max_in_flight,
             },
         }
 

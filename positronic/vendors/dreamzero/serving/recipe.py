@@ -85,7 +85,6 @@ def client_stack(
                 'horizon_sec': prediction_period_sec if mode is Mode.CHUNKED else None,
             },
             latency_estimate=0.0,
-            max_in_flight=16,
         ),
         inference(image_mappings, width, height, jpeg_quality),
     )

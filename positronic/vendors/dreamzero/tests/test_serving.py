@@ -11,6 +11,7 @@ from positronic_model_server import serialization
 from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.codecs import Codec
 from positronic.policy.executor import Executor, WaitStatus
@@ -51,6 +52,13 @@ def observation(index):
         GRIP: np.zeros((1, 1), np.float32),
         PROMPT: 'Put banana in bowl.',
     }
+
+
+def test_client_capacity_is_declared_in_model_metadata():
+    model = DreamZeroModel(NativePolicy())
+    assert model.metadata[policy_keys.MAX_IN_FLIGHT] == 16
+    model = DreamZeroModel(NativePolicy(), metadata={policy_keys.MAX_IN_FLIGHT: 24})
+    assert model.metadata[policy_keys.MAX_IN_FLIGHT] == 24
 
 
 def test_history_only_calls_and_selected_frames():

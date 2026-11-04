@@ -363,8 +363,10 @@ checkpoints, start one server for each.
 
 **Python Client:** A Python client (`positronic.offboard.client.InferenceClient`) handles the protocol. The API is in alpha and may change.
 
-Periodic recipes can set `InferenceSchedule(max_in_flight=...)` above its default of one to pipeline
-ordinary calls over the session connection. Replies must arrive in actual send order, including `None`
+Servers can set session metadata `max_in_flight` above its default of one to pipeline ordinary calls.
+This configures the shared client runtime: the limit counts submitted calls until their answers are
+read, and also determines worker count, without an additional waiting queue.
+Replies must arrive in actual send order, including `None`
 and errors; observation timestamps need not arrive in order and are the server's responsibility.
 At capacity, the scheduler skips new samples and records `skipped_samples` in episode
 metadata. A pending `replan_now` survives skipped samples and remains available to the recipe's

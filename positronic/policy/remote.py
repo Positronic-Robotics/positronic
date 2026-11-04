@@ -195,6 +195,7 @@ class RemotePolicy(Policy):
         try:
             try:
                 server_meta = dict(session.metadata)
+                runtime.set_max_in_flight(server_meta.get(policy_keys.MAX_IN_FLIGHT, 1))
                 stack = declared_stack(server_meta, session.protocol_version)
                 client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry

@@ -28,6 +28,7 @@ class _UnchargedAnswer(Answer[T]):
         self._elapsed_ns = 0
         self._execution_ns = 0
         self.result_read = False
+        self.cancel_requested = False
         self.completion_reported = False
         self.call = pool.submit(self._run, function)
 
@@ -67,8 +68,18 @@ class _UnchargedAnswer(Answer[T]):
         return self.call.result()
 
     def cancel(self) -> None:
-        """Cancel queued work; a function already running must finish before its resources can close."""
-        self.call.cancel()
+        """Discard the answer; a function already running must finish before releasing its slot."""
+        self.cancel_requested = True
+        if not self.call.cancel() and self.call.done():
+            self.discard()
+
+    def discard(self) -> None:
+        """Consume a completed answer and report an unread failure."""
+        if self.result_read or self.call.cancelled():
+            return
+        self.result_read = True
+        if (exc := self.call.exception()) is not None:
+            logging.error('A submitted function failed without its result being read: %s', exc)
 
     def _delay_sec(self, until_ns: int) -> float:
         """Wall time still owed before advancing the clock; infinity requires worker completion."""
@@ -119,31 +130,31 @@ class Executor(Runtime):
     until the worker finishes. Submission and result reads belong to the control thread; submitted
     functions must not mutate episode state.
 
-    ``max_queue_size`` bounds waiting work in addition to ``max_workers`` execution slots.
-    ``submit`` raises ``QueueFull`` at capacity. Worker completion or cancellation frees a slot,
-    independently of answer visibility or consumption. Zero allows only the execution slots.
+    ``max_in_flight`` bounds calls until their results are read or cancelled calls finish.
+    The same limit determines worker count; there is no additional admission queue.
+    ``submit`` raises ``QueueFull`` at capacity, including when completed answers remain unread.
     """
 
     def __init__(
-        self,
-        clock: Callable[[], int],
-        *,
-        simulated: bool,
-        charge_inference_time: bool,
-        max_workers: int = 16,
-        max_queue_size: int = 16,
+        self, clock: Callable[[], int], *, simulated: bool, charge_inference_time: bool, max_in_flight: int = 16
     ) -> None:
-        if type(max_queue_size) is not int or max_queue_size < 0:
-            raise ValueError('max_queue_size must be a nonnegative integer')
         self._clock = clock
         self._simulated = simulated
         self._charge_inference_time = charge_inference_time
         self._tick = -1
         self._tick_time_ns: int | None = None
-        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='policy-fn')
-        self._capacity = max_workers + max_queue_size
+        self._pool: ThreadPoolExecutor | None = None
+        self._closed = False
+        self.set_max_in_flight(max_in_flight)
         self._answers: set[_UnchargedAnswer[Any]] = set()
         self._metadata: dict[str, Any] = {}
+
+    def set_max_in_flight(self, limit: int) -> None:
+        if type(limit) is not int or limit < 1:
+            raise ValueError('max_in_flight must be a positive integer')
+        if self._closed or (self._pool is not None and limit != self._max_in_flight):
+            raise RuntimeError('Change max_in_flight before submitting work')
+        self._max_in_flight = limit
 
     def set_metadata(self, name: str, value: Any) -> None:
         self._metadata[name] = deepcopy(value)
@@ -174,7 +185,7 @@ class Executor(Runtime):
         return any(not answer.completion_reported for answer in self._answers)
 
     def has_ready_answers(self) -> bool:
-        return any(not answer.result_read and not answer.call.cancelled() and answer.done() for answer in self._answers)
+        return any(not answer.result_read and not answer.cancel_requested and answer.done() for answer in self._answers)
 
     def take_completed(self) -> tuple[Answer[Any], ...]:
         """Consume each completion once, when its answer becomes visible on the episode clock.
@@ -185,6 +196,8 @@ class Executor(Runtime):
         completed = tuple(answer for answer in self._answers if not answer.completion_reported and answer.done())
         for answer in completed:
             answer.completion_reported = True
+            if answer.cancel_requested:
+                answer.discard()
         self._answers = {
             answer
             for answer in self._answers
@@ -193,8 +206,15 @@ class Executor(Runtime):
         return completed
 
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
-        if sum(not answer.call.done() for answer in self._answers) >= self._capacity:
-            raise QueueFull('Policy execution queue is full')
+        if self._closed:
+            raise RuntimeError('Policy execution is closed')
+        outstanding = sum(
+            not answer.call.done() or not (answer.result_read or answer.cancel_requested) for answer in self._answers
+        )
+        if outstanding >= self._max_in_flight:
+            raise QueueFull('Policy execution is at capacity')
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=self._max_in_flight, thread_name_prefix='policy-fn')
         context = contextvars.copy_context()
 
         def invoke() -> T:
@@ -241,11 +261,9 @@ class Executor(Runtime):
 
     def close(self) -> None:
         """Cancel queued calls, drain running calls, and report failures whose results were never read."""
-        self._pool.shutdown(wait=True, cancel_futures=True)
+        self._closed = True
+        if self._pool is not None:
+            self._pool.shutdown(wait=True, cancel_futures=True)
         for answer in self._answers:
-            if answer.result_read or answer.call.cancelled():
-                continue
-            # rules-allow: swallowed-error — the caller dropped this answer; report its failure during cleanup.
-            if (exc := answer.call.exception()) is not None:
-                logging.error('A submitted function failed without its result being read: %s', exc)
+            answer.discard()
         self._answers.clear()

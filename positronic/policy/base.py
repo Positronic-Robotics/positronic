@@ -143,6 +143,10 @@ class Runtime(ABC):
         return timed
 
     @abstractmethod
+    def set_max_in_flight(self, limit: int) -> None:
+        """Configure shared capacity; changing it requires no submissions yet. Unread answers occupy slots."""
+
+    @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
         """Submit without waiting; raise ``QueueFull`` if the runtime's admission capacity is exhausted."""
 

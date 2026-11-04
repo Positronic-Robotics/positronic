@@ -23,6 +23,7 @@ from .keys import (
     CHECKPOINT_PATH,
     GRIP,
     JOINTS,
+    MAX_IN_FLIGHT,
     MODEL_SOURCE_ENV,
     OBS_TIME_NS,
     PROMPT,
@@ -136,7 +137,7 @@ class DreamZeroModel(Model):
                 'image_mappings': recipe.droid_cameras(),
                 'jpeg_quality': 90,
             },
-            metadata=metadata,
+            metadata={MAX_IN_FLIGHT: 16, **(metadata or {})},
         )
         self._policy = policy
         self._width, self._height = width, height

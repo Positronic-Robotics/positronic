@@ -16,6 +16,7 @@ LLM_TYPE = 'llm'
 ACTION_HORIZON_SEC = 'action_horizon_sec'
 ACTION_FPS = 'action_fps'
 JPEG_QUALITY = 'jpeg_quality'
+MAX_IN_FLIGHT = 'max_in_flight'
 # Metadata understood by the legacy offboard client and server.
 COMPRESS_IMAGES = 'compress_images'
 POSITRONIC_VERSION = 'positronic_version'
