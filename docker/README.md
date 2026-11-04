@@ -43,12 +43,13 @@ docker/build.sh
 ## Policy serving images
 
 Each `Dockerfile.serve-*` recipe builds an inference server image for one public DROID checkpoint. CI
-publishes the five example images to Docker Hub as `positro/*` images:
+publishes each image to Docker Hub as a `positro/*` image:
 
 | Recipe | Image | Model |
 |---|---|---|
 | [`Dockerfile.serve-pi05-droid`](Dockerfile.serve-pi05-droid) | `positro/pi05-droid` | openpi π0.5 DROID |
 | [`Dockerfile.serve-gr00t-n17-droid`](Dockerfile.serve-gr00t-n17-droid) | `positro/gr00t-n17-droid` | GR00T N1.7 DROID |
+| [`Dockerfile.serve-gr00t-n17-droid-rtc`](Dockerfile.serve-gr00t-n17-droid-rtc) | `positro/gr00t-n17-droid-rtc` | GR00T N1.7 DROID with real-time chunking |
 | [`Dockerfile.serve-molmoact2-droid`](Dockerfile.serve-molmoact2-droid) | `positro/molmoact2-droid` | MolmoAct2 DROID |
 | [`Dockerfile.serve-flux3-action`](Dockerfile.serve-flux3-action) | `positro/flux3-action` | FLUX 3 Action DROID |
 | [`Dockerfile.serve-cosmos3-nano`](Dockerfile.serve-cosmos3-nano) | `positro/cosmos3-nano` | Cosmos3-Nano DROID |

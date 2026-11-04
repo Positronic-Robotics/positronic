@@ -3,7 +3,8 @@ Licensed by NVIDIA Corporation under the NVIDIA Open Model License.
 Built on NVIDIA Cosmos.
 
 The image that docker/Dockerfile.serve-gr00t-n17-droid builds contains two models from NVIDIA
-Corporation, at the revisions that the recipe pins:
+Corporation, at the revisions that the recipe pins. docker/Dockerfile.serve-gr00t-n17-droid-rtc
+changes only the start command of that image. The models:
 - nvidia/GR00T-N1.7-DROID, the policy.
 - nvidia/Cosmos-Reason2-2B, its backbone, an NVIDIA Cosmos Model.
 The NVIDIA Open Model License Agreement governs both. The image holds a copy of the agreement at
