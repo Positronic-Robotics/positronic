@@ -255,8 +255,8 @@ class RegistryCredentialFile(BaseModel):
         return SecretStr(password_from_file(self.password_file))
 
 
-def _secret_from_file(secret_file: Path, secret: str) -> str:
-    """The text of the file a caller names, with its last line ending off. `secret` names what it holds.
+def _secret_from_file(secret_file: Path, holds: Literal['password', 'token']) -> str:
+    """The text of the file a caller names, with its last line ending off.
 
     A path that is mistyped, names a directory, or cannot be read raises `ValueError`.
     """
@@ -264,13 +264,13 @@ def _secret_from_file(secret_file: Path, secret: str) -> str:
     try:
         path = secret_file.expanduser()
     except RuntimeError as exc:  # `~name` for a user this machine does not have
-        raise ValueError(f'the {secret} file path names no home directory') from exc
+        raise ValueError(f'the {holds} file path names no home directory') from exc
     try:
         if not path.is_file():
-            raise ValueError(f'the {secret} file path names no file')
+            raise ValueError(f'the {holds} file path names no file')
         held = path.read_text()
     except OSError as exc:
-        raise ValueError(f'the {secret} file cannot be read: {exc.strerror}') from exc
+        raise ValueError(f'the {holds} file cannot be read: {exc.strerror}') from exc
     return held.removesuffix('\n').removesuffix('\r')
 
 
@@ -291,17 +291,12 @@ def credential_from_file(username: str, password_file: Path) -> RegistryCredenti
     return RegistryCredential(username=username, password=SecretStr(password_from_file(password_file)))
 
 
-# The credential an image endpoint carries: a `RegistryCredential` in an `Endpoint`, and a `RegistryCredentialFile` in
-# an `EndpointFile`.
-Credential = TypeVar('Credential', RegistryCredential, RegistryCredentialFile)
-
-
 # An endpoint overrides one cascading property; every other property of `Cascade` is per task.
 _ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
 _PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
 
 
-class _EndpointBase(Cascade, Generic[Credential]):
+class _EndpointBase(Cascade):
     """One policy to run, where it comes from, and the wire a session with it runs over.
 
     * `remote` — the caller provides the server, and `address` carries the fields its `wire` dials.
@@ -333,7 +328,6 @@ class _EndpointBase(Cascade, Generic[Credential]):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
-    image_credential: Credential | None = None
     # The most sessions the platform holds open to a remote policy at once. None leaves the count to the platform.
     max_concurrent_sessions: int | None = Field(default=None, ge=1)
     # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
@@ -397,26 +391,31 @@ class _EndpointBase(Cascade, Generic[Credential]):
     def _a_credential_opens_the_image_this_entry_names(self) -> Self:
         """Refuse a credential on an entry that names no image. A bare label runs a plan endpoint,
         which carries its own credential."""
-        if self.image_credential is not None and self.image is None:
+        if self.states_an_image_credential and self.image is None:
             raise ValueError(
                 f'endpoint {self.name!r} states image_credential and names no image; a credential opens the '
                 'image the entry that states it names'
             )
         return self
 
-    @model_validator(mode='after')
-    def _a_session_limit_bounds_a_remote_address(self) -> Self:
-        if self.max_concurrent_sessions is None:
-            return self
+    def _refuse_off_a_remote_address(self, stated: str, served_reason: str) -> None:
+        """Refuse `stated` on an entry that is not a remote endpoint at an address."""
         if self.kind is not EndpointKind.remote:
             raise ValueError(
-                f'{slug_of(self.kind)} endpoint {self.name!r} states max_concurrent_sessions, which only a remote '
-                'endpoint carries: the platform serves this policy and opens its sessions'
+                f'{slug_of(self.kind)} endpoint {self.name!r} states {stated}, which only a remote endpoint '
+                f'carries: {served_reason}'
             )
         if self.address is None:
             raise ValueError(
-                f'endpoint {self.name!r} states max_concurrent_sessions and names no address: state it on the plan '
-                'endpoint this label names'
+                f'endpoint {self.name!r} states {stated} and names no address: state it on the plan endpoint this '
+                'label names'
+            )
+
+    @model_validator(mode='after')
+    def _a_session_limit_bounds_a_remote_address(self) -> Self:
+        if self.max_concurrent_sessions is not None:
+            self._refuse_off_a_remote_address(
+                'max_concurrent_sessions', 'the platform serves this policy and opens its sessions'
             )
         return self
 
@@ -457,20 +456,14 @@ class _EndpointBase(Cascade, Generic[Credential]):
     def _a_token_opens_a_remote_address(self) -> Self:
         if not self.states_a_token:
             return self
-        if self.kind is not EndpointKind.remote:
+        self._refuse_off_a_remote_address(
+            'a bearer token', "the platform serves this policy and gives it the run's own token"
+        )
+        # The session dial of these wires carries no header of the endpoint, so no bearer token reaches the server.
+        if self.wire is Wire.websocket_unix or self.wire is Wire.modal_websocket_tls:
             raise ValueError(
-                f'{slug_of(self.kind)} endpoint {self.name!r} states a bearer token, which only a remote endpoint '
-                "carries: the platform serves this policy and gives it the run's own token"
-            )
-        if self.address is None:
-            raise ValueError(
-                f'endpoint {self.name!r} states a bearer token and names no address: state it on the plan endpoint '
-                'this label names'
-            )
-        if self.wire is Wire.websocket_unix:
-            raise ValueError(
-                f'endpoint {self.name!r} states a bearer token on the {slug_of(Wire.websocket_unix)} wire, where the '
-                'server takes no token'
+                f'endpoint {self.name!r} states a bearer token on the {slug_of(self.wire)} wire, whose session '
+                'carries no endpoint header'
             )
         return self
 
@@ -482,20 +475,24 @@ class _EndpointBase(Cascade, Generic[Credential]):
 
     @property
     @abstractmethod
+    def states_an_image_credential(self) -> bool:
+        """Whether this entry states the credential that opens its image."""
+
+    @property
+    @abstractmethod
     def states_a_token(self) -> bool:
         """Whether this entry states a bearer token for its endpoint."""
 
 
-# The longest bearer token an endpoint takes.
-MAX_TOKEN_LENGTH = 4096
+MAX_BEARER_TOKEN_LENGTH = 4096
 
 
 def _a_valid_token(token: str) -> str:
-    # No message quotes the token: it is a secret, and a header carries it whole.
+    # No message quotes the token.
     if not token:
         raise ValueError('the bearer token is empty')
-    if len(token) > MAX_TOKEN_LENGTH:
-        raise ValueError(f'the bearer token is longer than {MAX_TOKEN_LENGTH} characters')
+    if len(token) > MAX_BEARER_TOKEN_LENGTH:
+        raise ValueError(f'the bearer token is longer than {MAX_BEARER_TOKEN_LENGTH} characters')
     if not _VISIBLE_ASCII.fullmatch(token):
         raise ValueError('the bearer token holds a space, a line ending or a character outside visible ASCII')
     return token
@@ -510,16 +507,21 @@ def _a_valid_secret_token(token: SecretStr) -> SecretStr:
 EndpointToken = Annotated[SecretStr, AfterValidator(_a_valid_secret_token)]
 
 
-class Endpoint(_EndpointBase[RegistryCredential]):
+class Endpoint(_EndpointBase):
     """An endpoint as a request carries it: a token as its value."""
 
     _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*_EndpointBase._OMITTED_WHEN_NONE, 'auth_token')
 
+    image_credential: RegistryCredential | None = None
     auth_token: EndpointToken | None = None
 
     @field_serializer('auth_token', when_used='json')
     def _dump_token(self, token: SecretStr | None, info: SerializationInfo) -> str | None:
         return None if token is None else _dumped(token, info)
+
+    @property
+    def states_an_image_credential(self) -> bool:
+        return self.image_credential is not None
 
     @property
     def states_a_token(self) -> bool:
@@ -530,13 +532,13 @@ def token_from_file(token_file: Path) -> str:
     """The bearer token a caller states as a path, read from the file it names.
 
     The file's last line ending comes off. A path that is mistyped, names a directory, or cannot be
-    read raises `ValueError`, and so does a token that is empty, longer than `MAX_TOKEN_LENGTH`, or
+    read raises `ValueError`, and so does a token that is empty, longer than `MAX_BEARER_TOKEN_LENGTH`, or
     not all visible ASCII.
     """
     return _a_valid_token(_secret_from_file(token_file, 'token'))
 
 
-class EndpointFile(_EndpointBase[RegistryCredentialFile]):
+class EndpointFile(_EndpointBase):
     """An endpoint as a plan file states it: a token by the file it is in.
 
     A request carries no such model. `plan_with_secrets_read` turns a plan of it into the plan a
@@ -545,12 +547,17 @@ class EndpointFile(_EndpointBase[RegistryCredentialFile]):
 
     _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*_EndpointBase._OMITTED_WHEN_NONE, 'auth_token_file')
 
+    image_credential: RegistryCredentialFile | None = None
     auth_token_file: Path | None = None
 
     @property
     def auth_token(self) -> SecretStr | None:
         """The token the file holds, read on each access."""
         return None if self.auth_token_file is None else SecretStr(token_from_file(self.auth_token_file))
+
+    @property
+    def states_an_image_credential(self) -> bool:
+        return self.image_credential is not None
 
     @property
     def states_a_token(self) -> bool:

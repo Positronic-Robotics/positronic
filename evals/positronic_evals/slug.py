@@ -34,20 +34,20 @@ class _SlugCodec:
         def from_slug(value: str) -> IntEnum:
             return by_slug[value]
 
-        def reject_sentinel(value: IntEnum) -> IntEnum:
+        def member_as_slug(value: object) -> object:
+            if not isinstance(value, enum_cls):
+                return value
             if value.value == 0:
                 raise ValueError(f'{enum_cls.__name__}.{value.name} is an unset sentinel, not a wire value')
-            return value
+            return slug_of(value)
 
         # A literal schema over the slugs both rejects an unknown one and renders as a string enum in
         # the generated OpenAPI, which a plain validator function cannot do.
         parse_slug = core_schema.no_info_after_validator_function(from_slug, core_schema.literal_schema(list(by_slug)))
         return core_schema.json_or_python_schema(
             json_schema=parse_slug,
-            python_schema=core_schema.union_schema([
-                core_schema.no_info_after_validator_function(reject_sentinel, core_schema.is_instance_schema(enum_cls)),
-                parse_slug,
-            ]),
+            # A member takes the slug check too, so a refused value gets one error, and it lists the slugs.
+            python_schema=core_schema.no_info_before_validator_function(member_as_slug, parse_slug),
             serialization=core_schema.plain_serializer_function_ser_schema(
                 slug_of, return_schema=core_schema.str_schema(), when_used='always'
             ),

@@ -137,17 +137,18 @@ tasks and the endpoint kinds it may use. `nebius_competition` names one eval and
 endpoint, and counts against the daily quota. `--org` states a `private_eval` on the command line.
 
 `rig_shape` names the embodiment a plan that states its tasks runs on: `franka`, a single-arm Franka,
-or `yam`, a bimanual YAM. A plan that names none runs on a `franka`. The platform picks the rig of
-that shape. A plan that names an eval runs on the embodiment the eval pins, and it is refused when it
-names a `rig_shape` other than `franka`. The gateway refuses `sim`. The platform runs every task of a
-plan on the rig its `rig_shape` names. Each task in `catalog.tasks` lists the shapes it runs on in
+`yam`, a bimanual YAM, `molmospaces`, the MolmoSpaces simulator, or `robolab`, the RoboLab simulator.
+The client refuses every other name, and the refusal lists these four. A plan that names none runs
+on a `franka`. The platform picks the rig of that shape. A plan that names an eval runs on the
+embodiment the eval pins, and it is refused when it names a `rig_shape` other than `franka`. The
+platform runs every task of a plan on the rig its `rig_shape` names. Each task in `catalog.tasks` lists the shapes it runs on in
 `embodiments`. A plan that states its tasks is refused when its `rig_shape` is not one of a task's
 `embodiments`, and the error names the task and the shapes it accepts. So a plan of two-arm tasks
 states `rig_shape: yam`.
 
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
-rig_shape: franka                        # franka | yam
+rig_shape: franka                        # franka | yam | molmospaces | robolab
 tasks:
   - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
   - task_id: marker-in-mug               # a mapping overrides for that task alone
@@ -323,7 +324,9 @@ is in. The platform presents `Authorization: Bearer <token>` to that endpoint on
 token when the run ends. The token is 1 to 4096 characters of visible ASCII, and the last line
 ending of the file comes off. A plan file never states the token itself. `plan_with_secrets_read`
 reads the file, and the request carries the token as `auth_token`. A `served` or an `image`
-endpoint takes no token, and neither does the `websocket_unix` wire.
+endpoint takes no token, and neither do the `websocket_unix` and `modal_websocket_tls` wires: no session
+on them carries the endpoint's headers. On the `websocket`, `grpc` and `roboarena` wires, which have no TLS, the
+token travels in clear.
 
 ```yaml
 endpoints:

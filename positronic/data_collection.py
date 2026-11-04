@@ -441,7 +441,9 @@ human = cfn.Config(
     webxr=positronic.cfg.webxr.oculus,
     sound=positronic.cfg.sound.sound,
     cameras={
-        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_2i.override(view='left', resolution='hd720', fps=30)
+        keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.sideview_left.override(
+            view='left', resolution='hd720', fps=30
+        )
     },
     operator_position=OperatorPosition.BACK,
 )

@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
@@ -52,8 +53,11 @@ from positronic.policy.processors import (
     ChunkedSchedule,
     ConstantDuration,
     EndOnField,
-    PauseOnUnavailable,
-    TemporalStack,
+    InferenceSchedule,
+    Periodic,
+    RequestTiming,
+    TrajectoryMerge,
+    TrajectoryPlayer,
 )
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
@@ -106,6 +110,7 @@ _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 def _mock_session(metadata=None):
     session = MagicMock()
     session.metadata = metadata or {}
+    session.max_in_flight = 1
     session.infer.return_value = {'action': 'test'}
     return session
 
@@ -350,13 +355,18 @@ class TestNewSessionRetriesRefusedConnects:
 
 
 def _ready(
-    session_id: str, meta: dict | None = None, *, version: protocol.ProtocolVersion = protocol.ProtocolVersion.V2
+    session_id: str,
+    meta: dict | None = None,
+    *,
+    version: protocol.ProtocolVersion = protocol.ProtocolVersion.V2,
+    max_in_flight: int | None = None,
 ) -> bytes:
     return legacy_protocol.serialise({
         protocol.STATUS: protocol.ServerStatus.READY,
         protocol.PROTOCOL_VERSION: version.value,
         protocol.META: meta if meta is not None else {'model_name': 'test'},
         protocol.SESSION_ID: session_id,
+        **({protocol.MAX_IN_FLIGHT: max_in_flight} if max_in_flight is not None else {}),
     })
 
 
@@ -379,9 +389,74 @@ def _observations_sent(conn: MagicMock) -> list:
     ]
 
 
+@pytest.mark.parametrize('version', list(protocol.ProtocolVersion))
+@pytest.mark.parametrize('limit', [None, 1, 20])
+def test_session_reads_capacity_separately_from_metadata(version, limit):
+    conn = _connection(_ready('test', version=version, max_in_flight=limit))
+    session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
+    assert session.max_in_flight == (1 if limit is None else limit)
+    assert protocol.MAX_IN_FLIGHT not in session.metadata
+
+
 class TestADroppedConnectionReconnects:
     """A connection that drops before the server's first answer opens a new session and sends the observation
     again. A new session holds no state, so this is safe only while the dropped one had answered nothing."""
+
+    def test_close_during_reconnect_releases_the_replacement_session(self):
+        reconnecting, finish_reconnect = threading.Event(), threading.Event()
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        replies = iter([_ready('second'), end_ack])
+
+        def recv(timeout=None):
+            reconnecting.set()
+            assert finish_reconnect.wait(3)
+            return next(replies)
+
+        dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+        reopened = _connection()
+        reopened.recv.side_effect = recv
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+        with ThreadPoolExecutor() as pool:
+            answer = pool.submit(session.infer, {'image': 'test'})
+            try:
+                assert reconnecting.wait(3)
+                session.close()
+            finally:
+                finish_reconnect.set()
+            with pytest.raises(RuntimeError, match='session is closing'):
+                answer.result(timeout=3)
+
+        assert _observations_sent(reopened) == []
+        assert legacy_protocol.deserialise(reopened.send.call_args.args[0]) == {
+            protocol.SESSION_ID: 'second',
+            protocol.END_SESSION: True,
+        }
+        reopened.close.assert_called_once()
+
+    def test_late_inference_does_not_interrupt_the_end_session_acknowledgement(self):
+        ending, acknowledge = threading.Event(), threading.Event()
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'first', protocol.END_SESSION: True})
+        conn = _connection(_ready('first'), _answer(None))
+        session = InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
+        session.infer({})
+
+        def recv(timeout=None):
+            ending.set()
+            assert acknowledge.wait(3)
+            conn.close.assert_not_called()
+            return end_ack
+
+        conn.recv.side_effect = recv
+        with ThreadPoolExecutor() as pool:
+            closing = pool.submit(session.close)
+            try:
+                assert ending.wait(3)
+                with pytest.raises(RuntimeError, match='session is closing'):
+                    session.infer({})
+            finally:
+                acknowledge.set()
+            closing.result(timeout=3)
+        conn.close.assert_called_once()
 
     def test_a_drop_before_the_first_answer_sends_the_observation_on_a_new_session(self):
         dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
@@ -435,9 +510,22 @@ class TestADroppedConnectionReconnects:
         reopened = _connection(_ready('second', second_meta, version=version), end_ack)
         session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
 
-        with pytest.raises(wire.PeerDisconnected, match='other metadata'):
+        with pytest.raises(wire.PeerDisconnected, match='other session settings'):
             session.infer({'image': 'test'})
 
+        assert _observations_sent(reopened) == []
+        reopened.close.assert_called_once()
+
+    def test_changed_capacity_refuses_a_reconnect(self):
+        dropped = _connection(_ready('first', max_in_flight=3), wire.PeerDisconnected('dropped'))
+        end_ack = legacy_protocol.serialise({protocol.SESSION_ID: 'second', protocol.END_SESSION: True})
+        reopened = _connection(_ready('second', max_in_flight=2), end_ack)
+        session = InferenceClient(_FakeWire(dropped, reopened), _ADDRESS).new_session()
+
+        with pytest.raises(wire.PeerDisconnected, match='other session settings'):
+            session.infer({'image': 'test'})
+
+        assert session.max_in_flight == 3
         assert _observations_sent(reopened) == []
         reopened.close.assert_called_once()
 
@@ -482,7 +570,7 @@ class TestADroppedConnectionReconnects:
         fake = _FakeWire(_connection(_ready('first'), wire.PeerDisconnected('dropped')), reopened)
         session = InferenceClient(fake, _ADDRESS).new_session()
 
-        with pytest.raises(wire.PeerDisconnected, match='other metadata'):
+        with pytest.raises(wire.PeerDisconnected, match='other session settings'):
             session.infer({'image': 'test'})
 
         assert _observations_sent(reopened) == []
@@ -651,7 +739,9 @@ def served(start_server):
     def start(*, codec=None, local=None, transport='websocket', model=None):
         model = FixedModel() if model is None else model
         pipeline = PolicyDeployment(
-            local if local is not None else Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10, horizon_sec=0.2)),
+            local
+            if local is not None
+            else Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10, horizon_sec=0.2)),
             codec=codec,
         )
         server = start_server(model, pipeline, grpc=transport == 'grpc')
@@ -697,12 +787,11 @@ def test_background_console_sends_remote_policy_rollouts_and_receives_their_resu
 @pytest.mark.parametrize('lead_sec', [0.0, 0.05])
 def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_first, lead_sec):
     resize = TransformImages(8, 8, mode=ResizeMode.BOUND)
-    schedule = ChunkedSchedule(fps=10, horizon_sec=0.2, inference_lead=ConstantDuration(lead_sec))
-    local = (
-        Sequential(resize, PauseOnUnavailable(), schedule)
-        if resize_first
-        else Sequential(PauseOnUnavailable(), schedule, resize)
+    schedule = Sequential(
+        TrajectoryPlayer(replan_on_error=True),
+        ChunkedSchedule(fps=10, horizon_sec=0.2, inference_lead=ConstantDuration(lead_sec)),
     )
+    local = Sequential(resize, schedule) if resize_first else Sequential(schedule, resize)
     address, model, pipeline = served(local=local, transport=transport)
     policy = RemotePolicy(transport, address)
     assert policy.meta() == {policy_keys.TYPE: 'remote'}
@@ -751,6 +840,71 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
         assert episode_meta[policy_keys.SESSION_ID] == model.ended_sessions[-1]
     assert len(set(model.ended_sessions)) == 2
     assert from_spec(pipeline.local.to_spec()).to_spec() == pipeline.local.to_spec()
+
+
+@pytest.mark.parametrize('transport', ['websocket', 'grpc'])
+def test_periodic_jpeg_history_and_prediction_share_one_call(served, transport):
+    class HistoryModel(Model):
+        def __init__(self):
+            self.observations = []
+            self.session_ids = []
+            self.ended_sessions = []
+
+        def __call__(self, obs: Obs, *, session_id: str):
+            self.observations.append(obs)
+            self.session_ids.append(session_id)
+            index = obs[policy_keys.SAMPLE_INDEX]
+            if index == 1:
+                return None
+            return [{'value': index * 10 + i} for i in range(10)]
+
+        def end_session(self, session_id: str) -> None:
+            self.ended_sessions.append(session_id)
+
+    local = Sequential(
+        TrajectoryPlayer(),
+        Periodic(10),
+        InferenceSchedule(
+            50,
+            request_timing=RequestTiming.every(0.1),
+            merge=TrajectoryMerge.at_observation(),
+            latency_estimate=ConstantDuration(0),
+        ),
+    )
+    address, model, _ = served(local=local, model=HistoryModel(), transport=transport)
+    policy = RemotePolicy(transport, address)
+    for episode in range(2):
+        now = [0]
+        runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(policy)
+        try:
+            for index in range(3):
+                now[0] = index * 100_000_000
+                obs = {'image': np.full((16, 16, 3), index * 50, dtype=np.uint8)}
+                first = run.send(obs)
+                assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+                step = run.send(obs)
+                assert isinstance(first, Step) and isinstance(step, Step)
+                commands = [item.commands['value'] for item in (first, step) if item.commands]
+                assert commands == ([0] if index == 0 else [5] if index == 1 else [9, 20])
+                assert step.resume_at_ns == now[0] + 20_000_000
+            observations = model.observations[episode * 3 :]
+            assert [obs[policy_keys.SAMPLE_INDEX] for obs in observations] == [0, 1, 2]
+            assert [obs[policy_keys.OBS_TIME_NS] for obs in observations] == [0, 100_000_000, 200_000_000]
+            assert [obs[policy_keys.CALL_ID] for obs in observations] == [0, 1, 2]
+            assert [obs[policy_keys.CALL_TIMINGS] for obs in observations] == [
+                [],
+                [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}],
+                [{policy_keys.CALL_ID: 1, policy_keys.ELAPSED_SEC: 0.0}],
+            ]
+            for index, obs in enumerate(observations):
+                np.testing.assert_allclose(obs['image'], index * 50, atol=1)
+                assert obs['image'].shape == (16, 16, 3)
+        finally:
+            runtime.close()
+            run.close()
+        assert model.session_ids[-3:] == [model.ended_sessions[-1]] * 3
+    assert len(set(model.ended_sessions)) == 2
 
 
 class DeclaredPromptModel(FixedModel):
@@ -995,12 +1149,13 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
         keys.EXTERIOR_IMAGE: np.full((224, 224, 3), 64, dtype=np.uint8),
         keys.TASK: 'stack',
     }
+    encoded_fields = codec.encode(obs).keys()
     outputs = []
     inputs = []
     for placement in (
         {'codec': codec},
-        {'local': Sequential(PauseOnUnavailable(), ChunkedSchedule(fps=10), codec)},
-        {'local': Sequential(PauseOnUnavailable(), codec, ChunkedSchedule(fps=10))},
+        {'local': Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10), codec)},
+        {'local': Sequential(codec, TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))},
     ):
         address, model, _ = served(model=EchoStateModel(), **placement)
         runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
@@ -1012,22 +1167,30 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
             completed = run.send(obs)
             assert isinstance(completed, Step)
             outputs.append(legacy_protocol.serialise(dict(first.commands) | dict(completed.commands)))
-            inputs.append(legacy_protocol.serialise(model.observations[0]))
+            inputs.append(legacy_protocol.serialise({name: model.observations[0][name] for name in encoded_fields}))
         finally:
             runtime.close()
             run.close()
     assert inputs[0] == inputs[1] == inputs[2]
     assert outputs[0] == outputs[1] == outputs[2]
+    assert model.observations[0][policy_keys.CALL_ID] == 0
+    assert model.observations[0][policy_keys.CALL_TIMINGS] == []
 
 
 def test_pipeline_rejects_frame_conversion_on_both_sides():
-    local = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE)), ChunkedSchedule(fps=10))
+    local = Sequential(
+        ChangeEEFrame(EEFrame(site=GRIPPER_SITE)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
+    )
     with pytest.raises(ValueError, match='Only one side'):
         PolicyDeployment(local, codec=ChangeEEFrame(EEFrame(site=GRIPPER_SITE)))
 
 
 def test_pipeline_takes_frame_conversions_of_different_signals_on_each_side():
-    local = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    local = Sequential(
+        ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)),
+        TrajectoryPlayer(replan_on_error=True),
+        ChunkedSchedule(fps=10),
+    )
     PolicyDeployment(local, codec=ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.TARGET_EE_POSE,)))
 
 
@@ -1062,34 +1225,59 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
     session.close.assert_called_once()
 
 
-def test_stack_failure_finishes_active_inference_before_closing_session(runtime):
-    started, release = threading.Event(), threading.Event()
-    order = []
-    stack = Sequential(TemporalStack(('image',), (0.0,)), ChunkedSchedule(fps=10))
-    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
+@pytest.mark.parametrize('capacity', [1, 3, 20])
+def test_session_controls_its_own_capacity_and_workers(runtime, capacity):
+    schedule = InferenceSchedule(
+        10,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+    )
+    metadata = {offboard_keys.LOCAL_STACK: schedule.to_spec()}
+    policy, session = _mock_remote_policy(metadata)
+    session.protocol_version = protocol.ProtocolVersion.V3
+    session.max_in_flight = capacity
+    started = [threading.Event() for _ in range(capacity)]
+    release = threading.Event()
 
     def infer(obs):
-        started.set()
-        assert release.wait(5), 'inference was not released'
-        order.append('inference finished')
-        return [{}]
+        started[obs[policy_keys.CALL_ID]].set()
+        assert release.wait(timeout=5)
 
     session.infer.side_effect = infer
-    session.close.side_effect = lambda: order.append('session closed')
+    occupied = runtime.submit(release.wait, 5)
     run = runtime.start(policy)
-    releaser = threading.Timer(0.05, release.set)
     try:
-        run.send({'image': _make_image(8, 8)})
-        assert started.wait(5)
-        releaser.start()
-        with pytest.raises(PolicyCommandError, match='image'):
-            run.send({})
+        for index in range(capacity):
+            run.send({policy_keys.OBS_TIME_NS: index * 100_000_000})
+        assert all(event.wait(timeout=2) for event in started)
+        run.send({policy_keys.OBS_TIME_NS: capacity * 100_000_000})
+        assert runtime.metadata_snapshot()[policy_keys.SKIPPED_SAMPLES] == 1
+        assert session.infer.call_count == capacity
+        release.set()
+        completed = 0
+        while completed < capacity + 1:
+            result = runtime.wait(timeout_sec=2)
+            assert result.status is WaitStatus.ANSWERS_READY
+            completed += len(result.completed)
+        occupied.result()
+        while runtime.has_ready_answers():
+            run.send({policy_keys.OBS_TIME_NS: capacity * 100_000_000})
     finally:
         release.set()
-        releaser.cancel()
         runtime.close()
         run.close()
-    assert order == ['inference finished', 'session closed']
+
+
+@pytest.mark.parametrize('limit', [None, 0, -1, True, 2.5, '2'])
+def test_invalid_session_capacity_refuses_the_handshake(limit):
+    ready = legacy_protocol.deserialise(_ready('test'))
+    ready[protocol.MAX_IN_FLIGHT] = limit
+    conn = _connection(legacy_protocol.serialise(ready))
+    with pytest.raises(ValueError, match='max_in_flight'):
+        InferenceClient(_FakeWire(conn), _ADDRESS).new_session()
+    conn.send.assert_not_called()
+    conn.close.assert_called_once()
 
 
 def test_a_failed_session_close_reaches_the_caller(runtime):
@@ -1243,7 +1431,7 @@ def test_a_run_records_the_frames_the_server_codec_states(runtime):
 def test_a_run_records_the_frames_both_sides_of_a_split_deployment_state(served, runtime):
     local = Sequential(
         ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)),
-        PauseOnUnavailable(),
+        TrajectoryPlayer(replan_on_error=True),
         ChunkedSchedule(fps=10, horizon_sec=0.2),
     )
     codec = ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.TARGET_EE_POSE,))
@@ -1255,7 +1443,7 @@ def test_a_run_records_the_frames_both_sides_of_a_split_deployment_state(served,
 def test_a_server_built_for_the_franka_hand_frame_states_its_poses_at_the_franka_hand_point(served, runtime):
     local = Sequential(
         ChangeEEFrame(cfg_codecs.franka_hand_frame.instantiate()),
-        PauseOnUnavailable(),
+        TrajectoryPlayer(replan_on_error=True),
         ChunkedSchedule(fps=10, horizon_sec=0.2),
     )
     address, _, _ = served(local=local)
@@ -1323,7 +1511,11 @@ def test_a_frame_codec_around_a_server_that_states_none_states_the_frames_for_it
 @pytest.mark.parametrize('side', ['client_stack', 'server_meta'])
 def test_a_remote_server_that_states_its_frames_gets_the_pose_on_one_session(side):
     if side == 'client_stack':
-        stack = Sequential(ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+        stack = Sequential(
+            ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)),
+            TrajectoryPlayer(replan_on_error=True),
+            ChunkedSchedule(fps=10),
+        )
         metadata = {offboard_keys.LOCAL_STACK: stack.to_spec()}
     else:
         metadata = {**CHUNKED_STACK, **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})}
@@ -1359,7 +1551,9 @@ def test_a_remote_server_that_states_another_site_is_refused_before_it_gets_an_o
 
 def test_a_remote_server_that_states_two_frames_for_one_pose_is_refused_before_it_gets_an_observation():
     offset = EEFrame(site=GRIPPER_SITE, offset=Transform3D(np.array([0.0, 0.0, 0.1])))
-    stack = Sequential(ChangeEEFrame(offset, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    stack = Sequential(
+        ChangeEEFrame(offset, keys=(keys.EE_POSE,)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
+    )
     metadata = {
         offboard_keys.LOCAL_STACK: stack.to_spec(),
         **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}),
@@ -1375,7 +1569,9 @@ def test_a_remote_server_that_states_two_frames_for_one_pose_is_refused_before_i
 
 def test_a_remote_server_that_repeats_its_client_stack_frame_in_its_metadata_runs(runtime):
     frame = cfg_codecs.droid_frame.instantiate()
-    stack = Sequential(ChangeEEFrame(frame, keys=(keys.EE_POSE,)), ChunkedSchedule(fps=10))
+    stack = Sequential(
+        ChangeEEFrame(frame, keys=(keys.EE_POSE,)), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)
+    )
     policy, session = _mock_remote_policy({
         offboard_keys.LOCAL_STACK: stack.to_spec(),
         **ee_frames_entry({keys.EE_POSE: frame}),
@@ -1448,7 +1644,11 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'cartesian_pos', 'pose': pose}}], {})
-    server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    server = start_server(
+        model,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        grpc=transport == 'grpc',
+    )
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'remote-stack'):
         run = runtime.start(RemotePolicy(transport, address))
@@ -1469,7 +1669,9 @@ def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_
     for parent_name in (
         telemetry_keys.SPAN_POLICY_INFER,
         telemetry_keys.SPAN_POLICY_SUBMIT,
-        'chunked_schedule',
+        'inference_schedule',
+        'trajectory_player',
+        'sequential',
         'remote_policy',
     ):
         assert span.parent_id is not None
@@ -1483,7 +1685,11 @@ def test_a_legacy_command_mapping_with_no_positions_fails_as_a_policy_command_er
     start_server, make_mock_model, runtime, transport
 ):
     model = make_mock_model([{keys.ROBOT_COMMAND: {'type': 'joint_pos'}}], {})
-    server = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)), grpc=transport == 'grpc')
+    server = start_server(
+        model,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        grpc=transport == 'grpc',
+    )
     address = server.ws()[1] if transport == 'websocket' else server.grpc()[1]
     run = runtime.start(RemotePolicy(transport, address))
     try:
@@ -1661,11 +1867,16 @@ def test_an_end_command_in_the_codec_ends_the_client_run_when_its_element_plays(
         placement = {
             'codec': codec,
             'local': Sequential(
-                EndOnField(), ChunkedSchedule(fps=10), TransformImages(640, 640, mode=ResizeMode.BOUND)
+                EndOnField(),
+                TrajectoryPlayer(replan_on_error=True),
+                ChunkedSchedule(fps=10),
+                TransformImages(640, 640, mode=ResizeMode.BOUND),
             ),
         }
     else:  # dreamzero: the action codec sits in the client stack, inside the schedule
-        placement = {'local': Sequential(EndOnField(), ChunkedSchedule(fps=10), codec)}
+        placement = {
+            'local': Sequential(EndOnField(), TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10), codec)
+        }
     address, _, _ = served(model=_EndingModel(), transport=transport, **placement)
     now = [0]
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)

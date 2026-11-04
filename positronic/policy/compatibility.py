@@ -13,9 +13,10 @@ from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION, component, se
 from positronic import keys as obs_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
 from positronic.dataset.transforms.image import Resample, ResizeMode
+from positronic.drivers.roboarm import RobotStatus
 from positronic.policy import keys as policy_keys
 from positronic.policy import training
-from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime
+from positronic.policy.base import Obs, Policy, PolicyRun, Processor, ProcessorRun, Runtime, Step
 from positronic.policy.codecs import (
     TASK_FIELD,
     Codec,
@@ -26,10 +27,54 @@ from positronic.policy.codecs import (
 )
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.keys import ACTION_FPS
-from positronic.policy.processors import ChunkedSchedule, PauseOnUnavailable, RTCSchedule, TemporalStack
+from positronic.policy.processors import (
+    ChunkedSchedule,
+    ConstantDuration,
+    DurationEstimate,
+    RTCSchedule,
+    TemporalStack,
+    TrajectoryPlayer,
+)
 from positronic.policy.sequential import Sequential
+from positronic.utils.lazy import OverlayMapping
+
+
+class PauseOnUnavailable(Policy):
+    """Withhold commands and inner calls while any arm is unavailable, retaining pending work.
+
+    TODO: Remove this processor and its registry entry when legacy ``stop_on_fault`` specs are retired.
+    """
+
+    WIRE_NAME = 'stop_on_fault'
+    WIRE_VERSION = 2
+    MILLISECOND_NS = 10**6
+
+    @staticmethod
+    def _arms_available(obs: Obs) -> bool:
+        return all(
+            RobotStatus(value) is RobotStatus.AVAILABLE
+            for name, value in obs.items()
+            if name.startswith(f'{obs_keys.ROBOT_STATE}.') and name.endswith(obs_keys.STATUS_SUFFIX)
+        )
+
+    def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
+        obs = yield
+        while True:
+            if self._arms_available(obs):
+                try:
+                    step = inner.send(obs)
+                except StopIteration as end:
+                    return end.value
+                obs = yield step
+            else:
+                obs = yield Step({}, runtime.time_ns + self.MILLISECOND_NS)
+
+    def to_spec(self) -> dict[str, Any]:
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
+
 
 TIMESTAMP = 'timestamp'
+CHUNKED_SCHEDULE = 'chunked_schedule'
 WALL_TIME_NS = 'wall_time_ns'
 ACTION_TIMESTAMP = 'action_timestamp'
 ACTION_HORIZON = 'action_horizon'
@@ -151,22 +196,78 @@ class ObservationCodecV1(Codec):
         }
 
 
+def chunked_schedule_v3(
+    fps: float,
+    horizon_sec: float | None = None,
+    record_stats: bool = True,
+    inference_lead: float | dict[str, Any] = 0.0,
+    replan_on_error: bool = True,
+) -> dict[str, Any]:
+    """Translate the combined scheduler and player into separate components."""
+    return sequence(
+        component(TrajectoryPlayer.WIRE_NAME, version=1, record_stats=record_stats, replan_on_error=replan_on_error),
+        ChunkedSchedule(fps, horizon_sec, DurationEstimate.from_spec(inference_lead)).to_spec(),
+    )
+
+
 def chunked_schedule_v2(
     fps: float,
     horizon_sec: float | None = None,
     record_stats: bool = True,
     inference_lead: float | dict[str, Any] = 0.0,
 ) -> dict[str, Any]:
-    """Translate the scheduler that keeps its pending chunk after an execution error."""
-    return component(
-        ChunkedSchedule.WIRE_NAME,
-        version=3,
-        fps=fps,
-        horizon_sec=horizon_sec,
-        record_stats=record_stats,
-        inference_lead=inference_lead,
-        replan_on_error=False,
-    )
+    """Translate the scheduler that keeps its pending commands after an execution error."""
+    return chunked_schedule_v3(fps, horizon_sec, record_stats, inference_lead, replan_on_error=False)
+
+
+class RTCScheduleV1(Policy):
+    """Play RTC predictions and supply the latency fields expected by published v1 recipes."""
+
+    WIRE_NAME = 'rtc_schedule'
+    WIRE_VERSION = 1
+    ESTIMATED_LATENCY_SEC = 'estimated_latency_sec'
+    MEASURED_LATENCY_SEC = 'measured_latency_sec'
+
+    def __init__(self, fps: float, call_after_sec: float, latency_estimate: float | dict[str, Any]):
+        self._fps = fps
+        self._call_after_sec = call_after_sec
+        self._latency_estimate = DurationEstimate.from_spec(latency_estimate)
+        self._schedule = Sequential(
+            TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False, replan_on_error=False),
+            RTCSchedule(fps, call_after_sec, ConstantDuration()),
+        )
+
+    def run(self, runtime: Runtime, infer: Callable[[Obs], Any]) -> PolicyRun:
+        duration = self._latency_estimate.run()
+        measured: float | None = None
+        estimated = 0.0
+
+        def infer_v1(obs: Obs) -> Any:
+            nonlocal measured, estimated
+            for timing in obs[policy_keys.CALL_TIMINGS]:
+                estimated = duration.update(timing[policy_keys.ELAPSED_SEC])
+                measured = timing[policy_keys.ELAPSED_SEC]
+            return infer(
+                OverlayMapping(
+                    obs,
+                    add={self.MEASURED_LATENCY_SEC: measured, self.ESTIMATED_LATENCY_SEC: estimated},
+                    remove=(policy_keys.CALL_ID, policy_keys.CALL_TIMINGS),
+                )
+            )
+
+        return (yield from self._schedule.run(runtime, infer_v1))
+
+    def meta(self) -> dict[str, Any]:
+        return self._schedule.meta()
+
+    def to_spec(self) -> dict[str, Any]:
+        return component(
+            self.WIRE_NAME,
+            version=self.WIRE_VERSION,
+            fps=self._fps,
+            call_after_sec=self._call_after_sec,
+            latency_estimate=self._latency_estimate.to_spec(),
+        )
 
 
 class StampObservationTimes(Policy):
@@ -218,7 +319,7 @@ class ChunkFromV1Answer(Codec):
 
 def _unnest_seq(node: dict[str, Any]) -> list[dict[str, Any]]:
     if SEQ in node:
-        return [part for child in node[SEQ] for part in _unnest_seq(child)]
+        return [part for entry in node[SEQ] for part in _unnest_seq(entry)]
     return [node]
 
 
@@ -233,7 +334,7 @@ def from_v1_spec(
     timing: dict[str, float] = {}
     parts: list[dict[str, Any]] = []
     for part in _unnest_seq(node):
-        if part.get(NAME) == RTCSchedule.WIRE_NAME:
+        if part.get(NAME) == RTCScheduleV1.WIRE_NAME:
             raise ValueError('Protocol v1 adds its own chunked schedule; serve rtc_schedule over protocol v2 or later')
         if _is_v1(part, ACTION_TIMESTAMP):
             timing[ChunkedSchedule.FPS_ARG] = part[ARGS][V1_FPS_ARG]
@@ -254,8 +355,8 @@ def from_v1_spec(
     if ChunkedSchedule.HORIZON_SEC_ARG not in timing and server_meta.get(policy_keys.ACTION_HORIZON_SEC) is not None:
         timing[ChunkedSchedule.HORIZON_SEC_ARG] = server_meta[policy_keys.ACTION_HORIZON_SEC]
 
-    schedule = {NAME: ChunkedSchedule.WIRE_NAME, VERSION: 2, ARGS: timing}
-    positions = [i for i, part in enumerate(parts) if _is_v1(part, ChunkedSchedule.WIRE_NAME)]
+    schedule = {NAME: CHUNKED_SCHEDULE, VERSION: 2, ARGS: timing}
+    positions = [i for i, part in enumerate(parts) if _is_v1(part, CHUNKED_SCHEDULE)]
     if positions:
         parts[positions[0]] = schedule
     else:

@@ -235,9 +235,15 @@ services:
     working_dir: /positronic
 
   dreamzero-server:
-    <<: *dreamzero-common
+    image: positro/dreamzero-droid:${IMAGE_TAG:-latest}
     container_name: dreamzero-server
-    entrypoint: ["uv", "run", "--python", "3.13", "--extra", "dreamzero", "python", "-m", "positronic.vendors.dreamzero.server"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [compute, utility]
     ports:
       - "8000:8000"
     shm_size: 16g

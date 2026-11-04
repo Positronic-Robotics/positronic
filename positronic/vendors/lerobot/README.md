@@ -124,6 +124,9 @@ dotted paths into the pipeline config with JSON-literal values (e.g. `?fps=10`).
 (`--model.checkpoints_dir`, `--model.checkpoint`, `--model.device`) is fixed at launch and cannot be changed per session. See the
 [offboard README](../../offboard/README.md) for the full syntax and error behavior.
 
+**Overlapping sessions:** The server serves several sessions at the same time, one inference at a time. Each
+session keeps its own action queue and processor state, and all sessions use one copy of the weights.
+
 ## See Also
 
 **Positronic Documentation:**

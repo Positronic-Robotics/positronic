@@ -218,7 +218,9 @@ What the platform does with the credential:
    deadline of 1800 s from the start of the VM. A miss there is the platform's fault. Your
    server's start has its own deadline of 1800 s, from the end of the pull to the first
    answer. A 25 GB image takes about 10 minutes to pull.
-6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token.
+6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token. A
+   competition run plays up to 12 episodes at the same time, so up to 12 sessions are open at the same
+   time. The server must answer all of them, with one state for each session.
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `1g.24gb` slice of an RTX PRO 6000: 24192 MiB of VRAM and a quarter of the card's

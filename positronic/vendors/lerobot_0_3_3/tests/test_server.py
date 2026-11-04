@@ -12,7 +12,8 @@ from positronic.offboard.protocol import deserialise
 from positronic.offboard.spec import PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs.observation import TASK_FIELD
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.sequential import Sequential
 
 torch = pytest.importorskip('torch')
 pytest.importorskip('lerobot')
@@ -82,7 +83,9 @@ def _make_server(monkeypatch, checkpoint: str | None) -> tuple[PolicyServer, Mag
     monkeypatch.setattr(lerobot_server, 'warmup', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(lerobot_server.ACTPolicy, 'from_pretrained', lambda *_args, **_kwargs: MagicMock())
     model_cfg = lerobot_server.act_model.override(checkpoints_dir='s3://bucket/exp', checkpoint=checkpoint)
-    return PolicyServer(model_cfg, PolicyDeployment(local=ChunkedSchedule(fps=15))), build
+    return PolicyServer(
+        model_cfg, PolicyDeployment(local=Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=15)))
+    ), build
 
 
 @pytest.mark.asyncio

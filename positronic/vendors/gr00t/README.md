@@ -190,8 +190,9 @@ Use `droid_rtc` to predict the next chunk while the client executes the current 
 docker compose run --rm --service-ports groot-server droid_rtc
 ```
 
-The client sends its remaining planned joints and grip, time offsets and inference latency.
-GR00T uses the latency estimate to select frozen steps and its session settings to choose the blend overlap.
+The client sends its remaining planned joints and grip, time offsets and completed call timings.
+GR00T estimates latency as the maximum of the last five calls in the session to select frozen steps,
+and uses its session settings to choose the blend overlap.
 The DROID checkpoint also requires end-effector poses. Each session caches those predictions,
 avoiding client-side pose reconstruction. Cached poses need not exactly match modified joint targets.
 See the [RTC design rationale](../../offboard/README.md#real-time-chunking) for the division of responsibilities.
@@ -199,7 +200,7 @@ Native checkpoint transforms prepare the overlap for inference. Both inference p
 
 The preset starts a new prediction every **0.5 seconds**, with **0.5 seconds** of blend overlap.
 Set `--pipeline.rtc.call_after_sec` and `--pipeline.rtc.blend_sec` to change these durations.
-`--pipeline.rtc.max_delay_sec` caps the client's latency estimate; `--pipeline.rtc.ramp_rate` controls native blending.
+`--pipeline.rtc.max_delay_sec` caps the server's latency estimate; `--pipeline.rtc.ramp_rate` controls native blending.
 RTC requires `horizon_sec=None`. A session can override `rtc` or disable it with `rtc=null`.
 An ordinary `droid` launch cannot enable RTC through a session request because its RTC path is not warmed.
 

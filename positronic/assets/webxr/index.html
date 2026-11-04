@@ -20,9 +20,8 @@
     </header>
     <script type="module">
         import { WebXRVideoPlayer } from './video-player.js';
-        import { initWebSocket, startXRApp } from '/core.js';
+        import { startXRApp } from '/core.js';
 
-        let websocket = null;
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
 
@@ -120,8 +119,7 @@
         }
 
         // Start the XR application and WebSocket connection using shared core
-        websocket = initWebSocket();
-        startXRApp({ websocket, onInit, onFrame });
+        startXRApp({ onInit, onFrame });
       </script>
   </body>
 </html>

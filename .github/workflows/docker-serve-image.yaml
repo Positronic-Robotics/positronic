@@ -1,6 +1,6 @@
 name: Build a Serving Image
 
-# Builds positro/<name> from docker/Dockerfile.serve-<name> and pushes it with `main`, the commit and `latest`; on a
+# Builds positro/<name> through docker/Makefile and pushes it with `main`, the commit and `latest`; on a
 # release, with `v<version>` and the commit.
 on:
   workflow_call:

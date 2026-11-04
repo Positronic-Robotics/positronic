@@ -36,8 +36,8 @@ See upstream [`DroidLerobotDataset._slice_meta_feature`](https://github.com/Open
 
 Galaxea's processor performs image resizing, state normalization, and action
 denormalization. The server returns full chunks with decoded joint and gripper
-commands. The client `ChunkedSchedule` executes up to `execution_steps` actions
-(default 16), at `codec.fps` (default 15 Hz), before requesting another chunk.
+commands. The client `ChunkedSchedule` schedules up to `execution_steps` actions
+(default 16), played by `TrajectoryPlayer` at `codec.fps` (default 15 Hz), before requesting another chunk.
 That same frequency is sent to the model as an observation field. Short chunks
 execute completely. The backend has no per-episode action cache; each server
 session owns and closes its backend connection.

@@ -1,6 +1,8 @@
 """The Positronic client selects v3 without interpreting native results as robot commands."""
 
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import partial
 
@@ -15,10 +17,22 @@ from positronic.drivers.roboarm import command
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import EncodeImages, PolicyCommandError
+from positronic.policy.codecs import Codec, EncodeImages, PolicyCommandError
+from positronic.policy.compatibility import RTCScheduleV1
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
+from positronic.policy.processors import (
+    ConstantDuration,
+    InferenceSchedule,
+    Periodic,
+    RequestTiming,
+    RTCSchedule,
+    TemporalStack,
+    TrajectoryMerge,
+    TrajectoryPlayer,
+)
 from positronic.policy.remote import RemotePolicy
+from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 from positronic.utils import flatten_dict
 from positronic.utils.versions import resolve_version
@@ -78,6 +92,252 @@ def test_v3_client_preserves_native_markers_in_metadata_and_results(serving):
             np.testing.assert_array_equal(result['array'], native['array'])
         finally:
             session.close()
+
+
+@pytest.fixture
+def watch_sends(monkeypatch):
+    def watch(session):
+        sent = threading.Semaphore(0)
+        send = session._conn.send
+
+        def send_and_notify(data):
+            send(data)
+            sent.release()
+
+        monkeypatch.setattr(session._conn, 'send', send_and_notify)
+        return sent
+
+    return watch
+
+
+def test_calls_pipeline_while_model_execution_and_replies_stay_ordered(serving, watch_sends):
+    release = threading.Event()
+    observed = []
+
+    class PipelineSession(Session):
+        def infer(self, observation):
+            index = observation['index']
+            observed.append(index)
+            if index == 1:
+                assert release.wait(5)
+                return None
+            if index == 2:
+                raise ValueError('Rejected sample')
+            return index
+
+    class PipelineModel(Model):
+        def prepare_session(self, params):
+            return PipelineSession(spec.component('chunked_schedule', version=2, fps=10))
+
+    with serving(PipelineModel) as endpoint:
+        session = InferenceClient(*endpoint, infer_timeout=5).new_session()
+        assert session.infer({'index': 0}) == 0
+        sent = watch_sends(session)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            try:
+                answers = []
+                for index in (1, 2, 3):
+                    answers.append(pool.submit(session.infer, {'index': index}))
+                    assert sent.acquire(timeout=2), 'A send waited for an earlier prediction'
+                assert not any(answer.done() for answer in answers)
+                release.set()
+                assert answers[0].result(timeout=5) is None
+                with pytest.raises(RuntimeError, match='Rejected sample'):
+                    answers[1].result(timeout=5)
+                assert answers[2].result(timeout=5) == 3
+                assert observed == [0, 1, 2, 3]
+            finally:
+                release.set()
+        session.close()
+
+
+def test_pipeline_timeout_fails_unanswered_calls_and_closes_session(serving, watch_sends):
+    release = threading.Event()
+
+    class StalledSession(Session):
+        def infer(self, observation):
+            if observation['index']:
+                assert release.wait(5)
+            return observation['index']
+
+    class StalledModel(Model):
+        def prepare_session(self, params):
+            return StalledSession(spec.component('chunked_schedule', version=2, fps=10))
+
+    with serving(StalledModel) as endpoint:
+        session = InferenceClient(*endpoint, infer_timeout=0.5).new_session()
+        assert session.infer({'index': 0}) == 0
+        sent = watch_sends(session)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                answers = []
+                for index in (1, 2):
+                    answers.append(pool.submit(session.infer, {'index': index}))
+                    assert sent.acquire(timeout=2)
+                for answer in answers:
+                    with pytest.raises((TimeoutError, wire.PeerDisconnected)):
+                        answer.result(timeout=3)
+                with pytest.raises(wire.PeerDisconnected):
+                    session.infer({'index': 3})
+            finally:
+                release.set()
+        session.close()
+
+
+def test_a_call_rejected_during_close_does_not_abort_an_outstanding_reply(serving):
+    started, release = threading.Event(), threading.Event()
+
+    class BlockingSession(Session):
+        def infer(self, observation):
+            if observation['index'] == 1:
+                started.set()
+                assert release.wait(5)
+            return observation['index']
+
+    class BlockingModel(Model):
+        def prepare_session(self, params):
+            return BlockingSession(spec.component('chunked_schedule', version=2, fps=10))
+
+    with serving(BlockingModel) as endpoint:
+        session = InferenceClient(*endpoint, infer_timeout=5).new_session()
+        assert session.infer({'index': 0}) == 0
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                answer = pool.submit(session.infer, {'index': 1})
+                assert started.wait(3)
+                closing = pool.submit(session.close)
+                deadline = time.monotonic() + 3
+                while not session._closing and time.monotonic() < deadline:
+                    time.sleep(0.001)
+                with pytest.raises(RuntimeError, match='session is closing'):
+                    session.infer({'index': 2})
+                release.set()
+                assert answer.result(timeout=3) == 1
+                closing.result(timeout=3)
+            finally:
+                release.set()
+        session.close()
+
+
+def test_remote_calls_match_responses_when_encoding_reorders_observations(serving, monkeypatch):
+    encoding, release = threading.Event(), threading.Event()
+    encoded, observed = [], []
+
+    class SlowCodec(Codec):
+        def encode(self, data):
+            if data['index'] == 1:
+                encoding.set()
+                assert release.wait(5)
+            encoded.append(data['index'])
+            return data
+
+        def _decode_single(self, data):
+            return data
+
+    stack = Sequential(
+        TrajectoryPlayer(),
+        Periodic(10),
+        InferenceSchedule(
+            1,
+            request_timing=RequestTiming.every(0.1),
+            merge=TrajectoryMerge.at_observation(),
+            latency_estimate=ConstantDuration(),
+        ),
+        SlowCodec(),
+        from_spec(
+            spec.component(
+                'pack_fields',
+                encode_layout={
+                    name: [name]
+                    for name in ('index', policy_keys.REPLAN_NOW, policy_keys.CALL_ID, policy_keys.CALL_TIMINGS)
+                },
+            )
+        ),
+    )
+
+    class ObservingSession(Session):
+        def infer(self, observation):
+            observed.append(observation)
+            return [{'value': observation['index']}]
+
+    class ObservingModel(Model):
+        def prepare_session(self, params):
+            return ObservingSession(spec.component('chunked_schedule', version=2, fps=10), max_in_flight=3)
+
+    monkeypatch.setattr('positronic.policy.remote.declared_stack', lambda *_: stack)
+    now = [0]
+    with serving(ObservingModel) as (client, address):
+        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(client.NAME, address))
+        try:
+            run.send({'index': 0, policy_keys.REPLAN_NOW: False})
+            assert runtime.wait(timeout_sec=3).status is WaitStatus.ANSWERS_READY
+            run.send({'index': 0, policy_keys.REPLAN_NOW: False})
+            now[0] = 100_000_000
+            run.send({'index': 1, policy_keys.REPLAN_NOW: True})
+            assert encoding.wait(3)
+            now[0] = 200_000_000
+            run.send({'index': 2, policy_keys.REPLAN_NOW: False})
+            assert runtime.wait(timeout_sec=3).status is WaitStatus.ANSWERS_READY
+            assert observed[-1]['index'] == 2
+            release.set()
+            assert runtime.wait(timeout_sec=3).status is WaitStatus.ANSWERS_READY
+            for value in (1, 2):
+                step = run.send({'index': 2})
+                assert step is not None and step.commands == {'value': value}
+            assert encoded == [0, 2, 1]
+            assert observed == [
+                {'index': 0, policy_keys.REPLAN_NOW: False, policy_keys.CALL_ID: 0, policy_keys.CALL_TIMINGS: []},
+                {'index': 2, policy_keys.REPLAN_NOW: False, policy_keys.CALL_ID: 2, policy_keys.CALL_TIMINGS: []},
+                {
+                    'index': 1,
+                    policy_keys.REPLAN_NOW: True,
+                    policy_keys.CALL_ID: 1,
+                    policy_keys.CALL_TIMINGS: [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}],
+                },
+            ]
+        finally:
+            release.set()
+            runtime.close()
+            run.close()
+
+
+def test_stack_failure_drains_sent_inference_before_closing_session(serving):
+    started, release = threading.Event(), threading.Event()
+    order = []
+    stack = spec.sequence(
+        TemporalStack(('image',), (0.0,)).to_spec(), spec.component('chunked_schedule', version=2, fps=10)
+    )
+
+    class BlockingSession(Session):
+        def infer(self, observation):
+            started.set()
+            assert release.wait(5)
+            order.append('inference finished')
+
+        def close(self):
+            order.append('session closed')
+
+    class BlockingModel(Model):
+        def prepare_session(self, params):
+            return BlockingSession(stack)
+
+    with serving(BlockingModel) as (client, address):
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(client.NAME, address))
+        releaser = threading.Timer(0.05, release.set)
+        try:
+            run.send({'image': np.zeros((8, 8, 3), dtype=np.uint8)})
+            assert started.wait(5)
+            releaser.start()
+            with pytest.raises(PolicyCommandError, match='image'):
+                run.send({})
+            assert order == ['inference finished', 'session closed']
+        finally:
+            release.set()
+            releaser.cancel()
+            runtime.close()
+            run.close()
 
 
 @pytest.mark.parametrize('image_args', [{}, {'paths': [['video', 'camera']]}], ids=['automatic', 'explicit'])
@@ -163,10 +423,11 @@ def test_a_v3_command_mapping_that_the_declared_stack_does_not_decode_fails_as_a
             first_step(*endpoint)
 
 
-def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a_command(serving):
+@pytest.mark.parametrize('version', [2, 3, spec.LATEST])
+def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a_command(serving, version):
     answer = [{obs_keys.ROBOT_COMMAND: JOINT_TARGET, obs_keys.TARGET_GRIP: 0.0}]
     description = spec.sequence(
-        spec.component('chunked_schedule', version=2, fps=20),
+        spec.component('chunked_schedule', version=version, fps=20),
         spec.parallel(
             spec.component('rename_observation_fields', mapping={}),
             spec.component('joint_position_action', joints_key=obs_keys.ROBOT_COMMAND, grip_key=obs_keys.TARGET_GRIP),
@@ -176,6 +437,77 @@ def test_a_v3_joint_list_that_the_declared_stack_decodes_reaches_the_caller_as_a
         step = first_step(*endpoint)
     assert step is not None
     assert isinstance(step.commands[obs_keys.ROBOT_COMMAND], command.JointPosition)
+
+
+@pytest.mark.parametrize('version', [None, 1, spec.LATEST, 'current'])
+def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, version):
+    timing_fields = (RTCScheduleV1.MEASURED_LATENCY_SEC, RTCScheduleV1.ESTIMATED_LATENCY_SEC)
+    if version == 'current':
+        schedule = spec.sequence(
+            spec.component('trajectory_player', plan_key=policy_keys.PLAN, record_stats=False),
+            RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration(0.1)).to_spec(),
+        )
+        timing_fields = (policy_keys.CALL_ID, policy_keys.CALL_TIMINGS)
+    else:
+        schedule = spec.component(
+            'rtc_schedule', version=version or 1, fps=10, call_after_sec=0.2, latency_estimate=0.1
+        )
+        if version is None:
+            del schedule[spec.VERSION]
+    description = spec.sequence(
+        schedule,
+        spec.parallel(
+            spec.component('select_observation_fields', mapping={name: name for name in timing_fields}),
+            spec.component(
+                'joint_position_action',
+                joints_key=obs_keys.ROBOT_COMMAND,
+                grip_key=obs_keys.TARGET_GRIP,
+                commands_path=[policy_keys.RTC.ACTION_PREFIX, policy_keys.RTC.PREFIX_ACTIONS],
+            ),
+        ),
+    )
+    seen = []
+
+    class RTCSession(Session):
+        def infer(self, observation):
+            seen.append(observation)
+            return [{obs_keys.ROBOT_COMMAND: JOINT_TARGET, obs_keys.TARGET_GRIP: float(i)} for i in range(5)]
+
+    class RTCModel(Model):
+        def prepare_session(self, params):
+            return RTCSession(description)
+
+    with serving(RTCModel) as (client, address):
+        now = [1_000_000_000]
+        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(client.NAME, address))
+        try:
+            run.send({})
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            first = run.send({})
+            assert first is not None
+            assert isinstance(first.commands[obs_keys.ROBOT_COMMAND], command.JointPosition)
+            now[0] += 250_000_000
+            step = run.send({})
+            assert step is not None
+            assert step.commands[obs_keys.TARGET_GRIP] == 2.0
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            prefix = seen[1][policy_keys.RTC.ACTION_PREFIX]
+            assert [action[obs_keys.TARGET_GRIP] for action in prefix[policy_keys.RTC.PREFIX_ACTIONS]] == [2, 3, 4]
+            assert prefix[policy_keys.RTC.CHUNK_OFFSET_SEC] == pytest.approx(0.2)
+            assert prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] == pytest.approx(-0.05)
+            assert policy_keys.PLAN not in seen[1]
+            if version == 'current':
+                assert seen[1][policy_keys.CALL_ID] == 1
+                assert seen[1][policy_keys.CALL_TIMINGS] == [{policy_keys.CALL_ID: 0, policy_keys.ELAPSED_SEC: 0.0}]
+            else:
+                assert seen[0][RTCScheduleV1.MEASURED_LATENCY_SEC] is None
+                assert seen[0][RTCScheduleV1.ESTIMATED_LATENCY_SEC] == 0.0
+                assert seen[1][RTCScheduleV1.MEASURED_LATENCY_SEC] == 0.0
+                assert seen[1][RTCScheduleV1.ESTIMATED_LATENCY_SEC] == 0.1
+        finally:
+            runtime.close()
+            run.close()
 
 
 def test_legacy_protocol_catalog_does_not_advertise_v3():

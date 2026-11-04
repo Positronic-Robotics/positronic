@@ -22,7 +22,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import ResizeMode, TransformImages
-from positronic.policy.processors import ChunkedSchedule
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.vendors.galaxea import codecs, protocol
 
 PYTHONPATH = 'PYTHONPATH'
@@ -193,7 +193,9 @@ def galaxea_model(
 def pipeline(codec: codecs.DroidCodec, execution_steps: int = 16):
     return PolicyDeployment(
         Sequential(
-            ChunkedSchedule(codec.fps, execution_steps / codec.fps), TransformImages(640, 640, mode=ResizeMode.BOUND)
+            TrajectoryPlayer(replan_on_error=True),
+            ChunkedSchedule(codec.fps, execution_steps / codec.fps),
+            TransformImages(640, 640, mode=ResizeMode.BOUND),
         ),
         codecs.droid(codec=codec),
     )

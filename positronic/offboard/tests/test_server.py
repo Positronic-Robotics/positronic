@@ -17,7 +17,7 @@ import pytest
 from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server import keys as offboard_keys
 from positronic_model_server import protocol, server_wire, websocket_wire
-from positronic_model_server.spec import ARGS, NAME, VERSION
+from positronic_model_server.spec import ARGS, SEQ
 from positronic_wire import registry, wire
 from positronic_wire import websocket as client_websocket
 from positronic_wire.websocket import WebsocketClientConnection
@@ -34,7 +34,7 @@ from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.offboard.tests.conftest import Served
 from positronic.policy import Codec
 from positronic.policy import keys as policy_keys
-from positronic.policy.processors import ChunkedSchedule, TemporalStack
+from positronic.policy.processors import ChunkedSchedule, TemporalStack, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 
 # Short enough for a quick test, long enough that a loaded box reaches the first poll.
@@ -99,14 +99,20 @@ class _UnbindableWire(server_wire.Wire):
 
 def test_a_server_with_no_wire_refuses_to_serve(make_mock_model):
     """A server that binds nothing answers nobody, so it raises instead of reporting itself ready."""
-    server = PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)))
+    server = PolicyServer(
+        lambda: make_mock_model([], {}),
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+    )
     with pytest.raises(ValueError, match='at least one wire'):
         server.serve([], on_ready=lambda: pytest.fail('it reported ready with no wire bound'))
 
 
 def test_a_wire_that_cannot_bind_stops_the_ones_that_did(make_mock_model):
     """A wire binds when it starts, and a startup that gives up frees the port an earlier wire took."""
-    server = PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)))
+    server = PolicyServer(
+        lambda: make_mock_model([], {}),
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+    )
     bound = _FailingWire(_A_MOMENT_IDLE)
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
@@ -121,7 +127,10 @@ def _rebind_and_release(host: str, port: int) -> None:
 
 def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_model):
     """A ``WebsocketWire`` binds a real socket when it starts, and a startup that rolls back frees it."""
-    server = PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)))
+    server = PolicyServer(
+        lambda: make_mock_model([], {}),
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+    )
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
     with pytest.raises(OSError, match='that port is taken'):
         server.serve([bound, _UnbindableWire()])
@@ -131,7 +140,10 @@ def test_a_websocket_wire_releases_its_port_when_startup_rolls_back(make_mock_mo
 
 def test_a_websocket_wire_served_once_still_releases_its_port_on_a_later_rollback(make_mock_model):
     """A wire that served and stopped starts again with a fresh socket, and a rollback before it serves frees it."""
-    server = PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)))
+    server = PolicyServer(
+        lambda: make_mock_model([], {}),
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+    )
     bound = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
     serving = threading.Thread(target=server.serve, args=([bound],))
     serving.start()
@@ -252,7 +264,10 @@ def test_a_host_with_one_address_binds_one_socket_and_names_the_port_it_took():
 
 def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_model, caplog):
     """No wire ends in silence: one failure raises out of ``serve``, and ``serve`` logs every other one."""
-    server = PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)))
+    server = PolicyServer(
+        lambda: make_mock_model([], {}),
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+    )
     with caplog.at_level(logging.ERROR, logger='positronic.offboard.server'):
         with pytest.raises(RuntimeError, match='the 0.05s wire fell over'):
             server.serve([_FailingWire(0.05), _FailingWire(0.1)])
@@ -262,7 +277,9 @@ def test_a_failing_wire_reaches_the_caller_and_the_rest_are_logged(make_mock_mod
 def test_an_idle_server_stops_itself(make_mock_model):
     """The idle watchdog ends every wire, and ``serve`` returns with no ``shutdown`` call."""
     server = PolicyServer(
-        lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=_A_MOMENT_IDLE / 60
+        lambda: make_mock_model([], {}),
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        idle_timeout_min=_A_MOMENT_IDLE / 60,
     )
     serving = threading.Thread(
         target=server.serve, args=([websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))],)
@@ -276,7 +293,9 @@ def test_an_idle_server_stops_itself(make_mock_model):
 def stub_server(start_server, make_mock_model) -> tuple[str, int, PolicyServer, MagicMock]:
     meta = {'model_name': 'stub', 'type': 'stub', policy_keys.CHECKPOINT_ID: 'stub'}
     policy = make_mock_model([{'action': [1, 2, 3]}], meta)
-    host, port, server, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)))
+    host, port, server, *_ = start_server(
+        policy, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
+    )
     return host, port, server, policy
 
 
@@ -289,11 +308,10 @@ def test_full_inference_cycle(stub_server):
     try:
         assert session.metadata['model_name'] == 'stub'
         assert session.metadata['type'] == 'stub'
-        assert session.metadata[offboard_keys.LOCAL_STACK] == {
-            NAME: ChunkedSchedule.WIRE_NAME,
-            VERSION: 3,
-            ARGS: {ChunkedSchedule.FPS_ARG: 10},
-        }
+        assert (
+            session.metadata[offboard_keys.LOCAL_STACK]
+            == Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)).to_spec()
+        )
         assert policy_keys.POSITRONIC_VERSION in session.metadata
 
         obs = {'image': 'test'}
@@ -391,7 +409,12 @@ class _IdentityCodec(Codec):
 @pytest.fixture
 def codec_server(start_server, make_mock_model) -> tuple[str, int, MagicMock]:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10), codec=_IdentityCodec()))
+    host, port, *_ = start_server(
+        policy,
+        PolicyDeployment(
+            Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)), codec=_IdentityCodec()
+        ),
+    )
     return host, port, policy
 
 
@@ -470,18 +493,19 @@ def test_warmup_failure_propagates_without_closing_the_model(make_mock_model):
 
 def test_local_stack_declared_in_handshake(start_server, make_mock_model):
     stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    pipeline = PolicyDeployment(ChunkedSchedule(fps=10), codec=_IdentityCodec())
+    pipeline = PolicyDeployment(
+        Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)), codec=_IdentityCodec()
+    )
     host, port, *_ = start_server(stub, pipeline)
     client = InferenceClient(
         client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
     )
     session = client.new_session()
     try:
-        assert session.metadata[offboard_keys.LOCAL_STACK] == {
-            NAME: ChunkedSchedule.WIRE_NAME,
-            VERSION: 3,
-            ARGS: {ChunkedSchedule.FPS_ARG: 10},
-        }
+        assert (
+            session.metadata[offboard_keys.LOCAL_STACK]
+            == Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)).to_spec()
+        )
     finally:
         session.close()
 
@@ -489,7 +513,11 @@ def test_local_stack_declared_in_handshake(start_server, make_mock_model):
 @pytest.fixture
 def unix_stub_server(start_server, socket_path, make_mock_model) -> tuple[Served, MagicMock]:
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), uds=socket_path)
+    served = start_server(
+        policy,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        uds=socket_path,
+    )
     return served, policy
 
 
@@ -500,11 +528,10 @@ def test_a_pipeline_served_over_a_unix_socket(unix_stub_server, socket_path):
     session = client.new_session()
     try:
         assert session.metadata['model_name'] == 'stub'
-        assert session.metadata[offboard_keys.LOCAL_STACK] == {
-            NAME: ChunkedSchedule.WIRE_NAME,
-            VERSION: 3,
-            ARGS: {ChunkedSchedule.FPS_ARG: 10},
-        }
+        assert (
+            session.metadata[offboard_keys.LOCAL_STACK]
+            == Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)).to_spec()
+        )
         assert session.metadata[offboard_keys.UDS] == socket_path
         assert offboard_keys.HOST not in session.metadata
         assert offboard_keys.PORT not in session.metadata
@@ -571,7 +598,9 @@ def test_a_socket_path_that_reads_as_a_url_is_dialled_as_the_filename_it_is(star
     odd.mkdir(parents=True)
     uds = str(odd / 's.sock')
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), uds=uds)
+    served = start_server(
+        policy, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))), uds=uds
+    )
 
     client = InferenceClient(*served.unix())
 
@@ -595,7 +624,7 @@ def test_a_client_waits_for_a_socket_the_server_has_not_bound_yet(start_server, 
     """``serve`` binds only once the model has loaded, so a co-located client starting beside its
     server finds no socket at all for that interval."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipeline = PolicyDeployment(ChunkedSchedule(fps=10))
+    pipeline = PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
     late = threading.Timer(1.5, lambda: start_server(policy, pipeline, uds=socket_path))
     late.start()
 
@@ -617,7 +646,7 @@ def test_a_client_waits_for_a_server_restarting_over_the_socket_it_left(start_se
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as gone:
         gone.bind(socket_path)
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    pipeline = PolicyDeployment(ChunkedSchedule(fps=10))
+    pipeline = PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
     late = threading.Timer(1.5, lambda: start_server(policy, pipeline, uds=socket_path))
     late.start()
 
@@ -664,7 +693,11 @@ def test_a_server_binds_over_the_socket_an_earlier_run_left(start_server, socket
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
         stale.bind(socket_path)
 
-    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), uds=socket_path)
+    served = start_server(
+        policy,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        uds=socket_path,
+    )
 
     session = InferenceClient(*served.unix()).new_session()
     session.close()
@@ -718,7 +751,9 @@ def test_a_server_refuses_a_socket_a_live_server_listens_on(socket_path, make_mo
     """``asyncio.create_unix_server`` unlinks the file it finds, so only a refusal here keeps the
     address with the server that owns it."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    server = PolicyServer(lambda: policy, PolicyDeployment(ChunkedSchedule(fps=10)))
+    server = PolicyServer(
+        lambda: policy, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
+    )
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as live:
         live.bind(socket_path)
@@ -753,7 +788,11 @@ class _ScriptedModel(Model):
 
 def _tunable_pipe(offsets: tuple[float, ...] = (-0.1, 0.0), pad_start: bool = True):
     return PolicyDeployment(
-        Sequential(TemporalStack(keys=('x',), offsets_sec=offsets, pad_start=pad_start), ChunkedSchedule(fps=10))
+        Sequential(
+            TemporalStack(keys=('x',), offsets_sec=offsets, pad_start=pad_start),
+            TrajectoryPlayer(replan_on_error=True),
+            ChunkedSchedule(fps=10),
+        )
     )
 
 
@@ -790,7 +829,7 @@ def test_session_params_coerce_json_values(param_server):
 
 
 def _fps_pipe(fps: float = 10.0):
-    return PolicyDeployment(ChunkedSchedule(fps=fps))
+    return PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=fps)))
 
 
 def test_session_param_retunes_the_client_schedule(start_server):
@@ -799,8 +838,8 @@ def test_session_param_retunes_the_client_schedule(start_server):
     default_session = _param_session(host, port, [])
     tuned_session = _param_session(host, port, [('fps', '5')])
     try:
-        assert default_session.metadata[offboard_keys.LOCAL_STACK][ARGS]['fps'] == 10
-        assert tuned_session.metadata[offboard_keys.LOCAL_STACK][ARGS]['fps'] == 5
+        assert default_session.metadata[offboard_keys.LOCAL_STACK][SEQ][1][ARGS]['fps'] == 10
+        assert tuned_session.metadata[offboard_keys.LOCAL_STACK][SEQ][1][ARGS]['fps'] == 5
         assert default_session.infer({}) == tuned_session.infer({})
     finally:
         default_session.close()
@@ -837,7 +876,7 @@ def test_unknown_session_param_rejected(param_server):
 
 
 def _codec_valued_pipe(codec: Codec):
-    return PolicyDeployment(ChunkedSchedule(fps=10), codec)
+    return PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)), codec)
 
 
 def test_import_string_session_params_rejected(param_server, start_server, make_mock_model):
@@ -904,7 +943,11 @@ def authed_endpoint(start_server, make_mock_model) -> tuple[tuple[wire.ClientWir
         address = wire.HostPortAddress(_LIVE_HOST, int(os.environ[ENDPOINT_PORT_ENV]), wire.SESSION_PATH, '')
         return (registry.client_wire(os.environ[ENDPOINT_WIRE_ENV]), address), os.environ[AUTH_TOKEN_ENV]
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-    served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
+    served = start_server(
+        policy,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        auth_token=_TOKEN,
+    )
     return served.ws(), _TOKEN
 
 
@@ -982,13 +1025,21 @@ def test_server_without_a_token_serves_open(stub_server):
 )
 def test_a_token_that_could_never_gate_fails_closed_at_startup(make_mock_model, token):
     with pytest.raises(ValueError, match='ASCII'):
-        PolicyServer(lambda: make_mock_model([], {}), PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=token)
+        PolicyServer(
+            lambda: make_mock_model([], {}),
+            PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+            auth_token=token,
+        )
 
 
 def test_a_non_ascii_authorization_header_is_refused_rather_than_crashing(start_server, make_mock_model):
     """HTTP header bytes are latin-1 decoded before the token comparison."""
     policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
-    host, port, *_ = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), auth_token=_TOKEN)
+    host, port, *_ = start_server(
+        policy,
+        PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+        auth_token=_TOKEN,
+    )
     with socket.create_connection((host, port), timeout=5.0) as sock:
         sock.sendall(
             b'POST /api/v1/keepalive HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n'
@@ -1002,7 +1053,9 @@ def test_shutdown_closes_the_loaded_model(start_server, make_mock_model):
     model = make_mock_model([], {})
     closed = threading.Event()
     model.close.side_effect = closed.set
-    served = start_server(model, PolicyDeployment(ChunkedSchedule(fps=10)))
+    served = start_server(
+        model, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
+    )
     session = InferenceClient(*served.ws()).new_session()
     session.close()
     model.close.assert_not_called()
@@ -1027,7 +1080,9 @@ class _HeldBuild:
 
 def test_a_shutdown_during_the_load_ends_the_server_once_it_loads(make_mock_model):
     source = _HeldBuild(make_mock_model([], {}))
-    server = PolicyServer(source, PolicyDeployment(ChunkedSchedule(fps=10)))
+    server = PolicyServer(
+        source, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
+    )
     wire_ = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
     serving = threading.Thread(target=server.serve, args=([wire_],), daemon=True)
     serving.start()
@@ -1049,7 +1104,11 @@ def _ws_client(host: str, port: int) -> InferenceClient:
 class TestKeepalive:
     def test_it_answers_the_seconds_the_idle_timeout_leaves(self, start_server, make_mock_model):
         policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-        served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=2)
+        served = start_server(
+            policy,
+            PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+            idle_timeout_min=2,
+        )
         assert InferenceClient(*served.ws()).keepalive() == 120
 
     def test_a_server_with_no_idle_timeout_answers_none(self, stub_server):
@@ -1058,13 +1117,17 @@ class TestKeepalive:
 
     def test_an_infinite_idle_timeout_answers_none(self, start_server, make_mock_model):
         policy = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub'})
-        served = start_server(policy, PolicyDeployment(ChunkedSchedule(fps=10)), idle_timeout_min=math.inf)
+        served = start_server(
+            policy,
+            PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
+            idle_timeout_min=math.inf,
+        )
         assert InferenceClient(*served.ws()).keepalive() is None
 
     def test_it_holds_off_the_idle_timeout_as_a_session_does(self, make_mock_model):
         server = PolicyServer(
             lambda: make_mock_model([], {}),
-            PolicyDeployment(ChunkedSchedule(fps=10)),
+            PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))),
             idle_timeout_min=_A_MOMENT_IDLE / 60,
         )
         wire_ = websocket_wire.WebsocketWire(server_wire.ServedHostPort('localhost', 0))
@@ -1085,7 +1148,9 @@ class TestKeepalive:
 
     def test_it_answers_only_once_the_model_has_loaded(self, make_mock_model, socket_path):
         source = _HeldBuild(make_mock_model([], {}))
-        server = PolicyServer(source, PolicyDeployment(ChunkedSchedule(fps=10)))
+        server = PolicyServer(
+            source, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
+        )
         wire_ = websocket_wire.WebsocketWire(websocket_wire.ServedUnixSocket(pathlib.Path(socket_path)))
         ready = threading.Event()
         serving = threading.Thread(target=server.serve, args=([wire_], ready.set), daemon=True)

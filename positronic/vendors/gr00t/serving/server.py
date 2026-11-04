@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import os
+from collections import deque
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -112,9 +113,17 @@ class Gr00tSession(Session):
         self._rtc = rtc
         self._fps = fps
         self._previous_poses: np.ndarray | None = None
+        self._latencies: deque[float] = deque(maxlen=5)
+
+    def _record_timings(self, timings: list[dict[str, Any]]) -> None:
+        for timing in timings:
+            elapsed_sec = timing[keys.ELAPSED_SEC]
+            if not _is_finite_number(elapsed_sec) or elapsed_sec < 0:
+                raise ValueError(f'{keys.ELAPSED_SEC} must be finite, non-negative seconds')
+            self._latencies.append(elapsed_sec)
 
     def _rtc_options(self, context: dict[str, Any]) -> dict[str, Any] | None:
-        for name in (keys.RTC.CHUNK_OFFSET_SEC, keys.RTC.OBSERVATION_OFFSET_SEC, keys.RTC.ESTIMATED_LATENCY_SEC):
+        for name in (keys.RTC.CHUNK_OFFSET_SEC, keys.RTC.OBSERVATION_OFFSET_SEC):
             value = context[name]
             if not _is_finite_number(value) or (name != keys.RTC.OBSERVATION_OFFSET_SEC and value < 0):
                 raise ValueError(f'{name} must be finite seconds, non-negative except for the observation offset')
@@ -137,7 +146,8 @@ class Gr00tSession(Session):
         if available <= 0:
             return None
         assert self._rtc is not None
-        frozen = min(available, math.ceil(round(context[keys.RTC.ESTIMATED_LATENCY_SEC] * 1e9) * self._fps / 1e9))
+        delay_sec = min(max(self._latencies, default=0.0), self._rtc[keys.RTC.MAX_DELAY_SEC])
+        frozen = min(available, math.ceil(round(delay_sec * 1e9) * self._fps / 1e9))
         overlap = min(available, frozen + math.ceil(self._rtc[keys.RTC.BLEND_SEC] * self._fps))
         actions = {EE_POSE: self._previous_poses[start + skipped : start + skipped + overlap].copy()}
         targets = targets[skipped : skipped + overlap]
@@ -165,6 +175,7 @@ class Gr00tSession(Session):
             if keys.RTC.FIELD in observation:
                 raise ValueError('This session does not enable RTC')
             return self._policy.get_action(observation)
+        self._record_timings(observation[keys.RTC.FIELD][keys.CALL_TIMINGS])
         options = self._rtc_options(observation[keys.RTC.FIELD])
         inputs = {name: value for name, value in observation.items() if name != keys.RTC.FIELD}
         result = self._policy.get_action(inputs, options=options)
@@ -173,6 +184,7 @@ class Gr00tSession(Session):
 
     def close(self) -> None:
         self._previous_poses = None
+        self._latencies.clear()
 
 
 class Gr00tModel(Model):
@@ -230,7 +242,8 @@ class Gr00tModel(Model):
                     ACTION: [],
                     keys.RTC.CHUNK_OFFSET_SEC: 0.0,
                     keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
-                    keys.RTC.ESTIMATED_LATENCY_SEC: 0.0,
+                    keys.CALL_ID: 0,
+                    keys.CALL_TIMINGS: [],
                 },
             })
             targets = [
@@ -242,7 +255,8 @@ class Gr00tModel(Model):
                     ACTION: targets,
                     keys.RTC.CHUNK_OFFSET_SEC: 0.0,
                     keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
-                    keys.RTC.ESTIMATED_LATENCY_SEC: 1 / self.parameters[keys.FPS],
+                    keys.CALL_ID: 1,
+                    keys.CALL_TIMINGS: [{keys.CALL_ID: 0, keys.ELAPSED_SEC: 1 / self.parameters[keys.FPS]}],
                 },
             })
             warm.close()

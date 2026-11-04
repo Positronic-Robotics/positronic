@@ -13,7 +13,7 @@ The service runs on the same machine as the run, or on another machine (see
 The service prepares each session until the person presses Ready. Each session declares stock components in its
 client stack:
 - `end_on_field` ends the run when a reply carries the Complete or the Give up of the person;
-- `chunked_schedule` asks for one frame at a time, and plays each reply at once;
+- `inference_schedule` asks for one frame at a time; `trajectory_player` plays each reply at once;
 - `change_ee_frame` states the grip point `gripper` as the frame of the pose and of the target;
 - `observation_codec` sends the task, the pose, the grip and the camera images of the robot;
 - `absolute_position_action` turns each reply into a command, and `end_command` gives the `end` of a reply to
@@ -38,6 +38,11 @@ The plain form of the policy works too:
 | iPhone | XR Browser | `--webxr=@positronic.cfg.webxr.iphone_teleop` (http) | `http://<laptop>:5005/?mode=teleop` |
 | Android phone | Chrome | `--webxr=@positronic.cfg.webxr.android_teleop` (https) | `https://<laptop>:5005/?mode=teleop` |
 | Meta Quest | Oculus Browser | `--webxr=@positronic.cfg.webxr.oculus` (https, the default) | `https://<laptop>:5005/` |
+| PlayStation VR2 | Chrome on the PC | `--webxr=@positronic.cfg.webxr.psvr2` (https) | `https://localhost:5005/` |
+
+The PlayStation VR2 has no browser of its own. It connects to a PC through the PC adapter and SteamVR, and Chrome on
+that PC opens the page. The address above is for a service that runs on the same PC; on another machine, use its
+address.
 
 The banner of `positronic teleop` prints the URL of the page, and the IPv4 address of each network interface with its
 name. Use the address of the network that the phone or the headset is on. Open port 5005 in the firewall of the
@@ -45,21 +50,21 @@ laptop. With https, the browser warns about the self-signed certificate. [Data C
 how to accept the warning on the Quest.
 
 The robot moves `sensitivity` times the distance of the controller or the phone, and turns as it turns. The phone
-configs set 2, and `oculus` sets 1. `--webxr.sensitivity=<x>` changes it.
+configs set 2, and `oculus` and `psvr2` set 1. `--webxr.sensitivity=<x>` changes it.
 
 ## Controls
 
 The service asks for Ready before each human trial. Ready comes only from the phone or the headset, because it
 confirms that the person holds the controller. The window on the laptop offers only Cancel.
 
-| Phase | Phone (teleop mode) | Quest (right controller) | What it does |
-|---|---|---|---|
-| The trial waits for Ready | tap **Ready** | press B | Ready: the episode starts |
-| The trial waits for Ready | tap **Cancel** (or Cancel in the window) | press the stick | Cancel (see Limits) |
-| The trial runs | tap **Control** | press A | control on or off (the clutch) |
-| Control is on | the slider | the trigger | the grip |
-| The trial runs | hold **Complete** for 1 s | hold B for 1 s | Complete: the episode ends |
-| The trial runs | hold **Hold: Give up** for 1 s | hold the stick for 1 s | Give up: the episode ends |
+| Phase | Phone (teleop mode) | Quest (right controller) | PlayStation VR2 (right controller) | What it does |
+|---|---|---|---|---|
+| The trial waits for Ready | tap **Ready** | press B | press Circle (○) | Ready: the episode starts |
+| The trial waits for Ready | tap **Cancel** (or Cancel in the window) | press the stick | press the stick | Cancel (see Limits) |
+| The trial runs | tap **Control** | press A | press Cross (✕) | control on or off (the clutch) |
+| Control is on | the slider | the trigger | the trigger | the grip |
+| The trial runs | hold **Complete** for 1 s | hold B for 1 s | hold Circle (○) for 1 s | Complete: the episode ends |
+| The trial runs | hold **Hold: Give up** for 1 s | hold the stick for 1 s | hold the stick for 1 s | Give up: the episode ends |
 
 When control comes on, the hand moves the robot from its current pose, so the robot does not jump. A turn of the hand
 turns the gripper about its grip point. When the phone or the controller is not tracked for 0.5 s, control goes off.
@@ -232,8 +237,9 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 - With `AUTH_TOKEN` unset, the service serves open: each peer that reaches the port can open a session. Then dial it
   with `--policy.headers=None`.
 - The sessions have no TLS. Use a private network, such as a tailnet.
-- A plan file sends the token with `auth_token_file` on the endpoint, so a service at a public address keeps
-  auth on. See the plan-file section of [client/README.md](../../client/README.md).
+- A plan file sends the token with `auth_token_file` on the endpoint. See the plan-file section of
+  [client/README.md](../../client/README.md). The `websocket`, `grpc` and `roboarena` wires have no TLS, so the token
+  travels in clear on them. Keep the service on a private network, such as a tailnet, or put it behind a TLS wire.
 - Each frame waits for one round trip of the network.
 - `--served_address.port` changes the port. Give `--policy.address.port` the same value.
 - On the Unix socket, the service takes no token, and `AUTH_TOKEN` has no effect.

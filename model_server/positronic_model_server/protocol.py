@@ -22,6 +22,7 @@ SESSION_ID = 'session_id'
 OBSERVATION = 'observation'
 END_SESSION = 'end_session'
 PROTOCOL_VERSION = 'protocol_version'
+MAX_IN_FLIGHT = 'max_in_flight'
 
 
 class ProtocolVersion(IntEnum):

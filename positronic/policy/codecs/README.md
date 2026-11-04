@@ -178,9 +178,9 @@ By default, action codecs label actions with the **commanded** targets (`robot_c
 
 ## Timing
 
-Codecs return full action chunks without timestamps. The client processor
-`ChunkedSchedule(fps, horizon_sec)` determines when commands run and how much of
-each chunk executes. `training_fps` supplies training cadence metadata, independently of the deployment's playback `fps`.
+Codecs return full action chunks without timestamps. `ChunkedSchedule(fps, horizon_sec)`
+assigns their timing and horizon; `TrajectoryPlayer` emits the commands when due.
+`training_fps` supplies training cadence metadata, independently of the deployment's playback `fps`.
 
 ## End-effector frames
 

@@ -87,9 +87,7 @@
     </div>
 
     <script type="module">
-      import { initWebSocket, startXRApp } from '/core.js';
-
-      let websocket = null;
+      import { startXRApp } from '/core.js';
 
       // The xr-standard gamepad layout of `buttons`.
       const BUTTON = { trigger: 0, stick: 3, a: 4, b: 5 };
@@ -362,8 +360,7 @@
       }
 
       // Boot using shared core
-      websocket = initWebSocket();
-      startXRApp({ websocket, onInit, onFrame });
+      startXRApp({ onInit, onFrame });
       setupButtons(setupSlider());
     </script>
   </body>
