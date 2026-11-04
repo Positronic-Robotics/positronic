@@ -54,6 +54,5 @@ DreamAPI checks each instruction against the scene, and refuses one that it find
 ## Known gaps
 
 - The hand speed limit scales a joint step once. A step can move the hand a little more than the limit.
-- The ramp counts each chunk as played whole. A client that plays fewer rows ends the ramp early.
 - The limits do not include joint speed, joint torque or a workspace boundary. A real robot needs them, with an
   emergency stop that does not depend on this server.

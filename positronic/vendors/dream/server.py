@@ -302,16 +302,26 @@ def _wait_until_warm(config: dict[str, Any], deadline_s: float) -> None:
     with dream_client.DreamClient() as client:
         client.policy(config)
         client.set_observation(frames, observation, timestamp=0.0)
+        call_timeout_s = config['timeout_ms'] / 1000
+        stale_sent = False
         while True:
             try:
                 client.get_action()
                 return
+            except dream_client.DreamProtocolError as error:
+                # The gateway may close the keep-alive connection during the wait, as in `DreamModel._get_action`.
+                stale = isinstance(error.__cause__, ssl.SSLEOFError)
+                if stale_sent or not stale or not _ends_by(deadline, call_timeout_s):
+                    raise
+                stale_sent = True
+                logger.info('The gateway closed an idle connection; asking again on a new one')
             except dream_client.DreamServerError as error:
                 wait = error.retry_after_s or 30.0
-                if not error.retryable or not _ends_by(deadline, wait + config['timeout_ms'] / 1000):
+                if not error.retryable or not _ends_by(deadline, wait + call_timeout_s):
                     raise
                 logger.info('Dream-1 is starting (%s); asking again in %.0f s', error.reason, wait)
                 time.sleep(wait)
+                stale_sent = False
 
 
 @cfn.config(
@@ -354,18 +364,17 @@ def dream_model(
     return model
 
 
-@cfn.config(rows=48, crop_to_aspect=True)
-def pipeline(rows: int, crop_to_aspect: bool) -> PolicyDeployment:
-    """The client keeps 9 frames of each camera, 0.2 s apart, and plays `rows` rows of each chunk at 20 Hz."""
+@cfn.config(crop_to_aspect=True)
+def pipeline(crop_to_aspect: bool) -> PolicyDeployment:
+    """The client keeps 9 frames of each camera, 0.2 s apart, and plays each chunk whole at 20 Hz.
+
+    The ramp of the limiter counts every row of a chunk as played, so the schedule takes no horizon.
+    """
     offsets = tuple(codecs.FRAME_PERIOD_S * (index + 1 - codecs.WINDOW_FRAMES) for index in range(codecs.WINDOW_FRAMES))
     stack = TemporalStack(
         keys=(keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE), offsets_sec=offsets, pad_start=False
     )
-    local = Sequential(
-        stack,
-        ChunkedSchedule(codecs.FPS, horizon_sec=rows / codecs.FPS),
-        TransformImages(*UPLOAD_SIZE, mode=ResizeMode.BOUND),
-    )
+    local = Sequential(stack, ChunkedSchedule(codecs.FPS), TransformImages(*UPLOAD_SIZE, mode=ResizeMode.BOUND))
     return PolicyDeployment(local, codecs.yam_bimanual.override(crop_to_aspect=crop_to_aspect).instantiate())
 
 

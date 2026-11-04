@@ -293,6 +293,21 @@ def test_warm_up_raises_when_the_model_asks_to_wait_past_the_deadline(gateway):
     assert len(gateway.calls) == 1
 
 
+def test_warm_up_asks_again_on_a_new_connection_when_the_gateway_closed_the_idle_one(gateway, monkeypatch):
+    gateway.statuses.append({'code': 'DA-2000', 'reason': 'pool_warming', 'retry_after_s': 0.01})
+    sleep = server.time.sleep
+
+    def wait_then_close(seconds):
+        sleep(seconds)
+        _close_idle_connections(monkeypatch, times=1)
+
+    monkeypatch.setattr(server, 'time', types.SimpleNamespace(monotonic=time.monotonic, sleep=wait_then_close))
+
+    server._wait_until_warm(CONFIG, deadline_s=30.0)
+
+    assert len(gateway.calls) == 2
+
+
 def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks():
     deployment = server.pipeline.instantiate()
 
@@ -300,4 +315,5 @@ def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks()
     layers = {layer['name']: layer['args'] for layer in spec['seq']}
     assert layers['temporal_stack']['keys'] == [keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE]
     np.testing.assert_allclose(layers['temporal_stack']['offsets_sec'], np.arange(-1.6, 0.01, 0.2), atol=1e-9)
-    assert layers['chunked_schedule']['horizon_sec'] == pytest.approx(ROWS / codecs.FPS)
+    # The limiter's ramp counts every row of a chunk as played.
+    assert layers['chunked_schedule'].get('horizon_sec') is None
