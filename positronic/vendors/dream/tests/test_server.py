@@ -284,6 +284,24 @@ def test_a_chunk_past_the_limits_is_limited(gateway, model):
     assert actions[:, 0].max() < 1.5
 
 
+def test_a_call_before_the_last_chunk_can_end_starts_the_ramp_again(gateway, model, tmp_path, monkeypatch):
+    def far(observation):
+        chunks = hold(observation)
+        return {name: (np.asarray(rows) + [1.5, 0, 0, 0, 0, 0, 0]).tolist() for name, rows in chunks.items()}
+
+    gateway.chunk = far
+    model(_request(), session_id='a')
+    replan = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    clock = server.time.monotonic() + ROWS / codecs.FPS + 1.0
+    monkeypatch.setattr(server.time, 'monotonic', lambda: clock)
+    whole = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    model.end_session('a')
+
+    assert replan[0, 0] == pytest.approx(0.5 / codecs.FPS)
+    assert whole[0, 0] > 1.1 * 0.5 / codecs.FPS
+    assert _record(tmp_path, 'a')['replans'] == 1
+
+
 def test_every_face_is_blurred_before_a_frame_leaves_the_server(model, gateway):
     face = cv2.cvtColor(_self_check_frame(), cv2.COLOR_BGR2RGB)
 
