@@ -104,8 +104,7 @@ def _connect(channel: str, sim: bool, compensation: Compensation):
         ee_mass=compensation.ee_mass,
         use_coulomb_friction=False,  # _set_coulomb_friction turns it on once the values are in
     )
-    if not sim:  # i2rt's sim chain runs no friction
-        _set_coulomb_friction(chain, compensation)
+    _set_coulomb_friction(chain, compensation)
     return chain
 
 

@@ -2105,12 +2105,17 @@ def test_coulomb_friction_that_the_chain_cannot_take_is_refused_before_a_chain_o
         yam.Robot(compensation=Compensation(coulomb_friction=friction))
 
 
-def test_the_sim_chain_gets_no_friction(monkeypatch):
-    """i2rt's sim chain runs no friction and has no friction values to set."""
-    sim_chain = types.SimpleNamespace()
-    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: sim_chain)
-    assert yam._connect('can0', True, STATION_COMPENSATION) is sim_chain
-    assert vars(sim_chain) == {}
+@pytest.mark.parametrize('compensation', [I2RT_COMPENSATION, STATION_COMPENSATION], ids=['i2rt', 'station'])
+def test_the_sim_chain_opens_with_the_compensation_of_its_caller(monkeypatch, compensation):
+    asked, sim_chain = {}, types.SimpleNamespace()
+
+    def get_yam_robot(channel, **kwargs):
+        asked.update(kwargs)
+        return sim_chain
+
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
+    assert yam._connect('can0', True, compensation) is sim_chain
+    assert asked['sim'] is True
 
 
 def test_the_arm_meta_carries_the_compensation_that_the_chain_reports_and_the_mass_it_was_given():
