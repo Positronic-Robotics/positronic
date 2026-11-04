@@ -20,7 +20,8 @@ class ChunkLimits:
     The hand moves at most `max_ee_speed_m_s`, and each gripper opening changes by at most `max_grip_step` per row.
     For the first `ramp_s` of a session, no joint moves faster than `ramp_max_rad_s`. Each joint stays
     `joint_margin_rad` inside its range, as the station's tracker clips its reference (`robots/sys0/tracker.py`), so
-    an arm that Dream sends past a stop holds short of it.
+    an arm that Dream sends past a stop holds short of it. A joint that starts inside the margin, as joints 2 and 3
+    parked at their lower stop do, moves out of it no faster than the other limits allow, and never toward the stop.
     """
 
     max_ee_speed_m_s: float = 0.6

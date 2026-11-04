@@ -128,9 +128,9 @@ class DreamModel(Model):
     """Dream-1 behind DreamAPI, one DreamAPI session per session.
 
     A call sends the frame windows of its request, and answers the chunk, limited, as one action per row. A refusal
-    that DreamAPI marks retryable is sent again until `retry_deadline_s` passes, and raises at once when the wait it
-    asks for ends past that. A call more than `session_idle_s` after the last one starts a new DreamAPI session, as
-    DreamAPI ends an idle session.
+    that DreamAPI marks retryable is sent again only while the wait it asks for and a whole call timeout still end
+    inside `retry_deadline_s`; otherwise it raises at once. A call more than `session_idle_s` after the last one
+    starts a new DreamAPI session, as DreamAPI ends an idle session.
     """
 
     def __init__(
@@ -148,6 +148,7 @@ class DreamModel(Model):
         self._blurrer = blurrer
         self._sessions_dir = sessions_dir
         self._retry_deadline_s = retry_deadline_s
+        self._call_timeout_s = config['timeout_ms'] / 1000
         self._session_idle_s = session_idle_s
         self._meta = meta
         self._sessions: dict[str, _Session] = {}
@@ -193,20 +194,19 @@ class DreamModel(Model):
                 stale_sent = True
                 logger.warning('The gateway closed an idle connection; sending the call again on a new one')
             except dream_client.DreamTimeout:
-                if time.monotonic() >= deadline:
+                if not _ends_by(deadline, self._call_timeout_s):
                     raise
                 logger.warning('DreamAPI did not answer in time; sending the call again')
             except dream_client.DreamSessionExpired as error:
                 # DreamAPI ends a session that waits too long between calls. It names a new session, which starts with
                 # a reset, and the client takes it.
-                if time.monotonic() >= deadline:
+                if not _ends_by(deadline, self._call_timeout_s):
                     raise
                 session.record['expired'] += 1
                 logger.warning('%s; sending the call again in the new session', error)
             except dream_client.DreamServerError as error:
                 wait = error.retry_after_s or 1.0
-                # A wait past the deadline would only delay the error, and every other session with it.
-                if not error.retryable or time.monotonic() + wait > deadline:
+                if not error.retryable or not _ends_by(deadline, wait + self._call_timeout_s):
                     raise
                 logger.warning('DreamAPI refused a call (%s); sending it again in %.1f s', error, wait)
                 time.sleep(wait)
@@ -281,6 +281,15 @@ class DreamModel(Model):
             self.end_session(session_id)
 
 
+def _ends_by(deadline: float, duration_s: float) -> bool:
+    """Whether `duration_s` from now ends by `deadline`, on the monotonic clock.
+
+    A call that cannot end by its deadline would only delay the error, and every other session with it, as the
+    server makes one call at a time.
+    """
+    return time.monotonic() + duration_s <= deadline
+
+
 def _wait_until_warm(config: dict[str, Any], deadline_s: float) -> None:
     """Send black frames until the model answers. A cold model takes up to an hour to start."""
     width, height = codecs.FRAME_SIZE
@@ -297,7 +306,7 @@ def _wait_until_warm(config: dict[str, Any], deadline_s: float) -> None:
                 return
             except dream_client.DreamServerError as error:
                 wait = error.retry_after_s or 30.0
-                if not error.retryable or time.monotonic() + wait > deadline:
+                if not error.retryable or not _ends_by(deadline, wait + config['timeout_ms'] / 1000):
                     raise
                 logger.info('Dream-1 is starting (%s); asking again in %.0f s', error.reason, wait)
                 time.sleep(wait)

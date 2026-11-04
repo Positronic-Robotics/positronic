@@ -2,6 +2,8 @@ import base64
 import http.client
 import json
 import ssl
+import time
+import types
 
 import cv2
 import numpy as np
@@ -40,7 +42,7 @@ def blurrer() -> FaceBlurrer:
 def model(gateway, blurrer, tmp_path):
     limiter = YamChunkLimiter(ChunkLimits(), codecs.FPS)
     built = server.DreamModel(
-        CONFIG, limiter, blurrer, tmp_path, retry_deadline_s=5.0, session_idle_s=60.0, meta={'type': 'dream'}
+        CONFIG, limiter, blurrer, tmp_path, retry_deadline_s=30.0, session_idle_s=60.0, meta={'type': 'dream'}
     )
     yield built
     built.close()
@@ -217,6 +219,26 @@ def test_a_retryable_refusal_that_asks_to_wait_past_the_deadline_raises_at_once(
     assert len(gateway.calls) == calls + 1
 
 
+def test_a_call_that_timed_out_goes_again_only_while_a_whole_call_fits_before_the_deadline(model, monkeypatch):
+    model(_request(), session_id='a')
+    clock = [0.0]
+    monkeypatch.setattr(server, 'time', types.SimpleNamespace(monotonic=lambda: clock[0], sleep=time.sleep))
+    model._retry_deadline_s = 12.0
+    calls = []
+
+    def timed_out():
+        calls.append(clock[0])
+        clock[0] += 5.0
+        raise server.dream_client.DreamTimeout('no answer')
+
+    monkeypatch.setattr(model._sessions['a'].client, 'get_action', timed_out)
+
+    with pytest.raises(server.dream_client.DreamTimeout):
+        model(_request(), session_id='a')
+    # The call timeout is 5 s: a third call, sent at 10 s, would end past the deadline at 12 s.
+    assert calls == [0.0, 5.0]
+
+
 def test_a_chunk_past_the_limits_is_limited(gateway, model):
     def far(observation):
         chunks = hold(observation)
@@ -246,7 +268,7 @@ def test_every_face_is_blurred_before_a_frame_leaves_the_server(model, gateway):
 def test_warm_up_asks_again_until_the_model_answers(gateway):
     gateway.statuses.extend([{'code': 'DA-2000', 'reason': 'pool_warming', 'retry_after_s': 0.01}] * 2)
 
-    server._wait_until_warm(CONFIG, deadline_s=5.0)
+    server._wait_until_warm(CONFIG, deadline_s=30.0)
 
     assert len(gateway.calls) == 3
 
@@ -255,7 +277,7 @@ def test_warm_up_raises_when_the_model_asks_to_wait_past_the_deadline(gateway):
     gateway.statuses.append({'code': 'DA-2000', 'reason': 'pool_warming', 'retry_after_s': 60.0})
 
     with pytest.raises(server.dream_client.DreamServerError):
-        server._wait_until_warm(CONFIG, deadline_s=5.0)
+        server._wait_until_warm(CONFIG, deadline_s=30.0)
     assert len(gateway.calls) == 1
 
 

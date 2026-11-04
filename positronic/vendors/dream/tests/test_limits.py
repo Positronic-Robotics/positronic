@@ -97,6 +97,21 @@ def test_a_joint_inside_the_margin_of_its_stop_is_moved_out_of_it():
     assert report.joint_range == 1
 
 
+def test_a_joint_that_starts_at_its_stop_moves_out_at_the_ramp_speed_and_never_toward_the_stop():
+    limiter = _limiter()
+    lower, _ = _model_range(limiter, 2)
+    start = POSE.copy()
+    start[2] = lower
+    rows = np.repeat(start[None], 5, axis=0)
+    rows[:, 2] = lower - 1.0
+
+    out, _ = limiter.limit(rows, start, elapsed_s=0.0)
+
+    steps = np.diff(np.concatenate([[lower], out[:, 2]]))
+    assert np.all(steps >= 0) and np.all(steps <= 0.5 / FPS + 1e-9)
+    assert out[-1, 2] == pytest.approx(lower + 0.03)
+
+
 def test_no_margin_clips_to_the_range_itself():
     limiter = _limiter(max_ee_speed_m_s=100.0, joint_margin_rad=0.0)
     rows = POSE[None].copy()
