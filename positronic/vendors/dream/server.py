@@ -127,10 +127,11 @@ def _measured(observation: dict[str, Any]) -> dict[str, np.ndarray]:
 class DreamModel(Model):
     """Dream-1 behind DreamAPI, one DreamAPI session per session.
 
-    A call sends the frame windows of its request, and answers the chunk, limited, as one action per row. A refusal
-    that DreamAPI marks retryable is sent again only while the wait it asks for and a whole call timeout still end
-    inside `retry_deadline_s`; otherwise it raises at once. A call more than `session_idle_s` after the last one
-    starts a new DreamAPI session, as DreamAPI ends an idle session.
+    A call sends the frame windows of its request, and answers the chunk, limited, as one action per row. A call
+    that times out, finds its session expired or its connection closed, or that DreamAPI refuses as retryable, is
+    sent again only while the wait asked for and a whole call timeout still end inside `retry_deadline_s`; otherwise
+    it raises at once. A call more than `session_idle_s` after the last one starts a new DreamAPI session, as
+    DreamAPI ends an idle session.
     """
 
     def __init__(
@@ -189,7 +190,8 @@ class DreamModel(Model):
                 # dreamlabs-client 1.0.9 sends a call again on a fresh connection when the gateway has closed its idle
                 # keep-alive one, but over TLS that close raises `ssl.SSLEOFError`, which it reports as a gateway it
                 # cannot reach. It has dropped the connection, so the call goes once more, on a new one.
-                if stale_sent or not isinstance(error.__cause__, ssl.SSLEOFError):
+                stale = isinstance(error.__cause__, ssl.SSLEOFError)
+                if stale_sent or not stale or not _ends_by(deadline, self._call_timeout_s):
                     raise
                 stale_sent = True
                 logger.warning('The gateway closed an idle connection; sending the call again on a new one')

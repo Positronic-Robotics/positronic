@@ -175,6 +175,18 @@ def test_a_call_whose_new_connection_also_fails_raises(model, gateway, monkeypat
         model(_request(), session_id='a')
 
 
+def test_a_call_on_a_closed_connection_is_not_sent_again_when_a_whole_call_does_not_fit(model, gateway, monkeypatch):
+    model(_request(), session_id='a')
+    calls = len(gateway.calls)
+    # The call timeout is 5 s, so no call sent now ends inside a 3 s deadline.
+    model._retry_deadline_s = 3.0
+    _close_idle_connections(monkeypatch, times=1)
+
+    with pytest.raises(server.dream_client.DreamProtocolError):
+        model(_request(), session_id='a')
+    assert len(gateway.calls) == calls
+
+
 def test_a_call_after_an_idle_gap_starts_a_new_session(model, gateway, tmp_path, monkeypatch):
     model(_request(), session_id='a')
     clock = server.time.monotonic() + 61.0
