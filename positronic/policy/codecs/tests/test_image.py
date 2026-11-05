@@ -259,10 +259,11 @@ class TestTransformImages:
         stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
         assert TransformImages(64, 48, mode=ResizeMode.BOUND).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
 
-    def test_a_history_matches_individually_resized_frames(self):
+    @pytest.mark.parametrize('resample', list(Resample))
+    def test_a_history_matches_individually_resized_frames(self, resample):
         rng = np.random.default_rng(0)
         stack = rng.integers(0, 256, size=(8, 480, 640, 3), dtype=np.uint8)
-        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
+        codec = TransformImages(64, 48, resample=resample, mode=ResizeMode.BOUND)
         one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
         np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
 
@@ -391,13 +392,6 @@ class TestTransformImages:
         codec = TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND)
         expected = codec.encode({'cam': np.ascontiguousarray(image)})['cam']
         np.testing.assert_array_equal(codec.encode({'cam': image})['cam'], expected)
-
-    def test_an_area_history_matches_individually_resized_frames(self):
-        rng = np.random.default_rng(0)
-        stack = rng.integers(0, 256, size=(8, 480, 640, 3), dtype=np.uint8)
-        codec = TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND)
-        one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
-        np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
 
 
 class TestEncodeImages:
