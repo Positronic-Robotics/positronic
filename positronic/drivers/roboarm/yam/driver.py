@@ -14,9 +14,9 @@ import functools
 import logging
 import math
 from collections import deque
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 import mujoco as mj
 import numpy as np
@@ -33,7 +33,7 @@ from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
 from ..ik import qpos_from_site_pose
 from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model
-from .compensation import I2RT_COMPENSATION, Compensation
+from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 logger = logging.getLogger(__name__)
@@ -75,25 +75,44 @@ def _chain_call() -> Iterator[None]:
         raise ChainFault(f'the chain failed: {exc}') from exc
 
 
-def _friction_share(speed: np.ndarray, fade: Sequence[float]) -> np.ndarray:
-    """The part of its Coulomb friction that a joint gets at ``speed`` under ``fade``: none below the first speed,
-    all from the second, linear between."""
-    zero_below, full_from = fade
-    return np.clip((np.abs(speed) - zero_below) / (full_from - zero_below), 0.0, 1.0)
+class _JointSpeeds(Protocol):
+    vel: np.ndarray  # rad/s per motor
 
 
-def _fade_coulomb_friction(chain: Any, fade: Sequence[float]) -> None:
-    """Scale the Coulomb friction of the hardware ``chain`` by ``_friction_share`` of the speed of each joint.
+@runtime_checkable
+class _FrictionLoop(Protocol):
+    """What the friction fade reads, writes and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update``
+    runs one cycle of its control loop and adds ``_coulomb_friction * sign(_joint_state.vel)``.
 
-    HACK: each ``update`` of i2rt adds ``_coulomb_friction * sign(speed)`` and has no setting for a fade. So the
-    scaled friction goes in before each ``update``, and ``get_robot_info`` reports the full friction. Only the thread
-    that runs ``update`` writes the speed, so i2rt reads the speed that the scale used.
+    HACK: these members are private to i2rt, which has no setting for a fade.
     """
+
+    _coulomb_friction: np.ndarray
+    _joint_state: _JointSpeeds
+    update: Callable[[], None]
+    get_robot_info: Callable[[], dict[str, Any]]
+
+
+def _fade_coulomb_friction(chain: object, fade: FrictionFade) -> None:
+    """Scale the Coulomb friction of the hardware ``chain`` by ``fade.share`` of the speed of each joint, before each
+    ``update``. ``get_robot_info`` reports the full friction. Only the thread that runs ``update`` writes the speed,
+    so i2rt reads the speed that the scale used.
+
+    Raise before anything changes when ``chain`` lacks a member of ``_FrictionLoop`` or its speed reading, so a moved
+    member fails the connect and not the control thread of i2rt.
+    """
+    if not isinstance(chain, _FrictionLoop):
+        raise TypeError(f'{type(chain).__name__} lacks a member of _FrictionLoop, which the friction fade needs')
     friction = np.array(chain._coulomb_friction, np.float64)
     update, robot_info = chain.update, chain.get_robot_info
 
+    def faded_friction() -> np.ndarray:
+        return friction * fade.share(chain._joint_state.vel)
+
+    faded_friction()
+
     def faded_update() -> None:
-        chain._coulomb_friction = friction * _friction_share(chain._joint_state.vel, fade)
+        chain._coulomb_friction = faded_friction()
         update()
 
     chain.update = faded_update
@@ -110,7 +129,7 @@ def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> 
     if compensation.coulomb_friction is not None:
         # The gripper motor gets no friction
         chain._coulomb_friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)
-    fade = compensation.coulomb_friction_fade_rad_s
+    fade = compensation.coulomb_friction_fade
     if compensation.use_coulomb_friction and fade is not None and not sim:
         _fade_coulomb_friction(chain, fade)
     chain.use_coulomb_friction = compensation.use_coulomb_friction
@@ -736,11 +755,6 @@ class Robot(pimm.ControlSystem):
             values = np.asarray(friction, np.float64)
             if values.shape != (len(YAM_JOINT_NAMES),) or not np.all(np.isfinite(values) & (values >= 0)):
                 raise ValueError(f'coulomb_friction needs one finite, non-negative value per arm joint, not {friction}')
-        fade = compensation.coulomb_friction_fade_rad_s
-        if fade is not None:
-            speeds = np.asarray(fade, np.float64)
-            if speeds.shape != (2,) or not (np.all(np.isfinite(speeds)) and 0 <= speeds[0] < speeds[1]):
-                raise ValueError(f'coulomb_friction_fade_rad_s needs two finite speeds, 0 <= first < second: {fade}')
         self._park_after_idle_s = park_after_idle_s
         self._park_tuning = park_tuning
         self._move_tuning = move_tuning

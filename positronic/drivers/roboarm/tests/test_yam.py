@@ -34,7 +34,7 @@ from positronic.drivers.roboarm.models import (
 from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
-from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation
+from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
@@ -2102,8 +2102,9 @@ def test_coulomb_friction_with_no_values_runs_the_values_of_i2rt(monkeypatch):
 
 # A YAM joint at rest reads speeds of up to this
 MAX_REST_SPEED_NOISE_RAD_S = 0.007
-# No friction below 0.01 rad/s, all of it from 0.02 rad/s
-FADED_COMPENSATION = dataclasses.replace(STATION_COMPENSATION, coulomb_friction_fade_rad_s=[0.01, 0.02])
+FADED_COMPENSATION = dataclasses.replace(
+    STATION_COMPENSATION, coulomb_friction_fade=FrictionFade(zero_below_rad_s=0.01, full_from_rad_s=0.02)
+)
 STATION_FRICTION_TORQUE = np.array([*STATION_COULOMB_FRICTION, 0.0])
 SPEEDS_AT_REST = [0.005, -0.005, MAX_REST_SPEED_NOISE_RAD_S, -MAX_REST_SPEED_NOISE_RAD_S]
 
@@ -2147,13 +2148,81 @@ def test_a_fade_with_the_friction_off_adds_no_coulomb_friction(monkeypatch, spee
 
 
 @pytest.mark.parametrize(
-    'fade',
-    [[0.01], [0.01, 0.02, 0.03], [0.02, 0.01], [0.01, 0.01], [-0.01, 0.02], [0.01, math.nan], [0.01, math.inf]],
-    ids=['one-speed', 'three-speeds', 'reversed', 'equal', 'negative', 'nan', 'infinite'],
+    'zero_below, full_from',
+    [(0.02, 0.01), (0.01, 0.01), (-0.01, 0.02), (0.01, math.nan), (0.01, math.inf)],
+    ids=['reversed', 'equal', 'negative', 'nan', 'infinite'],
 )
-def test_a_fade_that_the_driver_cannot_run_is_refused_before_a_chain_opens(fade):
-    with pytest.raises(ValueError, match='coulomb_friction_fade_rad_s'):
-        yam.Robot(compensation=dataclasses.replace(FADED_COMPENSATION, coulomb_friction_fade_rad_s=fade))
+def test_a_friction_fade_that_does_not_rise_from_a_non_negative_speed_is_refused(zero_below, full_from):
+    with pytest.raises(ValueError, match='friction fade'):
+        FrictionFade(zero_below_rad_s=zero_below, full_from_rad_s=full_from)
+
+
+def _chain_without_a_speed_reading() -> I2rtChain:
+    chain = I2rtChain()
+    chain._joint_state = types.SimpleNamespace()
+    return chain
+
+
+@pytest.mark.parametrize('make_chain', [yam._FakeYam, _chain_without_a_speed_reading], ids=['no-update', 'no-speed'])
+def test_a_fade_on_a_chain_that_lacks_what_it_reads_fails_the_connect_with_the_friction_off(monkeypatch, make_chain):
+    chain = make_chain()
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: chain)
+    with pytest.raises((TypeError, AttributeError)):
+        yam._connect('can0', False, FADED_COMPENSATION)
+    assert not chain.use_coulomb_friction
+
+
+class FakeMotorChain:
+    """Seven motors for i2rt's ``MotorChainRobot``: they hold at 0.5 rad, report ``vel`` and keep each torque sent."""
+
+    running = True
+
+    def __init__(self):
+        self.vel = np.zeros(7)
+        self.torques: list[np.ndarray] = []
+
+    def __len__(self) -> int:
+        return 7
+
+    def read_states(self) -> list[types.SimpleNamespace]:
+        state = {'pos': 0.5, 'eff': 0.0, 'temp_mos': 0.0, 'temp_rotor': 0.0, 'timestamp': 0.0}
+        return [types.SimpleNamespace(vel=speed, **state) for speed in self.vel]
+
+    def set_commands(self, torques: np.ndarray, **_) -> list[types.SimpleNamespace]:
+        self.torques.append(np.array(torques))
+        return self.read_states()
+
+    def close(self) -> None:
+        pass
+
+
+def test_the_friction_fade_runs_on_the_hardware_chain_of_i2rt(monkeypatch):
+    """The fade reads and wraps private members of i2rt's chain, so an i2rt that moves them fails here."""
+    motor_chain_robot = pytest.importorskip('i2rt.robots.motor_chain_robot')
+    motors = FakeMotorChain()
+
+    def get_yam_robot(channel, use_coulomb_friction, **_):
+        return motor_chain_robot.MotorChainRobot(
+            motor_chain=motors,
+            use_gravity_comp=False,
+            gripper_index=6,
+            gripper_limits=np.array([0.0, 1.0]),
+            joint_limits=np.array([[-3.0, 3.0]] * 6),
+            kp=np.full(7, 10.0),
+            kd=np.ones(7),
+            coulomb_friction=np.zeros(7),
+            use_coulomb_friction=use_coulomb_friction,
+            zero_gravity_mode=False,
+        )
+
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
+    chain = yam._connect('can0', False, FADED_COMPENSATION)
+    chain.close()  # stops the control thread of i2rt, so the test runs each cycle below
+    for speed, share in ((0.005, 0.0), (0.1, 1.0), (-0.1, -1.0)):
+        motors.vel = np.full(7, speed)
+        chain.update()  # i2rt reads the speed of the cycle before
+        chain.update()
+        np.testing.assert_allclose(motors.torques[-1], share * STATION_FRICTION_TORQUE, atol=1e-12)
 
 
 @pytest.mark.parametrize(
