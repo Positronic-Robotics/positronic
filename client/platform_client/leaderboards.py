@@ -165,6 +165,10 @@ class RankRange(_Wire):
             raise ValueError(f'places from {self.best} down to {self.worst}')
         return self
 
+    def __str__(self) -> str:
+        """The places as a page shows them: `3`, or `3-5` where the row can take any of them."""
+        return str(self.best) if self.best == self.worst else f'{self.best}-{self.worst}'
+
 
 class Link(_Wire):
     text: str

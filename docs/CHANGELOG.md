@@ -13,7 +13,7 @@ This release publishes `positronic-platform-client` 0.47.10, and `positronic` re
 | `positronic-wire` | 0.12.2 |
 
 ### Platform client
-- `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard of a tag. It also reads a leaderboard whose other fields this client version refuses. `NEBIUS_COMPETITION_TAG` in `platform_client.leaderboards` is the tag `competition.phail.ai` ([#1161](https://github.com/Positronic-Robotics/positronic/pull/1161))
+- `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard of a tag. It also reads a leaderboard whose other fields this client version refuses. `NEBIUS_COMPETITION_TAG` in `platform_client.leaderboards` is the tag `competition.phail.ai`. `str()` of a `RankRange` gives `3`, or `1-2` for a range of places ([#1161](https://github.com/Positronic-Robotics/positronic/pull/1161))
 - `RigShape` gains `molmospaces` and `robolab`, so a plan names the simulator it runs in. `sim` is removed, and the plan refuses it or any other unknown shape ([#1137](https://github.com/Positronic-Robotics/positronic/pull/1137))
 - A `remote` endpoint in a plan file can state `auth_token_file`. `positronic eval run --from-file` reads the bearer token from that file, and the platform presents it to that endpoint only ([#1131](https://github.com/Positronic-Robotics/positronic/pull/1131))
 - The plan refuses a bearer token on the `modal_websocket_tls` wire. The READMEs state that the `websocket`, `grpc` and `roboarena` wires have no TLS ([#1136](https://github.com/Positronic-Robotics/positronic/pull/1136))

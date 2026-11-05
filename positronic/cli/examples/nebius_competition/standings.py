@@ -25,13 +25,7 @@ from platform_client.client import PlatformClient
 from platform_client.config import platform_url_from, record_if_needed
 from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
-from platform_client.leaderboards import (
-    NEBIUS_COMPETITION_TAG,
-    LeaderboardDescriptor,
-    LeaderboardRef,
-    LeaderboardRow,
-    Metric,
-)
+from platform_client.leaderboards import NEBIUS_COMPETITION_TAG, LeaderboardDescriptor, LeaderboardRef, Metric
 
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -45,13 +39,6 @@ def _table(header: list[str], rows: list[list[str]]) -> list[str]:
 
 def _ranked_metric(descriptor: LeaderboardDescriptor) -> Metric:
     return next(metric for metric in descriptor.metrics if metric.key == descriptor.ranked_by)
-
-
-def _place(row: LeaderboardRow) -> str:
-    """`baseline` for a reference row; else the place, or the range of places that the row can take."""
-    if row.rank is None:
-        return 'baseline'
-    return str(row.rank.best) if row.rank.best == row.rank.worst else f'{row.rank.best}-{row.rank.worst}'
 
 
 def run(client: PlatformClient, board: LeaderboardRef | None) -> list[str]:
@@ -87,7 +74,7 @@ def run(client: PlatformClient, board: LeaderboardRef | None) -> list[str]:
     for row in response.rows:
         score = row.metrics.get(metric.key)
         rows.append([
-            _place(row),
+            'baseline' if row.rank is None else str(row.rank),
             f'{row.display_name}#{row.user_tag}' if row.user_tag is not None else row.display_name,
             '-' if score is None else f'{score.value:.{metric.decimals}f}',
             '-' if row.submission is None else str(row.submission.id),

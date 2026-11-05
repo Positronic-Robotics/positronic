@@ -743,6 +743,11 @@ def test_a_range_runs_from_low_to_high():
         Estimate(value=1.0, low=2.0, high=0.5)
 
 
+@pytest.mark.parametrize(('best', 'worst', 'shown'), [(3, 3, '3'), (1, 2, '1-2')], ids=['one-place', 'range'])
+def test_a_rank_shows_one_place_or_the_range_of_places(best: int, worst: int, shown: str):
+    assert str(RankRange(best=best, worst=worst)) == shown
+
+
 def test_places_run_from_the_best_to_the_worst():
     assert RankRange(best=2, worst=2).worst == 2
     with pytest.raises(ValidationError, match='down to'):

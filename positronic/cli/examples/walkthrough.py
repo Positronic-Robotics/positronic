@@ -134,7 +134,7 @@ def walkthrough(
             print(f'   {summary.leaderboard}')
             leaderboard = public.get_leaderboard(summary.leaderboard)
             for row in leaderboard.rows:
-                rank = 'base' if row.rank is None else row.rank.best
+                rank = 'base' if row.rank is None else str(row.rank)
                 score = row.metrics.get(leaderboard.descriptor.ranked_by)
                 value = None if score is None else score.value
                 name = row.display_name if row.user_tag is None else f'{row.display_name}#{row.user_tag}'
