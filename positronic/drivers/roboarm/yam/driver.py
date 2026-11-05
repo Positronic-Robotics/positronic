@@ -32,7 +32,7 @@ from positronic.utils import package_assets_path
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
 from ..ik import qpos_from_site_pose
-from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
+from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model
 from .compensation import I2RT_COMPENSATION, Compensation
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 # The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
 # TODO(#517): centralise driver kinematics so driver and sim share one module.
-_MJCF_PATH = 'assets/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 _IK_ROT_TOL = 1e-2  # radians
 # Joints 2 and 3 rest on their lower mechanical stops at zero.
@@ -153,7 +152,7 @@ class _Kinematics:
     """
 
     def __init__(self):
-        model_path = package_assets_path(_MJCF_PATH)
+        model_path = package_assets_path(YAM_MJCF_PATH)
         self._model = mj.MjModel.from_xml_path(model_path)
         self._data = mj.MjData(self._model)
         site = mj.mjtObj.mjOBJ_SITE
