@@ -34,15 +34,20 @@ Get a DreamAPI key at [platform.dreamlabs.ai](https://platform.dreamlabs.ai). Pu
 `~/.dreamlabs/credentials` as the line `DREAM_API_KEY=<key>` with mode 600. Do not put it in arguments or configs.
 
 ```bash
-# Serve Dream-1 on :8000. A cold model takes up to an hour to start, and the server waits for it.
+# Serve Dream-1 on 127.0.0.1:8000. A cold model takes up to an hour to start, and the server waits for it.
 uv run --locked --extra dream python -m positronic.vendors.dream.server yam_bimanual \
-  --model.sessions_dir=~/dream_sessions
+  --websocket.served_address.host=127.0.0.1 --model.sessions_dir=~/dream_sessions
 
 # Run an ABC task against it. Name the same extras in both commands: `uv run` removes the extras it is not given.
 uv run --locked --extra dream positronic eval run --eval=.sim.amazon_abc.put_bottles \
   --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --charge_inference_time=False --output_dir=~/datasets/dream/abc
 ```
+
+The server binds `0.0.0.0` unless told otherwise, and with no `AUTH_TOKEN` it serves any client. Each request from a
+client becomes a billed DreamAPI call on your key, so bind `127.0.0.1` when the client runs on the same machine. A
+server that a robot reaches from another machine needs `AUTH_TOKEN` and a private network, such as a tailnet (see
+[Authentication](../../offboard/README.md#authentication)).
 
 A round trip to DreamAPI takes 0.4 to 4 s, so a sim run pauses sim time during each call
 (`--charge_inference_time=False`). On a machine with no GPU, set `MUJOCO_GL=osmesa`. DreamAPI ended a session that
