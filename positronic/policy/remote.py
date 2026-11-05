@@ -604,11 +604,16 @@ class RemotePolicy(Policy):
             ),
         }
         stack = declared_stack(meta, version, overrides)
-        refusal = self._stream_refusal(parts, temporal, [*schedules, *(v1.schedule for v1 in rtc)], encodes)
+        predicted = [*schedules, *(v1.schedule for v1 in rtc)]
+        refusal = self._stream_refusal(parts, temporal, predicted, encodes)
         if refusal is not None:
             logger.warning('The frame stream does not mirror the declared stack: %s; requests go in full', refusal)
             return declared_stack(meta, version), None, self._jpeg_quality, False
         (stacked,) = temporal
+        (schedule,) = predicted
+        timing = schedule.request_timing
+        # An RTC schedule calls ``call_after_sec`` after its previous call, whichever recipe declared it.
+        call_after_sec = timing.seconds if timing.reference is RequestTiming.Reference.AFTER_START else None
         quality = encodes[0].quality if encodes else self._jpeg_quality
         stack_meta = stack.meta()
 
@@ -630,7 +635,7 @@ class RemotePolicy(Policy):
             lead=schedules[0].latency_estimate.run().update if schedules else None,
             resize=partial(self._transform_row, transforms) if transforms else None,
             jpeg_quality=quality,
-            call_after_sec=rtc[0].schedule.request_timing.seconds if rtc else None,
+            call_after_sec=call_after_sec,
             snap_sec=self._frame_stream_snap_sec,
         )
         hooks.streamer = streamer

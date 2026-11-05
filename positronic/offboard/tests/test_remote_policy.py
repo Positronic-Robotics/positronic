@@ -79,6 +79,7 @@ from positronic.policy.processors import (
     InferenceSchedule,
     Periodic,
     RequestTiming,
+    RTCSchedule,
     TemporalStack,
     TrajectoryMerge,
     TrajectoryPlayer,
@@ -2310,6 +2311,23 @@ def test_an_rtc_frame_stream_targets_its_rows_from_the_call_time_plus_call_after
     assert _frame_index(tail) == 9
     # The declared encode_images leaves the stack as arrays; the rows and the requests go at its quality.
     assert qualities and set(qualities) == {75}
+
+
+def test_a_frame_stream_times_the_calls_of_an_rtc_schedule_that_a_recipe_declares_directly():
+    temporal = TemporalStack(('image',), (-0.25, -0.15, 0.0), pad_start=False).to_spec()
+    player = TrajectoryPlayer(plan_key=policy_keys.PLAN, record_stats=False, replan_on_error=False)
+    rtc = RTCSchedule(fps=10.0, call_after_sec=0.4, latency_estimate=ConstantDuration(0.1))
+    meta = {
+        offboard_keys.LOCAL_STACK: {'seq': [temporal, player.to_spec(), rtc.to_spec()]},
+        ACTION_FPS: 10.0,
+        policy_keys.COMPRESS_IMAGES: True,
+        FRAME_STREAM: {'version': 1, 'codecs': ['jpeg', 'h264']},
+    }
+    session = _run_v2_rtc(meta, 11)
+
+    # The same timing as the `rtc_schedule` v1 recipe: call 1 at 0.5 s, call 2 at 0.9 s, each referring to both rows.
+    requests = [call.args[0]['image'] for call in session.infer.call_args_list]
+    assert [(r[b'call'], r[b'rows']) for r in requests[1:]] == [(1, [2, 1]), (2, [2, 1])]
 
 
 def test_a_session_without_a_frame_stream_keeps_the_declared_encode_images():
