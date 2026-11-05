@@ -10,8 +10,10 @@ finds it, and the probe applies that check to the same view.
 """
 
 import argparse
+import contextlib
 import dataclasses
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import cv2
@@ -50,7 +52,30 @@ def _single_bad_frame(before: np.ndarray, frame: np.ndarray, after: np.ndarray) 
     )
 
 
-def probe(serial: int, frames: int, resolution: str, fps: int, out: Path | None) -> TearCount:
+@dataclasses.dataclass(frozen=True)
+class Sample:
+    index: int
+    dropped: bool
+    grey: np.ndarray
+    side_by_side: np.ndarray
+
+
+def _sample(camera, left, right, count: TearCount) -> Sample:
+    """Read one grabbed frame, apply the driver's check to it, and count the result."""
+    camera.retrieve_image(left, sl.VIEW.LEFT_UNRECTIFIED)
+    camera.retrieve_image(right, sl.VIEW.RIGHT_UNRECTIFIED)
+    raw_left = left.get_data()
+    dropped = starts_with_zero_fill(raw_left)
+    if dropped:
+        count.dropped.append(count.grabbed)
+    elif np.all(raw_left[0, 0, :3] == ZERO_FILL_BGR):
+        count.partial_fill_passed.append(count.grabbed)
+    side_by_side = np.concatenate([raw_left[:, :, :3], right.get_data()[:, :, :3]], axis=1)
+    return Sample(count.grabbed, dropped, _small_grey(side_by_side), side_by_side)
+
+
+@contextlib.contextmanager
+def _opened(serial: int, resolution: str, fps: int) -> Iterator:
     camera = sl.Camera()
     init = sl.InitParameters()
     init.camera_resolution = getattr(sl.RESOLUTION, resolution.upper())
@@ -61,32 +86,29 @@ def probe(serial: int, frames: int, resolution: str, fps: int, out: Path | None)
     result = camera.open(init)
     if result != sl.ERROR_CODE.SUCCESS:
         raise RuntimeError(f'Failed to open camera {serial}: {result}')
+    try:
+        yield camera
+    finally:
+        camera.close()
+
+
+def probe(serial: int, frames: int, resolution: str, fps: int, out: Path | None) -> TearCount:
     left, right = sl.Mat(), sl.Mat()
     count = TearCount(serial)
-    window: list[tuple[int, bool, np.ndarray, np.ndarray]] = []  # index, dropped, small grey, side by side
-    try:
+    window: list[Sample] = []
+    with _opened(serial, resolution, fps) as camera:
         for _ in range(frames):
             result = camera.grab()
             count.grab_codes[str(result)] = count.grab_codes.get(str(result), 0) + 1
             if result != sl.ERROR_CODE.SUCCESS:
                 continue
-            camera.retrieve_image(left, sl.VIEW.LEFT_UNRECTIFIED)
-            camera.retrieve_image(right, sl.VIEW.RIGHT_UNRECTIFIED)
-            raw_left = left.get_data()
-            torn = starts_with_zero_fill(raw_left)
-            if torn:
-                count.dropped.append(count.grabbed)
-            elif np.all(raw_left[0, 0, :3] == ZERO_FILL_BGR):
-                count.partial_fill_passed.append(count.grabbed)
-            side_by_side = np.concatenate([raw_left[:, :, :3], right.get_data()[:, :, :3]], axis=1)
-            window = [*window[-2:], (count.grabbed, torn, _small_grey(side_by_side), side_by_side)]
-            if len(window) == 3 and not window[1][1] and _single_bad_frame(*(w[2] for w in window)):
-                count.torn_passed.append(window[1][0])
-                if out is not None:
-                    cv2.imwrite(str(out / f'{serial}_passed_{window[1][0]}.png'), window[1][3])
+            window = [*window[-2:], _sample(camera, left, right, count)]
             count.grabbed += 1
-    finally:
-        camera.close()
+            if len(window) < 3 or window[1].dropped or not _single_bad_frame(*(w.grey for w in window)):
+                continue
+            count.torn_passed.append(window[1].index)
+            if out is not None:
+                cv2.imwrite(str(out / f'{serial}_passed_{window[1].index}.png'), window[1].side_by_side)
     return count
 
 
