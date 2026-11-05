@@ -21,9 +21,6 @@ import numpy as np
 
 from positronic.drivers.camera.zed import ZERO_FILL_BGR, sl, starts_with_zero_fill
 
-# Mean absolute grey difference, on a 0-255 scale, above which two frames of a static scene differ.
-FRAMES_DIFFER = 6.0
-
 
 @dataclasses.dataclass
 class TearCount:
@@ -87,17 +84,16 @@ def _opened(serial: int, resolution, fps: int) -> Iterator:
         camera.close()
 
 
-def _single_bad_frame(before: np.ndarray, frame: np.ndarray, after: np.ndarray) -> bool:
+def _single_bad_frame(before: np.ndarray, frame: np.ndarray, after: np.ndarray, differ: float) -> bool:
     d_before, d_after = np.abs(frame - before).mean(), np.abs(after - frame).mean()
-    return (
-        d_before > FRAMES_DIFFER
-        and d_after > FRAMES_DIFFER
-        and np.abs(after - before).mean() < 0.5 * min(d_before, d_after)
-    )
+    return d_before > differ and d_after > differ and np.abs(after - before).mean() < 0.5 * min(d_before, d_after)
 
 
-def probe(serial: int, frames: int, resolution, fps: int, out: Path | None) -> TearCount:
-    """Grab ``frames`` frames at ``resolution`` (an ``sl.RESOLUTION``) and count the torn ones."""
+def probe(serial: int, frames: int, resolution, fps: int, differ: float, out: Path | None) -> TearCount:
+    """Grab ``frames`` frames at ``resolution`` (an ``sl.RESOLUTION``) and count the torn ones.
+
+    Two frames differ when their mean absolute grey difference, on a 0-255 scale, is above ``differ``.
+    """
     left, right = sl.Mat(), sl.Mat()
     count = TearCount(serial)
     window: list[Sample] = []
@@ -107,9 +103,15 @@ def probe(serial: int, frames: int, resolution, fps: int, out: Path | None) -> T
             count.grab_codes[str(result)] = count.grab_codes.get(str(result), 0) + 1
             if result != sl.ERROR_CODE.SUCCESS:
                 continue
-            window = [*window[-2:], _sample(camera, left, right, count)]
+            sample = _sample(camera, left, right, count)
             count.grabbed += 1
-            if len(window) < 3 or window[1].dropped or not _single_bad_frame(*(w.grey for w in window)):
+            if sample.dropped:
+                continue
+            # The driver sends only the frames it does not drop, so a frame is judged against its sent neighbours.
+            window = [*window[-2:], sample]
+            if len(window) < 3:
+                continue
+            if not _single_bad_frame(*(w.grey for w in window), differ=differ):
                 continue
             count.torn_passed.append(window[1].index)
             path = out / f'{serial}_passed_{window[1].index}.png' if out is not None else None
@@ -124,11 +126,12 @@ def main() -> None:
     parser.add_argument('--frames', type=int, default=3600)
     parser.add_argument('--resolution', default='HD720', type=str.upper, choices=list(sl.RESOLUTION.__members__))
     parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--differ', type=float, default=6.0, help='grey difference above which two frames differ')
     parser.add_argument('--out', type=Path)
     args = parser.parse_args()
     if args.out is not None:
         args.out.mkdir(parents=True, exist_ok=True)
-    count = probe(args.serial, args.frames, sl.RESOLUTION[args.resolution], args.fps, args.out)
+    count = probe(args.serial, args.frames, sl.RESOLUTION[args.resolution], args.fps, args.differ, args.out)
     print(json.dumps(dataclasses.asdict(count), indent=1))
 
 

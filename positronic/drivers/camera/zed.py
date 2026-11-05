@@ -203,6 +203,14 @@ class SLCamera(pimm.ControlSystem):
             return
         self._error = None
 
+    def _grab_until_not_torn(self, clock: pimm.Clock) -> GrabOutcome:
+        outcome = self._grab_frame(clock)
+        for _ in range(self.READY_GRABS - 1):
+            if outcome is not GrabOutcome.TORN:
+                break
+            outcome = self._grab_frame(clock)
+        return outcome
+
     def _make_ready(
         self, call: pimm.calls.Call[None, None], clock: pimm.Clock, should_stop: pimm.SignalReceiver
     ) -> Generator[pimm.Sleep, None, None]:
@@ -225,14 +233,6 @@ class SLCamera(pimm.ControlSystem):
         if error is None:
             error = self._hold(DeviceFault(f'Camera {self._serial_number} opened and sent no frame', FaultKind.CAMERA))
         call.set_exception(error)
-
-    def _grab_until_not_torn(self, clock: pimm.Clock) -> GrabOutcome:
-        outcome = self._grab_frame(clock)
-        for _ in range(self.READY_GRABS - 1):
-            if outcome is not GrabOutcome.TORN:
-                break
-            outcome = self._grab_frame(clock)
-        return outcome
 
     def _init_params(self):
         init_params = sl.InitParametersOne() if self._mono else sl.InitParameters()
