@@ -285,6 +285,24 @@ FAULT_IN_URL = f"""
 """
 
 
+def docked_list_without_the_linked_row() -> str:
+    """A docked list that shares the link parameter `episode` and holds none of the rows of `inline_rows`."""
+    data = json.dumps({'columns': [{'key': 'task', 'label': 'Task'}], 'rows': [{'id': 'other-1', 'values': {}}]})
+    return (
+        f'<positronic-replay id="other" dock link-param="episode"><script type="application/json">{data}</script>'
+        '</positronic-replay>'
+    )
+
+
+def in_shadow_tree(body: str) -> str:
+    """`body` inside the shadow tree of another component, where the page's own queries do not reach."""
+    markup = json.dumps(body).replace('</', '<\\/')
+    return (
+        '<probe-shadow></probe-shadow><script>customElements.define("probe-shadow", class extends HTMLElement {'
+        f' connectedCallback() {{ this.attachShadow({{ mode: "open" }}).innerHTML = {markup}; }} }});</script>'
+    )
+
+
 def zero_filter() -> str:
     """A column whose filter is 0, which is no filter the element reads."""
     data = json.dumps({
@@ -391,6 +409,13 @@ def pages() -> dict[str, str]:
         '/page/dock-video': page_html(inline_element('dock link-param="episode"')),
         '/page/dock-panel': page_html(inline_element('mode="full" dock link-param="episode"') + PANEL),
         '/page/list': page_html(inline_element('mode="full" link-param="episode"')),
+        '/page/two-lists': page_html(
+            docked_list_without_the_linked_row() + inline_element('dock link-param="episode"')
+        ),
+        '/page/empty': page_html(''),
+        '/page/two-lists-in-shadow': page_html(
+            in_shadow_tree(docked_list_without_the_linked_row() + inline_element('dock link-param="episode"'))
+        ),
         '/page/nulls': page_html(null_cells()),
         '/page/cut': page_html(f'<positronic-replay src="{SHARE}/cut.json"></positronic-replay>'),
         '/page/fault': page_html(fault_rows()),
@@ -1667,6 +1692,96 @@ class Probe:
         )
         page.close()
 
+    def host_styles(self):
+        print("A host page's styles on the cells, the column names, the filters and the Details button:")
+        page = self.open('/page/dock-video?episode=2')
+        self.until(page, "host().hasAttribute('open')", 8000)
+        cells = page.evaluate("""(() => {
+          const style = (node) => getComputedStyle(node);
+          const [text, , badge] = [...row('2').cells];
+          const iconFact = all('fact').find((fact) => fact.querySelector('img'));
+          return {
+            tableCells: [...all('cell'), ...all('head-cell')].every((cell) => style(cell).display === 'table-cell'),
+            badgeWeight: style(badge).fontWeight === style(text).fontWeight,
+            iconFactWidth: Math.round(iconFact.getBoundingClientRect().width),
+          };
+        })()""")
+        self.check(
+            "a cell of a badge or an icon column takes none of the badge's or the icon's styles",
+            cells['tableCells'] and cells['badgeWeight'] and cells['iconFactWidth'] > 18,
+            cells,
+        )
+        page.evaluate('one("close").click()')
+        stuck = page.evaluate("""(() => {
+          const head = one('sticky-head');
+          const names = [...host().shadowRoot.querySelectorAll('[part~="table-scroll"] th')];
+          const copies = [...head.querySelectorAll('th')];
+          const edges = (th) => [th.getBoundingClientRect().left, th.getBoundingClientRect().right];
+          const off = (th, at) => edges(th).map((x, side) => Math.abs(x - edges(copies[at])[side]));
+          return Math.max(...names.flatMap(off));
+        })()""")
+        self.check('each column name that stays under the bar sits over its column', stuck < 1, f'{stuck:.1f} px off')
+        page.add_style_tag(
+            content='positronic-replay::part(filter-select) { outline: 3px solid rgb(1, 2, 3); }'
+            ' positronic-replay::part(details-toggle pressed) { outline: 3px solid rgb(4, 5, 6); }'
+        )
+        outlines = page.evaluate(
+            "[...host().shadowRoot.querySelectorAll('select')].map((select) => getComputedStyle(select).outlineColor)"
+        )
+        self.check('a host page styles each filter select', outlines == ['rgb(1, 2, 3)'] * 4, outlines)
+        cell(page, 3).click()
+        self.until(page, "host().hasAttribute('open')", 5000)
+        toggle = "getComputedStyle(one('details-toggle')).outlineColor"
+        part(page, 'details-toggle').click()
+        pressed = page.evaluate(toggle)
+        part(page, 'details-toggle').click()
+        released = page.evaluate(toggle)
+        self.check(
+            'a host page styles the pressed Details button, and only while it is pressed',
+            pressed == 'rgb(4, 5, 6)' and released != pressed,
+            (pressed, released),
+        )
+        page.close()
+
+    def link_in_one_of_two_lists(self):
+        print('A link to a row of the second of two lists that share the link parameter:')
+        warnings = []
+        page = self.browser.new_page(viewport={'width': 1400, 'height': 900})
+        page.on('console', lambda message: message.type == 'warning' and warnings.append(message.text))
+        page.goto(self.base + '/page/two-lists?episode=30', wait_until='load')
+        opened = self.until(page, "document.querySelectorAll('positronic-replay')[1]?.hasAttribute('open')", 8000)
+        self.check('the list that holds the row opens it', opened)
+        self.check('the address keeps the parameter', 'episode=30' in page.url, page.url)
+        self.check('the other list opens nothing', not page.evaluate("host().hasAttribute('open')"))
+        self.check('and logs no warning', not warnings, warnings)
+        page.close()
+        print('The same two lists inside the shadow tree of another component:')
+        warnings.clear()
+        page = self.browser.new_page(viewport={'width': 1400, 'height': 900})
+        page.on('console', lambda message: message.type == 'warning' and warnings.append(message.text))
+        page.goto(self.base + '/page/two-lists-in-shadow?episode=30', wait_until='load')
+        holder = "document.querySelector('probe-shadow').shadowRoot.querySelectorAll('positronic-replay')[1]"
+        self.check('the list that holds the row opens it', self.until(page, f"{holder}?.hasAttribute('open')", 8000))
+        self.check('the address keeps the parameter', 'episode=30' in page.url, page.url)
+        self.check('and logs no warning', not warnings, warnings)
+        page.close()
+        print('A list the host removes, and the address it moves on to, in the same task:')
+        page = self.browser.new_page(viewport={'width': 1400, 'height': 900})
+        page.goto(self.base + '/page/empty?episode=no-such-row', wait_until='load')
+        page.evaluate(
+            """(markup) => {
+              const holder = document.createElement('div');
+              holder.innerHTML = markup;
+              document.body.append(holder);
+              holder.remove();
+              history.replaceState(null, '', '?episode=next');
+            }""",
+            inline_element('mode="full" link-param="episode"'),
+        )
+        time.sleep(0.5)
+        self.check('the address keeps the new parameter', 'episode=next' in page.url, page.url)
+        page.close()
+
     def width_change(self):
         print('A width change while a row plays:')
         page = self.open('/page/dock?episode=7')
@@ -1762,6 +1877,8 @@ def main(headed: bool) -> int:
             probe.end_and_zero_filter,
             probe.src_restored_and_mixed_length,
             probe.link_to_no_row,
+            probe.link_in_one_of_two_lists,
+            probe.host_styles,
             probe.swap_reports_and_button_names,
             probe.viewer_between_rows,
             probe.fault_is_not_input,

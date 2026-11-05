@@ -21,6 +21,8 @@
 //   - `dock-below` (dock): a selector of the host's bar. The dock and the list share the window below it.
 //   - `link-param` (full layout): the URL search parameter that names the open row. A link opens that row.
 //   - `link-param` is read once, at the first connect.
+//   - A link that names no row of the list loses the parameter, unless another connected list, in any shadow tree,
+//     has the same `link-param`.
 //   - `camera-names`: a JSON object that maps a camera key to the name the visitor sees.
 //   - A value of the wrong shape logs an error, and the element uses the default.
 //   - The defaults: `full`, `video`, the top of the window, no link parameter, the camera keys.
@@ -106,6 +108,8 @@
 //   - --replay-sticky-top: where the copy of the column names sticks.
 //   - --list-max, --video-max: the most height the compact list and its videos take.
 //   - Each node has a `part` to style.
+//   - A cell, a column name and a dock fact also take the part `column-<type>` of their column's type.
+//   - The Details button takes the part `pressed` while the details show.
 import {
   cellKey,
   cellText,
@@ -213,6 +217,8 @@ function setLinkParam(name, value) {
 }
 
 export class PositronicReplay extends HTMLElement {
+  // Every connected element, so a list finds its peers inside any shadow tree.
+  static #peers = new Set();
   static observedAttributes = ['src', ...Object.keys(ATTRIBUTES)];
 
   #list = null;
@@ -251,12 +257,14 @@ export class PositronicReplay extends HTMLElement {
   connectedCallback() {
     this.#connected = true;
     if (this.#linkParam === undefined) this.#linkParam = this.#readLinkParam();
+    PositronicReplay.#peers.add(this);
     if (this.#list) this.#render();
     else this.#load();
   }
 
   disconnectedCallback() {
     this.#connected = false;
+    PositronicReplay.#peers.delete(this);
     this.#waitForScript?.disconnect();
     this.#loading?.abort();
     this.#loading = null;
@@ -548,16 +556,22 @@ export class PositronicReplay extends HTMLElement {
   }
 
   /** The row the page's address names; null where it names none. An address that names a row the list does not
-   * hold loses the parameter. */
+   * hold loses the parameter, unless another connected list has the same link parameter. */
   #linkedRow() {
     const name = this.#linkParam;
     const id = name ? new URLSearchParams(window.location.search).get(name) : null;
     if (id === null) return null;
     const row = this.#list.rows.find((each) => each.id === id);
     if (row) return row;
-    // The address comes from the visitor, as an old link or an episode the list no longer holds: no host fault.
-    console.warn(`The link parameter ${name}=${id} names no row of this list; the element opens none.`);
-    setLinkParam(name, null);
+    // A peer connected by the same insertion upgrades after this one, before the microtask runs.
+    queueMicrotask(() => {
+      // The host can remove the list or move the address on before this runs.
+      if (!this.isConnected || new URLSearchParams(window.location.search).get(name) !== id) return;
+      if ([...PositronicReplay.#peers].some((other) => other !== this && other.#linkParam === name)) return;
+      // The address comes from the visitor, as an old link or an episode the list no longer holds: no host fault.
+      console.warn(`The link parameter ${name}=${id} names no row of this list; the element opens none.`);
+      setLinkParam(name, null);
+    });
     return null;
   }
 
@@ -565,7 +579,7 @@ export class PositronicReplay extends HTMLElement {
     const filtered = this.#list.columns.filter((column) => column.filter);
     if (!filtered.length) return null;
     this.#selects = filtered.map((column) => {
-      const select = element('select', { 'data-key': column.key, 'aria-label': column.label }, [
+      const select = element('select', { part: 'filter-select', 'data-key': column.key, 'aria-label': column.label }, [
         element('option', { value: '' }, [column.filter.all]),
         ...column.filter.options.map((option) => element('option', { value: option.value }, [option.label])),
       ]);
@@ -586,13 +600,20 @@ export class PositronicReplay extends HTMLElement {
     return element('div', { part: 'filters' }, [...controls, this.#count]);
   }
 
+  // The part that names a column's type on its cells, its name and its dock facts. No node inside a cell has it.
+  #columnPart(column) {
+    return `column-${column.type}`;
+  }
+
   #table() {
     const { columns, rows } = this.#list;
     const head = element(
       'tr',
       {},
       columns.map((column) =>
-        element('th', { scope: 'col', part: `head-cell ${column.type}`, title: column.hover }, [column.label]),
+        element('th', { scope: 'col', part: `head-cell ${this.#columnPart(column)}`, title: column.hover }, [
+          column.label,
+        ]),
       ),
     );
     const linkColumn = columns.find((column) => column.type === ColumnType.TEXT);
@@ -600,7 +621,7 @@ export class PositronicReplay extends HTMLElement {
     const body = rows.map((row) => {
       const cells = columns.map((column) => {
         const content = cellContent(column, row.values[column.key], column === linkColumn ? row.href : null);
-        return element('td', { part: `cell ${column.type}`, 'data-label': column.label }, content);
+        return element('td', { part: `cell ${this.#columnPart(column)}`, 'data-label': column.label }, content);
       });
       const tr = element('tr', { part: 'row', 'data-id': row.id, tabindex: '0', 'aria-label': row.label }, cells);
       tr.addEventListener('click', (event) => this.#rowClicked(event, row));
@@ -732,6 +753,7 @@ export class PositronicReplay extends HTMLElement {
     toggle.addEventListener('click', (event) => {
       details.hidden = !details.hidden;
       toggle.setAttribute('aria-pressed', String(!details.hidden));
+      toggle.part.toggle('pressed', !details.hidden);
       if (event.isTrusted) this.#act('details', { open: !details.hidden });
     });
     details.querySelector('slot').addEventListener('slotchange', (event) => {
@@ -833,8 +855,9 @@ export class PositronicReplay extends HTMLElement {
       .filter((column) => column.key !== INDEX_KEY)
       .map((column) => {
         const content = cellContent(column, row.values[column.key]);
-        if (column.type !== ColumnType.NUMBER) return element('span', { part: `fact ${column.type}` }, content);
-        return element('span', { part: 'fact number' }, [
+        const part = `fact ${this.#columnPart(column)}`;
+        if (column.type !== ColumnType.NUMBER) return element('span', { part }, content);
+        return element('span', { part }, [
           ...content,
           element('span', { part: 'fact-label' }, [column.label]),
         ]);
