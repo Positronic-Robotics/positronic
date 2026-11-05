@@ -1,4 +1,5 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
 from positronic_model_server.spec import ARGS, NAME, VERSION
@@ -7,7 +8,7 @@ from positronic import keys as obs_keys
 from positronic.dataset.transforms import Elementwise
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 
-from .base import Codec
+from .base import Codec, CommandsPathCodec
 
 
 class BinarizeGripTraining(Codec):
@@ -89,12 +90,13 @@ class BinarizeGripInference(Codec):
         }
 
 
-class FlipGrip(Codec):
+class FlipGrip(CommandsPathCodec):
     """Serve a model whose gripper speaks an aperture (1 = open) on positronic's 1 = closed wire: flips ``grip``
     entering the model and ``target_grip`` leaving it.
 
-    With ``arms`` it flips ``grip.{arm}`` and ``target_grip.{arm}`` of each arm named, and publishes version 2.
-    Without, it flips the one-arm channels and publishes version 1. Compose to the left of obs/action codecs::
+    With ``arms`` it flips ``grip.{arm}`` and ``target_grip.{arm}`` of each arm named. With ``commands_path`` it also
+    flips ``target_grip`` in each executed command sent back to the model, such as an RTC prefix. Either argument
+    publishes version 2; with neither it publishes version 1. Compose to the left of obs/action codecs::
 
         FlipGrip() | obs & action
     """
@@ -103,15 +105,22 @@ class FlipGrip(Codec):
     WIRE_VERSION = 2
     ONE_ARM_VERSION = 1
 
-    def __init__(self, arms: Sequence[str] | None = None):
+    def __init__(self, arms: Sequence[str] | None = None, *, commands_path: tuple[str | int, ...] | None = None):
+        super().__init__(commands_path)
         self._arms = None if arms is None else tuple(arms)
         names = (None,) if self._arms is None else self._arms
         self._grips = tuple(obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in names)
         self._target_grips = tuple(obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in names)
 
+    def _flip_target_grips(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        return {**values, **{key: 1.0 - values[key] for key in self._target_grips if key in values}}
+
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        return self._flip_target_grips(values)
+
     def encode(self, data):
         # ``data`` belongs to the caller, so the flip goes on a copy.
-        flipped = {key: 1.0 - data[key] for key in self._grips if key in data}
+        flipped = {key: 1.0 - data[key] for key in self._grips if key in data} | super().encode(data)
         return {**data, **flipped} if flipped else data
 
     @property
@@ -119,12 +128,10 @@ class FlipGrip(Codec):
         return Identity()
 
     def _decode_single(self, data: dict) -> dict:
-        for key in self._target_grips:
-            if key in data:
-                data[key] = 1.0 - data[key]
-        return data
+        return self._flip_target_grips(data)
 
     def to_spec(self):
-        if self._arms is None:
+        if self._arms is None and self._commands_path is None:
             return {NAME: self.WIRE_NAME, VERSION: self.ONE_ARM_VERSION}
-        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: {'arms': list(self._arms)}}
+        args = {} if self._arms is None else {'arms': list(self._arms)}
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args | self._commands_path_args()}

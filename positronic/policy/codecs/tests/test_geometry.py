@@ -23,8 +23,15 @@ from positronic.drivers.roboarm.models import (
     parse_ee_frames,
 )
 from positronic.geom import Rotation, Transform3D, quat_closest
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
-from positronic.policy.codecs import ChangeEEFrame
+from positronic.policy.codecs import (
+    ACTION,
+    AbsoluteJointsAction,
+    AbsolutePositionAction,
+    CartesianDeltaAction,
+    ChangeEEFrame,
+)
 from positronic.policy.codecs.geometry import ConvertPose
 from positronic.policy.spec import from_spec
 
@@ -102,6 +109,7 @@ QUAT = Rotation.Representation.QUAT
 FRANKA_URDF = bundled_franka_model()[roboarm_keys.URDF]
 TO_ROBOLAB = frame_transform(FRANKA_URDF, GRIPPER_SITE, ROBOLAB_EEF_LINK)
 ROBOLAB_FRAME = EEFrame(site=GRIPPER_SITE, offset=TO_ROBOLAB)
+RTC_PREFIX_PATH = (policy_keys.RTC.ACTION_PREFIX, policy_keys.RTC.PREFIX_ACTIONS)
 AT_GRIPPER = ee_frames_entry(dict.fromkeys((obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE)))
 
 
@@ -234,15 +242,55 @@ def test_states_the_frame_it_speaks_for_each_key():
     assert codec.training_encoder.meta == codec.meta
 
 
-def test_survives_the_wire_spec_round_trip():
+@pytest.mark.parametrize('commands_path', [None, RTC_PREFIX_PATH])
+def test_survives_the_wire_spec_round_trip(commands_path):
     """The transform is the server's to choose; nothing about the rig's model crosses."""
-    codec = ChangeEEFrame(ROBOLAB_FRAME)
-    rebuilt = from_spec(codec.to_spec())
+    codec = ChangeEEFrame(ROBOLAB_FRAME, commands_path=commands_path)
+    rebuilt = from_spec(json.loads(json.dumps(codec.to_spec())))
     assert isinstance(rebuilt, ChangeEEFrame)
+    assert rebuilt.to_spec() == codec.to_spec()
     pose_c = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
     obs = {obs_keys.EE_POSE: pose_c.as_vector(QUAT)}
     np.testing.assert_array_equal(rebuilt.encode(obs)[obs_keys.EE_POSE], codec.encode(obs)[obs_keys.EE_POSE])
     assert rebuilt.meta == codec.meta
+
+
+@pytest.mark.parametrize(
+    ('action_codec', 'prediction'),
+    [
+        (AbsolutePositionAction('pose', 'grip', commands_path=RTC_PREFIX_PATH), [0.3, 0.1, 0.4, 0.5, 0.5, 0.5, 0.5, 1]),
+        (CartesianDeltaAction(commands_path=RTC_PREFIX_PATH), [0.01, -0.02, 0.03, 0.1, 0.0, -0.2, 0.5]),
+        (AbsoluteJointsAction('joints', 'grip', num_joints=2, commands_path=RTC_PREFIX_PATH), [0.1, -0.2, 0.75]),
+    ],
+    ids=['absolute_position', 'cartesian_delta', 'absolute_joints'],
+)
+def test_a_frame_stack_sends_the_rtc_prefix_back_as_the_model_predicted_it(action_codec, prediction):
+    stack = ChangeEEFrame(ROBOLAB_FRAME, commands_path=RTC_PREFIX_PATH) | action_codec
+    predicted = [{ACTION: np.asarray(prediction, dtype=np.float32)}] * 2
+    played = [stack.decode(model_values) for model_values in predicted]
+
+    encoded = stack.encode({policy_keys.RTC.ACTION_PREFIX: {policy_keys.RTC.PREFIX_ACTIONS: played}})
+
+    sent = encoded[policy_keys.RTC.ACTION_PREFIX][policy_keys.RTC.PREFIX_ACTIONS]
+    for model_values in sent:
+        np.testing.assert_allclose(model_values[ACTION], prediction, atol=1e-6)
+
+
+def test_the_frame_codec_moves_the_played_pose_and_leaves_the_prefix_alone_without_commands_path():
+    pose = _pose([0.3, 0.1, 0.4], [0.2, -0.3, 0.5])
+    played = [{obs_keys.ROBOT_COMMAND: cmd_module.CartesianPosition(pose=pose), obs_keys.TARGET_GRIP: 1.0}]
+    prefix = {policy_keys.RTC.ACTION_PREFIX: {policy_keys.RTC.PREFIX_ACTIONS: played}}
+
+    moved = ChangeEEFrame(ROBOLAB_FRAME, commands_path=RTC_PREFIX_PATH).encode(prefix)
+    kept = ChangeEEFrame(ROBOLAB_FRAME).encode(prefix)
+
+    command = moved[policy_keys.RTC.ACTION_PREFIX][policy_keys.RTC.PREFIX_ACTIONS][0]
+    np.testing.assert_allclose(
+        command[obs_keys.ROBOT_COMMAND].pose.as_vector(QUAT), (pose * TO_ROBOLAB).as_vector(QUAT), atol=1e-9
+    )
+    assert command[obs_keys.TARGET_GRIP] == 1.0
+    assert played[0][obs_keys.ROBOT_COMMAND].pose is pose, "the caller's commands stay unchanged"
+    assert kept is prefix
 
 
 def test_a_v1_spec_is_refused_as_an_unsupported_version():

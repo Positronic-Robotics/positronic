@@ -15,13 +15,17 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.command import Impedance, JointDelta
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.geom import Rotation, Transform3D
+from positronic.policy import keys as policy_keys
 from positronic.policy.base import Step
 from positronic.policy.codecs import (
     ACTION,
     BimanualJointsAction,
     CartesianDeltaAction,
+    ChangeEEFrame,
     Codec,
+    FlipGrip,
     JointPositionAction,
     PackFields,
     SelectObservationFields,
@@ -99,15 +103,78 @@ def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input()
     assert JointPositionAction('joints', 'grip').encode({'plan': {'commands': []}}) == {}
 
 
+@pytest.mark.parametrize(
+    'build',
+    [
+        lambda path: JointPositionAction('joints', 'grip', commands_path=path),
+        lambda path: BimanualJointsAction(commands_path=path),
+        lambda path: FlipGrip(commands_path=path),
+        lambda path: ChangeEEFrame(EEFrame(site=GRIPPER_SITE), commands_path=path),
+        lambda path: AbsoluteJointsAction('joints', 'grip', commands_path=path),
+        lambda path: AbsolutePositionAction('pose', 'grip', commands_path=path),
+        lambda path: CartesianDeltaAction(commands_path=path),
+        lambda path: JointDeltaAction(commands_path=path),
+    ],
+    ids=[
+        'one_arm',
+        'two_arms',
+        'flip_grip',
+        'change_ee_frame',
+        'absolute_joints',
+        'absolute_position',
+        'cartesian_delta',
+        'joint_delta',
+    ],
+)
 @pytest.mark.parametrize('path', [[], (), ('plan', False), (0,), 'plan'])
-def test_joint_command_encoding_requires_a_named_tuple_path(path):
+def test_joint_command_encoding_requires_a_named_tuple_path(build, path):
     with pytest.raises(ValueError, match='commands_path'):
-        JointPositionAction('joints', 'grip', commands_path=path)
+        build(path)
 
 
 def test_joint_command_wire_path_rejects_a_string():
     with pytest.raises(ValueError, match='commands_path'):
         from_spec(component('joint_position_action', joints_key='joints', grip_key='grip', commands_path='plan'))
+
+
+VECTOR_ACTION_CODECS = [
+    (AbsoluteJointsAction, {'tgt_joints_key': 'joints', 'tgt_grip_key': 'grip', 'num_joints': 2}, [0.1, -0.2, 0.75]),
+    (
+        AbsolutePositionAction,
+        {'tgt_ee_pose_key': 'pose', 'tgt_grip_key': 'grip'},
+        [0.1, 0.2, 0.3, 0.5, 0.5, 0.5, 0.5, 1],
+    ),
+    (CartesianDeltaAction, {}, [0.01, -0.02, 0.03, 0.1, 0.0, -0.2, 0.5]),
+    (JointDeltaAction, {'num_joints': 2}, [0.5, -0.25, 1.0]),
+]
+
+
+@pytest.mark.parametrize(('cls', 'args', 'action'), VECTOR_ACTION_CODECS, ids=lambda v: getattr(v, 'WIRE_NAME', ''))
+def test_vector_action_codecs_encode_their_decoded_commands_back_to_the_model_action(cls, args, action):
+    codec = from_spec(json.loads(json.dumps(cls(**args, commands_path=('plan', 'commands')).to_spec())))
+    assert type(codec) is cls
+    assert isinstance(codec, Codec)
+    commands = codec.decode([{ACTION: np.asarray(action, dtype=np.float32)}])
+
+    encoded = codec.encode({'plan': {'commands': commands, 'offset_sec': 0.1}, 'unselected': 'omit'})
+    encoded = serialization.deserialise(serialization.serialise(encoded))
+
+    assert set(encoded) == {'plan'}
+    assert encoded['plan']['offset_sec'] == 0.1
+    np.testing.assert_allclose(encoded['plan']['commands'][0][ACTION], action, rtol=1e-6, atol=1e-6)
+    assert cls(**args).encode({'plan': {'commands': commands}}) == {}
+
+
+@pytest.mark.parametrize(('cls', 'args', 'action'), VECTOR_ACTION_CODECS, ids=lambda v: getattr(v, 'WIRE_NAME', ''))
+def test_vector_action_codecs_refuse_to_encode_another_command_type(cls, args, action):
+    codec = cls(**args, commands_path=('plan', 'commands'))
+    other = (
+        cmd_module.CartesianPosition(Transform3D.identity)
+        if cls is not AbsolutePositionAction
+        else JointDelta(np.zeros(2))
+    )
+    with pytest.raises(ValueError, match=obs_keys.ROBOT_COMMAND):
+        codec.encode({'plan': {'commands': [{obs_keys.ROBOT_COMMAND: other, obs_keys.TARGET_GRIP: 0.0}]}})
 
 
 @pytest.mark.parametrize('positions', [False, True])
@@ -445,6 +512,125 @@ def test_bimanual_joints_action_splits_into_per_arm_joint_commands_and_grip_targ
 def test_bimanual_joints_action_of_the_wrong_width_is_refused():
     with pytest.raises(ValueError, match='14-D'):
         BimanualJointsAction().decode({ACTION: np.zeros(8, dtype=np.float32)})
+
+
+LEFT_COMMAND, RIGHT_COMMAND = (obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, arm) for arm in obs_keys.BIMANUAL_ARMS)
+LEFT_GRIP, RIGHT_GRIP = (obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS)
+RTC_PREFIX_PATH = (policy_keys.RTC.ACTION_PREFIX, policy_keys.RTC.PREFIX_ACTIONS)
+
+
+def two_arm_command(left, left_grip, right, right_grip):
+    return {
+        LEFT_COMMAND: cmd_module.JointPosition(np.asarray(left, dtype=np.float32)),
+        LEFT_GRIP: left_grip,
+        RIGHT_COMMAND: cmd_module.JointPosition(np.asarray(right, dtype=np.float32)),
+        RIGHT_GRIP: right_grip,
+    }
+
+
+@pytest.mark.parametrize('commands_path', [None, RTC_PREFIX_PATH])
+def test_bimanual_joints_action_restores_from_its_wire_spec(commands_path):
+    description = json.loads(json.dumps(BimanualJointsAction(num_joints=2, commands_path=commands_path).to_spec()))
+
+    restored = from_spec(description)
+
+    assert isinstance(restored, BimanualJointsAction)
+    assert restored.to_spec() == description
+    decoded = restored.decode({ACTION: np.array([1, 2, 0.5, 3, 4, 0.0], dtype=np.float32)})
+    np.testing.assert_array_equal(decoded[RIGHT_COMMAND].positions, [3, 4])
+
+
+def test_a_declared_two_arm_stack_decodes_a_chunk_into_commands_for_each_arm():
+    stack = (
+        FlipGrip(arms=obs_keys.BIMANUAL_ARMS)
+        | BimanualJointsAction()
+        | SplitActionChunk()
+        | PackFields(decode_layout={ACTION: ['actions']})
+    )
+    restored = from_spec(json.loads(json.dumps(stack.to_spec())))
+    assert isinstance(restored, Codec)
+    chunk = np.stack([np.concatenate([np.full(6, step), [0.75], np.full(6, -step), [0.0]]) for step in range(3)])
+
+    decoded = restored.decode({'actions': chunk.astype(np.float32)})
+
+    assert len(decoded) == 3
+    for step, action in enumerate(decoded):
+        assert isinstance(action[LEFT_COMMAND], cmd_module.JointPosition)
+        np.testing.assert_array_equal(action[LEFT_COMMAND].positions, np.full(6, step))
+        np.testing.assert_array_equal(action[RIGHT_COMMAND].positions, np.full(6, -step))
+        assert action[LEFT_GRIP] == pytest.approx(0.25)
+        assert action[RIGHT_GRIP] == pytest.approx(1.0)
+
+
+def test_bimanual_joints_action_encodes_the_executed_commands_as_model_actions():
+    codec = BimanualJointsAction(num_joints=2, commands_path=RTC_PREFIX_PATH)
+    commands = [two_arm_command([1, 2], 0.25, [3, 4], 1.0), two_arm_command([5, 6], 0.0, [7, 8], 0.5)]
+    prefix = {policy_keys.RTC.PREFIX_ACTIONS: commands, policy_keys.RTC.CHUNK_OFFSET_SEC: 0.2}
+
+    encoded = codec.encode({policy_keys.RTC.ACTION_PREFIX: prefix, 'unselected': 'omit'})
+    encoded = serialization.deserialise(serialization.serialise(encoded))
+
+    assert set(encoded) == {policy_keys.RTC.ACTION_PREFIX}
+    assert encoded[policy_keys.RTC.ACTION_PREFIX][policy_keys.RTC.CHUNK_OFFSET_SEC] == 0.2
+    actions = encoded[policy_keys.RTC.ACTION_PREFIX][policy_keys.RTC.PREFIX_ACTIONS]
+    np.testing.assert_array_equal(actions[0][ACTION], [1, 2, 0.25, 3, 4, 1.0])
+    np.testing.assert_array_equal(actions[1][ACTION], [5, 6, 0.0, 7, 8, 0.5])
+    assert actions[0][ACTION].dtype == np.float32
+    assert prefix[policy_keys.RTC.PREFIX_ACTIONS] is commands
+    decoded = codec.decode(actions)
+    for original, restored in zip(commands, decoded, strict=True):
+        for channel in (LEFT_COMMAND, RIGHT_COMMAND):
+            np.testing.assert_array_equal(restored[channel].positions, original[channel].positions)
+        assert restored[LEFT_GRIP] == original[LEFT_GRIP]
+        assert restored[RIGHT_GRIP] == original[RIGHT_GRIP]
+
+
+@pytest.mark.parametrize(
+    ('stack', 'predicted'),
+    [
+        (
+            FlipGrip(commands_path=RTC_PREFIX_PATH)
+            | JointPositionAction('joints', 'grip', num_joints=2, commands_path=RTC_PREFIX_PATH),
+            [
+                {'joints': np.array([1, 2], dtype=np.float32), 'grip': np.array([0.8], dtype=np.float32)},
+                {'joints': np.array([3, 4], dtype=np.float32), 'grip': np.array([0.0], dtype=np.float32)},
+            ],
+        ),
+        (
+            FlipGrip(arms=obs_keys.BIMANUAL_ARMS, commands_path=RTC_PREFIX_PATH)
+            | BimanualJointsAction(num_joints=2, commands_path=RTC_PREFIX_PATH),
+            [
+                {ACTION: np.array([1, 2, 0.8, 3, 4, 0.1], dtype=np.float32)},
+                {ACTION: np.array([5, 6, 0.0, 7, 8, 1.0], dtype=np.float32)},
+            ],
+        ),
+    ],
+    ids=['one_arm', 'two_arms'],
+)
+def test_a_flip_grip_stack_sends_the_rtc_prefix_back_as_the_model_predicted_it(stack, predicted):
+    played = [stack.decode(prediction) for prediction in predicted]
+    grips = [dict(command) for command in played]
+
+    encoded = stack.encode({policy_keys.RTC.ACTION_PREFIX: {policy_keys.RTC.PREFIX_ACTIONS: played}})
+
+    sent = encoded[policy_keys.RTC.ACTION_PREFIX][policy_keys.RTC.PREFIX_ACTIONS]
+    for model_values, prediction in zip(sent, predicted, strict=True):
+        assert set(model_values) == set(prediction)
+        for name, value in prediction.items():
+            np.testing.assert_allclose(model_values[name], value, atol=1e-6)
+    assert played == grips
+
+
+def test_bimanual_command_encoding_distinguishes_empty_absent_and_malformed_input():
+    codec = BimanualJointsAction(num_joints=2, commands_path=('plan', 'commands'))
+    assert BimanualJointsAction().encode({'plan': {'commands': []}}) == {}
+    assert codec.encode({}) == {}
+    assert codec.encode({'plan': {'commands': []}}) == {'plan': {'commands': []}}
+    with pytest.raises(KeyError):
+        codec.encode({'plan': {'commands': [{LEFT_COMMAND: cmd_module.JointPosition(np.zeros(2)), LEFT_GRIP: 0.0}]}})
+    delta = {**two_arm_command([0, 0], 0.0, [0, 0], 0.0), RIGHT_COMMAND: JointDelta(np.zeros(2))}
+    with pytest.raises(ValueError, match='absolute joint targets'):
+        codec.encode({'plan': {'commands': [delta]}})
 
 
 IMPEDANCE = Impedance(kq=(40.0,) * 7, kqd=(4.0,) * 7, kx=(750.0,) * 6, kxd=(37.0,) * 6)

@@ -105,13 +105,16 @@ Decoding runs right-to-left: unpack fields, split timesteps, then construct comm
 
 ### Actions
 
+Each action codec that builds commands from model values also takes `commands_path`. It then encodes the commands at
+that path back into model values, such as an RTC prefix.
+
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
 | [`SplitActionChunk`](action.py) | Splits prediction arrays into one record per timestep. | Feed a chunk of predictions to action decoders. |
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`BimanualJointsAction`](action.py) | Inference: decodes a two-arm action into one `JointPosition` command and one grip target per arm. Per arm, the action holds the joints and then the grip, left arm first. | The model predicts absolute joints for two arms, as MolmoAct2-BimanualYAM and ABC-DiT do. [`bimanual_joints_state`](observation.py) packs the state in the same layout. Compose `FlipGrip(arms=…)` for a model that speaks a gripper width. |
-| [`JointPositionAction`](action.py) | Decodes named joint and grip predictions; optionally encodes commands at `commands_path`. | Convert between model values and absolute robot commands, including planned actions sent with a request. |
+| [`JointPositionAction`](action.py) | Decodes named joint and grip predictions into `JointPosition` commands plus grip. | Convert between model values and absolute robot commands, including planned actions sent with a request. |
 | [`CartesianDeltaAction`](action.py) | Inference: decodes translation in metres, rotation in the selected `rotation_rep` format (default `rotvec`) and grip closure into a `CartesianDelta` command plus absolute grip. | Predictions describe per-step Cartesian deltas in physical units. |
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |
 | [`JointDeltaAction`](action.py) | Inference: clips and scales normalized DROID joint velocities into `JointDelta` commands, and thresholds grip. | Serve a checkpoint using the DROID joint-delta action convention. |
@@ -122,7 +125,7 @@ Decoding runs right-to-left: unpack fields, split timesteps, then construct comm
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses off a site of the rig model, states the frame as `ee_frames`, and converts decoded commands back. | The checkpoint reads poses. An identity offset states a checkpoint trained at the rig site. |
+| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses off a site of the rig model, states the frame as `ee_frames`, and converts decoded commands back. `commands_path` also converts each command sent back to the model, such as an RTC prefix, into the policy's frame. | The checkpoint reads poses. An identity offset states a checkpoint trained at the rig site. |
 | [`ConvertPose`](geometry.py) | Converts selected observation/episode pose vectors to float32, a chosen rotation representation and a fixed rotation offset. Preserves translation and frame metadata; decoded actions pass through. | Match quaternion, Euler or 6D rotation conventions expected by a model. |
 
 ### Gripper
@@ -131,7 +134,7 @@ Decoding runs right-to-left: unpack fields, split timesteps, then construct comm
 |-------|--------------|----------------|
 | [`BinarizeGripTraining`](gripper.py) | Training: thresholds selected signals to 0 or 1. Inference: passes through. | Recordings contain continuous grip values but the model should learn binary grip labels or inputs. |
 | [`BinarizeGripInference`](gripper.py) | Inference: thresholds the decoded grip command. Training: passes through. | The model predicts continuous grip values but execution needs open/closed commands. |
-| [`FlipGrip`](gripper.py) | Inference: maps the observed grip and the decoded target grip to `1 - value`. `FlipGrip(arms=…)` maps those of each named arm and publishes version 2. Training: passes through. | Serve a model that speaks an aperture (`1 = open`) on Positronic's `1 = closed` convention. |
+| [`FlipGrip`](gripper.py) | Inference: maps the observed grip and the decoded target grip to `1 - value`. `FlipGrip(arms=…)` maps those of each named arm. `commands_path` also maps the target grip of each command sent back to the model, such as an RTC prefix. Either argument publishes version 2. Training: passes through. | Serve a model that speaks an aperture (`1 = open`) on Positronic's `1 = closed` convention. |
 
 ### Images
 

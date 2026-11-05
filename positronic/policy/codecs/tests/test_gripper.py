@@ -89,6 +89,7 @@ def test_flip_grip():
 
 _LEFT, _RIGHT = (obs_keys.arm_channel(obs_keys.GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS)
 _TARGETS = [obs_keys.arm_channel(obs_keys.TARGET_GRIP, arm) for arm in obs_keys.BIMANUAL_ARMS]
+_LEFT_COMMAND = obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, obs_keys.LEFT_ARM)
 
 
 def test_flip_grip_with_arms_flips_the_grip_of_each_arm():
@@ -121,7 +122,45 @@ def test_flip_grip_with_arms_publishes_version_2_with_the_arms():
     assert spec == {NAME: 'flip_grip', VERSION: 2, ARGS: {'arms': ['left', 'right']}}
 
 
-@pytest.mark.parametrize('flip', [FlipGrip(), FlipGrip(arms=obs_keys.BIMANUAL_ARMS)], ids=['v1', 'v2'])
+def test_flip_grip_with_a_commands_path_publishes_version_2_with_the_path():
+    spec = FlipGrip(commands_path=('plan', 'commands')).to_spec()
+    assert spec == {NAME: 'flip_grip', VERSION: 2, ARGS: {'commands_path': ['plan', 'commands']}}
+
+
+def test_flip_grip_with_a_commands_path_flips_the_target_grips_of_each_command():
+    flip = FlipGrip(arms=obs_keys.BIMANUAL_ARMS, commands_path=('plan', 'commands'))
+    commands = [{_TARGETS[0]: 0.25, _TARGETS[1]: 1.0, _LEFT_COMMAND: 'kept'}]
+
+    encoded = flip.encode({'plan': {'commands': commands, 'offset': 0.2}, _LEFT: 0.2, obs_keys.TASK: 'fold'})
+
+    assert encoded == {
+        'plan': {
+            'commands': [{_TARGETS[0]: pytest.approx(0.75), _TARGETS[1]: pytest.approx(0.0), _LEFT_COMMAND: 'kept'}],
+            'offset': 0.2,
+        },
+        _LEFT: pytest.approx(0.8),
+        obs_keys.TASK: 'fold',
+    }
+    assert commands[0][_TARGETS[0]] == 0.25
+    assert flip.encode({_LEFT: 0.2}) == {_LEFT: pytest.approx(0.8)}
+
+
+@pytest.mark.parametrize('flip', [FlipGrip(), FlipGrip(arms=obs_keys.BIMANUAL_ARMS)], ids=['one_arm', 'two_arms'])
+def test_flip_grip_without_a_commands_path_leaves_the_commands_alone(flip):
+    commands = [{obs_keys.TARGET_GRIP: 0.25, _TARGETS[0]: 0.25}]
+    assert flip.encode({'plan': {'commands': commands}}) == {'plan': {'commands': commands}}
+
+
+@pytest.mark.parametrize(
+    'flip',
+    [
+        FlipGrip(),
+        FlipGrip(arms=obs_keys.BIMANUAL_ARMS),
+        FlipGrip(commands_path=('plan', 'commands')),
+        FlipGrip(arms=obs_keys.BIMANUAL_ARMS, commands_path=('plan', 0, 'commands')),
+    ],
+    ids=['v1', 'v2', 'v2_one_arm_commands', 'v2_two_arm_commands'],
+)
 def test_a_client_builds_each_flip_grip_version_from_its_spec(flip):
     rebuilt = from_spec(json.loads(json.dumps(flip.to_spec())))
     assert isinstance(rebuilt, FlipGrip)
