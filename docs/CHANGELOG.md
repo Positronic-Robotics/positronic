@@ -29,6 +29,8 @@ This release publishes `positronic-platform-client` 0.47.10, and `positronic` re
 - A video policy can take observations at a regular rate while the robot plays its commands. Chunked and RTC policies use one scheduler ([#1139](https://github.com/Positronic-Robotics/positronic/pull/1139))
 - A two-arm protocol v3 server can declare `bimanual_joints_action` in its client stack, with an RTC prefix ([#1154](https://github.com/Positronic-Robotics/positronic/pull/1154))
 - The LeRobot server serves overlapping sessions, each from its own state, over one copy of the weights ([#1140](https://github.com/Positronic-Robotics/positronic/pull/1140))
+- The `dream` vendor serves Dream-1 through DreamAPI to the bimanual YAM over the model-server protocol, with the `dreamlabs-client` package of the `dream` extra ([#1149](https://github.com/Positronic-Robotics/positronic/pull/1149))
+- `TransformImages` resizes the selected images of all cameras and frame histories in one bounded thread pool ([#1160](https://github.com/Positronic-Robotics/positronic/pull/1160))
 - The serving and training images no longer trust the leaked eMudhra (emSign) intermediate CAs. The main lock holds certifi 2026.10.23 ([#1141](https://github.com/Positronic-Robotics/positronic/pull/1141)) ([#1148](https://github.com/Positronic-Robotics/positronic/pull/1148)) ([#1138](https://github.com/Positronic-Robotics/positronic/pull/1138))
 
 ### Runtime
