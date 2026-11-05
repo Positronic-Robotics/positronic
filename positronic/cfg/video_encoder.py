@@ -19,3 +19,23 @@ jetson_h264 = cfn.Config(
 
 # libx264 on one core, for a host without the hardware encoder
 libx264_veryfast = cfn.Config(LibavEncoder, options=(('preset', 'veryfast'), ('threads', '1')))
+
+# NVIDIA desktop GPU H.264 through FFmpeg's h264_nvenc: constant quality with no bitrate target. B-frames, adaptive
+# quantization and lookahead make the size follow the content as libx264 does. At cq 35.75 a 720p camera stream comes
+# out within a few percent of the size of libx264 at its defaults.
+nvenc_h264 = cfn.Config(
+    LibavEncoder,
+    codec='h264_nvenc',
+    options=(
+        ('preset', 'p4'),
+        ('profile', 'high'),
+        ('rc', 'vbr'),
+        ('cq', '35.75'),
+        ('b', '0'),
+        ('bf', '3'),
+        ('b_ref_mode', 'middle'),
+        ('spatial_aq', '1'),
+        ('temporal_aq', '1'),
+        ('rc-lookahead', '20'),
+    ),
+)
