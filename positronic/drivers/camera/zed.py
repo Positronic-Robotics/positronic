@@ -27,7 +27,18 @@ class GrabOutcome(Enum):
 
     SENT = auto()
     NO_IMAGE = auto()  # the grab succeeded, and the SDK gave no image
+    TORN = auto()  # the grab succeeded, and the image starts with zero fill
     LOST = auto()  # the grab failed, and the camera holds the error
+
+
+# The BGR colour that the SDK gives a raw YUV pixel of zeros. A real pixel comes near it only at full chroma, and a
+# black pixel is (0, 0, 0).
+ZERO_FILL_BGR = (0, 135, 0)
+
+
+def starts_with_zero_fill(raw_bgra: np.ndarray) -> bool:
+    """Whether all of row 0 of an unrectified BGRA image has the zero fill colour."""
+    return bool(np.all(raw_bgra[0, :, :3] == ZERO_FILL_BGR))
 
 
 class SLCamera(pimm.ControlSystem):
@@ -262,7 +273,7 @@ class SLCamera(pimm.ControlSystem):
         return getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
 
     def _grab_frame(self, clock: pimm.Clock) -> GrabOutcome:
-        """Grab and send one frame. Hold the error when the grab fails."""
+        """Grab and send one frame. Hold the error when the grab fails, and drop a torn frame."""
         camera = self._camera
         assert camera is not None, 'a camera that holds no error is open'
         result = camera.grab()
@@ -270,6 +281,14 @@ class SLCamera(pimm.ControlSystem):
             self._hold(DeviceFault(f'Camera {self._serial_number} is lost: {result}', FaultKind.CAMERA))
             return GrabOutcome.LOST
         image = sl.Mat()
+        # A USB stereo camera that loses data in one frame can send the next frame with zeros at the start of its raw
+        # buffer and the rest shifted. The SDK accepts that frame, and its image validity check does not flag it.
+        if not self._mono:
+            if camera.retrieve_image(image, sl.VIEW.LEFT_UNRECTIFIED) != sl.ERROR_CODE.SUCCESS:
+                return GrabOutcome.NO_IMAGE
+            if starts_with_zero_fill(image.get_data()):
+                logger.warning('Camera %s sent a torn frame; dropping it', self._serial_number)
+                return GrabOutcome.TORN
         capture_time = pimm.Time(**{CAPTURE_TIME: camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()})
         if camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
             return GrabOutcome.NO_IMAGE

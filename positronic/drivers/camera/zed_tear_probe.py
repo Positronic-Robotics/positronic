@@ -1,0 +1,108 @@
+"""Count the torn frames of a ZED stereo camera: frames the driver drops, and torn frames that pass its check.
+
+Usage
+  uv run --locked --extra hardware python -m positronic.drivers.camera.zed_tear_probe --serial <serial> --frames 3600
+  ... --out <dir>   # also save each torn frame that passes the check, side by side, as a PNG
+
+Point the camera at a static scene. A torn frame that passes the check then shows as a single bad frame: it differs
+from both neighbours, and the neighbours match each other. The driver drops a frame when ``starts_with_zero_fill``
+finds it, and the probe applies that check to the same view.
+"""
+
+import argparse
+import dataclasses
+import json
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from positronic.drivers.camera.zed import ZERO_FILL_BGR, sl, starts_with_zero_fill
+
+# Mean absolute grey difference, on a 0-255 scale, above which two frames of a static scene differ.
+FRAMES_DIFFER = 6.0
+
+
+@dataclasses.dataclass
+class TearCount:
+    """What one probe run saw. Frame lists hold indexes of grabbed frames."""
+
+    serial: int
+    grabbed: int = 0
+    grab_codes: dict[str, int] = dataclasses.field(default_factory=dict)
+    dropped: list[int] = dataclasses.field(default_factory=list)
+    torn_passed: list[int] = dataclasses.field(default_factory=list)  # single bad frames that the check sent
+    partial_fill_passed: list[int] = dataclasses.field(default_factory=list)  # zero fill at row 0 start, not all of it
+
+
+def _small_grey(side_by_side: np.ndarray) -> np.ndarray:
+    return cv2.resize(cv2.cvtColor(side_by_side, cv2.COLOR_BGR2GRAY), (320, 90), interpolation=cv2.INTER_AREA).astype(
+        np.int16
+    )
+
+
+def _single_bad_frame(before: np.ndarray, frame: np.ndarray, after: np.ndarray) -> bool:
+    d_before, d_after = np.abs(frame - before).mean(), np.abs(after - frame).mean()
+    return (
+        d_before > FRAMES_DIFFER
+        and d_after > FRAMES_DIFFER
+        and np.abs(after - before).mean() < 0.5 * min(d_before, d_after)
+    )
+
+
+def probe(serial: int, frames: int, resolution: str, fps: int, out: Path | None) -> TearCount:
+    camera = sl.Camera()
+    init = sl.InitParameters()
+    init.camera_resolution = getattr(sl.RESOLUTION, resolution.upper())
+    init.camera_fps = fps
+    init.set_from_serial_number(serial)
+    init.depth_mode = sl.DEPTH_MODE.NONE
+    init.async_grab_camera_recovery = True
+    result = camera.open(init)
+    if result != sl.ERROR_CODE.SUCCESS:
+        raise RuntimeError(f'Failed to open camera {serial}: {result}')
+    left, right = sl.Mat(), sl.Mat()
+    count = TearCount(serial)
+    window: list[tuple[int, bool, np.ndarray, np.ndarray]] = []  # index, dropped, small grey, side by side
+    try:
+        for _ in range(frames):
+            result = camera.grab()
+            count.grab_codes[str(result)] = count.grab_codes.get(str(result), 0) + 1
+            if result != sl.ERROR_CODE.SUCCESS:
+                continue
+            camera.retrieve_image(left, sl.VIEW.LEFT_UNRECTIFIED)
+            camera.retrieve_image(right, sl.VIEW.RIGHT_UNRECTIFIED)
+            raw_left = left.get_data()
+            torn = starts_with_zero_fill(raw_left)
+            if torn:
+                count.dropped.append(count.grabbed)
+            elif np.all(raw_left[0, 0, :3] == ZERO_FILL_BGR):
+                count.partial_fill_passed.append(count.grabbed)
+            side_by_side = np.concatenate([raw_left[:, :, :3], right.get_data()[:, :, :3]], axis=1)
+            window = [*window[-2:], (count.grabbed, torn, _small_grey(side_by_side), side_by_side)]
+            if len(window) == 3 and not window[1][1] and _single_bad_frame(*(w[2] for w in window)):
+                count.torn_passed.append(window[1][0])
+                if out is not None:
+                    cv2.imwrite(str(out / f'{serial}_passed_{window[1][0]}.png'), window[1][3])
+            count.grabbed += 1
+    finally:
+        camera.close()
+    return count
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--serial', type=int, required=True)
+    parser.add_argument('--frames', type=int, default=3600)
+    parser.add_argument('--resolution', default='hd720')
+    parser.add_argument('--fps', type=int, default=30)
+    parser.add_argument('--out', type=Path)
+    args = parser.parse_args()
+    if args.out is not None:
+        args.out.mkdir(parents=True, exist_ok=True)
+    count = probe(args.serial, args.frames, args.resolution, args.fps, args.out)
+    print(json.dumps(dataclasses.asdict(count), indent=1))
+
+
+if __name__ == '__main__':
+    main()
