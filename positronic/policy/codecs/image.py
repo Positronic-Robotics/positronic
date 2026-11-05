@@ -115,16 +115,18 @@ class TransformImages(Codec):
 
     def _map_images(self, data: Any, transform: Callable[[np.ndarray], np.ndarray]) -> Any:
         def transform_value(value: Any) -> Any:
-            is_rgb_image = isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
-            if self._paths is None and not is_rgb_image:
-                return value
             value = np.asarray(value)
             if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
                 raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
             return transform(value)
 
         if self._paths is None:
-            return map_leaves(data, transform_value)
+
+            def transform_if_image(value: Any) -> Any:
+                is_rgb_image = isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
+                return transform_value(value) if is_rgb_image else value
+
+            return map_leaves(data, transform_if_image)
         for path in self._paths:
             data = update_at(data, path, transform_value)
         return data
