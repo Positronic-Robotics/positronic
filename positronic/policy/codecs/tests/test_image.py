@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ from positronic import keys
 from positronic.cfg.codecs import image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
+from positronic.dataset.transforms.image import transform_frame
 from positronic.policy import spec, training
 from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, ResizeMode, TransformImages
 from positronic.policy.keys import RTC
@@ -163,6 +165,69 @@ def test_explicit_image_paths_preserve_names_other_images_and_containers():
         TransformImages(6, 6, paths=[['state']], mode=ResizeMode.BOUND).encode({'state': [1, 2]})
 
 
+@pytest.mark.parametrize('explicit', [False, True])
+@pytest.mark.parametrize('mode', list(ResizeMode))
+@pytest.mark.parametrize('resample', list(Resample))
+def test_multiple_cameras_and_histories_keep_pixels_order_and_inputs(explicit, mode, resample):
+    rng = np.random.default_rng(42)
+    front = rng.integers(0, 256, (480, 640, 3), dtype=np.uint8)[:, ::-1]
+    history = rng.integers(0, 256, (3, 360, 480, 3), dtype=np.uint8)
+    fitted = rng.integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    state = rng.standard_normal(14)
+    inputs = {'cameras': (front, [history]), 'fitted': fitted, 'state': state}
+    paths = [['cameras', 0], ['cameras', 1, 0], ['fitted']] if explicit else None
+    codec = TransformImages(64, 48, mode=mode, resample=resample, paths=paths)
+    original_front, original_history = front.copy(), history.copy()
+
+    output = codec.encode(inputs)
+
+    assert isinstance(output['cameras'], tuple)
+    assert isinstance(output['cameras'][1], list)
+    np.testing.assert_array_equal(
+        output['cameras'][0], transform_frame(front, 64, 48, mode=mode, resample=resample), strict=True
+    )
+    np.testing.assert_array_equal(
+        output['cameras'][1][0],
+        np.stack([transform_frame(frame, 64, 48, mode=mode, resample=resample) for frame in history]),
+        strict=True,
+    )
+    assert output['fitted'] is fitted
+    assert output['state'] is state
+    np.testing.assert_array_equal(front, original_front, strict=True)
+    np.testing.assert_array_equal(history, original_history, strict=True)
+
+
+def test_overlapping_paths_use_the_result_of_the_earlier_transform():
+    frames = np.random.default_rng(1).integers(0, 256, (2, 480, 640, 3), dtype=np.uint8)
+    inputs = {'cameras': list(frames)}
+    codec = TransformImages(
+        64, 48, mode=ResizeMode.PAD, paths=[['cameras', 0], ['cameras', 1], ['cameras'], ['cameras']]
+    )
+
+    output = codec.encode(inputs)
+
+    expected = np.stack([transform_frame(frame, 64, 48, mode=ResizeMode.PAD) for frame in frames])
+    np.testing.assert_array_equal(output['cameras'], expected, strict=True)
+    assert isinstance(inputs['cameras'], list)
+    np.testing.assert_array_equal(inputs['cameras'], frames, strict=True)
+
+
+def test_one_codec_can_encode_concurrent_observations():
+    codec = TransformImages(64, 48, mode=ResizeMode.PAD)
+    rng = np.random.default_rng(15)
+    observations = [
+        {camera: rng.integers(0, 256, (240, 320, 3), dtype=np.uint8) for camera in ('left', 'right')} for _ in range(4)
+    ]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        outputs = list(pool.map(codec.encode, observations))
+
+    for obs, output in zip(observations, outputs, strict=True):
+        for camera, frame in obs.items():
+            np.testing.assert_array_equal(
+                output[camera], transform_frame(frame, 64, 48, mode=ResizeMode.PAD), strict=True
+            )
+
+
 def _image(h, w):
     return np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -194,27 +259,12 @@ class TestTransformImages:
         stack = np.zeros((3, 480, 640, 3), dtype=np.uint8)
         assert TransformImages(64, 48, mode=ResizeMode.BOUND).encode({'cam': stack})['cam'].shape == (3, 48, 64, 3)
 
-    def test_a_threaded_stack_scales_to_the_same_pixels_as_one_thread(self):
+    def test_a_history_matches_individually_resized_frames(self):
         rng = np.random.default_rng(0)
-        stack = rng.integers(0, 256, size=(TransformImages._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
+        stack = rng.integers(0, 256, size=(8, 480, 640, 3), dtype=np.uint8)
         codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
         one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
         np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)
-
-    def test_a_single_usable_cpu_stays_serial(self, monkeypatch):
-        """A pool wins nothing on a single core, and costs threads to raise."""
-        monkeypatch.setattr(TransformImages, '_usable_cpus', staticmethod(lambda: 1))
-        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
-        assert codec._workers(codec._PARALLEL_FROM + 4) == 1
-
-    def test_the_pool_is_bounded_by_the_cpus_the_process_may_run_on(self, monkeypatch):
-        monkeypatch.setattr(TransformImages, '_usable_cpus', staticmethod(lambda: 2))
-        codec = TransformImages(64, 48, mode=ResizeMode.BOUND)
-        assert codec._workers(codec._MAX_WORKERS * 4) == 2
-
-    def test_a_stack_under_the_parallel_bar_still_scales(self):
-        stack = np.zeros((TransformImages._PARALLEL_FROM - 1, 480, 640, 3), dtype=np.uint8)
-        assert TransformImages(64, 48, mode=ResizeMode.BOUND).encode({'cam': stack})['cam'].shape[1:] == (48, 64, 3)
 
     def test_nested_images_are_reached(self):
         result = TransformImages(64, 48, mode=ResizeMode.BOUND).encode({
@@ -342,9 +392,9 @@ class TestTransformImages:
         expected = codec.encode({'cam': np.ascontiguousarray(image)})['cam']
         np.testing.assert_array_equal(codec.encode({'cam': image})['cam'], expected)
 
-    def test_a_threaded_area_stack_scales_to_the_same_pixels_as_one_thread(self):
+    def test_an_area_history_matches_individually_resized_frames(self):
         rng = np.random.default_rng(0)
-        stack = rng.integers(0, 256, size=(TransformImages._PARALLEL_FROM + 4, 480, 640, 3), dtype=np.uint8)
+        stack = rng.integers(0, 256, size=(8, 480, 640, 3), dtype=np.uint8)
         codec = TransformImages(64, 48, resample=Resample.AREA, mode=ResizeMode.BOUND)
         one_at_a_time = np.stack([codec.encode({'cam': frame})['cam'] for frame in stack])
         np.testing.assert_array_equal(codec.encode({'cam': stack})['cam'], one_at_a_time)

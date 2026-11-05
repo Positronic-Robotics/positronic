@@ -1,6 +1,8 @@
 import os
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from itertools import combinations
 from typing import Any, Self
 
 import numpy as np
@@ -65,8 +67,7 @@ class TransformImages(Codec):
 
     WIRE_NAME = 'transform_images'
 
-    # Below this a stack scales quicker in one thread than a pool costs to raise.
-    _PARALLEL_FROM = 4
+    _MIN_PARALLEL_PIXELS = 256 * 256
     _MAX_WORKERS = 8
 
     def __init__(
@@ -95,25 +96,6 @@ class TransformImages(Codec):
             args['mode'] = ResizeMode(args['mode'])
         return cls(**args)
 
-    def encode(self, data):
-        if self._paths is None:
-            return map_leaves(data, self._transform_value)
-        for path in self._paths:
-            data = update_at(data, path, lambda value: self._transform_image(np.asarray(value)))
-        return data
-
-    def _transform_value(self, value: Any) -> Any:
-        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-            return self._transform_image(value)
-        return value
-
-    def _transform_image(self, value: np.ndarray) -> np.ndarray:
-        if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
-            raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
-        if value.ndim == 4:
-            return np.stack(self._scaled_frames(value))
-        return image.transform_frame(value, self._width, self._height, mode=self._mode, resample=self._resample)
-
     @staticmethod
     def _usable_cpus() -> int:
         """CPUs this process may run on — its affinity mask where the platform publishes one, else the
@@ -124,24 +106,70 @@ class TransformImages(Codec):
             return len(os.sched_getaffinity(0))
         return os.cpu_count() or 1
 
-    def _workers(self, frames: int) -> int:
-        """Threads to scale ``frames`` on. One means the serial path: a pool wins nothing on a single
-        usable CPU, and below ``_PARALLEL_FROM`` it costs more to raise than the frames take."""
-        if frames < self._PARALLEL_FROM:
+    def _workers(self, frames: Sequence[np.ndarray]) -> int:
+        pixels = sum(
+            frame.shape[0] * frame.shape[1]
+            for frame in frames
+            if frame.shape[:2] != (self._height, self._width)
+            and (self._mode is not ResizeMode.BOUND or frame.shape[0] > self._height or frame.shape[1] > self._width)
+        )
+        if pixels < self._MIN_PARALLEL_PIXELS:
             return 1
-        return max(1, min(frames, self._MAX_WORKERS, self._usable_cpus()))
+        return max(1, min(len(frames), self._MAX_WORKERS, self._usable_cpus()))
 
-    def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
-        """Every frame of one stack, scaled. Pillow and OpenCV drop the GIL for a resize and the frames are
-        independent, so more than one may run at a time."""
+    def _scaled_frames(self, frames: Sequence[np.ndarray]) -> list[np.ndarray]:
         scale = partial(
             image.transform_frame, width=self._width, height=self._height, mode=self._mode, resample=self._resample
         )
-        workers = self._workers(len(stack))
+        workers = self._workers(frames)
         if workers == 1:
-            return [scale(frame) for frame in stack]
+            return [scale(frame) for frame in frames]
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            return list(pool.map(scale, stack))
+            return list(pool.map(scale, frames))
+
+    @staticmethod
+    def _frames(value: np.ndarray) -> list[np.ndarray]:
+        if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
+            raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
+        return [value] if value.ndim == 3 else list(value)
+
+    def _map_images(self, data: Any, transform: Callable[[np.ndarray], np.ndarray]) -> Any:
+        if self._paths is None:
+
+            def transform_value(value: Any) -> Any:
+                if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
+                    return transform(value)
+                return value
+
+            return map_leaves(data, transform_value)
+        for path in self._paths:
+            data = update_at(data, path, lambda value: transform(np.asarray(value)))
+        return data
+
+    def encode(self, data):
+        if self._paths is not None and any(
+            a == b[: len(a)] or b == a[: len(b)] for a, b in combinations(self._paths, 2)
+        ):
+            # Overlapping paths transform the same data in the declared order.
+            def transform(value: np.ndarray) -> np.ndarray:
+                frames = self._scaled_frames(self._frames(value))
+                return frames[0] if value.ndim == 3 else np.stack(frames)
+
+            return self._map_images(data, transform)
+
+        frames: list[np.ndarray] = []
+
+        def collect(value: np.ndarray) -> np.ndarray:
+            frames.extend(self._frames(value))
+            return value
+
+        self._map_images(data, collect)
+        scaled = iter(self._scaled_frames(frames))
+
+        def replace(value: np.ndarray) -> np.ndarray:
+            return next(scaled) if value.ndim == 3 else np.stack([next(scaled) for _ in value])
+
+        return self._map_images(data, replace)
 
     def decode(self, data):
         return data
