@@ -53,7 +53,7 @@ from positronic.offboard.client import (
     InferenceClient,
     InferenceSession,
 )
-from positronic.offboard.frame_stream import FRAME_STREAM, REF, ROW, StreamedRows
+from positronic.offboard.frame_stream import FRAME_STREAM, REF, ROW, RowsMissing, StreamedRows
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy import remote as remote_module
@@ -2086,19 +2086,19 @@ def test_a_session_that_allows_several_calls_in_flight_goes_in_full(caplog):
     ],
 )
 def test_only_a_session_that_streams_frames_caches_its_resizes(monkeypatch, frame_stream, cached, resize):
-    sizes = []
+    puts = []
     put = ResizeCache.put
 
     def put_and_count(cache, *args):
         put(cache, *args)
-        sizes.append(len(cache._entries))
+        puts.append(cache)
 
     monkeypatch.setattr(ResizeCache, 'put', put_and_count)
     session = _run_on_mock_session(_stream_meta(resize), 8, frame_stream=frame_stream)
 
     first = serialization.deserialise(serialization.serialise(session.infer.call_args_list[0].args[0]['image']))
     assert first.shape == (3, 4, 6, 3)  # the declared stack resizes either way
-    assert bool(sizes) is cached
+    assert bool(puts) is cached
     if frame_stream is not None:
         second = session.infer.call_args_list[1].args[0]['image']
         assert second[b'rows'] == [2, 1]  # the rows went out sized as the stack sizes its frames
@@ -2189,19 +2189,18 @@ def test_a_served_frame_stream_gives_the_model_the_observations_of_full_requests
     served, monkeypatch, frame_stream, atol
 ):
     resolved: list[list[int]] = []
-    resolve, add = StreamedRows.resolve, StreamedRows.add
+    resolve = StreamedRows.resolve
 
     def recording_resolve(rows, obs):
-        resolved.append([len(value[b'rows']) for value in obs.values() if isinstance(value, Mapping) and REF in value])
-        return resolve(rows, obs)
-
-    def dropping_add(rows, row):
-        add(rows, row)
-        if row['call'] == 2:
-            rows._rows.pop(row['back'], None)  # the server lost the rows of call 2: that request misses them
+        refers = {key: value for key, value in obs.items() if isinstance(value, Mapping) and REF in value}
+        resolved.append([len(value[b'rows']) for value in refers.values()])
+        out = resolve(rows, obs)  # decodes each stack's tail, as a request that misses its rows does
+        if any(value[b'call'] == 2 and value[b'rows'] for value in refers.values()):
+            # the server lost the rows of call 2: that request misses them
+            raise RowsMissing([[key, back] for key, value in refers.items() for back in value[b'rows']])
+        return out
 
     monkeypatch.setattr(StreamedRows, 'resolve', recording_resolve)
-    monkeypatch.setattr(StreamedRows, 'add', dropping_add)
     local = _streamed_stack(ChunkedSchedule(fps=10), TransformImages(24, 16, mode=ResizeMode.BOUND))
     observed = {}
     for stream in (None, frame_stream):

@@ -140,14 +140,6 @@ def _log_late_close_failure(closed: Future[None]) -> None:
         logger.error('The session close failed after the run continued: %r', failure)
 
 
-def _predicts(schedule: Policy) -> bool:
-    """Whether the frame streamer predicts the calls of ``schedule``: a chunked schedule's, one call at a time, each
-    after the previous chunk less its lead (``ChunkedSchedule``)."""
-    if not isinstance(schedule, InferenceSchedule):
-        return False
-    return schedule.request_timing.reference is RequestTiming.Reference.BEFORE_END and schedule.merge.chained
-
-
 def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict[str, Any]:
     """The frame of each pose signal that a server states in its metadata or through its client stack."""
     # A server repeats its client stack's frames in its metadata, and the harness checks only the merged copy.
@@ -477,6 +469,14 @@ class RemotePolicy(Policy):
             self.streamer.on_replan(now_ns)
 
     @staticmethod
+    def _predicts(schedule: Policy) -> bool:
+        """Whether the frame streamer predicts the calls of ``schedule``: a chunked schedule's, one call at a time,
+        each after the previous chunk less its lead (``ChunkedSchedule``)."""
+        if not isinstance(schedule, InferenceSchedule):
+            return False
+        return schedule.request_timing.reference is RequestTiming.Reference.BEFORE_END and schedule.merge.chained
+
+    @staticmethod
     def _stream_refusal(
         parts: cabc.Sequence[cabc.Mapping[str, Any]],
         temporal: cabc.Sequence[TemporalStack],
@@ -489,7 +489,7 @@ class RemotePolicy(Policy):
         the rows and the requests then carry the frames that the stack would send."""
         if len(temporal) != 1 or not streams_stack(temporal[0].keys, temporal[0].offsets_sec):
             return 'it holds no temporal stack whose rows the stream carries'
-        if len(schedules) != 1 or not _predicts(schedules[0]):
+        if len(schedules) != 1 or not RemotePolicy._predicts(schedules[0]):
             return 'it holds no schedule whose calls the stream predicts'
         last = parts[-1].get(NAME) == EncodeImages.WIRE_NAME
         if encodes and not (len(encodes) == 1 and encodes[0].encodes_every_image and last):

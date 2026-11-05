@@ -1297,7 +1297,7 @@ def test_each_replan_reports_its_time_to_on_replan(execution, monkeypatch, repla
     model = SlowModel(runtime)
     monkeypatch.setattr(runtime, 'submit', model.submit)
     replans: list[int] = []
-    # The client builds a declared chunked schedule as this, with the hook added (``RemotePolicy``).
+    # ``on_replan`` is not part of the spec: the schedule built from its spec with the hook keeps the same spec.
     schedule = InferenceSchedule.from_spec_args(**ChunkedSchedule(fps=10).to_spec()[ARGS], on_replan=replans.append)
     run = runtime.start(Sequential(TrajectoryPlayer(replan_on_error=replan_on_error), schedule), Mock())
     channel = f'{keys.ROBOT_STATE}{keys.STATUS_SUFFIX}'
