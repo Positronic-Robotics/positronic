@@ -153,7 +153,6 @@ def _connect(channel: str, sim: bool, compensation: Compensation):
         ee_mass=compensation.ee_mass,
         use_coulomb_friction=False,  # _set_coulomb_friction turns it on once the values are in
     )
-    _set_coulomb_friction(chain, compensation, sim)
     return chain
 
 
@@ -826,8 +825,8 @@ class Robot(pimm.ControlSystem):
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
-        """Open the chain, move the arm to the start pose, answer ``asked``, and serve the arm until ``should_stop``.
-        Park and release it after.
+        """Open the chain, set its friction, move the arm to the start pose, answer ``asked``, and serve the arm until
+        ``should_stop``. Park and release it after.
 
         A ``ChainFault`` goes on the state and the grip once, before a park that publishes no readings. It answers
         ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked. Any other
@@ -859,6 +858,7 @@ class Robot(pimm.ControlSystem):
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
+                _set_coulomb_friction(vendor, self._compensation, self._sim)
                 self.robot_meta.emit(meta)
                 self.arm_meta.emit(arm.arm_meta(self._compensation.ee_mass))
                 joints, grip, missed = yield from arm.go_to_start()

@@ -2086,7 +2086,9 @@ def _connected(monkeypatch, compensation: Compensation) -> tuple[dict[str, Any],
         return _i2rt_chain(kwargs['gravity_comp_factor'], kwargs['use_coulomb_friction'])
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
-    return asked, yam._connect('can0', False, compensation)
+    chain = yam._connect('can0', False, compensation)
+    yam._set_coulomb_friction(chain, compensation, sim=False)
+    return asked, chain
 
 
 def test_a_station_hands_its_gravity_model_to_i2rt(monkeypatch):
@@ -2165,6 +2167,7 @@ def test_an_update_that_started_before_the_fade_adds_no_coulomb_friction_at_rest
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     chain = yam._connect('can0', False, FADED_COMPENSATION)
+    yam._set_coulomb_friction(chain, FADED_COMPENSATION, sim=False)
     I2rtChain.update(chain)
     np.testing.assert_allclose(chain.friction_torques[-1], 0.0, atol=1e-9)
 
@@ -2198,12 +2201,22 @@ def _chain_without_a_speed_reading() -> I2rtChain:
 
 
 @pytest.mark.parametrize('make_chain', [yam._FakeYam, _chain_without_a_speed_reading], ids=['no-update', 'no-speed'])
-def test_a_fade_on_a_chain_that_lacks_what_it_reads_fails_the_connect_with_the_friction_off(monkeypatch, make_chain):
+def test_a_fade_on_a_chain_that_lacks_what_it_reads_is_refused_with_the_friction_off(monkeypatch, make_chain):
     chain = make_chain()
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: chain)
     with pytest.raises((TypeError, AttributeError)):
-        yam._connect('can0', False, FADED_COMPENSATION)
+        yam._set_coulomb_friction(yam._connect('can0', False, FADED_COMPENSATION), FADED_COMPENSATION, sim=False)
     assert not chain.use_coulomb_friction
+
+
+def test_a_fade_that_the_chain_cannot_take_parks_and_releases_the_chain_before_it_raises(monkeypatch):
+    rig = Rig(compensation=FADED_COMPENSATION)
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', lambda channel, **_: rig.vendor)
+    rig.driver._connect = yam._connect
+    with pytest.raises(TypeError, match='_FrictionLoop'):
+        rig.tick(30)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed and not rig.vendor.use_coulomb_friction
 
 
 class FakeMotorChain:
@@ -2253,6 +2266,7 @@ def test_the_friction_fade_runs_on_the_hardware_chain_of_i2rt(monkeypatch):
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     chain = yam._connect('can0', False, FADED_COMPENSATION)
+    yam._set_coulomb_friction(chain, FADED_COMPENSATION, sim=False)
     chain.close()  # stops the control thread of i2rt, so the test runs each cycle below
     for speed, share in ((0.005, 0.0), (0.1, 1.0), (-0.1, -1.0)):
         motors.vel = np.full(7, speed)
@@ -2302,14 +2316,13 @@ def test_the_sim_chain_opens_with_the_compensation_of_its_caller(monkeypatch, co
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     assert yam._connect('can0', True, compensation) is sim_chain
+    yam._set_coulomb_friction(sim_chain, compensation, sim=True)
     assert asked['sim'] is True
 
 
 def test_the_arm_meta_carries_the_compensation_that_the_chain_reports_and_the_mass_it_was_given():
-    rig = Rig(compensation=Compensation(ee_mass=STATION_EE_MASS))
+    rig = Rig(compensation=STATION_COMPENSATION)
     rig.vendor.gravity_comp_factor = np.array([*STATION_GRAVITY_COMP, 1.0])
-    rig.vendor.use_coulomb_friction = True
-    rig.vendor._coulomb_friction = np.array([*STATION_COULOMB_FRICTION, 0.0])
     rig.ready()
     assert _last(rig.arm_metas) == STATION_ARM_META
 
