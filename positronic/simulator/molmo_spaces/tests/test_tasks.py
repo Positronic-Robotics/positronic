@@ -18,7 +18,7 @@ from positronic.drivers.roboarm.command import JointPosition
 from positronic.eval import keys as eval_keys
 from positronic.policy.tests.test_harness import StubPolicy
 from positronic.simulator.env_server import protocol
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
+from positronic.simulator.env_server.proxy import EnvTask, RemoteEnvControlSystem
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.molmo_spaces import keys as molmo_keys
@@ -43,21 +43,27 @@ def asked(monkeypatch) -> list[Any]:
     """Specs sent to the proxy, which returns one episode from each of two benchmarks."""
     specs: list[Any] = []
 
-    def tasks(self, selection: Any) -> list[dict[str, Any]]:
+    def tasks(self, selection: Any) -> list[EnvTask]:
         specs.append(selection)
         return [
-            {
-                **_PICK,
-                eval_keys.TASK: 'put the banana in the bowl',
-                molmo_keys.EPISODE_INDEX: 0,
-                molmo_keys.TASK_HORIZON: _PICK_HORIZON_SEC,
-            },
-            {
-                **_PLACE,
-                eval_keys.TASK: 'put the mug on the shelf',
-                molmo_keys.EPISODE_INDEX: 0,
-                molmo_keys.TASK_HORIZON: _PLACE_HORIZON_SEC,
-            },
+            EnvTask(
+                'put the banana in the bowl',
+                {
+                    **_PICK,
+                    eval_keys.TASK: 'put the banana in the bowl',
+                    molmo_keys.EPISODE_INDEX: 0,
+                    molmo_keys.TASK_HORIZON: _PICK_HORIZON_SEC,
+                },
+            ),
+            EnvTask(
+                'put the mug on the shelf',
+                {
+                    **_PLACE,
+                    eval_keys.TASK: 'put the mug on the shelf',
+                    molmo_keys.EPISODE_INDEX: 0,
+                    molmo_keys.TASK_HORIZON: _PLACE_HORIZON_SEC,
+                },
+            ),
         ]
 
     monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
@@ -81,6 +87,9 @@ def test_the_env_answers_which_episodes_the_sweep_runs(asked):
     assert all(eval_keys.SEED not in scene for scene in scenes)
     assert [trial.meta[eval_keys.TRIAL_INDEX] for trial in trials] == [0, 1, 2, 3]
     assert trials[0].meta[_BENCHMARK] == 'pick_20251231'
+    assert [trial.instruction for trial in trials] == ['put the banana in the bowl'] * 2 + [
+        'put the mug on the shelf'
+    ] * 2
 
 
 def test_the_benchmark_dimensions_and_the_episode_selection_ride_the_spec(asked):
@@ -126,14 +135,22 @@ def test_the_collection_config_asks_the_pick_mini_benchmark_for_a_two_minute_hor
     assert molmo_cfg.pick_mini_collect.kwargs['with_object_image_points'] is False
 
 
-def _listing_of(selection: dict[str, Any]) -> list[dict[str, Any]]:
+def _listing_of(selection: dict[str, Any]) -> list[EnvTask]:
     """What the env lists for a selection of one benchmark and pinned episodes."""
     bench = {
         key: selection[dimension]
         for dimension, key in zip(mapping.BenchmarkPath._fields, molmo_keys.BENCHMARK_DIMENSIONS, strict=True)
     }
     return [
-        {**bench, eval_keys.TASK: 'pick it', molmo_keys.EPISODE_INDEX: i, molmo_keys.TASK_HORIZON: _PICK_HORIZON_SEC}
+        EnvTask(
+            f'pick it, episode {i}',
+            {
+                **bench,
+                eval_keys.TASK: 'pick it',
+                molmo_keys.EPISODE_INDEX: i,
+                molmo_keys.TASK_HORIZON: _PICK_HORIZON_SEC,
+            },
+        )
         for i in selection[mapping.SELECT_EPISODES]
     ]
 
@@ -165,6 +182,7 @@ def test_episode_paths_list_each_benchmark_once_and_run_the_pins_in_their_order(
         ('holodeck-objaverse', 295),
         ('holodeck-objaverse', 295),
     ]
+    assert [trial.instruction for trial in trials[::2]] == [f'pick it, episode {i}' for i in (11, 0, 49, 295)]
 
 
 def test_episode_paths_carry_the_horizon_override(monkeypatch):
@@ -268,6 +286,8 @@ class _MolmoObservationEnv(EnvProtocol):
         'molmospaces-bench-v1', 'procthor-10k', 'FrankaPickDroidMiniBench', 'pick_20251231'
     )
     INSTRUCTION = 'Hold the arm still'
+    # The scene meta of a reset, which the policy never gets: the listing gives each task its instruction.
+    RESET_TASK = 'the text of the reset meta'
     CONTROL_DT = 0.1
     HORIZON_STEPS = 5
 
@@ -285,6 +305,7 @@ class _MolmoObservationEnv(EnvProtocol):
                 **self.BENCHMARK._asdict(),
                 mapping.TOKEN_EPISODE_INDEX: 3,
                 mapping.TASK_NAME: self.INSTRUCTION,
+                protocol.TASK_INSTRUCTION: self.INSTRUCTION,
                 mapping.TASK_HORIZON_SEC: self.HORIZON_STEPS * self.CONTROL_DT,
             }
         ]
@@ -294,7 +315,7 @@ class _MolmoObservationEnv(EnvProtocol):
         self.actions.clear()
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self.observation}],
-            protocol.FRAME_META: {mapping.META_TASK: self.INSTRUCTION},
+            protocol.FRAME_META: {mapping.META_TASK: self.RESET_TASK},
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self.CONTROL_DT,
         }

@@ -89,13 +89,17 @@ class Embodiment:
     ready_handlers: dict[str, pimm.calls.ControlSystemHandler[None, None]] = field(default_factory=dict)
     control_systems: tuple[pimm.ControlSystem, ...] = ()
     simulated: bool = False
+    # A new goal text that the embodiment publishes during an episode. The policy gets it in place of the task's
+    # instruction until the episode ends.
+    goal_source: pimm.ControlSystemEmitter[str] | None = None
 
 
 @dataclass
 class Task:
     """One trial: the goal the policy conditions on, the time budget it runs under, and what sets it up."""
 
-    instruction_source: str | Callable[[], str]
+    # The text the policy gets until the embodiment's ``goal_source`` publishes a new goal.
+    instruction: str
     # Time budget for a rollout; ``None`` ends on ``Eval.done`` alone.
     timeout_sec: float | None
     # What to ask for, keyed as ``Embodiment.prepare_handlers`` is; a handler this does not name goes unasked
@@ -104,12 +108,6 @@ class Task:
     meta: dict[str, Any] = field(default_factory=dict)
     # Charge the trial the wall time each model call takes. Only a sim states it off: a real rig pays it.
     charge_inference_time: bool = True
-
-    @property
-    def instruction(self) -> str:
-        """An embodiment that learns its task on reset has one to report only once that reset has run."""
-        src = self.instruction_source
-        return src if isinstance(src, str) else src()
 
 
 # rules-allow: stale-doc — a plan is read for what is left, which needs the landed steps marked
@@ -132,7 +130,7 @@ class Task:
 # [✓] The episode call carries the session that runs it, so the Harness holds no policy.
 # [✓] The episode call names where it records, so the Harness holds no dataset.
 # [✓] A benchmark answers ``tasks(spec)``, so positronic holds no task table of its own.
-# [ ] A task carries its instruction as data, so no trial reads it after the reset.
+# [✓] A task carries its instruction as data, so no trial reads it after the reset.
 # [ ] A sim eval config names a selection, and a spec flag narrows it to one task.
 # [ ] A task names its model, and a routed policy serves the mix.
 # [ ] A session logs the trials it ran, and a later run replays that log.

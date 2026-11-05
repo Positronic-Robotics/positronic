@@ -4,14 +4,15 @@ This module must work in an isolated interpreter without Positronic installed.
 
 Protocol (msgpack frames, see ``protocol``), between a client and its slot:
   client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
-  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``
-  client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``, and optional ``meta``
+  client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``, opt. ``goal``
+  client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``, opt. ``goal``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Command handling failures return ``{'error': str}`` without closing the session; the client re-raises them.
 
 ``control_dt`` is the control period in seconds and can vary per step.
-``meta`` identifies the scene; ``robot_meta`` identifies the robot model. A step's ``meta`` replaces the reset's.
-Either metadata dict can be empty when the client supplies that information.
+``meta`` identifies the scene; ``robot_meta`` identifies the robot model. Either metadata dict can be empty when the
+client supplies that information. A task record's ``instruction`` is the text the policy gets for that task. A frame
+carries ``goal`` when the env moves the goal away from that text, and a later ``goal`` replaces an earlier one.
 
 An env serves a fixed number of slots, ``num_slots``: independent episodes that one env call steps together. Most
 envs serve one. Each client that connects takes the next free slot and drives only that slot, so N clients can run N
@@ -47,7 +48,7 @@ class EnvProtocol(ABC):
 
     @abstractmethod
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        """Task records selected by ``spec``, each with a ``name`` field.
+        """Task records selected by ``spec``, each with a ``name`` field and an ``instruction`` field.
 
         An absent key leaves that axis unrestricted; an unknown value raises.
         """
@@ -62,7 +63,8 @@ class EnvProtocol(ABC):
         """Construct or reuse the environment and re-randomize every slot from an opaque token.
 
         Return ``slots`` (one ``{'obs': ...}`` per slot), scene ``meta``, ``robot_meta``, and ``control_dt``
-        in seconds. Either metadata dict may be empty when the client supplies it.
+        in seconds. Either metadata dict may be empty when the client supplies it. A slot whose scene draws a goal
+        other than its task's listed instruction also carries ``goal``.
         """
 
     @abstractmethod
@@ -71,7 +73,7 @@ class EnvProtocol(ABC):
 
         ``actions`` maps a slot index to its action and leaves out every slot that is not in an episode; the env
         holds such a slot. ``slots`` answers with one ``{'obs', 'done'}`` per slot, in slot order. A slot may
-        also carry ``meta``, which replaces its scene meta from ``reset``: a prompt that changes in the episode.
+        also carry ``goal``, the new goal text of a task whose goal moves in the episode.
         ``control_dt`` is the wait until the next step and may vary each step.
         """
 

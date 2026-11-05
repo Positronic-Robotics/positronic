@@ -220,7 +220,7 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
         control_systems=(producer,),
         simulated=True,
     )
-    plan = [Task(instruction_source='count', timeout_sec=timeout)]
+    plan = [Task(instruction='count', timeout_sec=timeout)]
     return Eval(embodiment, partial(iter, plan), done=producer.done)
 
 

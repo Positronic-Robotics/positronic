@@ -28,7 +28,6 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE
-from positronic.eval import Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
@@ -38,12 +37,13 @@ from positronic.simulator.env_server import launcher, protocol
 from positronic.simulator.env_server.adapter import EnvAdapter, WireCommandAdapter, _in_env_control_frame, _wire_command
 from positronic.simulator.env_server.client import _CLOSE_ACK_TIMEOUT, EnvConnection
 from positronic.simulator.env_server.launcher import free_port, serve_subprocess
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
+from positronic.simulator.env_server.proxy import EnvTask, RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.env_server.server import EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.env_server.tests.mujoco_env import (
     CAMERAS,
     SCENE_NAME,
+    STACK_CUBES_INSTRUCTION,
     make_mujoco_env,
     remote_stack_cubes_eval,
 )
@@ -208,8 +208,9 @@ def test_the_env_answers_its_own_task_list(env_server):
     """Unknown task specifications must reach the environment and return its errors."""
     host, port = env_server
     conn = EnvConnection(host, port)
-    assert conn.tasks({}) == [{'name': SCENE_NAME}]
-    assert conn.tasks({'task': SCENE_NAME}) == [{'name': SCENE_NAME}]
+    listed = [{'name': SCENE_NAME, protocol.TASK_INSTRUCTION: STACK_CUBES_INSTRUCTION}]
+    assert conn.tasks({}) == listed
+    assert conn.tasks({'task': SCENE_NAME}) == listed
     with pytest.raises(RuntimeError, match='nosuchscene'):
         conn.tasks({'task': 'nosuchscene'})
     conn.close()
@@ -657,7 +658,7 @@ class _CountdownEnv(EnvProtocol):
         names = [selection] if isinstance(selection, str) else list(selection)
         if any(name != _COUNTDOWN for name in names):
             raise ValueError(f'_CountdownEnv serves {_COUNTDOWN!r}, not {names}')
-        return [{'name': name} for name in names]
+        return [{'name': name, protocol.TASK_INSTRUCTION: f'count down from {name}'} for name in names]
 
     def reset(self, token):
         self._steps = 0
@@ -711,7 +712,9 @@ def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
         obs_rx = world.pair(proxy.observations['value'])
         world.start([proxy])
 
-        assert proxy.tasks({'task': _COUNTDOWN}) == [{eval_keys.TASK: _COUNTDOWN}]
+        assert proxy.tasks({'task': _COUNTDOWN}) == [
+            EnvTask(f'count down from {_COUNTDOWN}', {eval_keys.TASK: _COUNTDOWN})
+        ]
 
         proxy.reset({eval_keys.SEED: 0})
         np.testing.assert_array_equal(obs_rx.value, np.zeros(7))
@@ -766,46 +769,51 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
 
 
 @pytest.mark.timeout(60.0)
-def test_proxy_caches_reset_meta_as_live_instruction_source():
-    """Live instruction callbacks must retain reset metadata across steps that omit it."""
+def test_an_env_that_keeps_the_listed_instruction_publishes_no_goal():
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
+        goal_rx = world.pair(proxy.goal)
         scheduler = world.start([proxy])
 
         proxy.reset({eval_keys.SEED: 0})
-        assert task.instruction == 'countdown'
         drive_scheduler(scheduler, steps=4)
-        assert task.instruction == 'countdown'
+        assert goal_rx.read() is None
 
 
-class _PromptPerStepEnv(_CountdownEnv):
-    """Moves its prompt to ``step <n>`` at each step, as a task with several targets in turn does."""
+class _GoalPerStepEnv(_CountdownEnv):
+    """Draws the goal ``reset`` at the reset and moves it to ``step <n>`` at each step, as a task with several
+    targets in turn does."""
 
     def __init__(self):
         super().__init__()
-        self.prompts: list[str] = []
+        self.goals: list[str] = []
+
+    def reset(self, token):
+        frame = super().reset(token)
+        self.goals = ['reset']
+        frame[protocol.SLOTS][0][protocol.FRAME_GOAL] = self.goals[-1]
+        return frame
 
     def step(self, actions):
         frame = super().step(actions)
-        self.prompts.append(f'step {self._steps}')
-        frame[protocol.SLOTS][0][protocol.FRAME_META] = {'task': self.prompts[-1]}
+        self.goals.append(f'step {self._steps}')
+        frame[protocol.SLOTS][0][protocol.FRAME_GOAL] = self.goals[-1]
         return frame
 
 
 @pytest.mark.timeout(60.0)
-def test_a_prompt_the_env_moves_in_the_episode_is_the_live_instruction():
-    env = _PromptPerStepEnv()
+def test_each_goal_the_env_reports_reaches_the_goal_signal():
+    env = _GoalPerStepEnv()
     with serve_env(env) as (host, port), pimm.World(virtual_time=True) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
-        task = Task(instruction_source=lambda: proxy.meta['task'], timeout_sec=1.0)
+        goal_rx = world.pair(proxy.goal)
         scheduler = world.start([proxy])
 
         proxy.reset({eval_keys.SEED: 0})
-        assert task.instruction == _COUNTDOWN
+        assert goal_rx.value == 'reset'
         drive_scheduler(scheduler, steps=4)
-        assert env.prompts
-        assert task.instruction == env.prompts[-1]
+        assert len(env.goals) > 1
+        assert goal_rx.value == env.goals[-1]
 
 
 def test_the_canonical_contract_is_exactly_what_a_client_can_emit():

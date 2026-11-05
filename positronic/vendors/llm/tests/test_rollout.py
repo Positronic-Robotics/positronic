@@ -142,7 +142,7 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
     states = script_move_then_end(monkeypatch, distance)
     embodiment = arm_with_wrist_camera()
     policy = LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,))
-    task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
+    task = Task(instruction='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     run_world(embodiment, TaskDriver(lambda: [task, task], policy, LocalDatasetWriter(tmp_path)))
     dataset = LocalDataset(tmp_path)
     assert len(dataset) == 2
@@ -210,7 +210,7 @@ def served(policy: LLMPolicy, sessions_dir: Path) -> Iterator[RemotePolicy]:
 @pytest.mark.parametrize('charge', [False, True])
 def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch, tmp_path, charge):
     states = script_move_then_end(monkeypatch, 0.01)
-    task = Task(instruction_source='Smoke test.', timeout_sec=10, charge_inference_time=charge)
+    task = Task(instruction='Smoke test.', timeout_sec=10, charge_inference_time=charge)
     sessions_dir, dataset_dir = tmp_path / 'sessions', tmp_path / 'dataset'
     sessions_dir.mkdir()
     with served(LLMPolicy(Endpoint('test'), Motion(), camera_keys=(keys.WRIST_IMAGE,)), sessions_dir) as policy:

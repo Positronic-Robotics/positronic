@@ -123,7 +123,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
 def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, caplog):
     presses = iter(['s'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
-    operator = KeyboardOperator(lambda: Task(instruction_source='pick', timeout_sec=None), _IdlePolicy(), None)
+    operator = KeyboardOperator(lambda: Task(instruction='pick', timeout_sec=None), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
         handler = world.pair(operator.perform_task)
 
@@ -138,7 +138,7 @@ def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, c
 
 def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog):
     """One episode at a time is the operator's own rule: the second press never reaches the harness."""
-    task = Task(instruction_source='pick', timeout_sec=None)
+    task = Task(instruction='pick', timeout_sec=None)
     presses = iter(['s', 's'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
     operator = KeyboardOperator(lambda: task, _IdlePolicy(), None)

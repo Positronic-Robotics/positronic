@@ -27,6 +27,9 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
 
     ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
     ``camera_view`` is a ``mapping.CameraView`` or its value.
+
+    A task's instruction is the prompt ABC lists for it. A seeded reset draws the prompt of some tasks, and some
+    tasks move the prompt during an episode: the env publishes each such prompt as a new goal.
     """
     view = mapping.CameraView(camera_view)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(mapping.task_names(task)))
@@ -37,19 +40,21 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
         mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE],
         ABC_TASK_EVAL_SIGNAL: proxy.privileged[mapping.OBS_TASK_EVAL],
     }
-    task_spec = Task(instruction_source=lambda: proxy.meta[mapping.META_TASK], timeout_sec=timeout)
 
     def tasks() -> list[Task]:
-        scenes = [
-            {
-                **params,
-                abc_keys.CAMERA_HEIGHT: camera_height,
-                abc_keys.CAMERA_WIDTH: camera_width,
-                abc_keys.CAMERA_VIEW: view.value,
-            }
-            for params in proxy.tasks(spec(**{mapping.SELECT_TASKS: task}))
+        task_scenes = [
+            (
+                Task(instruction=listed.instruction, timeout_sec=timeout),
+                {
+                    **listed.params,
+                    abc_keys.CAMERA_HEIGHT: camera_height,
+                    abc_keys.CAMERA_WIDTH: camera_width,
+                    abc_keys.CAMERA_VIEW: view.value,
+                },
+            )
+            for listed in proxy.tasks(spec(**{mapping.SELECT_TASKS: task}))
         ]
-        return build_tasks(task_spec, seed, trial_count, scenes)
+        return build_tasks(task_scenes, seed, trial_count)
 
     return Eval(embodiment, tasks, privileged=privileged, done=proxy.done)
 

@@ -67,7 +67,7 @@ def make_embodiment(simulated: bool = False, move_s: float = 0.0, arm_failures: 
 
 def make_trial(instruction: str = 'stub') -> Callable[[], Task]:
     prepare_args = {eval_keys.ARM: 'start-pose', eval_keys.GRIPPER: 0.0}
-    return partial(Task, instruction_source=instruction, timeout_sec=None, prepare_args=prepare_args)
+    return partial(Task, instruction=instruction, timeout_sec=None, prepare_args=prepare_args)
 
 
 # Below the range Linux and macOS hand out for port 0, so that a server that binds port 0 in another test cannot take

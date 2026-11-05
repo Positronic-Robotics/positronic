@@ -15,7 +15,7 @@ OVERRIDE = 'put the red cup in the grey tote'
 def _trials(instruction: str = CONFIGURED):
     """A trial source that numbers its draws in the trial's meta, so a test can tell the trials apart."""
     draws = itertools.count()
-    return lambda: Task(instruction_source=instruction, timeout_sec=None, meta={'draw': next(draws)})
+    return lambda: Task(instruction=instruction, timeout_sec=None, meta={'draw': next(draws)})
 
 
 def test_start_sends_the_trial_drawn_before_it_and_draws_the_next():
@@ -130,7 +130,7 @@ def test_one_episode_runs_at_a_time_and_accepts_verdicts_until_it_closes():
 
 
 def test_a_trial_source_that_fails_leaves_the_station_as_it_was():
-    draws = iter([Task(instruction_source=CONFIGURED, timeout_sec=None)])
+    draws = iter([Task(instruction=CONFIGURED, timeout_sec=None)])
     station = Station(lambda: next(draws))
     with pytest.raises(StopIteration):
         station.start(now=1.0)
@@ -157,28 +157,6 @@ def test_an_episode_that_the_policy_ended_reads_as_ended_by_the_policy(end):
 def test_the_verdicts_record_who_ended_the_episode():
     assert terminal_payload(Outcome.PASS) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
     assert terminal_payload(Outcome.FAIL) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: False}
-
-
-def _known_after_reset() -> str:
-    return CONFIGURED
-
-
-def test_a_trial_whose_instruction_is_known_only_after_its_reset_is_refused_at_startup():
-    with pytest.raises(TypeError, match='string'):
-        Station(lambda: Task(instruction_source=_known_after_reset, timeout_sec=None))
-
-
-def test_a_later_trial_whose_instruction_is_known_only_after_its_reset_is_refused_at_start():
-    draws = iter([
-        Task(instruction_source=CONFIGURED, timeout_sec=None),
-        Task(instruction_source=_known_after_reset, timeout_sec=None),
-    ])
-    station = Station(lambda: next(draws))
-    with pytest.raises(TypeError, match='string'):
-        station.start(now=1.0)
-    view = station.view(now=2.0)
-    assert view.phase is Phase.READY
-    assert view.episodes == []
 
 
 def test_each_change_advances_the_generation_and_a_view_does_not():

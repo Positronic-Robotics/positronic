@@ -31,6 +31,7 @@ class RobolabAdapter(WireCommandAdapter):
             {
                 eval_keys.TASK: record[robolab_keys.RECORD_NAME],
                 robolab_keys.EPISODE_LENGTH: record[robolab_keys.RECORD_EPISODE_LENGTH_S],
+                robolab_keys.INSTRUCTION_TYPE: record[robolab_keys.RECORD_INSTRUCTION_TYPE],
             }
             for record in records
         ]

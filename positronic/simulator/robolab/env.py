@@ -116,6 +116,7 @@ from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.events.subtask_recorder import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     SubtaskCompletionRecorderTerm,
 )
+from robolab.core.task.task import resolve_instruction  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.core.utils.function_loader import get_callable_info  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.core.world.world_state import get_world  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.registrations.droid import camera_presets  # noqa: E402  # pyright: ignore[reportMissingImports]
@@ -208,7 +209,8 @@ class RobolabEnv(EnvProtocol):
 
     @staticmethod
     def _benchmark_tasks() -> dict[str, dict[str, Any]]:
-        """Every benchmark task by name: the seconds RoboLab gives an episode, and the categories it sits in."""
+        """Every benchmark task by name: the seconds RoboLab gives an episode, the categories it sits in, and its
+        instruction as the task class states it, a text or one text per phrasing."""
         with open(os.path.join(robolab.constants.TASK_DIR, '_metadata', 'task_metadata.json')) as f:
             entries = json.load(f)
         remap = robolab.constants.BENCHMARK_TASK_CATEGORIES
@@ -217,6 +219,8 @@ class RobolabEnv(EnvProtocol):
             attributes = [a.strip() for a in entry['attributes'].split(',')]
             tasks[entry['task_name']] = {
                 'episode_length_s': float(entry['episode_s']),
+                # The metadata holds no variants for a task whose instruction is one text.
+                'instruction': entry['instruction_variants'] or entry['instruction'],
                 # An attribute outside the map, such as ``vague``, is a phrasing and no category.
                 'categories': {remap[a] for a in attributes if a in remap},
             }
@@ -224,7 +228,8 @@ class RobolabEnv(EnvProtocol):
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """The tasks ``spec`` selects: ``task`` is one of RoboLab's categories, a task name, or a list of
-        names. Without a ``task`` the whole benchmark runs."""
+        names. Without a ``task`` the whole benchmark runs. Each record states the instruction in the phrasing that
+        ``instruction_type`` names, as ``create_env`` resolves it, and names that phrasing for the reset."""
         benchmark = self._benchmark_tasks()
         categories = set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values())
         match spec.get('task'):
@@ -241,8 +246,14 @@ class RobolabEnv(EnvProtocol):
             raise ValueError(
                 f'RoboLab does not hold {unknown}; a task is a name, a list of names, or one of {sorted(categories)}'
             )
+        instruction_type = spec[keys.SELECT_INSTRUCTION_TYPE]
         return [
-            {keys.RECORD_NAME: name, keys.RECORD_EPISODE_LENGTH_S: benchmark[name]['episode_length_s']}
+            {
+                keys.RECORD_NAME: name,
+                keys.RECORD_EPISODE_LENGTH_S: benchmark[name]['episode_length_s'],
+                protocol.TASK_INSTRUCTION: resolve_instruction(benchmark[name]['instruction'], instruction_type),
+                keys.RECORD_INSTRUCTION_TYPE: instruction_type,
+            }
             for name in names
         ]
 
@@ -291,7 +302,7 @@ class RobolabEnv(EnvProtocol):
         # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
         # task identity the episode records.
         self._meta = {
-            'task': self._env_cfg.instruction,
+            keys.META_INSTRUCTION: self._env_cfg.instruction,
             'env_name': env_name,
             'task_name': self._env_cfg._task_name,
             'attributes': list(self._env_cfg._task_attributes),
