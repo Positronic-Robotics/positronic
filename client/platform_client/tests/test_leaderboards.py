@@ -387,12 +387,13 @@ MODELS: list[BaseModel] = [
             ),
         ],
     ),
-    LeaderboardEvalListResponse(),
+    LeaderboardEvalListResponse(tag=TAG),
     LeaderboardEvalListResponse(
+        tag=TAG,
         leaderboards=[
             LeaderboardEvalSummary(leaderboard=BOARD, descriptor=LeaderboardEvalDescriptor(eval=EvalRef('fake.smoke'))),
             LeaderboardEvalSummary(leaderboard=LeaderboardRef('example-rig'), descriptor=LeaderboardEvalDescriptor()),
-        ]
+        ],
     ),
     MODEL_LEADERBOARD,
     TEAM_LEADERBOARD,
@@ -449,7 +450,7 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     LeaderboardListResponse: {'tag', 'leaderboards'},
     LeaderboardEvalDescriptor: {'eval'},
     LeaderboardEvalSummary: {'leaderboard', 'descriptor'},
-    LeaderboardEvalListResponse: {'leaderboards'},
+    LeaderboardEvalListResponse: {'tag', 'leaderboards'},
     Baseline: {'publisher'},
     LeaderboardRow: {
         'key',
@@ -702,9 +703,15 @@ def test_the_eval_read_of_a_list_reads_a_leaderboard_that_the_full_read_refuses(
 
 
 def test_the_eval_read_of_a_list_still_refuses_an_entry_with_no_slug():
-    wire = {'leaderboards': [{'descriptor': {'eval': 'fake.smoke'}}]}
+    wire = {'tag': 'example.site', 'leaderboards': [{'descriptor': {'eval': 'fake.smoke'}}]}
     with pytest.raises(ValidationError, match='leaderboard'):
         LeaderboardEvalListResponse.model_validate(wire)
+
+
+def test_the_eval_read_of_a_list_refuses_a_body_that_names_no_tag():
+    with pytest.raises(ValidationError, match='tag'):
+        LeaderboardEvalListResponse.model_validate({})
+    assert LeaderboardEvalListResponse.model_validate({'tag': 'example.site'}).leaderboards == []
 
 
 def test_a_listed_leaderboard_gives_its_place_in_each_of_its_tags():

@@ -312,6 +312,7 @@ class LeaderboardEvalSummary(_Wire):
 class LeaderboardEvalListResponse(_Wire):
     """`leaderboards.list`, read for the slug and the eval of each leaderboard alone."""
 
+    tag: LeaderboardTag
     leaderboards: list[LeaderboardEvalSummary] = Field(default_factory=list)
 
 

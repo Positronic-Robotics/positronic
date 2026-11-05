@@ -39,6 +39,7 @@ TEXT_SUFFIXES = frozenset({'.py', '.md', '.toml'})
 _ENGAGEMENT_WORD = re.compile(r'\b(' + '|'.join(ENGAGEMENT_WORDS) + ')', re.IGNORECASE)
 
 # Values that the platform names and the client spells as the platform does; the scan takes them out of a line.
+# rules-allow: grandfathered-violation — a tag value that the platform owns, not a word that this code may drop
 PLATFORM_VALUES = (NEBIUS_COMPETITION_TAG,)
 
 

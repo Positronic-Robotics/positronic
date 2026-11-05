@@ -247,10 +247,12 @@ def test_a_leaderboard_that_the_full_list_read_refuses_still_names_its_eval(plat
     assert platform.body['eval'] == LEADERBOARD_EVAL
 
 
-def test_a_leaderboard_answer_the_client_cannot_read_is_the_platforms_fault(platform, run_command):
-    unreadable = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
-        'leaderboards': [{'leaderboard': 'leaderboard-0'}]
-    }
+@pytest.mark.parametrize(
+    'unreadable',
+    [{'tag': NEBIUS_COMPETITION_TAG, 'leaderboards': [{'leaderboard': 'leaderboard-0'}]}, {}],
+    ids=['entry-with-no-descriptor', 'empty-body'],
+)  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
+def test_a_leaderboard_answer_the_client_cannot_read_is_the_platforms_fault(platform, run_command, unreadable):
     platform.answer_by_route({routes.LEADERBOARDS_LIST: (unreadable, 200)})
 
     with pytest.raises(

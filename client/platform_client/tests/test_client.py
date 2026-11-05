@@ -905,7 +905,7 @@ def test_leaderboard_models_parses_each_family():
     ('payload', 'call'),
     [
         ({'tag': 'example.site'}, lambda client: client.list_leaderboards(LeaderboardTag('example.site'))),
-        ({}, lambda client: client.list_leaderboard_evals(LeaderboardTag('example.site'))),
+        ({'tag': 'example.site'}, lambda client: client.list_leaderboard_evals(LeaderboardTag('example.site'))),
         (
             {
                 'leaderboard': 'example-board',
