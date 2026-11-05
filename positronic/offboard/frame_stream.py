@@ -317,13 +317,14 @@ class FrameStreamer:
             self._targets = []
         self._chunk_end = now_ns / 1e9
 
-    def on_answer(self, chunk: cabc.Sized, elapsed_sec: float) -> None:
+    def on_answer(self, chunk: cabc.Sized | None, elapsed_sec: float) -> None:
         """Plan the rows of the next request when the schedule reads ``chunk``, the answer of a call that took
-        ``elapsed_sec`` (its ``Answer.elapsed_sec``, which the schedule's lead estimate follows)."""
+        ``elapsed_sec`` (its ``Answer.elapsed_sec``, which the schedule's lead estimate follows). ``None``, an answer
+        that leaves the plan as it is, starts no chunk: the schedule calls again at once."""
         self.flush()
         now = self._clock() / 1e9
         lead = 0.0 if self._lead is None else self._lead(elapsed_sec)
-        duration = len(chunk) / self._fps
+        duration = 0.0 if chunk is None else len(chunk) / self._fps
         if self._horizon_sec is not None:
             duration = min(duration, self._horizon_sec)
         start = max(now, self._chunk_end)  # an early answer waits behind the commands still due

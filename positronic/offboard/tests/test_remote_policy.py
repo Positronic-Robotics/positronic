@@ -1969,6 +1969,21 @@ def test_a_replan_after_an_arm_error_streams_the_rows_of_the_call_that_the_sched
     assert (fourth[b'call'], fourth[b'rows']) == (3, [2, 1])
 
 
+def test_an_answer_that_leaves_the_plan_streams_no_rows_and_the_next_answer_streams_again():
+    temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
+    meta = _stream_meta(ChunkedSchedule(fps=10.0).to_spec())
+    meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
+    chunk = [{'value': i} for i in range(5)]
+    session = _run_on_mock_session(
+        meta, 14, frame_stream='jpeg', version=protocol.ProtocolVersion.V2, replies=[chunk, None, chunk, chunk]
+    )
+
+    # The None answer, read at 0.7 s, starts no chunk: the schedule calls at once, with no rows to refer to. The
+    # chunk read at 0.8 s runs to 1.3 s, and the call then refers to both rows again.
+    requests = [call.args[0]['image'] for call in session.infer.call_args_list]
+    assert [(r[b'call'], r[b'rows']) if REF in r else None for r in requests[1:]] == [(1, [2, 1]), (2, []), (3, [2, 1])]
+
+
 def test_an_rtc_session_goes_in_full_because_the_stream_predicts_chunked_calls(caplog):
     temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
     rtc = RTCSchedule(fps=10.0, call_after_sec=0.4, latency_estimate=ConstantDuration(0.1))
