@@ -147,6 +147,11 @@ uv sync --locked --extra hardware --extra franka   # a Franka station
 uv sync --locked --extra hardware --extra yam      # a YAM station
 ```
 
+The Franka robot's system version sets the libfranka version: 0.15.3 before system version 5.9.0, and 0.21.3 from
+5.9.0. `positronic-franka` builds against either one. Its
+[README](https://github.com/Positronic-Robotics/positronic-franka#which-libfranka) lists the packages each version
+needs, and how to rebuild the extension after a change of libfranka.
+
 After installation, the following command-line scripts will be available:
 - `positronic-data-collection`: Collect demonstrations in simulation or on hardware
 - `positronic-server`: Browse and inspect datasets

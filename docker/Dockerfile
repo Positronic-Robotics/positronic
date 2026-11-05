@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y \
     libeigen3-dev \
     libturbojpeg \
     libfmt-dev \
+    libconsole-bridge-dev \
+    libtinyxml2-dev \
     lsb-release \
     libhidapi-dev  # Spacemouse
 RUN apt-get update && apt-get install -y software-properties-common
@@ -45,8 +47,9 @@ RUN uv venv --python 3.13
 ENV VIRTUAL_ENV=/.venv/
 ENV PATH=/$VIRTUAL_ENV/bin:$PATH
 
-# Install libfranka
-RUN git clone --single-branch --recurse-submodules --branch 0.15.3 https://github.com/frankaemika/libfranka
+# The robot's system version sets the libfranka version: 0.15.3 before system version 5.9.0, 0.21.3 from 5.9.0.
+ARG LIBFRANKA_VERSION=0.15.3
+RUN git clone --single-branch --recurse-submodules --branch ${LIBFRANKA_VERSION} https://github.com/frankarobotics/libfranka
 RUN mkdir libfranka/build && cd libfranka/build && cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF .. && cmake --build . && cmake --install .
 ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 
