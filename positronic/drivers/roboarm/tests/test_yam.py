@@ -2115,11 +2115,6 @@ def _friction_torque_at(chain: I2rtChain, speed: float) -> np.ndarray:
     return chain.friction_torques[-1]
 
 
-def test_a_compensation_with_no_fade_leaves_the_update_of_the_chain_to_i2rt(monkeypatch):
-    _, chain = _connected(monkeypatch, STATION_COMPENSATION)
-    assert 'update' not in vars(chain) and 'get_robot_info' not in vars(chain)
-
-
 @pytest.mark.parametrize('speed', [*SPEEDS_AT_REST, 0.015, -0.015, 0.1, -0.1])
 def test_a_compensation_with_no_fade_adds_the_full_coulomb_friction_at_any_speed(monkeypatch, speed):
     _, chain = _connected(monkeypatch, STATION_COMPENSATION)
@@ -2145,9 +2140,10 @@ def test_a_chain_that_fades_its_friction_reports_the_full_coulomb_friction(monke
     np.testing.assert_array_equal(chain.get_robot_info()[yam._COULOMB_FRICTION], STATION_FRICTION_TORQUE)
 
 
-def test_a_fade_with_the_friction_off_leaves_the_update_of_the_chain_to_i2rt(monkeypatch):
+@pytest.mark.parametrize('speed', [0.005, 0.1, -0.1])
+def test_a_fade_with_the_friction_off_adds_no_coulomb_friction(monkeypatch, speed):
     _, chain = _connected(monkeypatch, dataclasses.replace(FADED_COMPENSATION, use_coulomb_friction=False))
-    assert 'update' not in vars(chain)
+    np.testing.assert_array_equal(_friction_torque_at(chain, speed), np.zeros(7))
 
 
 @pytest.mark.parametrize(
