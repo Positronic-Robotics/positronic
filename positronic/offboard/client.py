@@ -1,5 +1,6 @@
 import logging
 import math
+import socket
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
@@ -16,6 +17,7 @@ from positronic import telemetry, telemetry_keys
 from positronic.offboard import protocol as legacy_protocol
 from positronic.utils.versions import Version, resolve_version
 
+from . import frame_ring as frames
 from .protocol import deserialise, serialise, typed_commands
 
 logger = logging.getLogger(__name__)
@@ -43,7 +45,11 @@ class InferenceSession:
 
     ``reopen`` returns a new session on the same server. A connection that drops before the server's first
     answer reconnects through it, once, and sends the observation again. ``ready_by`` is the
-    ``time.monotonic()`` instant past which the status handshake waits for no further update.
+    ``time.monotonic()`` instant past which neither the status handshake nor the frame ring handover waits.
+
+    ``dial_frame_channel`` is the wire's ``frame_channel_dialer``, where the wire has one. A server that
+    also declares a frame ring then gets every image through shared memory, and the message carries a
+    reference in place of each one.
     """
 
     def __init__(
@@ -53,6 +59,7 @@ class InferenceSession:
         *,
         ready_by: float = math.inf,
         reopen: Callable[[], 'InferenceSession'] | None = None,
+        dial_frame_channel: Callable[[float], socket.socket] | None = None,
     ):
         self._conn = conn
         self._infer_timeout = infer_timeout
@@ -77,6 +84,7 @@ class InferenceSession:
         self._pending: deque[object] = deque()
         self._timings = local()
         self.served_timing = self.wire_timing = {}
+        self._frames = self._frame_writer(dial_frame_channel, ready_by)
 
     @property
     def served_timing(self) -> Mapping[str, float]:
@@ -95,6 +103,19 @@ class InferenceSession:
     @wire_timing.setter
     def wire_timing(self, value: Mapping[str, float]) -> None:
         self._timings.wire = value
+
+    def _frame_writer(
+        self, dial_channel: Callable[[float], socket.socket] | None, ready_by: float
+    ) -> frames.FrameWriter | None:
+        declared = self._metadata.get(frames.HANDSHAKE_KEY)
+        if dial_channel is None or self._session_id is None or not declared or not frames.SUPPORTED:
+            return None
+        return frames.FrameWriter.open(dial_channel, self._session_id, ready_by)
+
+    @property
+    def sends_frames_through_ring(self) -> bool:
+        """True when this session holds a frame ring: every image goes through it raw, or the call raises."""
+        return self._frames is not None
 
     def _handshake(self, ready_by: float, timeout_per_message: float = 30.0) -> dict[str, Any]:
         """Receive status updates until server is ready.
@@ -204,15 +225,30 @@ class InferenceSession:
         ):
             reopened.close()
             raise wire.PeerDisconnected('The server this session reconnected to declares other session settings')
+        # The caller prepared the observation for this session's transport, so a ring cannot fall away here.
+        if self._frames is not None and reopened._frames is None:
+            reopened.close()
+            raise wire.PeerDisconnected('The session this one reconnected to has no frame ring')
+        # The run records the image transport of the session it opened, so a ring cannot appear here either.
+        if self._frames is None and reopened._frames is not None:
+            reopened._frames.close()
+            reopened._frames = None
         with self._send_lock:
             if not self._closing:
+                # A ring is handed over under one session id, so the new session's ring replaces this one's.
+                if self._frames is not None:
+                    self._frames.close()
                 self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+                self._frames = reopened._frames
                 return
         reopened.close()
         raise RuntimeError('The inference session is closing')
 
     def _round_trip(self, obs: dict[str, Any]) -> Any:
         self.served_timing = self.wire_timing = {}
+        write_frames = None
+        if self._frames is not None:
+            obs, write_frames = self._frames.pack(obs)
         request = (
             obs
             if self._protocol is protocol.ProtocolVersion.V1
@@ -222,6 +258,9 @@ class InferenceSession:
             serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
         )
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
+        # The ring changes a slot only for a message that serialised, so a refused one leaves held frames intact.
+        if write_frames is not None:
+            write_frames()
         wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
         token = object()
@@ -295,6 +334,10 @@ class InferenceSession:
 
     def close(self) -> None:
         """End the server session and wait for its cleanup before closing the connection."""
+        # A session closed by a failed round trip still holds its ring.
+        if self._frames is not None:
+            self._frames.close()
+            self._frames = None
         with self._send_lock:
             self._closing = True
         with self._responses:
@@ -411,7 +454,13 @@ class InferenceClient:
         """
         conn = self._wire.dial(self._address, self.headers, open_timeout)
         try:
-            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen)
+            return InferenceSession(
+                conn,
+                infer_timeout=self.infer_timeout,
+                ready_by=ready_by,
+                reopen=reopen,
+                dial_frame_channel=self._wire.frame_channel_dialer(self._address),
+            )
         except BaseException:
             conn.close()
             raise
