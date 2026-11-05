@@ -30,6 +30,7 @@ This release publishes `positronic-platform-client` 0.47.10, and `positronic` re
 - A two-arm protocol v3 server can declare `bimanual_joints_action` in its client stack, with an RTC prefix ([#1154](https://github.com/Positronic-Robotics/positronic/pull/1154))
 - The LeRobot server serves overlapping sessions, each from its own state, over one copy of the weights ([#1140](https://github.com/Positronic-Robotics/positronic/pull/1140))
 - The `dream` vendor serves Dream-1 through DreamAPI to the bimanual YAM over the model-server protocol, with the `dreamlabs-client` package of the `dream` extra ([#1149](https://github.com/Positronic-Robotics/positronic/pull/1149))
+- The run command of the Dream-1 server README binds the server to `127.0.0.1`. The README says that the default address is open, and that a server for a robot on another machine needs `AUTH_TOKEN` and a private network ([#1163](https://github.com/Positronic-Robotics/positronic/pull/1163))
 - `TransformImages` resizes the selected images of all cameras and frame histories in one bounded thread pool ([#1160](https://github.com/Positronic-Robotics/positronic/pull/1160))
 - The serving and training images no longer trust the leaked eMudhra (emSign) intermediate CAs. The main lock holds certifi 2026.10.23 ([#1141](https://github.com/Positronic-Robotics/positronic/pull/1141)) ([#1148](https://github.com/Positronic-Robotics/positronic/pull/1148)) ([#1138](https://github.com/Positronic-Robotics/positronic/pull/1138))
 
@@ -39,6 +40,7 @@ This release publishes `positronic-platform-client` 0.47.10, and `positronic` re
 
 ### Robots
 - `yam.Robot` takes a `Compensation` in place of `gravity_comp_factor`: the gravity factors, the end-effector mass and the Coulomb friction. Each episode records them per arm ([#1135](https://github.com/Positronic-Robotics/positronic/pull/1135))
+- Both yambox YAM arms run the full compensation: the gravity factors, the end-effector mass and the Coulomb friction ([#1162](https://github.com/Positronic-Robotics/positronic/pull/1162))
 - The hardware image builds libfranka 0.15.3 or 0.21.3, from the `LIBFRANKA_VERSION` build argument ([#1158](https://github.com/Positronic-Robotics/positronic/pull/1158))
 - The Franka DROID camera configs read each camera serial number from the environment ([#1151](https://github.com/Positronic-Robotics/positronic/pull/1151))
 - The ZED driver drops a torn frame whose raw buffer starts with zero fill ([#1159](https://github.com/Positronic-Robotics/positronic/pull/1159))
@@ -56,8 +58,12 @@ This release publishes `positronic-platform-client` 0.47.10, and `positronic` re
 - The WebXR server writes its log to the process log, not to `/tmp/webxr.log` ([#1143](https://github.com/Positronic-Robotics/positronic/pull/1143))
 - `positronic.teleop.scripted_headset` does the trials of `positronic teleop` with no person and no headset, for a timing run ([#1125](https://github.com/Positronic-Robotics/positronic/pull/1125))
 
+### Datasets
+- `positronic.cfg.video_encoder.nvenc_h264` writes H.264 with the NVENC encoder of an NVIDIA GPU, and `positronic.cfg.dataset_writer.nvenc` selects it. A dataset writer checks its encoder when it is made, so a host that cannot encode fails at start ([#1164](https://github.com/Positronic-Robotics/positronic/pull/1164))
+
 ### Replay
 - `<positronic-replay>` is a web component in the server's static files. It shows a list of episodes and plays the episode that a visitor opens ([#1134](https://github.com/Positronic-Robotics/positronic/pull/1134))
+- `<positronic-replay>` fixes four defects on a host page: the badge and icon styles no longer reach a cell, each copied column name sits over its column, a list keeps the link of another list, and a host page can style the filters and the pressed Details button ([#1155](https://github.com/Positronic-Robotics/positronic/pull/1155))
 
 ### Tests
 - A remote LLM test bounds the episode length only when inference time is not charged ([#1146](https://github.com/Positronic-Robotics/positronic/pull/1146))
