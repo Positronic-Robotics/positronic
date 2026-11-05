@@ -78,10 +78,6 @@ class LeaderboardTag(_Name):
     __slots__ = ()
 
 
-# The tag of the leaderboards that rank the runs of the `nebius_competition` request type.
-NEBIUS_COMPETITION_TAG = LeaderboardTag('competition.phail.ai')
-
-
 class ModelFamilyRef(_Name):
     """The id of a model family that `leaderboards.models` lists."""
 

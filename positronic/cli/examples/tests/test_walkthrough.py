@@ -13,20 +13,20 @@ from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER, PlatformClient
 from platform_client.config import CONFIG_DIR_ENV, Config, write_config
 from platform_client.ids import ApiKey
-from platform_client.leaderboards import NEBIUS_COMPETITION_TAG
 
 from positronic.cli.conftest import SERVES_THIS_CLIENT
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'walkthrough.py'
 BASE = 'http://gateway.test'
 LEADERBOARDS = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
-    'tag': NEBIUS_COMPETITION_TAG,
+    'tag': LEADERBOARD_TAG,
     'leaderboards': [
         {
             'leaderboard': 'a.board',
             'title': 'Board A',
             'method': 'best_submission',
-            'tags': [{'tag': NEBIUS_COMPETITION_TAG, 'position': 0}],
+            'tags': [{'tag': LEADERBOARD_TAG, 'position': 0}],
             'descriptor': {
                 'eval': 'a.eval',
                 'metrics': [{'key': 'primary', 'name': 'success_rate', 'decimals': 3}],
@@ -68,7 +68,7 @@ def test_the_discovery_read_sends_no_key_even_when_the_environment_holds_one(wal
     platform = Platform()
     transport = httpx.MockTransport(platform)
     with walkthrough['anonymous_client'](client=httpx.Client(base_url=BASE, transport=transport)) as public:
-        public.list_leaderboards(NEBIUS_COMPETITION_TAG)
+        public.list_leaderboards(LEADERBOARD_TAG)
 
     assert AUTH_HEADER not in platform.requests[0].headers
 

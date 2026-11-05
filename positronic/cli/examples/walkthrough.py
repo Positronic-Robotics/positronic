@@ -32,11 +32,12 @@ from platform_client.enums import NO_RESULT_STATUSES, TERMINAL_STATUSES
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import plan_of_image
 from platform_client.ids import SubmissionId
-from platform_client.leaderboards import NEBIUS_COMPETITION_TAG
 from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest
 from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
 from positronic_evals.evals import EvalRef
+
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
@@ -126,10 +127,10 @@ def walkthrough(
 
     print('5. leaderboard')
     with anonymous_client(client.base_url) as public:
-        listed = public.list_leaderboards(NEBIUS_COMPETITION_TAG).leaderboards
+        listed = public.list_leaderboards(LEADERBOARD_TAG).leaderboards
         ranking = [summary for summary in listed if summary.descriptor.eval == eval_ref]
         if not ranking:
-            print(f'   no {NEBIUS_COMPETITION_TAG} leaderboard ranks {eval_ref}')
+            print(f'   no {LEADERBOARD_TAG} leaderboard ranks {eval_ref}')
         for summary in ranking:
             print(f'   {summary.leaderboard}')
             leaderboard = public.get_leaderboard(summary.leaderboard)
@@ -172,8 +173,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if eval_ref is None or policy_image is None:
         with client as public:
-            print(f'pass --eval=<name>; the {NEBIUS_COMPETITION_TAG} leaderboards rank these evals:')
-            for summary in public.list_leaderboards(NEBIUS_COMPETITION_TAG).leaderboards:
+            print(f'pass --eval=<name>; the {LEADERBOARD_TAG} leaderboards rank these evals:')
+            for summary in public.list_leaderboards(LEADERBOARD_TAG).leaderboards:
                 if summary.descriptor.eval is not None:
                     print(f'   {summary.leaderboard}: ranks {summary.descriptor.eval}')
         return

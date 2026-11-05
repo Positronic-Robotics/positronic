@@ -25,8 +25,9 @@ import pytest
 from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, CLIENT_VERSION, CREDENTIAL_ENV, PLATFORM_VERSION_HEADER
 from platform_client.config import CONFIG_DIR_ENV
-from platform_client.leaderboards import NEBIUS_COMPETITION_TAG
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY
+
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SUBMISSION = '5f3a91c2b7d40e18'
@@ -109,13 +110,13 @@ ANSWERS: dict[str, object] = {
     routes.CATALOG_EVALS: {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': [], 'composable': True}]},
     routes.CATALOG_TASKS: {'tasks': [{'id': TASK, 'embodiments': ['franka', 'yam'], 'task': 'spoons into a tote'}]},
     routes.LEADERBOARDS_LIST: {
-        'tag': NEBIUS_COMPETITION_TAG,
+        'tag': LEADERBOARD_TAG,
         'leaderboards': [
             {
                 'leaderboard': 'fake.smoke',
                 'title': 'Fake smoke',
                 'method': 'best_submission',
-                'tags': [{'tag': NEBIUS_COMPETITION_TAG, 'position': 0}],
+                'tags': [{'tag': LEADERBOARD_TAG, 'position': 0}],
                 'descriptor': LEADERBOARD_DESCRIPTOR,
             }
         ],

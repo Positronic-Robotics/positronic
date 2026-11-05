@@ -25,7 +25,9 @@ from platform_client.client import PlatformClient
 from platform_client.config import platform_url_from, record_if_needed
 from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
-from platform_client.leaderboards import NEBIUS_COMPETITION_TAG, LeaderboardDescriptor, LeaderboardRef, Metric
+from platform_client.leaderboards import LeaderboardDescriptor, LeaderboardRef, Metric
+
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -44,7 +46,7 @@ def _ranked_metric(descriptor: LeaderboardDescriptor) -> Metric:
 def run(client: PlatformClient, board: LeaderboardRef | None) -> list[str]:
     """The lines to print: the leaderboards on offer, or the standings on `board`."""
     if board is None:
-        listed = client.list_leaderboards(NEBIUS_COMPETITION_TAG).leaderboards
+        listed = client.list_leaderboards(LEADERBOARD_TAG).leaderboards
         if not listed:
             return ['no leaderboards']
         rows = [
@@ -62,7 +64,7 @@ def run(client: PlatformClient, board: LeaderboardRef | None) -> list[str]:
     except PlatformError as exc:
         if exc.code is not ErrorCode.not_found:
             raise
-        listed = client.list_leaderboards(NEBIUS_COMPETITION_TAG).leaderboards
+        listed = client.list_leaderboards(LEADERBOARD_TAG).leaderboards
         offered = ', '.join(summary.leaderboard for summary in listed)
         raise SystemExit(f'{exc.message}: {board}\nleaderboards on offer: {offered}') from exc
     metric = _ranked_metric(response.descriptor)

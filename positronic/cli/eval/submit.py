@@ -9,13 +9,13 @@ from platform_client.client import PlatformClient
 from platform_client.enums import NO_RESULT_STATUSES
 from platform_client.eval_plan import RegistryCredential, Sample, password_from_file, plan_of_image
 from platform_client.ids import OrgSlug, TransactionKey
-from platform_client.leaderboards import NEBIUS_COMPETITION_TAG
 from platform_client.policy_images import PolicyImage
 from platform_client.responses import SubmissionCreateResponse
 from positronic_evals.evals import EvalRef
 from pydantic import SecretStr
 
 from positronic.cli.account.gateway import CommandFailed, Fault, gateway, refusing_bad_input
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 
 def _credential(username: str | None, password_file: object | None) -> RegistryCredential | None:
@@ -43,16 +43,16 @@ def leaderboard_eval(client: PlatformClient) -> EvalRef:
     A leaderboard that ranks no eval, such as one of a real robot, does not count. No eval, or more than one,
     leaves the choice to the caller.
     """
-    listed = client.list_leaderboard_evals(NEBIUS_COMPETITION_TAG).leaderboards
+    listed = client.list_leaderboard_evals(LEADERBOARD_TAG).leaderboards
     ranked = sorted({entry.descriptor.eval for entry in listed if entry.descriptor.eval is not None})
     if len(ranked) != 1:
         named = ', '.join(ranked) if ranked else 'no eval'
         raise CommandFailed(
-            f'the {NEBIUS_COMPETITION_TAG} leaderboards rank {named}: pass --eval=<name>; '
+            f'the {LEADERBOARD_TAG} leaderboards rank {named}: pass --eval=<name>; '
             '`positronic eval catalog` lists the evals',
             Fault.USAGE,
         )
-    print(f'eval {ranked[0]}, which the {NEBIUS_COMPETITION_TAG} leaderboards rank')
+    print(f'eval {ranked[0]}, which the {LEADERBOARD_TAG} leaderboards rank')
     return ranked[0]
 
 

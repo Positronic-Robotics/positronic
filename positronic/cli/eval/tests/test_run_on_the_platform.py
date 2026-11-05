@@ -10,7 +10,6 @@ from platform_client.enums import ErrorCode, OnExhausted, QuotaSubject, ReasonCo
 from platform_client.errors import EVALS_DETAIL, QUOTA_DETAIL, TASKS_DETAIL
 from platform_client.ids import SubmissionId
 from platform_client.leaderboards import (
-    NEBIUS_COMPETITION_TAG,
     PRIMARY_METRIC,
     LeaderboardDescriptor,
     LeaderboardListResponse,
@@ -25,6 +24,7 @@ from positronic_evals.evals import EvalRef
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.conftest import ID, KEY, SUBMISSION, refusal, runs_of_four
 from positronic.cli.eval.run import run
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 
 def _created(status: SubmissionStatus, **fields) -> SubmissionCreateResponse:
@@ -137,7 +137,7 @@ def _summary(
         leaderboard=LeaderboardRef(f'leaderboard-{index}'),
         title=f'Leaderboard {index}',
         method=method,
-        tags=[TagPosition(tag=NEBIUS_COMPETITION_TAG, position=index)],
+        tags=[TagPosition(tag=LEADERBOARD_TAG, position=index)],
         descriptor=LeaderboardDescriptor(
             eval=EvalRef(eval_name) if eval_name is not None else None,
             robot=robot,
@@ -150,7 +150,7 @@ def _summary(
 def _listed(*evals: str | None) -> LeaderboardListResponse:
     """What `leaderboards.list` answers for the tag: one leaderboard for each of `evals`."""
     return LeaderboardListResponse(
-        tag=NEBIUS_COMPETITION_TAG, leaderboards=[_summary(index, name) for index, name in enumerate(evals)]
+        tag=LEADERBOARD_TAG, leaderboards=[_summary(index, name) for index, name in enumerate(evals)]
     )
 
 
@@ -165,7 +165,7 @@ def test_a_run_that_names_no_eval_runs_the_eval_that_the_tagged_leaderboard_rank
     assert platform.paths == [routes.LEADERBOARDS_LIST, routes.SUBMISSIONS_CREATE]
     assert platform.body['eval'] == LEADERBOARD_EVAL
     out = capsys.readouterr().out
-    assert f'eval {LEADERBOARD_EVAL}, which the {NEBIUS_COMPETITION_TAG} leaderboards rank' in out
+    assert f'eval {LEADERBOARD_EVAL}, which the {LEADERBOARD_TAG} leaderboards rank' in out
 
 
 def test_two_leaderboards_over_one_eval_name_that_eval(platform, run_command):
@@ -188,13 +188,13 @@ def test_leaderboards_that_rank_no_single_eval_leave_the_eval_to_the_caller(plat
     platform.answer_by_route({routes.LEADERBOARDS_LIST: (_listed(*evals), 200)})
 
     with pytest.raises(
-        CommandFailed, match=f'the {NEBIUS_COMPETITION_TAG} leaderboards rank {named}: pass --eval=<name>'
+        CommandFailed, match=f'the {LEADERBOARD_TAG} leaderboards rank {named}: pass --eval=<name>'
     ) as exit_info:
         run_command(run, policy_image='org/p:v1')
 
     assert exit_info.value.fault is Fault.USAGE
     assert platform.paths == [routes.LEADERBOARDS_LIST]
-    assert dict(platform.request.url.params) == {'tag': NEBIUS_COMPETITION_TAG}
+    assert dict(platform.request.url.params) == {'tag': LEADERBOARD_TAG}
 
 
 def test_the_leaderboard_read_sends_no_key(platform, run_command):
@@ -222,7 +222,7 @@ def test_a_leaderboard_with_a_method_and_a_robot_this_client_has_no_name_for_sti
 ):
     later = _summary(0, LEADERBOARD_EVAL, method='a_method_this_client_has_no_name_for', robot='A later robot')
     platform.answer_by_route({
-        routes.LEADERBOARDS_LIST: (LeaderboardListResponse(tag=NEBIUS_COMPETITION_TAG, leaderboards=[later]), 200),
+        routes.LEADERBOARDS_LIST: (LeaderboardListResponse(tag=LEADERBOARD_TAG, leaderboards=[later]), 200),
         routes.SUBMISSIONS_CREATE: (_created(SubmissionStatus.pending), 200),
     })
 
@@ -234,7 +234,7 @@ def test_a_leaderboard_with_a_method_and_a_robot_this_client_has_no_name_for_sti
 def test_a_leaderboard_that_the_full_list_read_refuses_still_names_its_eval(platform, run_command):
     # No metrics breaks a rule of the full descriptor; the run reads the slug and the eval alone.
     listed = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
-        'tag': NEBIUS_COMPETITION_TAG,
+        'tag': LEADERBOARD_TAG,
         'leaderboards': [{'leaderboard': 'leaderboard-0', 'descriptor': {'eval': LEADERBOARD_EVAL, 'metrics': []}}],
     }
     platform.answer_by_route({
@@ -249,7 +249,7 @@ def test_a_leaderboard_that_the_full_list_read_refuses_still_names_its_eval(plat
 
 @pytest.mark.parametrize(
     'unreadable',
-    [{'tag': NEBIUS_COMPETITION_TAG, 'leaderboards': [{'leaderboard': 'leaderboard-0'}]}, {}],
+    [{'tag': LEADERBOARD_TAG, 'leaderboards': [{'leaderboard': 'leaderboard-0'}]}, {}],
     ids=['entry-with-no-descriptor', 'empty-body'],
 )  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
 def test_a_leaderboard_answer_the_client_cannot_read_is_the_platforms_fault(platform, run_command, unreadable):

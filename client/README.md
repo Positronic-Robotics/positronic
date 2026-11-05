@@ -427,9 +427,8 @@ Each side refuses a version of the other that is too old:
   write to a platform it cannot read.
 
 `leaderboards.list?tag=<tag>` names the leaderboards of one tag, and `leaderboards.get?leaderboard=<slug>`
-reads one. The tag `competition.phail.ai` (`NEBIUS_COMPETITION_TAG` in `platform_client.leaderboards`)
-holds the leaderboards that rank `nebius_competition` runs. From the command line,
-`positronic/cli/examples/nebius_competition/standings.py` prints those leaderboards, or the rows of one:
+reads one. From the command line, `positronic/cli/examples/nebius_competition/standings.py` prints the
+leaderboards that rank `nebius_competition` runs, or the rows of one:
 
 ```bash
 uv run positronic/cli/examples/nebius_competition/standings.py
@@ -498,11 +497,11 @@ together.
 ```python
 from platform_client.client import PlatformClient
 from platform_client.eval_plan import plan_of_image
-from platform_client.leaderboards import NEBIUS_COMPETITION_TAG
+from platform_client.leaderboards import LeaderboardTag
 from platform_client.policy_images import PolicyImage
 
 with PlatformClient(api_key=key) as client:
-    listed = client.list_leaderboards(NEBIUS_COMPETITION_TAG).leaderboards  # no key; each names its eval
+    listed = client.list_leaderboards(LeaderboardTag('<tag>')).leaderboards  # no key; each names its eval
     ranked = [summary.descriptor.eval for summary in listed if summary.descriptor.eval is not None]
     created = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), ranked[0]))
     view = client.get_submission(created.submission_id)

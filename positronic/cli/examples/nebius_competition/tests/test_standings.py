@@ -12,9 +12,10 @@ from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, AUTH_HEADER, PlatformClient
 from platform_client.config import CONFIG_DIR_ENV, Config, write_config
 from platform_client.ids import ApiKey
-from platform_client.leaderboards import NEBIUS_COMPETITION_TAG, LeaderboardRef
+from platform_client.leaderboards import LeaderboardRef
 
 from positronic.cli.conftest import SERVES_THIS_CLIENT
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'standings.py'
 BASE = 'http://gateway.test'
@@ -27,20 +28,20 @@ DESCRIPTOR = {  # rules-allow: hardcoded-keys — a wire fixture pins the server
     'ranked_by': 'primary',
 }
 LEADERBOARDS = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
-    'tag': NEBIUS_COMPETITION_TAG,
+    'tag': LEADERBOARD_TAG,
     'leaderboards': [
         {
             'leaderboard': 'a.board',
             'title': 'Board A',
             'method': 'best_submission',
-            'tags': [{'tag': NEBIUS_COMPETITION_TAG, 'position': 0}],
+            'tags': [{'tag': LEADERBOARD_TAG, 'position': 0}],
             'descriptor': DESCRIPTOR,
         },
         {
             'leaderboard': 'b.rig',
             'title': 'Rig B',
             'method': 'a_method_this_client_has_no_name_for',
-            'tags': [{'tag': NEBIUS_COMPETITION_TAG, 'position': 1}],
+            'tags': [{'tag': LEADERBOARD_TAG, 'position': 1}],
             'descriptor': {
                 'robot': 'A robot this client has no name for',
                 'metrics': [{'key': 'reward', 'name': 'reward', 'decimals': 1}],
@@ -123,7 +124,7 @@ def test_with_no_board_it_lists_every_tagged_leaderboard_and_the_eval_each_ranks
         'b.rig    -       reward        Rig B',
     ]
     assert [request.url.path for request in platform.requests] == [routes.LEADERBOARDS_LIST]
-    assert dict(platform.requests[0].url.params) == {'tag': NEBIUS_COMPETITION_TAG}
+    assert dict(platform.requests[0].url.params) == {'tag': LEADERBOARD_TAG}
     assert AUTH_HEADER not in platform.requests[0].headers
 
 
