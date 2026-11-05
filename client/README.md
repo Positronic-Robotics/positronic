@@ -439,11 +439,11 @@ uv run positronic/cli/examples/nebius_competition/standings.py --board=<slug>
 From Python, `PlatformClient.list_leaderboards` and `.get_leaderboard` read them, the latter taking a
 `LeaderboardRef`. Neither sends a key: a published leaderboard is readable by anyone.
 
-A team row reads `<display name>#<user tag>`. The name is an alias and is not unique, so the user tag is
-what tells two rows apart, and it is how you find your own: it is the same on every leaderboard you
-appear on. The name has 1 to 64 characters after the spaces at its ends are removed, and no control or
-text-direction character (Unicode Cc, or Bidi_Control). `--alias` refuses any other name before the
-sign-in, and the platform refuses it too.
+A team row reads `<display name>#<user tag>`. Two rows can show the same name, so the user tag tells two
+rows apart. It is the same on every leaderboard you appear on, so you find your own row by it. The name
+has 1 to 64 characters after the spaces at its ends are removed, and no control or text-direction
+character (Unicode Cc, or Bidi_Control). `--alias` refuses any other name before the sign-in, and the
+platform refuses it too.
 
 A row with `baseline` set is a reference model, and `baseline.publisher` names the organization that
 released it. A baseline row has no `rank`. The `rank` of each other row gives the best and the worst
@@ -518,8 +518,8 @@ owns the set of names, and `PUBLIC_EVALS` names only the public ones. Do not cop
 document; read it from the platform:
 
 - `leaderboards.list` needs no key. Each leaderboard of a simulator names the eval it ranks.
-  `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard alone, so it
-  also reads a leaderboard whose other fields this client version refuses.
+  `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard alone. It also
+  reads a leaderboard whose other fields this client version refuses.
 - `submissions.create` with a name the platform does not offer raises a `PlatformError` whose
   `evals` carries every eval on offer, with a leaderboard or without one.
 

@@ -38,9 +38,7 @@ TEXT_SUFFIXES = frozenset({'.py', '.md', '.toml'})
 # own name where a path names it.
 _ENGAGEMENT_WORD = re.compile(r'\b(' + '|'.join(ENGAGEMENT_WORDS) + ')', re.IGNORECASE)
 
-# Values that the platform names, which the client spells as the platform does. The scan takes them out of a
-# line before it reads the line. This tag is the host name of the site that shows the leaderboards of
-# `nebius_competition` runs.
+# Values that the platform names and the client spells as the platform does; the scan takes them out of a line.
 PLATFORM_VALUES = (NEBIUS_COMPETITION_TAG,)
 
 

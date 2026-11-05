@@ -298,7 +298,7 @@ class LeaderboardEvalDescriptor(_Wire):
 class LeaderboardEvalSummary(_Wire):
     """One leaderboard of `leaderboards.list`, read for its slug and its eval alone.
 
-    It reads no other field, so it reads a leaderboard that `LeaderboardSummary` refuses for one of them.
+    It also reads a leaderboard that `LeaderboardSummary` refuses for one of its other fields.
     """
 
     leaderboard: LeaderboardRef

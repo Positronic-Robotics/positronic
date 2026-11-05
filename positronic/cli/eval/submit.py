@@ -39,7 +39,7 @@ def _credential(username: str | None, password_file: object | None) -> RegistryC
 def leaderboard_eval(client: PlatformClient) -> EvalRef:
     """The eval that the leaderboards of `nebius_competition` runs rank, for a run that names no eval.
 
-    The platform publishes its leaderboards, so the name follows each change of them with no new install.
+    The name follows each change of the leaderboards with no new install: the platform publishes them.
     A leaderboard that ranks no eval, such as one of a real robot, does not count. No eval, or more than one,
     leaves the choice to the caller.
     """

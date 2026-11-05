@@ -13,14 +13,14 @@ This release publishes `positronic-platform-client` 0.47.10, and `positronic` re
 | `positronic-wire` | 0.12.2 |
 
 ### Platform client
-- `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard of a tag, and no other field. So it also reads a leaderboard whose other fields this client version refuses. `NEBIUS_COMPETITION_TAG` in `platform_client.leaderboards` is the tag `competition.phail.ai` ([#1160](https://github.com/Positronic-Robotics/positronic/pull/1160))
+- `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard of a tag. It also reads a leaderboard whose other fields this client version refuses. `NEBIUS_COMPETITION_TAG` in `platform_client.leaderboards` is the tag `competition.phail.ai` ([#1161](https://github.com/Positronic-Robotics/positronic/pull/1161))
 - `RigShape` gains `molmospaces` and `robolab`, so a plan names the simulator it runs in. `sim` is removed, and the plan refuses it or any other unknown shape ([#1137](https://github.com/Positronic-Robotics/positronic/pull/1137))
 - A `remote` endpoint in a plan file can state `auth_token_file`. `positronic eval run --from-file` reads the bearer token from that file, and the platform presents it to that endpoint only ([#1131](https://github.com/Positronic-Robotics/positronic/pull/1131))
 - The plan refuses a bearer token on the `modal_websocket_tls` wire. The READMEs state that the `websocket`, `grpc` and `roboarena` wires have no TLS ([#1136](https://github.com/Positronic-Robotics/positronic/pull/1136))
 - The client version moves to 0.47.9 after two changes took the same version ([#1145](https://github.com/Positronic-Robotics/positronic/pull/1145))
 
 ### Competition
-- `positronic eval run` with no `--eval` runs the eval that the leaderboards tagged `competition.phail.ai` rank. A leaderboard that ranks no eval does not count. `standings.py` and `walkthrough.py` read `leaderboards.list` and `leaderboards.get` ([#1160](https://github.com/Positronic-Robotics/positronic/pull/1160))
+- `positronic eval run` with no `--eval` runs the eval that the leaderboards tagged `competition.phail.ai` rank. A leaderboard that ranks no eval does not count. `standings.py` and `walkthrough.py` read `leaderboards.list` and `leaderboards.get` ([#1161](https://github.com/Positronic-Robotics/positronic/pull/1161))
 - CI publishes `positro/gr00t-n17-droid-rtc`, the GR00T N1.7 DROID serving image that starts with the `droid_rtc` preset ([#1142](https://github.com/Positronic-Robotics/positronic/pull/1142))
 - The competition guide says that a submission to an eval that the leaderboard does not rank counts for the day ([#1132](https://github.com/Positronic-Robotics/positronic/pull/1132))
 - The competition guide names the entry page, where a team can enter and see its submissions ([#936](https://github.com/Positronic-Robotics/positronic/pull/936))
