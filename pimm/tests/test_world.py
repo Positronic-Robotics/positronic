@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import nullcontext
 from functools import partial
 from multiprocessing.context import SpawnProcess
@@ -42,6 +42,7 @@ from pimm.tests.testing import MockClock
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, Time
 from pimm.utils import map as pimm_map
 from pimm.world import (
+    BackgroundProcessError,
     LocalQueueEmitter,
     MultiprocessEmitter,
     MultiprocessReceiver,
@@ -888,6 +889,29 @@ class TestWorldControlSystems:
                 world.start(main_process=main_cs, background=[background_cs, main_cs])
 
 
+def _kill_own_process(signum: int) -> None:
+    os.kill(os.getpid(), signum)
+
+
+def _raise_in_own_process() -> None:
+    raise RuntimeError('the device is gone')
+
+
+class EndsItsProcess(ControlSystem):
+    """Waits in a background process until `after` is set, then calls `end` in that process."""
+
+    def __init__(self, end: Callable[[], object], after):
+        self._end = end
+        self._after = after
+
+    def run(self, should_stop, clock):
+        while not self._after.is_set():
+            yield Sleep(0.01)
+        self._end()
+        while not should_stop.value:
+            yield Sleep(0.01)
+
+
 # Integration tests
 class TestAnyControlSystemEndsTheWorld:
     """Either foreground or background completion stops the world."""
@@ -902,6 +926,39 @@ class TestAnyControlSystemEndsTheWorld:
         seen = mp.Value('i', 0)
         with World() as world:
             world.run(StopWatcher(seen), Finisher(3))
+        assert seen.value == 1
+
+    @pytest.mark.parametrize(
+        ('end', 'exitcode'),
+        [
+            (partial(_kill_own_process, signal.SIGKILL), -signal.SIGKILL),
+            (partial(os._exit, 3), 3),
+            (_raise_in_own_process, 1),
+        ],
+        ids=['signal', 'non-zero-exit', 'raise'],
+    )
+    def test_a_failed_background_process_stops_the_world_and_raises_after_the_teardown(self, end, exitcode):
+        ctx = mp.get_context('spawn')
+        ready, holding, release, closed = (ctx.Event() for _ in range(4))
+        release.set()
+        survivor = ShutdownWaiter(ready, holding, release, closed)
+        seen = mp.Value('i', 0)
+        with pytest.raises(BackgroundProcessError) as raised:
+            with World() as world:
+                world.run(StopWatcher(seen, rounds=3000), [EndsItsProcess(end, after=ready), survivor])
+        assert seen.value == 1
+        assert closed.is_set()
+        assert raised.value.exitcode == exitcode
+        assert 'EndsItsProcess.run' in str(raised.value)
+
+    def test_a_background_process_ended_by_a_stop_signal_stops_the_world_with_no_error(self):
+        started = mp.get_context('spawn').Event()
+        started.set()
+        seen = mp.Value('i', 0)
+        with World() as world:
+            world.run(
+                StopWatcher(seen, rounds=3000), EndsItsProcess(partial(_kill_own_process, signal.SIGTERM), started)
+            )
         assert seen.value == 1
 
 

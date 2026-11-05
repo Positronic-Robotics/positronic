@@ -25,9 +25,10 @@ from .core import (
 )
 from .time import Time
 from .utils import RateLimiter, map, read_updated, value_updated
-from .world import World
+from .world import BackgroundProcessError, World
 
 __all__ = [
+    'BackgroundProcessError',
     'Clock',
     'Command',
     'ControlLoop',
