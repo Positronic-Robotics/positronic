@@ -27,10 +27,17 @@ from platform_client.client import API_KEY_ENV, API_URL_ENV, CLIENT_VERSION, CRE
 from platform_client.config import CONFIG_DIR_ENV
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY
 
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SUBMISSION = '5f3a91c2b7d40e18'
 TASK = 'eight-spoons-into-grey-tote'
 AT = '2026-03-04T05:06:07Z'
+LEADERBOARD_DESCRIPTOR = {
+    'eval': 'fake.smoke',
+    'metrics': [{'key': 'primary', 'name': 'success_rate', 'decimals': 3}],
+    'ranked_by': 'primary',
+}
 
 # One canned answer per route, each the shape its response model requires. A submission is finished
 # the first time it is read, so a polling example terminates on its first pass.
@@ -83,33 +90,36 @@ ANSWERS: dict[str, object] = {
         ]
     },
     routes.SUBMISSIONS_CANCEL: {'status': 'cancelled', 'refunded': True},
-    routes.RANKINGS_GET: {
-        'board': 'fake.smoke',
-        'eval': 'fake.smoke',
-        'primary_metric': 'success_rate',
-        'rankings': [
+    routes.LEADERBOARDS_GET: {
+        'leaderboard': 'fake.smoke',
+        'title': 'Fake smoke',
+        'method': 'best_submission',
+        'descriptor': LEADERBOARD_DESCRIPTOR,
+        'computed_at': AT,
+        'rows': [
             {
-                'rank': 1,
+                'key': 'team-1',
                 'display_name': 'demo',
-                'tag': '0ddba7',
-                'scores': {'primary': 0.5, 'episodes': 4},
-                'submission_id': SUBMISSION,
-                'submitted_at': AT,
+                'user_tag': '0ddba7',
+                'rank': {'best': 1, 'worst': 1},
+                'metrics': {'primary': {'value': 0.5, 'low': 0.5, 'high': 0.5}},
+                'submission': {'id': SUBMISSION, 'submitted_at': AT},
             }
         ],
     },
     routes.CATALOG_EVALS: {'evals': [{'id': 'fake.smoke', 'embodiment': 'franka', 'tasks': [], 'composable': True}]},
     routes.CATALOG_TASKS: {'tasks': [{'id': TASK, 'embodiments': ['franka', 'yam'], 'task': 'spoons into a tote'}]},
-    routes.RANKINGS_LIST: {
-        'boards': [
+    routes.LEADERBOARDS_LIST: {
+        'tag': LEADERBOARD_TAG,
+        'leaderboards': [
             {
-                'board': 'fake.smoke',
+                'leaderboard': 'fake.smoke',
                 'title': 'Fake smoke',
-                'eval': 'fake.smoke',
-                'primary_metric': 'success_rate',
-                'visibility': 'public',
+                'method': 'best_submission',
+                'tags': [{'tag': LEADERBOARD_TAG, 'position': 0}],
+                'descriptor': LEADERBOARD_DESCRIPTOR,
             }
-        ]
+        ],
     },
 }
 

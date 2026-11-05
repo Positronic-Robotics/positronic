@@ -362,7 +362,7 @@ def run(
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
     since the platform owns the evals it offers. With no ``--eval``, it runs the eval that the
-    platform's boards rank. ``--from-file`` files an eval plan for the lab rig,
+    platform's leaderboards rank. ``--from-file`` files an eval plan for the lab rig,
     as a YAML or JSON file. Two or more endpoints in it make one blind sample. ``--org`` names the
     organisation a private run is for: beside ``--from-file`` it states the plan's request type, and
     with ``--policy-image`` it makes a private run instead of a `nebius_competition` one. A filed run —

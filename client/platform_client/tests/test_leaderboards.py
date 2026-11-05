@@ -29,6 +29,9 @@ from platform_client.leaderboards import (
     LeaderboardDescriptor,
     LeaderboardEpisode,
     LeaderboardEpisodesResponse,
+    LeaderboardEvalDescriptor,
+    LeaderboardEvalListResponse,
+    LeaderboardEvalSummary,
     LeaderboardListResponse,
     LeaderboardModelsResponse,
     LeaderboardProgressResponse,
@@ -384,6 +387,14 @@ MODELS: list[BaseModel] = [
             ),
         ],
     ),
+    LeaderboardEvalListResponse(tag=TAG),
+    LeaderboardEvalListResponse(
+        tag=TAG,
+        leaderboards=[
+            LeaderboardEvalSummary(leaderboard=BOARD, descriptor=LeaderboardEvalDescriptor(eval=EvalRef('fake.smoke'))),
+            LeaderboardEvalSummary(leaderboard=LeaderboardRef('example-rig'), descriptor=LeaderboardEvalDescriptor()),
+        ],
+    ),
     MODEL_LEADERBOARD,
     TEAM_LEADERBOARD,
     CHARTS,
@@ -437,6 +448,9 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     TagPosition: {'tag', 'position'},
     LeaderboardSummary: {'leaderboard', 'title', 'method', 'tags', 'descriptor', 'caveats'},
     LeaderboardListResponse: {'tag', 'leaderboards'},
+    LeaderboardEvalDescriptor: {'eval'},
+    LeaderboardEvalSummary: {'leaderboard', 'descriptor'},
+    LeaderboardEvalListResponse: {'tag', 'leaderboards'},
     Baseline: {'publisher'},
     LeaderboardRow: {
         'key',
@@ -672,6 +686,34 @@ def test_a_listed_leaderboard_reads_past_a_field_this_client_does_not_declare():
     assert summary.leaderboard == LeaderboardRef('later-board')
 
 
+def test_the_eval_read_of_a_list_reads_a_leaderboard_that_the_full_read_refuses():
+    # A descriptor with no metrics breaks a rule of `LeaderboardDescriptor`, and the eval read does not check it.
+    wire = {
+        'tag': 'example.site',
+        'leaderboards': [{**SUMMARY_WIRE, 'descriptor': {'eval': 'fake.smoke', 'metrics': []}}],
+    }
+    with pytest.raises(ValidationError, match='metrics'):
+        LeaderboardListResponse.model_validate(wire)
+
+    listed = LeaderboardEvalListResponse.model_validate(wire)
+
+    assert [(entry.leaderboard, entry.descriptor.eval) for entry in listed.leaderboards] == [
+        (LeaderboardRef('later-board'), EvalRef('fake.smoke'))
+    ]
+
+
+def test_the_eval_read_of_a_list_still_refuses_an_entry_with_no_slug():
+    wire = {'tag': 'example.site', 'leaderboards': [{'descriptor': {'eval': 'fake.smoke'}}]}
+    with pytest.raises(ValidationError, match='leaderboard'):
+        LeaderboardEvalListResponse.model_validate(wire)
+
+
+def test_the_eval_read_of_a_list_refuses_a_body_that_names_no_tag():
+    with pytest.raises(ValidationError, match='tag'):
+        LeaderboardEvalListResponse.model_validate({})
+    assert LeaderboardEvalListResponse.model_validate({'tag': 'example.site'}).leaderboards == []
+
+
 def test_a_listed_leaderboard_gives_its_place_in_each_of_its_tags():
     summary = LeaderboardSummary.model_validate(SUMMARY_WIRE)
     assert summary.tags == [TagPosition(tag=LeaderboardTag('example.site'), position=2)]
@@ -706,6 +748,11 @@ def test_a_range_runs_from_low_to_high():
     assert Estimate(value=1.0, low=1.0, high=1.0).low == 1.0
     with pytest.raises(ValidationError, match='down to'):
         Estimate(value=1.0, low=2.0, high=0.5)
+
+
+@pytest.mark.parametrize(('best', 'worst', 'shown'), [(3, 3, '3'), (1, 2, '1-2')], ids=['one-place', 'range'])
+def test_a_rank_shows_one_place_or_the_range_of_places(best: int, worst: int, shown: str):
+    assert str(RankRange(best=best, worst=worst)) == shown
 
 
 def test_places_run_from_the_best_to_the_worst():

@@ -60,6 +60,7 @@ from platform_client.leaderboards import (
     PRIMARY_METRIC,
     LeaderboardChartsResponse,
     LeaderboardEpisodesResponse,
+    LeaderboardEvalListResponse,
     LeaderboardListResponse,
     LeaderboardModelsResponse,
     LeaderboardProgressResponse,
@@ -796,6 +797,26 @@ def test_list_leaderboards_names_the_tag_and_parses_each_leaderboard():
     assert dict(gateway.request().url.params) == {'tag': 'example.site'}
 
 
+def test_list_leaderboard_evals_names_the_tag_and_reads_the_eval_of_each_leaderboard():
+    gateway = Gateway(
+        200,
+        {
+            'tag': 'example.site',
+            'leaderboards': [
+                {'leaderboard': 'example-board', 'descriptor': {**LEADERBOARD_DESCRIPTOR, 'eval': 'fake.smoke'}},
+                {'leaderboard': 'example-rig', 'descriptor': LEADERBOARD_DESCRIPTOR},
+            ],
+        },
+    )
+
+    response = make_client(gateway, api_key=None).list_leaderboard_evals(LeaderboardTag('example.site'))
+
+    assert isinstance(response, LeaderboardEvalListResponse)
+    assert [entry.descriptor.eval for entry in response.leaderboards] == [EvalRef('fake.smoke'), None]
+    assert gateway.request().url.path == routes.LEADERBOARDS_LIST
+    assert dict(gateway.request().url.params) == {'tag': 'example.site'}
+
+
 def test_get_leaderboard_names_the_slug_and_parses_the_rows():
     gateway = Gateway(
         200,
@@ -884,6 +905,7 @@ def test_leaderboard_models_parses_each_family():
     ('payload', 'call'),
     [
         ({'tag': 'example.site'}, lambda client: client.list_leaderboards(LeaderboardTag('example.site'))),
+        ({'tag': 'example.site'}, lambda client: client.list_leaderboard_evals(LeaderboardTag('example.site'))),
         (
             {
                 'leaderboard': 'example-board',
@@ -905,7 +927,7 @@ def test_leaderboard_models_parses_each_family():
         (LEADERBOARD_PART, lambda client: client.leaderboard_progress(LeaderboardRef('example-board'))),
         ({'models': []}, lambda client: client.leaderboard_models()),
     ],
-    ids=['list', 'get', 'charts', 'episodes', 'progress', 'models'],
+    ids=['list', 'list-evals', 'get', 'charts', 'episodes', 'progress', 'models'],
 )
 def test_a_leaderboard_read_sends_no_key_even_when_the_client_holds_one(payload: dict, call):
     gateway = Gateway(200, payload)

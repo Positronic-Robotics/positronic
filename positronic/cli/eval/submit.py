@@ -6,7 +6,7 @@ Not a command of its own: running an eval is one act, and where it runs is an ar
 from pathlib import Path
 
 from platform_client.client import PlatformClient
-from platform_client.enums import NO_RESULT_STATUSES, BoardVisibility
+from platform_client.enums import NO_RESULT_STATUSES
 from platform_client.eval_plan import RegistryCredential, Sample, password_from_file, plan_of_image
 from platform_client.ids import OrgSlug, TransactionKey
 from platform_client.policy_images import PolicyImage
@@ -15,6 +15,7 @@ from positronic_evals.evals import EvalRef
 from pydantic import SecretStr
 
 from positronic.cli.account.gateway import CommandFailed, Fault, gateway, refusing_bad_input
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 
 def _credential(username: str | None, password_file: object | None) -> RegistryCredential | None:
@@ -35,21 +36,23 @@ def _credential(username: str | None, password_file: object | None) -> RegistryC
     return RegistryCredential(username=username, password=SecretStr(password))
 
 
-def board_eval(client: PlatformClient) -> EvalRef:
-    """The eval that the platform's public boards rank, for a run to the platform that names no eval.
+def leaderboard_eval(client: PlatformClient) -> EvalRef:
+    """The eval that the leaderboards of `nebius_competition` runs rank, for a run that names no eval.
 
-    The platform publishes its boards, so the name follows each change of the boards with no new install.
-    A board of the caller's tenant does not count. No public board, or public boards over more than one eval,
-    leave the choice to the caller.
+    The name follows each change of the leaderboards with no new install: the platform publishes them.
+    A leaderboard that ranks no eval, such as one of a real robot, does not count. No eval, or more than one,
+    leaves the choice to the caller.
     """
-    boards = client.list_boards().boards
-    ranked = sorted({board.eval for board in boards if board.visibility is BoardVisibility.public})
+    listed = client.list_leaderboard_evals(LEADERBOARD_TAG).leaderboards
+    ranked = sorted({entry.descriptor.eval for entry in listed if entry.descriptor.eval is not None})
     if len(ranked) != 1:
         named = ', '.join(ranked) if ranked else 'no eval'
         raise CommandFailed(
-            f'the boards rank {named}: pass --eval=<name>; `positronic eval catalog` lists the evals', Fault.USAGE
+            f'the {LEADERBOARD_TAG} leaderboards rank {named}: pass --eval=<name>; '
+            '`positronic eval catalog` lists the evals',
+            Fault.USAGE,
         )
-    print(f'eval {ranked[0]}, which the board ranks')
+    print(f'eval {ranked[0]}, which the {LEADERBOARD_TAG} leaderboards rank')
     return ranked[0]
 
 
@@ -75,12 +78,12 @@ def submit(
     request for that organisation instead of a `nebius_competition` one. An image the platform
     cannot pull anonymously takes a credential: `registry_username` and `registry_password_file`,
     the file the password is in. `sample` runs a random subset of the eval's trials. With no
-    `eval_name`, the run takes the eval that the boards rank (`board_eval`).
+    `eval_name`, the run takes the eval that the leaderboards rank (`leaderboard_eval`).
     """
     with gateway(platform_url) as client:
         if eval_name is None:
-            # Outside `refusing_bad_input`: a board answer that the client cannot read is the platform's fault.
-            eval_ref = board_eval(client)
+            # Outside `refusing_bad_input`: a leaderboard answer that the client cannot read is the platform's fault.
+            eval_ref = leaderboard_eval(client)
         else:
             with refusing_bad_input():
                 eval_ref = EvalRef(eval_name)

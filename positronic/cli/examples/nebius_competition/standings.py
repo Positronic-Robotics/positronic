@@ -1,16 +1,17 @@
-"""Print the public leaderboards, or the standings on one of them.
+"""Print the competition leaderboards, or the standings on one of them.
 
     uv run positronic/cli/examples/nebius_competition/standings.py
     uv run positronic/cli/examples/nebius_competition/standings.py --board=<slug>
 
-No key is needed: a public board is readable by anyone. With no `--board`, the script lists the
-boards `rankings.list` returns, with the eval each one ranks. With a slug, it prints every row of
-that board: rank, display name, tag, primary score and submission id.
+No key is needed: a published leaderboard is readable by anyone. With no `--board`, the script lists the
+leaderboards that `leaderboards.list` returns for the tag of the competition site, with the eval each one
+ranks. With a slug, it prints every row of that leaderboard: place, display name, tag, the score that the
+leaderboard ranks by, and submission id.
 
 The platform is `--platform-url`, else POSITRONIC_PLATFORM_URL, else the one that
 `positronic account register` saved, as in `submit_sample.py`.
 
-The platform owns the set of boards and evals. Read the names here; do not copy them from a document.
+The platform owns the set of leaderboards and evals. Read the names here; do not copy them from a document.
 """
 
 from __future__ import annotations
@@ -20,11 +21,13 @@ import os
 import sys
 
 import httpx
-from platform_client.boards import BoardRef
 from platform_client.client import PlatformClient
 from platform_client.config import platform_url_from, record_if_needed
 from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
+from platform_client.leaderboards import LeaderboardDescriptor, LeaderboardRef, Metric
+
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 
 def _table(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -36,38 +39,53 @@ def _table(header: list[str], rows: list[list[str]]) -> list[str]:
     ]
 
 
-def run(client: PlatformClient, board: BoardRef | None) -> list[str]:
-    """The lines to print: the boards on offer, or the standings on `board`."""
+def _ranked_metric(descriptor: LeaderboardDescriptor) -> Metric:
+    return next(metric for metric in descriptor.metrics if metric.key == descriptor.ranked_by)
+
+
+def run(client: PlatformClient, board: LeaderboardRef | None) -> list[str]:
+    """The lines to print: the leaderboards on offer, or the standings on `board`."""
     if board is None:
-        boards = client.list_boards().boards
-        if not boards:
-            return ['no boards']
-        rows = [[b.board, b.eval, b.primary_metric, b.title] for b in boards]
-        return _table(['board', 'eval', 'primary metric', 'title'], rows)
+        listed = client.list_leaderboards(LEADERBOARD_TAG).leaderboards
+        if not listed:
+            return ['no leaderboards']
+        rows = [
+            [
+                summary.leaderboard,
+                summary.descriptor.eval or '-',
+                _ranked_metric(summary.descriptor).name,
+                summary.title,
+            ]
+            for summary in listed
+        ]
+        return _table(['board', 'eval', 'ranked by', 'title'], rows)
     try:
-        response = client.rankings(board=board)
+        response = client.get_leaderboard(board)
     except PlatformError as exc:
         if exc.code is not ErrorCode.not_found:
             raise
-        offered = ', '.join(summary.board for summary in client.list_boards().boards)
-        raise SystemExit(f'{exc.message}: {board}\nboards on offer: {offered}') from exc
-    header = f'{response.board}: ranks {response.eval} by {response.primary_metric}'
-    if not response.rankings:
+        listed = client.list_leaderboards(LEADERBOARD_TAG).leaderboards
+        offered = ', '.join(summary.leaderboard for summary in listed)
+        raise SystemExit(f'{exc.message}: {board}\nleaderboards on offer: {offered}') from exc
+    metric = _ranked_metric(response.descriptor)
+    ranks = f'ranks {response.descriptor.eval} by' if response.descriptor.eval is not None else 'ranks by'
+    header = f'{response.leaderboard}: {ranks} {metric.name}'
+    if not response.rows:
         return [header, 'no entries']
-    rows = [
-        [
+    rows = []
+    for row in response.rows:
+        score = row.metrics.get(metric.key)
+        rows.append([
             'baseline' if row.rank is None else str(row.rank),
-            f'{row.display_name}#{row.tag}',
-            '-' if row.scores.primary is None else f'{row.scores.primary:.3f}',
-            str(row.submission_id),
-        ]
-        for row in response.rankings
-    ]
-    return [header, *_table(['rank', 'name#tag', response.primary_metric, 'submission'], rows)]
+            f'{row.display_name}#{row.user_tag}' if row.user_tag is not None else row.display_name,
+            '-' if score is None else f'{score.value:.{metric.decimals}f}',
+            '-' if row.submission is None else str(row.submission.id),
+        ])
+    return [header, *_table(['rank', 'name#tag', metric.name, 'submission'], rows)]
 
 
 def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | None = None) -> PlatformClient:
-    """A client that sends no key, whatever the environment holds: a public board is readable by anyone."""
+    """A client that sends no key, whatever the environment holds: a published leaderboard is readable by anyone."""
     anonymous = PlatformClient(platform_url, client=client)
     anonymous.api_key = None
     return anonymous
@@ -76,11 +94,11 @@ def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
-    parser.add_argument('--board', default=None, help='the slug of one board; the listing prints the slugs')
+    parser.add_argument('--board', default=None, help='the slug of one leaderboard; the listing prints the slugs')
     args = parser.parse_args(argv)
     # Every value the wire types refuse — a slug, a platform URL — is refused here, before any request.
     try:
-        board = BoardRef(args.board) if args.board is not None else None
+        board = LeaderboardRef(args.board) if args.board is not None else None
         record = record_if_needed(os.environ, args.platform_url, key_required=False)
         client = anonymous_client(platform_url_from(os.environ, args.platform_url, record))
     except ValueError as exc:

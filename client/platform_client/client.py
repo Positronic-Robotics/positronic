@@ -32,6 +32,7 @@ from platform_client.ids import ApiKey, LeaderboardVersionId, OrgSlug, PurchaseI
 from platform_client.leaderboards import (
     LeaderboardChartsResponse,
     LeaderboardEpisodesResponse,
+    LeaderboardEvalListResponse,
     LeaderboardListResponse,
     LeaderboardModelsResponse,
     LeaderboardProgressResponse,
@@ -297,6 +298,11 @@ class PlatformClient:
         """The leaderboards of one tag, in the order of their positions in it."""
         query = LeaderboardListQuery(tag=tag)
         return self._get(routes.LEADERBOARDS_LIST, LeaderboardListResponse, query=query, auth=Auth.NONE)
+
+    def list_leaderboard_evals(self, tag: LeaderboardTag) -> LeaderboardEvalListResponse:
+        """The leaderboards of one tag, read for the slug and the eval of each alone."""
+        query = LeaderboardListQuery(tag=tag)
+        return self._get(routes.LEADERBOARDS_LIST, LeaderboardEvalListResponse, query=query, auth=Auth.NONE)
 
     def get_leaderboard(self, leaderboard: LeaderboardRef) -> LeaderboardResponse:
         """One leaderboard and its rows. The parts of the same version take the `version` it answers."""

@@ -161,6 +161,10 @@ class RankRange(_Wire):
             raise ValueError(f'places from {self.best} down to {self.worst}')
         return self
 
+    def __str__(self) -> str:
+        """The places as a page shows them: `3`, or `3-5` where the row can take any of them."""
+        return str(self.best) if self.best == self.worst else f'{self.best}-{self.worst}'
+
 
 class Link(_Wire):
     text: str
@@ -283,6 +287,29 @@ class LeaderboardSummary(_Wire):
     def _one_place_in_each_tag(self) -> Self:
         _refuse_repeats((place.tag for place in self.tags), 'tag places')
         return self
+
+
+class LeaderboardEvalDescriptor(_Wire):
+    """The descriptor of a leaderboard, read for its eval alone."""
+
+    eval: EvalRef | None = None
+
+
+class LeaderboardEvalSummary(_Wire):
+    """One leaderboard of `leaderboards.list`, read for its slug and its eval alone.
+
+    It also reads a leaderboard that `LeaderboardSummary` refuses for one of its other fields.
+    """
+
+    leaderboard: LeaderboardRef
+    descriptor: LeaderboardEvalDescriptor
+
+
+class LeaderboardEvalListResponse(_Wire):
+    """`leaderboards.list`, read for the slug and the eval of each leaderboard alone."""
+
+    tag: LeaderboardTag
+    leaderboards: list[LeaderboardEvalSummary] = Field(default_factory=list)
 
 
 class LeaderboardListResponse(_Wire):

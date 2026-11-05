@@ -1,4 +1,4 @@
-"""`walkthrough.py`: the board reads it makes with no key, whatever the environment holds."""
+"""`walkthrough.py`: the leaderboard reads it makes with no key, whatever the environment holds."""
 
 from __future__ import annotations
 
@@ -15,19 +15,25 @@ from platform_client.config import CONFIG_DIR_ENV, Config, write_config
 from platform_client.ids import ApiKey
 
 from positronic.cli.conftest import SERVES_THIS_CLIENT
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'walkthrough.py'
 BASE = 'http://gateway.test'
-BOARDS = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
-    'boards': [
+LEADERBOARDS = {  # rules-allow: hardcoded-keys — a wire fixture pins the server's spelling
+    'tag': LEADERBOARD_TAG,
+    'leaderboards': [
         {
-            'board': 'a.board',
+            'leaderboard': 'a.board',
             'title': 'Board A',
-            'eval': 'a.eval',
-            'primary_metric': 'success_rate',
-            'visibility': 'public',
+            'method': 'best_submission',
+            'tags': [{'tag': LEADERBOARD_TAG, 'position': 0}],
+            'descriptor': {
+                'eval': 'a.eval',
+                'metrics': [{'key': 'primary', 'name': 'success_rate', 'decimals': 3}],
+                'ranked_by': 'primary',
+            },
         }
-    ]
+    ],
 }
 
 
@@ -46,15 +52,15 @@ def walkthrough() -> dict[str, Any]:
 
 
 class Platform:
-    """Answers `rankings.list` and records every request."""
+    """Answers `leaderboards.list` and records every request."""
 
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        assert request.url.path == routes.RANKINGS_LIST
-        return httpx.Response(200, json=BOARDS, headers=SERVES_THIS_CLIENT)
+        assert request.url.path == routes.LEADERBOARDS_LIST
+        return httpx.Response(200, json=LEADERBOARDS, headers=SERVES_THIS_CLIENT)
 
 
 def test_the_discovery_read_sends_no_key_even_when_the_environment_holds_one(walkthrough: dict[str, Any], monkeypatch):
@@ -62,7 +68,7 @@ def test_the_discovery_read_sends_no_key_even_when_the_environment_holds_one(wal
     platform = Platform()
     transport = httpx.MockTransport(platform)
     with walkthrough['anonymous_client'](client=httpx.Client(base_url=BASE, transport=transport)) as public:
-        public.list_boards()
+        public.list_leaderboards(LEADERBOARD_TAG)
 
     assert AUTH_HEADER not in platform.requests[0].headers
 
@@ -103,7 +109,7 @@ def test_a_run_takes_the_key_and_platform_that_register_saved(walkthrough: dict[
     assert [(client.api_key, client.base_url) for client in clients] == [('pk_live_saved', BASE)]
 
 
-def test_the_discovery_run_lists_the_boards_of_the_platform_that_register_saved(
+def test_the_discovery_run_lists_the_leaderboards_of_the_platform_that_register_saved(
     walkthrough: dict[str, Any], monkeypatch, tmp_path, capsys
 ):
     write_config(tmp_path, Config(platform_url=BASE, api_key=ApiKey('pk_live_saved')))
