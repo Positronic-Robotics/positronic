@@ -108,6 +108,8 @@ class SLCamera(pimm.ControlSystem):
     REBOOTED_CAMERA_MAX_POLLS = 60
     # A ready call reopens a camera whose last frame is older than this.
     STALE_FRAME_SEC = 1.0
+    # A ready call grabs again after a torn frame, up to this many grabs.
+    READY_GRABS = 3
 
     @staticmethod
     def _is_listed(serial: int) -> bool:
@@ -216,13 +218,21 @@ class SLCamera(pimm.ControlSystem):
             self._camera.close()
             self._camera = None
         yield from self._open_or_hold(should_stop)
-        if self._error is None and self._grab_frame(clock) is GrabOutcome.SENT:
+        if self._error is None and self._grab_until_not_torn(clock) is GrabOutcome.SENT:
             call.set_result(None)
             return
         error = self._error
         if error is None:
             error = self._hold(DeviceFault(f'Camera {self._serial_number} opened and sent no frame', FaultKind.CAMERA))
         call.set_exception(error)
+
+    def _grab_until_not_torn(self, clock: pimm.Clock) -> GrabOutcome:
+        outcome = self._grab_frame(clock)
+        for _ in range(self.READY_GRABS - 1):
+            if outcome is not GrabOutcome.TORN:
+                break
+            outcome = self._grab_frame(clock)
+        return outcome
 
     def _init_params(self):
         init_params = sl.InitParametersOne() if self._mono else sl.InitParameters()

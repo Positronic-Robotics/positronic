@@ -37,21 +37,6 @@ class TearCount:
     partial_fill_passed: list[int] = dataclasses.field(default_factory=list)  # zero fill at row 0 start, not all of it
 
 
-def _small_grey(side_by_side: np.ndarray) -> np.ndarray:
-    return cv2.resize(cv2.cvtColor(side_by_side, cv2.COLOR_BGR2GRAY), (320, 90), interpolation=cv2.INTER_AREA).astype(
-        np.int16
-    )
-
-
-def _single_bad_frame(before: np.ndarray, frame: np.ndarray, after: np.ndarray) -> bool:
-    d_before, d_after = np.abs(frame - before).mean(), np.abs(after - frame).mean()
-    return (
-        d_before > FRAMES_DIFFER
-        and d_after > FRAMES_DIFFER
-        and np.abs(after - before).mean() < 0.5 * min(d_before, d_after)
-    )
-
-
 @dataclasses.dataclass(frozen=True)
 class Sample:
     index: int
@@ -60,10 +45,20 @@ class Sample:
     side_by_side: np.ndarray
 
 
+def _small_grey(side_by_side: np.ndarray) -> np.ndarray:
+    return cv2.resize(cv2.cvtColor(side_by_side, cv2.COLOR_BGR2GRAY), (320, 90), interpolation=cv2.INTER_AREA).astype(
+        np.int16
+    )
+
+
 def _sample(camera, left, right, count: TearCount) -> Sample:
     """Read one grabbed frame, apply the driver's check to it, and count the result."""
-    camera.retrieve_image(left, sl.VIEW.LEFT_UNRECTIFIED)
-    camera.retrieve_image(right, sl.VIEW.RIGHT_UNRECTIFIED)
+    for image, view in ((left, sl.VIEW.LEFT_UNRECTIFIED), (right, sl.VIEW.RIGHT_UNRECTIFIED)):
+        result = camera.retrieve_image(image, view)
+        if result != sl.ERROR_CODE.SUCCESS:
+            raise RuntimeError(
+                f'Camera {count.serial} grabbed frame {count.grabbed} and gave no {view} image: {result}'
+            )
     raw_left = left.get_data()
     dropped = starts_with_zero_fill(raw_left)
     if dropped:
@@ -75,10 +70,10 @@ def _sample(camera, left, right, count: TearCount) -> Sample:
 
 
 @contextlib.contextmanager
-def _opened(serial: int, resolution: str, fps: int) -> Iterator:
+def _opened(serial: int, resolution, fps: int) -> Iterator:
     camera = sl.Camera()
     init = sl.InitParameters()
-    init.camera_resolution = getattr(sl.RESOLUTION, resolution.upper())
+    init.camera_resolution = resolution
     init.camera_fps = fps
     init.set_from_serial_number(serial)
     init.depth_mode = sl.DEPTH_MODE.NONE
@@ -92,7 +87,17 @@ def _opened(serial: int, resolution: str, fps: int) -> Iterator:
         camera.close()
 
 
-def probe(serial: int, frames: int, resolution: str, fps: int, out: Path | None) -> TearCount:
+def _single_bad_frame(before: np.ndarray, frame: np.ndarray, after: np.ndarray) -> bool:
+    d_before, d_after = np.abs(frame - before).mean(), np.abs(after - frame).mean()
+    return (
+        d_before > FRAMES_DIFFER
+        and d_after > FRAMES_DIFFER
+        and np.abs(after - before).mean() < 0.5 * min(d_before, d_after)
+    )
+
+
+def probe(serial: int, frames: int, resolution, fps: int, out: Path | None) -> TearCount:
+    """Grab ``frames`` frames at ``resolution`` (an ``sl.RESOLUTION``) and count the torn ones."""
     left, right = sl.Mat(), sl.Mat()
     count = TearCount(serial)
     window: list[Sample] = []
@@ -107,8 +112,9 @@ def probe(serial: int, frames: int, resolution: str, fps: int, out: Path | None)
             if len(window) < 3 or window[1].dropped or not _single_bad_frame(*(w.grey for w in window)):
                 continue
             count.torn_passed.append(window[1].index)
-            if out is not None:
-                cv2.imwrite(str(out / f'{serial}_passed_{window[1].index}.png'), window[1].side_by_side)
+            path = out / f'{serial}_passed_{window[1].index}.png' if out is not None else None
+            if path is not None and not cv2.imwrite(str(path), window[1].side_by_side):
+                raise OSError(f'Failed to write {path}')
     return count
 
 
@@ -116,13 +122,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--serial', type=int, required=True)
     parser.add_argument('--frames', type=int, default=3600)
-    parser.add_argument('--resolution', default='hd720')
+    parser.add_argument('--resolution', default='HD720', type=str.upper, choices=list(sl.RESOLUTION.__members__))
     parser.add_argument('--fps', type=int, default=30)
     parser.add_argument('--out', type=Path)
     args = parser.parse_args()
     if args.out is not None:
         args.out.mkdir(parents=True, exist_ok=True)
-    count = probe(args.serial, args.frames, args.resolution, args.fps, args.out)
+    count = probe(args.serial, args.frames, sl.RESOLUTION[args.resolution], args.fps, args.out)
     print(json.dumps(dataclasses.asdict(count), indent=1))
 
 

@@ -470,6 +470,25 @@ def test_a_torn_frame_is_dropped_with_no_error_and_the_next_frame_is_sent(zed_mo
     assert _frame_times(frames) == pytest.approx(sent)
 
 
+def test_a_ready_call_that_reopens_the_camera_grabs_again_after_a_torn_frame(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER)
+    camera = _camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    sdk.images_stop_at = clock.now()
+    _drive(loop, clock, until=clock.now() + 2 * zed_module.SLCamera.STALE_FRAME_SEC)
+
+    answer = _readier(world, camera)(None)
+    stale_grab = len(sdk.grab_times)
+    sdk.torn_grabs = frozenset({stale_grab + 1, stale_grab + 2})
+    _drive(loop, clock, until=clock.now() + 0.01)
+
+    assert answer.result() is None
+    assert not _errors(frames)
+    assert len(sdk.cameras) == 2
+
+
 def _dark_scene() -> np.ndarray:
     """A dark room at 720p: BGR values near black with sensor noise, opaque alpha."""
     rng = np.random.default_rng(0)
