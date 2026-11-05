@@ -1,4 +1,5 @@
 import os
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import Any, Self
@@ -59,14 +60,15 @@ class TransformImages(Codec):
 
     ``BOUND`` only shrinks to fit. ``PAD`` fits and pads to the exact size, preserving aspect ratio.
     ``STRETCH`` resizes to the exact size, allowing distortion. Width, height and mode are required.
-    ``paths=None`` finds arrays automatically; explicit paths require images and leave other values untouched.
-    Field names and decoded results pass through unchanged.
+    ``paths=None`` finds arrays automatically. Each explicit path must select an RGB image or a stack
+    of equally sized frames in the input. All selections must be valid before resizing; use separate
+    codecs when one transformation depends on another.
+    Other values, field names and decoded results pass through unchanged.
     """
 
     WIRE_NAME = 'transform_images'
 
-    # Below this a stack scales quicker in one thread than a pool costs to raise.
-    _PARALLEL_FROM = 4
+    _MIN_PARALLEL_PIXELS = 256 * 256
     _MAX_WORKERS = 8
 
     def __init__(
@@ -95,53 +97,56 @@ class TransformImages(Codec):
             args['mode'] = ResizeMode(args['mode'])
         return cls(**args)
 
-    def encode(self, data):
-        if self._paths is None:
-            return map_leaves(data, self._transform_value)
-        for path in self._paths:
-            data = update_at(data, path, lambda value: self._transform_image(np.asarray(value)))
-        return data
+    def _needs_resize(self, frame: np.ndarray) -> bool:
+        height, width = frame.shape[:2]
+        if self._mode is ResizeMode.BOUND:
+            return height > self._height or width > self._width
+        return (height, width) != (self._height, self._width)
 
-    def _transform_value(self, value: Any) -> Any:
-        if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-            return self._transform_image(value)
-        return value
-
-    def _transform_image(self, value: np.ndarray) -> np.ndarray:
-        if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
-            raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
-        if value.ndim == 4:
-            return np.stack(self._scaled_frames(value))
-        return image.transform_frame(value, self._width, self._height, mode=self._mode, resample=self._resample)
-
-    @staticmethod
-    def _usable_cpus() -> int:
-        """CPUs this process may run on — its affinity mask where the platform publishes one, else the
-        host's count. FOOTGUN: neither reads a cgroup CPU quota, so a container limited by `--cpus` and
-        not by a mask still reads the host's cores.
-        """
-        if hasattr(os, 'sched_getaffinity'):
-            return len(os.sched_getaffinity(0))
-        return os.cpu_count() or 1
-
-    def _workers(self, frames: int) -> int:
-        """Threads to scale ``frames`` on. One means the serial path: a pool wins nothing on a single
-        usable CPU, and below ``_PARALLEL_FROM`` it costs more to raise than the frames take."""
-        if frames < self._PARALLEL_FROM:
-            return 1
-        return max(1, min(frames, self._MAX_WORKERS, self._usable_cpus()))
-
-    def _scaled_frames(self, stack: np.ndarray) -> list[np.ndarray]:
-        """Every frame of one stack, scaled. Pillow and OpenCV drop the GIL for a resize and the frames are
-        independent, so more than one may run at a time."""
+    def _scaled_frames(self, frames: Sequence[np.ndarray]) -> list[np.ndarray]:
         scale = partial(
             image.transform_frame, width=self._width, height=self._height, mode=self._mode, resample=self._resample
         )
-        workers = self._workers(len(stack))
-        if workers == 1:
-            return [scale(frame) for frame in stack]
+        pixels = sum(frame.shape[0] * frame.shape[1] for frame in frames if self._needs_resize(frame))
+        cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+        workers = min(len(frames), self._MAX_WORKERS, cpus)
+        if workers <= 1 or pixels < self._MIN_PARALLEL_PIXELS:
+            return [scale(frame) for frame in frames]
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            return list(pool.map(scale, stack))
+            return list(pool.map(scale, frames))
+
+    def _map_images(self, data: Any, transform: Callable[[np.ndarray], np.ndarray]) -> Any:
+        def transform_value(value: Any) -> Any:
+            value = np.asarray(value)
+            if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
+                raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
+            return transform(value)
+
+        if self._paths is None:
+
+            def transform_if_image(value: Any) -> Any:
+                is_rgb_image = isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
+                return transform_value(value) if is_rgb_image else value
+
+            return map_leaves(data, transform_if_image)
+        for path in self._paths:
+            data = update_at(data, path, transform_value)
+        return data
+
+    def encode(self, data):
+        frames: list[np.ndarray] = []
+
+        def collect(value: np.ndarray) -> np.ndarray:
+            frames.extend([value] if value.ndim == 3 else value)
+            return value
+
+        self._map_images(data, collect)
+        scaled = iter(self._scaled_frames(frames))
+
+        def replace(value: np.ndarray) -> np.ndarray:
+            return next(scaled) if value.ndim == 3 else np.stack([next(scaled) for _ in value])
+
+        return self._map_images(data, replace)
 
     def decode(self, data):
         return data
