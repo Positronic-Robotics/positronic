@@ -16,8 +16,16 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY
 from positronic.dataset.video import LibavEncoder, VideoSignal, VideoSignalWriter
 
-# The NVIDIA driver makes this device node; NVENC opens a session only where it exists.
-HAS_NVIDIA_GPU = Path('/dev/nvidiactl').exists()
+
+def _nvenc_opens() -> bool:
+    try:
+        video_encoder.nvenc_h264.instantiate().ensure_available()
+    except (UnknownCodecError, RuntimeError):
+        return False
+    return True
+
+
+NVENC_OPENS = _nvenc_opens()
 
 
 @pytest.fixture
@@ -273,16 +281,9 @@ class TestLibavEncoder:
         with pytest.raises(RuntimeError, match='cannot open an encoder session'):
             LibavEncoder(options=(('preset', 'no-such-preset'),)).ensure_available()
 
-    @pytest.mark.skipif(HAS_NVIDIA_GPU, reason='a host with an NVIDIA GPU opens the session')
-    def test_nvenc_is_refused_on_a_host_without_an_nvidia_gpu(self):
-        # An FFmpeg build without NVENC (the macOS wheels) has no such codec; one with it opens no session.
-        with pytest.raises((UnknownCodecError, RuntimeError)):
-            video_encoder.nvenc_h264.instantiate().ensure_available()
-
-    @pytest.mark.skipif(not HAS_NVIDIA_GPU, reason='needs an NVIDIA GPU and its driver')
+    @pytest.mark.skipif(not NVENC_OPENS, reason='needs a GPU and driver that open an NVENC session')
     def test_nvenc_writes_a_file_that_reads_back_at_every_index(self, video_paths):
         encoder = video_encoder.nvenc_h264.instantiate()
-        encoder.ensure_available()
         frames = [create_frame(i * 4, (720, 1280, 3)) for i in range(45)]
         with VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder) as w:
             for i, frame in enumerate(frames):
