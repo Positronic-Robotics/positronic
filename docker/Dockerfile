@@ -47,7 +47,7 @@ RUN uv venv --python 3.13
 ENV VIRTUAL_ENV=/.venv/
 ENV PATH=/$VIRTUAL_ENV/bin:$PATH
 
-# The robot's system version sets the libfranka version: 0.15.3 before system version 5.9.0, 0.21.3 from 5.9.0.
+# The robot's system version sets the libfranka version: 0.15.3 for 5.7.2 up to 5.9.0, 0.21.3 from 5.9.0.
 ARG LIBFRANKA_VERSION=0.15.3
 RUN git clone --single-branch --recurse-submodules --branch ${LIBFRANKA_VERSION} https://github.com/frankarobotics/libfranka
 RUN mkdir libfranka/build && cd libfranka/build && cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF .. && cmake --build . && cmake --install .

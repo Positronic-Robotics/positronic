@@ -40,8 +40,8 @@ Now you are ready to build our Docker.
 docker/build.sh
 ```
 
-The image builds libfranka 0.15.3, for a Franka robot system version before 5.9.0. For system version 5.9.0 and
-later, build it with libfranka 0.21.3:
+The image builds libfranka 0.15.3, for a Franka robot system version from 5.7.2 up to, not including, 5.9.0.
+For system version 5.9.0 and later, build it with libfranka 0.21.3:
 ```bash
 LIBFRANKA_VERSION=0.21.3 docker/build.sh
 ```
