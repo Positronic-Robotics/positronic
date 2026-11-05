@@ -78,6 +78,11 @@ def declared_codecs(meta: cabc.Mapping[str, Any]) -> frozenset[FrameCodec]:
     return frozenset(codec for codec in FrameCodec if codec.value in declaration.get('codecs', ()))
 
 
+def _streams_frame(value: Any) -> bool:
+    """Whether a stream carries ``value``: a uint8 RGB frame, whose pixels a JPEG frame or an H.264 unit keeps."""
+    return isinstance(value, np.ndarray) and value.dtype == np.uint8 and value.ndim == 3 and value.shape[-1] == 3
+
+
 def streams_stack(keys: cabc.Sequence[str], offsets_sec: cabc.Sequence[float]) -> bool:
     """Whether a frame stream carries the rows of a ``TemporalStack`` of ``keys`` at ``offsets_sec``: its last offset
     is the current frame, and its rows and keys fit the bounds of ``StreamedRows``."""
@@ -297,11 +302,7 @@ class FrameStreamer:
         """Record the frames of one raw observation of the run."""
         now = self._clock() / 1e9
         if self._image_keys is None:
-            self._image_keys = tuple(
-                key
-                for key in self._keys
-                if isinstance(obs.get(key), np.ndarray) and obs[key].ndim == 3 and obs[key].shape[-1] == 3
-            )
+            self._image_keys = tuple(key for key in self._keys if _streams_frame(obs.get(key)))
         with self._lock:
             self._ticks.append((now, {key: obs[key] for key in self._image_keys if key in obs}))
             keep = now + self._offsets[0] - 1.0  # one second before the oldest offset
@@ -375,6 +376,8 @@ class FrameStreamer:
         with self._lock:
             while self._targets and now >= self._targets[0][1]:
                 back, target = self._targets.pop(0)
+                if not self._image_keys:
+                    continue  # the stack holds no frame a stream carries
                 if not self._ticks or (not self._pad_start and target < self._ticks[0][0]):
                     continue  # TemporalStack drops an offset before its first entry
                 times = [t for t, _ in self._ticks]

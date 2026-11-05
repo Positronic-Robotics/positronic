@@ -1839,6 +1839,26 @@ def test_a_declared_encode_images_leaves_the_stack_for_the_frame_stream_to_refer
     assert qualities and set(qualities) == {75}
 
 
+def test_a_frame_the_declared_encode_images_leaves_goes_as_without_a_stream(monkeypatch):
+    """``encode_images`` leaves a float frame for the request, which encodes it at the policy's quality. A stream
+    carries only the frames ``encode_images`` would encode, so the float frame goes as it does without a stream."""
+    floats = {index: {'image': np.full((8, 12, 3), 10.0 * index)} for index in range(8)}
+    qualities = []
+    for module in (frame_stream_module, remote_module):
+        encode = module.encode_jpeg
+        monkeypatch.setattr(
+            module, 'encode_jpeg', lambda image, q=90, *a, _e=encode: qualities.append(q) or _e(image, q)
+        )
+    meta = _stream_meta({'name': 'encode_images', 'args': {'quality': 75}})
+    full = _run_on_mock_session(meta, 8, frame_stream=None, extra=floats)
+    full_qualities, qualities[:] = list(qualities), []
+    streamed = _run_on_mock_session(meta, 8, frame_stream='jpeg', extra=floats)
+
+    streamed.send_message.assert_not_called()
+    assert _request_bytes(streamed) == _request_bytes(full)
+    assert set(qualities) == set(full_qualities) == {90}
+
+
 def _request_bytes(session: MagicMock) -> list[bytes]:
     """The serialised requests that ``session`` got, each without its wall-clock time."""
     return [

@@ -428,9 +428,14 @@ class RemotePolicy(Policy):
         return images
 
     class _PassImages(EncodeImages):
-        """A declared ``encode_images`` in a streaming session: it leaves the frames as arrays, so that the frame
-        streamer compares the stack with its rows and encodes the frames the request carries itself, at the declared
-        quality."""
+        """A declared ``encode_images`` in a streaming session: it leaves the frames it would encode as arrays, so
+        that the frame streamer compares the stack with its rows and encodes the frames the request carries itself, at
+        the declared quality. An image ``encode_images`` would leave, such as a float frame, it encodes at
+        ``fallback_quality``: the quality the request encodes that image at without a stream."""
+
+        def __init__(self, *, fallback_quality: int, **args: Any) -> None:
+            super().__init__(**args)
+            self._fallback_quality = fallback_quality
 
         @property
         def quality(self) -> int:
@@ -441,7 +446,12 @@ class RemotePolicy(Policy):
             return self._images is None
 
         def encode(self, data: dict) -> dict:
-            return data
+            return map_leaves(data, self._pass_value)
+
+        def _pass_value(self, value: Any) -> Any:
+            if self.encodes(value):
+                return value  # the stream and the request encode it at the declared quality
+            return _prepare_value(value, self._fallback_quality)
 
     class _StreamerHooks:
         """The calls that the components of a streaming session's stack make on its frame streamer, which is built after
@@ -511,7 +521,9 @@ class RemotePolicy(Policy):
             InferenceSchedule.from_spec_args: self._recorded(
                 partial(InferenceSchedule.from_spec_args, on_replan=hooks.replan), schedules
             ),
-            EncodeImages.from_spec_args: self._recorded(self._PassImages.from_spec_args, encodes),
+            EncodeImages.from_spec_args: self._recorded(
+                partial(self._PassImages.from_spec_args, fallback_quality=self._jpeg_quality), encodes
+            ),
         }
         stack = declared_stack(meta, version, overrides)
         refusal = self._stream_refusal(unnest_seq(meta[offboard_keys.LOCAL_STACK]), temporal, schedules, encodes)

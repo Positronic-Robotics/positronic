@@ -33,16 +33,19 @@ class EncodeImages(Codec):
         self._images = None if paths is None else tuple(JpegEncoding(tuple(path), quality) for path in paths)
         self._quality = quality
 
-    def _encode_value(self, value: Any) -> Any:
-        if (
+    @staticmethod
+    def encodes(value: Any) -> bool:
+        """Whether ``encode`` without ``paths`` JPEG-encodes ``value``: a nonempty uint8 RGB image."""
+        return (
             isinstance(value, np.ndarray)
             and value.dtype == np.uint8
             and value.ndim >= 3
             and value.shape[-1] == 3
             and min(value.shape[-3:-1]) > 0
-        ):
-            return encode_jpeg(value, self._quality)
-        return value
+        )
+
+    def _encode_value(self, value: Any) -> Any:
+        return encode_jpeg(value, self._quality) if self.encodes(value) else value
 
     def encode(self, data: dict) -> dict:
         return map_leaves(data, self._encode_value) if self._images is None else encode_images(data, self._images)
