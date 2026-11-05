@@ -7,3 +7,4 @@ from positronic.dataset.local_dataset import LocalDatasetWriter
 
 local = cfn.Config(partial, LocalDatasetWriter)
 jetson = local.override(video_encoder=video_encoder.jetson_h264)
+nvenc = local.override(video_encoder=video_encoder.nvenc_h264)

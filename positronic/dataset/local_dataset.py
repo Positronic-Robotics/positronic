@@ -480,6 +480,7 @@ class LocalDatasetWriter(DatasetWriter):
 
     def __init__(self, root: Path, *, video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER) -> None:
         self.root = root.expanduser()
+        video_encoder.ensure_available()
         self._video_encoder = video_encoder
         self._next_episode_id = 0
         self._lock: ExitStack | None = None
@@ -487,7 +488,6 @@ class LocalDatasetWriter(DatasetWriter):
     def __enter__(self) -> LocalDatasetWriter:
         if self._lock is not None:
             raise RuntimeError('Dataset writer is already open')
-        self._video_encoder.ensure_available()
         self.root.mkdir(parents=True, exist_ok=True)
         with ExitStack() as stack:
             # Lock the directory itself: a lock file in it would go to every mirror of the dataset.
