@@ -2347,19 +2347,17 @@ def _drop_the_rows_of_call(monkeypatch, call: int) -> list[list[int]]:
     """Make every served session lose the rows of ``call``; returns, per resolved request, the rows each of its stacks
     refers to."""
     resolved: list[list[int]] = []
-    resolve, add = StreamedRows.resolve, StreamedRows.add
+    resolve = StreamedRows.resolve
 
     def recording_resolve(rows, obs):
-        resolved.append([len(value[b'rows']) for value in obs.values() if isinstance(value, Mapping) and REF in value])
-        return resolve(rows, obs)
-
-    def dropping_add(rows, row):
-        add(rows, row)
-        if row['call'] == call:
-            rows._rows.pop(row['back'], None)
+        refers = {key: value for key, value in obs.items() if isinstance(value, Mapping) and REF in value}
+        resolved.append([len(value[b'rows']) for value in refers.values()])
+        out = resolve(rows, obs)  # decodes each stack's tail, as a request that misses its rows does
+        if any(value[b'call'] == call and value[b'rows'] for value in refers.values()):
+            raise RowsMissing([[key, back] for key, value in refers.items() for back in value[b'rows']])
+        return out
 
     monkeypatch.setattr(StreamedRows, 'resolve', recording_resolve)
-    monkeypatch.setattr(StreamedRows, 'add', dropping_add)
     return resolved
 
 
