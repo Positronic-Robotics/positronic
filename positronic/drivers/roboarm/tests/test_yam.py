@@ -2158,8 +2158,8 @@ def test_an_update_that_started_before_the_fade_adds_no_coulomb_friction_at_rest
     """i2rt's control thread can be in an ``update`` that it looked up before the driver wrapped it, and read the
     friction flag after the driver turned it on."""
 
-    def get_yam_robot(channel, **kwargs):
-        chain = _i2rt_chain(kwargs['gravity_comp_factor'], kwargs['use_coulomb_friction'])
+    def get_yam_robot(channel, gravity_comp_factor, use_coulomb_friction, **_):
+        chain = _i2rt_chain(gravity_comp_factor, use_coulomb_friction)
         chain._joint_state = types.SimpleNamespace(vel=np.full(7, MAX_REST_SPEED_NOISE_RAD_S))
         return chain
 
