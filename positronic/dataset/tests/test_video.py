@@ -275,7 +275,8 @@ class TestLibavEncoder:
 
     @pytest.mark.skipif(HAS_NVIDIA_GPU, reason='a host with an NVIDIA GPU opens the session')
     def test_nvenc_is_refused_on_a_host_without_an_nvidia_gpu(self):
-        with pytest.raises(RuntimeError, match='libx264_veryfast'):
+        # An FFmpeg build without NVENC (the macOS wheels) has no such codec; one with it opens no session.
+        with pytest.raises((UnknownCodecError, RuntimeError)):
             video_encoder.nvenc_h264.instantiate().ensure_available()
 
     @pytest.mark.skipif(not HAS_NVIDIA_GPU, reason='needs an NVIDIA GPU and its driver')
