@@ -1888,11 +1888,25 @@ def test_a_verified_park_releases_even_when_its_report_fails(caplog):
     assert 'Publishing the arm state failed during shutdown' in caplog.text
 
 
-def _i2rt_chain(gravity_comp_factor, use_coulomb_friction) -> yam._FakeYam:
+class I2rtChain(yam._FakeYam):
+    """The friction part of the hardware chain of i2rt. Each ``update`` stores the friction torque that i2rt adds
+    (i2rt motor_chain_robot.py:359): ``_coulomb_friction * sign(speed)`` at the speed of ``_joint_state``."""
+
+    def __init__(self):
+        super().__init__()
+        self._joint_state = types.SimpleNamespace(vel=np.zeros(7))
+        self.friction_torques: list[np.ndarray] = []
+
+    def update(self) -> None:
+        on = self.use_coulomb_friction
+        self.friction_torques.append(self._coulomb_friction * np.sign(self._joint_state.vel) if on else np.zeros(7))
+
+
+def _i2rt_chain(gravity_comp_factor, use_coulomb_friction) -> I2rtChain:
     """A fake chain that i2rt opens with these arguments. As i2rt does, it reports the gravity compensation that the
     driver passed, or i2rt's own if the driver passed none, and 1.0 for the gripper motor. It takes the friction flag
     with i2rt's own friction values."""
-    chain = yam._FakeYam()
+    chain = I2rtChain()
     arm = I2RT_GRAVITY_COMP if gravity_comp_factor is None else gravity_comp_factor
     chain.gravity_comp_factor = np.append(arm, 1.0)
     chain.use_coulomb_friction = use_coulomb_friction
@@ -2042,7 +2056,7 @@ def test_a_driver_given_no_compensation_asks_for_the_compensation_of_i2rt():
     assert _opened_with()['compensation'] is I2RT_COMPENSATION
 
 
-def _connected(monkeypatch, compensation: Compensation) -> tuple[dict[str, Any], yam._FakeYam]:
+def _connected(monkeypatch, compensation: Compensation) -> tuple[dict[str, Any], I2rtChain]:
     """Open a hardware chain through the factory of the driver. Return what it asked i2rt for, and the chain."""
     asked = {}
 
@@ -2086,6 +2100,66 @@ def test_coulomb_friction_with_no_values_runs_the_values_of_i2rt(monkeypatch):
     np.testing.assert_array_equal(chain._coulomb_friction, [*I2RT_COULOMB_FRICTION, 0.0])
 
 
+# A YAM joint at rest reads speeds of up to this
+MAX_REST_SPEED_NOISE_RAD_S = 0.007
+# No friction below 0.01 rad/s, all of it from 0.02 rad/s
+FADED_COMPENSATION = dataclasses.replace(STATION_COMPENSATION, coulomb_friction_fade_rad_s=[0.01, 0.02])
+STATION_FRICTION_TORQUE = np.array([*STATION_COULOMB_FRICTION, 0.0])
+SPEEDS_AT_REST = [0.005, -0.005, MAX_REST_SPEED_NOISE_RAD_S, -MAX_REST_SPEED_NOISE_RAD_S]
+
+
+def _friction_torque_at(chain: I2rtChain, speed: float) -> np.ndarray:
+    """Run one ``update`` of ``chain`` with each motor at ``speed``. Return the friction torque that it sends."""
+    chain._joint_state = types.SimpleNamespace(vel=np.full(7, speed))
+    chain.update()
+    return chain.friction_torques[-1]
+
+
+def test_a_compensation_with_no_fade_leaves_the_update_of_the_chain_to_i2rt(monkeypatch):
+    _, chain = _connected(monkeypatch, STATION_COMPENSATION)
+    assert 'update' not in vars(chain) and 'get_robot_info' not in vars(chain)
+
+
+@pytest.mark.parametrize('speed', [*SPEEDS_AT_REST, 0.015, -0.015, 0.1, -0.1])
+def test_a_compensation_with_no_fade_adds_the_full_coulomb_friction_at_any_speed(monkeypatch, speed):
+    _, chain = _connected(monkeypatch, STATION_COMPENSATION)
+    np.testing.assert_array_equal(_friction_torque_at(chain, speed), np.sign(speed) * STATION_FRICTION_TORQUE)
+
+
+@pytest.mark.parametrize('speed', SPEEDS_AT_REST)
+def test_a_fade_adds_no_coulomb_friction_at_the_speed_noise_of_a_joint_at_rest(monkeypatch, speed):
+    """A torque that changes direction with the noise of a speed reading makes an arm at rest rattle."""
+    _, chain = _connected(monkeypatch, FADED_COMPENSATION)
+    np.testing.assert_allclose(_friction_torque_at(chain, speed), 0.0, atol=1e-9)
+
+
+@pytest.mark.parametrize('speed, share', [(0.015, 0.5), (-0.015, -0.5), (0.1, 1.0), (-0.1, -1.0)])
+def test_a_fade_adds_the_coulomb_friction_in_the_direction_that_the_joint_moves(monkeypatch, speed, share):
+    _, chain = _connected(monkeypatch, FADED_COMPENSATION)
+    np.testing.assert_allclose(_friction_torque_at(chain, speed), share * STATION_FRICTION_TORQUE, atol=1e-12)
+
+
+def test_a_chain_that_fades_its_friction_reports_the_full_coulomb_friction(monkeypatch):
+    _, chain = _connected(monkeypatch, FADED_COMPENSATION)
+    _friction_torque_at(chain, 0.0)
+    np.testing.assert_array_equal(chain.get_robot_info()[yam._COULOMB_FRICTION], STATION_FRICTION_TORQUE)
+
+
+def test_a_fade_with_the_friction_off_leaves_the_update_of_the_chain_to_i2rt(monkeypatch):
+    _, chain = _connected(monkeypatch, dataclasses.replace(FADED_COMPENSATION, use_coulomb_friction=False))
+    assert 'update' not in vars(chain)
+
+
+@pytest.mark.parametrize(
+    'fade',
+    [[0.01], [0.01, 0.02, 0.03], [0.02, 0.01], [0.01, 0.01], [-0.01, 0.02], [0.01, math.nan], [0.01, math.inf]],
+    ids=['one-speed', 'three-speeds', 'reversed', 'equal', 'negative', 'nan', 'infinite'],
+)
+def test_a_fade_that_the_driver_cannot_run_is_refused_before_a_chain_opens(fade):
+    with pytest.raises(ValueError, match='coulomb_friction_fade_rad_s'):
+        yam.Robot(compensation=dataclasses.replace(FADED_COMPENSATION, coulomb_friction_fade_rad_s=fade))
+
+
 @pytest.mark.parametrize(
     'friction',
     [
@@ -2113,7 +2187,11 @@ def test_a_list_that_the_caller_changes_after_the_driver_is_built_does_not_reach
     np.testing.assert_array_equal(chain._coulomb_friction, [*STATION_COULOMB_FRICTION, 0.0])
 
 
-@pytest.mark.parametrize('compensation', [I2RT_COMPENSATION, STATION_COMPENSATION], ids=['i2rt', 'station'])
+@pytest.mark.parametrize(
+    'compensation',
+    [I2RT_COMPENSATION, STATION_COMPENSATION, FADED_COMPENSATION],
+    ids=['i2rt', 'station', 'station-with-fade'],
+)
 def test_the_sim_chain_opens_with_the_compensation_of_its_caller(monkeypatch, compensation):
     asked, sim_chain = {}, types.SimpleNamespace()
 

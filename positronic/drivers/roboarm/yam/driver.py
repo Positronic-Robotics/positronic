@@ -14,7 +14,7 @@ import functools
 import logging
 import math
 from collections import deque
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -75,15 +75,44 @@ def _chain_call() -> Iterator[None]:
         raise ChainFault(f'the chain failed: {exc}') from exc
 
 
-def _set_coulomb_friction(chain: Any, compensation: Compensation) -> None:
-    """Set the Coulomb friction of ``compensation`` on ``chain``, which i2rt opened with the flag off. The values go
-    in before the flag, so the control loop of the chain never runs the values of i2rt's arm config in their place.
+def _friction_share(speed: np.ndarray, fade: Sequence[float]) -> np.ndarray:
+    """The part of its Coulomb friction that a joint gets at ``speed`` under ``fade``: none below the first speed,
+    all from the second, linear between."""
+    zero_below, full_from = fade
+    return np.clip((np.abs(speed) - zero_below) / (full_from - zero_below), 0.0, 1.0)
+
+
+def _fade_coulomb_friction(chain: Any, fade: Sequence[float]) -> None:
+    """Scale the Coulomb friction of the hardware ``chain`` by ``_friction_share`` of the speed of each joint.
+
+    HACK: each ``update`` of i2rt adds ``_coulomb_friction * sign(speed)`` and has no setting for a fade. So the
+    scaled friction goes in before each ``update``, and ``get_robot_info`` reports the full friction. Only the thread
+    that runs ``update`` writes the speed, so i2rt reads the speed that the scale used.
+    """
+    friction = np.array(chain._coulomb_friction, np.float64)
+    update, robot_info = chain.update, chain.get_robot_info
+
+    def faded_update() -> None:
+        chain._coulomb_friction = friction * _friction_share(chain._joint_state.vel, fade)
+        update()
+
+    chain.update = faded_update
+    chain.get_robot_info = lambda: {**robot_info(), _COULOMB_FRICTION: friction.copy()}
+
+
+def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> None:
+    """Set the Coulomb friction of ``compensation`` on ``chain``, which i2rt opened with the flag off. The values and
+    the fade go in before the flag, so the control loop of the chain never runs the values of i2rt's arm config or a
+    friction without the fade. i2rt's sim chain adds no friction, so it gets no fade.
 
     HACK: i2rt's get_yam_robot takes the flag but reads the values only from its arm config.
     """
     if compensation.coulomb_friction is not None:
         # The gripper motor gets no friction
         chain._coulomb_friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)
+    fade = compensation.coulomb_friction_fade_rad_s
+    if compensation.use_coulomb_friction and fade is not None and not sim:
+        _fade_coulomb_friction(chain, fade)
     chain.use_coulomb_friction = compensation.use_coulomb_friction
 
 
@@ -103,7 +132,7 @@ def _connect(channel: str, sim: bool, compensation: Compensation):
         ee_mass=compensation.ee_mass,
         use_coulomb_friction=False,  # _set_coulomb_friction turns it on once the values are in
     )
-    _set_coulomb_friction(chain, compensation)
+    _set_coulomb_friction(chain, compensation, sim)
     return chain
 
 
@@ -707,6 +736,11 @@ class Robot(pimm.ControlSystem):
             values = np.asarray(friction, np.float64)
             if values.shape != (len(YAM_JOINT_NAMES),) or not np.all(np.isfinite(values) & (values >= 0)):
                 raise ValueError(f'coulomb_friction needs one finite, non-negative value per arm joint, not {friction}')
+        fade = compensation.coulomb_friction_fade_rad_s
+        if fade is not None:
+            speeds = np.asarray(fade, np.float64)
+            if speeds.shape != (2,) or not (np.all(np.isfinite(speeds)) and 0 <= speeds[0] < speeds[1]):
+                raise ValueError(f'coulomb_friction_fade_rad_s needs two finite speeds, 0 <= first < second: {fade}')
         self._park_after_idle_s = park_after_idle_s
         self._park_tuning = park_tuning
         self._move_tuning = move_tuning
