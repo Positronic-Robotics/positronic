@@ -2,7 +2,6 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from itertools import combinations
 from typing import Any, Self
 
 import numpy as np
@@ -96,71 +95,46 @@ class TransformImages(Codec):
             args['mode'] = ResizeMode(args['mode'])
         return cls(**args)
 
-    @staticmethod
-    def _usable_cpus() -> int:
-        """CPUs this process may run on — its affinity mask where the platform publishes one, else the
-        host's count. FOOTGUN: neither reads a cgroup CPU quota, so a container limited by `--cpus` and
-        not by a mask still reads the host's cores.
-        """
-        if hasattr(os, 'sched_getaffinity'):
-            return len(os.sched_getaffinity(0))
-        return os.cpu_count() or 1
-
-    def _workers(self, frames: Sequence[np.ndarray]) -> int:
-        pixels = sum(
-            frame.shape[0] * frame.shape[1]
-            for frame in frames
-            if frame.shape[:2] != (self._height, self._width)
-            and (self._mode is not ResizeMode.BOUND or frame.shape[0] > self._height or frame.shape[1] > self._width)
-        )
-        if pixels < self._MIN_PARALLEL_PIXELS:
-            return 1
-        return max(1, min(len(frames), self._MAX_WORKERS, self._usable_cpus()))
+    def _needs_resize(self, frame: np.ndarray) -> bool:
+        height, width = frame.shape[:2]
+        if self._mode is ResizeMode.BOUND:
+            return height > self._height or width > self._width
+        return (height, width) != (self._height, self._width)
 
     def _scaled_frames(self, frames: Sequence[np.ndarray]) -> list[np.ndarray]:
         scale = partial(
             image.transform_frame, width=self._width, height=self._height, mode=self._mode, resample=self._resample
         )
-        workers = self._workers(frames)
-        if workers == 1:
+        pixels = sum(frame.shape[0] * frame.shape[1] for frame in frames if self._needs_resize(frame))
+        cpus = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count() or 1
+        workers = min(len(frames), self._MAX_WORKERS, cpus)
+        if workers <= 1 or pixels < self._MIN_PARALLEL_PIXELS:
             return [scale(frame) for frame in frames]
         with ThreadPoolExecutor(max_workers=workers) as pool:
             return list(pool.map(scale, frames))
 
-    @staticmethod
-    def _frames(value: np.ndarray) -> list[np.ndarray]:
-        if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
-            raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
-        return [value] if value.ndim == 3 else list(value)
-
     def _map_images(self, data: Any, transform: Callable[[np.ndarray], np.ndarray]) -> Any:
-        if self._paths is None:
-
-            def transform_value(value: Any) -> Any:
-                if isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3:
-                    return transform(value)
+        def transform_value(value: Any) -> Any:
+            if self._paths is None and not (
+                isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
+            ):
                 return value
+            value = np.asarray(value)
+            if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
+                raise ValueError(f'Expected HWC with 3 channels or a THWC frame stack, got {value.shape}')
+            return transform(value)
 
+        if self._paths is None:
             return map_leaves(data, transform_value)
         for path in self._paths:
-            data = update_at(data, path, lambda value: transform(np.asarray(value)))
+            data = update_at(data, path, transform_value)
         return data
 
     def encode(self, data):
-        if self._paths is not None and any(
-            a == b[: len(a)] or b == a[: len(b)] for a, b in combinations(self._paths, 2)
-        ):
-            # Overlapping paths transform the same data in the declared order.
-            def transform(value: np.ndarray) -> np.ndarray:
-                frames = self._scaled_frames(self._frames(value))
-                return frames[0] if value.ndim == 3 else np.stack(frames)
-
-            return self._map_images(data, transform)
-
         frames: list[np.ndarray] = []
 
         def collect(value: np.ndarray) -> np.ndarray:
-            frames.extend(self._frames(value))
+            frames.extend([value] if value.ndim == 3 else value)
             return value
 
         self._map_images(data, collect)

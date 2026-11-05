@@ -197,7 +197,7 @@ def test_multiple_cameras_and_histories_keep_pixels_order_and_inputs(explicit, m
     np.testing.assert_array_equal(history, original_history, strict=True)
 
 
-def test_overlapping_paths_use_the_result_of_the_earlier_transform():
+def test_multiple_paths_can_select_the_same_frames():
     frames = np.random.default_rng(1).integers(0, 256, (2, 480, 640, 3), dtype=np.uint8)
     inputs = {'cameras': list(frames)}
     codec = TransformImages(
