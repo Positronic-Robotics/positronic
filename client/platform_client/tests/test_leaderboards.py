@@ -29,6 +29,9 @@ from platform_client.leaderboards import (
     LeaderboardDescriptor,
     LeaderboardEpisode,
     LeaderboardEpisodesResponse,
+    LeaderboardEvalDescriptor,
+    LeaderboardEvalListResponse,
+    LeaderboardEvalSummary,
     LeaderboardListResponse,
     LeaderboardModelsResponse,
     LeaderboardProgressResponse,
@@ -384,6 +387,13 @@ MODELS: list[BaseModel] = [
             ),
         ],
     ),
+    LeaderboardEvalListResponse(),
+    LeaderboardEvalListResponse(
+        leaderboards=[
+            LeaderboardEvalSummary(leaderboard=BOARD, descriptor=LeaderboardEvalDescriptor(eval=EvalRef('fake.smoke'))),
+            LeaderboardEvalSummary(leaderboard=LeaderboardRef('example-rig'), descriptor=LeaderboardEvalDescriptor()),
+        ]
+    ),
     MODEL_LEADERBOARD,
     TEAM_LEADERBOARD,
     CHARTS,
@@ -437,6 +447,9 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
     TagPosition: {'tag', 'position'},
     LeaderboardSummary: {'leaderboard', 'title', 'method', 'tags', 'descriptor', 'caveats'},
     LeaderboardListResponse: {'tag', 'leaderboards'},
+    LeaderboardEvalDescriptor: {'eval'},
+    LeaderboardEvalSummary: {'leaderboard', 'descriptor'},
+    LeaderboardEvalListResponse: {'leaderboards'},
     Baseline: {'publisher'},
     LeaderboardRow: {
         'key',
@@ -670,6 +683,28 @@ def test_a_listed_leaderboard_reads_past_a_field_this_client_does_not_declare():
     wire['descriptor'] = {**SUMMARY_WIRE['descriptor'], 'a_later_fact': 3}
     summary = LeaderboardSummary.model_validate_json(json.dumps(wire))
     assert summary.leaderboard == LeaderboardRef('later-board')
+
+
+def test_the_eval_read_of_a_list_reads_a_leaderboard_that_the_full_read_refuses():
+    # A descriptor with no metrics breaks a rule of `LeaderboardDescriptor`, and the eval read does not check it.
+    wire = {
+        'tag': 'example.site',
+        'leaderboards': [{**SUMMARY_WIRE, 'descriptor': {'eval': 'fake.smoke', 'metrics': []}}],
+    }
+    with pytest.raises(ValidationError, match='metrics'):
+        LeaderboardListResponse.model_validate(wire)
+
+    listed = LeaderboardEvalListResponse.model_validate(wire)
+
+    assert [(entry.leaderboard, entry.descriptor.eval) for entry in listed.leaderboards] == [
+        (LeaderboardRef('later-board'), EvalRef('fake.smoke'))
+    ]
+
+
+def test_the_eval_read_of_a_list_still_refuses_an_entry_with_no_slug():
+    wire = {'leaderboards': [{'descriptor': {'eval': 'fake.smoke'}}]}
+    with pytest.raises(ValidationError, match='leaderboard'):
+        LeaderboardEvalListResponse.model_validate(wire)
 
 
 def test_a_listed_leaderboard_gives_its_place_in_each_of_its_tags():

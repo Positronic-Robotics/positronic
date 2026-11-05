@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 import pytest
+from platform_client.leaderboards import NEBIUS_COMPETITION_TAG
 
 # The words that name a role or a period in one engagement rather than anything the platform has.
 # What the contract says instead is `user` for the account and `caller` for whoever is asking.
@@ -37,6 +38,18 @@ TEXT_SUFFIXES = frozenset({'.py', '.md', '.toml'})
 # own name where a path names it.
 _ENGAGEMENT_WORD = re.compile(r'\b(' + '|'.join(ENGAGEMENT_WORDS) + ')', re.IGNORECASE)
 
+# Values that the platform names, which the client spells as the platform does. The scan takes them out of a
+# line before it reads the line. This tag is the host name of the site that shows the leaderboards of
+# `nebius_competition` runs.
+PLATFORM_VALUES = (NEBIUS_COMPETITION_TAG,)
+
+
+def _words(line: str) -> str:
+    """The line with each platform value taken out."""
+    for value in PLATFORM_VALUES:
+        line = line.replace(value, '')
+    return line
+
 
 def scanned_files() -> list[Path]:
     return sorted(
@@ -52,9 +65,14 @@ def test_a_file_outside_the_engagement_directory_uses_none_of_its_words(path: Pa
     hits = [
         f'{path.relative_to(REPO_ROOT)}:{number}: {line.strip()}'
         for number, line in enumerate(path.read_text().splitlines(), 1)
-        if _ENGAGEMENT_WORD.search(line)
+        if _ENGAGEMENT_WORD.search(_words(line))
     ]
     assert not hits, 'engagement vocabulary outside its directory:\n' + '\n'.join(hits)
+
+
+def test_a_platform_value_passes_and_the_same_word_outside_it_does_not():
+    assert not _ENGAGEMENT_WORD.search(_words(f"tag='{NEBIUS_COMPETITION_TAG}'"))
+    assert _ENGAGEMENT_WORD.search(_words(f'the {NEBIUS_COMPETITION_TAG} competition'))
 
 
 def test_the_scan_reaches_both_trees_and_stops_at_the_engagement_directory():

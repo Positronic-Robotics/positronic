@@ -7,7 +7,7 @@ checkout, so nothing has to be installed first — `uv run` builds the environme
 |---|---|
 | `walkthrough.py` | The whole flow through `PlatformClient`: register, submit, read quota, poll to a terminal status. |
 | `nebius_competition/submit_sample.py` | Submitting to one engagement's eval with a transaction key, and waiting for what it scored. |
-| `nebius_competition/standings.py` | The public boards, and the rows of one board. No key. |
+| `nebius_competition/standings.py` | The leaderboards of `nebius_competition` runs, and the rows of one leaderboard. No key. |
 
 ## From the command line
 
@@ -53,8 +53,9 @@ from it; do not copy them from a document:
 uv run positronic/cli/examples/nebius_competition/standings.py
 ```
 
-That prints the public boards and the eval each one ranks, with no key. With a key, `eval run` with
-a name the platform does not offer answers with every eval on offer, with a board or without one.
+That prints the leaderboards of `nebius_competition` runs and the eval each one ranks, with no key. With
+a key, `eval run` with a name the platform does not offer answers with every eval on offer, with a
+leaderboard or without one.
 
 ## From Python
 

@@ -78,6 +78,10 @@ class LeaderboardTag(_Name):
     __slots__ = ()
 
 
+# The tag of the leaderboards that rank the runs of the `nebius_competition` request type.
+NEBIUS_COMPETITION_TAG = LeaderboardTag('competition.phail.ai')
+
+
 class ModelFamilyRef(_Name):
     """The id of a model family that `leaderboards.models` lists."""
 
@@ -283,6 +287,28 @@ class LeaderboardSummary(_Wire):
     def _one_place_in_each_tag(self) -> Self:
         _refuse_repeats((place.tag for place in self.tags), 'tag places')
         return self
+
+
+class LeaderboardEvalDescriptor(_Wire):
+    """The descriptor of a leaderboard, read for its eval alone."""
+
+    eval: EvalRef | None = None
+
+
+class LeaderboardEvalSummary(_Wire):
+    """One leaderboard of `leaderboards.list`, read for its slug and its eval alone.
+
+    It reads no other field, so it reads a leaderboard that `LeaderboardSummary` refuses for one of them.
+    """
+
+    leaderboard: LeaderboardRef
+    descriptor: LeaderboardEvalDescriptor
+
+
+class LeaderboardEvalListResponse(_Wire):
+    """`leaderboards.list`, read for the slug and the eval of each leaderboard alone."""
+
+    leaderboards: list[LeaderboardEvalSummary] = Field(default_factory=list)
 
 
 class LeaderboardListResponse(_Wire):

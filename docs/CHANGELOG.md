@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.4.4] - 2026-11-05
+
+This release publishes `positronic-platform-client` 0.47.10, and `positronic` requires that version. `positronic eval run` with no `--eval` runs the eval that the leaderboards tagged `competition.phail.ai` rank, and the competition examples read the `leaderboards` routes. A plan names the simulator it runs in as its rig shape, and a remote endpoint can take a bearer token from a file. A World stops and raises when one of its background processes fails. The serving images no longer trust the leaked eMudhra intermediate CAs. The YAM driver takes the end-effector mass and the Coulomb friction, and `Task.instruction` is plain text that each simulator lists before the reset.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.47.10 |
+| `positronic-evals` | 0.2.4 |
+| `positronic-eval-vocabulary` | 0.7.1 |
+| `positronic-model-server` | 0.3.5 |
+| `positronic-wire` | 0.12.2 |
+
+### Platform client
+- `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard of a tag, and no other field. So it also reads a leaderboard whose other fields this client version refuses. `NEBIUS_COMPETITION_TAG` in `platform_client.leaderboards` is the tag `competition.phail.ai` ([#1160](https://github.com/Positronic-Robotics/positronic/pull/1160))
+- `RigShape` gains `molmospaces` and `robolab`, so a plan names the simulator it runs in. `sim` is removed, and the plan refuses it or any other unknown shape ([#1137](https://github.com/Positronic-Robotics/positronic/pull/1137))
+- A `remote` endpoint in a plan file can state `auth_token_file`. `positronic eval run --from-file` reads the bearer token from that file, and the platform presents it to that endpoint only ([#1131](https://github.com/Positronic-Robotics/positronic/pull/1131))
+- The plan refuses a bearer token on the `modal_websocket_tls` wire. The READMEs state that the `websocket`, `grpc` and `roboarena` wires have no TLS ([#1136](https://github.com/Positronic-Robotics/positronic/pull/1136))
+- The client version moves to 0.47.9 after two changes took the same version ([#1145](https://github.com/Positronic-Robotics/positronic/pull/1145))
+
+### Competition
+- `positronic eval run` with no `--eval` runs the eval that the leaderboards tagged `competition.phail.ai` rank. A leaderboard that ranks no eval does not count. `standings.py` and `walkthrough.py` read `leaderboards.list` and `leaderboards.get` ([#1160](https://github.com/Positronic-Robotics/positronic/pull/1160))
+- CI publishes `positro/gr00t-n17-droid-rtc`, the GR00T N1.7 DROID serving image that starts with the `droid_rtc` preset ([#1142](https://github.com/Positronic-Robotics/positronic/pull/1142))
+- The competition guide says that a submission to an eval that the leaderboard does not rank counts for the day ([#1132](https://github.com/Positronic-Robotics/positronic/pull/1132))
+- The competition guide names the entry page, where a team can enter and see its submissions ([#936](https://github.com/Positronic-Robotics/positronic/pull/936))
+
+### Inference
+- A video policy can take observations at a regular rate while the robot plays its commands. Chunked and RTC policies use one scheduler ([#1139](https://github.com/Positronic-Robotics/positronic/pull/1139))
+- A two-arm protocol v3 server can declare `bimanual_joints_action` in its client stack, with an RTC prefix ([#1154](https://github.com/Positronic-Robotics/positronic/pull/1154))
+- The LeRobot server serves overlapping sessions, each from its own state, over one copy of the weights ([#1140](https://github.com/Positronic-Robotics/positronic/pull/1140))
+- The serving and training images no longer trust the leaked eMudhra (emSign) intermediate CAs. The main lock holds certifi 2026.10.23 ([#1141](https://github.com/Positronic-Robotics/positronic/pull/1141)) ([#1148](https://github.com/Positronic-Robotics/positronic/pull/1148)) ([#1138](https://github.com/Positronic-Robotics/positronic/pull/1138))
+
+### Runtime
+- A World stops when a background process ends, however it ends. A process that fails raises `pimm.BackgroundProcessError` in the parent, and a stop by SIGINT or SIGTERM stays a clean stop ([#1157](https://github.com/Positronic-Robotics/positronic/pull/1157))
+- The World keeps its stop flag free of a lock, so a killed process cannot block the others ([#1120](https://github.com/Positronic-Robotics/positronic/pull/1120))
+
+### Robots
+- `yam.Robot` takes a `Compensation` in place of `gravity_comp_factor`: the gravity factors, the end-effector mass and the Coulomb friction. Each episode records them per arm ([#1135](https://github.com/Positronic-Robotics/positronic/pull/1135))
+- The hardware image builds libfranka 0.15.3 or 0.21.3, from the `LIBFRANKA_VERSION` build argument ([#1158](https://github.com/Positronic-Robotics/positronic/pull/1158))
+- The Franka DROID camera configs read each camera serial number from the environment ([#1151](https://github.com/Positronic-Robotics/positronic/pull/1151))
+- The ZED driver drops a torn frame whose raw buffer starts with zero fill ([#1159](https://github.com/Positronic-Robotics/positronic/pull/1159))
+
+### Evals
+- `Task.instruction` is plain text. Each simulator lists the instruction of each task before the reset, and an embodiment whose goal moves during an episode publishes the new goal on its own signal ([#1152](https://github.com/Positronic-Robotics/positronic/pull/1152))
+- A recording sync deletes no key under its S3 prefix, so it keeps the episodes that another run uploads there ([#982](https://github.com/Positronic-Robotics/positronic/pull/982))
+
+### LLM policy
+- `LLMPolicy` no longer offers the `give_up` tool. `done` is the one tool that ends an episode ([#1156](https://github.com/Positronic-Robotics/positronic/pull/1156))
+
+### Teleoperation
+- The `psvr2` preset serves the headset page for PlayStation VR2, with an `immersive-vr` session ([#1129](https://github.com/Positronic-Robotics/positronic/pull/1129))
+- The headset page opens its controller socket again after it closes ([#1144](https://github.com/Positronic-Robotics/positronic/pull/1144))
+- The WebXR server writes its log to the process log, not to `/tmp/webxr.log` ([#1143](https://github.com/Positronic-Robotics/positronic/pull/1143))
+- `positronic.teleop.scripted_headset` does the trials of `positronic teleop` with no person and no headset, for a timing run ([#1125](https://github.com/Positronic-Robotics/positronic/pull/1125))
+
+### Replay
+- `<positronic-replay>` is a web component in the server's static files. It shows a list of episodes and plays the episode that a visitor opens ([#1134](https://github.com/Positronic-Robotics/positronic/pull/1134))
+
+### Tests
+- A remote LLM test bounds the episode length only when inference time is not charged ([#1146](https://github.com/Positronic-Robotics/positronic/pull/1146))
+
 ## [0.4.3] - 2026-11-02
 
 This release publishes `positronic-platform-client` 0.47.6, and `positronic` requires that version. The client reads the public leaderboards. `positronic eval status` shows the score of a failed run over the episodes that closed before it failed. A listed submission shows when its run started and ended, and a finished submission can carry a report link. The client refuses a team name over 64 characters or with a control character. A policy can request its next action chunk while the robot executes the current one (real-time chunking), and GR00T is the first model that uses it. A plan can name a Modal Server with sticky sessions as its wire. A person who teleoperates is now an ordinary remote model server. A launcher selects a dataset writer for the video encoding, so code that builds a `Rollout` or a `Harness` passes a writer.
