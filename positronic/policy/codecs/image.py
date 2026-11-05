@@ -60,8 +60,10 @@ class TransformImages(Codec):
 
     ``BOUND`` only shrinks to fit. ``PAD`` fits and pads to the exact size, preserving aspect ratio.
     ``STRETCH`` resizes to the exact size, allowing distortion. Width, height and mode are required.
-    ``paths=None`` finds arrays automatically; explicit paths require images and leave other values untouched.
-    Field names and decoded results pass through unchanged.
+    ``paths=None`` finds arrays automatically. Each explicit path must select an RGB image or a stack
+    of equally sized frames in the input. All selections must be valid before resizing; use separate
+    codecs when one transformation depends on another.
+    Other values, field names and decoded results pass through unchanged.
     """
 
     WIRE_NAME = 'transform_images'
