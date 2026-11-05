@@ -125,7 +125,7 @@ that path back into model values, such as an RTC prefix.
 
 | Codec | What it does | When to use it |
 |-------|--------------|----------------|
-| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses off a site of the rig model, states the frame as `ee_frames`, and converts decoded commands back. | The checkpoint reads poses. An identity offset states a checkpoint trained at the rig site. |
+| [`ChangeEEFrame`](geometry.py) | Moves observation and recorded poses off a site of the rig model, states the frame as `ee_frames`, and converts decoded commands back. `commands_path` also converts each command sent back to the model, such as an RTC prefix, into the policy's frame. | The checkpoint reads poses. An identity offset states a checkpoint trained at the rig site. |
 | [`ConvertPose`](geometry.py) | Converts selected observation/episode pose vectors to float32, a chosen rotation representation and a fixed rotation offset. Preserves translation and frame metadata; decoded actions pass through. | Match quaternion, Euler or 6D rotation conventions expected by a model. |
 
 ### Gripper

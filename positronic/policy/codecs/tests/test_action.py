@@ -15,6 +15,7 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.command import Impedance, JointDelta
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Step
@@ -22,6 +23,7 @@ from positronic.policy.codecs import (
     ACTION,
     BimanualJointsAction,
     CartesianDeltaAction,
+    ChangeEEFrame,
     Codec,
     FlipGrip,
     JointPositionAction,
@@ -107,12 +109,22 @@ def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input()
         lambda path: JointPositionAction('joints', 'grip', commands_path=path),
         lambda path: BimanualJointsAction(commands_path=path),
         lambda path: FlipGrip(commands_path=path),
+        lambda path: ChangeEEFrame(EEFrame(site=GRIPPER_SITE), commands_path=path),
         lambda path: AbsoluteJointsAction('joints', 'grip', commands_path=path),
         lambda path: AbsolutePositionAction('pose', 'grip', commands_path=path),
         lambda path: CartesianDeltaAction(commands_path=path),
         lambda path: JointDeltaAction(commands_path=path),
     ],
-    ids=['one_arm', 'two_arms', 'flip_grip', 'absolute_joints', 'absolute_position', 'cartesian_delta', 'joint_delta'],
+    ids=[
+        'one_arm',
+        'two_arms',
+        'flip_grip',
+        'change_ee_frame',
+        'absolute_joints',
+        'absolute_position',
+        'cartesian_delta',
+        'joint_delta',
+    ],
 )
 @pytest.mark.parametrize('path', [[], (), ('plan', False), (0,), 'plan'])
 def test_joint_command_encoding_requires_a_named_tuple_path(build, path):
