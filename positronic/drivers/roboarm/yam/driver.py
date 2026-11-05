@@ -15,7 +15,7 @@ import logging
 import math
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
 import mujoco as mj
@@ -54,6 +54,7 @@ _JOINT_LIMITS = 'joint_limits'  # the arm's (lower, upper) per joint in the vend
 _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the chain runs, in get_robot_info()
 # The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
 _COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
+_COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 
 
@@ -95,11 +96,12 @@ class _FrictionLoop(Protocol):
 
 def _fade_coulomb_friction(chain: object, fade: FrictionFade) -> None:
     """Scale the Coulomb friction of the hardware ``chain`` by ``fade.share`` of the speed of each joint, before each
-    ``update``. ``get_robot_info`` reports the full friction. Only the thread that runs ``update`` writes the speed,
-    so i2rt reads the speed that the scale used.
+    ``update``. ``get_robot_info`` reports the full friction and the fade. Only the thread that runs ``update`` writes
+    the speed, so i2rt reads the speed that the scale used.
 
-    Raise before anything changes when ``chain`` lacks a member of ``_FrictionLoop`` or its speed reading, so a moved
-    member fails the connect and not the control thread of i2rt.
+    The scaled friction also goes in before the wrapper: i2rt's control thread can be in an ``update`` that started
+    before the wrapper and reads the flag after the caller turns it on. A chain that lacks a member of
+    ``_FrictionLoop`` or its speed reading raises before anything changes, so it fails the connect and not that thread.
     """
     if not isinstance(chain, _FrictionLoop):
         raise TypeError(f'{type(chain).__name__} lacks a member of _FrictionLoop, which the friction fade needs')
@@ -109,14 +111,14 @@ def _fade_coulomb_friction(chain: object, fade: FrictionFade) -> None:
     def faded_friction() -> np.ndarray:
         return friction * fade.share(chain._joint_state.vel)
 
-    faded_friction()
+    chain._coulomb_friction = faded_friction()
 
     def faded_update() -> None:
         chain._coulomb_friction = faded_friction()
         update()
 
     chain.update = faded_update
-    chain.get_robot_info = lambda: {**robot_info(), _COULOMB_FRICTION: friction.copy()}
+    chain.get_robot_info = lambda: {**robot_info(), _COULOMB_FRICTION: friction.copy(), _COULOMB_FRICTION_FADE: fade}
 
 
 def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> None:
@@ -324,6 +326,8 @@ class _Arm(DriverRun[command.CommandType]):
         if _USE_COULOMB_FRICTION in info:
             meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
             meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
+            fade = info.get(_COULOMB_FRICTION_FADE)
+            meta[roboarm_keys.COULOMB_FRICTION_FADE] = None if fade is None else asdict(fade)
         return meta
 
     def observations(self) -> dict[str, np.ndarray]:

@@ -58,6 +58,8 @@ STATION_COMPENSATION = Compensation(
     use_coulomb_friction=True,
     coulomb_friction=STATION_COULOMB_FRICTION,
 )
+STATION_FADE = FrictionFade(zero_below_rad_s=0.01, full_from_rad_s=0.02)
+STATION_FADE_META = {'zero_below_rad_s': 0.01, 'full_from_rad_s': 0.02}  # how the arm meta records it
 # The joint ranges of the i2rt YAM arm model, and the limits an i2rt chain reports: those ranges widened by
 # 0.15 rad (i2rt get_robot.py:196).
 I2RT_YAM_RANGES = np.array([
@@ -77,12 +79,14 @@ STATION_ARM_META = {
     roboarm_keys.EE_MASS: STATION_EE_MASS,
     roboarm_keys.USE_COULOMB_FRICTION: True,
     roboarm_keys.COULOMB_FRICTION: [*STATION_COULOMB_FRICTION, 0.0],
+    roboarm_keys.COULOMB_FRICTION_FADE: None,
 }
 I2RT_ARM_META = {
     roboarm_keys.GRAVITY_COMP_FACTOR: [*I2RT_GRAVITY_COMP, 1.0],
     roboarm_keys.EE_MASS: None,
     roboarm_keys.USE_COULOMB_FRICTION: False,
     roboarm_keys.COULOMB_FRICTION: [*I2RT_COULOMB_FRICTION, 0.0],
+    roboarm_keys.COULOMB_FRICTION_FADE: None,
 }
 
 
@@ -2024,9 +2028,26 @@ def _record_an_episode(rig: Embodiment, root: Path) -> dict[str, Any]:
             [f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in keys.BIMANUAL_ARMS],
             STATION_ARM_META,
         ),
+        (
+            embodiment_cfg.yam_bimanual_yambox.override(
+                cameras={},
+                compensation=dict.fromkeys(
+                    keys.BIMANUAL_ARMS,
+                    roboarm_cfg.yam_compensation.override(
+                        gravity_comp_factor=STATION_GRAVITY_COMP,
+                        ee_mass=STATION_EE_MASS,
+                        use_coulomb_friction=True,
+                        coulomb_friction=STATION_COULOMB_FRICTION,
+                        coulomb_friction_fade=STATION_FADE,
+                    ),
+                ),
+            ),
+            [f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in keys.BIMANUAL_ARMS],
+            {**STATION_ARM_META, roboarm_keys.COULOMB_FRICTION_FADE: STATION_FADE_META},
+        ),
         (embodiment_cfg.yam, [keys.JOINTS], I2RT_ARM_META),
     ],
-    ids=['yambox', 'one-arm'],
+    ids=['yambox', 'yambox-with-fade', 'one-arm'],
 )
 def test_an_episode_records_the_compensation_that_each_chain_runs(chains, tmp_path, rig, signals, arm_meta):
     static = _record_an_episode(rig.instantiate(), tmp_path)
@@ -2102,9 +2123,7 @@ def test_coulomb_friction_with_no_values_runs_the_values_of_i2rt(monkeypatch):
 
 # A YAM joint at rest reads speeds of up to this
 MAX_REST_SPEED_NOISE_RAD_S = 0.007
-FADED_COMPENSATION = dataclasses.replace(
-    STATION_COMPENSATION, coulomb_friction_fade=FrictionFade(zero_below_rad_s=0.01, full_from_rad_s=0.02)
-)
+FADED_COMPENSATION = dataclasses.replace(STATION_COMPENSATION, coulomb_friction_fade=STATION_FADE)
 STATION_FRICTION_TORQUE = np.array([*STATION_COULOMB_FRICTION, 0.0])
 SPEEDS_AT_REST = [0.005, -0.005, MAX_REST_SPEED_NOISE_RAD_S, -MAX_REST_SPEED_NOISE_RAD_S]
 
@@ -2133,6 +2152,21 @@ def test_a_fade_adds_no_coulomb_friction_at_the_speed_noise_of_a_joint_at_rest(m
 def test_a_fade_adds_the_coulomb_friction_in_the_direction_that_the_joint_moves(monkeypatch, speed, share):
     _, chain = _connected(monkeypatch, FADED_COMPENSATION)
     np.testing.assert_allclose(_friction_torque_at(chain, speed), share * STATION_FRICTION_TORQUE, atol=1e-12)
+
+
+def test_an_update_that_started_before_the_fade_adds_no_coulomb_friction_at_rest(monkeypatch):
+    """i2rt's control thread can be in an ``update`` that it looked up before the driver wrapped it, and read the
+    friction flag after the driver turned it on."""
+
+    def get_yam_robot(channel, **kwargs):
+        chain = _i2rt_chain(kwargs['gravity_comp_factor'], kwargs['use_coulomb_friction'])
+        chain._joint_state = types.SimpleNamespace(vel=np.full(7, MAX_REST_SPEED_NOISE_RAD_S))
+        return chain
+
+    monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
+    chain = yam._connect('can0', False, FADED_COMPENSATION)
+    I2rtChain.update(chain)
+    np.testing.assert_allclose(chain.friction_torques[-1], 0.0, atol=1e-9)
 
 
 def test_a_chain_that_fades_its_friction_reports_the_full_coulomb_friction(monkeypatch):
