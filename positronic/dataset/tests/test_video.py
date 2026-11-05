@@ -292,7 +292,8 @@ class TestLibavEncoder:
         signal = VideoSignal(video_paths['video'], video_paths['frames'])
         assert len(signal) == len(frames)
         for i in (0, 29, 30, 44):
-            assert_frames_equal(signal._values_at([i])[0], frames[i])
+            read, _ = signal[i]
+            assert_frames_equal(read, frames[i])
         with av.open(str(video_paths['video'])) as container:
             (stream,) = container.streams.video
             assert (stream.codec_context.name, stream.codec_context.profile) == ('h264', 'High')
