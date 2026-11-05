@@ -115,9 +115,8 @@ class TransformImages(Codec):
 
     def _map_images(self, data: Any, transform: Callable[[np.ndarray], np.ndarray]) -> Any:
         def transform_value(value: Any) -> Any:
-            if self._paths is None and not (
-                isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
-            ):
+            is_rgb_image = isinstance(value, np.ndarray) and value.ndim in (3, 4) and value.shape[-1] == 3
+            if self._paths is None and not is_rgb_image:
                 return value
             value = np.asarray(value)
             if value.ndim not in (3, 4) or value.shape[-1] != 3 or min(value.shape[-3:-1]) < 1:
