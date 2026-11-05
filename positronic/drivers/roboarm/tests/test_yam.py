@@ -2185,8 +2185,10 @@ class FakeMotorChain:
         return 7
 
     def read_states(self) -> list[types.SimpleNamespace]:
-        state = {'pos': 0.5, 'eff': 0.0, 'temp_mos': 0.0, 'temp_rotor': 0.0, 'timestamp': 0.0}
-        return [types.SimpleNamespace(vel=speed, **state) for speed in self.vel]
+        return [
+            types.SimpleNamespace(pos=0.5, vel=speed, eff=0.0, temp_mos=0.0, temp_rotor=0.0, timestamp=0.0)
+            for speed in self.vel
+        ]
 
     def set_commands(self, torques: np.ndarray, **_) -> list[types.SimpleNamespace]:
         self.torques.append(np.array(torques))
