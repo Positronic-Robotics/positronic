@@ -1984,6 +1984,21 @@ def test_an_answer_that_leaves_the_plan_streams_no_rows_and_the_next_answer_stre
     assert [(r[b'call'], r[b'rows']) if REF in r else None for r in requests[1:]] == [(1, [2, 1]), (2, []), (3, [2, 1])]
 
 
+def test_an_answer_the_schedule_discards_after_a_replan_plans_no_rows():
+    temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
+    meta = _stream_meta(ChunkedSchedule(fps=10.0).to_spec())
+    meta[offboard_keys.LOCAL_STACK]['seq'][0] = temporal
+    replan = {1: {policy_keys.REPLAN_NOW: True}}
+    session = _run_on_mock_session(meta, 10, frame_stream='jpeg', version=protocol.ProtocolVersion.V2, extra=replan)
+
+    # The replan at 0.1 s calls again at once while the call of 0.0 s is pending. The schedule discards that call's
+    # answer, so the stream plans the rows of the call after the replan's answer: read at 0.2 s, its chunk runs to
+    # 0.7 s, and that call refers to both rows.
+    requests = [call.args[0]['image'] for call in session.infer.call_args_list]
+    assert [REF in r for r in requests[:2]] == [False, False]
+    assert (requests[2][b'call'], requests[2][b'rows']) == (1, [2, 1])
+
+
 def test_an_rtc_session_goes_in_full_because_the_stream_predicts_chunked_calls(caplog):
     temporal = {**_stream_meta()[offboard_keys.LOCAL_STACK]['seq'][0], 'version': 2}
     rtc = RTCSchedule(fps=10.0, call_after_sec=0.4, latency_estimate=ConstantDuration(0.1))
@@ -2230,9 +2245,9 @@ def test_a_server_decodes_each_message_of_a_streamed_session_off_its_event_loop(
 
 def test_an_answer_reports_its_result_once_at_its_first_read(runtime):
     reads = []
-    answer = RemotePolicy._ReportingRuntime(runtime, lambda chunk, elapsed_sec: reads.append(chunk)).submit(
-        lambda: [1, 2, 3]
-    )
+    answer = RemotePolicy._ReportingRuntime(
+        runtime, lambda chunk, elapsed_sec, replans: reads.append(chunk), lambda: 0
+    ).submit(lambda: [1, 2, 3])
     assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
     assert answer.done()
     assert reads == []

@@ -280,6 +280,7 @@ class FrameStreamer:
         self._horizon_sec = horizon_sec
         self._lead = lead
         self._chunk_end = 0.0
+        self.replans = 0
         self._resize = resize
         self._quality = jpeg_quality
         self._crf = crf
@@ -312,15 +313,21 @@ class FrameStreamer:
 
     def on_replan(self, now_ns: int) -> None:
         """Record that the schedule cleared its plan at ``now_ns`` (``ChunkedSchedule``'s ``on_replan``): the next
-        chunk starts when the schedule reads its answer, and the rows planned for the call it dropped do not go out."""
+        chunk starts when the schedule reads its answer, and the rows planned for the call it dropped do not go out.
+        ``replans`` counts them: a call submitted before the last one gives an answer the schedule discards."""
         with self._lock:
             self._targets = []
+            self.replans += 1
         self._chunk_end = now_ns / 1e9
 
-    def on_answer(self, chunk: cabc.Sized | None, elapsed_sec: float) -> None:
+    def on_answer(self, chunk: cabc.Sized | None, elapsed_sec: float, replans: int | None = None) -> None:
         """Plan the rows of the next request when the schedule reads ``chunk``, the answer of a call that took
-        ``elapsed_sec`` (its ``Answer.elapsed_sec``, which the schedule's lead estimate follows). ``None``, an answer
-        that leaves the plan as it is, starts no chunk: the schedule calls again at once."""
+        ``elapsed_sec`` (its ``Answer.elapsed_sec``, which the schedule's lead estimate follows) and was submitted after
+        ``replans`` replans (None: after the last one). ``None`` for ``chunk``, an answer that leaves the plan as it is,
+        starts no chunk: the schedule calls again at once. The answer of a call submitted before the last replan plans
+        nothing: the schedule discards it."""
+        if replans is not None and replans != self.replans:
+            return
         self.flush()
         now = self._clock() / 1e9
         lead = 0.0 if self._lead is None else self._lead(elapsed_sec)

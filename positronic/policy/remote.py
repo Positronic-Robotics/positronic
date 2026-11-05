@@ -271,11 +271,12 @@ class RemotePolicy(Policy):
                 return call(obs)
 
     class _ReportingAnswer(Answer[T]):
-        """``answer``, reporting its result and ``elapsed_sec`` to ``on_read`` at the first read."""
+        """``answer``, reporting its result, ``elapsed_sec`` and ``replans`` to ``on_read`` at the first read."""
 
-        def __init__(self, answer: Answer[T], on_read: cabc.Callable[[T, float], None]) -> None:
+        def __init__(self, answer: Answer[T], on_read: cabc.Callable[[T, float, int], None], replans: int) -> None:
             self._answer = answer
             self._on_read = on_read
+            self._replans = replans
             self._reported = False
 
         def done(self) -> bool:
@@ -293,18 +294,22 @@ class RemotePolicy(Policy):
             result = self._answer.result()
             if not self._reported:
                 self._reported = True
-                self._on_read(result, self._answer.elapsed_sec)
+                self._on_read(result, self._answer.elapsed_sec, self._replans)
             return result
 
         def cancel(self) -> None:
             self._answer.cancel()
 
     class _ReportingRuntime(Runtime):
-        """``inner``, with each answer reporting its result and its ``elapsed_sec`` to ``on_read`` at the first read."""
+        """``inner``, with each answer reporting its result, its ``elapsed_sec`` and the ``replans`` count at its submit
+        to ``on_read`` at the first read."""
 
-        def __init__(self, inner: Runtime, on_read: cabc.Callable[[Any, float], None]) -> None:
+        def __init__(
+            self, inner: Runtime, on_read: cabc.Callable[[Any, float, int], None], replans: cabc.Callable[[], int]
+        ) -> None:
             self._inner = inner
             self._on_read = on_read
+            self._replans = replans
 
         def set_metadata(self, name: str, value: Any) -> None:
             self._inner.set_metadata(name, value)
@@ -318,7 +323,8 @@ class RemotePolicy(Policy):
             return self._inner.tick
 
         def submit(self, function: cabc.Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
-            return RemotePolicy._ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read)
+            replans = self._replans()
+            return RemotePolicy._ReportingAnswer(self._inner.submit(function, *args, **kwargs), self._on_read, replans)
 
         def _submit_on(
             self,
@@ -329,8 +335,9 @@ class RemotePolicy(Policy):
             *args: P.args,
             **kwargs: P.kwargs,
         ) -> Answer[T]:
+            replans = self._replans()
             answer = self._inner._submit_on(workers, limit, function, *args, **kwargs)
-            return RemotePolicy._ReportingAnswer(answer, self._on_read)
+            return RemotePolicy._ReportingAnswer(answer, self._on_read, replans)
 
         def has_ready_answers(self) -> bool:
             return self._inner.has_ready_answers()
@@ -373,7 +380,11 @@ class RemotePolicy(Policy):
                 return answer
 
             infer = partial(self._infer, streamer, call, connection_lock)
-            policy_runtime = execution if streamer is None else self._ReportingRuntime(execution, streamer.on_answer)
+            policy_runtime = (
+                execution
+                if streamer is None
+                else self._ReportingRuntime(execution, streamer.on_answer, lambda: streamer.replans)
+            )
             run = policy_runtime.start(stack, infer)
             obs = yield
             while True:
