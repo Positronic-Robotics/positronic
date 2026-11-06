@@ -147,8 +147,8 @@ export class EpisodePlayer {
   #notes = { replay: null, video: null };
   #summary;
   #frame = null;
-  // The recording the viewer frame shows; null where it shows none.
-  #recording = null;
+  // The `rrd` of the recording the viewer frame shows; null where it shows none.
+  #rrd = null;
   // The element whose focus the viewer takes when it next shows a recording: the player root where the viewer held
   // the focus when it was hidden, or the element that held it when a host asked for it while it was hidden. A focus
   // that moved elsewhere in the meantime stays where the visitor put it.
@@ -303,6 +303,19 @@ export class EpisodePlayer {
     this.#note.textContent = shown;
   }
 
+  /** The viewer in the frame, where it has started and not crashed: rerun's page keeps it in `_handle`. Null for a
+   * viewer on another origin, which the element cannot reach. */
+  #runningViewer() {
+    let viewer;
+    try {
+      viewer = this.#frame?.contentWindow._handle;
+    } catch (error) {
+      if (error.name !== 'SecurityError') throw error;
+      return null;
+    }
+    return viewer && !viewer.has_panicked() ? viewer : null;
+  }
+
   // A running viewer opens the recording in place, so its WebAssembly does not load and start again. Else the frame
   // loads the viewer page, in place too: a new `src` would add a browser history entry.
   #showRecording(rrd) {
@@ -321,7 +334,7 @@ export class EpisodePlayer {
       url.searchParams.set('hide_welcome_screen', '');
       this.#frame.contentWindow.location.replace(url.href);
     }
-    this.#recording = rrd;
+    this.#rrd = rrd;
     const holder = this.#focusForViewer;
     this.#focusForViewer = null;
     if (holder && holder === this.#focused()) this.focusViewer();
@@ -343,23 +356,11 @@ export class EpisodePlayer {
     this.#frame.hidden = true;
     // A running viewer drops the recording and its data, and stays for the next one.
     const viewer = this.#runningViewer();
-    if (viewer) viewer.remove_receiver(this.#recording);
+    if (viewer) viewer.remove_receiver(this.#rrd);
     else this.#frame.contentWindow.location.replace('about:blank');
-    this.#recording = null;
+    this.#rrd = null;
   }
 
-  /** The viewer in the frame, where it has started and not crashed: rerun's page keeps it in `_handle`. Null for a
-   * viewer on another origin, which the element cannot reach. */
-  #runningViewer() {
-    let viewer;
-    try {
-      viewer = this.#frame?.contentWindow._handle;
-    } catch (error) {
-      if (error.name !== 'SecurityError') throw error;
-      return null;
-    }
-    return viewer && !viewer.has_panicked() ? viewer : null;
-  }
 
   // Each viewer page that loads takes the element's keys, and the keyboard once it starts.
   // A viewer on another origin than the page keeps its own keys.
