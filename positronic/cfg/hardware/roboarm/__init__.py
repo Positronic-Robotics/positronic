@@ -9,7 +9,7 @@ from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm.models import DROID_EE_FRAME
 
 if TYPE_CHECKING:
-    from positronic.drivers.roboarm.yam.compensation import Compensation
+    from positronic.drivers.roboarm.yam.compensation import Compensation, FrictionFade
     from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 # The pose each arm is drawn around at the start of a trial. Where a driver parks is its own and lives with it.
@@ -94,6 +94,13 @@ def yam_compensation(**fields) -> 'Compensation':
     from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION
 
     return dataclasses.replace(I2RT_COMPENSATION, **fields)
+
+
+@cfn.config()
+def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'FrictionFade':
+    from positronic.drivers.roboarm.yam.compensation import FrictionFade
+
+    return FrictionFade(zero_below_rad_s=zero_below_rad_s, full_from_rad_s=full_from_rad_s)
 
 
 @cfn.config(
