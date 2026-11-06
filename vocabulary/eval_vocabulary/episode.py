@@ -21,6 +21,8 @@ ENDED_BY = 'eval.ended_by'
 ENDED_BY_OPERATOR = 'operator'
 # The policy ended the trial: its run returned a `PolicyEnd`.
 ENDED_BY_POLICY = 'policy'
+# The station ended the trial: its software cancelled the trial, and no person and no policy ended it.
+ENDED_BY_STATION = 'station'
 # The `PolicyEnd` of a trial that the policy ended. It is the policy's claim, not a verdict.
 POLICY_END = 'eval.policy_end'
 # The instruction that the policy got, as it was at the end of the trial.

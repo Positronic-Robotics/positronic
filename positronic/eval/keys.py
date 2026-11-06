@@ -9,6 +9,7 @@ from eval_vocabulary.episode import BENCHMARK_TASK
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
 from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
 from eval_vocabulary.episode import ENDED_BY_POLICY as ENDED_BY_POLICY
+from eval_vocabulary.episode import ENDED_BY_STATION as ENDED_BY_STATION
 from eval_vocabulary.episode import POLICY_END as POLICY_END
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED

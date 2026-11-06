@@ -22,6 +22,7 @@ from eval_vocabulary.episode import (
     BENCHMARK_TASK,
     ENDED_BY,
     ENDED_BY_OPERATOR,
+    ENDED_BY_STATION,
     LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
@@ -529,6 +530,10 @@ def recorded_try_window(episode: Path) -> TryWindow | None:
     return TryWindow(min(starts), max(times[-1].as_py() for _, times in read))
 
 
+# The enders whose end is not the task's verdict, so the trial they ended has no label. A tuple, because a damaged
+# `static.json` can record an unhashable value.
+_ENDERS_OUTSIDE_THE_TASK = (ENDED_BY_OPERATOR, ENDED_BY_STATION)
+
 # The end event of each outcome that one states. `out_of_time` has none.
 _END_EVENTS: Mapping[Outcome, type[EndEvent]] = MappingProxyType({end.outcome: end for end in (Success, Fail, Safety)})
 
@@ -552,10 +557,10 @@ class _SimTrial(NamedTuple):
 def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
     """The trial that `episode` records, with its task under `task_key`.
 
-    None when an operator ended the trial, or the episode records no verdict, no id or no world time.
+    None when an operator or the station ended the trial, or the episode records no verdict, no id or no world time.
     """
     static = read_static(episode)
-    if static is None or static.get(ENDED_BY) == ENDED_BY_OPERATOR:
+    if static is None or static.get(ENDED_BY) in _ENDERS_OUTSIDE_THE_TASK:
         return None
     recorded = recorded_task_and_outcome(static, task_key)
     uid = recorded_uid(episode) if recorded is not None else None
@@ -586,7 +591,7 @@ MOLMO_LABELER = LabelerRef('molmo')
 def molmo_label(episode: Path) -> Label | None:
     """MolmoSpaces' labeler: a trial succeeds or fails at its end, or runs out of time.
 
-    A trial that an operator ended has no label.
+    A trial that an operator or the station ended has no label.
     """
     return _end_label(episode, TASK, MOLMO_LABELER)
 
