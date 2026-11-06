@@ -180,7 +180,9 @@ class _Arm(DriverRun[command.CommandType]):
             return
         self._condition = condition
         if self.reading.in_error:
-            logger.error(f'{self.controller.ip}: {self.reading.power.name}, error {self.controller.errors}')
+            joints = np.round(np.degrees(self.reading.q), 1).tolist()
+            errors = self.controller.errors
+            logger.error(f'{self.controller.ip}: {self.reading.power.name}, error {errors}, joints {joints} deg')
         else:
             logger.info(f'{self.controller.ip}: {self.reading.power.name}, no error')
 
