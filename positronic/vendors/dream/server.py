@@ -3,9 +3,8 @@
 The policy runs at Dream Labs, behind DreamAPI. `dreamlabs-client` reads the API key from `DREAM_API_KEY` or from
 `~/.dreamlabs/credentials`. Every face in a frame is blurred before the frame leaves this server, and each chunk keeps
 `limits.ChunkLimits`. Each session first sends a canary: a fixed observation whose reply changes only when the model
-changes. A chunk starts after the rows that the client plays before it, from the last row sent. Each session writes
-`<sessions_dir>/<session_id>.json`: the canary, and the trace id, timing and limits of each call.
-`<session_id>.npz` beside it holds each chunk as DreamAPI answered it and as the limiter sent it.
+changes. Each session writes `<sessions_dir>/<session_id>.json`: the canary, and the trace id, timing and limits of
+each call. `<session_id>.npz` beside it holds each chunk as DreamAPI answered it and as the limiter sent it.
 
 Usage
   uv run --locked --extra dream python -m positronic.vendors.dream.server yam_bimanual
