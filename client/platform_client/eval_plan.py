@@ -728,8 +728,8 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
         limited = sorted(entry.name for entry in self.endpoints if entry.max_concurrent_sessions is not None)
         if limited:
             raise ValueError(
-                f'a nebius_competition plan states max_concurrent_sessions on {", ".join(limited)}: a competition '
-                'run opens the published count of sessions'
+                f'a nebius_competition plan states max_concurrent_sessions on {", ".join(limited)}: the run opens '
+                'the published count of sessions'
             )
         return self
 
