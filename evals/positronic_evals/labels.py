@@ -530,10 +530,6 @@ def recorded_try_window(episode: Path) -> TryWindow | None:
     return TryWindow(min(starts), max(times[-1].as_py() for _, times in read))
 
 
-# The enders whose end is not the task's verdict, so the trial they ended has no label. A tuple, because a damaged
-# `static.json` can record an unhashable value.
-_ENDERS_OUTSIDE_THE_TASK = (ENDED_BY_OPERATOR, ENDED_BY_STATION)
-
 # The end event of each outcome that one states. `out_of_time` has none.
 _END_EVENTS: Mapping[Outcome, type[EndEvent]] = MappingProxyType({end.outcome: end for end in (Success, Fail, Safety)})
 
@@ -552,6 +548,11 @@ class _SimTrial(NamedTuple):
         """The end event that the outcome states, at the end of the trial."""
         end = _END_EVENTS.get(self.outcome)
         return (end(seconds=self.seconds_to_end),) if end is not None else ()
+
+
+# The enders whose end is not the task's verdict, so the trial they ended has no label. A tuple, because a damaged
+# `static.json` can record an unhashable value.
+_ENDERS_OUTSIDE_THE_TASK = (ENDED_BY_OPERATOR, ENDED_BY_STATION)
 
 
 def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
