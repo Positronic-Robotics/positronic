@@ -147,6 +147,8 @@ export class EpisodePlayer {
   #notes = { replay: null, video: null };
   #summary;
   #frame = null;
+  // The recording the viewer frame shows; null where it shows none.
+  #recording = null;
   // The element whose focus the viewer takes when it next shows a recording: the player root where the viewer held
   // the focus when it was hidden, or the element that held it when a host asked for it while it was hidden. A focus
   // that moved elsewhere in the meantime stays where the visitor put it.
@@ -290,10 +292,7 @@ export class EpisodePlayer {
     }
     this.#clearVideos();
     this.#setNote('replay', null);
-    const url = new URL(VIEWER_URL);
-    url.searchParams.set('url', row.rrd);
-    url.searchParams.set('hide_welcome_screen', '');
-    this.#showFrame(url.href);
+    this.#showRecording(row.rrd);
   }
 
   /** Sets the note about the 3D replay or about the video; the note line shows both. */
@@ -304,15 +303,25 @@ export class EpisodePlayer {
     this.#note.textContent = shown;
   }
 
-  // A new `src` would add a browser history entry, so the frame changes its page in place.
-  #showFrame(url) {
+  // A running viewer opens the recording in place, so its WebAssembly does not load and start again. Else the frame
+  // loads the viewer page, in place too: a new `src` would add a browser history entry.
+  #showRecording(rrd) {
     if (!this.#frame) {
       this.#frame = element('iframe', { part: 'viewer', title: '3D replay', allow: 'fullscreen' });
       this.#frame.addEventListener('load', () => this.#watchFrame());
       this.#stage.before(this.#frame);
     }
     this.#frame.hidden = false;
-    this.#frame.contentWindow.location.replace(url);
+    const viewer = this.#runningViewer();
+    if (viewer) {
+      viewer.add_receiver(rrd);
+    } else {
+      const url = new URL(VIEWER_URL);
+      url.searchParams.set('url', rrd);
+      url.searchParams.set('hide_welcome_screen', '');
+      this.#frame.contentWindow.location.replace(url.href);
+    }
+    this.#recording = rrd;
     const holder = this.#focusForViewer;
     this.#focusForViewer = null;
     if (holder && holder === this.#focused()) this.focusViewer();
@@ -332,10 +341,27 @@ export class EpisodePlayer {
       this.#focusForViewer = this.#root;
     }
     this.#frame.hidden = true;
-    this.#frame.contentWindow.location.replace('about:blank');
+    // A running viewer drops the recording and its data, and stays for the next one.
+    const viewer = this.#runningViewer();
+    if (viewer) viewer.remove_receiver(this.#recording);
+    else this.#frame.contentWindow.location.replace('about:blank');
+    this.#recording = null;
   }
 
-  // The viewer's page loads anew for each episode: give it the element's keys, and the keyboard once it starts.
+  /** The viewer in the frame, where it has started and not crashed: rerun's page keeps it in `_handle`. Null for a
+   * viewer on another origin, which the element cannot reach. */
+  #runningViewer() {
+    let viewer;
+    try {
+      viewer = this.#frame?.contentWindow._handle;
+    } catch (error) {
+      if (error.name !== 'SecurityError') throw error;
+      return null;
+    }
+    return viewer && !viewer.has_panicked() ? viewer : null;
+  }
+
+  // Each viewer page that loads takes the element's keys, and the keyboard once it starts.
   // A viewer on another origin than the page keeps its own keys.
   #watchFrame() {
     const view = this.#frame.contentWindow;

@@ -333,7 +333,26 @@ HELPERS = """<script>
   window.noteText = () => (one('note') && !one('note').hidden ? one('note').textContent : '');
   window.frame = () => host().shadowRoot.querySelector('iframe');
   window.frameUrl = () => (frame() && !frame().hidden ? frame().contentWindow.location.href : '');
-  window.loads = (rrd) => frameUrl().includes(encodeURIComponent(rrd));
+  // The element gives a running viewer each next recording through rerun's handle; the probe notes the last one.
+  setInterval(() => {
+    const view = document.querySelector('positronic-replay')?.shadowRoot?.querySelector('iframe')?.contentWindow;
+    const handle = view?._handle;
+    if (!handle || handle.probeNoted) return;
+    handle.probeNoted = true;
+    const add = handle.add_receiver.bind(handle);
+    handle.add_receiver = (url, ...rest) => {
+      view.probeRecording = url;
+      return add(url, ...rest);
+    };
+  }, 10);
+  // The recording the shown viewer holds: the last one the element gave it, else the one its page opened.
+  window.shownRecording = () => {
+    if (!frameUrl()) return '';
+    const view = frame().contentWindow;
+    return view.probeRecording ?? new URL(view.location.href).searchParams.get('url') ?? '';
+  };
+  window.loads = (rrd) => shownRecording().includes(rrd);
+  window.viewerRecordingId = () => frame()?.contentWindow._handle?.get_active_recording_id() ?? null;
   // The media query listeners the page holds, and the waits of the length the fixture server's Retry-After asks.
   window.queryListeners = 0;
   const addToQuery = MediaQueryList.prototype.addEventListener;
@@ -556,9 +575,14 @@ def serve(media: Media, requests: Requests) -> ThreadingHTTPServer:
 
 
 def is_aborted_viewer_fetch(text: str, source: str) -> bool:
-    """Whether an error is the rerun viewer's own report of a recording fetch that stopped when the element replaced
-    the viewer page with the next episode or with a blank page. The probe counts these apart."""
+    """Whether an error is the rerun viewer's own report of a recording fetch that stopped when the element dropped
+    the recording or replaced the viewer page. The probe counts these apart."""
     return 'Failed to fetch' in text and '/rerun/' in source
+
+
+def frame_kept(page: Page) -> bool:
+    """Whether the element's hidden frame still holds the viewer page."""
+    return page.evaluate("frame()?.contentWindow.location.pathname.endsWith('/embedded.html') ?? false")
 
 
 def button_label(page: Page, at: int) -> str:
@@ -914,6 +938,7 @@ class Probe:
     def dock_link(self, fresh_tab_entries: int):
         """`fresh_tab_entries` is the history length of a new tab with a page, from the control arm."""
         print('A link to a row on the third page (dock, full mode), and three replays:')
+        mark = self.requests.mark()
         page = self.open('/page/dock?episode=120')
         start = self.history_length(page)
         self.check('the link opens the dock', self.until(page, "one('dock') && !one('dock').hidden"))
@@ -927,15 +952,16 @@ class Probe:
         self.check('the row is shown and current', current)
         position = page.evaluate("one('position').textContent")
         self.check('the dock counts its place', position == f'{ROWS} of {ROWS}', position)
-        urls = []
+        shown = []
         for row, key in (('120', None), ('119', 'ArrowUp'), ('118', 'ArrowUp')):
             if key:
                 page.keyboard.press(key)
-            loaded = self.until(page, f"loads('/rrd/ok/{row}.rrd')")
+            shown.append(self.until(page, f"loads('/rrd/ok/{row}.rrd') && viewerRecordingId() !== null"))
             time.sleep(SETTLE_S)
-            urls.append(page.evaluate('frameUrl()') if loaded else None)
-        embedded = f'/rerun/{rerun_release()}/embedded.html?url='
-        self.check('each replay loads the embedded viewer page', all(url and embedded in url for url in urls), urls)
+        self.check('the viewer shows each replay', all(shown), shown)
+        pages = [path for path in self.viewer_requests(mark) if path.endswith('.html')]
+        embedded = f'/static/rerun/{rerun_release()}/embedded.html'
+        self.check('three replays load the embedded viewer page once', pages == [embedded], pages)
         end = self.history_length(page)
         fresh = fresh_tab_entries
         self.check('three replays add no browser history entry', start == end == fresh, (fresh, start, end))
@@ -949,6 +975,12 @@ class Probe:
             {'action': 'close', 'row': '118', 'via': 'Escape'},
         ]
         self.check('the steps and Escape send open/Step and close/Escape', actions == wanted, actions)
+        held = page.evaluate('viewerRecordingId()')
+        self.check('the closed dock keeps the viewer, which holds no recording', held is None and frame_kept(page))
+        page.locator('positronic-replay tr[data-id="117"] td').nth(2).click()
+        reopened = self.until(page, "loads('/rrd/ok/117.rrd') && viewerRecordingId() !== null")
+        pages = [path for path in self.viewer_requests(mark) if path.endswith('.html')]
+        self.check('a replay after the close shows in the same viewer', reopened and pages == [embedded], pages)
         page.close()
 
     def history_control(self) -> int:
@@ -1626,8 +1658,8 @@ class Probe:
         shown = self.until(page, "loads('/rrd/ok/26.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
         page.keyboard.press('ArrowDown')
         time.sleep(0.5)
-        pending = page.evaluate("[frameUrl(), frame()?.contentWindow.location.href ?? '', noteText()]")
-        hidden = pending[0] == '' and '/rrd/ok/26.rrd' not in pending[1].replace('%2F', '/')
+        pending = page.evaluate('[frameUrl(), viewerRecordingId(), noteText()]')
+        hidden = pending[0] == '' and pending[1] is None
         self.check('while the next recording is pending, no viewer shows the old one', shown and hidden, pending)
         self.check('the note says the replay is on its way', 'Preparing' in pending[2], pending[2])
         self.check(
