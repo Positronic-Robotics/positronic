@@ -1,0 +1,15 @@
+# Opt-in review profile. Production pre-commit rules remain in pyproject.toml.
+target-version = "py311"
+preview = true
+extend-exclude = ["stubs"]
+force-exclude = true
+
+[lint]
+select = ["PLR0912", "PLR0914", "PLR0915", "PLR1702"]
+
+[lint.pylint]
+max-branches = 12
+max-args = 5
+max-locals = 15
+max-statements = 50
+max-nested-blocks = 5

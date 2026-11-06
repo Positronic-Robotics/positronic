@@ -13,6 +13,19 @@ repos:
   # Existing errors are grandfathered in .basedpyright/baseline.json.
   - repo: local
     hooks:
+      - id: code-smells
+        name: repeated validation and control paths (review candidates)
+        entry: uv run --locked python -m utilities.check_code_smells
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [manual]
+      - id: code-complexity
+        name: complexity signals (review candidates)
+        entry: uv run --locked ruff check --config utilities/code_smells.toml
+        language: system
+        types: [python]
+        stages: [manual]
       - id: basedpyright
         name: basedpyright type check
         # Dedicated `.venv-typecheck` so the ratchet always sees the same deps
