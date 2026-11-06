@@ -23,7 +23,9 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   without one rebuilds the scene with RoboLab's budget;
 - with ``--num-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
   command, a clone with no command holds, a clone still makes subtask progress after another clone ends its
-  episode, and a one-scene recorded state restores into every clone.
+  episode, and a one-scene recorded state restores into every clone;
+- a fault: a clone whose arm state stops being finite ends alone, as a failure with ``fault``. This runs on the
+  single clone and on the batch.
 
 The transform checks all drive a single clone, whatever ``--num-envs`` asks for; the batch check builds its
 own env, because a clone count is fixed at ``create_env``.
@@ -441,6 +443,41 @@ def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
     print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
+def _check_a_clone_that_faults(env: RobolabEnv) -> None:
+    """The arm state of the last clone stops being finite. Only that clone ends, as a failure with ``fault``, and a
+    reset clears the fault.
+
+    Every clone commands a pose, so the solve runs over the faulted clone. Without the fault check, a single
+    clone failed its step with a singular matrix, and a faulted clone in a batch ran on with a state that was
+    not finite.
+    """
+    env.reset(_TOKEN)
+    robot = env._robot
+    faulted = env.num_slots - 1
+    nan = torch.full_like(robot.data.joint_pos[faulted : faulted + 1], float('nan'))
+    robot.write_joint_state_to_sim(nan, torch.zeros_like(nan), env_ids=torch.tensor([faulted], device=env._env.device))
+    pos, quat = (values.cpu() for values in env._eef_pose())
+    poses = {
+        slot: protocol.single_arm_action(
+            {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: _wire_pose(pos[slot], quat[slot])}, 0.0
+        )
+        for slot in range(env.num_slots)
+    }
+    others = [slot for slot in range(env.num_slots) if slot != faulted]
+    for _ in range(3):
+        frames = env.step(poses)[protocol.SLOTS]
+        frame = frames[faulted]
+        assert frame[protocol.FRAME_DONE] and not frame[protocol.FRAME_SUCCESS], f'clone {faulted} did not end'
+        assert protocol.FRAME_FAULT in frame, f'clone {faulted} ended with no fault: {sorted(frame)}'
+        ended = [slot for slot in others if frames[slot][protocol.FRAME_DONE] or protocol.FRAME_FAULT in frames[slot]]
+        assert not ended, f'clones {ended} ended, but only clone {faulted} faulted'
+        applied = env._env.action_manager.action[others, :7]
+        assert torch.isfinite(applied).all(), 'a clone that did not fault was commanded a value that is not finite'
+    env.reset(_TOKEN)
+    assert not env._faulted.any(), f'a reset left faulted clones {env._faulted.nonzero().flatten().tolist()}'
+    print(f'  fault: OK (clone {faulted} of {env.num_slots} faulted and ended alone as a failure; a reset clears it)')
+
+
 def _check_batch(num_envs: int) -> None:
     """Every clone answers its own frame and takes the command addressed to it.
 
@@ -481,6 +518,7 @@ def _check_batch(num_envs: int) -> None:
     print(f'  batch: OK ({num_envs} clones answer their own frames, take their own commands, and hold without one)')
     _check_a_clone_that_ends_first(env)
     _check_a_recorded_state_reaches_every_clone(env)
+    _check_a_clone_that_faults(env)
     env.close()
 
 
@@ -496,6 +534,7 @@ def main() -> None:
     failures = _run_cartesian_cases(env)
     _check_cartesian_delta(env)
     _check_an_episode_length_replaces_the_budget(env)
+    _check_a_clone_that_faults(env)
     env.close()
     if args.num_envs > 1:
         _check_batch(args.num_envs)

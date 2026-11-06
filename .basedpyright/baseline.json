@@ -2546,14 +2546,6 @@
                 }
             },
             {
-                "code": "reportOptionalOperand",
-                "range": {
-                    "startColumn": 60,
-                    "endColumn": 74,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalMemberAccess",
                 "range": {
                     "startColumn": 17,

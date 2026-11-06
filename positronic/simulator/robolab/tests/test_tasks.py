@@ -225,3 +225,20 @@ def test_a_pinned_timeout_stays_the_deadline_under_a_horizon(asked):
 def test_a_horizon_and_a_timeout_must_be_finite_and_positive(arg, value):
     with pytest.raises(ValueError, match=arg):
         robolab_cfg.benchmark.override(**{arg: value}).instantiate()
+
+
+@pytest.mark.parametrize(
+    'frame, recorded',
+    [
+        ({protocol.FRAME_DONE: False, protocol.FRAME_SUCCESS: False}, None),
+        ({protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: True}, {eval_keys.SUCCESS: True}),
+        ({protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: False}, {eval_keys.SUCCESS: False}),
+        (
+            {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: False, protocol.FRAME_FAULT: 'not finite'},
+            {eval_keys.SUCCESS: False, robolab_keys.FAULT: 'not finite'},
+        ),
+    ],
+    ids=['running', 'success', 'time-out', 'fault'],
+)
+def test_an_episode_records_how_it_ended(frame, recorded):
+    assert RobolabAdapter({}).terminal(frame) == recorded

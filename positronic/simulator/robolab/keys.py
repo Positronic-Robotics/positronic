@@ -22,6 +22,9 @@ EPISODE_LENGTH_OVERRIDE = 'robolab.episode_length_override'
 # The phrasing of the instruction, which the task record states and ``_reset_token`` reads back.
 INSTRUCTION_TYPE = 'robolab.instruction_type'
 
+# Why the env ended the episode early, when it did. Absent for an episode that ended by success or time-out.
+FAULT = 'robolab.fault'
+
 # The fields of a reset token. The episode length is absent when the task sets it, the state when the scene randomizes.
 TOKEN_TASK = 'task'
 TOKEN_INSTRUCTION_TYPE = 'instruction_type'
