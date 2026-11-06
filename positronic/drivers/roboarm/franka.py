@@ -130,6 +130,8 @@ _PARK_JOINTS = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
 
 # The field Desk answers the safe inputs in.
 SAFE_INPUT_STATE = 'safeInputState'
+# The field Desk answers the recoverable safety errors in, each by name.
+RECOVERABLE_ERRORS = 'recoverableErrors'
 # The safe input the emergency stop is wired to.
 EMERGENCY_STOP_INPUT = 'x31'
 # The error the arm's state carries, and a ready call answers, while the emergency stop is pressed.
@@ -151,15 +153,17 @@ class _SafeInputLevel(StrEnum):
 
 
 class _Reading(NamedTuple):
-    """One reading of the safe inputs, published in one assignment so a reader never sees half of it."""
+    """One reading of the safe inputs and the recoverable safety errors, published in one assignment so a reader
+    never sees half of it."""
 
     sampled: bool
     triggered: frozenset[str]
     levels: Mapping[str, _SafeInputLevel | None] = {}
+    recoverable_errors: frozenset[str] = frozenset()
 
 
 class _SafeInputs:
-    """The control box's safe inputs, which libfranka does not report and Desk does.
+    """The control box's safe inputs and its recoverable safety errors, which libfranka does not report and Desk does.
 
     A thread reads them every ``_POLL_S``, over a Desk client this owns: the read needs no control
     token, and the session that drives the arm must stay on one thread.
@@ -216,6 +220,12 @@ class _SafeInputs:
         reading = self._reading
         return reading.levels.get(name) if reading.sampled else None
 
+    @property
+    def recoverable_errors(self) -> list[str]:
+        """The recoverable safety errors the last reading found active; empty where no reading is in hand."""
+        reading = self._reading
+        return sorted(reading.recoverable_errors) if reading.sampled else []
+
     @staticmethod
     def _level(reading: object) -> _SafeInputLevel | None:
         """The level Desk sent, or None where Desk sent a value that names no level."""
@@ -254,7 +264,7 @@ class _SafeInputs:
                 desk = Desk(self._ip, *credentials)
                 desk._authenticate()  # Desk publishes the read; the login behind it stays underscored
                 self._desk = desk
-            self._note(desk.safety_status()[SAFE_INPUT_STATE])
+            self._note(desk.safety_status())
         # rules-allow: swallowed-error — a control box that stops answering must not end the run; the
         # reading goes stale instead, and a stale reading names no input.
         except Exception as exc:
@@ -263,9 +273,10 @@ class _SafeInputs:
             self._desk, self._unreadable = None, True
             self._reading = self._reading._replace(sampled=False)
 
-    def _note(self, state: Mapping[str, object]) -> None:
-        """Record a reading, and log a safe input whose state changed."""
-        sampled, was_triggered, _ = self._reading
+    def _note(self, status: Mapping[str, Any]) -> None:
+        """Record a reading of Desk's safety status, and log a safe input whose state changed."""
+        state: Mapping[str, object] = status[SAFE_INPUT_STATE]
+        sampled, was_triggered, *_ = self._reading
         if not sampled:
             logger.info(f'The control box reports its safe inputs as {dict(state)}')
         self._unreadable = False
@@ -276,7 +287,8 @@ class _SafeInputs:
                 logger.warning(f'The control box prohibits motion: safe inputs {sorted(triggered)} are triggered')
             else:
                 logger.info('The control box permits motion: every safe input is clear')
-        self._reading = _Reading(True, triggered, levels)
+        recoverable = frozenset(name for name, active in status[RECOVERABLE_ERRORS].items() if active)
+        self._reading = _Reading(True, triggered, levels, recoverable)
 
     def __enter__(self) -> '_SafeInputs':
         """Take the first reading, then keep it fresh on a thread until the block ends."""
@@ -861,8 +873,6 @@ class _Brakes:
 
 # The field Desk answers the state of each joint brake in.
 BRAKE_STATE = 'brakeState'
-# The field Desk answers the recoverable safety errors in, each by name.
-RECOVERABLE_ERRORS = 'recoverableErrors'
 
 
 class _BrakeState(StrEnum):
@@ -1164,6 +1174,10 @@ class Robot(pimm.ControlSystem):
             outcome = arm.recover()
             if asked:
                 logger.info(f'A console asked to clear a fault; the recovery returned {outcome.name}')
+            if asked and outcome is RecoveryOutcome.CLEARED and (held := arm.safe_inputs.recoverable_errors):
+                # libfranka sees no error here while Desk holds the arm, so only the Desk step clears it.
+                logger.warning(f'The recovery returned CLEARED, and Desk still reports {held}')
+                outcome = RecoveryOutcome.NOT_CLEARED
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
                 outcome = self._clear_with_desk_prepare(session, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:

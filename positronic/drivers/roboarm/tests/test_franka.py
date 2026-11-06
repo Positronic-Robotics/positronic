@@ -226,7 +226,10 @@ class FakeDesk:
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
         self.safety_error = False
         self.fsoe_error = False
+        # A joint fault that Desk holds and that its prepare acknowledges.
+        self.generic_joint_error = False
         self.programming_mode = False
+        self.status_reads = 0
         # The Desk login that holds robot control, where a session of the driver does not.
         self.holder: str | None = None
         self.reboot_clears = True
@@ -282,6 +285,7 @@ class FakeDesk:
             raise RuntimeError('424 Client Error: Failed Dependency for url: /desk/api/joints/unlock')
         if self.programming_mode:
             raise franka.ProgrammingModeError()
+        self.generic_joint_error = False
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
 
     def ensure_control(self) -> None:
@@ -295,12 +299,16 @@ class FakeDesk:
     def safety_status(self) -> dict[str, Any]:
         if self.unreachable:
             raise ConnectionError('the control box is not answering')
+        self.status_reads += 1
         # Desk sends each brake state as a plain string.
         brakes = [str(brake) for brake in self.brakes]
         return {
             franka.SAFE_INPUT_STATE: dict(self.safe_inputs),
             franka.BRAKE_STATE: brakes,
-            franka.RECOVERABLE_ERRORS: {franka.FSOE_CONNECTION_ERROR: self.fsoe_error},
+            franka.RECOVERABLE_ERRORS: {
+                franka.FSOE_CONNECTION_ERROR: self.fsoe_error,
+                'genericJointError': self.generic_joint_error,
+            },
         }
 
 
@@ -2829,6 +2837,75 @@ def test_a_recover_call_on_a_box_only_a_reboot_clears_reboots_it_once_and_connec
     run.tick()
     assert Call.STATE in reconnected.calls[mark:], 'the run does not read the new connection'
     assert isinstance(run.streamed[-1], franka.FrankaState)
+
+
+def _until_the_watch_reads_again(desk: FakeDesk) -> None:
+    """Wait until the watch thread has taken a whole reading after this call."""
+    mark = desk.status_reads
+    deadline = time.monotonic() + 5.0
+    while desk.status_reads < mark + 2 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert desk.status_reads >= mark + 2, 'the watch thread took no reading'
+
+
+def _hold_in_desk(desk: FakeDesk, error: str) -> None:
+    if error == franka.FSOE_CONNECTION_ERROR:
+        desk.fsoe_error = True
+    else:
+        desk.generic_joint_error = True
+
+
+@pytest.mark.parametrize('error', ['genericJointError', franka.FSOE_CONNECTION_ERROR])
+def test_a_recover_call_that_libfranka_clears_runs_the_desk_step_while_desk_holds_an_error(
+    desk, world, monkeypatch, error
+):
+    """libfranka reports no error on an arm that Desk holds in a recoverable safety error, so its recovery
+    returns CLEARED and the arm still refuses every move until Desk clears the error."""
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    _hold_in_desk(desk, error)
+    _until_the_watch_reads_again(desk)
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert Call.PREPARE in desk.calls[mark:]
+    assert (Call.REBOOT in desk.calls[mark:]) == (error == franka.FSOE_CONNECTION_ERROR)
+    assert not desk.generic_joint_error and not desk.fsoe_error
+
+
+def test_a_recover_call_that_libfranka_clears_runs_no_desk_step_while_desk_holds_no_error(desk, world, monkeypatch):
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    run = _start_run(world, _driver(FakeArm(PARK)))
+    _until_the_watch_reads_again(desk)
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert desk.calls[mark:] == []
+    assert RecoveryStep.CONNECTING not in run.step_names
+
+
+def test_a_recovery_no_console_asked_for_runs_no_desk_step_while_desk_holds_an_error(desk, world, monkeypatch):
+    """The driver recovers after every robot error, many times a day, with nobody at the rig."""
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    arm = FakeArm(PARK)
+    run = _start_run(world, _driver(arm))
+    desk.generic_joint_error = True
+    _until_the_watch_reads_again(desk)
+    mark, recoveries = len(desk.calls), arm.calls.count(Call.RECOVER_FROM_ERRORS)
+    arm.error = 1
+
+    run.tick()
+
+    assert arm.calls.count(Call.RECOVER_FROM_ERRORS) == recoveries + 1
+    assert desk.calls[mark:] == []
 
 
 def test_a_reboot_that_does_not_clear_the_box_answers_the_error_and_each_press_reboots_once(desk, world, monkeypatch):
