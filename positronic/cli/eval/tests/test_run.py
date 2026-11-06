@@ -4,11 +4,13 @@ import logging
 import os
 import re
 import sys
+import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
 from itertools import islice
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock
 
 import numpy as np
@@ -39,7 +41,15 @@ from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
 from positronic.cfg.video_encoder import jetson_h264
 from positronic.cli.account.gateway import CommandFailed, Fault
-from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
+from positronic.cli.eval.run import (
+    TaskDriver,
+    _pass_span,
+    main,
+    prepare_output_dir,
+    run_world,
+    scoped_env_var,
+    timed_pass,
+)
 from positronic.dataset.episode import META_UID, META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.vector import SimpleSignalWriter
@@ -284,17 +294,38 @@ def test_a_local_run_passes_its_pace_to_the_sweep(run_command, monkeypatch, stat
     assert seen == [paced]
 
 
+class _SleepsOnce(pimm.ControlSystem):
+    """A driver that asks for no task. It sleeps 0.2 s on the clock of its world and times the sleep on wall time."""
+
+    def __init__(self):
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.wall_sec = 0.0
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        start = time.monotonic()
+        yield pimm.Sleep(0.2)
+        self.wall_sec = time.monotonic() - start
+
+
+@pytest.mark.timeout(30.0)
 @pytest.mark.parametrize(
-    'simulated, pace, mode',
-    [
-        (True, False, pimm.TimeMode.VIRTUAL),
-        (True, True, pimm.TimeMode.PACED),
-        (False, False, pimm.TimeMode.WALL),
-        (False, True, pimm.TimeMode.WALL),
-    ],
+    'simulated, pace, held', [(True, False, False), (True, True, True), (False, False, True), (False, True, True)]
 )
-def test_the_world_of_an_embodiment_is_paced_only_when_simulated_and_asked(simulated, pace, mode):
-    assert run_module._time_mode(cast(Embodiment, SimpleNamespace(simulated=simulated)), pace) is mode
+def test_a_world_holds_to_wall_time_on_hardware_and_when_a_simulated_run_is_paced(simulated, pace, held):
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={},
+        static_meta={},
+        meta_source=None,
+        simulated=simulated,
+    )
+    driver = _SleepsOnce()
+
+    run_world(embodiment, driver, pace=pace)
+
+    assert (driver.wall_sec >= 0.2 - 1e-3) is held
 
 
 SMOKE = 'molmo.franka_pick_mini_smoke'

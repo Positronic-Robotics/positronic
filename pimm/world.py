@@ -615,13 +615,14 @@ class _WallPace:
     def __init__(self, clock: Clock, wall: Clock):
         self._clock = clock
         self._wall = wall
-        self._offset_ns: int | None = None  # wall time minus virtual time, set at the first wait
+        self._offset_ns: int | None = None  # wall time minus virtual time, set before the clock first moves
 
-    def wait_ns(self) -> int:
-        wall_ns, now_ns = self._wall.now_ns(), self._clock.now_ns()
+    def wait_ns(self, target_ns: int) -> int:
+        """The wall time to wait before the clock moves to ``target_ns``."""
+        wall_ns = self._wall.now_ns()
         if self._offset_ns is None:
-            self._offset_ns = wall_ns - now_ns
-        ahead_ns = now_ns + self._offset_ns - wall_ns
+            self._offset_ns = wall_ns - self._clock.now_ns()
+        ahead_ns = target_ns + self._offset_ns - wall_ns
         if ahead_ns < -_PACE_MAX_LAG_NS:
             self._offset_ns -= ahead_ns + _PACE_MAX_LAG_NS
         return max(0, ahead_ns)
@@ -715,9 +716,9 @@ class World:
             signal.default_int_handler(signum, frame)
 
     def _drive(self, loop: Iterator[Command]) -> None:
-        wait = self._time_mode is not TimeMode.VIRTUAL
+        sleeps_on_wall = self._time_mode is not TimeMode.VIRTUAL
         for command in loop:
-            if wait:
+            if sleeps_on_wall:
                 # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
                 time.sleep(command.seconds if isinstance(command, Sleep) else 0)
 
@@ -936,10 +937,11 @@ class World:
             if not ready:
                 break
 
-            wait_ns = max(0, target_ns - self._clock.now_ns())
-            self._advance_to(target_ns)
             if self._pace is not None:
-                wait_ns = self._pace.wait_ns()
+                wait_ns = self._pace.wait_ns(target_ns)
+            else:
+                wait_ns = max(0, target_ns - self._clock.now_ns())
+            self._advance_to(target_ns)
             yield Sleep(wait_ns / 1e9) if wait_ns else Yield()
 
     def connect(

@@ -42,7 +42,6 @@ from pimm.tests.testing import MockClock
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, Time
 from pimm.utils import map as pimm_map
 from pimm.world import (
-    _PACE_MAX_LAG_NS,
     BackgroundProcessError,
     LocalQueueEmitter,
     MultiprocessEmitter,
@@ -56,7 +55,6 @@ from pimm.world import (
     _bg_wrapper,
     _stop_when_orphaned,
     _StopFlag,
-    _WallPace,
 )
 
 
@@ -312,6 +310,25 @@ class TestStopFlagReceiver:
         assert third.updated is True
 
 
+class StallsOnWallTime(ControlSystem):
+    """Blocks the world on wall time once, then runs `rounds` rounds of 10 ms. It times the rounds after the block."""
+
+    def __init__(self, stall_sec: float, rounds: int):
+        self._stall_sec = stall_sec
+        self._rounds = rounds
+        self.wall_sec_after_stall = 0.0
+        self.clock_sec_after_stall = 0.0
+
+    def run(self, should_stop, clock):
+        yield Sleep(0.01)
+        time.sleep(self._stall_sec)
+        wall_start, clock_start = time.monotonic(), clock.now()
+        for _ in range(self._rounds):
+            yield Sleep(0.01)
+        self.wall_sec_after_stall = time.monotonic() - wall_start
+        self.clock_sec_after_stall = clock.now() - clock_start
+
+
 class TestVirtualClock:
     """Under a virtual or a paced time mode the World owns a VirtualClock and advances it itself."""
 
@@ -335,40 +352,20 @@ class TestVirtualClock:
         with World() as world:
             assert isinstance(world.clock, SystemClock)
 
-    def test_pace_waits_until_wall_time_reaches_the_clock(self):
-        clock, wall = MockClock(), MockClock(start_time=100.0)
-        pace = _WallPace(clock, wall)
-        assert pace.wait_ns() == 0
-        clock.advance(0.01)
-        assert pace.wait_ns() == pytest.approx(10_000_000, abs=1)
-        wall.advance(0.01)
-        assert pace.wait_ns() == 0
-
-    def test_pace_keeps_a_lag_inside_the_bound(self):
-        clock, wall = MockClock(), MockClock()
-        pace = _WallPace(clock, wall)
-        pace.wait_ns()
-        wall.advance(0.03)
-        assert pace.wait_ns() == 0
-        clock.advance(0.04)
-        assert pace.wait_ns() == pytest.approx(10_000_000, abs=1)
-
-    def test_pace_drops_a_lag_past_the_bound(self):
-        clock, wall = MockClock(), MockClock()
-        pace = _WallPace(clock, wall)
-        pace.wait_ns()
-        wall.advance(0.2)
-        assert pace.wait_ns() == 0
-        clock.advance(0.2)
-        assert pace.wait_ns() == pytest.approx(200_000_000 - _PACE_MAX_LAG_NS, abs=1)
-
     def test_paced_world_does_not_run_ahead_of_wall_time(self):
         with World(time_mode=TimeMode.PACED) as world:
             start = time.monotonic()
             world.run(Finisher(rounds=20))
             assert world.clock.now() == pytest.approx(0.2)
-            # The pace anchors at the first wake, 0.01 s into virtual time.
-            assert time.monotonic() - start >= 0.19
+            assert time.monotonic() - start >= 0.2 - 1e-3
+
+    def test_paced_world_does_not_run_fast_to_make_up_a_long_stall(self):
+        loop = StallsOnWallTime(stall_sec=0.3, rounds=20)
+        with World(time_mode=TimeMode.PACED) as world:
+            world.run(loop)
+        assert loop.clock_sec_after_stall == pytest.approx(0.2)
+        # A paced world makes up at most 50 ms of a lag past the round that ends the stall.
+        assert loop.wall_sec_after_stall >= 0.2 - 0.01 - 0.05 - 1e-3
 
 
 # Module scope: `start_in_subprocess` pickles the loop to reach a spawned child, and a definition inside
