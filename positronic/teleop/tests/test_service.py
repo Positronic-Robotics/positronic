@@ -511,7 +511,7 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
 
     [episode] = LocalDataset(tmp_path)
     policy_meta = policy_keys.POLICY_META
-    assert episode.static[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+    assert episode.static[eval_keys.ENDED_BY] == eval_keys.EndedBy.POLICY
     assert episode.static[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
     assert episode.static[f'{policy_meta}.{policy_keys.TYPE}'] == 'remote'
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'

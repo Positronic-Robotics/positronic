@@ -141,7 +141,7 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
 
     assert policy.observations, 'the episode never opened'
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
-    assert eval_keys.ENDED_BY_OPERATOR in caplog.text
+    assert eval_keys.EndedBy.OPERATOR in caplog.text
     assert policy.closed
 
 
@@ -375,7 +375,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     assert first[eval_keys.INSTRUCTION_OVERRIDDEN] is True
     assert first[eval_keys.TRIAL_INDEX] == 0
     assert first[eval_keys.SUCCESS] is True
-    assert first[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_OPERATOR
+    assert first[eval_keys.ENDED_BY] == eval_keys.EndedBy.OPERATOR
     assert second[eval_keys.TRIAL_INDEX] == 1
     assert second[eval_keys.SUCCESS] is False
 
@@ -398,16 +398,16 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
 
         def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
-            done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+            done.emit({eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: True})
             yield from wait(lambda: policy.observations, 'an observation', clock)
             if retry:
-                done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+                done.emit({eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: True})
             yield from wait(answers[0].done, 'the answer', clock)
 
         drive_scheduler(world.start([harness, *embodiment.control_systems, PageOperator(script)]))
     assert policy.observations
     expected = (
-        {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+        {eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
         if retry
         else {eval_keys.TERMINATED: False}
     )

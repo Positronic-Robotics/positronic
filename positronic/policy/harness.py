@@ -459,7 +459,7 @@ class Harness(pimm.ControlSystem):
             return {**done.data, eval_keys.TERMINATED: True}
         if ended is not None and (deadline_ns is None or ended.time_ns <= deadline_ns):
             return {
-                eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY,
+                eval_keys.ENDED_BY: eval_keys.EndedBy.POLICY,
                 eval_keys.POLICY_END: ended.end.value,
                 eval_keys.TERMINATED: True,
             }

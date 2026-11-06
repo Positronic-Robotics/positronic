@@ -21,8 +21,6 @@ from eval_vocabulary.episode import (
     ABC_REWARD_SIGNAL,
     BENCHMARK_TASK,
     ENDED_BY,
-    ENDED_BY_OPERATOR,
-    ENDED_BY_STATION,
     LEGACY_FRAMES_TIME_COLUMN,
     LEGACY_TIME_COLUMN,
     META_FILE,
@@ -39,6 +37,7 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
+    EndedBy,
 )
 from eval_vocabulary.progress import MARK_CHANNELS
 from eval_vocabulary.timeline import EMITTED_WORLD, RECORDED_TIME, recording_timeline
@@ -552,7 +551,7 @@ class _SimTrial(NamedTuple):
 
 # The enders whose end is not the task's verdict, so the trial they ended has no label. A tuple, because a damaged
 # `static.json` can record an unhashable value.
-_ENDERS_OUTSIDE_THE_TASK = (ENDED_BY_OPERATOR, ENDED_BY_STATION)
+_ENDERS_OUTSIDE_THE_TASK = (EndedBy.OPERATOR, EndedBy.STATION)
 
 
 def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:

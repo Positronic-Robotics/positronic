@@ -15,14 +15,8 @@ UID = 'uid'
 SUCCESS = 'eval.success'
 # False when the trial ran out of time before it ended.
 TERMINATED = 'eval.terminated'
-# Who ended the trial, when it was not the task's own ground truth. An env's terminal leaves it absent.
+# Who ended the trial, as an `EndedBy`, when it was not the task's own ground truth. An env's terminal leaves it absent.
 ENDED_BY = 'eval.ended_by'
-# A person at the station ended the trial: a button on a console, or a key.
-ENDED_BY_OPERATOR = 'operator'
-# The policy ended the trial: its run returned a `PolicyEnd`.
-ENDED_BY_POLICY = 'policy'
-# The station ended the trial: its software cancelled the trial, and no person and no policy ended it.
-ENDED_BY_STATION = 'station'
 # The `PolicyEnd` of a trial that the policy ended. It is the policy's claim, not a verdict.
 POLICY_END = 'eval.policy_end'
 # The instruction that the policy got, as it was at the end of the trial.
@@ -73,6 +67,17 @@ GT_STATE_PROGRESS = 'progress'
 ABC_TASK_EVAL_SIGNAL = 'task_eval'
 # ABC's progress through the task at each step, from 0 to 1. ABC scores progress as its maximum over the episode.
 ABC_REWARD_SIGNAL = f'{ABC_TASK_EVAL_SIGNAL}.reward'
+
+
+class EndedBy(StrEnum):
+    """Who ended a trial that the task's own ground truth did not end. A recorded value never changes."""
+
+    # A person at the station ended the trial: a button on a console, or a key.
+    OPERATOR = 'operator'
+    # The policy ended the trial: its run returned a `PolicyEnd`.
+    POLICY = 'policy'
+    # The station ended the trial: its software cancelled the trial, and no person and no policy ended it.
+    STATION = 'station'
 
 
 class PolicyEnd(StrEnum):

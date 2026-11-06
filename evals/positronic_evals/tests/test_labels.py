@@ -23,9 +23,6 @@ from eval_vocabulary.episode import (
     ABC_REWARD_SIGNAL,
     BENCHMARK_TASK,
     ENDED_BY,
-    ENDED_BY_OPERATOR,
-    ENDED_BY_POLICY,
-    ENDED_BY_STATION,
     GT_STATE_PROGRESS,
     GT_STATE_SIGNAL,
     LEGACY_FRAMES_TIME_COLUMN,
@@ -42,6 +39,7 @@ from eval_vocabulary.episode import (
     TIMESTAMP_COLUMN_PREFIX,
     UID,
     VALUE_COLUMN,
+    EndedBy,
 )
 from eval_vocabulary.progress import STATE_SIGNAL
 from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD, HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME
@@ -435,15 +433,15 @@ def test_a_trial_that_ran_out_of_time_has_a_label_with_no_end_event(tmp_path: Pa
     assert ran_out is not None and ran_out.outcome is Outcome.out_of_time
 
 
-@pytest.mark.parametrize('ended_by', [ENDED_BY_OPERATOR, ENDED_BY_STATION])
-def test_a_trial_that_an_operator_or_the_station_ended_has_no_label(tmp_path: Path, ended_by: str):
+@pytest.mark.parametrize('ended_by', [EndedBy.OPERATOR, EndedBy.STATION])
+def test_a_trial_that_an_operator_or_the_station_ended_has_no_label(tmp_path: Path, ended_by: EndedBy):
     (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, ENDED_BY: ended_by})
     _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
     assert molmo_label(episode) is None
 
 
 def test_a_trial_that_the_policy_ended_keeps_the_label_of_its_recorded_end(tmp_path: Path):
-    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, ENDED_BY: ENDED_BY_POLICY})
+    (episode,) = _episodes(tmp_path, {TASK: CUP, SUCCESS: True, ENDED_BY: EndedBy.POLICY})
     _write_timed_signal(episode, 'grip', [0, 1_000_000_000])
     assert molmo_label(episode) == _label(Success(seconds=1.0), seconds_to_end=1.0, annotator=MOLMO_LABELER)
 

@@ -67,7 +67,7 @@ class KeyboardOperator(KeyboardControl):
                 except Exception as e:  # rules-allow: swallowed-error — the operator is who this failure is for
                     logger.error(f'Episode failed to open: {e}')
             case 'p':
-                self.done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR})
+                self.done.emit({eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR})
 
 
 def real(
