@@ -29,6 +29,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import webxr
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
+from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.webxr import Frontend, SessionMode, WebXR
 from positronic.geom import Rotation, Transform3D
@@ -299,6 +300,180 @@ def test_a_start_pose_the_arm_refuses_is_sounded_to_the_operator(world):
 
     assert [path.name for _, path in sounds.emitted] == ['error-occurred.wav']
     assert marks['after'] > marks['refused']
+
+
+def test_a_controller_that_reports_no_buttons_is_skipped_and_the_session_goes_on(world):
+    """A Quest controller that loses tracking can stay on the page with an empty button list."""
+    dc, arm, buttons, _, _ = build_teleop_arm(world)
+    asked = []
+
+    driver = ManualDriver([
+        (lambda: buttons.emit({'left': None, 'right': []}), 0.01),
+        (lambda: buttons.emit(make_buttons(stick=0.0)), 0.01),
+        (lambda: buttons.emit(make_buttons(stick=1.0)), 0.01),
+        (lambda: asked.extend(arm.incoming()), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert len(asked) == 1
+
+
+def test_a_controller_drives_only_the_arm_of_its_side(world):
+    """With two arms, the left controller moves the left arm. The buttons and the pose of the right controller
+    do not move it, and a pose with no left controller in it sends no command."""
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, side=webxr.LEFT)
+    arm, buttons = world.pair(dc.sync_move), world.pair(dc.buttons_receiver)
+    poses, state = world.pair(dc.controller_positions), world.pair(dc.robot_state)
+    commands = RecordingEmitter()
+    dc.robot_commands._bind(commands, clock=world.clock)
+    robot_pose = Transform3D(translation=np.array([0.4, 0.0, 0.3]), rotation=Rotation.identity)
+    hand = Transform3D(translation=np.array([0.0, 1.0, 0.0]), rotation=Rotation.identity)
+    moved = Transform3D(translation=np.array([0.0, 1.0, 0.05]), rotation=Rotation.identity)
+    asked, marks = [], {}
+
+    def press(side: str, *, A: bool = False, stick: bool = False):
+        pressed = [0.0, 0.0, 0.0, float(stick), float(A), 0.0]
+        buttons.emit({'left': [0.0] * 6, 'right': [0.0] * 6} | {side: pressed})
+
+    driver = ManualDriver([
+        (lambda: state.emit(types.SimpleNamespace(ee_pose=robot_pose, status=RobotStatus.AVAILABLE)), 0.01),
+        (lambda: poses.emit({'left': hand, 'right': hand}), 0.01),
+        (lambda: press('right'), 0.01),
+        (lambda: press('right', A=True, stick=True), 0.01),
+        (lambda: poses.emit({'left': hand, 'right': moved}), 0.01),
+        (lambda: marks.update(right=len(commands.emitted)), 0.01),
+        (lambda: press('left'), 0.01),
+        (lambda: press('left', A=True), 0.01),
+        (lambda: poses.emit({'left': None, 'right': moved}), 0.01),
+        (lambda: marks.update(no_left=len(commands.emitted)), 0.01),
+        (lambda: poses.emit({'left': moved, 'right': hand}), 0.01),
+        (lambda: press('left'), 0.01),
+        (lambda: press('left', stick=True), 0.01),
+        (lambda: asked.extend(arm.incoming()), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert marks['right'] == 0, 'the right controller moved the left arm'
+    assert marks['no_left'] == 0, 'a pose with no left controller in it moved the left arm'
+    assert len(commands.emitted) > 0, 'the left controller did not move the left arm'
+    target = commands.emitted[-1][1].pose
+    np.testing.assert_allclose(np.linalg.norm(target.translation - robot_pose.translation), 0.05, atol=1e-9)
+    assert len(asked) == 1, 'the left stick did not put the left arm at its start pose'
+
+
+def test_the_report_of_an_arm_tells_the_tracking_state_and_the_last_events(world):
+    dc, _arm, buttons, _, _ = build_teleop_arm(world)
+    poses, state = world.pair(dc.controller_positions), world.pair(dc.robot_state)
+    reports = RecordingEmitter()
+    dc.report._bind(reports, clock=world.clock)
+    robot_pose = Transform3D(translation=np.array([0.4, 0.0, 0.3]), rotation=Rotation.identity)
+
+    driver = ManualDriver([
+        (lambda: state.emit(types.SimpleNamespace(ee_pose=robot_pose, status=RobotStatus.AVAILABLE)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (lambda: poses.emit({'left': None, 'right': robot_pose}), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    report = reports.emitted[-1][1]
+    assert report.tracking
+    assert [event.split(' ', 1)[1] for event in report.events] == [
+        'tracking refused: the controller has no pose',
+        'tracking on',
+    ]
+
+
+def test_the_report_tells_how_far_the_target_and_the_arm_moved_since_tracking_came_on(world):
+    """The operator compares the two shifts: a target that goes the wrong way points at the headset frame, and an arm
+    that goes another way than its target points at the robot side."""
+    dc, _arm, buttons, _, _ = build_teleop_arm(world)
+    poses, state = world.pair(dc.controller_positions), world.pair(dc.robot_state)
+    reports = RecordingEmitter()
+    dc.report._bind(reports, clock=world.clock)
+    start = Transform3D(translation=np.array([0.4, 0.0, 0.3]), rotation=Rotation.identity)
+    moved_arm = Transform3D(translation=np.array([0.4, 0.02, 0.3]), rotation=Rotation.identity)
+    hand = Transform3D(translation=np.array([0.0, 1.0, 0.0]), rotation=Rotation.identity)
+    # FRONT maps the x of the hand to the y of the robot
+    hand_right = Transform3D(translation=np.array([0.05, 1.0, 0.0]), rotation=Rotation.identity)
+
+    driver = ManualDriver([
+        (lambda: state.emit(types.SimpleNamespace(ee_pose=start, status=RobotStatus.AVAILABLE)), 0.01),
+        (lambda: poses.emit({'left': None, 'right': hand}), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (lambda: poses.emit({'left': None, 'right': hand_right}), 0.01),
+        (lambda: state.emit(types.SimpleNamespace(ee_pose=moved_arm, status=RobotStatus.AVAILABLE)), 0.5),
+        (None, 0.01),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=2000)
+
+    report = reports.emitted[-1][1]
+    np.testing.assert_allclose(report.target_shift, [0.0, 0.05, 0.0], atol=1e-9)
+    np.testing.assert_allclose(report.arm_shift, [0.0, 0.02, 0.0], atol=1e-9)
+
+
+@pytest.mark.parametrize(
+    ('trigger', 'low', 'high', 'gamma', 'grip'),
+    [
+        (0.5, 0.0, 1.0, 1.0, 0.5),
+        (0.04, 0.05, 0.95, 1.0, 0.0),
+        (0.96, 0.05, 0.95, 1.0, 1.0),
+        (0.5, 0.05, 0.95, 1.0, 0.5),
+        (0.25, 0.0, 1.0, 0.5, 0.5),
+    ],
+    ids=['as is', 'under the low end', 'over the high end', 'between the ends', 'bent'],
+)
+def test_the_trigger_asks_for_a_grip_through_its_range_and_its_bend(trigger, low, high, gamma, grip):
+    assert data_collection.trigger_grip(trigger, low, high, gamma) == pytest.approx(grip)
+
+
+def test_the_trigger_bend_reaches_the_gripper(world):
+    """A part press with a bend below 1 closes the gripper more than the trigger reads."""
+    dc = DataCollectionController(OperatorPosition.FRONT.value, NOMINAL_JOINTS, trigger_gamma=0.5)
+    buttons = world.pair(dc.buttons_receiver)
+    grips = RecordingEmitter()
+    dc.target_grip._bind(grips, clock=world.clock)
+
+    driver = ManualDriver([(lambda: buttons.emit(make_buttons(trigger=0.25)), 0.01), (None, 0.01)])
+    drive_scheduler(world.start([dc, driver]), steps=100)
+
+    assert grips.emitted[-1][1] == pytest.approx(0.5)
+
+
+def test_a_shift_to_the_right_of_the_operator_reads_as_x_the_red_axis_of_the_controller():
+    # The robot frame on the stand: x to the operator, y to the right of the operator, z up. The green axis of the
+    # controller is x of the robot, and the blue axis is down
+    assert data_collection._shift_text(np.array([-0.03, 0.05, 0.01])) == 'x+5 y-3 z-1 cm'
+
+
+def test_the_status_panel_sends_a_new_view_of_the_arms_again_and_again(world):
+    """The page shows the panel or hides it, so the panel keeps its view new for the moment it is shown."""
+    panel = data_collection.StatusPanel([webxr.LEFT, webxr.RIGHT])
+    state = world.pair(panel.robot_states[webxr.LEFT])
+    frames = RecordingEmitter()
+    panel.frame._bind(frames, clock=world.clock)
+
+    driver = ManualDriver([(lambda: state.emit(types.SimpleNamespace(status=RobotStatus.ERROR)), 1.0), (None, 0.01)])
+    drive_scheduler(world.start([panel, driver]), steps=2000)
+
+    assert len(frames.emitted) >= 4
+    assert frames.emitted[-1][1].any(), 'the panel shows no text'
+
+
+@pytest.mark.parametrize('left_nominal_joints', [(), [*NOMINAL_JOINTS[:-1], float('nan')]], ids=['none', 'a nan'])
+def test_a_two_arm_station_with_no_finite_start_pose_for_an_arm_is_refused(left_nominal_joints):
+    with pytest.raises(ValueError, match='left_nominal_joints'):
+        data_collection.main_bimanual(
+            left_arm=DummyRobot(),
+            right_arm=DummyRobot(),
+            webxr=WebXR(port=0),
+            left_nominal_joints=left_nominal_joints,
+            right_nominal_joints=NOMINAL_JOINTS.tolist(),
+        )
 
 
 def test_an_arm_state_that_carries_a_signal_error_is_sounded_and_the_session_goes_on(world):

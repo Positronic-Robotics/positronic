@@ -25,7 +25,9 @@ export class WebXRVideoPlayer {
             uniforms: {
                 map: { value: this.videoTexture },
                 blueBoost: { value: 1.0 },
-                contrast: { value: 1.0 }  // 1.0 is normal, >1.0 increases contrast
+                contrast: { value: 1.0 },  // 1.0 is normal, >1.0 increases contrast
+                // 1.0 shows black as clear: text on black floats over the room
+                clearBlack: { value: 0.0 }
             },
             vertexShader: `
                 varying vec2 vUv;
@@ -38,6 +40,7 @@ export class WebXRVideoPlayer {
                 uniform sampler2D map;
                 uniform float blueBoost;
                 uniform float contrast;
+                uniform float clearBlack;
                 varying vec2 vUv;
                 void main() {
                     vec4 texColor = texture2D(map, vUv);
@@ -47,6 +50,10 @@ export class WebXRVideoPlayer {
                     texColor.b = min(1.0, texColor.b * blueBoost);
                     // Clamp final colors to valid range
                     texColor.rgb = clamp(texColor.rgb, 0.0, 1.0);
+                    float brightest = max(texColor.r, max(texColor.g, texColor.b));
+                    if (clearBlack > 0.5 && brightest < 0.15) {
+                        texColor.a = 0.0;
+                    }
                     gl_FragColor = texColor;
                 }
             `,
@@ -68,7 +75,8 @@ export class WebXRVideoPlayer {
         this.videoGroup = new THREE.Group();
         this.videoGroup.add(this.videoPlane);
         this.scene.add(this.videoGroup);
-        this.videoGroup.visible = true;
+        this.mode = 0;
+        this.applyMode();
 
 
         // Connect to video websocket
@@ -139,6 +147,18 @@ export class WebXRVideoPlayer {
         // Update video plane position and orientation
         this.videoGroup.position.copy(cameraPosition).add(offset);
         this.videoGroup.quaternion.copy(cameraQuaternion);
+    }
+
+    // The modes, in the order that cycleMode goes through them: hidden, on black, and with black clear
+    applyMode() {
+        if (!this.videoGroup) return;
+        this.videoGroup.visible = this.mode !== 0;
+        this.videoMaterial.uniforms.clearBlack.value = this.mode === 2 ? 1.0 : 0.0;
+    }
+
+    cycleMode() {
+        this.mode = (this.mode + 1) % 3;
+        this.applyMode();
     }
 
     show() {

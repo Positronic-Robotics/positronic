@@ -1,10 +1,12 @@
+import collections
 import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import configuronic as cfn
+import cv2
 import numpy as np
 import pos3
 
@@ -37,7 +39,8 @@ from positronic.utils.buttons import ButtonHandler
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
     for side in [LEFT, RIGHT]:
-        if buttons[side] is None:
+        # A controller that loses tracking can stay on the page with fewer buttons than the mapping reads
+        if buttons[side] is None or len(buttons[side]) < 6:
             continue
 
         mapping = {
@@ -54,6 +57,47 @@ def _check_error(is_error, was_error):
     return is_error, is_error and not was_error
 
 
+# The last events that the report of an arm keeps, and how often a report goes out while tracking is on
+_REPORT_EVENTS = 4
+_REPORT_S = 0.2
+# The status panel: its image, and how often it sends a new one
+_PANEL_SIZE = (960, 540)
+_PANEL_FRAME_S = 0.2
+_WHITE, _GREEN, _RED, _YELLOW = (255, 255, 255), (80, 255, 80), (255, 80, 80), (255, 230, 80)
+_AXES_LEGEND = 'controller axes: x red, y green, z blue'
+# The axes of a controller in the robot frame of the stand (x to the operator, y to the right, z up), as the operator
+# checked them: red (x) to the right, green (y) to the operator, blue (z) down. A half turn about the x = y line
+_ROBOT_FROM_CONTROLLER = geom.Rotation.from_rotvec(np.array([1.0, 1.0, 0.0]) * np.pi / np.sqrt(2.0))
+
+
+class ArmReport(NamedTuple):
+    """What the operator sees of an arm: is tracking on, the last events of the arm, how far the target and the
+    arm moved since tracking came on, in metres in the robot frame, and the trigger with the grip it asks for."""
+
+    tracking: bool
+    events: tuple[str, ...]
+    target_shift: np.ndarray | None = None
+    arm_shift: np.ndarray | None = None
+    trigger: float | None = None
+    grip_target: float | None = None
+
+
+def trigger_grip(trigger: float, low: float, high: float, gamma: float) -> float:
+    """The grip that ``trigger`` asks for: 0 up to ``low``, 1 from ``high``, and ``gamma`` bends the way between.
+
+    A ``gamma`` below 1 closes the gripper more for a part press, and above 1 less.
+    """
+    return float(np.clip((trigger - low) / (high - low), 0.0, 1.0) ** gamma)
+
+
+def _shift_text(shift: np.ndarray | None) -> str:
+    """``shift``, given in the robot frame, as the operator reads it: in the axes of the controller."""
+    if shift is None:
+        return '-'
+    x, y, z = np.round(_ROBOT_FROM_CONTROLLER.inv(np.asarray(shift)) * 100).astype(int)
+    return f'x{x:+d} y{y:+d} z{z:+d} cm'
+
+
 class DataCollectionController(pimm.ControlSystem):
     def __init__(
         self,
@@ -61,11 +105,30 @@ class DataCollectionController(pimm.ControlSystem):
         nominal_joints: Sequence[float] | np.ndarray,
         joints_spread: Sequence[float] | np.ndarray = (),
         *,
+        side: str = RIGHT,
+        twist_gain: float = 1.0,
+        hand_axes: geom.Rotation | None = None,
+        trigger_range: tuple[float, float] = (0.0, 1.0),
+        trigger_gamma: float = 1.0,
         output_path: Path | None = None,
         static_meta: dict | None = None,
         metadata_getter: Callable[[], dict] | None = None,
     ):
         self.operator_position = operator_position
+        # The headset controller whose pose and buttons drive the arm
+        self._side = side
+        self._twist_gain = twist_gain
+        self._hand_axes = hand_axes
+        low, high = trigger_range
+        if not 0.0 <= low < high <= 1.0 or not trigger_gamma > 0:
+            raise ValueError(f'trigger_range {trigger_range}, trigger_gamma {trigger_gamma}: need 0 <= low < high <= 1')
+        self._trigger_curve = (low, high, trigger_gamma)
+        self._trigger: float | None = None
+        self._grip_target: float | None = None
+        self._events: collections.deque[str] = collections.deque(maxlen=_REPORT_EVENTS)
+        # The tool point when tracking came on, and the last target sent since then
+        self._start: np.ndarray | None = None
+        self._target: np.ndarray | None = None
         self._output_path = output_path
         self._nominal_joints = np.asarray(nominal_joints, dtype=np.float64)
         # A station that measured no jitter sends the arm exactly to its nominal.
@@ -87,6 +150,27 @@ class DataCollectionController(pimm.ControlSystem):
 
         self.ds_agent_commands = pimm.ControlSystemEmitter(self)
         self.sound = pimm.ControlSystemEmitter(self)
+        self.report = pimm.ControlSystemEmitter[ArmReport](self)
+
+    def _note(self, text: str, tracking: bool, level: int = logging.INFO) -> None:
+        """Log ``text`` for the arm of this controller, and send it in the report of the arm."""
+        logging.log(level, f'{self._side} arm: {text}')
+        self._events.append(f'{time.strftime("%H:%M:%S")} {text}')
+        self._send_report(tracking)
+
+    def _shifts(self) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """How far the target and the arm moved since tracking came on."""
+        if self._start is None:
+            return None, None
+        target = None if self._target is None else self._target - self._start
+        arm = None
+        state = self.robot_state.read()
+        if state is not None and not isinstance(state.data, pimm.SignalError):
+            arm = np.array(state.data.ee_pose.translation, dtype=np.float64) - self._start
+        return target, arm
+
+    def _send_report(self, tracking: bool) -> None:
+        self.report.emit(ArmReport(tracking, tuple(self._events), *self._shifts(), self._trigger, self._grip_target))
 
     def _ready(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
         """Redraw the scene and put the arm at a start pose drawn around the nominal joints, yielding until
@@ -112,19 +196,23 @@ class DataCollectionController(pimm.ControlSystem):
         """Log and sound ``error`` once, as the controller enters it."""
         _, entered_error = _check_error(True, was_error)
         if entered_error:
-            logging.error(f'The arm gives no state: {error}')
+            self._note(f'the arm gives no state: {error}', False, logging.ERROR)
             self.sound.emit(error_wav_path)
 
     def _toggle_control(self, tracker: Tracker) -> None:
         if tracker.on:
             tracker.turn_off()
+            target, arm = self._shifts()
+            self._note(f'tracking off: target {_shift_text(target)}, arm {_shift_text(arm)}', False)
             return
         robot_pos = self.robot_state.value.ee_pose
-        hand_pos = self.controller_positions.value.get(RIGHT)
+        hand_pos = self.controller_positions.value.get(self._side)
         if hand_pos is None:
-            logging.warning('Control needs a pose of the right controller')
+            self._note('tracking refused: the controller has no pose', False, logging.WARNING)
             return
         tracker.turn_on(robot_pos, hand_pos)
+        self._start, self._target = np.array(robot_pos.translation, dtype=np.float64), None
+        self._note('tracking on', True)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         sounds = Path(package_assets_path('assets/sounds'))
@@ -133,16 +221,17 @@ class DataCollectionController(pimm.ControlSystem):
         abort_wav_path = sounds / 'recording-has-been-aborted.wav'
         error_wav_path = sounds / 'error-occurred.wav'
 
-        tracker = Tracker(self.operator_position)
+        tracker = Tracker(self.operator_position, self._twist_gain, self._hand_axes)
         button_handler = ButtonHandler()
 
         recording = False
         in_error = False
+        next_report = clock.now()
 
         while not should_stop.value:
             try:
                 _parse_buttons(self.buttons_receiver.value, button_handler)
-                if button_handler.just_pressed('right_B'):
+                if button_handler.just_pressed(f'{self._side}_B'):
                     if not recording:
                         meta = dict(self._static_meta)
                         meta.update(self.robot_meta_in.value)
@@ -153,33 +242,46 @@ class DataCollectionController(pimm.ControlSystem):
                         self.ds_agent_commands.emit(DsWriterCommand.STOP())
                         self.sound.emit(end_wav_path)
                     recording = not recording
-                elif button_handler.just_pressed('right_A'):
+                elif button_handler.just_pressed(f'{self._side}_A'):
                     self._toggle_control(tracker)
-                elif button_handler.just_pressed('right_stick') and not tracker.is_umi_mode:
+                elif button_handler.just_pressed(f'{self._side}_stick') and not tracker.is_umi_mode:
                     if recording:
                         self.ds_agent_commands.emit(DsWriterCommand.ABORT())
                         self.sound.emit(abort_wav_path)
                     tracker.turn_off()
                     recording = False
+                    self._note('to the start pose', False)
                     try:
                         yield from self._ready(should_stop)
+                        self._note('at the start pose', False)
                     # rules-allow: swallowed-error — the operator hears it and asks again, session goes on
                     except Exception as e:
-                        logging.error(f'The rig was not readied: {e}')
+                        self._note(f'the start pose failed: {e}', False, logging.ERROR)
                         self.sound.emit(error_wav_path)
 
-                self.target_grip.emit(button_handler.get_value('right_trigger'))
+                trigger = f'{self._side}_trigger'
+                if trigger in button_handler:  # none until the controller first sends its buttons
+                    self._trigger = float(button_handler.get_value(trigger))
+                    self._grip_target = trigger_grip(self._trigger, *self._trigger_curve)
+                    self.target_grip.emit(self._grip_target)
                 cp_msg = self.controller_positions.read()
+                # The headset sends the poses while one controller is tracked, and gives None for the other
+                hand_pos = cp_msg.data.get(self._side)
 
                 if tracker.on:
                     in_error, entered_error = _check_error(
                         self.robot_state.value.status == roboarm.RobotStatus.ERROR, in_error
                     )
                     if entered_error:
+                        self._note('the arm reports an error: the stick clears it', True, logging.ERROR)
                         self.sound.emit(error_wav_path)
-                    if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(tracker.update(cp_msg.data[RIGHT]))
+                    if not in_error and cp_msg.updated and hand_pos is not None:
+                        cmd = roboarm.command.CartesianPosition(tracker.update(hand_pos))
                         self.robot_commands.emit(cmd)
+                        self._target = np.array(cmd.pose.translation, dtype=np.float64)
+                if clock.now() >= next_report:
+                    self._send_report(tracker.on)
+                    next_report = clock.now() + _REPORT_S
 
                 yield pimm.Sleep(0.001)
 
@@ -191,6 +293,58 @@ class DataCollectionController(pimm.ControlSystem):
                 self._report_entered_error(e, in_error, error_wav_path)
                 in_error = True
                 yield pimm.Sleep(0.001)
+
+
+class StatusPanel(pimm.ControlSystem):
+    """The state of each arm as text on black, for the headset video. The page shows it, or hides it."""
+
+    def __init__(self, sides: Sequence[str]):
+        self._sides = tuple(sides)
+        self.reports = pimm.ReceiverDict(self)
+        self.robot_states = pimm.ReceiverDict(self)
+        self.grips = pimm.ReceiverDict(self)
+        self.frame = pimm.ControlSystemEmitter(self)
+
+    def _arm_line(self, side: str) -> tuple[str, tuple[int, int, int]]:
+        message = self.robot_states[side].read()
+        if message is None:
+            return f'{side}: no state', _RED
+        if isinstance(message.data, pimm.SignalError):
+            return f'{side}: no state ({message.data})', _RED
+        status = message.data.status
+        report = self.reports[side].read()
+        tracking = report is not None and report.data.tracking
+        color = _RED if status is roboarm.RobotStatus.ERROR else (_GREEN if tracking else _WHITE)
+        grip = self.grips[side].read()
+        grip_text = '' if grip is None or isinstance(grip.data, pimm.SignalError) else f', grip {grip.data:.2f}'
+        if report is not None and report.data.trigger is not None:
+            grip_text = f', trig {report.data.trigger:.2f}>{report.data.grip_target:.2f}{grip_text}'
+        return f'{side}: {status.name}, track {"ON" if tracking else "off"}{grip_text}', color
+
+    def view(self) -> np.ndarray:
+        width, height = _PANEL_SIZE
+        image = np.zeros((height, width, 3), dtype=np.uint8)
+        row = 0
+        for side in self._sides:
+            lines = [self._arm_line(side)]
+            report = self.reports[side].read()
+            if report is not None:
+                lines.append((f'  target {_shift_text(report.data.target_shift)}', _YELLOW))
+                lines.append((f'  arm    {_shift_text(report.data.arm_shift)}', _YELLOW))
+                lines += [(f'  {event}', _WHITE) for event in report.data.events]
+            for text, color in lines:
+                origin = (10, 34 + 32 * row)
+                cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+                row += 1
+            row += 1
+        origin = (10, 34 + 32 * row)
+        cv2.putText(image, _AXES_LEGEND, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.8, _YELLOW, 2, cv2.LINE_AA)
+        return image
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        while not should_stop.value:
+            self.frame.emit(self.view())
+            yield pimm.Sleep(_PANEL_FRAME_S)
 
 
 def controller_positions_serializer(controller_positions: dict[str, geom.Transform3D]) -> dict[str, np.ndarray]:
@@ -306,6 +460,58 @@ def main(
             )
 
         world.run(data_collection, bg_cs)
+
+
+def main_bimanual(
+    left_arm: pimm.ControlSystem,
+    right_arm: pimm.ControlSystem,
+    webxr: WebXR,
+    # The start poses that the stick of each controller puts its arm at
+    left_nominal_joints: Sequence[float],
+    right_nominal_joints: Sequence[float],
+    operator_position: OperatorPosition = OperatorPosition.FRONT,
+    twist_gain: float = 1.0,
+    # Count the shifts and the turns in the axes of the controller (see _ROBOT_FROM_CONTROLLER), not of the headset
+    controller_axes: bool = False,
+    # The trigger of each controller closes the gripper on its side, through trigger_grip
+    left_gripper: pimm.ControlSystem | None = None,
+    right_gripper: pimm.ControlSystem | None = None,
+    trigger_range: tuple[float, float] = (0.0, 1.0),
+    trigger_gamma: float = 1.0,
+):
+    """Runs teleoperation of two arms in real hardware. Each controller moves the arm on its side."""
+    # TODO: Record a dataset, and drive cameras and sound. Each one needs its signals for each arm.
+    arms = {
+        LEFT: (left_arm, left_nominal_joints, left_gripper),
+        RIGHT: (right_arm, right_nominal_joints, right_gripper),
+    }
+    for side, (_, joints, _) in arms.items():
+        if not len(joints) or not np.all(np.isfinite(joints)):
+            raise ValueError(f'--{side}_nominal_joints names joint angles: give each joint a finite value')
+
+    with pimm.World() as world:
+        panel = StatusPanel(arms.keys())
+        world.connect(panel.frame, webxr.frame)
+        controllers = []
+        for side, (arm, joints, gripper) in arms.items():
+            controller = DataCollectionController(
+                operator_position.value,
+                joints,
+                side=side,
+                twist_gain=twist_gain,
+                hand_axes=_ROBOT_FROM_CONTROLLER if controller_axes else None,
+                trigger_range=trigger_range,
+                trigger_gamma=trigger_gamma,
+            )
+            wire.wire(world, controller, None, {}, arm, gripper, None)
+            _wire(world, None, controller, webxr, arm, None)
+            world.connect(controller.report, panel.reports[side])
+            world.connect(arm.state, panel.robot_states[side])
+            if gripper is not None:
+                world.connect(gripper.grip, panel.grips[side])
+            controllers.append(controller)
+        # Each arm runs in a process of its own: the vendor client of a CRON arm keeps one connection for each process
+        world.run([*controllers, panel], [webxr, left_arm, right_arm, left_gripper, right_gripper])
 
 
 @cfn.config(
@@ -434,6 +640,21 @@ droid = cfn.Config(
 droid_3cam = droid.override(cameras=positronic.cfg.hardware.camera.droid_3cam)
 
 
+cron_bimanual = cfn.Config(
+    main_bimanual,
+    left_arm=positronic.cfg.hardware.roboarm.cron_with_gripper.override(ip='192.168.68.67'),
+    right_arm=positronic.cfg.hardware.roboarm.cron_with_gripper.override(ip='192.168.68.66'),
+    webxr=positronic.cfg.webxr.oculus,
+    left_nominal_joints=positronic.cfg.hardware.roboarm.CRON_LEFT_NOMINAL_JOINTS,
+    right_nominal_joints=positronic.cfg.hardware.roboarm.CRON_RIGHT_NOMINAL_JOINTS,
+    operator_position=OperatorPosition.FRONT,
+    twist_gain=2.0,
+    controller_axes=True,
+    left_gripper=positronic.cfg.hardware.gripper.cron_dh_gripper,
+    right_gripper=positronic.cfg.hardware.gripper.cron_dh_gripper.override(port='socket://192.168.68.66:7663'),
+)
+
+
 human = cfn.Config(
     main,
     robot_arm=None,
@@ -460,6 +681,7 @@ def _internal_main():
         'sim_pnp': main_sim.override(loaders=positronic.cfg.simulator.multi_tote_loaders),
         'droid': droid,
         'droid_3cam': droid_3cam,
+        'cron_bimanual': cron_bimanual,
         'human': human,
     })
 

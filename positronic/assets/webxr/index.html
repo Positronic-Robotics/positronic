@@ -24,6 +24,9 @@
 
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
+        // The Y button of the left controller cycles the video: hidden, on black, with black clear
+        const Y_BUTTON = 5;
+        let yWasPressed = false;
 
         function initControllerAxes(scene) {
           // Create axis visualizers for both controllers
@@ -114,6 +117,10 @@
               controllerAxes[hand].visible = false;
             }
           }
+          const left = controllers.left;
+          const yPressed = left !== null && left.buttons.length > Y_BUTTON && left.buttons[Y_BUTTON] > 0.5;
+          if (yPressed && !yWasPressed && videoPlayer) videoPlayer.cycleMode();
+          yWasPressed = yPressed;
           if (videoPlayer) videoPlayer.update();
           return controllers;
         }
