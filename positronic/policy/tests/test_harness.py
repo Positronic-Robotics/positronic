@@ -1229,7 +1229,7 @@ def test_an_operator_safety_stop_leaves_the_rig_where_it_stopped(episode_harness
     assert _end_with(episode_harness, done) == ({**done, eval_keys.TERMINATED: True}, [])
 
 
-@pytest.mark.parametrize('outcome', [None, Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED])
+@pytest.mark.parametrize('outcome', [None, *(outcome for outcome in Outcome if outcome is not Outcome.SAFETY)])
 def test_an_operator_stop_on_any_other_verdict_moves_the_rig_back(episode_harness, outcome):
     done = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR} | ({OUTCOME: outcome} if outcome else {})
     assert _end_with(episode_harness, done) == ({**done, eval_keys.TERMINATED: True}, ['home'])
