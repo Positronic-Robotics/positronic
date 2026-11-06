@@ -8,6 +8,8 @@ export class WebXRVideoPlayer {
         this.videoPlane = null;
         this.videoGroup = null;
         this.ws = null;
+        this.lastFrameAt = 0;
+        this.watchdog = null;
         this.scene = null;
         this.camera = null;
     }
@@ -71,16 +73,19 @@ export class WebXRVideoPlayer {
 
         // Connect to video websocket
         console.log("Connecting to video websocket...");
-        await this.connectWebSocket();
+        this.connectWebSocket();
+        this.watchdog = setInterval(() => this.replaceLostSocket(), 1000);
     }
 
-    async connectWebSocket() {
+    connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/video`;
 
         this.ws = new WebSocket(wsUrl);
+        this.lastFrameAt = performance.now();
 
         this.ws.onmessage = async (event) => {
+            this.lastFrameAt = performance.now();
             try {
                 // Create an image from the base64 data
                 const img = new Image();
@@ -103,9 +108,19 @@ export class WebXRVideoPlayer {
         };
 
         this.ws.onclose = () => {
-            console.log("Video WebSocket closed, attempting to reconnect...");
-            setTimeout(() => this.connectWebSocket(), 1000);
+            console.log("Video WebSocket closed");
         };
+    }
+
+    replaceLostSocket() {
+        // The service sends a frame on every view tick. A socket with no frame for this long is lost: the page never
+        // sends on it, so a connection that dies with no close frame never closes on the page.
+        const frameTimeoutMs = 3000;
+        const silentMs = performance.now() - this.lastFrameAt;
+        if (this.ws.readyState !== WebSocket.CLOSED && silentMs < frameTimeoutMs) return;
+        console.log(`Video WebSocket lost (no frame for ${Math.round(silentMs)} ms), reconnecting...`);
+        this.ws.close();
+        this.connectWebSocket();
     }
 
     update() {
@@ -141,6 +156,7 @@ export class WebXRVideoPlayer {
     }
 
     dispose() {
+        clearInterval(this.watchdog);
         if (this.ws) {
             this.ws.close();
         }
