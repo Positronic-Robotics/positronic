@@ -79,9 +79,14 @@ class _Arm(DriverRun[command.CommandType]):
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
+        max_reach: float | None = None,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_HZ)
         self.controller = controller
+        # A Cartesian target further than this from the base is held on the sphere of this radius: near full reach the
+        # joints turn fast for a small move of the tool, and the controller stopped the arm on a following error there
+        self.max_reach = max_reach
+        self._at_reach = False
         self.out = out
         self.state = CronState()
         self.max_speed = dynamics_factor * _MAX_JOINT_SPEED
@@ -107,16 +112,28 @@ class _Arm(DriverRun[command.CommandType]):
             self._deferred = None
             self.controller.stop_move()
 
+    def _within_reach(self, pose: geom.Transform3D) -> geom.Transform3D:
+        """``pose``, or the pose on the sphere of ``max_reach`` toward it, with the same rotation."""
+        distance = float(np.linalg.norm(pose.translation))
+        if self.max_reach is None or distance <= self.max_reach:
+            self._at_reach = False
+            return pose
+        if not self._at_reach:
+            logger.info(f'{self.controller.ip}: a target {distance:.2f} m away is held at {self.max_reach} m')
+            self._at_reach = True
+        return geom.Transform3D(np.asarray(pose.translation) * (self.max_reach / distance), pose.rotation)
+
     def _to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks the arm to hold, solved from the joints it reads now."""
         # TODO: PositionControl and Impedance need a controller that takes them; the velocity loop runs its own law
         command.require_native_mode(cmd, 'CRON')
         match cmd:
             case command.CartesianPosition(pose):
-                joints = self.controller.inverse(pose, self.reading.q)
+                joints = self.controller.inverse(self._within_reach(pose), self.reading.q)
             case command.CartesianDelta() as delta_cmd:
                 held = self.reading.q if self.target is None else self.target
-                joints = self.controller.inverse(delta_cmd.apply(self.controller.forward(held)), held)
+                target = self._within_reach(delta_cmd.apply(self.controller.forward(held)))
+                joints = self.controller.inverse(target, held)
             case command.JointPosition(positions):
                 joints = np.asarray(positions, dtype=np.float64)
             case other:
@@ -213,6 +230,7 @@ class Robot(pimm.ControlSystem):
         power_off_on_exit: bool = True,
         tool_length: float = 0.0,
         project: str | None = None,
+        max_reach: float | None = None,
     ) -> None:
         # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
@@ -221,6 +239,7 @@ class Robot(pimm.ControlSystem):
         self.power_off_on_exit = power_off_on_exit
         self.tool_length = tool_length
         self.project = project
+        self.max_reach = max_reach
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[CronState](self)
@@ -229,7 +248,14 @@ class Robot(pimm.ControlSystem):
     def _arm(self, controller: CronController, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
-            controller, self.sync_move, self.commands, self.state, self.relative_dynamics_factor, should_stop, clock
+            controller,
+            self.sync_move,
+            self.commands,
+            self.state,
+            self.relative_dynamics_factor,
+            should_stop,
+            clock,
+            self.max_reach,
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
