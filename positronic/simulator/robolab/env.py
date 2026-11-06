@@ -390,7 +390,9 @@ class RobolabEnv(EnvProtocol):
             self._kit_app.update()
         wires = {slot: protocol.single_arm(action) for slot, action in actions.items()}
         for slot, wire in wires.items():
-            self._grip[slot] = float(wire[protocol.TARGET_GRIP])
+            grip = float(wire[protocol.TARGET_GRIP])
+            if math.isfinite(grip):  # the rig refuses a grip that is not finite, so the slot keeps its last grip
+                self._grip[slot] = grip
         act = torch.zeros(self._num_envs, 8, device=self._env.device)
         act[:, :7] = self._joint_targets({slot: wire[protocol.ROBOT_COMMAND] for slot, wire in wires.items()})
         # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
@@ -421,10 +423,10 @@ class RobolabEnv(EnvProtocol):
     def _joint_targets(self, commands: dict[int, dict[str, Any]]) -> torch.Tensor:
         """The ``(num_envs, 7)`` absolute joint targets the substrate steps, from each slot's wire command.
 
-        A slot with no command holds its measured joints. The differential IK runs once for the whole batch,
-        because the controller is sized to it. A slot commanding joints rather than a pose is handed its own
-        measured pose, which that solve maps back to its measured joints, and its row is written from the
-        command instead.
+        A slot with no command, or with a command whose targets are not finite, holds its measured joints. The
+        differential IK runs once for the whole batch, because the controller is sized to it. A slot commanding
+        joints rather than a pose is handed its own measured pose, which that solve maps back to its measured
+        joints, and its row is written from the command instead.
         """
         measured = self._measured_q()
         targets = measured.clone()  # what ``hold`` commands, and the neutral row for every other case
@@ -458,8 +460,8 @@ class RobolabEnv(EnvProtocol):
                     raise ValueError(f'unknown command type {other!r}')
         if pose_slots:
             targets[pose_slots] = self._solve_ik(pose_pos, pose_quat)[pose_slots]
-        # The rig's driver refuses a command that is not finite and holds. So a bad command fails the task, and the
-        # clone's physics stays finite.
+        # The rig's driver refuses a command that is not finite. Holding it here keeps the clone's physics finite.
+        # The row of a faulted slot stays not finite, because its measured joints are not finite.
         refused = ~torch.isfinite(targets).all(dim=1)
         targets[refused] = measured[refused]
         return targets
