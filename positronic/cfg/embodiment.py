@@ -196,7 +196,8 @@ yam_bimanual_yambox = yam_bimanual.override(
     mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3125], keys.RIGHT_ARM: [0.30, -0.305, 0.3125]},
     # A fit to live data over all poses of this station gives the mass of the end effector and the gravity factors,
     # except joint 2: its factor 0.96 is below the fit, so that the arm sags into the friction that holds it high on
-    # a descent to the desk. Each friction value is below the static friction measured on its joint.
+    # a descent to the desk. Each friction value is below the static friction measured on its joint. The friction
+    # fades out at rest: the sign of the speed noise flips it there, and the arms rattle.
     compensation=dict.fromkeys(
         keys.BIMANUAL_ARMS,
         positronic.cfg.hardware.roboarm.yam_compensation.override(
@@ -204,6 +205,9 @@ yam_bimanual_yambox = yam_bimanual.override(
             ee_mass=0.925,
             use_coulomb_friction=True,
             coulomb_friction=[0.0, 0.85, 1.0, 0.04, 0.07, 0.0],
+            coulomb_friction_fade=positronic.cfg.hardware.roboarm.yam_friction_fade.override(
+                zero_below_rad_s=0.01, full_from_rad_s=0.02
+            ),
         ),
     ),
     cameras={

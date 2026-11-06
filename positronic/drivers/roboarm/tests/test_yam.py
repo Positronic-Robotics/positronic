@@ -2026,28 +2026,11 @@ def _record_an_episode(rig: Embodiment, root: Path) -> dict[str, Any]:
         (
             embodiment_cfg.yam_bimanual_yambox.override(cameras={}),
             [f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in keys.BIMANUAL_ARMS],
-            STATION_ARM_META,
-        ),
-        (
-            embodiment_cfg.yam_bimanual_yambox.override(
-                cameras={},
-                compensation=dict.fromkeys(
-                    keys.BIMANUAL_ARMS,
-                    roboarm_cfg.yam_compensation.override(
-                        gravity_comp_factor=STATION_GRAVITY_COMP,
-                        ee_mass=STATION_EE_MASS,
-                        use_coulomb_friction=True,
-                        coulomb_friction=STATION_COULOMB_FRICTION,
-                        coulomb_friction_fade=STATION_FADE,
-                    ),
-                ),
-            ),
-            [f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in keys.BIMANUAL_ARMS],
             {**STATION_ARM_META, roboarm_keys.COULOMB_FRICTION_FADE: STATION_FADE_META},
         ),
         (embodiment_cfg.yam, [keys.JOINTS], I2RT_ARM_META),
     ],
-    ids=['yambox', 'yambox-with-fade', 'one-arm'],
+    ids=['yambox', 'one-arm'],
 )
 def test_an_episode_records_the_compensation_that_each_chain_runs(chains, tmp_path, rig, signals, arm_meta):
     static = _record_an_episode(rig.instantiate(), tmp_path)
@@ -2342,7 +2325,7 @@ def _asked_by_channel(monkeypatch, rig) -> dict[str, dict[str, Any]]:
 
     def get_yam_robot(channel, **kwargs):
         asked[channel] = kwargs
-        return yam._FakeYam()
+        return _i2rt_chain(kwargs['gravity_comp_factor'], kwargs['use_coulomb_friction'])
 
     monkeypatch.setattr('i2rt.robots.get_robot.get_yam_robot', get_yam_robot)
     with pimm.World() as world:
