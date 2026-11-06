@@ -13,6 +13,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+from eval_vocabulary.outcome import OUTCOME, Outcome
 
 import pimm
 from pimm.tests.testing import Passive, wire_call
@@ -1204,6 +1205,34 @@ def test_preparation_precedes_budget_and_return_skips_scene(episode_harness):
     back.set_result(None)
     next(h.loop)
     assert answer.result() == {eval_keys.TERMINATED: False}
+
+
+def _end_with(h, done: dict[str, Any]) -> tuple[dict[str, Any], list[Any]]:
+    """Run one episode that prepares ``RESET``, end it with ``done``, and return its answer and each move back."""
+    answer = h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), Hold(), None))
+    next(h.loop)
+    next(h.prepare[RESET].incoming()).set_result(None)
+    next(h.loop)
+    h.done.emit(done)
+    next(h.loop)
+    next(h.loop)
+    moved_back = []
+    for back in h.prepare[RESET].incoming():
+        moved_back.append(back.request)
+        back.set_result(None)
+    next(h.loop)
+    return answer.result(), moved_back
+
+
+def test_an_operator_safety_stop_leaves_the_rig_where_it_stopped(episode_harness):
+    done = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, OUTCOME: Outcome.SAFETY}
+    assert _end_with(episode_harness, done) == ({**done, eval_keys.TERMINATED: True}, [])
+
+
+@pytest.mark.parametrize('outcome', [None, Outcome.SUCCESS, Outcome.FAIL, Outcome.DISCARDED])
+def test_an_operator_stop_on_any_other_verdict_moves_the_rig_back(episode_harness, outcome):
+    done = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR} | ({OUTCOME: outcome} if outcome else {})
+    assert _end_with(episode_harness, done) == ({**done, eval_keys.TERMINATED: True}, ['home'])
 
 
 @pytest.mark.parametrize('failure', ['unknown', 'prepare', 'return'])

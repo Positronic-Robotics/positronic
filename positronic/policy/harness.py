@@ -11,6 +11,7 @@ from operator import or_
 from typing import Any
 
 import numpy as np
+from eval_vocabulary.outcome import OUTCOME, Outcome
 from opentelemetry.trace import Span
 
 import pimm
@@ -120,7 +121,9 @@ class Harness(pimm.ControlSystem):
     Before each episode the harness asks every device to be ready, then prepares what the task names. A device
     that answers ready with an error fails the episode before it starts. A ``pimm.SignalError`` on an
     observation fails the episode before the policy reads that value. Between episodes the harness repairs a
-    device in error (``_ready_devices_in_error``).
+    device in error (``_ready_devices_in_error``). After an episode that ends with a payload, the harness asks again
+    for what the task named, less the scene, to put the rig back. A payload with the ``Safety`` outcome is an operator's
+    stop, so the rig stays where the episode left it.
     """
 
     def __init__(
@@ -605,7 +608,7 @@ class Harness(pimm.ControlSystem):
                 logging.info('Policy closed')
 
         self._telemetry.end(clock.now())
-        if payload is not None:
+        if payload is not None and payload.get(OUTCOME) != Outcome.SAFETY:
             back_args = {k: v for k, v in task.prepare_args.items() if k != eval_keys.SCENE}
             # rules-allow: swallowed-error — the move back is cleanup, and the recording is already complete.
             try:
