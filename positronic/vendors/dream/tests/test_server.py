@@ -4,15 +4,19 @@ import json
 import ssl
 import time
 import types
+from unittest.mock import Mock
 
 import cv2
 import numpy as np
 import pytest
 from shared.faceblur import FaceBlurrer, _self_check_frame
 
+import pimm
 from positronic import keys
 from positronic.policy import keys as policy_keys
+from positronic.policy.base import Answer, NotAnswered
 from positronic.policy.codecs import ACTION
+from positronic.policy.executor import Executor
 from positronic.vendors import dream
 from positronic.vendors.dream import codecs, server
 from positronic.vendors.dream.limits import ChunkLimits, YamChunkLimiter
@@ -49,7 +53,7 @@ def model(gateway, blurrer, tmp_path):
     built.close()
 
 
-def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = False) -> dict:
+def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = False, ahead: int = 0) -> dict:
     if view is None:
         view = np.full((176, 320, 3), 120, np.uint8)
     observation = {dream.PROMPT: 'fold the towel', **dream.STATION_ROBOT}
@@ -61,6 +65,7 @@ def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = Fal
         dream.OBSERVATION: observation,
         dream.FRAMES: {dream.FRAME_WINDOW.format(camera=camera): window for camera in dream.CAMERAS},
         policy_keys.REPLAN_NOW: replan,
+        dream.ROWS_AHEAD: ahead,
     }
 
 
@@ -234,6 +239,49 @@ def test_the_session_keeps_each_chunk_as_answered_and_as_limited(gateway, model,
     assert chunks['answered'][0, 0, 0] == pytest.approx(1.5) and chunks['limited'][0, 0, 0] < 1.0
 
 
+def _far(observation):
+    return {name: (np.asarray(rows) + [1.5, 0, 0, 0, 0, 0, 0]).tolist() for name, rows in hold(observation).items()}
+
+
+def test_a_chunk_drops_the_rows_that_the_client_plays_before_it(gateway, model, tmp_path):
+    gateway.chunk = _far
+    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    second = np.array([action[ACTION] for action in model(_request(ahead=10), session_id='a')])
+    model.end_session('a')
+
+    assert len(first) == ROWS and len(second) == ROWS - 10
+    assert [call['dropped'] for call in _record(tmp_path, 'a')['calls']] == [0, 10]
+    limited = np.load(tmp_path / 'a.npz')['limited']
+    assert np.isnan(limited[1, :10]).all()
+    np.testing.assert_array_equal(limited[1, 10:], second)
+
+
+def test_a_chunk_keeps_its_last_row_when_every_row_is_ahead(gateway, model):
+    model(_request(), session_id='a')
+
+    assert len(model(_request(ahead=ROWS), session_id='a')) == 1
+
+
+def test_a_chunk_starts_its_limits_from_the_last_row_sent(gateway, model):
+    gateway.chunk = _far
+    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    # The arm is still at the start, but the client plays the rest of the first chunk before the second one.
+    second = np.array([action[ACTION] for action in model(_request(ahead=20), session_id='a')])
+
+    assert first[-1, 0] > 1.0
+    assert np.abs(second[0, :6] - first[-1, :6]).max() < 0.1
+
+
+def test_a_replan_drops_no_row_and_starts_its_limits_from_the_measured_state(gateway, model):
+    gateway.chunk = _far
+    model(_request(), session_id='a')
+
+    replan = np.array([action[ACTION] for action in model(_request(replan=True, ahead=20), session_id='a')])
+
+    assert len(replan) == ROWS
+    assert replan[0, 0] == pytest.approx(0.5 / codecs.FPS)
+
+
 def test_a_refusal_that_is_not_retryable_raises(model, gateway):
     model(_request(), session_id='a')
     gateway.statuses.append({'code': 'DA-4000', 'reason': 'malformed', 'detail': 'bad'})
@@ -384,7 +432,7 @@ def test_a_sessions_dir_under_the_home_directory_is_expanded(gateway, tmp_path, 
     assert (tmp_path / 'records').is_dir() and not (tmp_path / '~').exists()
 
 
-def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks():
+def test_the_pipeline_stacks_nine_frames_of_each_camera_and_sends_its_plan():
     deployment = server.pipeline.instantiate()
 
     spec = deployment.local.to_spec()
@@ -392,5 +440,65 @@ def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks()
     assert layers['temporal_stack']['keys'] == [keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE]
     np.testing.assert_allclose(layers['temporal_stack']['offsets_sec'], np.arange(-1.6, 0.01, 0.2), atol=1e-9)
     assert layers['trajectory_player']['replan_on_error'] is True
-    # The limiter's ramp counts every row of a chunk as played.
+    assert layers['trajectory_player']['plan_key'] == policy_keys.PLAN
+    # The limiter's ramp counts every row that the server sends as played.
     assert layers['inference_schedule']['merge']['horizon_sec'] is None
+
+
+class _DueAnswer(Answer):
+    def __init__(self, runtime, value, due_ns):
+        self._runtime, self._value, self._due_ns = runtime, value, due_ns
+        self._elapsed_sec = (due_ns - runtime.time_ns) / 1e9
+
+    @property
+    def elapsed_sec(self):
+        if not self.done():
+            raise NotAnswered()
+        return self._elapsed_sec
+
+    @property
+    def execution_sec(self):
+        return self.elapsed_sec
+
+    def done(self):
+        return self._runtime.time_ns >= self._due_ns
+
+    def result(self):
+        return self._value
+
+    def cancel(self):
+        pass
+
+
+def test_the_arm_waits_little_between_chunks_and_never_plays_a_row_it_has_passed(monkeypatch):
+    latency_ns, period_ns = 1_350_000_000, round(1e9 / codecs.FPS)
+    view = np.zeros((4, 4, 3), np.uint8)
+    obs = dict.fromkeys((keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE), view)
+    with pimm.World(virtual_time=True) as world:
+        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+
+        def submit(function, request):
+            # Each row holds the time that DreamAPI plans it for: the observation, and then one row per period.
+            observed_ns = runtime.time_ns
+            rows = range(codecs.rows_ahead(request), ROWS)
+            chunk = [{ACTION: observed_ns + row * period_ns} for row in rows]
+            return _DueAnswer(runtime, chunk, observed_ns + latency_ns)
+
+        monkeypatch.setattr(runtime, 'submit', submit)
+        run = runtime.start(server.pipeline.instantiate().local, Mock())
+        played = []
+        try:
+            for tick in range(600):
+                world.clock.advance_to_ns(tick * period_ns)
+                played.append((tick * period_ns, run.send(obs).commands.get(ACTION)))
+        finally:
+            run.close()
+            runtime.close()
+
+    first = next(index for index, (_, planned) in enumerate(played) if planned is not None)
+    moving = [(now, planned) for now, planned in played[first:] if planned is not None]
+    planned = [planned for _, planned in moving]
+    assert planned == sorted(planned)
+    # The first chunk starts when it comes, from an arm that held still. A later one starts where the arm is.
+    assert max(now - planned for now, planned in moving[ROWS:]) <= 0.35e9
+    assert len(moving) / len(played[first:]) > 0.85

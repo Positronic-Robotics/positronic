@@ -31,3 +31,6 @@ CHUNKS = {keys.LEFT_ARM: 'q_l_chunk', keys.RIGHT_ARM: 'q_r_chunk'}
 # window of each camera, oldest frame first.
 OBSERVATION = 'observation'
 FRAMES = 'frames'
+# The field of that request that holds how many rows of its current chunk the client plays after the observation. The
+# chunk that answers the request starts after them.
+ROWS_AHEAD = 'rows_ahead'
