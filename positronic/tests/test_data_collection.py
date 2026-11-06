@@ -17,6 +17,7 @@ import PIL.Image
 import psutil
 import pytest
 import turbojpeg
+import websockets.sync.client
 
 import pimm
 from positronic import data_collection, keys, utils, wire
@@ -383,6 +384,19 @@ def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = N
     finally:
         stop.value = True
         list(run)
+
+
+def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send(caplog, monkeypatch):
+    # The closing log line is the one sign that the handler ended. No frame goes out, so the stream never uses its
+    # encoder and the test needs no libturbojpeg.
+    monkeypatch.setattr(turbojpeg, 'TurboJPEG', object)
+    with caplog.at_level(logging.INFO, logger=webxr.__name__), _served_webxr() as base:
+        with websockets.sync.client.connect(base.replace('http://', 'ws://') + '/video'):
+            pass
+        deadline = time.monotonic() + 5
+        while 'Video WebSocket connection closed' not in caplog.messages:
+            assert time.monotonic() < deadline, 'the video stream outlived its socket'
+            time.sleep(0.05)
 
 
 @pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
