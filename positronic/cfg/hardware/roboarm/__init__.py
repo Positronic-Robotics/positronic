@@ -73,8 +73,15 @@ def kinova(ip, relative_dynamics_factor):
 
 
 # tool_length: a DH Robotics AG-160-95 on its flange adapter, from the flange to the middle of the finger pads
-@cfn.config(ip='192.168.68.63', relative_dynamics_factor=0.2, power_off_on_exit=True, tool_length=0.195, project=None)
-def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, project):
+@cfn.config(
+    ip='192.168.68.63',
+    relative_dynamics_factor=0.2,
+    power_off_on_exit=True,
+    tool_length=0.195,
+    project=None,
+    max_reach=None,
+)
+def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, project, max_reach):
     from positronic.drivers.roboarm.cron.driver import Robot
 
     return Robot(
@@ -83,11 +90,13 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, project):
         power_off_on_exit=power_off_on_exit,
         tool_length=tool_length,
         project=project,
+        max_reach=max_reach,
     )
 
 
-# A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
-cron_with_gripper = cron.override(project='gripper_bridge')
+# A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box. The
+# reach is held under full stretch, where the controller stopped the arm on following errors
+cron_with_gripper = cron.override(project='gripper_bridge', max_reach=0.85)
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)

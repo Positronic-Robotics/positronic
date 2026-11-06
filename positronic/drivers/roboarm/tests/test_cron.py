@@ -215,8 +215,8 @@ def driven(rctl):
     """
     loops = []
 
-    def build(factor: float = 1.0, stop: StopFlag | None = None, tool_length: float = 0.0, project: str | None = None):
-        driver = cron.Robot('controller', relative_dynamics_factor=factor, tool_length=tool_length, project=project)
+    def build(factor: float = 1.0, stop: StopFlag | None = None, tool_length: float = 0.0, **options):
+        driver = cron.Robot('controller', relative_dynamics_factor=factor, tool_length=tool_length, **options)
         states = RecordingEmitter()
         clock = MockClock()
         driver.state._bind(states, clock=clock)
@@ -251,6 +251,17 @@ def test_the_arm_is_powered_straight_to_run_with_control_taken_first(rctl, drive
     _pump(loop, clock, 1)
 
     assert rctl.calls == ['connect', 'sync_robot_model', 'take_control', 'run']
+
+
+def test_a_target_beyond_the_reach_is_held_on_the_sphere_of_the_reach(rctl, driven):
+    """Near full reach the joints turn fast for a small move of the tool, and the controller stops the arm."""
+    _, _, commands, clock, loop = driven(max_reach=0.6)
+    far = geom.Transform3D(translation=np.array([0.8, 0.6, 0.0]))
+    commands.push(command.CartesianPosition(far))
+
+    _pump(loop, clock, 800)
+
+    np.testing.assert_allclose(rctl.q[:3], [0.48, 0.36, 0.0], atol=0.01)
 
 
 def test_a_project_of_the_controller_is_started_once_control_is_taken(rctl, driven):
