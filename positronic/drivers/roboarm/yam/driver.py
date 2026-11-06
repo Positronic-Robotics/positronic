@@ -15,8 +15,8 @@ import logging
 import math
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
-from dataclasses import dataclass
-from typing import Any, cast
+from dataclasses import asdict, dataclass
+from typing import Any, Protocol, cast, runtime_checkable
 
 import mujoco as mj
 import numpy as np
@@ -33,7 +33,7 @@ from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
 from ..ik import qpos_from_site_pose
 from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model
-from .compensation import I2RT_COMPENSATION, Compensation
+from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ _JOINT_LIMITS = 'joint_limits'  # the arm's (lower, upper) per joint in the vend
 _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the chain runs, in get_robot_info()
 # The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
 _COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
+_COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 
 
@@ -75,15 +76,64 @@ def _chain_call() -> Iterator[None]:
         raise ChainFault(f'the chain failed: {exc}') from exc
 
 
-def _set_coulomb_friction(chain: Any, compensation: Compensation) -> None:
-    """Set the Coulomb friction of ``compensation`` on ``chain``, which i2rt opened with the flag off. The values go
-    in before the flag, so the control loop of the chain never runs the values of i2rt's arm config in their place.
+class _JointSpeeds(Protocol):
+    vel: np.ndarray  # rad/s per motor
+
+
+@runtime_checkable
+class _FrictionLoop(Protocol):
+    """What the friction fade reads, writes and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update``
+    runs one cycle of its control loop and adds ``_coulomb_friction * sign(_joint_state.vel)``.
+
+    HACK: these members are private to i2rt, which has no setting for a fade.
+    """
+
+    _coulomb_friction: np.ndarray
+    _joint_state: _JointSpeeds
+    update: Callable[[], None]
+    get_robot_info: Callable[[], dict[str, Any]]
+
+
+def _fade_coulomb_friction(chain: object, fade: FrictionFade) -> None:
+    """Scale the Coulomb friction of the hardware ``chain`` by ``fade.share`` of the speed of each joint, before each
+    ``update``. ``get_robot_info`` reports the full friction and the fade. Only the thread that runs ``update`` writes
+    the speed, so i2rt reads the speed that the scale used.
+
+    The scaled friction also goes in before the wrapper: i2rt's control thread can be in an ``update`` that started
+    before the wrapper and reads the flag after the caller turns it on. A chain that lacks a member of
+    ``_FrictionLoop`` or its speed reading raises before anything changes, so it fails the connect and not that thread.
+    """
+    if not isinstance(chain, _FrictionLoop):
+        raise TypeError(f'{type(chain).__name__} lacks a member of _FrictionLoop, which the friction fade needs')
+    friction = np.array(chain._coulomb_friction, np.float64)
+    update, robot_info = chain.update, chain.get_robot_info
+
+    def faded_friction() -> np.ndarray:
+        return friction * fade.share(chain._joint_state.vel)
+
+    chain._coulomb_friction = faded_friction()
+
+    def faded_update() -> None:
+        chain._coulomb_friction = faded_friction()
+        update()
+
+    chain.update = faded_update
+    chain.get_robot_info = lambda: {**robot_info(), _COULOMB_FRICTION: friction.copy(), _COULOMB_FRICTION_FADE: fade}
+
+
+def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> None:
+    """Set the Coulomb friction of ``compensation`` on ``chain``, which i2rt opened with the flag off. The values and
+    the fade go in before the flag, so the control loop of the chain never runs the values of i2rt's arm config or a
+    friction without the fade. i2rt's sim chain adds no friction, so it gets no fade.
 
     HACK: i2rt's get_yam_robot takes the flag but reads the values only from its arm config.
     """
     if compensation.coulomb_friction is not None:
         # The gripper motor gets no friction
         chain._coulomb_friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)
+    fade = compensation.coulomb_friction_fade
+    if compensation.use_coulomb_friction and fade is not None and not sim:
+        _fade_coulomb_friction(chain, fade)
     chain.use_coulomb_friction = compensation.use_coulomb_friction
 
 
@@ -103,7 +153,6 @@ def _connect(channel: str, sim: bool, compensation: Compensation):
         ee_mass=compensation.ee_mass,
         use_coulomb_friction=False,  # _set_coulomb_friction turns it on once the values are in
     )
-    _set_coulomb_friction(chain, compensation)
     return chain
 
 
@@ -276,6 +325,8 @@ class _Arm(DriverRun[command.CommandType]):
         if _USE_COULOMB_FRICTION in info:
             meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
             meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
+            fade = info.get(_COULOMB_FRICTION_FADE)
+            meta[roboarm_keys.COULOMB_FRICTION_FADE] = None if fade is None else asdict(fade)
         return meta
 
     def observations(self) -> dict[str, np.ndarray]:
@@ -774,8 +825,8 @@ class Robot(pimm.ControlSystem):
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
-        """Open the chain, move the arm to the start pose, answer ``asked``, and serve the arm until ``should_stop``.
-        Park and release it after.
+        """Open the chain, set its friction, move the arm to the start pose, answer ``asked``, and serve the arm until
+        ``should_stop``. Park and release it after.
 
         A ``ChainFault`` goes on the state and the grip once, before a park that publishes no readings. It answers
         ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked. Any other
@@ -807,6 +858,7 @@ class Robot(pimm.ControlSystem):
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
+                _set_coulomb_friction(vendor, self._compensation, self._sim)
                 self.robot_meta.emit(meta)
                 self.arm_meta.emit(arm.arm_meta(self._compensation.ee_mass))
                 joints, grip, missed = yield from arm.go_to_start()
