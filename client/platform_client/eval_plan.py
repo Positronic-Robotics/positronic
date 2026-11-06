@@ -723,6 +723,18 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
         return self
 
     @model_validator(mode='after')
+    def _a_competition_run_opens_the_published_count_of_sessions(self) -> Self:
+        if not isinstance(self.request_type, NebiusCompetition):
+            return self
+        limited = sorted(entry.name for entry in self.endpoints if entry.max_concurrent_sessions is not None)
+        if limited:
+            raise ValueError(
+                f'a nebius_competition plan states max_concurrent_sessions on {", ".join(limited)}: a competition '
+                'run opens the published count of sessions'
+            )
+        return self
+
+    @model_validator(mode='after')
     def _states_a_count(self) -> Self:
         if self.episodes_per_endpoint is None and not self.names_an_eval:
             raise ValueError('a plan states episodes_per_endpoint; a task or an endpoint overrides it')

@@ -1172,6 +1172,25 @@ def test_a_competition_plan_names_an_eval_and_states_no_tasks():
         a_plan(request_type={'type': 'nebius_competition', 'org': 'acme'})
 
 
+def test_a_competition_plan_states_no_session_limit():
+    limited = {**_IMAGE_ENTRY, 'max_concurrent_sessions': 1}
+    with pytest.raises(ValidationError, match='nebius_competition plan states max_concurrent_sessions on policy'):
+        EvalPlan.model_validate({
+            'request_type': {'type': 'nebius_competition'},
+            'eval': 'molmo.x',
+            'endpoints': [limited],
+        })
+
+
+def test_a_private_plan_of_a_named_eval_states_a_session_limit_on_its_image():
+    plan = EvalPlan.model_validate({
+        'request_type': PRIVATE,
+        'eval': 'molmo.x',
+        'endpoints': [{**_IMAGE_ENTRY, 'max_concurrent_sessions': 1}],
+    })
+    assert plan.endpoints[0].max_concurrent_sessions == 1
+
+
 def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():
     image = PolicyImage('org/policy:v1')
     assert isinstance(plan_of_image(image, EvalRef('molmo.x')).request_type, NebiusCompetition)
