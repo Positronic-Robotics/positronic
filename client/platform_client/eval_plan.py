@@ -328,7 +328,8 @@ class _EndpointBase(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
-    # The most sessions the platform holds open to a remote policy at once. None leaves the count to the platform.
+    # The most sessions the platform holds open to a remote policy or an image at once. None leaves the count to
+    # the platform.
     max_concurrent_sessions: int | None = Field(default=None, ge=1)
     # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
     # holds it. None takes the published slice.
@@ -412,10 +413,18 @@ class _EndpointBase(Cascade):
             )
 
     @model_validator(mode='after')
-    def _a_session_limit_bounds_a_remote_address(self) -> Self:
-        if self.max_concurrent_sessions is not None:
-            self._refuse_off_a_remote_address(
-                'max_concurrent_sessions', 'the platform serves this policy and opens its sessions'
+    def _a_session_limit_bounds_a_remote_address_or_an_image(self) -> Self:
+        if self.max_concurrent_sessions is None:
+            return self
+        if not self.names_a_locator:
+            raise ValueError(
+                f'endpoint {self.name!r} states max_concurrent_sessions and names no address or image: state it on '
+                'the plan endpoint this label names'
+            )
+        if self.kind is EndpointKind.served:
+            raise ValueError(
+                f'served endpoint {self.name!r} states max_concurrent_sessions, which only a remote or an image '
+                'endpoint carries: the platform serves this policy and opens its sessions'
             )
         return self
 
