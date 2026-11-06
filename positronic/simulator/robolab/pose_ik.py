@@ -48,10 +48,7 @@ def _dh_transform(a: float, d: float, alpha: float, theta: float) -> np.ndarray:
 
 def panda_flange(q: np.ndarray) -> np.ndarray:
     """The ``4 x 4`` flange pose at joints ``q``."""
-    pose = np.eye(4)
-    for (a, d, alpha), theta in zip(_DH, [*q, 0.0], strict=True):
-        pose = pose @ _dh_transform(a, d, alpha, theta)
-    return pose
+    return tool_kinematics(q, np.eye(4))[0]
 
 
 def tool_kinematics(q: np.ndarray, flange_to_tool: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
