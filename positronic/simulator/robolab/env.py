@@ -336,6 +336,11 @@ class RobolabEnv(EnvProtocol):
             None,
         )
 
+    def _nonfinite_arms(self) -> torch.Tensor:
+        """Per slot, whether its arm joints or joint velocities hold a value that is not finite, ``(num_envs,)``."""
+        joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
+        return ~torch.isfinite(joints).all(dim=1)
+
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
         key = (token[keys.TOKEN_TASK], token[keys.TOKEN_INSTRUCTION_TYPE], token.get(keys.TOKEN_EPISODE_LENGTH_S))
@@ -496,11 +501,6 @@ class RobolabEnv(EnvProtocol):
         joint_pos = robot.data.joint_pos[:, self._joint_ids]
         self._ik.set_command(torch.cat([target_pos_b, target_quat_b], dim=-1), ee_pos_b, ee_quat_b)
         return self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
-
-    def _nonfinite_arms(self) -> torch.Tensor:
-        """Per slot, whether its arm joints or joint velocities hold a value that is not finite, ``(num_envs,)``."""
-        joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
-        return ~torch.isfinite(joints).all(dim=1)
 
     def _measured_q(self) -> torch.Tensor:
         """Every slot's measured arm joints, ``(num_envs, 7)``."""
