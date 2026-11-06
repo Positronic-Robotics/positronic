@@ -675,6 +675,24 @@ class Probe:
             time.sleep(0.05)
         time.sleep(0.5)
 
+    @staticmethod
+    def closed_screen_tab_stops(page: Page) -> list[str]:
+        """The parts of the controls inside the screen that Tab stops at, from the page's start to its end."""
+        # A click on the page's corner moves the start of Tab off a control that had the focus.
+        page.mouse.click(1, 1)
+        stops = []
+        for _ in range(30):
+            page.keyboard.press('Tab')
+            if page.evaluate('document.activeElement === document.body'):
+                break
+            stop = page.evaluate("""(() => {
+              const inner = document.activeElement === host() ? host().shadowRoot.activeElement : null;
+              return inner?.closest('[part~="screen"]') ? inner.getAttribute('part') ?? inner.tagName : null;
+            })()""")
+            if stop:
+                stops.append(stop)
+        return stops
+
     def rrd_requests(self, mark: int) -> list[str]:
         return [path for path in self.requests.since(mark) if path.endswith('.rrd')]
 
@@ -745,6 +763,8 @@ class Probe:
         self.check('each run carries its outcome', runs == wanted_runs, runs)
         actions_slot = page.evaluate("host().shadowRoot.querySelector('slot[name=actions]').assignedNodes().length")
         self.check('the actions slot shows', actions_slot == 1, actions_slot)
+        stops = self.closed_screen_tab_stops(page)
+        self.check('Tab stops at no control of the screen before it opens', not stops, stops)
         list_max = page.evaluate("getComputedStyle(one('list')).maxHeight")
         self.check('the list takes its height limit from --list-max', list_max == '100px', list_max)
         episode = page.locator('positronic-replay [part~="episode"]').nth(1)
@@ -760,10 +780,25 @@ class Probe:
         self.check('the open row pauses', self.until(page, "!host().hasAttribute('playing')", 8000))
         page.locator('positronic-replay [part~="screen-close"]').click()
         self.check('the close button closes the screen', not page.evaluate("host().hasAttribute('screen-open')"))
+        stops = self.closed_screen_tab_stops(page)
+        self.check('Tab stops at no control of the closed screen after a close', not stops, stops)
+        episode.click()
+        self.until(page, "host().hasAttribute('screen-open')")
+        page.evaluate("one('screen-close').focus()")
+        page.keyboard.press('Enter')
+        focused = page.evaluate(
+            "(() => { const at = host().shadowRoot.activeElement; return at?.getAttribute('part') ?? null })()"
+        )
+        on_row = page.evaluate(
+            "host().shadowRoot.activeElement === all('episode')[1].querySelector('[part~=\"episode-play\"]')"
+        )
+        self.check('a close from the keyboard moves the focus to the play button of its row', on_row, focused)
         actions = self.actions(page)
         wanted = [
             {'action': 'open', 'row': '1', 'from': 'Row'},
             {'action': 'play', 'row': '1', 'playing': False, 'via': 'Row'},
+            {'action': 'close', 'row': '1', 'via': 'Button'},
+            {'action': 'open', 'row': '1', 'from': 'Row'},
             {'action': 'close', 'row': '1', 'via': 'Button'},
         ]
         self.check('the controls send open, play and close', actions == wanted, actions)
