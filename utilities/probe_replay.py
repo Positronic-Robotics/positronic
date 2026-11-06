@@ -580,11 +580,6 @@ def is_aborted_viewer_fetch(text: str, source: str) -> bool:
     return 'Failed to fetch' in text and '/rerun/' in source
 
 
-def frame_kept(page: Page) -> bool:
-    """Whether the element's hidden frame still holds the viewer page."""
-    return page.evaluate("frame()?.contentWindow.location.pathname.endsWith('/embedded.html') ?? false")
-
-
 def button_label(page: Page, at: int) -> str:
     """The accessible name of the play button of compact row `at`."""
     return page.evaluate(f"all('episode-play')[{at}].getAttribute('aria-label')")
@@ -975,8 +970,10 @@ class Probe:
             {'action': 'close', 'row': '118', 'via': 'Escape'},
         ]
         self.check('the steps and Escape send open/Step and close/Escape', actions == wanted, actions)
-        held = page.evaluate('viewerRecordingId()')
-        self.check('the closed dock keeps the viewer, which holds no recording', held is None and frame_kept(page))
+        held = page.evaluate("[viewerRecordingId(), frame()?.contentWindow.location.pathname ?? '']")
+        self.check(
+            'the closed dock keeps the viewer, which holds no recording', held[0] is None and held[1] == embedded, held
+        )
         page.locator('positronic-replay tr[data-id="117"] td').nth(2).click()
         reopened = self.until(page, "loads('/rrd/ok/117.rrd') && viewerRecordingId() !== null")
         pages = [path for path in self.viewer_requests(mark) if path.endswith('.html')]
