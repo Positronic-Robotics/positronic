@@ -328,8 +328,7 @@ class _EndpointBase(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
-    # The most sessions the platform holds open to a remote policy or an image at once. None leaves the count to
-    # the platform.
+    # The most sessions the platform holds open to the policy at once. None leaves the count to the platform.
     max_concurrent_sessions: int | None = Field(default=None, ge=1)
     # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
     # holds it. None takes the published slice.
