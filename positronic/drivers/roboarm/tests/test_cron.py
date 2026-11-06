@@ -445,7 +445,10 @@ def test_each_change_of_the_error_state_is_logged_with_the_address_of_the_contro
         _pump(loop, clock, 5)
 
     lines = [record.getMessage() for record in caplog.records]
-    assert lines == ['controller: RUN, error hardware errors motion errors', 'controller: RUN, no error']
+    assert lines == [
+        'controller: RUN, error hardware errors motion errors, joints [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] deg',
+        'controller: RUN, no error',
+    ]
 
 
 def test_a_long_move_that_the_planner_travels_slower_than_asked_is_not_given_up(world, rctl, driven):
