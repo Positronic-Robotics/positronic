@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
+# The two CRON arms on one stand, with the tool axis level and the tool x axis vertical. The left pose is the mirror of
+# the right pose, joint by joint.
+CRON_LEFT_NOMINAL_JOINTS = [-3.2894, -0.9433, -2.2283, 3.2027, 4.5339, 2.3613]
+CRON_RIGHT_NOMINAL_JOINTS = [0.1478, -2.1983, 2.2283, -0.0612, 1.7492, 7.0635]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 # The law that DROID-pretrained checkpoints run under: the joint gains and the Cartesian damping of DROID's Franka,
@@ -66,6 +70,24 @@ def kinova(ip, relative_dynamics_factor):
     from positronic.drivers.roboarm.kinova.driver import Robot
 
     return Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor)
+
+
+# tool_length: a DH Robotics AG-160-95 on its flange adapter, from the flange to the middle of the finger pads
+@cfn.config(ip='192.168.68.63', relative_dynamics_factor=0.2, power_off_on_exit=True, tool_length=0.195, project=None)
+def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, project):
+    from positronic.drivers.roboarm.cron.driver import Robot
+
+    return Robot(
+        ip=ip,
+        relative_dynamics_factor=relative_dynamics_factor,
+        power_off_on_exit=power_off_on_exit,
+        tool_length=tool_length,
+        project=project,
+    )
+
+
+# A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
+cron_with_gripper = cron.override(project='gripper_bridge')
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)
