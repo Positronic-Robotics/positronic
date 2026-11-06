@@ -76,10 +76,10 @@ class RobolabAdapter(WireCommandAdapter):
 
     def terminal(self, result: dict[str, Any]) -> dict[str, Any] | None:
         # ``done`` covers termination and truncation, so the trial ends either way; ``success`` is True only
-        # when the task's success condition fired, keeping timeouts honest. A fault ends the trial as a failure.
+        # when the task's success condition fired, keeping timeouts honest. A fault adds its value beside the verdict.
         if not result[protocol.FRAME_DONE]:
             return None
         payload = {eval_keys.SUCCESS: bool(result[protocol.FRAME_SUCCESS])}
-        if protocol.FRAME_FAULT in result:
-            payload[robolab_keys.FAULT] = result[protocol.FRAME_FAULT]
+        if robolab_keys.FRAME_FAULT in result:
+            payload[robolab_keys.FAULT] = result[robolab_keys.FRAME_FAULT]
         return payload

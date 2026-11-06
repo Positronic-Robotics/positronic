@@ -22,8 +22,12 @@ EPISODE_LENGTH_OVERRIDE = 'robolab.episode_length_override'
 # The phrasing of the instruction, which the task record states and ``_reset_token`` reads back.
 INSTRUCTION_TYPE = 'robolab.instruction_type'
 
-# Why the env ended the episode early, when it did. Absent for an episode that ended by success or time-out.
+# A step frame's field when the env ended a clone's episode because the clone cannot go on. Its value is the fault.
+FRAME_FAULT = 'fault'
+# The fault of an episode that the env ended because the clone could not go on. Absent for any other episode.
 FAULT = 'robolab.fault'
+# The fault of a clone whose arm joints or joint velocities hold a value that is not finite.
+FAULT_NONFINITE_ARM = 'nonfinite_arm_state'
 
 # The fields of a reset token. The episode length is absent when the task sets it, the state when the scene randomizes.
 TOKEN_TASK = 'task'

@@ -68,9 +68,6 @@ FRAME_SUCCESS = 'success'
 # A slot's goal text, in a frame where the env moved its goal away from the listed instruction of the slot's task, or
 # from the goal it reported last in the episode.
 FRAME_GOAL = 'goal'
-# Why the env ended a slot's episode because it cannot continue it, for example a physics state that is not finite.
-# Absent when the episode ended or runs normally.
-FRAME_FAULT = 'fault'
 # Whether the environment reports an arm error in this observation.
 OBS_ARM_ERROR = 'arm_error'
 # The raw observation fields of one arm. A bimanual env names them per arm with ``arm_channel``. Each env states

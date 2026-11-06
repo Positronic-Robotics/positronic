@@ -234,11 +234,11 @@ def test_a_horizon_and_a_timeout_must_be_finite_and_positive(arg, value):
         ({protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: True}, {eval_keys.SUCCESS: True}),
         ({protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: False}, {eval_keys.SUCCESS: False}),
         (
-            {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: False, protocol.FRAME_FAULT: 'not finite'},
+            {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: False, robolab_keys.FRAME_FAULT: 'not finite'},
             {eval_keys.SUCCESS: False, robolab_keys.FAULT: 'not finite'},
         ),
     ],
-    ids=['running', 'success', 'time-out', 'fault'],
+    ids=['running', 'success', 'failure', 'fault'],
 )
-def test_an_episode_records_how_it_ended(frame, recorded):
+def test_the_terminal_payload_carries_the_verdict_and_a_fault(frame, recorded):
     assert RobolabAdapter({}).terminal(frame) == recorded

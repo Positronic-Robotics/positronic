@@ -151,7 +151,7 @@ class RobolabEnv(EnvProtocol):
     ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's own reset events, or
     restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
     forwarded command into its row of the 8-dim jointpos action and reports, per slot, ``done`` (episode over)
-    and ``success`` (the task's success termination fired). A slot whose physics state stops being finite is
+    and ``success`` (the task's success termination fired). A slot whose arm state stops being finite is
     faulted: its episode ends as a failure with ``fault``, and the other slots continue.
 
     ``num_envs`` scene clones share one task, one sim and one ``env.step``; the whole batch reruns the same
@@ -162,7 +162,6 @@ class RobolabEnv(EnvProtocol):
     # the other entries, in their order, reads that sensor in one pass
     # (``robolab.core.sensors.contact_sensor_utils.create_contact_sensors``).
     _TABLE = 'table'
-    _FAULT = 'the physics state of the arm is not finite'
 
     def __init__(self, num_envs: int = 1):
         if num_envs < 1:
@@ -187,7 +186,7 @@ class RobolabEnv(EnvProtocol):
         self._eef_offset_rot = None
         self._ik = None
         self._grip: Any = None  # each slot's latest grip command, which a slot with no command holds
-        self._faulted: Any = None  # per slot, whether its physics state stopped being finite in this episode
+        self._faulted: Any = None  # per slot, whether its arm state stopped being finite in this episode
         self._world: Any = None
         self._gripper = ''
         self._objects: list[str] = []
@@ -323,7 +322,6 @@ class RobolabEnv(EnvProtocol):
         cfg = DifferentialIKControllerCfg(command_type='pose', use_relative_mode=False, ik_method='dls')
         self._ik = DifferentialIKController(cfg, num_envs=self._num_envs, device=self._env.device)
         self._grip = torch.zeros(self._num_envs, dtype=torch.float32, device=self._env.device)
-        self._faulted = torch.zeros(self._num_envs, dtype=torch.bool, device=self._env.device)
         self._world = get_world(self._env)
         (self._gripper,) = self._env_cfg.contact_gripper
         self._objects = [name for name in self._env_cfg.contact_object_list if name != self._TABLE]
@@ -349,7 +347,6 @@ class RobolabEnv(EnvProtocol):
             self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
         assert self._env is not None  # built above (key change) or already live (cached)
         self._grip.zero_()
-        self._faulted.zero_()
         self._shown_chains = [None] * self._num_envs
         # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
         # placed scene into the sensors (robolab/eval/episode.py).
@@ -364,6 +361,7 @@ class RobolabEnv(EnvProtocol):
             # objects for contact sensing after the shipped demos were recorded).
             merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
             obs, _extras = self._env.reset_to(merged, None, is_relative=True)
+        self._faulted = self._nonfinite_arms()
         # ``robot_meta`` carries the DROID rig's model (the launcher serialized it, since this server can't
         # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's
         # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
@@ -393,17 +391,16 @@ class RobolabEnv(EnvProtocol):
         wires = {slot: protocol.single_arm(action) for slot, action in actions.items()}
         for slot, wire in wires.items():
             self._grip[slot] = float(wire[protocol.TARGET_GRIP])
-        # A state that is not finite is found before the solve that it would break, so a slot whose state breaks in
-        # this step ends in the next one.
-        self._faulted |= self._nonfinite_slots()
         act = torch.zeros(self._num_envs, 8, device=self._env.device)
         act[:, :7] = self._joint_targets({slot: wire[protocol.ROBOT_COMMAND] for slot, wire in wires.items()})
         # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
         act[:, 7] = self._grip
         obs, _reward, _term, _trunc, _info = self._env.step(act)
+        self._faulted |= self._nonfinite_arms()
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps
-        # running (never frozen, no verdict), while a real success/time-out freezes the env and records one.
+        # running (never frozen, no verdict), while a real success/time-out freezes the env and records one. A
+        # faulted slot is done too, with no success.
         frozen = self._frozen_slots()
         faulted = self._faulted.tolist()
         results = self._env.get_env_results()
@@ -414,7 +411,7 @@ class RobolabEnv(EnvProtocol):
                     protocol.FRAME_OBS: observed[slot],
                     protocol.FRAME_DONE: frozen[slot] or faulted[slot],
                     protocol.FRAME_SUCCESS: frozen[slot] and not faulted[slot] and bool(results[slot]['success']),
-                    **({protocol.FRAME_FAULT: self._FAULT} if faulted[slot] else {}),
+                    **({keys.FRAME_FAULT: keys.FAULT_NONFINITE_ARM} if faulted[slot] else {}),
                 }
                 for slot in range(self._num_envs)
             ],
@@ -461,6 +458,10 @@ class RobolabEnv(EnvProtocol):
                     raise ValueError(f'unknown command type {other!r}')
         if pose_slots:
             targets[pose_slots] = self._solve_ik(pose_pos, pose_quat)[pose_slots]
+        # The rig's driver refuses a command that is not finite and holds. So a bad command fails the task, and the
+        # clone's physics stays finite.
+        refused = ~torch.isfinite(targets).all(dim=1)
+        targets[refused] = measured[refused]
         return targets
 
     def _solve_ik(self, target_pos: torch.Tensor, target_quat: torch.Tensor) -> torch.Tensor:
@@ -473,6 +474,7 @@ class RobolabEnv(EnvProtocol):
         offset translation is zero), then target and measured pose move into the root frame alongside the
         root-frame-rotated jacobian.
         """
+        assert self._body_idx is not None and self._ik is not None  # built with the env, before any step
         robot = self._robot
         target_quat_w = quat_mul(target_quat, quat_inv(self._eef_offset_rot))
         target_pos_w = target_pos + self._env.scene.env_origins
@@ -481,31 +483,22 @@ class RobolabEnv(EnvProtocol):
         ee_pos_b, ee_quat_b = subtract_frame_transforms(
             root_pos_w, root_quat_w, robot.data.body_pos_w[:, self._body_idx], robot.data.body_quat_w[:, self._body_idx]
         )
-        # The solve inverts one matrix per slot. A matrix that is not finite makes the inverse of a single slot
-        # raise, and gives a batch a row that is not finite. A zero jacobian keeps a faulted slot from raising.
-        jacobian = torch.where(self._faulted[:, None, None], 0.0, self._arm_jacobian())
+        # Fixed-base articulation: jacobian rows drop the root body (body row - 1), columns are the joint ids.
+        jacobian = robot.root_physx_view.get_jacobians()[:, self._body_idx - 1, :, self._joint_ids]
+        root_rot = matrix_from_quat(quat_inv(root_quat_w))
+        jacobian[:, :3, :] = torch.bmm(root_rot, jacobian[:, :3, :])
+        jacobian[:, 3:, :] = torch.bmm(root_rot, jacobian[:, 3:, :])
+        # The solve inverts one matrix per slot. A faulted slot's jacobian is not finite: alone, its inverse raises.
+        # A zero jacobian keeps that inverse finite. The slot's row of the result stays not finite.
+        jacobian = torch.where(self._faulted[:, None, None], 0.0, jacobian)
         joint_pos = robot.data.joint_pos[:, self._joint_ids]
         self._ik.set_command(torch.cat([target_pos_b, target_quat_b], dim=-1), ee_pos_b, ee_quat_b)
         return self._ik.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
 
-    def _arm_jacobian(self) -> torch.Tensor:
-        """Every slot's base_link jacobian over the arm joints in the robot root frame, ``(num_envs, 6, 7)``."""
-        robot = self._robot
-        assert self._body_idx is not None  # set with the env, before any reset or step reads the arm
-        # Fixed-base articulation: jacobian rows drop the root body (body row - 1), columns are the joint ids.
-        jacobian = robot.root_physx_view.get_jacobians()[:, self._body_idx - 1, :, self._joint_ids]
-        root_rot = matrix_from_quat(quat_inv(robot.data.root_quat_w))
-        jacobian[:, :3, :] = torch.bmm(root_rot, jacobian[:, :3, :])
-        jacobian[:, 3:, :] = torch.bmm(root_rot, jacobian[:, 3:, :])
-        return jacobian
-
-    def _nonfinite_slots(self) -> torch.Tensor:
-        """Per slot, whether its arm joints or its arm jacobian hold a value that is not finite, ``(num_envs,)``."""
-        joints = self._robot.data.joint_pos[:, self._joint_ids], self._robot.data.joint_vel[:, self._joint_ids]
-        finite = torch.isfinite(self._arm_jacobian()).all(dim=(1, 2))
-        for values in joints:
-            finite &= torch.isfinite(values).all(dim=1)
-        return ~finite
+    def _nonfinite_arms(self) -> torch.Tensor:
+        """Per slot, whether its arm joints or joint velocities hold a value that is not finite, ``(num_envs,)``."""
+        joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
+        return ~torch.isfinite(joints).all(dim=1)
 
     def _measured_q(self) -> torch.Tensor:
         """Every slot's measured arm joints, ``(num_envs, 7)``."""

@@ -24,6 +24,7 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
 - with ``--num-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
   command, a clone with no command holds, a clone still makes subtask progress after another clone ends its
   episode, and a one-scene recorded state restores into every clone;
+- a NaN command holds the measured joints;
 - a fault: a clone whose arm state stops being finite ends alone, as a failure with ``fault``. This runs on the
   single clone and on the batch.
 
@@ -443,19 +444,45 @@ def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
     print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
-def _check_a_clone_that_faults(env: RobolabEnv) -> None:
-    """The arm state of the last clone stops being finite. Only that clone ends, as a failure with ``fault``, and a
-    reset clears the fault.
+def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
+    """A NaN joint target holds the measured joints, as the rig's driver does. No fault, and the joints stay finite."""
+    env.reset(_TOKEN)
+    measured = env._measured_q()[0].clone()
+    nan = np.full(7, np.nan, dtype=np.float32)
+    frame = _step(
+        env,
+        protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: nan}, 0.0),
+    )
+    applied = env._env.action_manager.action[0, :7]
+    assert torch.equal(applied, measured), f'a NaN target was applied as {applied.tolist()}, not the held joints'
+    assert not frame[protocol.FRAME_DONE] and keys.FRAME_FAULT not in frame, (
+        f'a NaN target ended the episode: {sorted(frame)}'
+    )
+    assert torch.isfinite(env._measured_q()[0]).all(), 'a NaN target left the joints not finite'
+    print('  NaN command: OK (held the measured joints; no fault)')
 
-    Every clone commands a pose, so the solve runs over the faulted clone. Without the fault check, a single
-    clone failed its step with a singular matrix, and a faulted clone in a batch ran on with a state that was
-    not finite.
+
+def _check_a_clone_that_faults(env: RobolabEnv) -> None:
+    """The arm state of the last clone stops being finite in a step. That frame ends the clone alone, as a failure
+    with ``fault``. The other clones go on with finite state through a stretch of pose solves that include the faulted
+    clone. After a reset, the faulted clone steps again with no fault.
     """
     env.reset(_TOKEN)
+    holds = dict.fromkeys(range(env.num_slots), _HOLD)
+    for _ in range(_SETTLE_STEPS):  # past RoboLab's first two steps, where a termination resets a clone in place
+        env.step(holds)
     robot = env._robot
     faulted = env.num_slots - 1
-    nan = torch.full_like(robot.data.joint_pos[faulted : faulted + 1], float('nan'))
-    robot.write_joint_state_to_sim(nan, torch.zeros_like(nan), env_ids=torch.tensor([faulted], device=env._env.device))
+    others = [slot for slot in range(env.num_slots) if slot != faulted]
+    # An infinite joint velocity makes the physics step leave the clone's joints not finite.
+    q = robot.data.joint_pos[faulted : faulted + 1].clone()
+    inf = torch.full_like(q, float('inf'))
+    robot.write_joint_state_to_sim(q, inf, env_ids=torch.tensor([faulted], device=env._env.device))
+    frames = env.step(holds)[protocol.SLOTS]
+    frame = frames[faulted]
+    assert not torch.isfinite(env._measured_q()[faulted]).all(), 'the physics step left the clone finite'
+    assert frame[protocol.FRAME_DONE] and not frame[protocol.FRAME_SUCCESS], f'clone {faulted} did not end'
+    assert frame.get(keys.FRAME_FAULT) == keys.FAULT_NONFINITE_ARM, f'clone {faulted} ended with {sorted(frame)}'
     pos, quat = (values.cpu() for values in env._eef_pose())
     poses = {
         slot: protocol.single_arm_action(
@@ -463,18 +490,17 @@ def _check_a_clone_that_faults(env: RobolabEnv) -> None:
         )
         for slot in range(env.num_slots)
     }
-    others = [slot for slot in range(env.num_slots) if slot != faulted]
-    for _ in range(3):
+    for _ in range(_HOLD_STEPS):
         frames = env.step(poses)[protocol.SLOTS]
-        frame = frames[faulted]
-        assert frame[protocol.FRAME_DONE] and not frame[protocol.FRAME_SUCCESS], f'clone {faulted} did not end'
-        assert protocol.FRAME_FAULT in frame, f'clone {faulted} ended with no fault: {sorted(frame)}'
-        ended = [slot for slot in others if frames[slot][protocol.FRAME_DONE] or protocol.FRAME_FAULT in frames[slot]]
+        assert keys.FRAME_FAULT in frames[faulted], f'clone {faulted} lost its fault'
+        ended = [slot for slot in others if frames[slot][protocol.FRAME_DONE] or keys.FRAME_FAULT in frames[slot]]
         assert not ended, f'clones {ended} ended, but only clone {faulted} faulted'
-        applied = env._env.action_manager.action[others, :7]
-        assert torch.isfinite(applied).all(), 'a clone that did not fault was commanded a value that is not finite'
+        assert torch.isfinite(env._measured_q()[others]).all(), 'a clone that did not fault lost its finite joints'
     env.reset(_TOKEN)
-    assert not env._faulted.any(), f'a reset left faulted clones {env._faulted.nonzero().flatten().tolist()}'
+    frames = env.step(holds)[protocol.SLOTS]
+    assert torch.isfinite(env._measured_q()[faulted]).all(), f'clone {faulted} kept joints that are not finite'
+    assert not frames[faulted][protocol.FRAME_DONE], f'clone {faulted} ended in the first step after a reset'
+    assert keys.FRAME_FAULT not in frames[faulted], f'clone {faulted} kept its fault after a reset'
     print(f'  fault: OK (clone {faulted} of {env.num_slots} faulted and ended alone as a failure; a reset clears it)')
 
 
@@ -534,6 +560,7 @@ def main() -> None:
     failures = _run_cartesian_cases(env)
     _check_cartesian_delta(env)
     _check_an_episode_length_replaces_the_budget(env)
+    _check_a_command_that_is_not_finite_holds(env)
     _check_a_clone_that_faults(env)
     env.close()
     if args.num_envs > 1:
