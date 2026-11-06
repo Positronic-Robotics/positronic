@@ -206,10 +206,11 @@ Each kind carries its own locator:
 - A record carries no URL. A `url` field is refused. A scheme in `host` is refused.
 - The kinds refuse each other's fields. An entry carries one answer to each question.
 
-A `remote` endpoint may state `max_concurrent_sessions`, an integer of 1 or more. The platform then
-holds at most that many sessions open to the policy at once. A server that serves one session at a
-time states 1. With no value, the platform picks the count. Only an entry that names its `address`
-states it: a label on a task takes the value of the plan endpoint it names.
+A `remote` or an `image` endpoint may state `max_concurrent_sessions`, an integer of 1 or more. The
+platform then holds at most that many sessions open to the policy at once. A server that serves one
+session at a time states 1. With no value, the platform picks the count. Only an entry that names
+its `address` or its `image` states it: a label on a task takes the value of the plan endpoint it
+names. A `served` endpoint states no limit: the platform serves that policy and opens its sessions.
 
 An `image` endpoint may state `min_vram_gb`, the least GPU memory the image needs, in GB of 10^9
 bytes. The platform gives the run the smallest GPU slice that holds it. With no value, the image gets

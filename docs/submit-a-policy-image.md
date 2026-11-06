@@ -225,7 +225,8 @@ What the platform does with the credential:
    answer. A 25 GB image takes about 10 minutes to pull.
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token. A
    competition run plays up to 12 episodes at the same time, so up to 12 sessions are open at the same
-   time. The server must answer all of them, with one state for each session.
+   time. The server must answer all of them, with one state for each session. A plan outside the
+   competition can state a lower count ([Session limit](#session-limit)).
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `1g.24gb` slice of an RTX PRO 6000: 24192 MiB of VRAM and a quarter of the card's
@@ -398,6 +399,23 @@ docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1 \
 
 The platform sees the same `401` or `404`: the credential does not read the image, or the name is
 wrong.
+
+### Session limit
+
+An `image` endpoint may state `max_concurrent_sessions`: the most sessions the platform holds open to
+the image at the same time, an integer of 1 or more. A server that answers one session at a time
+states 1. The platform then plays fewer episodes at the same time, and the run takes longer. With no
+value, a run may open up to 12 sessions. A competition run keeps the published count: a competition
+plan that states `max_concurrent_sessions` is refused.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    wire: websocket
+    image: docker.io/<you>/<image>@sha256:<digest>
+    max_concurrent_sessions: 1
+```
 
 ## Submit
 
