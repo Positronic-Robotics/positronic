@@ -266,6 +266,28 @@ jobs:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
         run: uv run pytest positronic/vendors/molmoact2/tests
 
+  yam:
+    # The YAM driver reads private members of i2rt's chain; this job runs its tests against the pinned i2rt
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable caching
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv venv --python 3.13
+
+      - name: Install dependencies
+        run: uv sync --locked --extra yam
+
+      - name: Run YAM driver tests against i2rt
+        env:
+          PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
+        run: uv run pytest positronic/drivers/roboarm/tests/test_yam.py
+
   lockfile-portability:
     strategy:
       fail-fast: false

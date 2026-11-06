@@ -20,3 +20,6 @@ EE_MASS = 'ee_mass'
 # The Coulomb friction torque per joint that an arm's controller adds, in Nm, and whether it adds it.
 COULOMB_FRICTION = 'coulomb_friction'
 USE_COULOMB_FRICTION = 'use_coulomb_friction'
+# How an arm's controller fades that friction at low speed, as a dumped ``FrictionFade``: none below one speed and
+# all of it from another, in rad/s. None adds the friction at any speed.
+COULOMB_FRICTION_FADE = 'coulomb_friction_fade'
