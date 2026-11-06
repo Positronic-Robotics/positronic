@@ -42,18 +42,21 @@ from pimm.tests.testing import MockClock
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, Time
 from pimm.utils import map as pimm_map
 from pimm.world import (
+    _PACE_MAX_LAG_NS,
     BackgroundProcessError,
     LocalQueueEmitter,
     MultiprocessEmitter,
     MultiprocessReceiver,
     StopFlagReceiver,
     SystemClock,
+    TimeMode,
     TransportMode,
     VirtualClock,
     World,
     _bg_wrapper,
     _stop_when_orphaned,
     _StopFlag,
+    _WallPace,
 )
 
 
@@ -63,7 +66,7 @@ def _new_stop_flag() -> _StopFlag:
 
 @pytest.mark.parametrize('transport', ['local', 'queue', 'shared_memory'])
 def test_message_times_are_snapshots_of_emission_and_first_delivery(transport):
-    with World(virtual_time=True) as world:
+    with World(time_mode=TimeMode.VIRTUAL) as world:
         if transport == 'local':
             emitter, receiver = world.local_pipe()
         else:
@@ -140,7 +143,7 @@ def test_fanout_preserves_emission_but_stamps_each_receiver(monkeypatch):
 
     wall = iter(range(100, 200))
     monkeypatch.setattr('pimm.time.time.monotonic_ns', lambda: next(wall))
-    with World(virtual_time=True) as world:
+    with World(time_mode=TimeMode.VIRTUAL) as world:
         first_receiver = world.pair(system.emitter, emitter_wrapper=pimm_map(increment))
         second_receiver = world.pair(system.emitter)
         world.start(system)
@@ -157,12 +160,12 @@ def test_fanout_preserves_emission_but_stamps_each_receiver(monkeypatch):
         assert cached is not None and cached.time == first.time
 
 
-@pytest.mark.parametrize('virtual_time', [False, True])
-def test_background_endpoints_have_world_time_only_on_hardware(monkeypatch, virtual_time):
+@pytest.mark.parametrize('time_mode', list(TimeMode))
+def test_background_endpoints_have_world_time_only_on_hardware(monkeypatch, time_mode):
     main = DummyControlSystem('main')
     background = DummyControlSystem('background')
     monkeypatch.setattr(World, 'start_in_subprocess', lambda *args, **kwargs: None)
-    with World(virtual_time=virtual_time) as world:
+    with World(time_mode=time_mode) as world:
         world.connect(background.emitter, main.receiver)
         world.connect(main.emitter, background.receiver)
         world.start(main, background)
@@ -171,7 +174,7 @@ def test_background_endpoints_have_world_time_only_on_hardware(monkeypatch, virt
         received_in_main = main.receiver.read()
         received_in_background = background.receiver.read()
         assert received_in_main is not None and received_in_background is not None
-        if virtual_time:
+        if time_mode is not TimeMode.WALL:
             assert set(received_in_main.time) == {EMITTED_WALL, RECEIVED_WALL, RECEIVED_WORLD}
             assert set(received_in_background.time) == {EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL}
         else:
@@ -187,7 +190,7 @@ def test_emitter_wrapper_follows_the_clock_bound_after_its_creation():
         return value
 
     wrapped = pimm_map(identity)(system.emitter)
-    with World(virtual_time=True) as world:
+    with World(time_mode=TimeMode.VIRTUAL) as world:
         receiver = world.pair(system.emitter)
         world.start(system)
         wrapped.emit(42)
@@ -310,7 +313,7 @@ class TestStopFlagReceiver:
 
 
 class TestVirtualClock:
-    """Under virtual_time the World owns a VirtualClock and advances it itself."""
+    """Under a virtual or a paced time mode the World owns a VirtualClock and advances it itself."""
 
     def test_advance_to_moves_forward_monotonically(self):
         clock = VirtualClock()
@@ -323,13 +326,49 @@ class TestVirtualClock:
         clock.advance_to_ns(750_000_000)
         assert clock.now_ns() == 750_000_000
 
-    def test_world_virtual_time_creates_virtual_clock(self):
-        with World(virtual_time=True) as world:
+    @pytest.mark.parametrize('time_mode', [TimeMode.VIRTUAL, TimeMode.PACED])
+    def test_world_virtual_time_creates_virtual_clock(self, time_mode):
+        with World(time_mode=time_mode) as world:
             assert isinstance(world.clock, VirtualClock)
 
     def test_world_defaults_to_system_clock(self):
         with World() as world:
             assert isinstance(world.clock, SystemClock)
+
+    def test_pace_waits_until_wall_time_reaches_the_clock(self):
+        clock, wall = MockClock(), MockClock(start_time=100.0)
+        pace = _WallPace(clock, wall)
+        assert pace.wait_ns() == 0
+        clock.advance(0.01)
+        assert pace.wait_ns() == pytest.approx(10_000_000, abs=1)
+        wall.advance(0.01)
+        assert pace.wait_ns() == 0
+
+    def test_pace_keeps_a_lag_inside_the_bound(self):
+        clock, wall = MockClock(), MockClock()
+        pace = _WallPace(clock, wall)
+        pace.wait_ns()
+        wall.advance(0.03)
+        assert pace.wait_ns() == 0
+        clock.advance(0.04)
+        assert pace.wait_ns() == pytest.approx(10_000_000, abs=1)
+
+    def test_pace_drops_a_lag_past_the_bound(self):
+        clock, wall = MockClock(), MockClock()
+        pace = _WallPace(clock, wall)
+        pace.wait_ns()
+        wall.advance(0.2)
+        assert pace.wait_ns() == 0
+        clock.advance(0.2)
+        assert pace.wait_ns() == pytest.approx(200_000_000 - _PACE_MAX_LAG_NS, abs=1)
+
+    def test_paced_world_does_not_run_ahead_of_wall_time(self):
+        with World(time_mode=TimeMode.PACED) as world:
+            start = time.monotonic()
+            world.run(Finisher(rounds=20))
+            assert world.clock.now() == pytest.approx(0.2)
+            # The pace anchors at the first wake, 0.01 s into virtual time.
+            assert time.monotonic() - start >= 0.19
 
 
 # Module scope: `start_in_subprocess` pickles the loop to reach a spawned child, and a definition inside
@@ -673,7 +712,7 @@ class TestWorldControlSystems:
             captured['wrapper'] = recording
             return recording
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             if wrapped_first:
                 mirrored = world.pair(system.emitter, emitter_wrapper=wrapper)
                 unwrapped = world.pair(system.emitter)
@@ -708,7 +747,7 @@ class TestWorldControlSystems:
         system = DummyControlSystem('loop')
         wrapper = Mock(side_effect=lambda receiver: receiver)
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             mirrored = world.pair(system.receiver, receiver_wrapper=wrapper)
 
             assert isinstance(mirrored, ControlSystemEmitter)
@@ -735,7 +774,7 @@ class TestWorldControlSystems:
     def test_start_sets_up_local_connections(self):
         producer = DummyControlSystem('producer')
         consumer = DummyControlSystem('consumer')
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.connect(producer.emitter, consumer.receiver)
 
             scheduler = world.start([producer, consumer])
@@ -779,7 +818,7 @@ class TestWorldControlSystems:
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.connect(background_cs.emitter, main_cs.receiver)
 
             scheduler = world.start(main_process=main_cs, background=background_cs)
@@ -819,7 +858,7 @@ class TestWorldControlSystems:
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.connect(main_cs.emitter, background_cs.receiver)
 
             scheduler = world.start(main_process=main_cs, background=background_cs)
@@ -851,7 +890,7 @@ class TestWorldControlSystems:
 
         monkeypatch.setattr(World, 'start_in_subprocess', fake_start_in_subprocess)
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             scheduler = world.start([], background=background_cs)
 
             assert [loop.cs for (loop,) in started_background] == [background_cs]
@@ -1011,7 +1050,7 @@ class TestWorldInterleave:
     def test_single_loop(self):
         """Test interleaving with multiple scenarios: single loop, multiple loops, timing, and scheduling."""
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             execution_order = []
 
             # Test single loop
@@ -1033,7 +1072,7 @@ class TestWorldInterleave:
     def test_two_loops(self):
         execution_order = []
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
 
             def loop_a(stop_reader, clock):
                 for i in range(2):
@@ -1058,7 +1097,7 @@ class TestWorldInterleave:
             assert world.should_stop
 
     def test_no_loops(self):
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             sleep_times = list(world.interleave())
             assert len(sleep_times) == 0
             assert not world.should_stop
@@ -1066,7 +1105,7 @@ class TestWorldInterleave:
         # Test exception handling
 
     def test_failing_loop(self):
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             execution_order = []
 
             def failing_loop(stop_reader, clock):
@@ -1084,7 +1123,7 @@ class TestWorldInterleave:
     def test_interleave_stop_behavior(self):
         """Test stop flag behavior: early stopping and completion detection."""
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             execution_order = []
 
             def stop_checking_loop(stop_reader, clock):
@@ -1119,7 +1158,7 @@ class TestWorldInterleave:
     def test_interleave_scheduling_order(self):
         """Test that loops are scheduled in the correct order based on their sleep times."""
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             execution_order = []
 
             def loop_a(stop_reader, clock):
@@ -1165,7 +1204,7 @@ class TestWorldInterleave:
                 execution_order.append(f'c_{i}')
                 yield Sleep(0.3)
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             for _ in world.interleave(loop_a, loop_b):
                 pass
             original_order = execution_order.copy()
@@ -1189,7 +1228,7 @@ class TestWorldInterleave:
                 execution_order.append(f'b_{i}')
                 yield Yield()
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             for _ in world.interleave(loop_a, loop_b):
                 pass
             original_order = execution_order.copy()
@@ -1205,7 +1244,7 @@ class TestWorldInterleave:
             while True:
                 yield Yield()
 
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             rounds = world.interleave(yield_forever)
             with caplog.at_level(logging.WARNING):
                 for _ in range(5):
@@ -1743,7 +1782,7 @@ def test_world_keeps_the_timeout_for_ordinary_control_systems(monkeypatch):
 def test_world_finishes_protected_foreground_shutdown_on_context_exit():
     ready, holding, release, closed = (threading.Event() for _ in range(4))
     release.set()
-    with World(virtual_time=True) as world:
+    with World(time_mode=TimeMode.VIRTUAL) as world:
         loop = world.start(ShutdownWaiter(ready, holding, release, closed))
         next(loop)
         assert ready.is_set()
@@ -1771,7 +1810,7 @@ def test_sibling_failure_closes_ordinary_foreground_loops_on_the_owner_thread(fa
             raise failure
 
     with pytest.raises(type(failure)) as raised:
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.run([Holding(), Failing()])
     assert raised.value is failure
     assert closed == [owner]
@@ -1821,7 +1860,7 @@ def test_context_exit_closes_a_retained_foreground_scheduler(start_control_syste
 
     expected = nullcontext() if failure is None else pytest.raises(type(failure))
     with expected:
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             fast, slow = Holding(0.01), Holding(3600)
             scheduler = world.start([fast, slow]) if start_control_system else world.interleave(fast.run, slow.run)
             next(scheduler)
@@ -1850,7 +1889,7 @@ def test_context_exit_closes_an_unstarted_foreground_scheduler(start_control_sys
 
     expected = nullcontext() if failure is None else pytest.raises(type(failure))
     with expected:
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             holding = Holding()
             scheduler = world.start(holding) if start_control_system else world.interleave(holding.run)
             assert initialized == []
@@ -1883,7 +1922,7 @@ def test_closing_a_foreground_scheduler_raises_only_its_cleanup_error(start_cont
 
     ordinary = Holding()
     failing_close = Holding(close_error)
-    with World(virtual_time=True) as world:
+    with World(time_mode=TimeMode.VIRTUAL) as world:
         scheduler = (
             world.start([ordinary, failing_close])
             if start_control_system
@@ -1924,7 +1963,7 @@ def test_foreground_cleanup_errors_remain_visible_through_world_exit(
                 closed.append((self.index, threading.get_ident()))
                 raise errors[self.index]
 
-    world = World(virtual_time=True)
+    world = World(time_mode=TimeMode.VIRTUAL)
     systems = [Closing(index) for index in range(error_count)]
     scheduler = world.start([*systems]) if start_control_system else world.interleave(*(cs.run for cs in systems))
     assert isinstance(scheduler, Generator)
@@ -1988,7 +2027,7 @@ def test_separate_foreground_schedulers_keep_all_cleanup_errors_at_world_exit(
                 closed.append((self.index, threading.get_ident()))
                 raise errors[self.index]
 
-    world = World(virtual_time=True)
+    world = World(time_mode=TimeMode.VIRTUAL)
     systems = [Closing(index) for index in range(scheduler_count)]
     schedulers = [world.start(system) if start_control_system else world.interleave(system.run) for system in systems]
     stopped_at = world.clock.now()
@@ -2051,7 +2090,7 @@ def test_foreground_close_failure_keeps_the_primary_error_first_and_closes_other
     ordinary = Holding()
     failing_close = Holding(close_error)
     with pytest.raises(BaseExceptionGroup) as raised:
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.run([ordinary, failing_close, Failing()])
     assert raised.value.exceptions == (body_error, close_error)
     assert closed == [(failing_close, owner), (ordinary, owner)]
@@ -2067,7 +2106,7 @@ def test_sibling_failure_does_not_discard_protected_foreground_shutdown(failure)
     ready, holding, release, closed = (threading.Event() for _ in range(4))
     release.set()
     with pytest.raises(type(failure)):
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.run([ShutdownWaiter(ready, holding, release, closed), Failing()])
     assert ready.is_set()
     assert holding.is_set()
@@ -2089,7 +2128,7 @@ def test_foreground_shutdown_failure_still_finishes_other_devices_and_cleans_up(
     waiter = ShutdownWaiter(ready, holding, release, closed)
     join, close, emitter_close, receiver_close = (Mock() for _ in range(4))
     with pytest.raises(error_type, match='shutdown failed'):
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             loop = world.start([FailingShutdown(), waiter], Finisher(1))
             next(loop)
             process = world.background_processes[0]
@@ -2127,7 +2166,7 @@ def test_foreground_shutdown_reports_multiple_base_exceptions_after_draining():
     ready, holding, release, closed = (threading.Event() for _ in range(4))
     release.set()
     with pytest.raises(BaseExceptionGroup) as raised:
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             loop = world.start([
                 *(FailingShutdown(error) for error in errors),
                 ShutdownWaiter(ready, holding, release, closed),
@@ -2140,7 +2179,7 @@ def test_foreground_shutdown_reports_multiple_base_exceptions_after_draining():
 def test_unstarted_protected_foreground_loop_is_not_run_on_exit():
     ready, holding, release, closed = (threading.Event() for _ in range(4))
     release.set()
-    with World(virtual_time=True) as world:
+    with World(time_mode=TimeMode.VIRTUAL) as world:
         world.start(ShutdownWaiter(ready, holding, release, closed))
     assert not ready.is_set()
     assert not holding.is_set()
@@ -2186,7 +2225,7 @@ def test_signals_during_a_protected_park_do_not_interrupt_it(signal_count):
     previous = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         with pytest.raises(KeyboardInterrupt):
-            with World(virtual_time=True) as world:
+            with World(time_mode=TimeMode.VIRTUAL) as world:
                 next(world.start(device))
         assert closed == [device]
         assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
@@ -2215,7 +2254,7 @@ def test_an_earlier_handler_runs_after_protected_shutdown_and_is_restored(signum
 
     previous = signal.signal(signum, handler)
     try:
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             next(world.start(InterruptedShutdown()))
         assert handled == [signum]
         assert signal.getsignal(signum) is handler
@@ -2234,7 +2273,7 @@ def test_an_earlier_sigterm_handler_runs_in_an_unprotected_world_in_place_of_the
 
     previous = signal.signal(signal.SIGTERM, lambda signum, frame: handled.append(signum))
     try:
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.run(Ordinary())
         assert handled == [signal.SIGTERM]
     finally:
@@ -2255,7 +2294,7 @@ def test_a_device_failure_is_raised_in_place_of_the_signal_that_came_with_it():
     previous = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         with pytest.raises(ValueError, match='device failed'):
-            with World(virtual_time=True) as world:
+            with World(time_mode=TimeMode.VIRTUAL) as world:
                 world.run([FailingDevice(), ShutdownWaiter(ready, holding, release, closed)])
         assert closed.is_set()
     finally:
@@ -2315,7 +2354,7 @@ def test_a_signal_interrupts_an_unprotected_world_at_once(signum, effect):
     previous = signal.signal(signum, signal.default_int_handler if signum == signal.SIGINT else signal.SIG_DFL)
     try:
         with pytest.raises(effect):
-            with World(virtual_time=True) as world:
+            with World(time_mode=TimeMode.VIRTUAL) as world:
                 world.run(Ordinary())
         assert reached == []
     finally:

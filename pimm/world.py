@@ -18,7 +18,7 @@ import time
 import traceback
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
-from enum import IntEnum
+from enum import Enum, IntEnum
 from multiprocessing import resource_tracker
 from multiprocessing.context import BaseContext
 from multiprocessing.managers import SyncManager
@@ -593,18 +593,53 @@ class BackgroundProcessError(RuntimeError):
         return f'{process} exited with code {self.exitcode}'
 
 
+class TimeMode(Enum):
+    """How the clock of a World moves."""
+
+    WALL = 'wall'  # a SystemClock: time passes on its own (real hardware)
+    VIRTUAL = 'virtual'  # a VirtualClock the World advances as fast as the machine allows (simulation)
+    PACED = 'paced'  # a VirtualClock the World holds at or behind wall time (simulation with a person in the loop)
+
+
+# How far a paced world lets virtual time fall behind wall time before it drops the rest of the lag. A sleep wakes late
+# by a fraction of a millisecond, so a smaller bound loses that each step and the world runs slower than wall time.
+_PACE_MAX_LAG_NS = 50_000_000
+
+
+class _WallPace:
+    """The wall time to wait so that a virtual clock does not run ahead of a wall clock.
+
+    A lag behind wall time past ``_PACE_MAX_LAG_NS`` is dropped, so the clock never runs fast to make up for it.
+    """
+
+    def __init__(self, clock: Clock, wall: Clock):
+        self._clock = clock
+        self._wall = wall
+        self._offset_ns: int | None = None  # wall time minus virtual time, set at the first wait
+
+    def wait_ns(self) -> int:
+        wall_ns, now_ns = self._wall.now_ns(), self._clock.now_ns()
+        if self._offset_ns is None:
+            self._offset_ns = wall_ns - now_ns
+        ahead_ns = now_ns + self._offset_ns - wall_ns
+        if ahead_ns < -_PACE_MAX_LAG_NS:
+            self._offset_ns -= ahead_ns + _PACE_MAX_LAG_NS
+        return max(0, ahead_ns)
+
+
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self, *, virtual_time: bool = False):
+    def __init__(self, *, time_mode: TimeMode = TimeMode.WALL):
         # Enforce "spawn" multiprocessing context. This makes process boundaries explicit:
         # background control systems must be picklable, and fork-only implicit state sharing
         # is disallowed (catching many cross-process foot-guns early).
         self._mp_ctx = mp.get_context('spawn')
 
-        # virtual_time runs a VirtualClock the world advances itself (simulation); otherwise a SystemClock
-        # follows wall time (real hardware). This single flag is the only sim-vs-real switch.
-        self._clock: Clock = VirtualClock() if virtual_time else SystemClock()
+        # time_mode is the only sim-vs-real switch.
+        self._time_mode = time_mode
+        self._clock: Clock = SystemClock() if time_mode is TimeMode.WALL else VirtualClock()
+        self._pace = _WallPace(self._clock, SystemClock()) if time_mode is TimeMode.PACED else None
 
         self._stop_flag = _StopFlag(self._mp_ctx)
         self.background_processes = []
@@ -680,9 +715,9 @@ class World:
             signal.default_int_handler(signum, frame)
 
     def _drive(self, loop: Iterator[Command]) -> None:
-        real_time = not isinstance(self._clock, VirtualClock)
+        wait = self._time_mode is not TimeMode.VIRTUAL
         for command in loop:
-            if real_time:
+            if wait:
                 # Sleep its duration; a Yield() becomes sleep(0) — an OS yield, not a busy-spin.
                 time.sleep(command.seconds if isinstance(command, Sleep) else 0)
 
@@ -806,7 +841,9 @@ class World:
         In a virtual-time world the world owns the clock and advances it here, so
         simulated time runs as fast as the machine allows. In a wall-clock world time
         passes on its own; the yielded ``Sleep`` is the wait the caller honours so each
-        loop keeps its real rate (a ``Yield`` means "no wait, run again now").
+        loop keeps its real rate (a ``Yield`` means "no wait, run again now"). A paced
+        world advances its clock here too, and the yielded ``Sleep`` is the wall time to
+        wait so that the clock does not run ahead of wall time.
 
         When a loop finishes (``StopIteration``) the stop flag is set so the others can
         observe ``should_stop`` and exit. The iterator ends once no loop is left. A BACKGROUND
@@ -901,6 +938,8 @@ class World:
 
             wait_ns = max(0, target_ns - self._clock.now_ns())
             self._advance_to(target_ns)
+            if self._pace is not None:
+                wait_ns = self._pace.wait_ns()
             yield Sleep(wait_ns / 1e9) if wait_ns else Yield()
 
     def connect(
@@ -1141,7 +1180,7 @@ class World:
     ) -> None:
         """Drive the cooperative scheduler to completion.
 
-        On a wall-clock world, honour each yielded ``Sleep`` so loops keep their real
+        On a wall-clock or a paced world, honour each yielded ``Sleep`` so loops keep their real
         rate. On a virtual-time world the clock is advanced inside ``interleave``, so
         there is nothing to wait for — just pump as fast as the machine allows.
 

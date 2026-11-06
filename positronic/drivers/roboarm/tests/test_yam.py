@@ -1031,7 +1031,7 @@ def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
 def test_world_exit_parks_a_foreground_yam_before_closing():
     vendor = FakeYam()
     driver = yam.Robot(connect=lambda channel, sim, compensation: vendor)
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         loop = world.start(driver)
         for _ in range(150):
             next(loop)
@@ -1054,7 +1054,7 @@ def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it(monkeypa
 
     monkeypatch.setattr(yam._Kinematics, 'fk', fk_once_failing)
     with pytest.raises(ValueError, match='forward kinematics failed'):
-        with pimm.World(virtual_time=True) as world:
+        with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
             loop = world.start(driver)
             for _ in range(1000):  # past the start move, into the command loop
                 next(loop)
@@ -1343,7 +1343,7 @@ def test_unstarted_foreground_yam_does_not_connect_on_world_exit():
         connections.append(vendor)
         return vendor
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         world.start(yam.Robot(connect=connect))
     assert not connections
 
@@ -1951,7 +1951,7 @@ def _a_trial_after_a_closed_trial(rig: Embodiment, prepare_args: dict, sides: li
 
     ``sides`` holds the suffix of each arm's ``grip`` and ``target_grip`` signals.
     """
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         close = {s: world.pair(rig.commands[f'{keys.TARGET_GRIP}{s}'].dest) for s in sides}
         grips = {s: world.pair(rig.observations[f'{keys.GRIP}{s}'].source) for s in sides}
         prepare = {name: world.pair(handler) for name, handler in rig.prepare_handlers.items()}
@@ -2007,7 +2007,7 @@ class _Idle(Policy):
 def _record_an_episode(rig: Embodiment, root: Path) -> dict[str, Any]:
     """Run one episode of ``_Idle`` on ``rig``, record it under ``root``, and return the statics it recorded."""
     harness, policy = Harness(rig), _Idle()
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         wire.wire_embodiment(world, harness, rig)
         perform = world.pair(harness.perform_task)
         done = world.pair(harness.done)
