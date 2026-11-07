@@ -1071,7 +1071,8 @@ export class PositronicReplay extends HTMLElement {
         element('slot', { name: 'actions' }),
       ]),
       element('div', { part: 'screen-slot' }, [
-        element('div', { part: 'screen-clip' }, [element('div', { part: 'screen' }, [close, playerRoot])]),
+        // A closed screen keeps its height at zero, so `inert` takes its controls out of Tab and the reader.
+        element('div', { part: 'screen-clip', inert: '' }, [element('div', { part: 'screen' }, [close, playerRoot])]),
       ]),
       list,
     );
@@ -1101,6 +1102,7 @@ export class PositronicReplay extends HTMLElement {
     for (const [each, nodes] of this.#rows) nodes.forEach((node) => node.part.toggle('current', each === row));
     this.#play(row, { playing: true });
     this.setAttribute('screen-open', '');
+    this.#part('screen-clip').inert = false;
     this.#showPlaying();
   }
 
@@ -1115,8 +1117,14 @@ export class PositronicReplay extends HTMLElement {
   }
 
   #closeScreen() {
+    const clip = this.#part('screen-clip');
+    // The focus leaves the closing screen for the play button of its row, so it stays on a control in view.
+    if (clip.contains(this.shadowRoot.activeElement)) {
+      this.#rows.get(this.#current)?.[0].querySelector('[part~="episode-play"]').focus();
+    }
     this.#player.stop();
     this.removeAttribute('screen-open');
+    clip.inert = true;
     this.#current = null;
     for (const nodes of this.#rows.values()) nodes.forEach((node) => node.part.remove('current'));
     this.#showPlaying();

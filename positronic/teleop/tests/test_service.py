@@ -511,7 +511,7 @@ def test_a_person_completes_a_trial_on_mujoco_franka_through_a_remote_policy(soc
 
     [episode] = LocalDataset(tmp_path)
     policy_meta = policy_keys.POLICY_META
-    assert episode.static[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+    assert episode.static[eval_keys.ENDED_BY] == eval_keys.EndedBy.POLICY
     assert episode.static[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
     assert episode.static[f'{policy_meta}.{policy_keys.TYPE}'] == 'remote'
     assert episode.static[f'{policy_meta}.{policy_keys.SERVER}.{policy_keys.TYPE}'] == 'teleop'
@@ -1035,7 +1035,9 @@ def test_the_next_session_of_a_run_starts_a_new_trial_after_the_last_one_ended(s
         _until_cleared(service)
         second = _readied_run(service, headset, runtime, socket_path)
         assert service.phase is Phase.RUNNING
-        _drive(second, 0.2)
+        # Two moves: the service keeps a trial whose session ends after one frame.
+        _drive_until(second, _is_move)
+        _drive_until(second, _is_move)
         second.close()
         _until_cleared(service)
 

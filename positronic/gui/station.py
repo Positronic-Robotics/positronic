@@ -31,14 +31,14 @@ Verdict = Literal[Outcome.PASS, Outcome.FAIL]
 
 def terminal_payload(verdict: Verdict) -> dict[str, Any]:
     """The ``done`` payload that ends an episode with ``verdict``. The harness records it in the episode's statics."""
-    return {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: verdict is Outcome.PASS}
+    return {eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: verdict is Outcome.PASS}
 
 
 def outcome_of(result: dict[str, Any]) -> Outcome:
     """The outcome that the harness's answer to an episode carries."""
     if not result[eval_keys.TERMINATED]:
         return Outcome.TIMEOUT
-    if result.get(eval_keys.ENDED_BY) == eval_keys.ENDED_BY_POLICY:
+    if result.get(eval_keys.ENDED_BY) == eval_keys.EndedBy.POLICY:
         return Outcome.POLICY_ENDED
     return Outcome.PASS if result[eval_keys.SUCCESS] else Outcome.FAIL
 
