@@ -444,29 +444,6 @@ def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
     print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
-def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
-    """A NaN joint target, a NaN pose and a NaN grip hold, as the rig's driver does. No fault, and the joints stay
-    finite."""
-    env.reset(_TOKEN)
-    for _ in range(_SETTLE_STEPS):  # past RoboLab's first two steps, where a termination resets a clone in place
-        _step(env, _HOLD)
-    nan = np.full(7, np.nan, dtype=np.float32)
-    commands = {
-        'joint target': {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: nan},
-        'pose': {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.full(12, np.nan, np.float32)},
-    }
-    for name, command in commands.items():
-        measured = env._measured_q()[0].clone()
-        grip = float(env._grip[0])
-        frame = _step(env, protocol.single_arm_action(command, float('nan')))
-        applied = env._env.action_manager.action[0]
-        assert torch.equal(applied[:7], measured), f'a NaN {name} was applied as {applied[:7].tolist()}'
-        assert float(applied[7]) == grip, f'a NaN grip was applied as {float(applied[7])}, not the last grip {grip}'
-        assert not frame[protocol.FRAME_DONE] and keys.FRAME_FAULT not in frame, f'a NaN {name} ended the episode'
-        assert torch.isfinite(env._measured_q()[0]).all(), f'a NaN {name} left the joints not finite'
-    print(f'  NaN command: OK ({" and ".join(commands)} held the measured joints, a NaN grip kept the last grip)')
-
-
 def _check_a_clone_that_faults(env: RobolabEnv) -> None:
     """The arm state of the last clone stops being finite in a step. That frame ends the clone alone, as a failure
     with ``fault``. The other clones go on with finite state through a stretch of pose solves that include the faulted
@@ -551,6 +528,29 @@ def _check_batch(num_envs: int) -> None:
     _check_a_recorded_state_reaches_every_clone(env)
     _check_a_clone_that_faults(env)
     env.close()
+
+
+def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
+    """A NaN joint target, a NaN pose and a NaN grip hold, as the rig's driver does. No fault, and the joints stay
+    finite."""
+    env.reset(_TOKEN)
+    for _ in range(_SETTLE_STEPS):  # past RoboLab's first two steps, where a termination resets a clone in place
+        _step(env, _HOLD)
+    nan = np.full(7, np.nan, dtype=np.float32)
+    commands = {
+        'joint target': {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: nan},
+        'pose': {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.full(12, np.nan, np.float32)},
+    }
+    for name, command in commands.items():
+        measured = env._measured_q()[0].clone()
+        grip = float(env._grip[0])
+        frame = _step(env, protocol.single_arm_action(command, float('nan')))
+        applied = env._env.action_manager.action[0]
+        assert torch.equal(applied[:7], measured), f'a NaN {name} was applied as {applied[:7].tolist()}'
+        assert float(applied[7]) == grip, f'a NaN grip was applied as {float(applied[7])}, not the last grip {grip}'
+        assert not frame[protocol.FRAME_DONE] and keys.FRAME_FAULT not in frame, f'a NaN {name} ended the episode'
+        assert torch.isfinite(env._measured_q()[0]).all(), f'a NaN {name} left the joints not finite'
+    print(f'  NaN command: OK ({" and ".join(commands)} held the measured joints, a NaN grip kept the last grip)')
 
 
 def main() -> None:
