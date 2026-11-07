@@ -263,12 +263,15 @@ class WebXR(pimm.ControlSystem):
         async def video_stream(websocket: WebSocket):
             await websocket.accept()
             logger.info('Video WebSocket connection accepted')
+            # The page sends nothing on `/video`, so the first message it receives is the disconnect. Without a
+            # receive, a closed socket stays unseen until the next frame goes out.
+            closed = asyncio.ensure_future(websocket.receive())
             try:
                 # The video needs libturbojpeg, and the page does not. So the encoder loads only here.
                 jpeg_encoder = turbojpeg.TurboJPEG()
                 fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_time = None
-                while not should_stop.value:
+                while not should_stop.value and not closed.done():
                     await asyncio.sleep(1 / 60)
 
                     msg = self._next_frame(last_sent_time)
@@ -282,6 +285,7 @@ class WebXR(pimm.ControlSystem):
                 logger.error(f'Video WebSocket error: {e}')
                 logger.error(traceback.format_exc())
             finally:
+                closed.cancel()
                 logger.info('Video WebSocket connection closed')
 
     def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
