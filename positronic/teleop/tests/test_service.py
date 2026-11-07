@@ -794,7 +794,7 @@ class _PagePassingASampleAtEachPoll:
         if request.path != STATE_PATH:
             return None
         if self._latest is not None:
-            positions, buttons = webxr._parse_controller_data(self._latest)
+            positions, buttons = webxr.parse_controller_message(self._latest)
             right = buttons[webxr.RIGHT]
             self._service.take_sample(positions[webxr.RIGHT], None if right is None else right.tolist())
         state = self._service.state()

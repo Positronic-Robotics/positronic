@@ -482,7 +482,7 @@ def test_the_page_state_is_empty_until_something_sends_one(world):
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
     message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0]})
-    positions, buttons = webxr._parse_controller_data(json.loads(json.dumps(message)))
+    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
     assert positions[webxr.LEFT] is None and buttons[webxr.LEFT] is None
     right, right_buttons = positions[webxr.RIGHT], buttons[webxr.RIGHT]
     assert right is not None and right_buttons is not None
