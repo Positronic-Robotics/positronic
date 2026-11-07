@@ -80,6 +80,12 @@ class EndedBy(StrEnum):
     STATION = 'station'
 
 
+# The names of two members before `EndedBy`. An older positronic-evals, installed beside a newer
+# positronic, imports them from here.
+ENDED_BY_OPERATOR = EndedBy.OPERATOR
+ENDED_BY_POLICY = EndedBy.POLICY
+
+
 class PolicyEnd(StrEnum):
     """What a policy says about its attempt when it ends the trial. A recorded value never changes."""
 
