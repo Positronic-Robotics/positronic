@@ -214,8 +214,7 @@ def _countdown_eval(producer: _CountdownProducer, timeout: float) -> Eval:
             keys.TARGET_GRIP: Command(producer.commands[keys.TARGET_GRIP], None),
         },
         prepare_handlers={eval_keys.SCENE: producer.env_reset},
-        # A rig that states frames carries the model they name.
-        static_meta={**ROBOT_STATIC_META, roboarm_keys.URDF: bundled_panda_model()[roboarm_keys.URDF]},
+        static_meta=dict(ROBOT_STATIC_META),
         meta_source=producer.robot_meta,
         control_systems=(producer,),
         simulated=True,
