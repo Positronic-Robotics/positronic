@@ -252,7 +252,7 @@ def test_an_interrupted_world_flushes_telemetry_before_its_exception_is_released
             yield pimm.Sleep(0.01)
             raise failure
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         recording_loop = recording(world.should_stop_reader(), world.clock)
         try:
             with pytest.raises(RuntimeError) as raised:

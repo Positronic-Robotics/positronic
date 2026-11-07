@@ -7,7 +7,7 @@ import pytest
 from pimm.calls import Answer, CallerDict, ControlSystemCaller, ControlSystemHandler, HandlerStopped, all_of, raise_to
 from pimm.core import ControlSystem, NoValueException, Sleep
 from pimm.tests.testing import Passive, wire_call
-from pimm.world import World
+from pimm.world import TimeMode, World
 
 
 class Adder(ControlSystem):
@@ -245,7 +245,7 @@ class TestWorldConnect:
 
     def test_in_process(self):
         client, adder = Client([(1, 2), (-1, 2), (3, 4)]), Adder(defer=2)
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.connect(client.add, adder.add)
             world.run([client, adder])
         assert client.results[0] == 3 and client.results[2] == 7
@@ -262,7 +262,7 @@ class TestWorldConnect:
     def test_a_handler_whose_system_ends_answers_the_calls_it_never_reached(self):
         """A caller blocked on an answer would wait for the rest of the run, and the answer is never coming."""
         client, deaf = Client([(1, 2)]), Deaf()
-        with World(virtual_time=True) as world:
+        with World(time_mode=TimeMode.VIRTUAL) as world:
             world.connect(client.add, deaf.add)
             world.run([client, deaf])
         assert isinstance(client.results[0], HandlerStopped)

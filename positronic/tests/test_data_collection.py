@@ -38,7 +38,7 @@ from positronic.tests.testing_inference import free_port
 # TODO: Move these fixtures into a common module so that others can reuse them.
 @pytest.fixture
 def world():
-    with pimm.World(virtual_time=True) as w:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as w:
         yield w
 
 
@@ -501,7 +501,7 @@ def test_data_collection_with_mujoco_robot_gripper(tmp_path):
     sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
 
     # Virtual time: the sim advances the world clock as physics steps
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         dc = DataCollectionController(
             operator_position=OperatorPosition.FRONT.value, nominal_joints=sim.initial_joints, output_path=tmp_path
         )
@@ -602,7 +602,7 @@ def test_mujoco_runs_a_command_that_pins_a_control_mode(mode):
     target[0] += 0.1
     cmd = roboarm_command.JointPosition(positions=target, mode=mode)
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         commands = world.pair(sim.commands)
         driver = ManualDriver([(lambda: commands.emit(cmd), 0.1)])
         scheduler = world.start([sim, driver])
@@ -622,7 +622,7 @@ def test_mujoco_grip_one_is_closed():
     assert finger_qpos() > 0.03
 
     snapshots = {}
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         target_grip = world.pair(sim.target_grip)
         grip = world.pair(sim.grip)
 

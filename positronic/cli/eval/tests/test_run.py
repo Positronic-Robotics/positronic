@@ -4,11 +4,13 @@ import logging
 import os
 import re
 import sys
+import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
 from itertools import islice
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import Mock
 
 import numpy as np
@@ -39,7 +41,15 @@ from positronic.cfg.eval import number_trials, spec
 from positronic.cfg.eval.real import droid as real_droid
 from positronic.cfg.video_encoder import jetson_h264
 from positronic.cli.account.gateway import CommandFailed, Fault
-from positronic.cli.eval.run import TaskDriver, _pass_span, main, prepare_output_dir, scoped_env_var, timed_pass
+from positronic.cli.eval.run import (
+    TaskDriver,
+    _pass_span,
+    main,
+    prepare_output_dir,
+    run_world,
+    scoped_env_var,
+    timed_pass,
+)
 from positronic.dataset.episode import META_UID, META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.vector import SimpleSignalWriter
@@ -198,7 +208,7 @@ def test_the_driver_asks_for_its_tasks_one_at_a_time():
     tasks = [Task(instruction='stack', timeout_sec=0.05, meta={eval_keys.TRIAL_INDEX: i}) for i in range(2)]
     stub = _EpisodeStub()
     driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         world.connect(driver.perform_task, stub.perform_task)
         for _ in islice(world.start([driver, stub]), 200):
             pass
@@ -228,7 +238,7 @@ class _ScriptedEpisodes(pimm.ControlSystem):
 
 def _drive(tasks: list[Task], episodes: _ScriptedEpisodes) -> None:
     driver = TaskDriver(partial(iter, tasks), _IdlePolicy(), None)
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         world.connect(driver.perform_task, episodes.perform_task)
         for _ in islice(world.start([driver, episodes]), 200):
             pass
@@ -262,7 +272,7 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
     made = [Task(instruction='t', timeout_sec=1.0) for _ in range(2)]
     seen: list[Task] = []
 
-    def capture(policy, evals, output_dir, timing, dataset_factory):
+    def capture(policy, evals, output_dir, timing, pace, dataset_factory):
         seen.extend(evals[0].tasks())
 
     monkeypatch.setattr(run_module, 'main', capture)
@@ -271,6 +281,51 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
     run_command(run_module.run, eval=eval_cfg, policy='a policy', **states)
 
     assert [task.charge_inference_time for task in seen] == [charged, charged]
+
+
+@pytest.mark.parametrize('states, paced', [({}, False), ({'pace': True}, True)])
+def test_a_local_run_passes_its_pace_to_the_sweep(run_command, monkeypatch, states: dict, paced: bool):
+    seen: list[bool] = []
+    monkeypatch.setattr(run_module, 'main', lambda **kwargs: seen.append(kwargs['pace']))
+    eval_cfg = Eval(embodiment=cast(Embodiment, SimpleNamespace(simulated=True)), tasks=partial(iter, []))
+
+    run_command(run_module.run, eval=eval_cfg, policy='a policy', **states)
+
+    assert seen == [paced]
+
+
+class _SleepsOnce(pimm.ControlSystem):
+    """A driver that asks for no task. It sleeps 0.2 s on the clock of its world and times the sleep on wall time."""
+
+    def __init__(self):
+        self.perform_task = pimm.calls.ControlSystemCaller[Rollout, dict[str, Any]](self)
+        self.wall_sec = 0.0
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        start = time.monotonic()
+        yield pimm.Sleep(0.2)
+        self.wall_sec = time.monotonic() - start
+
+
+@pytest.mark.timeout(30.0)
+@pytest.mark.parametrize(
+    'simulated, pace, held', [(True, False, False), (True, True, True), (False, False, True), (False, True, True)]
+)
+def test_a_world_holds_to_wall_time_on_hardware_and_when_a_simulated_run_is_paced(simulated, pace, held):
+    embodiment = Embodiment(
+        descriptor='stub',
+        observations={},
+        commands={},
+        prepare_handlers={},
+        static_meta={},
+        meta_source=None,
+        simulated=simulated,
+    )
+    driver = _SleepsOnce()
+
+    run_world(embodiment, driver, pace=pace)
+
+    assert (driver.wall_sec >= 0.2 - 1e-3) is held
 
 
 SMOKE = 'molmo.franka_pick_mini_smoke'
@@ -288,7 +343,7 @@ def test_local_eval_accepts_a_writer_preset_from_the_cli(run_command, monkeypatc
 def test_a_local_run_of_a_public_eval_runs_the_config_its_definition_names(run_command, monkeypatch):
     seen: list[Eval] = []
     monkeypatch.setattr(
-        run_module, 'main', lambda policy, evals, output_dir, timing, dataset_factory: seen.extend(evals)
+        run_module, 'main', lambda policy, evals, output_dir, timing, pace, dataset_factory: seen.extend(evals)
     )
 
     run_command(run_module.run, eval=SMOKE, policy='a policy')
@@ -303,7 +358,7 @@ def test_a_local_run_of_a_public_eval_prints_the_score_of_the_episodes_it_record
     monkeypatch.setattr(
         run_module,
         'main',
-        lambda policy, evals, output_dir, timing, dataset_factory: _record(output_dir, [True, False, True, True]),
+        lambda policy, evals, output_dir, timing, pace, dataset_factory: _record(output_dir, [True, False, True, True]),
     )
 
     run_command(run_module.run, eval=SMOKE, policy='a policy', output_dir=tmp_path)
@@ -313,7 +368,7 @@ def test_a_local_run_of_a_public_eval_prints_the_score_of_the_episodes_it_record
 
 
 def test_a_local_run_of_a_public_eval_without_an_output_dir_prints_no_score(run_command, monkeypatch, capsys, caplog):
-    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing, dataset_factory: [])
+    monkeypatch.setattr(run_module, 'main', lambda policy, evals, output_dir, timing, pace, dataset_factory: [])
 
     with caplog.at_level(logging.WARNING, logger=run_module.logger.name):
         run_command(run_module.run, eval=SMOKE, policy='a policy')

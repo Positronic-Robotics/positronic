@@ -109,10 +109,17 @@ class TaskDriver(pimm.ControlSystem):
             answer.result()  # a failed episode raises here, and that ends the run
 
 
+def _time_mode(embodiment: Embodiment, pace: bool) -> pimm.TimeMode:
+    if not embodiment.simulated:
+        return pimm.TimeMode.WALL
+    return pimm.TimeMode.PACED if pace else pimm.TimeMode.VIRTUAL
+
+
 def run_world(
     embodiment: Embodiment,
     driver,
     *,
+    pace: bool = False,
     privileged: dict[str, pimm.ControlSystemEmitter] | None = None,
     done: pimm.ControlSystemEmitter | None = None,
 ) -> None:
@@ -123,9 +130,10 @@ def run_world(
     decides from itself, so the runner wires nothing of it but that call. Each rollout supplies its writer,
     or ``None`` to write nothing.
     ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
+    ``pace`` holds a simulated embodiment to wall time, for a person in the loop.
     """
     harness = Harness(embodiment)
-    with pimm.World(virtual_time=embodiment.simulated) as world:
+    with pimm.World(time_mode=_time_mode(embodiment, pace)) as world:
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)
 
@@ -210,6 +218,7 @@ def main(
     evals: list[Eval],
     output_dir: str | Path | None = None,
     timing: bool = False,
+    pace: bool = False,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
 ) -> list[Path]:
     """Run an unattended sweep: a driver walks each eval's tasks, rebuilding the World per eval.
@@ -220,6 +229,8 @@ def main(
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + a machine-load stats
     stream). It needs an ``output_dir`` and an all-simulated sweep: everything under the bound tracer enters
     the report, so a real embodiment in a timed sweep is rejected rather than allowed to pollute it.
+
+    ``pace`` holds each simulated embodiment to wall time, for a person in the loop.
     """
     # Validate timing up front, before the policy warmup, so a rejected sweep fails before it spends anything.
     if timing:
@@ -238,7 +249,11 @@ def main(
             for ev in evals:
                 driver = TaskDriver(ev.tasks, policy, dataset_factory(output_path) if output_path is not None else None)
                 run_world(
-                    ev.embodiment, driver, privileged=ev.privileged if output_path is not None else None, done=ev.done
+                    ev.embodiment,
+                    driver,
+                    pace=pace,
+                    privileged=ev.privileged if output_path is not None else None,
+                    done=ev.done,
                 )
     if output_path is None:
         return []
@@ -340,6 +355,7 @@ def run(
     output_dir=None,
     charge_inference_time: bool = True,
     timing=False,
+    pace: bool = False,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
     policy_image: str | None = None,
     alias: str | None = None,
@@ -373,7 +389,8 @@ def run(
     ``--sample-seed`` picks the draw: the same seed draws the same trials.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
-    simulated eval; reduce them with ``positronic eval timing-report``.
+    simulated eval; reduce them with ``positronic eval timing-report``. ``pace`` holds a simulated eval to wall
+    time, so that a person can teleoperate it; without it, simulated time runs as fast as the machine allows.
 
     A run sent to the platform returns the platform's answer, so a caller holding this function has
     the id without parsing what was printed. A local run's result is the dataset it wrote.
@@ -388,6 +405,7 @@ def run(
         '--output-dir': output_dir,
         '--charge-inference-time': None if charge_inference_time else False,
         '--timing': timing or None,
+        '--pace': pace or None,
         '--dataset-factory': None if dataset_factory is LocalDatasetWriter else dataset_factory,
     }
     platform_only = {
@@ -425,7 +443,12 @@ def run(
             )
         chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
         recorded = main(
-            policy=policy, evals=[chosen], output_dir=output_dir, timing=timing, dataset_factory=dataset_factory
+            policy=policy,
+            evals=[chosen],
+            output_dir=output_dir,
+            timing=timing,
+            pace=pace,
+            dataset_factory=dataset_factory,
         )
         if definition is not None:
             if output_dir is None:

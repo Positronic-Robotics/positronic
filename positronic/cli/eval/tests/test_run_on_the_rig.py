@@ -369,7 +369,8 @@ def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path:
 
 
 @pytest.mark.parametrize(
-    'elsewhere', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}, {'sample_count': 5}]
+    'elsewhere',
+    [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}, {'pace': True}, {'sample_count': 5}],
 )
 def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, tmp_path: Path, elsewhere: dict):
     with pytest.raises(SystemExit, match='a rig run has no'):
@@ -377,7 +378,7 @@ def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_comman
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('switch', [{'timing': False}, {'charge_inference_time': True}])
+@pytest.mark.parametrize('switch', [{'timing': False}, {'charge_inference_time': True}, {'pace': False}])
 def test_a_rig_run_takes_a_switch_stated_at_what_it_already_does(platform, run_command, tmp_path: Path, switch: dict):
     # A switch stated at what a rig run already does reads as one left at its default, so the rig
     # takes it.

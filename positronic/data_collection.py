@@ -1,5 +1,4 @@
 import logging
-import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -355,7 +354,8 @@ def main_sim(
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
     )
 
-    with pimm.World(virtual_time=True) as world:
+    # VR teleop is live, so the world holds virtual time to wall time.
+    with pimm.World(time_mode=pimm.TimeMode.PACED) as world:
         # The sim carries both the arm and the gripper ports, so it fills both slots.
         ds_agent = wire.wire(
             world, data_collection, dataset_factory if output_path is not None else None, camera_emitters, sim, sim, gui
@@ -363,22 +363,7 @@ def main_sim(
         _wire(world, ds_agent, data_collection, webxr, sim, sound)
         world.connect(data_collection.redraw_scene, sim.env_reset)
 
-        sim_iter = world.start([sim, data_collection, ds_agent], [webxr, gui, sound])
-        sim_iter = iter(sim_iter)
-
-        # VR teleop is live, so pace virtual time to wall time: only step the sim when it has fallen behind.
-        start_time = pimm.world.SystemClock().now_ns()
-        sim_start_time = world.clock.now_ns()
-
-        while not world.should_stop:
-            try:
-                time_since_start = pimm.world.SystemClock().now_ns() - start_time
-                if world.clock.now_ns() < sim_start_time + time_since_start:
-                    next(sim_iter)
-                else:
-                    time.sleep(0.001)
-            except StopIteration:
-                break
+        world.run([sim, data_collection, ds_agent], [webxr, gui, sound])
 
 
 main_cfg = cfn.Config(
