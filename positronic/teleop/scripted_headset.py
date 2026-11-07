@@ -13,7 +13,7 @@ import math
 import ssl
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import replace
 from urllib.parse import urlsplit
 
@@ -130,10 +130,7 @@ class _Page:
     def phase(self) -> Phase:
         return self.state().phase
 
-    def until(self, phases: Sequence[Phase]) -> Phase:
-        return self.until_state(lambda state: state.phase in phases).phase
-
-    def until_state(self, condition: Callable[[PageState], bool]) -> PageState:
+    def until(self, condition: Callable[[PageState], bool]) -> PageState:
         while not condition(state := self.state()):
             time.sleep(_STATE_POLL_SEC)
         return state
@@ -147,13 +144,13 @@ def _press_until(page: _Page, hand: _Hand, button: Button, seen: Callable[[PageS
     """
     logger.info('The scripted headset presses %s', button.name)
     hand.buttons = _buttons(button)
-    state = page.until_state(seen)
+    state = page.until(seen)
     hand.release()
     return state
 
 
 def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
-    page.until([Phase.READY_WAIT])
+    page.until(lambda state: state.phase is Phase.READY_WAIT)
     # A trial that ends at once after Ready, for example by a short timeout, can end before this poll sees it run.
     if _press_until(page, hand, Button.B, lambda state: state.phase is not Phase.READY_WAIT).phase is not Phase.RUNNING:
         logger.warning('The trial ended before the scripted headset saw it run')

@@ -23,8 +23,9 @@ from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import ServedUnixSocket
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
+from websockets.http11 import Request, Response
 from websockets.sync.client import unix_connect
-from websockets.sync.connection import Connection
+from websockets.sync.server import ServerConnection, serve
 
 import pimm
 import positronic.cfg.simulator
@@ -34,6 +35,7 @@ from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers import webxr
 from positronic.drivers.webxr import STATE_PATH, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
@@ -767,33 +769,50 @@ def test_a_scripted_headset_radius_that_is_negative_or_not_finite_is_refused(rad
         scripted_headset.drive(page='http://127.0.0.1:1', trials=1, radius=radius)
 
 
-class _PagePolledByTheHand(scripted_headset._Page):
-    """The page of ``service``, whose bridge passes a sample of ``hand`` to the service only when the scripted headset
-    polls the page state. So the service reads no sample of a press that starts and ends between two polls."""
+class _PagePassingASampleAtEachPoll:
+    """A page of ``service`` that passes the latest sample of the headset to the service only when the page state is
+    polled. So the service reads no sample of a press that starts and ends between two polls."""
 
-    def __init__(self, service: TeleopService, hand: scripted_headset._Hand):
-        super().__init__(cast(httpx.Client, None), hand)
+    def __init__(self, service: TeleopService):
         self._service = service
+        self._latest: dict | None = None
+        self._server = serve(self._take_samples, '127.0.0.1', 0, process_request=self._answer_state)
+        self.url = f'http://127.0.0.1:{self._server.socket.getsockname()[1]}'
 
-    def state(self) -> command.PageState:
-        self._service.take_sample(self._hand._pose(time.monotonic()), self._hand.buttons)
+    def __enter__(self) -> '_PagePassingASampleAtEachPoll':
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._server.shutdown()
+
+    def _take_samples(self, connection: ServerConnection) -> None:
+        for message in connection:
+            self._latest = json.loads(message)
+
+    def _answer_state(self, connection: ServerConnection, request: Request) -> Response | None:
+        if request.path != STATE_PATH:
+            return None
+        if self._latest is not None:
+            positions, buttons = webxr._parse_controller_data(self._latest)
+            right = buttons[webxr.RIGHT]
+            self._service.take_sample(positions[webxr.RIGHT], None if right is None else right.tolist())
         state = self._service.state()
-        return command.PageState(state.phase, state.control)
+        return connection.respond(200, json.dumps(asdict(command.PageState(state.phase, state.control))))
 
 
 @pytest.mark.timeout(30)
 def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(socket_path):
     service = TeleopService(ServedUnixSocket(socket_path), ready_limit=2.0, silence_limit=1.0, hold_sec=HOLD_SEC)
-    hand = scripted_headset._Hand(
-        cast(Connection, None), rate_hz=72.0, view_fps=30.0, min_hold_sec=0.05, radius=0.05, circle_sec=1.0
-    )
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        trial = pool.submit(scripted_headset._trial, _PagePolledByTheHand(service, hand), hand, trial_sec=1.0)
+    with _PagePassingASampleAtEachPoll(service) as page, ThreadPoolExecutor(max_workers=1) as pool:
+        trials = pool.submit(
+            scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
+        )
         service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
         moves = []
         while END not in (element := service.next_frame(FRAME_REQUEST, [])):
             moves.append(element[ACTION][:3])
-        trial.result(timeout=10)
+        trials.result(timeout=10)
     assert element[END] == PolicyEnd.COMPLETE.value
     assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
 
