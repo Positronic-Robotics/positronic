@@ -796,9 +796,38 @@ class _PagePassingASampleAtEachPoll:
         if self._latest is not None:
             positions, buttons = webxr.parse_controller_message(self._latest)
             right = buttons[webxr.RIGHT]
-            self._service.take_sample(positions[webxr.RIGHT], None if right is None else right.tolist())
+            if self._passes(right):
+                self._service.take_sample(positions[webxr.RIGHT], None if right is None else right.tolist())
         state = self._service.state()
+        self._answered(state.phase)
         return connection.respond(200, json.dumps(asdict(command.PageState(state.phase, state.control))))
+
+    def _passes(self, buttons: np.ndarray | None) -> bool:
+        return True
+
+    def _answered(self, phase: Phase) -> None:
+        pass
+
+
+class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
+    """A page that passes no sample with B up from the end of a trial until it showed the next Ready wait twice. So the
+    service reads B down from Complete into the first press of Ready of the next trial."""
+
+    def __init__(self, service: TeleopService):
+        super().__init__(service)
+        self._phase = Phase.IDLE
+        # The answers of the next Ready wait still to show before a release of B passes, or 0 when it passes.
+        self._ready_waits_to_miss = 0
+
+    def _passes(self, buttons: np.ndarray | None) -> bool:
+        return not (self._ready_waits_to_miss and buttons is not None and buttons[Button.B] == 0.0)
+
+    def _answered(self, phase: Phase) -> None:
+        if self._phase is Phase.RUNNING and phase is not Phase.RUNNING:
+            self._ready_waits_to_miss = 2
+        elif self._ready_waits_to_miss and phase is Phase.READY_WAIT:
+            self._ready_waits_to_miss -= 1
+        self._phase = phase
 
 
 @pytest.mark.timeout(30)
@@ -815,6 +844,23 @@ def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(soc
         trials.result(timeout=10)
     assert element[END] == PolicyEnd.COMPLETE.value
     assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
+
+
+@pytest.mark.timeout(30)
+def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_release_of_complete(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=1.0, hold_sec=HOLD_SEC)
+    with _PageMissingTheReleaseAfterComplete(service) as page, ThreadPoolExecutor(max_workers=1) as pool:
+        trials = pool.submit(
+            scripted_headset.drive, page=page.url, trials=2, min_hold_sec=0.05, trial_sec=0.5, circle_sec=1.0
+        )
+        ends = []
+        for _ in range(2):
+            service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+            while END not in (element := service.next_frame(FRAME_REQUEST, [])):
+                pass
+            ends.append(element[END])
+        trials.result(timeout=10)
+    assert ends == [PolicyEnd.COMPLETE.value, PolicyEnd.COMPLETE.value]
 
 
 def test_the_phone_page_reads_the_fields_of_the_page_state():
