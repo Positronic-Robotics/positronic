@@ -152,7 +152,7 @@ def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_p
     for index, episode in enumerate(dataset):
         assert isinstance(episode, Episode)
         assert episode[eval_keys.TERMINATED] is True
-        assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+        assert episode[eval_keys.ENDED_BY] == eval_keys.EndedBy.POLICY
         assert episode[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
         assert eval_keys.SUCCESS not in episode
         assert episode[f'{policy_keys.POLICY_META}.{policy_keys.STOP_REASON}'] == Tool.DONE
@@ -220,7 +220,7 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
     assert len(states) == 4
     for index, episode in enumerate(dataset):
         assert isinstance(episode, Episode)
-        assert episode[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_POLICY
+        assert episode[eval_keys.ENDED_BY] == eval_keys.EndedBy.POLICY
         assert episode[eval_keys.POLICY_END] == PolicyEnd.COMPLETE
         assert episode[f'{policy_keys.SERVER_META}.{policy_keys.TYPE}'] == policy_keys.LLM_TYPE
         assert episode[f'{policy_keys.SERVER_META}.{policy_keys.MODEL}'] == 'test'

@@ -512,7 +512,7 @@ def test_a_return_inside_the_budget_ends_the_episode_and_records_the_policy_and_
     policy = EndAfter(calls=3, end=end)
     h.observation.emit(1)
     answer = h.caller(Rollout(Task('test', 1.0), policy, h.dataset))
-    ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
+    ended = {eval_keys.ENDED_BY: eval_keys.EndedBy.POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
     assert _until_answered(h, answer) == ended
     assert policy.calls == 3
     assert [value for _, value in h.commands.values] == [1, 2]

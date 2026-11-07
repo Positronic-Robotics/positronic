@@ -12,6 +12,7 @@ from eval_vocabulary.episode import ENDED_BY_POLICY as ENDED_BY_POLICY
 from eval_vocabulary.episode import POLICY_END as POLICY_END
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED
+from eval_vocabulary.episode import EndedBy as EndedBy
 
 DURATION = 'eval.duration'
 

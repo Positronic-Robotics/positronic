@@ -150,13 +150,13 @@ def test_a_verdict_that_arrives_after_the_budget_reads_as_a_timeout():
 
 @pytest.mark.parametrize('end', list(PolicyEnd))
 def test_an_episode_that_the_policy_ended_reads_as_ended_by_the_policy(end):
-    ended = {eval_keys.ENDED_BY: eval_keys.ENDED_BY_POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
+    ended = {eval_keys.ENDED_BY: eval_keys.EndedBy.POLICY, eval_keys.POLICY_END: end, eval_keys.TERMINATED: True}
     assert outcome_of(ended) is Outcome.POLICY_ENDED
 
 
 def test_the_verdicts_record_who_ended_the_episode():
-    assert terminal_payload(Outcome.PASS) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True}
-    assert terminal_payload(Outcome.FAIL) == {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: False}
+    assert terminal_payload(Outcome.PASS) == {eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: True}
+    assert terminal_payload(Outcome.FAIL) == {eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: False}
 
 
 def test_each_change_advances_the_generation_and_a_view_does_not():
