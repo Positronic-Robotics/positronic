@@ -37,7 +37,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import ACTION, ResizeMode, TransformImages
-from positronic.policy.processors import ChunkedSchedule, TemporalStack, TrajectoryPlayer
+from positronic.policy.processors import ChunkedSchedule, DelayEstimate, TemporalStack, TrajectoryPlayer
 from positronic.vendors import dream
 from positronic.vendors.dream import codecs
 from positronic.vendors.dream.limits import ChunkLimits, LimitReport, YamChunkLimiter
@@ -104,8 +104,10 @@ class _Session:
         self.elapsed_s = 0.0
         # When the last call answered, on the monotonic clock.
         self.answered_s: float | None = None
-        # Each chunk as DreamAPI answered it and as the limiter sent it, `(rows, 14)`, left arm first. The server
-        # does not see which rows the client runs: a replan drops the rest of a chunk.
+        # The last row sent of each arm, where the next chunk starts unless the client replans.
+        self.sent: dict[str, np.ndarray] | None = None
+        # Each chunk as DreamAPI answered it and as the limiter sent it, `(rows, 14)`, left arm first. A row that the
+        # server drops is NaN in `limited`. A replan drops the rest of a chunk at the client, unseen by the server.
         self.answered: list[np.ndarray] = []
         self.limited: list[np.ndarray] = []
         self.record: dict[str, Any] = {'calls': [], 'expired': 0, 'renewed': 0, 'replans': 0}
@@ -130,7 +132,12 @@ class DreamModel(Model):
     that times out, finds its session expired or its connection closed, or that DreamAPI refuses as retryable, is
     sent again only while the wait asked for and a whole call timeout still end inside `retry_deadline_s`; otherwise
     it raises at once. A call more than `session_idle_s` after the last one starts a new DreamAPI session, as
-    DreamAPI ends an idle session. A call with `policy_keys.REPLAN_NOW` starts the ramp of the limiter again.
+    DreamAPI ends an idle session.
+
+    A chunk answers an observation that the client took while it played the chunk before. The client plays the rest
+    of that chunk first, `dream.ROWS_AHEAD` rows, so the answer drops as many rows, keeps at least one, and the limiter
+    starts from the last row sent. A call with `policy_keys.REPLAN_NOW`, or the first call of a session, drops no row,
+    and the limiter starts from the measured state; a replan also starts the ramp of the limiter again.
     """
 
     def __init__(
@@ -214,11 +221,14 @@ class DreamModel(Model):
                 # The gateway may close the new connection during the wait too.
                 stale_sent = False
 
-    def _call_record(self, session: _Session, rows: int, reports: dict[str, LimitReport]) -> dict[str, Any]:
+    def _call_record(
+        self, session: _Session, rows: int, dropped: int, reports: dict[str, LimitReport]
+    ) -> dict[str, Any]:
         timing = session.client.last_timing or {}
         return {
             'trace_id': session.traces[-1] if session.traces else None,
             'rows': rows,
+            'dropped': dropped,
             **{name: timing.get(name) for name in ('rtt_ms', 'serve_infer_ms', 'gateway_ms')},
             'limits': {arm: dataclasses.asdict(report) for arm, report in reports.items()},
         }
@@ -256,22 +266,28 @@ class DreamModel(Model):
             session = self._sessions[session_id] = _Session(self._config)
             session.record['canary'] = canary
         # On an arm error the client drops the rest of the chunk and replans, and the rows it played are unknown.
-        if obs.get(policy_keys.REPLAN_NOW, False):
+        replan = obs.get(policy_keys.REPLAN_NOW, False)
+        if replan:
             session.elapsed_s = 0.0
             session.record['replans'] += 1
         chunks = self._send(session, dict(obs))
-        measured = self._measured(obs[dream.OBSERVATION])
+        answered = len(chunks[keys.LEFT_ARM])
+        if replan or session.sent is None:
+            start, dropped = self._measured(obs[dream.OBSERVATION]), 0
+        else:
+            start, dropped = session.sent, min(obs[dream.ROWS_AHEAD], answered - 1)
         limited, reports = {}, {}
         for arm in keys.BIMANUAL_ARMS:
-            limited[arm], reports[arm] = self._limiter.limit(chunks[arm], measured[arm], session.elapsed_s)
-        rows = len(limited[keys.LEFT_ARM])
+            limited[arm], reports[arm] = self._limiter.limit(chunks[arm][dropped:], start[arm], session.elapsed_s)
+        session.sent = {arm: rows[-1] for arm, rows in limited.items()}
+        rows = answered - dropped
         session.elapsed_s += rows / codecs.FPS
-        call = self._call_record(session, rows, reports)
+        call = self._call_record(session, rows, dropped, reports)
         session.record['calls'].append(call)
         logger.info('Dream call: trace %s, %s ms round trip', call['trace_id'], call['rtt_ms'])
         session.answered.append(np.concatenate([chunks[arm] for arm in keys.BIMANUAL_ARMS], axis=1))
         actions = np.concatenate([limited[arm] for arm in keys.BIMANUAL_ARMS], axis=1)
-        session.limited.append(actions)
+        session.limited.append(np.concatenate([np.full((dropped, actions.shape[1]), np.nan), actions]))
         return [{ACTION: action} for action in actions]
 
     def end_session(self, session_id: str) -> None:
@@ -381,11 +397,13 @@ def dream_model(
     return model
 
 
-@cfn.config(crop_to_aspect=True)
-def pipeline(crop_to_aspect: bool) -> PolicyDeployment:
-    """The client keeps 9 frames of each camera, 0.2 s apart, and plays each chunk whole at 20 Hz.
+@cfn.config(crop_to_aspect=True, max_lead_s=1.6)
+def pipeline(crop_to_aspect: bool, max_lead_s: float) -> PolicyDeployment:
+    """The client keeps 9 frames of each camera, 0.2 s apart, and plays each chunk that the server sends whole at 20 Hz.
 
-    The ramp of the limiter counts every row of a chunk as played, so the schedule takes no horizon.
+    The client asks for the next chunk before the current one ends, by the longest of the last 5 round trips, at most
+    `max_lead_s`, and sends the rest of its plan, so the server can drop the rows that it plays first. The ramp of the
+    limiter counts every row sent as played, so the schedule takes no horizon.
     """
     offsets = tuple(codecs.FRAME_PERIOD_S * (index + 1 - codecs.WINDOW_FRAMES) for index in range(codecs.WINDOW_FRAMES))
     stack = TemporalStack(
@@ -393,8 +411,8 @@ def pipeline(crop_to_aspect: bool) -> PolicyDeployment:
     )
     local = Sequential(
         stack,
-        TrajectoryPlayer(replan_on_error=True),
-        ChunkedSchedule(codecs.FPS),
+        TrajectoryPlayer(plan_key=policy_keys.PLAN, replan_on_error=True),
+        ChunkedSchedule(codecs.FPS, inference_lead=DelayEstimate.max(last=5, max_sec=max_lead_s)),
         TransformImages(*UPLOAD_SIZE, mode=ResizeMode.BOUND),
     )
     return PolicyDeployment(local, codecs.yam_bimanual.override(crop_to_aspect=crop_to_aspect).instantiate())
