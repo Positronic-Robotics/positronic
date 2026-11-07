@@ -24,6 +24,7 @@ from positronic_model_server.websocket_wire import ServedUnixSocket
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 from websockets.sync.client import unix_connect
+from websockets.sync.connection import Connection
 
 import pimm
 import positronic.cfg.simulator
@@ -47,6 +48,7 @@ from positronic.policy.remote import RemotePolicy
 from positronic.policy.sequential import Sequential
 from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
+from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import Button, ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
 from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
@@ -763,6 +765,37 @@ def test_a_scripted_headset_trial_count_that_is_not_a_positive_integer_is_refuse
 def test_a_scripted_headset_radius_that_is_negative_or_not_finite_is_refused(radius):
     with pytest.raises(ValueError, match='radius must be finite and not negative'):
         scripted_headset.drive(page='http://127.0.0.1:1', trials=1, radius=radius)
+
+
+class _PagePolledByTheHand(scripted_headset._Page):
+    """The page of ``service``, whose bridge passes a sample of ``hand`` to the service only when the scripted headset
+    polls the page state. So the service reads no sample of a press that starts and ends between two polls."""
+
+    def __init__(self, service: TeleopService, hand: scripted_headset._Hand):
+        super().__init__(cast(httpx.Client, None), hand)
+        self._service = service
+
+    def state(self) -> command.PageState:
+        self._service.take_sample(self._hand._pose(time.monotonic()), self._hand.buttons)
+        state = self._service.state()
+        return command.PageState(state.phase, state.control)
+
+
+@pytest.mark.timeout(30)
+def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=2.0, silence_limit=1.0, hold_sec=HOLD_SEC)
+    hand = scripted_headset._Hand(
+        cast(Connection, None), rate_hz=72.0, view_fps=30.0, min_hold_sec=0.05, radius=0.05, circle_sec=1.0
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        trial = pool.submit(scripted_headset._trial, _PagePolledByTheHand(service, hand), hand, trial_sec=1.0)
+        service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+        moves = []
+        while END not in (element := service.next_frame(FRAME_REQUEST, [])):
+            moves.append(element[ACTION][:3])
+        trial.result(timeout=10)
+    assert element[END] == PolicyEnd.COMPLETE.value
+    assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
 
 
 def test_the_phone_page_reads_the_fields_of_the_page_state():
