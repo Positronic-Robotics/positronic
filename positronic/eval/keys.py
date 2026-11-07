@@ -7,6 +7,8 @@ from eval_vocabulary.episode import BENCHMARK_TASK
 # ``SUCCESS``, which a failure can leave absent, ``ENDED_BY``, who ended it when the env did not, and ``POLICY_END``,
 # what the policy said when it ended it.
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
+from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
+from eval_vocabulary.episode import ENDED_BY_POLICY as ENDED_BY_POLICY
 from eval_vocabulary.episode import POLICY_END as POLICY_END
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED
