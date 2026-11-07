@@ -14,3 +14,5 @@ To update to a new version:
 4. Remove the old version directory
 5. Update the rerun-sdk pin in pyproject.toml to match
 6. Update `RERUN_VERSION` in ../replay/media.js to match
+7. Check that the new page still keeps its started viewer in `window._handle`, and that `re_viewer.js` still gives it
+   `add_receiver`, `remove_receiver` and `has_panicked`: ../replay/media.js opens each next replay through them
