@@ -333,23 +333,12 @@ HELPERS = """<script>
   window.noteText = () => (one('note') && !one('note').hidden ? one('note').textContent : '');
   window.frame = () => host().shadowRoot.querySelector('iframe');
   window.frameUrl = () => (frame() && !frame().hidden ? frame().contentWindow.location.href : '');
-  // The element gives a running viewer each next recording through rerun's handle; the probe notes the last one.
-  setInterval(() => {
-    const view = document.querySelector('positronic-replay')?.shadowRoot?.querySelector('iframe')?.contentWindow;
-    const handle = view?._handle;
-    if (!handle || handle.probeNoted) return;
-    handle.probeNoted = true;
-    const add = handle.add_receiver.bind(handle);
-    handle.add_receiver = (url, ...rest) => {
-      view.probeRecording = url;
-      return add(url, ...rest);
-    };
-  }, 10);
-  // The recording the shown viewer holds: the last one the element gave it, else the one its page opened.
+  // The recording the shown viewer fetched last. The frame's resource entries are the viewer's own requests: the
+  // element asks for a recording's first byte from the page.
   window.shownRecording = () => {
     if (!frameUrl()) return '';
-    const view = frame().contentWindow;
-    return view.probeRecording ?? new URL(view.location.href).searchParams.get('url') ?? '';
+    const entries = frame().contentWindow.performance.getEntriesByType('resource');
+    return entries.filter((entry) => new URL(entry.name).pathname.endsWith('.rrd')).at(-1)?.name ?? '';
   };
   window.loads = (rrd) => shownRecording().includes(rrd);
   window.viewerRecordingId = () => frame()?.contentWindow._handle?.get_active_recording_id() ?? null;
