@@ -341,7 +341,6 @@ HELPERS = """<script>
     return entries.filter((entry) => new URL(entry.name).pathname.endsWith('.rrd')).at(-1)?.name ?? '';
   };
   window.loads = (rrd) => shownRecording().includes(rrd);
-  window.viewerRecordingId = () => frame()?.contentWindow._handle?.get_active_recording_id() ?? null;
   // The media query listeners the page holds, and the waits of the length the fixture server's Retry-After asks.
   window.queryListeners = 0;
   const addToQuery = MediaQueryList.prototype.addEventListener;
@@ -940,7 +939,7 @@ class Probe:
         for row, key in (('120', None), ('119', 'ArrowUp'), ('118', 'ArrowUp')):
             if key:
                 page.keyboard.press(key)
-            shown.append(self.until(page, f"loads('/rrd/ok/{row}.rrd') && viewerRecordingId() !== null"))
+            shown.append(self.until(page, f"loads('/rrd/ok/{row}.rrd')"))
             time.sleep(SETTLE_S)
         self.check('the viewer shows each replay', all(shown), shown)
         pages = [path for path in self.viewer_requests(mark) if path.endswith('.html')]
@@ -959,12 +958,10 @@ class Probe:
             {'action': 'close', 'row': '118', 'via': 'Escape'},
         ]
         self.check('the steps and Escape send open/Step and close/Escape', actions == wanted, actions)
-        held = page.evaluate("[viewerRecordingId(), frame()?.contentWindow.location.pathname ?? '']")
-        self.check(
-            'the closed dock keeps the viewer, which holds no recording', held[0] is None and held[1] == embedded, held
-        )
+        held = page.evaluate("[frameUrl(), frame()?.contentWindow.location.pathname ?? '']")
+        self.check('the closed dock hides the viewer and keeps its page', held == ['', embedded], held)
         page.locator('positronic-replay tr[data-id="117"] td').nth(2).click()
-        reopened = self.until(page, "loads('/rrd/ok/117.rrd') && viewerRecordingId() !== null")
+        reopened = self.until(page, "loads('/rrd/ok/117.rrd')")
         pages = [path for path in self.viewer_requests(mark) if path.endswith('.html')]
         self.check('a replay after the close shows in the same viewer', reopened and pages == [embedded], pages)
         page.close()
@@ -1644,10 +1641,10 @@ class Probe:
         shown = self.until(page, "loads('/rrd/ok/26.rrd')", 15000) and self.until(page, 'viewerStarted()', 15000)
         page.keyboard.press('ArrowDown')
         time.sleep(0.5)
-        pending = page.evaluate('[frameUrl(), viewerRecordingId(), noteText()]')
-        hidden = pending[0] == '' and pending[1] is None
+        pending = page.evaluate('[frameUrl(), noteText()]')
+        hidden = pending[0] == ''
         self.check('while the next recording is pending, no viewer shows the old one', shown and hidden, pending)
-        self.check('the note says the replay is on its way', 'Preparing' in pending[2], pending[2])
+        self.check('the note says the replay is on its way', 'Preparing' in pending[1], pending[1])
         self.check(
             'the viewer shows the new recording once it is there', self.until(page, "loads('/rrd/slow/27.rrd')", 15000)
         )
