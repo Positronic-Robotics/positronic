@@ -549,9 +549,9 @@ class _SimTrial(NamedTuple):
         return (end(seconds=self.seconds_to_end),) if end is not None else ()
 
 
-# The enders whose end is not the task's verdict, so the trial they ended has no label. A tuple, because a damaged
-# `static.json` can record an unhashable value.
-_ENDERS_OUTSIDE_THE_TASK = (EndedBy.OPERATOR, EndedBy.STATION)
+# A trial that the policy ended keeps its label.
+# A tuple, because a damaged `static.json` can record an unhashable value.
+_ENDERS_OF_A_TRIAL_WITH_NO_LABEL = (EndedBy.OPERATOR, EndedBy.STATION)
 
 
 def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
@@ -560,7 +560,7 @@ def _recorded_sim_trial(episode: Path, task_key: str) -> _SimTrial | None:
     None when an operator or the station ended the trial, or the episode records no verdict, no id or no world time.
     """
     static = read_static(episode)
-    if static is None or static.get(ENDED_BY) in _ENDERS_OUTSIDE_THE_TASK:
+    if static is None or static.get(ENDED_BY) in _ENDERS_OF_A_TRIAL_WITH_NO_LABEL:
         return None
     recorded = recorded_task_and_outcome(static, task_key)
     uid = recorded_uid(episode) if recorded is not None else None
