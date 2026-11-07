@@ -223,6 +223,8 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
         joint_set.add(ep.static[_SINGULAR_JOINT_SIGNAL])
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], joints=[])
     for name, sig in ep.signals.items():
+        if not len(sig):
+            continue  # No sample to show, and no kind: the kind is read from the first sample.
         if sig.kind == Kind.IMAGE:
             try:
                 sig[0][0]
@@ -232,7 +234,7 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
             signals.videos.append(name)
             continue
 
-        first = sig[0][0] if len(sig) else 0.0
+        first = sig[0][0]
         if isinstance(first, str):
             signals.texts[name] = list(dict.fromkeys(str(value) for value in sig.values()))
             continue

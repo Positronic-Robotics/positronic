@@ -432,7 +432,7 @@ class _TableEpisode(Episode):
             TimeBounds(
                 Time(**{n: bound.start[n] for n in bound.start}), Time(**{n: bound.finish[n] for n in bound.finish})
             )
-            for bound in (signal.bounds(signal.timelines) for signal in episode.signals.values())
+            for bound in (signal.bounds(signal.timelines) for signal in episode.signals.values() if len(signal))
         ]
 
     def __getitem__(self, name: str) -> Any:

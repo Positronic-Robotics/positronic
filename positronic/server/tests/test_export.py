@@ -26,6 +26,7 @@ from positronic.dataset import Dataset, Time
 from positronic.dataset.dataset import FilterDataset
 from positronic.dataset.episode import META_PATH, Episode, EpisodeContainer
 from positronic.dataset.local_dataset import LocalDatasetWriter, load_all_datasets
+from positronic.dataset.tests.test_episode import write_empty_scalar_file
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME
@@ -486,6 +487,19 @@ def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_s
     export_all(load_all_datasets(tmp_path / 'dataset'), out, ep_table_cfg=duration, max_resolution=64, assets=False)
 
     assert json.loads((out / 'api/episodes.json').read_text())['episodes'] == [[0, [10.0]]]
+
+
+def test_an_episode_with_a_signal_of_no_rows_is_exported(tmp_path):
+    with LocalDatasetWriter(tmp_path / 'dataset') as writer, writer.new_episode() as episode:
+        for second in range(1, 4):
+            episode.append(keys.JOINTS, np.zeros(7, dtype=np.float32), Time(**{RECORDED_TIME: second * 1_000_000_000}))
+    [episode_dir] = [path.parent for path in (tmp_path / 'dataset').rglob('meta.json')]
+    write_empty_scalar_file(episode_dir, 'marks')
+    out = tmp_path / 'out'
+    duration = {'__duration__': ColumnConfig(label='Duration')}
+    export_all(load_all_datasets(tmp_path / 'dataset'), out, ep_table_cfg=duration, max_resolution=64, assets=False)
+
+    assert json.loads((out / 'api/episodes.json').read_text())['episodes'] == [[0, [2.0]]]
 
 
 def test_a_table_holds_no_download_of_an_episode(dataset, tmp_path):

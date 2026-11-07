@@ -60,6 +60,33 @@ def test_episode_bounds(tmp_path):
     assert ep.bounds(RECORDED_TIME).finish == 2500
 
 
+def write_empty_scalar_file(ep_dir, name):
+    """A signal file with its columns and no rows, as a tool writes when it removes the last mark."""
+    table = pa.table({LEGACY_TIME_COLUMN: pa.array([], pa.int64()), VALUE_COLUMN: pa.array([], pa.string())})
+    pq.write_table(table, ep_dir / f'{name}.parquet')
+
+
+def test_a_signal_with_no_rows_does_not_bound_the_episode(tmp_path):
+    ep_dir = tmp_path / 'ep'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+        w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
+        write_empty_scalar_file(ep_dir, 'marks')
+
+    ep = DiskEpisode(ep_dir)
+    assert len(ep.signals['marks']) == 0
+    assert ep.bounds(RECORDED_TIME) == (1000, 2000)
+
+
+def test_an_episode_whose_only_signal_has_no_rows_has_no_bounds(tmp_path):
+    ep_dir = tmp_path / 'ep'
+    with DiskEpisodeWriter(ep_dir):
+        write_empty_scalar_file(ep_dir, 'marks')
+
+    with pytest.raises(ValueError, match='no signals'):
+        DiskEpisode(ep_dir).bounds(RECORDED_TIME)
+
+
 def test_episode_getitem_returns_signal(tmp_path):
     ep_dir = tmp_path / 'ep3'
     with DiskEpisodeWriter(ep_dir) as w:
