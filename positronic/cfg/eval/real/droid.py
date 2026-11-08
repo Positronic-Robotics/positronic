@@ -18,7 +18,7 @@ def _droid_trial(instruction: str, timeout: float | None, meta: dict[str, Any] |
     # home after a policy episode then stops on the power limit reflex.
     start_pose = command.sampled_joints(FRANKA_NOMINAL_JOINTS, FRANKA_JOINTS_SPREAD)
     return Task(
-        instruction_source=instruction,
+        instruction=instruction,
         timeout_sec=timeout,
         prepare_args={eval_keys.ARM: start_pose, eval_keys.GRIPPER: 0.0},
         meta=meta or {},

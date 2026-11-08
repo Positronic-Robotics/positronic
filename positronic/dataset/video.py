@@ -4,6 +4,7 @@ import threading
 from collections import deque
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Protocol, overload
@@ -13,6 +14,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from av.container import OutputContainer
+from av.error import FFmpegError
+from av.video.codeccontext import VideoCodecContext
 from av.video.stream import VideoStream
 from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 
@@ -69,6 +72,10 @@ class _LibavSession:
         self._container.close()
 
 
+# The frame side of the session that ``LibavEncoder.ensure_available`` opens. A hardware encoder refuses a tiny frame.
+_PROBE_FRAME_SIDE = 256
+
+
 @dataclass(frozen=True)
 class LibavEncoder:
     """Encodes in the calling process with a PyAV (libav) codec."""
@@ -80,6 +87,20 @@ class LibavEncoder:
     def ensure_available(self) -> None:
         if av.Codec(self.codec, 'w').type != 'video':
             raise ValueError(f"'{self.codec}' is not a video codec")
+        # Open a session: a hardware codec reaches its GPU only then.
+        context = av.CodecContext.create(self.codec, 'w')
+        assert isinstance(context, VideoCodecContext)
+        context.width = context.height = _PROBE_FRAME_SIDE
+        context.pix_fmt = 'yuv420p'
+        context.time_base = Fraction(1, 30)
+        context.options = dict(self.options)
+        try:
+            context.open()
+        except FFmpegError as e:
+            raise RuntimeError(
+                f'{self!r} cannot open an encoder session on this host: {e}. Set a software video_encoder, '
+                'for example @positronic.cfg.video_encoder.libx264_veryfast'
+            ) from e
 
     def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
         container = av.open(str(path), mode='w')

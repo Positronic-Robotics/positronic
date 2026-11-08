@@ -61,8 +61,8 @@ Recordings are immutable. All post-hoc modification goes through one mechanism: 
 ## Episode bounds
 
 `episode.bounds(names)` derives named endpoints from signals containing all selected timelines.
-It takes the coordinatewise maximum of signal starts and ends. Empty eligible signals or no
-eligible signals raise `ValueError`. Subtraction yields a span with units owned by consumers.
+It takes the coordinatewise maximum of signal starts and ends, and skips an eligible signal with
+no samples. No eligible signal with samples raises `ValueError`. Subtraction yields a span with units owned by consumers.
 Bounds and spans are not episode metadata; transformed views derive them from their signals.
 
 Bounds return `TimeBounds(start, finish)` with inclusive endpoints. A single timeline name selects

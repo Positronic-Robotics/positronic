@@ -1,7 +1,9 @@
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+from botocore.exceptions import ClientError
 
 from positronic.dataset.episode import Episode, EpisodeContainer
 from positronic.dataset.signal import IndicesLike, Signal
@@ -80,3 +82,44 @@ class DummyTransform(EpisodeTransform):
                     data[key] = episode[key]
 
         return EpisodeContainer(data=data, meta=episode.meta)
+
+
+class InMemoryS3:
+    """The part of a boto3 S3 client that `pos3` calls, over a dict of `(bucket, key) -> bytes`."""
+
+    def __init__(self):
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def head_object(self, *, Bucket, Key):
+        if (Bucket, Key) not in self.objects:
+            raise ClientError({'Error': {'Code': '404'}}, 'HeadObject')
+        return {'ContentLength': len(self.objects[Bucket, Key])}
+
+    def get_paginator(self, operation):
+        assert operation == 'list_objects_v2'
+        return self
+
+    def paginate(self, *, Bucket, Prefix):
+        yield {
+            'Contents': [
+                {'Key': key, 'Size': len(body)}
+                for (bucket, key), body in sorted(self.objects.items())
+                if bucket == Bucket and key.startswith(Prefix)
+            ]
+        }
+
+    def put_object(self, *, Bucket, Key, Body):
+        self.objects[Bucket, Key] = Body
+
+    def upload_file(self, filename, bucket, key, *, Callback):
+        body = Path(filename).read_bytes()
+        self.objects[bucket, key] = body
+        Callback(len(body))
+
+    def delete_object(self, *, Bucket, Key):
+        self.objects.pop((Bucket, Key), None)
+
+    def download_file(self, bucket, key, filename, *, Callback):
+        body = self.objects[bucket, key]
+        Path(filename).write_bytes(body)
+        Callback(len(body))

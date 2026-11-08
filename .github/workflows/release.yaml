@@ -276,3 +276,12 @@ jobs:
       name: ${{ matrix.name }}
       release: true
     secrets: inherit
+
+  # The RTC image starts positro/gr00t-n17-droid with `droid_rtc`, and its build reads that image from the registry.
+  publish-serve-gr00t-n17-droid-rtc:
+    needs: publish-serve-images
+    uses: ./.github/workflows/docker-serve-image.yaml
+    with:
+      name: gr00t-n17-droid-rtc
+      release: true
+    secrets: inherit

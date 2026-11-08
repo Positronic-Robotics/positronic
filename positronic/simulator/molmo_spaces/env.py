@@ -221,6 +221,7 @@ class MolmoSpacesEnv(EnvProtocol):
                     **bench._asdict(),
                     mapping.TOKEN_EPISODE_INDEX: i,
                     mapping.TASK_NAME: episodes[i].language.task_description,
+                    protocol.TASK_INSTRUCTION: episodes[i].language.task_description,
                     mapping.TASK_HORIZON_SEC: horizon_sec,
                     mapping.TASK_HORIZON_OVERRIDE_SEC: override_sec,
                 }

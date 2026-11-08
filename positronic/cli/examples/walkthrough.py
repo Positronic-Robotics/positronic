@@ -1,4 +1,4 @@
-"""Drive one submission from registration to a board, against any platform.
+"""Drive one submission from registration to a leaderboard, against any platform.
 
     uv run positronic/cli/examples/walkthrough.py --eval=<name> --policy-image=<reference>
 
@@ -7,8 +7,8 @@ The credential is read from the environment rather than taken as an argument: a 
 readable by every process on the box and lands in shell history.
 
 `--eval` names the eval to run. The platform owns the list: with no `--eval`, the script prints the
-public boards and the eval each one ranks, and stops. A name the platform does not offer is refused,
-and the refusal names the evals on offer.
+leaderboards of `nebius_competition` runs and the eval each one ranks, and stops. A name the platform
+does not offer is refused, and the refusal names the evals on offer.
 
 The key comes from POSITRONIC_PLATFORM_API_KEY, else from the record `positronic account register` saves.
 With no key, the script registers with the token in POSITRONIC_PLATFORM_CREDENTIAL, which the platform's identity
@@ -36,6 +36,8 @@ from platform_client.policy_images import PolicyImage
 from platform_client.requests import RegisterRequest
 from platform_client.responses import ErroredSubmissionView, FinishedSubmissionView, SubmissionView
 from positronic_evals.evals import EvalRef
+
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
 
 def authenticate(client: PlatformClient, *, credential: str, alias: str) -> None:
@@ -78,7 +80,7 @@ def print_quota(client: PlatformClient) -> None:
 
 
 def anonymous_client(platform_url: str | None = None, *, client: httpx.Client | None = None) -> PlatformClient:
-    """A client that sends no key, whatever the environment holds: a public board is readable by anyone."""
+    """A client that sends no key, whatever the environment holds: a published leaderboard is readable by anyone."""
     anonymous = PlatformClient(platform_url, client=client)
     anonymous.api_key = None
     return anonymous
@@ -123,24 +125,30 @@ def walkthrough(
     print(f'   primary {view.scores.primary}')
     print(f'   result  {view.artifacts.result}')
 
-    print('5. board')
+    print('5. leaderboard')
     with anonymous_client(client.base_url) as public:
-        boards = [board for board in public.list_boards().boards if board.eval == eval_ref]
-        if not boards:
-            print(f'   no public board ranks {eval_ref}')
-        for board in boards:
-            print(f'   {board.board}')
-            for row in public.rankings(board=board.board).rankings:
-                rank = 'base' if row.rank is None else row.rank
-                print(f'   {rank:>4}  {row.display_name}#{row.tag}  {row.scores.primary}  {row.submission_id}')
+        listed = public.list_leaderboards(LEADERBOARD_TAG).leaderboards
+        ranking = [summary for summary in listed if summary.descriptor.eval == eval_ref]
+        if not ranking:
+            print(f'   no {LEADERBOARD_TAG} leaderboard ranks {eval_ref}')
+        for summary in ranking:
+            print(f'   {summary.leaderboard}')
+            leaderboard = public.get_leaderboard(summary.leaderboard)
+            for row in leaderboard.rows:
+                rank = 'base' if row.rank is None else str(row.rank)
+                score = row.metrics.get(leaderboard.descriptor.ranked_by)
+                value = None if score is None else score.value
+                name = row.display_name if row.user_tag is None else f'{row.display_name}#{row.user_tag}'
+                submission = None if row.submission is None else row.submission.id
+                print(f'   {rank:>4}  {name}  {value}  {submission}')
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--platform-url', default=None, help='a platform other than the default one')
-    parser.add_argument('--alias', default='demo', help='the name a board displays you by')
+    parser.add_argument('--alias', default='demo', help='the name a leaderboard displays you by')
     parser.add_argument(
-        '--eval', default=None, help='the eval to run; with none, the public boards name the ones on offer'
+        '--eval', default=None, help='the eval to run; with none, the leaderboards name the ones on offer'
     )
     parser.add_argument(
         '--policy-image', default=None, help='the image the platform pulls and runs; needed with --eval'
@@ -148,7 +156,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--timeout', type=float, default=60.0, help='seconds to wait for a terminal status')
     args = parser.parse_args(argv)
     if (args.eval is None) != (args.policy_image is None):
-        parser.error('--eval and --policy-image go together: pass both, or neither to list the boards')
+        parser.error('--eval and --policy-image go together: pass both, or neither to list the leaderboards')
     # Every value the wire types refuse — a name, a reference, a platform URL — is refused here,
     # before any request.
     try:
@@ -165,9 +173,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if eval_ref is None or policy_image is None:
         with client as public:
-            print('pass --eval=<name>; the public boards rank these evals:')
-            for board in public.list_boards().boards:
-                print(f'   {board.board}: ranks {board.eval} by {board.primary_metric}')
+            print(f'pass --eval=<name>; the {LEADERBOARD_TAG} leaderboards rank these evals:')
+            for summary in public.list_leaderboards(LEADERBOARD_TAG).leaderboards:
+                if summary.descriptor.eval is not None:
+                    print(f'   {summary.leaderboard}: ranks {summary.descriptor.eval}')
         return
 
     with client:

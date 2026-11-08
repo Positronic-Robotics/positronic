@@ -328,7 +328,7 @@ class _EndpointBase(Cascade):
     # A `PolicyImage`, so a reference the registry could never resolve is refused in the caller's own
     # process instead of spending a round trip to learn it.
     image: PolicyImage | None = None
-    # The most sessions the platform holds open to a remote policy at once. None leaves the count to the platform.
+    # The most sessions the platform holds open to the policy at once. None leaves the count to the platform.
     max_concurrent_sessions: int | None = Field(default=None, ge=1)
     # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
     # holds it. None takes the published slice.
@@ -412,10 +412,11 @@ class _EndpointBase(Cascade):
             )
 
     @model_validator(mode='after')
-    def _a_session_limit_bounds_a_remote_address(self) -> Self:
-        if self.max_concurrent_sessions is not None:
-            self._refuse_off_a_remote_address(
-                'max_concurrent_sessions', 'the platform serves this policy and opens its sessions'
+    def _a_session_limit_bounds_an_endpoint_that_names_its_policy(self) -> Self:
+        if self.max_concurrent_sessions is not None and not self.names_a_locator:
+            raise ValueError(
+                f'endpoint {self.name!r} states max_concurrent_sessions and names no address, spec or image: state '
+                'it on the plan endpoint this label names'
             )
         return self
 
@@ -711,6 +712,18 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
     def _a_competition_run_names_an_eval(self) -> Self:
         if isinstance(self.request_type, NebiusCompetition) and not self.names_an_eval:
             raise ValueError('a nebius_competition plan names an eval and states no tasks')
+        return self
+
+    @model_validator(mode='after')
+    def _a_competition_run_opens_the_published_count_of_sessions(self) -> Self:
+        if not isinstance(self.request_type, NebiusCompetition):
+            return self
+        limited = sorted(entry.name for entry in self.endpoints if entry.max_concurrent_sessions is not None)
+        if limited:
+            raise ValueError(
+                f'a nebius_competition plan states max_concurrent_sessions on {", ".join(limited)}: the run opens '
+                'the published count of sessions'
+            )
         return self
 
     @model_validator(mode='after')

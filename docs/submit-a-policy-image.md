@@ -29,6 +29,11 @@ to Docker Hub. Build from the root of a positronic checkout:
 | FLUX 3 Action DROID | [`docker/Dockerfile.serve-flux3-action`](../docker/Dockerfile.serve-flux3-action), published as `positro/flux3-action` | `python:3.12-slim-bookworm` | `black-forest-labs/flux-3-action-droid`, `variants/gd`; see [FLUX 3 Action](#flux-3-action) |
 | Cosmos3-Nano DROID | [`docker/Dockerfile.serve-cosmos3-nano`](../docker/Dockerfile.serve-cosmos3-nano), published as `positro/cosmos3-nano` | `nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04` | `nvidia/Cosmos3-Nano-Policy-DROID`; see [Cosmos3-Nano](#cosmos3-nano) |
 
+`positro/gr00t-n17-droid-rtc` is the GR00T image with the `droid_rtc` start command, which serves
+[real-time chunking](../positronic/vendors/gr00t/README.md#real-time-chunking). Its recipe,
+[`docker/Dockerfile.serve-gr00t-n17-droid-rtc`](../docker/Dockerfile.serve-gr00t-n17-droid-rtc), adds no
+layer to `positro/gr00t-n17-droid`.
+
 CI builds each image when its recipe or the code it installs changes, and tags each build `main`, `latest`
 and the commit. A release also tags each of them `v<version>`. CI does not test an
 image: run the checks in [Test the image before you submit](#test-the-image-before-you-submit).
@@ -220,7 +225,8 @@ What the platform does with the credential:
    answer. A 25 GB image takes about 10 minutes to pull.
 6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token. A
    competition run plays up to 12 episodes at the same time, so up to 12 sessions are open at the same
-   time. The server must answer all of them, with one state for each session.
+   time. The server must answer all of them, with one state for each session. A plan outside the
+   competition can state a lower count ([Session limit](#session-limit)).
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `1g.24gb` slice of an RTX PRO 6000: 24192 MiB of VRAM and a quarter of the card's
@@ -393,6 +399,23 @@ docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1 \
 
 The platform sees the same `401` or `404`: the credential does not read the image, or the name is
 wrong.
+
+### Session limit
+
+An `image` endpoint may state `max_concurrent_sessions`: the most sessions the platform holds open to
+the image at the same time, an integer of 1 or more. A server that answers one session at a time
+states 1. The platform then plays fewer episodes at the same time, and the run takes longer. With no
+value, a run may open up to 12 sessions. A competition run keeps the published count: a competition
+plan that states `max_concurrent_sessions` is refused.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    wire: websocket
+    image: docker.io/<you>/<image>@sha256:<digest>
+    max_concurrent_sessions: 1
+```
 
 ## Submit
 

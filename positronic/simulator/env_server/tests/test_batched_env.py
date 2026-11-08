@@ -54,7 +54,7 @@ class _ClonedScene(EnvProtocol):
         return len(self._ends_at)
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{'name': _SCENE}]
+        return [{'name': _SCENE, protocol.TASK_INSTRUCTION: f'run {_SCENE}'}]
 
     def _observed(self, slot: int) -> dict[str, Any]:
         return {_STEPS: np.full(2, self._steps[slot], dtype=np.float64), _GRIP: self._grips[slot]}

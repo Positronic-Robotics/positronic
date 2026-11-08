@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Self
 
 import numpy as np
@@ -11,19 +11,20 @@ from positronic.drivers.roboarm.ik import change_frame
 from positronic.drivers.roboarm.models import EEFrame, ee_frames_entry
 from positronic.policy import training
 
-from .base import Codec
+from .base import Codec, CommandsPathCodec
 
 _QUAT = geom.Rotation.Representation.QUAT
 
 
-class ChangeEEFrame(Codec):
+class ChangeEEFrame(CommandsPathCodec):
     """Convert poses between a site of the embodiment's model and the frame the policy speaks.
 
     The policy speaks ``frame``, and states it as the ``EE_FRAMES`` entry of each key in ``keys``. The rig reports
     its poses at a site with no offset and refuses a policy that names another site. Keys in ``keys`` go
     ``pose * frame.offset`` on encode and ``pose * frame.offset⁻¹`` on decode; absent keys and joint-space
     commands are left alone. A ``CartesianDelta`` has no anchor pose to convert against, so it travels with the
-    frame it is expressed in and the driver applies it there.
+    frame it is expressed in and the driver applies it there. With ``commands_path`` it also converts each executed
+    command sent back to the model, such as an RTC prefix, into ``frame``: the reverse of its decode.
 
     Which side of the ``remote`` marker it sits on decides who converts, the rig or the server. Compose it left
     of the observation/action codecs.
@@ -36,7 +37,10 @@ class ChangeEEFrame(Codec):
         self,
         frame: EEFrame,
         keys: tuple[str, ...] = (obs_keys.EE_POSE, obs_keys.TARGET_EE_POSE, obs_keys.ROBOT_COMMAND),
+        *,
+        commands_path: tuple[str | int, ...] | None = None,
     ):
+        super().__init__(commands_path)
         self._frame = frame
         self._keys = tuple(keys)
 
@@ -44,17 +48,21 @@ class ChangeEEFrame(Codec):
     def from_spec_args(cls, **args: Any) -> Self:
         # A wire spec carries the frame as ``site`` and a ``[tx,ty,tz,qw,qx,qy,qz]`` ``transform`` vector.
         offset = geom.Transform3D.from_vector(np.asarray(args.pop('transform'), dtype=np.float64), _QUAT)
-        return cls(EEFrame(site=args.pop('site'), offset=offset), **args)
+        return super().from_spec_args(frame=EEFrame(site=args.pop('site'), offset=offset), **args)
 
-    def _apply(self, data: dict, transform: geom.Transform3D) -> dict:
-        moved = {key: change_frame(data[key], transform) for key in self._keys if key in data}
-        return {**data, **moved} if moved else data
+    def _moved(self, data: Mapping[str, Any], transform: geom.Transform3D) -> dict[str, Any]:
+        return {key: change_frame(data[key], transform) for key in self._keys if key in data}
 
     def encode(self, data):
-        return self._apply(data, self._frame.offset)
+        moved = self._moved(data, self._frame.offset) | super().encode(data)
+        return {**data, **moved} if moved else data
+
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        return {**values, **self._moved(values, self._frame.offset)}
 
     def _decode_single(self, data: dict) -> dict:
-        return self._apply(data, self._frame.offset.inv)
+        moved = self._moved(data, self._frame.offset.inv)
+        return {**data, **moved} if moved else data
 
     @property
     def training_encoder(self) -> EpisodeTransform:
@@ -73,7 +81,8 @@ class ChangeEEFrame(Codec):
                 'site': self._frame.site,
                 'transform': self._frame.offset.as_vector(_QUAT).tolist(),
                 'keys': list(self._keys),
-            },
+            }
+            | self._commands_path_args(),
         }
 
 

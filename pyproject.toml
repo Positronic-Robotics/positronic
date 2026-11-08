@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "positronic"
-version = "0.4.3"
+version = "0.4.4"
 description = "Positronic robotics project"
 requires-python = ">=3.11, <3.14"
 readme = { file = "README.md", content-type = "text/markdown" }
@@ -35,24 +35,24 @@ dependencies = [
     "opentelemetry-api>=1.42",  # no-op span surface; the SDK ships in the `telemetry` extra
     # openpi-client: optional, see [project.optional-dependencies] openpi
     "plotly>=6.5.0",
-    "pos3>=0.3.1",
+    "pos3>=0.5.0",
     # The platform's wire contract, which `positronic eval run --policy-image` and
     # `positronic account` speak. A workspace member in a clone (see [tool.uv.sources]); a released
     # `positronic` resolves it from the index, so the client is published first
     # (.github/workflows/release.yaml). Pinned exactly, because that package guarantees no
     # backwards compatibility: a floating requirement would let a fresh install of THIS release
     # resolve a contract it was never built against.
-    "positronic-platform-client==0.47.9",
+    "positronic-platform-client==0.47.13",
     # The client side of every wire and the facts both ends share. A workspace member in a clone;
     # a released `positronic` resolves it from the index, so it is published first, and it is pinned
     # exactly for the same reason the client is (wire/README.md).
     "positronic-wire[websocket,grpc]==0.12.2",
     "positronic-model-server[websocket,grpc]==0.3.5",
     # The words an attended rollout records, which the rollouts viewer colours and counts.
-    "positronic-eval-vocabulary==0.7.1",
+    "positronic-eval-vocabulary==0.7.2",
     # The public evals that `positronic eval run` runs here, and the episode lists the MolmoSpaces sim server
     # reads. A workspace member in a clone; pinned exactly for the same reason the client is.
-    "positronic-evals==0.2.4",
+    "positronic-evals==0.2.5",
     "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
@@ -144,6 +144,10 @@ llm = [
 llm-openai = ["positronic[llm]", "pydantic-ai-slim[openai]"]
 llm-anthropic = ["positronic[llm]", "pydantic-ai-slim[anthropic]"]
 llm-google = ["positronic[llm]", "pydantic-ai-slim[google]"]
+# Dream-1 of Dream Labs (`positronic/vendors/dream`). Its server reads the trace id of a reply off a private part of
+# the client, so the version is pinned. The client has no release older than `exclude-newer`, so it has a date of its
+# own below. The client wheel also carries `shared.faceblur`, the face blurrer that the server runs.
+dream = ["dreamlabs-client==1.0.9"]
 
 # A dependency group rather than an extra, so `uv run` and `uv sync` include it without being asked.
 # An extra has to be named on every invocation, and one command that forgets uninstalls the tools the
@@ -213,6 +217,8 @@ positronic = false
 configuronic = false
 pos3 = false
 positronic-franka = false
+# One week before the release of the pinned `dreamlabs-client`; no release of it is older than `exclude-newer`.
+dreamlabs-client = "2026-10-27T00:00:00Z"
 
 [tool.uv.sources]
 positronic-platform-client = { workspace = true }

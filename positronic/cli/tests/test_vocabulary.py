@@ -12,6 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from positronic.cli.examples.nebius_competition import leaderboards
+from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
+
 # The words that name a role or a period in one engagement rather than anything the platform has.
 # What the contract says instead is `user` for the account and `caller` for whoever is asking.
 ENGAGEMENT_WORDS = ('competition', 'participant', 'contestant', 'season', 'qualifier', 'prize', 'entrant')
@@ -55,6 +58,11 @@ def test_a_file_outside_the_engagement_directory_uses_none_of_its_words(path: Pa
         if _ENGAGEMENT_WORD.search(line)
     ]
     assert not hits, 'engagement vocabulary outside its directory:\n' + '\n'.join(hits)
+
+
+def test_the_competition_tag_is_defined_where_the_scan_does_not_read_and_fails_the_scan_anywhere_else():
+    assert Path(leaderboards.__file__).resolve().parent == ENGAGEMENT_DIR
+    assert _ENGAGEMENT_WORD.search(LEADERBOARD_TAG)
 
 
 def test_the_scan_reaches_both_trees_and_stops_at_the_engagement_directory():

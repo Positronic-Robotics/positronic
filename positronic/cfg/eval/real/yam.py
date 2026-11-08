@@ -19,7 +19,7 @@ def _bimanual_trials(instruction: str, timeout: float | None, trial_count: int) 
     }
     return [
         Task(
-            instruction_source=instruction,
+            instruction=instruction,
             timeout_sec=timeout,
             prepare_args=start,
             meta={eval_keys.TRIAL_INDEX: trial, eval_keys.TRIAL_COUNT: trial_count},

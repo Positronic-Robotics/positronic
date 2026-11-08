@@ -89,6 +89,8 @@ def wire_embodiment(
         world.connect(embodiment.meta_source, harness.robot_meta_in)
     for joint_signal, source in embodiment.arm_meta_sources.items():
         world.connect(source, harness.arm_meta_in[joint_signal])
+    if embodiment.goal_source is not None:
+        world.connect(embodiment.goal_source, harness.goal)
     if done is not None:
         world.connect(done, harness.done)
 

@@ -40,7 +40,7 @@ def _mujoco_franka_eval(mujoco_model_path, loaders, camera_fps, camera_dict, ins
     privileged = {SIM_STATE: sim.sim_state}
     return Eval(
         embodiment,
-        partial(build_tasks, Task(instruction_source=instruction, timeout_sec=timeout), seed, trial_count),
+        partial(build_tasks, [(Task(instruction=instruction, timeout_sec=timeout), {})], seed, trial_count),
         privileged=privileged,
     )
 

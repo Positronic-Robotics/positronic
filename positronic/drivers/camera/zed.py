@@ -27,7 +27,18 @@ class GrabOutcome(Enum):
 
     SENT = auto()
     NO_IMAGE = auto()  # the grab succeeded, and the SDK gave no image
+    TORN = auto()  # the grab succeeded, and the image starts with zero fill
     LOST = auto()  # the grab failed, and the camera holds the error
+
+
+# The BGR colour that the SDK gives a raw YUV pixel of zeros. A real pixel comes near it only at full chroma, and a
+# black pixel is (0, 0, 0).
+ZERO_FILL_BGR = (0, 135, 0)
+
+
+def starts_with_zero_fill(raw_bgra: np.ndarray) -> bool:
+    """Whether all of row 0 of an unrectified BGRA image has the zero fill colour."""
+    return bool(np.all(raw_bgra[0, :, :3] == ZERO_FILL_BGR))
 
 
 class SLCamera(pimm.ControlSystem):
@@ -97,6 +108,8 @@ class SLCamera(pimm.ControlSystem):
     REBOOTED_CAMERA_MAX_POLLS = 60
     # A ready call reopens a camera whose last frame is older than this.
     STALE_FRAME_SEC = 1.0
+    # A ready call grabs again after a torn frame, up to this many grabs.
+    READY_GRABS = 3
 
     @staticmethod
     def _is_listed(serial: int) -> bool:
@@ -190,6 +203,14 @@ class SLCamera(pimm.ControlSystem):
             return
         self._error = None
 
+    def _grab_until_not_torn(self, clock: pimm.Clock) -> GrabOutcome:
+        outcome = self._grab_frame(clock)
+        for _ in range(self.READY_GRABS - 1):
+            if outcome is not GrabOutcome.TORN:
+                break
+            outcome = self._grab_frame(clock)
+        return outcome
+
     def _make_ready(
         self, call: pimm.calls.Call[None, None], clock: pimm.Clock, should_stop: pimm.SignalReceiver
     ) -> Generator[pimm.Sleep, None, None]:
@@ -205,7 +226,7 @@ class SLCamera(pimm.ControlSystem):
             self._camera.close()
             self._camera = None
         yield from self._open_or_hold(should_stop)
-        if self._error is None and self._grab_frame(clock) is GrabOutcome.SENT:
+        if self._error is None and self._grab_until_not_torn(clock) is GrabOutcome.SENT:
             call.set_result(None)
             return
         error = self._error
@@ -262,7 +283,7 @@ class SLCamera(pimm.ControlSystem):
         return getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
 
     def _grab_frame(self, clock: pimm.Clock) -> GrabOutcome:
-        """Grab and send one frame. Hold the error when the grab fails."""
+        """Grab and send one frame. Hold the error when the grab fails, and drop a torn frame."""
         camera = self._camera
         assert camera is not None, 'a camera that holds no error is open'
         result = camera.grab()
@@ -270,6 +291,14 @@ class SLCamera(pimm.ControlSystem):
             self._hold(DeviceFault(f'Camera {self._serial_number} is lost: {result}', FaultKind.CAMERA))
             return GrabOutcome.LOST
         image = sl.Mat()
+        # A USB stereo camera that loses data in one frame can send the next frame with zeros at the start of its raw
+        # buffer and the rest shifted. The SDK accepts that frame, and its image validity check does not flag it.
+        if not self._mono:
+            if camera.retrieve_image(image, sl.VIEW.LEFT_UNRECTIFIED) != sl.ERROR_CODE.SUCCESS:
+                return GrabOutcome.NO_IMAGE
+            if starts_with_zero_fill(image.get_data()):
+                logger.warning('Camera %s sent a torn frame; dropping it', self._serial_number)
+                return GrabOutcome.TORN
         capture_time = pimm.Time(**{CAPTURE_TIME: camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()})
         if camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
             return GrabOutcome.NO_IMAGE

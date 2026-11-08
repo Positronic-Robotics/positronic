@@ -21,7 +21,7 @@ from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
 from positronic.simulator.amazon_abc.adapter import CAMERAS, AbcAdapter
 from positronic.simulator.env_server import protocol
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
+from positronic.simulator.env_server.proxy import EnvTask, RemoteEnvControlSystem
 
 
 @pytest.fixture
@@ -29,9 +29,12 @@ def asked(monkeypatch) -> list[Any]:
     """The specs the eval sends the proxy."""
     specs: list[Any] = []
 
-    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+    def tasks(self, spec: dict[str, Any]) -> list[EnvTask]:
         specs.append(spec)
-        return [{eval_keys.TASK: 'put_plastic_bottles_in_bin'}, {eval_keys.TASK: 'turn_mug_right_side_up'}]
+        return [
+            EnvTask('put the plastic bottles in the bin', {eval_keys.TASK: 'put_plastic_bottles_in_bin'}),
+            EnvTask('turn the mug right side up', {eval_keys.TASK: 'turn_mug_right_side_up'}),
+        ]
 
     monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
     return specs
@@ -72,6 +75,9 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
     assert (scene[abc_keys.CAMERA_HEIGHT], scene[abc_keys.CAMERA_WIDTH]) == (260, 416)
     assert scene[abc_keys.CAMERA_VIEW] == mapping.CameraView.ZED_X.value
     assert [t.meta[eval_keys.SEED] for t in trials] == [3, 4, 3, 4]
+    assert [t.instruction for t in trials] == ['put the plastic bottles in the bin'] * 2 + [
+        'turn the mug right side up'
+    ] * 2
 
 
 def test_the_config_refuses_an_unknown_camera_view():
@@ -141,8 +147,8 @@ def test_the_eval_records_abcs_reward_under_the_signal_that_the_abc_labeler_read
 
 @pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG])
 def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(monkeypatch, name: EvalRef):
-    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{eval_keys.TASK: task} for task in spec[mapping.SELECT_TASKS]]
+    def tasks(self, spec: dict[str, Any]) -> list[EnvTask]:
+        return [EnvTask(task, {eval_keys.TASK: task}) for task in spec[mapping.SELECT_TASKS]]
 
     monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
     definition = public_eval(name)

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import collections
 import contextlib
@@ -17,6 +18,7 @@ import PIL.Image
 import psutil
 import pytest
 import turbojpeg
+from fastapi import FastAPI
 
 import pimm
 from positronic import data_collection, keys, utils, wire
@@ -385,6 +387,23 @@ def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = N
         list(run)
 
 
+def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send(monkeypatch):
+    # No frame goes out, so the stream never uses its encoder and the test needs no libturbojpeg.
+    monkeypatch.setattr(turbojpeg, 'TurboJPEG', object)
+    app = FastAPI()
+    WebXR(port=free_port())._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
+    incoming = iter([{'type': 'websocket.connect'}, {'type': 'websocket.disconnect', 'code': 1000}])
+
+    async def receive():
+        return next(incoming)
+
+    async def send(message):
+        pass
+
+    scope = {'type': 'websocket', 'path': '/video', 'headers': [], 'query_string': b'', 'root_path': ''}
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=5))
+
+
 @pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
 def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
     monkeypatch.chdir(tmp_path)
@@ -463,7 +482,7 @@ def test_the_page_state_is_empty_until_something_sends_one(world):
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
     message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0]})
-    positions, buttons = webxr._parse_controller_data(json.loads(json.dumps(message)))
+    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
     assert positions[webxr.LEFT] is None and buttons[webxr.LEFT] is None
     right, right_buttons = positions[webxr.RIGHT], buttons[webxr.RIGHT]
     assert right is not None and right_buttons is not None

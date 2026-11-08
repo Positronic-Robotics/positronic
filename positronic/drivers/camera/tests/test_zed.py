@@ -165,7 +165,8 @@ class DroppingSdk:
 
     A camera opened before the drop grabs again only from ``sdk_recovers_at``. ``None`` is a model whose loss the SDK
     never recovers, such as the ZED Mini. The first ``failed_reopens`` opens after the drop fail. A camera opened
-    before ``images_stop_at`` grabs with no error from then on, and gives no image.
+    before ``images_stop_at`` grabs with no error from then on, and gives no image. Every image shows ``scene``, and
+    the grabs that ``torn_grabs`` counts from 0 give a torn image.
     """
 
     def __init__(
@@ -176,6 +177,8 @@ class DroppingSdk:
         sdk_recovers_at: float | None = None,
         failed_reopens: int = 0,
         images_stop_at: float = float('inf'),
+        scene: np.ndarray | None = None,
+        torn_grabs: frozenset[int] = frozenset(),
     ):
         self.clock = clock
         self.lost_at = lost_at
@@ -183,6 +186,9 @@ class DroppingSdk:
         self.sdk_recovers_at = sdk_recovers_at
         self.failed_reopens = failed_reopens
         self.images_stop_at = images_stop_at
+        self.scene = np.zeros((4, 6, 4), dtype=np.uint8) if scene is None else scene
+        self.torn_grabs = torn_grabs
+        self.grab_times: list[float] = []
         self.cameras: list[FakeCamera] = []
         self.reboots: list[int] = []
 
@@ -220,6 +226,7 @@ class FakeCamera:
     def grab(self) -> ErrorCode:
         assert self.opened_at is not None and self.closed_at is None, 'grab on a camera that is not open'
         now, sdk = self._sdk.clock.now(), self._sdk
+        sdk.grab_times.append(now)
         if now < sdk.lost_at or self.opened_at >= sdk.listed_at:
             return ErrorCode.SUCCESS
         if sdk.sdk_recovers_at is not None and now >= sdk.sdk_recovers_at:
@@ -232,10 +239,12 @@ class FakeCamera:
     def get_timestamp(self, _reference) -> types.SimpleNamespace:
         return types.SimpleNamespace(get_nanoseconds=self._sdk.clock.now_ns)
 
-    def retrieve_image(self, _image, _view) -> ErrorCode:
+    def retrieve_image(self, image: 'FakeMat', _view) -> ErrorCode:
         assert self.opened_at is not None
         if self.opened_at < self._sdk.images_stop_at <= self._sdk.clock.now():
             return ErrorCode.FAILURE
+        torn = len(self._sdk.grab_times) - 1 in self._sdk.torn_grabs
+        image.data = _torn(self._sdk.scene) if torn else self._sdk.scene
         return ErrorCode.SUCCESS
 
 
@@ -245,8 +254,21 @@ class FakeInitParameters:
 
 
 class FakeMat:
+    data: np.ndarray
+
     def get_data(self) -> np.ndarray:
-        return np.zeros((2, 2, 4), dtype=np.uint8)
+        return self.data
+
+
+# The BGRA pixel that the SDK gives a raw pixel of zeros, as a ZED Mini sent it at the start of a torn frame
+ZERO_FILL_BGRA = (0, 135, 0, 255)
+
+
+def _torn(scene: np.ndarray) -> np.ndarray:
+    """``scene`` as a torn frame: two rows of zero fill, and the rest shifted down."""
+    torn = np.roll(scene, 2, axis=0)
+    torn[:2] = ZERO_FILL_BGRA
+    return torn
 
 
 LOST_AT = 1.0
@@ -268,7 +290,7 @@ def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter):
         InitParameters=FakeInitParameters,
         Mat=FakeMat,
         RESOLUTION=types.SimpleNamespace(AUTO='auto'),
-        VIEW=types.SimpleNamespace(LEFT='left'),
+        VIEW=types.SimpleNamespace(LEFT='left', LEFT_UNRECTIFIED='left_unrectified'),
         DEPTH_MODE=types.SimpleNamespace(NONE='none'),
         UNIT=types.SimpleNamespace(METER='meter'),
         TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
@@ -437,3 +459,49 @@ def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
     stop.stopped = True
     _drive(loop, clock, until=clock.now() + 1.0)
     assert _returned(loop)
+
+
+def test_a_torn_frame_is_dropped_with_no_error_and_the_next_frame_is_sent(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, torn_grabs=frozenset({3, 7, 8}))
+    _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=0.2)
+    assert not _errors(frames)
+    sent = [t for i, t in enumerate(sdk.grab_times) if i not in sdk.torn_grabs]
+    assert _frame_times(frames) == pytest.approx(sent)
+
+
+def test_a_ready_call_that_reopens_the_camera_grabs_again_after_a_torn_frame(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER)
+    camera = _camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    sdk.images_stop_at = clock.now()
+    _drive(loop, clock, until=clock.now() + 2 * zed_module.SLCamera.STALE_FRAME_SEC)
+
+    answer = _readier(world, camera)(None)
+    stale_grab = len(sdk.grab_times)
+    sdk.torn_grabs = frozenset({stale_grab + 1, stale_grab + 2})
+    _drive(loop, clock, until=clock.now() + 0.01)
+
+    assert answer.result() is None
+    assert not _errors(frames)
+    assert len(sdk.cameras) == 2
+
+
+def _dark_scene() -> np.ndarray:
+    """A dark room at 720p: BGR values near black with sensor noise, opaque alpha."""
+    rng = np.random.default_rng(0)
+    scene = np.full((720, 1280, 4), 255, dtype=np.uint8)
+    scene[..., :3] = rng.integers(0, 12, size=(720, 1280, 3), dtype=np.uint8)
+    return scene
+
+
+@pytest.mark.parametrize(
+    'scene', [np.full((720, 1280, 4), (0, 0, 0, 255), np.uint8), _dark_scene()], ids=['black', 'dark']
+)
+def test_a_black_or_dark_frame_is_sent(zed_module, scene):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, scene=scene)
+    _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=0.2)
+    assert _frame_times(frames) == pytest.approx(sdk.grab_times)

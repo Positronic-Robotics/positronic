@@ -91,6 +91,7 @@ exclude-newer = "2026-07-21T00:00:00Z"
 [options.exclude-newer-package]
 certifi = "2026-10-27T00:00:00Z"
 configuronic = false
+dreamlabs-client = "2026-10-27T00:00:00Z"
 pos3 = false
 positronic = false
 positronic-franka = false
@@ -1974,6 +1975,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/4e/e2/f5012fda17ee5d1eaf3481b6ca3e11dffa5348e5e08ab745538fdc8041bb/draccus-0.10.0.tar.gz", hash = "sha256:8dd08304219becdcd66cd16058ba98e9c3e6b7bfe48ccb9579dae39f8d37ae19", size = 62243, upload-time = "2025-02-05T07:27:48.182Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/9a/a83083b230d352ee5d205757b74006dbe084448ca45e3bc5ca99215b1e55/draccus-0.10.0-py3-none-any.whl", hash = "sha256:90243418ae0e9271c390a59cafb6acfd37001193696ed36fcc8525f791a83282", size = 71783, upload-time = "2025-02-05T07:27:46.1Z" },
+]
+
+[[package]]
+name = "dreamlabs-client"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra != 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or extra != 'extra-10-positronic-yam'" },
+    { name = "websockets" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/02/1c5091027a1640177845fe86c245316478974f8c4398dd9b334ef7f505a3/dreamlabs_client-1.0.9-py3-none-any.whl", hash = "sha256:8751cc6a1e103a359460ddc81eb5e3be0ec55fc73faff298c8f442fd5c390b67", size = 458764, upload-time = "2026-10-23T21:11:47.006Z" },
 ]
 
 [[package]]
@@ -5523,20 +5537,20 @@ sdist = { url = "https://files.pythonhosted.org/packages/f0/8d/03dcd20105d000975
 
 [[package]]
 name = "pos3"
-version = "0.3.1"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/18/dbea5adb4fabaf9cea0b647f5881d47ec7297829954c6246b94c2b551016/pos3-0.3.1.tar.gz", hash = "sha256:502273448d5041df2faabeb8327405553bdebaa509117abef5f2cfd3abe0b574", size = 47279, upload-time = "2026-05-30T21:56:43.346Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/a9/6db19d9bd19a529bd019f4cf51b865569432cfa11dc8c32eb1907360c5c7/pos3-0.5.0.tar.gz", hash = "sha256:98c7a0cb12678497f04b44ec3b02824e0adbc3d02cd4fb4af9a5b06aa4dcde60", size = 54933, upload-time = "2026-10-30T12:19:19.195Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/03/fb4cc9fe613932a7dedf8c526ebcce740846ba9309a41ee5e99a6c921ede/pos3-0.3.1-py3-none-any.whl", hash = "sha256:b2539aec688b708ae179ebe8f91fca10fe83bd062dbb6d87235e277aa45b602d", size = 28845, upload-time = "2026-05-30T21:56:42.253Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/ab/df4ff398ec9b30ff54b27072ca77140358901610cd57317f2e524a5aa7cf/pos3-0.5.0-py3-none-any.whl", hash = "sha256:97b6764107a1129cacc1f73bb62edfff6ba48af0cdcf3f3f23c9dd09afae3161", size = 31324, upload-time = "2026-10-30T12:19:18.075Z" },
 ]
 
 [[package]]
 name = "positronic"
-version = "0.4.3"
+version = "0.4.4"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "15.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
@@ -5580,6 +5594,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dream = [
+    { name = "dreamlabs-client" },
+]
 dreamzero = [
     { name = "huggingface-hub", version = "0.35.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or extra == 'extra-10-positronic-yam' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2')" },
     { name = "huggingface-hub", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot-0-3-3' or extra == 'extra-10-positronic-molmoact2' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra != 'extra-10-positronic-lerobot' and extra != 'extra-10-positronic-yam')" },
@@ -5687,6 +5704,7 @@ requires-dist = [
     { name = "configuronic", specifier = ">=0.7.0" },
     { name = "cvxopt" },
     { name = "dearpygui", marker = "platform_machine != 'aarch64'" },
+    { name = "dreamlabs-client", marker = "extra == 'dream'", specifier = "==1.0.9" },
     { name = "einops", marker = "extra == 'molmoact2'" },
     { name = "fastapi" },
     { name = "feetech-servo-sdk", marker = "extra == 'hardware'" },
@@ -5713,7 +5731,7 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'molmoact2'" },
     { name = "placo", marker = "extra == 'hardware'" },
     { name = "plotly", specifier = ">=6.5.0" },
-    { name = "pos3", specifier = ">=0.3.1" },
+    { name = "pos3", specifier = ">=0.5.0" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-anthropic'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-google'" },
     { name = "positronic", extras = ["llm"], marker = "extra == 'llm-openai'" },
@@ -5764,7 +5782,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=15.0.1" },
     { name = "zmq" },
 ]
-provides-extras = ["openpi", "hardware", "franka", "scenes", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm", "llm-openai", "llm-anthropic", "llm-google"]
+provides-extras = ["openpi", "hardware", "franka", "scenes", "lerobot-0-3-3", "lerobot", "molmoact2", "dreamzero", "lance", "yam", "telemetry", "llm", "llm-openai", "llm-anthropic", "llm-google", "dream"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5788,12 +5806,12 @@ dev = [
 
 [[package]]
 name = "positronic-eval-vocabulary"
-version = "0.7.1"
+version = "0.7.2"
 source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-evals"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "evals" }
 dependencies = [
     { name = "positronic-eval-vocabulary" },
@@ -5810,14 +5828,14 @@ requires-dist = [
 
 [[package]]
 name = "positronic-franka"
-version = "0.12.0"
+version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam')" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot') or (sys_platform == 'linux' and extra == 'extra-10-positronic-lerobot-0-3-3') or (sys_platform == 'linux' and extra == 'extra-10-positronic-molmoact2') or (sys_platform == 'linux' and extra != 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
     { name = "requests", marker = "sys_platform == 'linux' or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-lerobot-0-3-3') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/75/88/1eaf3f824fcb1e64581a14ad87e8e110aa9311c21950c83ba0baa027764f/positronic_franka-0.12.0.tar.gz", hash = "sha256:a51c0638b29004723b4f802af50243f3d39f1702981e5247a21c93f7cc2e3c0f", size = 1837092, upload-time = "2026-10-24T13:35:33.163Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/dd/c85e2def5a67395c0fb4a5807c07a843ec458fa6d8648a6008a344e875ae/positronic_franka-0.12.1.tar.gz", hash = "sha256:88b854a030253e999eae363dc7479561c61b61a1e9c3ef6681f77116a6eee3bf", size = 1841779, upload-time = "2026-11-07T06:44:02.252Z" }
 
 [[package]]
 name = "positronic-model-server"
@@ -5854,7 +5872,7 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.47.9"
+version = "0.47.13"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },

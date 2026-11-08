@@ -124,7 +124,13 @@ class LiberoEnv(EnvProtocol):
             for task_id in ids:
                 if not 0 <= task_id < num_tasks:
                     raise ValueError(f'suite {suite_name!r} holds {num_tasks} tasks, so task_id {task_id} is none')
-                records.append({'suite': suite_name, 'task_id': task_id, 'name': suite.get_task(task_id).name})
+                task = suite.get_task(task_id)
+                records.append({
+                    'suite': suite_name,
+                    'task_id': task_id,
+                    'name': task.name,
+                    protocol.TASK_INSTRUCTION: task.language,
+                })
         return records
 
     def _build(self, suite_name: str, task_id: int, camera_resolution: int, control_mode: str) -> None:

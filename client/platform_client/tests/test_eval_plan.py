@@ -323,6 +323,9 @@ def test_a_remote_endpoint_names_no_bring_up():
         Endpoint(name='baseline', wire=Wire.websocket, image=PolicyImage('org/policy:v1'))
 
 
+_IMAGE_ENTRY = {'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'}
+
+
 def test_a_remote_endpoint_states_the_most_sessions_the_platform_opens_to_it():
     entry = Endpoint.model_validate(remote('baseline', max_concurrent_sessions=1))
     assert entry.max_concurrent_sessions == 1
@@ -336,22 +339,29 @@ def test_a_session_limit_below_one_is_refused(limit: int):
         Endpoint.model_validate(remote('baseline', max_concurrent_sessions=limit))
 
 
-def test_a_served_or_an_image_endpoint_states_no_session_limit():
-    with pytest.raises(ValidationError, match='which only a remote endpoint carries'):
-        Endpoint(name='candidate', kind=EndpointKind.served, spec='pi05', wire=Wire.grpc, max_concurrent_sessions=1)
-    with pytest.raises(ValidationError, match='which only a remote endpoint carries'):
-        Endpoint.model_validate({
-            'name': 'policy',
-            'kind': 'image',
-            'image': 'org/p:v1',
-            'wire': 'websocket',
-            'max_concurrent_sessions': 1,
-        })
+def test_an_image_endpoint_states_the_most_sessions_the_platform_opens_to_it():
+    entry = Endpoint.model_validate({**_IMAGE_ENTRY, 'max_concurrent_sessions': 1})
+    assert entry.max_concurrent_sessions == 1
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(_IMAGE_ENTRY).max_concurrent_sessions is None
 
 
-def test_a_label_states_no_session_limit_of_its_own():
+_SERVED_ENTRY = {'name': 'candidate', 'kind': 'served', 'spec': 'pi05', 'wire': 'grpc'}
+
+
+def test_a_served_endpoint_states_the_most_sessions_the_platform_opens_to_it():
+    entry = Endpoint.model_validate({**_SERVED_ENTRY, 'max_concurrent_sessions': 1})
+    assert entry.max_concurrent_sessions == 1
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(_SERVED_ENTRY).max_concurrent_sessions is None
+
+
+@pytest.mark.parametrize(
+    'label', [{'name': 'baseline'}, {'name': 'baseline', 'kind': 'image'}, {'name': 'baseline', 'kind': 'served'}]
+)
+def test_a_label_states_no_session_limit_of_its_own(label: dict[str, str]):
     with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
-        a_plan(tasks=[{'task_id': SPOONS, 'endpoints': [{'name': 'baseline', 'max_concurrent_sessions': 1}]}])
+        a_plan(tasks=[{'task_id': SPOONS, 'endpoints': [{**label, 'max_concurrent_sessions': 1}]}])
 
 
 def test_a_task_entry_that_names_its_address_states_a_session_limit():
@@ -364,9 +374,6 @@ def test_an_endpoint_without_a_session_limit_omits_it_from_its_dump(mode: str):
     assert 'max_concurrent_sessions' not in Endpoint.model_validate(BASELINE).model_dump(mode=mode)
     stated = Endpoint.model_validate(remote('baseline', max_concurrent_sessions=3)).model_dump(mode=mode)
     assert stated['max_concurrent_sessions'] == 3
-
-
-_IMAGE_ENTRY = {'name': 'policy', 'kind': 'image', 'image': 'org/p:v1', 'wire': 'websocket'}
 
 
 def test_an_image_endpoint_states_the_least_gpu_memory_it_needs():
@@ -1170,6 +1177,29 @@ def test_a_competition_plan_names_an_eval_and_states_no_tasks():
         a_plan(request_type={'type': 'nebius_competition'})
     with pytest.raises(ValidationError, match='org'):
         a_plan(request_type={'type': 'nebius_competition', 'org': 'acme'})
+
+
+@pytest.mark.parametrize('entry', [_IMAGE_ENTRY, _SERVED_ENTRY])
+def test_a_competition_plan_states_no_session_limit(entry: dict[str, str]):
+    limited = {**entry, 'max_concurrent_sessions': 1}
+    with pytest.raises(
+        ValidationError, match=f'nebius_competition plan states max_concurrent_sessions on {entry["name"]}'
+    ):
+        EvalPlan.model_validate({
+            'request_type': {'type': 'nebius_competition'},
+            'eval': 'molmo.x',
+            'endpoints': [limited],
+        })
+
+
+@pytest.mark.parametrize('entry', [_IMAGE_ENTRY, _SERVED_ENTRY])
+def test_a_private_plan_of_a_named_eval_states_a_session_limit_on_its_endpoint(entry: dict[str, str]):
+    plan = EvalPlan.model_validate({
+        'request_type': PRIVATE,
+        'eval': 'molmo.x',
+        'endpoints': [{**entry, 'max_concurrent_sessions': 1}],
+    })
+    assert plan.endpoints[0].max_concurrent_sessions == 1
 
 
 def test_an_image_plan_is_a_competition_run_unless_it_names_an_org():

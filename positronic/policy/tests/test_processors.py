@@ -41,6 +41,7 @@ from positronic.policy.codecs import (
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
+    BimanualJointsAction,
     CartesianDeltaAction,
     JointDeltaAction,
     JointPositionAction,
@@ -2472,6 +2473,7 @@ def test_wire_names_match_the_registered_components():
         'absolute_position_action': AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP),
         'cartesian_delta_action': CartesianDeltaAction(),
         'absolute_joints_action': AbsoluteJointsAction(keys.TARGET_JOINTS, keys.TARGET_GRIP),
+        'bimanual_joints_action': BimanualJointsAction(),
         'joint_delta_action': JointDeltaAction(),
         'joint_position_action': JointPositionAction('joints', 'grip'),
         'set_control_mode': SetControlMode(PositionControl()),

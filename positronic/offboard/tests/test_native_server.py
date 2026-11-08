@@ -17,7 +17,7 @@ from positronic.drivers.roboarm import command
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import Codec, EncodeImages, PolicyCommandError
+from positronic.policy.codecs import ACTION, Codec, EncodeImages, PolicyCommandError
 from positronic.policy.compatibility import RTCScheduleV1
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
@@ -505,6 +505,54 @@ def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, versi
                 assert seen[0][RTCScheduleV1.ESTIMATED_LATENCY_SEC] == 0.0
                 assert seen[1][RTCScheduleV1.MEASURED_LATENCY_SEC] == 0.0
                 assert seen[1][RTCScheduleV1.ESTIMATED_LATENCY_SEC] == 0.1
+        finally:
+            runtime.close()
+            run.close()
+
+
+def test_remote_rtc_decodes_two_arm_actions_and_sends_the_prefix_as_model_actions(serving):
+    description = spec.sequence(
+        spec.component('trajectory_player', plan_key=policy_keys.PLAN, record_stats=False),
+        RTCSchedule(fps=10, call_after_sec=0.2, latency_estimate=ConstantDuration(0.1)).to_spec(),
+        spec.component(
+            'bimanual_joints_action', commands_path=[policy_keys.RTC.ACTION_PREFIX, policy_keys.RTC.PREFIX_ACTIONS]
+        ),
+    )
+    answer = [{ACTION: np.array([*JOINT_TARGET[:6], 0.0, *JOINT_TARGET[1:], i], dtype=np.float32)} for i in range(5)]
+    seen = []
+
+    class TwoArmSession(Session):
+        def infer(self, observation):
+            seen.append(observation)
+            return answer
+
+    class TwoArmModel(Model):
+        def prepare_session(self, params):
+            return TwoArmSession(description)
+
+    right_grip = obs_keys.arm_channel(obs_keys.TARGET_GRIP, obs_keys.RIGHT_ARM)
+    with serving(TwoArmModel) as (client, address):
+        now = [1_000_000_000]
+        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        run = runtime.start(RemotePolicy(client.NAME, address))
+        try:
+            run.send({})
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            first = run.send({})
+            assert first is not None
+            for arm in obs_keys.BIMANUAL_ARMS:
+                assert isinstance(
+                    first.commands[obs_keys.arm_channel(obs_keys.ROBOT_COMMAND, arm)], command.JointPosition
+                )
+            now[0] += 250_000_000
+            step = run.send({})
+            assert step is not None
+            assert step.commands[right_grip] == 2.0
+            assert runtime.wait(timeout_sec=5).status is WaitStatus.ANSWERS_READY
+            prefix = seen[1][policy_keys.RTC.ACTION_PREFIX][policy_keys.RTC.PREFIX_ACTIONS]
+            assert len(prefix) == 3
+            for sent, played in zip(prefix, answer[2:], strict=True):
+                np.testing.assert_array_equal(sent[ACTION], played[ACTION])
         finally:
             runtime.close()
             run.close()

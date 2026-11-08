@@ -4,7 +4,7 @@ The driver solves FK/IK against the vendored MJCF (``assets/i2rt_yam/yam.xml``) 
 The chain reads the gripper as 0=closed/1=open, the inverse of positronic's grip.
 
 Check on the rig after bring-up: the CAN interface (``ip link set can0 up type can bitrate 1000000``), motor
-zero calibration, kp/kd gains, the gravity compensation each joint needs (``gravity_comp_factor``), gripper
+zero calibration, kp/kd gains, the gravity and friction compensation each joint needs (``Compensation``), gripper
 polarity, joint ranges, the mount pose (``base_pose``), teleop latency, and the arm going limp on close
 (``zero_torque_mode``).
 """
@@ -14,9 +14,9 @@ import functools
 import logging
 import math
 from collections import deque
-from collections.abc import Callable, Generator, Iterator, Sequence
-from dataclasses import dataclass
-from typing import Any, cast
+from collections.abc import Callable, Generator, Iterator
+from dataclasses import asdict, dataclass
+from typing import Any, Protocol, cast, runtime_checkable
 
 import mujoco as mj
 import numpy as np
@@ -32,14 +32,14 @@ from positronic.utils import package_assets_path
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
 from ..ik import qpos_from_site_pose
-from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, bundled_yam_model
+from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model
+from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 logger = logging.getLogger(__name__)
 
 # The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
 # TODO(#517): centralise driver kinematics so driver and sim share one module.
-_MJCF_PATH = 'assets/i2rt_yam/yam.xml'
 _IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 _IK_ROT_TOL = 1e-2  # radians
 # Joints 2 and 3 rest on their lower mechanical stops at zero.
@@ -52,6 +52,9 @@ _CONTROL_HZ = 100
 _JOINT_POS, _JOINT_VEL, _GRIPPER_POS = 'joint_pos', 'joint_vel', 'gripper_pos'
 _JOINT_LIMITS = 'joint_limits'  # the arm's (lower, upper) per joint in the vendor's get_robot_info()
 _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the chain runs, in get_robot_info()
+# The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
+_COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
+_COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 
 
@@ -73,19 +76,84 @@ def _chain_call() -> Iterator[None]:
         raise ChainFault(f'the chain failed: {exc}') from exc
 
 
-def _connect(channel: str, sim: bool, gravity_comp_factor: np.ndarray | None):
+class _JointSpeeds(Protocol):
+    vel: np.ndarray  # rad/s per motor
+
+
+@runtime_checkable
+class _FrictionLoop(Protocol):
+    """What the friction fade reads, writes and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update``
+    runs one cycle of its control loop and adds ``_coulomb_friction * sign(_joint_state.vel)``.
+
+    HACK: these members are private to i2rt, which has no setting for a fade.
+    """
+
+    _coulomb_friction: np.ndarray
+    _joint_state: _JointSpeeds
+    update: Callable[[], None]
+    get_robot_info: Callable[[], dict[str, Any]]
+
+
+def _fade_coulomb_friction(chain: object, fade: FrictionFade) -> None:
+    """Scale the Coulomb friction of the hardware ``chain`` by ``fade.share`` of the speed of each joint, before each
+    ``update``. ``get_robot_info`` reports the full friction and the fade. Only the thread that runs ``update`` writes
+    the speed, so i2rt reads the speed that the scale used.
+
+    The scaled friction also goes in before the wrapper: i2rt's control thread can be in an ``update`` that started
+    before the wrapper and reads the flag after the caller turns it on. A chain that lacks a member of
+    ``_FrictionLoop`` or its speed reading raises before anything changes, so it fails the connect and not that thread.
+    """
+    if not isinstance(chain, _FrictionLoop):
+        raise TypeError(f'{type(chain).__name__} lacks a member of _FrictionLoop, which the friction fade needs')
+    friction = np.array(chain._coulomb_friction, np.float64)
+    update, robot_info = chain.update, chain.get_robot_info
+
+    def faded_friction() -> np.ndarray:
+        return friction * fade.share(chain._joint_state.vel)
+
+    chain._coulomb_friction = faded_friction()
+
+    def faded_update() -> None:
+        chain._coulomb_friction = faded_friction()
+        update()
+
+    chain.update = faded_update
+    chain.get_robot_info = lambda: {**robot_info(), _COULOMB_FRICTION: friction.copy(), _COULOMB_FRICTION_FADE: fade}
+
+
+def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> None:
+    """Set the Coulomb friction of ``compensation`` on ``chain``, which i2rt opened with the flag off. The values and
+    the fade go in before the flag, so the control loop of the chain never runs the values of i2rt's arm config or a
+    friction without the fade. i2rt's sim chain adds no friction, so it gets no fade.
+
+    HACK: i2rt's get_yam_robot takes the flag but reads the values only from its arm config.
+    """
+    if compensation.coulomb_friction is not None:
+        # The gripper motor gets no friction
+        chain._coulomb_friction = np.append(np.asarray(compensation.coulomb_friction, np.float64), 0.0)
+    fade = compensation.coulomb_friction_fade
+    if compensation.use_coulomb_friction and fade is not None and not sim:
+        _fade_coulomb_friction(chain, fade)
+    chain.use_coulomb_friction = compensation.use_coulomb_friction
+
+
+def _connect(channel: str, sim: bool, compensation: Compensation):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
     # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
     with vendor_import('i2rt', 'YAM support', hint=_YAM_EXTRA_HINT):
         from i2rt.robots.get_robot import get_yam_robot  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
         from i2rt.robots.utils import GripperType  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
-    return get_yam_robot(
+    factor = compensation.gravity_comp_factor
+    chain = get_yam_robot(
         channel,
         gripper_type=GripperType.LINEAR_4310,
         zero_gravity_mode=False,
         sim=sim,
-        gravity_comp_factor=gravity_comp_factor,
+        gravity_comp_factor=None if factor is None else np.asarray(factor, np.float64),
+        ee_mass=compensation.ee_mass,
+        use_coulomb_friction=False,  # _set_coulomb_friction turns it on once the values are in
     )
+    return chain
 
 
 class YamState(State, pimm.shared_memory.NumpySMAdapter):
@@ -133,7 +201,7 @@ class _Kinematics:
     """
 
     def __init__(self):
-        model_path = package_assets_path(_MJCF_PATH)
+        model_path = package_assets_path(YAM_MJCF_PATH)
         self._model = mj.MjModel.from_xml_path(model_path)
         self._data = mj.MjData(self._model)
         site = mj.mjtObj.mjOBJ_SITE
@@ -246,11 +314,20 @@ class _Arm(DriverRun[command.CommandType]):
         margin = self._CHAIN_LIMIT_MARGIN_RAD
         return limits[:, 0] + margin, limits[:, 1] - margin
 
-    def arm_meta(self) -> dict[str, Any]:
-        """The settings that the chain reports it runs this arm with."""
-        return {
-            roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(self._robot_info[_GRAVITY_COMP_FACTOR], np.float64).tolist()
+    def arm_meta(self, ee_mass: float | None) -> dict[str, Any]:
+        """The settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which it
+        does not report. i2rt's sim chain runs no friction and reports none."""
+        info = self._robot_info
+        meta = {
+            roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(info[_GRAVITY_COMP_FACTOR], np.float64).tolist(),
+            roboarm_keys.EE_MASS: ee_mass,
         }
+        if _USE_COULOMB_FRICTION in info:
+            meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
+            meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
+            fade = info.get(_COULOMB_FRICTION_FADE)
+            meta[roboarm_keys.COULOMB_FRICTION_FADE] = None if fade is None else asdict(fade)
+        return meta
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
@@ -654,7 +731,7 @@ class Robot(pimm.ControlSystem):
         *,
         base_pose: geom.Transform3D | None = None,
         sim: bool = False,
-        gravity_comp_factor: Sequence[float] | None = None,
+        compensation: Compensation = I2RT_COMPENSATION,
         park_after_idle_s: float | None = 60.0,
         park_tuning: SettleTuning = PARK_SETTLE,
         move_tuning: SettleTuning = MOVE_SETTLE,
@@ -664,25 +741,30 @@ class Robot(pimm.ControlSystem):
         :param channel: SocketCAN interface of the arm (e.g. ``can0``). Ignored in sim mode.
         :param base_pose: Arm-base mount pose in the world frame; None keeps everything in the arm-base frame.
         :param sim: Run against i2rt's own MuJoCo sim instead of hardware.
-        :param gravity_comp_factor: One factor per arm joint, scaling the gravity torque i2rt compensates.
-            None keeps i2rt's own. A joint that reads a steady offset below where it was sent is under-
-            compensated, and the offset is what it carries divided by its position gain.
+        :param compensation: The gravity model and the Coulomb friction that i2rt adds to the PD of the chain.
         :param park_after_idle_s: Park after this many seconds with no arm or gripper command, counted from the
             end of a blocking move or of the start. None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
-        :param connect: ``(channel, sim, gravity_comp_factor) -> i2rt Robot`` factory; the fake-mode smoke
+        :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
         if park_after_idle_s is not None and (not math.isfinite(park_after_idle_s) or park_after_idle_s <= 0):
             raise ValueError('park_after_idle_s must be finite and positive, or None')
+        # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
+        # it does, those checks and a check that each value is finite run here first.
+        friction = compensation.coulomb_friction
+        if friction is not None:
+            values = np.asarray(friction, np.float64)
+            if values.shape != (len(YAM_JOINT_NAMES),) or not np.all(np.isfinite(values) & (values >= 0)):
+                raise ValueError(f'coulomb_friction needs one finite, non-negative value per arm joint, not {friction}')
         self._park_after_idle_s = park_after_idle_s
         self._park_tuning = park_tuning
         self._move_tuning = move_tuning
         self._channel = channel
         self._base_pose = base_pose if base_pose is not None else geom.Transform3D.identity
         self._sim = sim
-        self._gravity_comp_factor = None if gravity_comp_factor is None else np.asarray(gravity_comp_factor, float)
+        self._compensation = compensation
         self._connect = connect
 
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
@@ -743,8 +825,8 @@ class Robot(pimm.ControlSystem):
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
-        """Open the chain, move the arm to the start pose, answer ``asked``, and serve the arm until ``should_stop``.
-        Park and release it after.
+        """Open the chain, set its friction, move the arm to the start pose, answer ``asked``, and serve the arm until
+        ``should_stop``. Park and release it after.
 
         A ``ChainFault`` goes on the state and the grip once, before a park that publishes no readings. It answers
         ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked. Any other
@@ -752,7 +834,7 @@ class Robot(pimm.ControlSystem):
         """
         try:
             with _chain_call():
-                vendor = self._connect(self._channel, self._sim, self._gravity_comp_factor)
+                vendor = self._connect(self._channel, self._sim, self._compensation)
         except ChainFault as exc:
             lost = self._report_lost(exc)
             for call in asked:
@@ -776,8 +858,9 @@ class Robot(pimm.ControlSystem):
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
+                _set_coulomb_friction(vendor, self._compensation, self._sim)
                 self.robot_meta.emit(meta)
-                self.arm_meta.emit(arm.arm_meta())
+                self.arm_meta.emit(arm.arm_meta(self._compensation.ee_mass))
                 joints, grip, missed = yield from arm.go_to_start()
                 self._answer_ready(asked, missed)
                 asked = []
@@ -946,13 +1029,21 @@ class _FakeYam:
         self._vel = np.zeros(7)
         self.last_command: np.ndarray | None = None
         self.joint_limits = np.array([[-np.inf, np.inf]] * 6)  # the limits it reports; the echo has none
-        self.gravity_comp_factor = np.ones(7)  # the factors it reports; the echo models no gravity
+        # The compensation it reports, under i2rt's names; the echo models no gravity and no friction
+        self.gravity_comp_factor = np.ones(7)
+        self.use_coulomb_friction = False
+        self._coulomb_friction = np.zeros(7)
 
     def num_dofs(self) -> int:
         return 7
 
     def get_robot_info(self) -> dict[str, Any]:
-        return {_JOINT_LIMITS: self.joint_limits.copy(), _GRAVITY_COMP_FACTOR: self.gravity_comp_factor.copy()}
+        return {
+            _JOINT_LIMITS: self.joint_limits.copy(),
+            _GRAVITY_COMP_FACTOR: self.gravity_comp_factor.copy(),
+            _USE_COULOMB_FRICTION: self.use_coulomb_friction,
+            _COULOMB_FRICTION: self._coulomb_friction.copy(),
+        }
 
     def get_observations(self) -> dict[str, np.ndarray]:
         return {
@@ -986,7 +1077,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     fake = _FakeYam() if args.fake else None
-    fake_connect = (lambda channel, sim, gravity_comp_factor: fake) if args.fake else _connect
+    fake_connect = (lambda channel, sim, compensation: fake) if args.fake else _connect
     robot = Robot(args.channel, sim=args.sim, connect=fake_connect)
 
     with pimm.World() as world:

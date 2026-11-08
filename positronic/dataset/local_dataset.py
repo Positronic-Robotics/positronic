@@ -17,13 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pos3
 from eval_vocabulary.episode import META_FILE, SIGNAL_FILE_SUFFIX, STATIC_FILE
 
 from positronic.utils.git import get_package_git_state
 from positronic.utils.lazy import LazyDict
 
 from .dataset import ConcatDataset, Dataset, DatasetWriter
-from .edits import EditedDataset
+from .edits import EDITS_FILE, EditedDataset
 from .episode import (
     EPISODE_SCHEMA_VERSION,
     META_CREATED_TS_NS,
@@ -43,6 +44,16 @@ from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
+
+
+def sync_recording_dir(output_dir: str) -> Path:
+    """Mirror the directory a run records into, and return its local path."""
+    # The remote side can hold keys this run never downloaded: another writer's episodes, or edits appended since.
+    # So the mirror deletes no remote key. With no remote delete, an uploaded `.unfinished` outlives the local one
+    # and hides the finished episode, and a stale `edits.jsonl` overwrites the newer remote one, so neither uploads.
+    return pos3.sync(
+        output_dir, sync_on_error=True, delete_remote=False, upload_exclude=[UNFINISHED_MARKER, EDITS_FILE]
+    )
 
 
 def _is_numeric_dir(p: Path) -> bool:
@@ -469,6 +480,7 @@ class LocalDatasetWriter(DatasetWriter):
 
     def __init__(self, root: Path, *, video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER) -> None:
         self.root = root.expanduser()
+        video_encoder.ensure_available()
         self._video_encoder = video_encoder
         self._next_episode_id = 0
         self._lock: ExitStack | None = None
@@ -476,7 +488,6 @@ class LocalDatasetWriter(DatasetWriter):
     def __enter__(self) -> LocalDatasetWriter:
         if self._lock is not None:
             raise RuntimeError('Dataset writer is already open')
-        self._video_encoder.ensure_available()
         self.root.mkdir(parents=True, exist_ok=True)
         with ExitStack() as stack:
             # Lock the directory itself: a lock file in it would go to every mirror of the dataset.

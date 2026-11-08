@@ -174,6 +174,19 @@ def test_a_reset_answers_one_slot_beside_the_scene_meta_and_the_control_period(e
     assert protocol.arm_channel(protocol.OBS_JOINT_POS, 'right') in slot[protocol.FRAME_OBS]
     assert frame[protocol.FRAME_META] == {mapping.META_TASK: _PROMPT}
     assert frame[protocol.FRAME_CONTROL_DT] == pytest.approx(_TIMESTEP * _DECIMATION)
+    assert protocol.FRAME_GOAL not in slot, 'the reset keeps the prompt that the listing states'
+
+
+def test_the_listing_states_each_tasks_prompt_as_its_instruction(env):
+    assert env.tasks({}) == [{mapping.TASK_NAME: _TOKEN[mapping.TOKEN_TASK], protocol.TASK_INSTRUCTION: _PROMPT}]
+
+
+def test_a_reset_that_draws_another_prompt_reports_it_as_the_goal(env, scene):
+    scene.prompt = 'put all red objects in the bin'
+
+    (slot,) = env.reset(_TOKEN)[protocol.SLOTS]
+
+    assert slot[protocol.FRAME_GOAL] == 'put all red objects in the bin'
 
 
 def test_the_d405_view_keeps_abcs_own_cameras(env, scene):
@@ -278,7 +291,7 @@ def test_a_step_ends_the_trial_and_gives_its_verdict_as_abcs_own_eval_does(
 
     assert set(frame) == {protocol.SLOTS, protocol.FRAME_CONTROL_DT}
     (slot,) = frame[protocol.SLOTS]
-    assert set(slot) == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS, protocol.FRAME_META}
+    assert set(slot) == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS}
     assert (slot[protocol.FRAME_DONE], slot[protocol.FRAME_SUCCESS]) == (done, success)
 
 
@@ -354,13 +367,15 @@ def test_a_step_of_a_scored_task_whose_metrics_carry_no_verdict_raises(env, scen
         env.step({0: _hold_both()})
 
 
-def test_a_step_reports_the_prompt_the_task_moved_to(env, scene):
+def test_a_step_reports_the_prompt_the_task_moved_to_as_the_goal_once(env, scene):
     env.reset(_TOKEN)
     scene.prompt = 'find the red mug'
 
-    result = protocol.slot_frame(env.step({0: _hold_both()}), 0)
+    moved = protocol.slot_frame(env.step({0: _hold_both()}), 0)
+    kept = protocol.slot_frame(env.step({0: _hold_both()}), 0)
 
-    assert result[protocol.FRAME_META] == {mapping.META_TASK: 'find the red mug'}
+    assert moved[protocol.FRAME_GOAL] == 'find the red mug'
+    assert protocol.FRAME_GOAL not in kept
 
 
 def test_the_client_reads_the_envs_own_verdict_from_its_slot(env, scene):

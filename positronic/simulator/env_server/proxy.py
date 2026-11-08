@@ -11,6 +11,7 @@ back — so only raw arrays cross the boundary and the World's virtual clock adv
 
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack
+from dataclasses import dataclass
 from typing import Any
 
 import pimm
@@ -28,6 +29,14 @@ from positronic.simulator.env_server.client import EnvConnection
 _IDLE_DT = 0.1
 
 
+@dataclass(frozen=True)
+class EnvTask:
+    """A task an env lists: the text the policy gets, and the trial params that reset the env to the task."""
+
+    instruction: str
+    params: dict[str, Any]
+
+
 class RemoteEnvControlSystem(pimm.ControlSystem):
     def __init__(self, adapter: EnvAdapter, serve: AbstractContextManager[tuple[str, int]]):
         self._adapter = adapter
@@ -42,6 +51,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self.observations: pimm.EmitterDict = pimm.EmitterDict(self)
         self.privileged: pimm.EmitterDict = pimm.EmitterDict(self)
         self.robot_meta = pimm.ControlSystemEmitter[dict](self)
+        self.goal = pimm.ControlSystemEmitter[str](self)
         self.done = pimm.ControlSystemEmitter[dict](self)
         self.env_reset = pimm.calls.ControlSystemHandler[Any, None](self)
 
@@ -50,15 +60,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         self._active = False
         # The latest env frame (``obs`` + ``control_dt``), refreshed by ``reset`` and each ``step``.
         self._frame: dict[str, Any] | None = None
-        # The scene meta (the task/prompt, scene ids) from ``reset``, or from the latest ``step`` that carries
-        # one; read by the client's ``Task`` for its live instruction.
-        self._meta: dict[str, Any] | None = None
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        """The env's latest scene meta (suite, task, …); a client reads its task from here."""
-        assert self._meta is not None, 'meta read before the first reset'
-        return self._meta
 
     def _connect(self) -> EnvConnection:
         """The connection to the env server, started and opened on the first call.
@@ -72,14 +73,18 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
             self._cleanup.callback(self._conn.close)
         return self._conn
 
-    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
-        """The tasks the env has for ``spec``, as the trial params an eval builds its sweep from."""
+    def tasks(self, spec: dict[str, Any]) -> list[EnvTask]:
+        """The tasks the env has for ``spec``, which an eval builds its sweep from."""
         try:
-            params = self._adapter.task_params(self._connect().tasks(spec))
-            if not params:
+            records = self._connect().tasks(spec)
+            if not records:
                 # A sweep of no trials writes nothing and ends at once, which reads as a run that succeeded.
                 raise ValueError(f'the env has no task for {spec!r}')
-            return params
+            params = self._adapter.task_params(records)
+            return [
+                EnvTask(record[protocol.TASK_INSTRUCTION], task_params)
+                for record, task_params in zip(records, params, strict=True)
+            ]
         except BaseException:
             # The listing runs before ``run``, so its failure is the only path that closes the server.
             self._cleanup.close()
@@ -96,18 +101,20 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = conn.reset(self._adapter.reset_token(params))
-        self._meta = self._frame[protocol.FRAME_META]
         self._active = True
         self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
-        self._emit_payload(self._frame[protocol.FRAME_OBS])
+        self._emit_payload(self._frame)
         # An empty payload clears the wire: a terminal the previous trial reached would end this one at once.
         self.done.emit({})
 
-    def _emit_payload(self, raw_obs: dict[str, Any]) -> None:
+    def _emit_payload(self, frame: dict[str, Any]) -> None:
+        raw_obs = frame[protocol.FRAME_OBS]
         for name, value in self._adapter.observations(raw_obs).items():
             self.observations[name].emit(value)
         for name, value in self._adapter.privileged(raw_obs).items():
             self.privileged[name].emit(value)
+        if protocol.FRAME_GOAL in frame:
+            self.goal.emit(frame[protocol.FRAME_GOAL])
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         try:
@@ -123,7 +130,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
                     with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
                         self._frame = self._step_env()
                         with telemetry.span(telemetry_keys.SPAN_MATERIALIZE):
-                            self._emit_payload(self._frame[protocol.FRAME_OBS])
+                            self._emit_payload(self._frame)
         finally:
             self._cleanup.close()
 
@@ -131,8 +138,6 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         assert self._conn is not None, 'stepped before the first reset connected'
         commands = {name: receiver.read() for name, receiver in self.commands.items()}
         result = self._conn.step(self._adapter.action(commands))
-        if protocol.FRAME_META in result:
-            self._meta = result[protocol.FRAME_META]
         payload = self._adapter.terminal(result)
         if payload:  # truthy-valued done: a non-empty payload ends the trial, an empty/``None`` one continues
             self.done.emit(payload)
@@ -184,4 +189,5 @@ def remote_embodiment(
         meta_source=proxy.robot_meta,
         control_systems=(proxy,),
         simulated=True,
+        goal_source=proxy.goal,
     )

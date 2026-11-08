@@ -206,10 +206,11 @@ Each kind carries its own locator:
 - A record carries no URL. A `url` field is refused. A scheme in `host` is refused.
 - The kinds refuse each other's fields. An entry carries one answer to each question.
 
-A `remote` endpoint may state `max_concurrent_sessions`, an integer of 1 or more. The platform then
-holds at most that many sessions open to the policy at once. A server that serves one session at a
-time states 1. With no value, the platform picks the count. Only an entry that names its `address`
-states it: a label on a task takes the value of the plan endpoint it names.
+An endpoint may state `max_concurrent_sessions`, an integer of 1 or more. The platform then holds at
+most that many sessions open to the policy at once. A server that serves one session at a time states
+1. With no value, the platform picks the count. Only an entry that names its `address`, its `spec` or
+its `image` states it: a label on a task takes the value of the plan endpoint it names. A
+`nebius_competition` plan states no limit: the run opens the published count of sessions.
 
 An `image` endpoint may state `min_vram_gb`, the least GPU memory the image needs, in GB of 10^9
 bytes. The platform gives the run the smallest GPU slice that holds it. With no value, the image gets
@@ -294,7 +295,7 @@ A plan that names an eval may run a random sample of the eval's trials. `sample`
 `count`, a number of trials, or as `percent`, a share of the eval's trials rounded up, and a `seed`
 (0 when none is given). The same seed draws the same trials, and the run takes them in the eval's
 own order. A count larger than the eval's trials is refused `bad_request`. A sampled run ranks on no
-board. A plan that states its own tasks takes no sample. On the command line, `--sample-count` or
+leaderboard. A plan that states its own tasks takes no sample. On the command line, `--sample-count` or
 `--sample-percent` states the size and `--sample-seed` the seed.
 
 ```yaml
@@ -426,35 +427,35 @@ Each side refuses a version of the other that is too old:
   Before its first write, a client reads `auth.config` and checks the version there, so it sends no
   write to a platform it cannot read.
 
-`rankings.list` names the boards, and `rankings.get?board=<slug>` reads one. From the command line,
-`positronic/cli/examples/nebius_competition/standings.py` prints the boards, or the rows of one:
+`leaderboards.list?tag=<tag>` names the leaderboards of one tag, and `leaderboards.get?leaderboard=<slug>`
+reads one. From the command line, `positronic/cli/examples/nebius_competition/standings.py` prints the
+leaderboards that rank `nebius_competition` runs, or the rows of one:
 
 ```bash
 uv run positronic/cli/examples/nebius_competition/standings.py
 uv run positronic/cli/examples/nebius_competition/standings.py --board=<slug>
 ```
 
-From Python, `PlatformClient.list_boards` and `.rankings` read them, the latter taking a `BoardRef`
-(`platform_client.boards`). Both take the key when one is set and work without: a public board is
-readable by anyone, a tenant's board only by its members.
+From Python, `PlatformClient.list_leaderboards` and `.get_leaderboard` read them, the latter taking a
+`LeaderboardRef`. Neither sends a key: a published leaderboard is readable by anyone.
 
-A board row reads `<display name>#<tag>`. The name is an alias and is not unique — a board may hide
-it altogether — so the tag is what tells two rows apart, and it is how you find your own: it is the
-same on every board you appear on. The name has 1 to 64 characters after the spaces at its ends are
-removed, and no control or text-direction character (Unicode Cc, or Bidi_Control). `--alias` refuses
-any other name before the sign-in, and the platform refuses it too.
+A team row reads `<display name>#<user tag>`. Two rows can show the same name, so the user tag tells two
+rows apart. It is the same on every leaderboard you appear on, so you find your own row by it. The name
+has 1 to 64 characters after the spaces at its ends are removed, and no control or text-direction
+character (Unicode Cc, or Bidi_Control). `--alias` refuses any other name before the sign-in, and the
+platform refuses it too.
 
 A row with `baseline` set is a reference model, and `baseline.publisher` names the organization that
-released it. A baseline row has no `rank`. The other rows rank 1..N among themselves, and the board
-lists every row in score order.
+released it. A baseline row has no `rank`. The `rank` of each other row gives the best and the worst
+place it can take, and the leaderboard lists every row in score order.
 
-Each row carries `replay`, a page that plays back the camera video of the row's submission, with the
-task and outcome of each episode. The page opens without a key, and `replay` is absent until the
-platform has built it.
+The `submission` of a team row carries `replay`, a page that plays back the camera video of the
+submission, with the task and outcome of each episode. The page opens without a key, and `replay` is
+absent until the platform has built it.
 
 `replay.data_url` names the JSON object the page renders from. `about` identifies the submission,
 and each episode carries its values and one absolute URL per camera video. A page on another origin
-can read the object, the videos and both `rankings` routes with no key:
+can read the object, the videos and the `leaderboards` routes with no key:
 
 ```json
 {
@@ -497,13 +498,13 @@ together.
 ```python
 from platform_client.client import PlatformClient
 from platform_client.eval_plan import plan_of_image
+from platform_client.leaderboards import LeaderboardTag
 from platform_client.policy_images import PolicyImage
 
 with PlatformClient(api_key=key) as client:
-    boards = client.list_boards().boards  # public; each names the eval it ranks
-    for board in boards:
-        print(board.board, board.eval, board.primary_metric)
-    created = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), boards[0].eval))
+    listed = client.list_leaderboards(LeaderboardTag('<tag>')).leaderboards  # no key; each names its eval
+    ranked = [summary.descriptor.eval for summary in listed if summary.descriptor.eval is not None]
+    created = client.create_submission(plan_of_image(PolicyImage('org/policy:v1'), ranked[0]))
     view = client.get_submission(created.submission_id)
 ```
 
@@ -516,9 +517,11 @@ runs it — one simulator, or one real robot — so there is no second axis to g
 owns the set of names, and `PUBLIC_EVALS` names only the public ones. Do not copy a name from a
 document; read it from the platform:
 
-- `rankings.list` needs no key. Each board it returns names the eval it ranks.
+- `leaderboards.list` needs no key. Each leaderboard of a simulator names the eval it ranks.
+  `PlatformClient.list_leaderboard_evals` reads the slug and the eval of each leaderboard alone. It also
+  reads a leaderboard whose other fields this client version refuses.
 - `submissions.create` with a name the platform does not offer raises a `PlatformError` whose
-  `evals` carries every eval on offer, with a board or without one.
+  `evals` carries every eval on offer, with a leaderboard or without one.
 
 Ids are 64-bit ints in Python and bare lowercase hex on the wire; closed sets are `IntEnum`s carried
 as slugs. A non-2xx response raises `PlatformError`, which carries the parsed error envelope: `code`

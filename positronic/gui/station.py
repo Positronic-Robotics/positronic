@@ -31,14 +31,14 @@ Verdict = Literal[Outcome.PASS, Outcome.FAIL]
 
 def terminal_payload(verdict: Verdict) -> dict[str, Any]:
     """The ``done`` payload that ends an episode with ``verdict``. The harness records it in the episode's statics."""
-    return {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: verdict is Outcome.PASS}
+    return {eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: verdict is Outcome.PASS}
 
 
 def outcome_of(result: dict[str, Any]) -> Outcome:
     """The outcome that the harness's answer to an episode carries."""
     if not result[eval_keys.TERMINATED]:
         return Outcome.TIMEOUT
-    if result.get(eval_keys.ENDED_BY) == eval_keys.ENDED_BY_POLICY:
+    if result.get(eval_keys.ENDED_BY) == eval_keys.EndedBy.POLICY:
         return Outcome.POLICY_ENDED
     return Outcome.PASS if result[eval_keys.SUCCESS] else Outcome.FAIL
 
@@ -88,12 +88,11 @@ class Station:
     """The console's record of one run. Each method takes a lock, so the web server and the control loop share it.
 
     ``next_task`` makes a trial before it is needed, so the page shows the instruction that the next Start sends.
-    A trial must carry that instruction as a string: one known only after the trial's reset has nothing to show.
     """
 
     def __init__(self, next_task: Callable[[], Task]):
         self._next_task = next_task
-        self._trial = self._draw()
+        self._trial = next_task()
         self._override: str | None = None
         self._override_since: int | None = None
         self._episodes: list[Episode] = []
@@ -102,12 +101,6 @@ class Station:
         # Starts at the wall clock in microseconds, so a restarted console starts above the one before it.
         self._generation = time.time_ns() // 1000
         self._lock = threading.Lock()
-
-    def _draw(self) -> Task:
-        trial = self._next_task()
-        if not isinstance(trial.instruction_source, str):
-            raise TypeError('the station console shows the instruction before Start, so it must be a string')
-        return trial
 
     def _is_open(self) -> bool:
         return bool(self._episodes) and self._episodes[-1].outcome is None
@@ -130,11 +123,11 @@ class Station:
                 raise Refused('the run has ended')
             if self._is_open():
                 raise Refused('an episode is already running')
-            trial, self._trial = self._trial, self._draw()
+            trial, self._trial = self._trial, self._next_task()
             number = len(self._episodes) + 1
             override = self._override
             if override is not None:
-                trial = replace(trial, instruction_source=override)
+                trial = replace(trial, instruction=override)
                 if self._override_since is None:
                     self._override_since = number
             overridden = override is not None

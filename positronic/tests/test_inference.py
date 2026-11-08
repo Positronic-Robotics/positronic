@@ -23,9 +23,10 @@ from websockets.sync.client import connect
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
-from positronic import keys, wire
-from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
+from positronic import inference, keys, wire
+from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter, load_all_datasets
 from positronic.dataset.serializers import Serializers
+from positronic.dataset.tests.utils import InMemoryS3
 from positronic.dataset.video import VideoSignal
 from positronic.drivers import keyboard
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
@@ -33,7 +34,7 @@ from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.station import Episode, Outcome, Phase, Verdict
 from positronic.gui.web import EndBody, InstructionBody, StationConsole, Status
-from positronic.inference import KeyboardOperator, real, web
+from positronic.inference import KeyboardOperator, real, stats, web
 from positronic.policy import Policy
 from positronic.policy.base import Step
 from positronic.policy.harness import Harness, Rollout
@@ -69,6 +70,30 @@ class _IdlePolicy(Policy):
                 obs = yield Step({}, runtime.time_ns + 100_000_000)
         finally:
             self.closed = True
+
+
+def test_stats_writes_nothing_to_the_prefix_it_reads(tmp_path, monkeypatch):
+    storage = InMemoryS3()
+    monkeypatch.setattr(pos3._Mirror, '_get_client', lambda self, profile=None: storage)
+    recorded = tmp_path / 'recorded'
+    with LocalDatasetWriter(recorded) as w, w.new_episode() as ew:
+        ew.set_static('eval.object', 'cube')
+    for path in recorded.rglob('*'):
+        if path.is_file():
+            storage.objects['recordings', f'run/{path.relative_to(recorded)}'] = path.read_bytes()
+    expected = dict(storage.objects)
+    uploaded_meanwhile = ('recordings', 'run/000000000000/000000000001/meta.json')
+    expected[uploaded_meanwhile] = b'{}'
+
+    def load_while_a_run_uploads(path):
+        storage.objects[uploaded_meanwhile] = b'{}'
+        return load_all_datasets(path)
+
+    monkeypatch.setattr(inference, 'load_all_datasets', load_while_a_run_uploads)
+    with pos3.mirror(cache_root=str(tmp_path / 'cache'), show_progress=False):
+        stats(output_dir='s3://recordings/run/', fields=['eval.object'])
+
+    assert storage.objects == expected
 
 
 @pytest.mark.timeout(30.0)
@@ -116,14 +141,14 @@ def test_a_keypress_opens_an_episode_and_another_ends_it(monkeypatch, caplog):
 
     assert policy.observations, 'the episode never opened'
     assert policy.observations[0][keys.TASK] == 'pick up the cube'
-    assert eval_keys.ENDED_BY_OPERATOR in caplog.text
+    assert eval_keys.EndedBy.OPERATOR in caplog.text
     assert policy.closed
 
 
 def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, caplog):
     presses = iter(['s'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
-    operator = KeyboardOperator(lambda: Task(instruction_source='pick', timeout_sec=None), _IdlePolicy(), None)
+    operator = KeyboardOperator(lambda: Task(instruction='pick', timeout_sec=None), _IdlePolicy(), None)
     with pimm.World(virtual_time=True) as world:
         handler = world.pair(operator.perform_task)
 
@@ -138,7 +163,7 @@ def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, c
 
 def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog):
     """One episode at a time is the operator's own rule: the second press never reaches the harness."""
-    task = Task(instruction_source='pick', timeout_sec=None)
+    task = Task(instruction='pick', timeout_sec=None)
     presses = iter(['s', 's'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
     operator = KeyboardOperator(lambda: task, _IdlePolicy(), None)
@@ -350,7 +375,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
     assert first[eval_keys.INSTRUCTION_OVERRIDDEN] is True
     assert first[eval_keys.TRIAL_INDEX] == 0
     assert first[eval_keys.SUCCESS] is True
-    assert first[eval_keys.ENDED_BY] == eval_keys.ENDED_BY_OPERATOR
+    assert first[eval_keys.ENDED_BY] == eval_keys.EndedBy.OPERATOR
     assert second[eval_keys.TRIAL_INDEX] == 1
     assert second[eval_keys.SUCCESS] is False
 
@@ -373,16 +398,16 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
 
         def script(clock):
             answers.append(caller(Rollout(Task('pick', 0.05), policy, None)))
-            done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+            done.emit({eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: True})
             yield from wait(lambda: policy.observations, 'an observation', clock)
             if retry:
-                done.emit({eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True})
+                done.emit({eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: True})
             yield from wait(answers[0].done, 'the answer', clock)
 
         drive_scheduler(world.start([harness, *embodiment.control_systems, PageOperator(script)]))
     assert policy.observations
     expected = (
-        {eval_keys.ENDED_BY: eval_keys.ENDED_BY_OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
+        {eval_keys.ENDED_BY: eval_keys.EndedBy.OPERATOR, eval_keys.SUCCESS: True, eval_keys.TERMINATED: True}
         if retry
         else {eval_keys.TERMINATED: False}
     )

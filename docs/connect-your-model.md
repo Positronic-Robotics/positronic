@@ -331,6 +331,9 @@ description = sequence(
 # Session.infer returns [{"robot_command": [7 joint positions], "target_grip": grip}, ...]
 ```
 
+The [Codecs Guide](../positronic/policy/codecs/README.md) lists the other action codecs, such as
+`bimanual_joints_action` for two arms.
+
 The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
 
 ## See Also

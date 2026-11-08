@@ -284,8 +284,8 @@ sampled = episode.time[[Time(world=1000), Time(world=2000)]]
 sampled = episode.time[Time(world=1000):Time(world=3000):Time(world=500)]
 ```
 
-`bounds(names)` takes the coordinatewise maximum of eligible signals' starts and ends. No eligible
-signals, or an eligible signal without bounds, raises `ValueError`. Bounds need not identify a
+`bounds(names)` takes the coordinatewise maximum of eligible signals' starts and ends. It skips an
+eligible signal with no samples. No eligible signal with samples raises `ValueError`. Bounds need not identify a
 stored record. Subtract the endpoints to obtain spans; a tick span is a tick count, not nanoseconds.
 
 All queries return a dictionary. Points contain signal values; batches and stepped slices contain

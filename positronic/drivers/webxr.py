@@ -32,7 +32,11 @@ STATE_PATH, CONTROLLER_PATH = '/state', '/ws'
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
 
 
-def _parse_controller_data(data: dict):
+def parse_controller_message(
+    data: Mapping[str, Any],
+) -> tuple[dict[str, geom.Transform3D | None], dict[str, np.ndarray | None]]:
+    """The poses and the buttons of the controllers in a message of the page on ``/ws``, the inverse of
+    ``controller_message``. A controller that the page does not track has ``None`` for both."""
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
     buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
@@ -263,12 +267,15 @@ class WebXR(pimm.ControlSystem):
         async def video_stream(websocket: WebSocket):
             await websocket.accept()
             logger.info('Video WebSocket connection accepted')
+            # The page sends nothing on `/video`, so the first message it receives is the disconnect. Without a
+            # receive, a closed socket stays unseen until the next frame goes out.
+            closed = asyncio.ensure_future(websocket.receive())
             try:
                 # The video needs libturbojpeg, and the page does not. So the encoder loads only here.
                 jpeg_encoder = turbojpeg.TurboJPEG()
                 fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_time = None
-                while not should_stop.value:
+                while not should_stop.value and not closed.done():
                     await asyncio.sleep(1 / 60)
 
                     msg = self._next_frame(last_sent_time)
@@ -282,6 +289,7 @@ class WebXR(pimm.ControlSystem):
                 logger.error(f'Video WebSocket error: {e}')
                 logger.error(traceback.format_exc())
             finally:
+                closed.cancel()
                 logger.info('Video WebSocket connection closed')
 
     def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
@@ -298,7 +306,7 @@ class WebXR(pimm.ControlSystem):
                     try:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
-                        controller_positions, buttons = _parse_controller_data(data)
+                        controller_positions, buttons = parse_controller_message(data)
 
                         # apply scaling
                         for transform in controller_positions.values():

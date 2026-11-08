@@ -11,7 +11,7 @@ import pytest
 from positronic import keys
 from positronic.cfg.eval.sim import libero as libero_cfg
 from positronic.eval import keys as eval_keys
-from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
+from positronic.simulator.env_server.proxy import EnvTask, RemoteEnvControlSystem
 from positronic.simulator.libero import keys as libero_keys
 from positronic.simulator.libero.adapter import LiberoAdapter
 
@@ -21,11 +21,14 @@ def asked(monkeypatch) -> list[Any]:
     """The specs the eval sends the proxy; every suite a spec names is answered with two tasks."""
     specs: list[Any] = []
 
-    def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
+    def tasks(self, spec: dict[str, Any]) -> list[EnvTask]:
         specs.append(spec)
         suites = [spec['suite']] if isinstance(spec['suite'], str) else spec['suite']
         return [
-            {eval_keys.TASK: f'{suite}_{i}', libero_keys.SUITE: suite, libero_keys.TASK_ID: i}
+            EnvTask(
+                f'do task {i} of {suite}',
+                {eval_keys.TASK: f'{suite}_{i}', libero_keys.SUITE: suite, libero_keys.TASK_ID: i},
+            )
             for suite in suites
             for i in (0, 1)
         ]
@@ -61,6 +64,9 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
     trials = list(ev.tasks())
 
     assert asked == [{'suite': 'libero_spatial'}], 'an unbound task_id is absent, so the env narrows nothing'
+    assert [trial.instruction for trial in trials] == ['do task 0 of libero_spatial'] * 2 + [
+        'do task 1 of libero_spatial'
+    ] * 2
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
     assert [(scene[libero_keys.TASK_ID], scene[eval_keys.SEED]) for scene in scenes] == [(0, 7), (0, 8), (1, 7), (1, 8)]
     assert scenes[0] == {

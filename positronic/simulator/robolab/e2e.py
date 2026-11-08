@@ -5,8 +5,9 @@ positronic launches the env-server subprocess (RoboLab's own Isaac Lab interpret
 demo's raw joint-position actions through the actual socket — the ``joint_pos`` path is a bit-identical
 passthrough to the 8-dim ``[q1..q7, gripper]`` action RoboLab's own replay feeds its jointpos env. The gate
 asserts the boundary mechanics. The server answers its own task list. The exact-state reset lands the arm on
-the demo's opening joints. Every recorded action round-trips the socket without a wire error. The demos' grasps
-show in ``gt_state`` as a gripper contact and a done ``object_grabbed`` condition, and a reset frame shows neither.
+the demo's opening joints and resolves the instruction that the task list states. Every recorded action
+round-trips the socket without a wire error. The demos' grasps show in ``gt_state`` as a gripper contact and a
+done ``object_grabbed`` condition, and a reset frame shows neither.
 Task success is reported but not asserted: the recording RoboLab ships at the pinned commit no longer reaches
 success under replay — its own ``examples/run_recorded.py`` reproduces the failure on the same box — so a
 success oracle needs a policy-driven differential, not a demo log.
@@ -38,6 +39,7 @@ _HOLD_TAIL_STEPS = 10
 _RESET_DRIFT_TOL = 0.05  # rad
 # The condition that opens each pick chain of RoboLab's tasks (``robolab.core.task.conditionals``).
 _GRABBED = 'object_grabbed'
+_INSTRUCTION_TYPE = 'default'
 
 
 def _load_fixture(path: str) -> list[tuple[np.ndarray, dict]]:
@@ -69,14 +71,18 @@ def _gt_state_events(state: dict) -> set[str]:
     return events
 
 
-def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dict, task: str) -> tuple[bool, set[str]]:
+def _replay_episode(
+    conn: EnvConnection, actions: np.ndarray, initial_state: dict, task: str, instruction: str
+) -> tuple[bool, set[str]]:
     """Replay one demo; return whether it ended in success, and the kinds of event its ``gt_state`` showed."""
     # Exact-state reset: the token carries the task plus the demo's own recorded initial scene state.
     out = conn.reset({
         robolab_keys.TOKEN_TASK: task,
-        robolab_keys.TOKEN_INSTRUCTION_TYPE: 'default',
+        robolab_keys.TOKEN_INSTRUCTION_TYPE: _INSTRUCTION_TYPE,
         robolab_keys.TOKEN_STATE: initial_state,
     })
+    resolved = out[protocol.FRAME_META][robolab_keys.META_INSTRUCTION]
+    assert resolved == instruction, f'the task list states {instruction!r}, and the reset resolved {resolved!r}'
     stale = _gt_state_events(out[protocol.FRAME_OBS][robolab_keys.GT_STATE])
     assert not stale, f'the reset frame shows {sorted(stale)}, so it holds the prior demo'
     seen: set[str] = set()
@@ -95,14 +101,16 @@ def _replay_episode(conn: EnvConnection, actions: np.ndarray, initial_state: dic
     return False, seen
 
 
-def _check_task_list(conn: EnvConnection, task: str) -> None:
-    """Assert the server answers its own task list, as the adapter reads it."""
+def _check_task_list(conn: EnvConnection, task: str) -> str:
+    """Assert the server answers its own task list, as the adapter reads it. Return the task's instruction."""
     adapter = RobolabAdapter({})
-    params = adapter.task_params(conn.tasks(spec(task=task)))
+    records = conn.tasks(spec(task=task, **{robolab_keys.SELECT_INSTRUCTION_TYPE: _INSTRUCTION_TYPE}))
+    params = adapter.task_params(records)
     assert [p[eval_keys.TASK] for p in params] == [task], f'{task} asked for, {params} answered'
     assert params[0][robolab_keys.EPISODE_LENGTH] > 0, f'{task} reports no episode budget, so a trial has no deadline'
-    whole = adapter.task_params(conn.tasks({}))
+    whole = adapter.task_params(conn.tasks({robolab_keys.SELECT_INSTRUCTION_TYPE: _INSTRUCTION_TYPE}))
     assert task in {p[eval_keys.TASK] for p in whole}, f'{task} is missing from the whole benchmark'
+    return records[0][protocol.TASK_INSTRUCTION]
 
 
 def run_replay(fixture_path: str, *, task: str) -> float:
@@ -113,9 +121,9 @@ def run_replay(fixture_path: str, *, task: str) -> float:
     with serve_robolab(robolab_keys.WRIST_LEFT) as (host, port):
         conn = EnvConnection(host, port)
         try:
-            _check_task_list(conn, task)
+            instruction = _check_task_list(conn, task)
             for i, (actions, initial_state) in enumerate(episodes):
-                ok, events = _replay_episode(conn, actions, initial_state, task)
+                ok, events = _replay_episode(conn, actions, initial_state, task, instruction)
                 seen |= events
                 successes += int(ok)
                 print(f'  episode {i}: {"success" if ok else "FAIL"} ({len(actions)} steps)')
