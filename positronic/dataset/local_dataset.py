@@ -519,8 +519,7 @@ class LocalDatasetWriter(DatasetWriter):
     - Exclusively locks the directory and scans existing episode numbers on context entry.
     - `new_episode()` allocates a new episode directory and returns a
       DiskEpisodeWriter.
-    - Each new episode opens its video encoders for the frame sizes of the last closed episode. So no encoder
-      opens at the first frame of a signal that keeps its size.
+    - Each new episode opens its video encoders for the frame sizes of the last closed episode.
     """
 
     def __init__(self, root: Path, *, video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER) -> None:

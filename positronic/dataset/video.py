@@ -50,7 +50,7 @@ class VideoEncoder(Protocol):
     def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
         """Start a file. Frame ``index`` plays at ``index / fps`` seconds, with a keyframe every ``gop`` frames.
 
-        The encoder sets up here, so that the first ``write`` takes no longer than the next ones.
+        The encoder sets up here, not at the first ``write``.
         """
         ...
 
