@@ -41,36 +41,17 @@ from eval_vocabulary.episode import (
 )
 from eval_vocabulary.progress import MARK_CHANNELS
 from eval_vocabulary.timeline import EMITTED_WORLD, RECORDED_TIME, recording_timeline
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    GetCoreSchemaHandler,
-    NonNegativeFloat,
-    NonNegativeInt,
-    PositiveInt,
-    model_validator,
-)
-from pydantic_core import core_schema
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, PositiveInt, model_validator
 
-from positronic_evals.slug import Slugged
+from positronic_evals.slug import Name, Slugged
 
 log = logging.getLogger(__name__)
 
 
-class LabelerRef(str):
+class LabelerRef(Name):
     """The name of a labeler, as a validated `str`."""
 
     __slots__ = ()
-
-    def __new__(cls, value: str) -> LabelerRef:
-        if not value or any(c.isspace() for c in value):
-            raise ValueError(f'not a labeler name: {value!r}')
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source: type, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 # rules-allow: earn-its-place — the API word; `eval_vocabulary.outcome` keeps the recorded word; a labeler maps them
