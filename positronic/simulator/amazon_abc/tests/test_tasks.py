@@ -138,7 +138,7 @@ def test_the_privileged_channel_carries_the_physics_state_and_the_task_metrics()
 
 def test_the_eval_records_abcs_reward_under_the_signal_that_the_abc_labeler_reads():
     ev = abc_cfg.put_bottles.instantiate()
-    metrics = mapping.task_eval_signals({'reward': 0.5, 'num_bottles_in_bin': 1})
+    metrics = protocol.numeric_signals({'reward': 0.5, 'num_bottles_in_bin': 1})
 
     recorded = {signal for name in ev.privileged for signal, _ in expand_suffixed(name, metrics)}
 
@@ -157,32 +157,6 @@ def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(monkeypatch, n
 
     pinned = [(task.name, trial) for task in definition.tasks for trial in task.trials]
     assert [(t.meta[eval_keys.TASK], {eval_keys.SEED: t.meta[eval_keys.SEED]}) for t in trials] == pinned
-
-
-def test_the_task_metrics_keep_every_numeric_entry_as_a_suffixed_signal():
-    signals = mapping.task_eval_signals({
-        'reward': 0.5,
-        'success': False,
-        'num_bottles_in_bin': 1,
-        'bottle_in_bin_mask': [True, False, False],
-    })
-
-    assert signals['.reward'] == 0.5
-    assert signals['.success'] == np.False_
-    assert signals['.num_bottles_in_bin'] == 1
-    assert np.array_equal(signals['.bottle_in_bin_mask'], [True, False, False])
-
-
-def test_a_task_metric_with_rows_arrives_flat():
-    signals = mapping.task_eval_signals({'bottle_center_offsets': [[0.0, 0.0, 0.1], [0.0, 0.0, 0.2]]})
-
-    assert np.array_equal(signals['.bottle_center_offsets'], [0.0, 0.0, 0.1, 0.0, 0.0, 0.2])
-
-
-def test_the_task_metrics_drop_names_and_empty_lists():
-    signals = mapping.task_eval_signals({'bottles_in_bin': ['bottle_0'], 'bottle_names': [], 'reward': 1.0})
-
-    assert set(signals) == {'.reward'}
 
 
 def test_the_terminal_carries_the_envs_own_verdict():

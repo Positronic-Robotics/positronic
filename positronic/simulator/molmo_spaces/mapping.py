@@ -113,6 +113,10 @@ META_HOUSE_INDEX = 'house_index'
 MOLMO_OBS_QPOS = 'qpos'  # MolmoSpaces joint positions, grouped by robot move group.
 
 OBS_SIM_STATE = 'sim_state'  # MuJoCo mjSTATE_INTEGRATION vector.
+# The task's metrics at this step, keyed by recording suffix: its reward, and the entries of its info.
+OBS_TASK_METRICS = 'task_metrics'
+# The metric that holds the task's reward.
+TASK_METRIC_REWARD = 'reward'
 
 # The left shoulder camera under its benchmark names, in Pi-policy preference order.
 LEFT_SHOULDER_CAMERAS = ('droid_shoulder_light_randomization', 'exo_camera_1')

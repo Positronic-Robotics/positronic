@@ -11,8 +11,10 @@ mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run
 import argparse
 
 import numpy as np
+from eval_vocabulary.episode import MOLMO_REWARD_SIGNAL, MOLMO_TASK_METRICS_SIGNAL
 
 from positronic import keys
+from positronic.dataset.serializers import expand_suffixed
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import mapping
@@ -28,6 +30,14 @@ def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
     )
     assert np.isfinite(sim_state).all(), 'privileged sim_state carries non-finite values'
     return sim_state
+
+
+def _check_task_metrics(adapter: MolmoAdapter, raw_obs: dict) -> dict:
+    """Check that the privileged task metrics carry a finite reward."""
+    metrics = dict(expand_suffixed(MOLMO_TASK_METRICS_SIGNAL, adapter.privileged(raw_obs)[mapping.OBS_TASK_METRICS]))
+    reward = metrics.get(MOLMO_REWARD_SIGNAL)
+    assert reward is not None and np.isfinite(reward), f'task metrics carry no finite reward: {metrics}'
+    return metrics
 
 
 def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 5) -> None:
@@ -51,10 +61,11 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                 q = obs[keys.ROBOT_STATE].q
                 assert q.shape == (7,), f'unexpected joint shape {q.shape}'
                 sim_state = _check_sim_state(adapter, frame[protocol.FRAME_OBS])
+                metrics = _check_task_metrics(adapter, frame[protocol.FRAME_OBS])
                 print(
                     f'  episode {i} of {benchmark.relative}: reset ok — '
                     f'task={frame[protocol.FRAME_META][mapping.META_TASK]!r} grip={obs[keys.GRIP]:.3f} '
-                    f'q0={q[0]:.4f} sim_state={sim_state.size}d'
+                    f'q0={q[0]:.4f} sim_state={sim_state.size}d metrics={sorted(metrics)}'
                 )
                 out = {protocol.FRAME_DONE: False}
                 for _ in range(steps):
@@ -62,7 +73,8 @@ def run(bench: mapping.BenchmarkPath | None, *, episodes: int = 1, steps: int = 
                     out = conn.step(hold)
                     adapter.observations(out[protocol.FRAME_OBS])
                     _check_sim_state(adapter, out[protocol.FRAME_OBS])
-                print(f'  episode {i}: {steps} steps ok (done={out[protocol.FRAME_DONE]})')
+                    metrics = _check_task_metrics(adapter, out[protocol.FRAME_OBS])
+                print(f'  episode {i}: {steps} steps ok (done={out[protocol.FRAME_DONE]}) last metrics={metrics}')
         finally:
             conn.close()
     print('E2E PASSED')

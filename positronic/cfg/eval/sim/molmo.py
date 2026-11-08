@@ -2,6 +2,7 @@ import logging
 import random
 
 import configuronic as cfn
+from eval_vocabulary.episode import MOLMO_TASK_METRICS_SIGNAL
 
 from positronic.cfg.eval import number_trials, require_finite_positive, spec
 from positronic.eval import Eval, Task
@@ -91,7 +92,10 @@ def benchmarks(
     embodiment = remote_embodiment(
         proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=adapter.robot_model
     )
-    privileged = {mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE]}
+    privileged = {
+        mapping.OBS_SIM_STATE: proxy.privileged[mapping.OBS_SIM_STATE],
+        MOLMO_TASK_METRICS_SIGNAL: proxy.privileged[mapping.OBS_TASK_METRICS],
+    }
 
     def pinned_listing(pins: list[tuple[mapping.BenchmarkPath, int]]) -> list[EnvTask]:
         """The env's task of each pin, in pin order: one listing per benchmark."""

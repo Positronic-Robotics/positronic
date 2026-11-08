@@ -94,6 +94,17 @@ def single_arm(action: dict[str, Any]) -> dict[str, Any]:
     return action
 
 
+def numeric_signals(metrics: dict[str, Any]) -> dict[str, Any]:
+    """The entries of an env's task metrics that record as signals: numeric, non-empty, keyed ``.name``."""
+    signals = {}
+    for name, value in metrics.items():
+        array = np.asarray(value)
+        if array.size and array.dtype.kind in 'biuf':
+            # A recorded signal holds a scalar or a 1-D vector per sample.
+            signals[f'.{name}'] = array.ravel() if array.ndim else array[()]
+    return signals
+
+
 def slot_frame(answer: dict[str, Any], slot: int) -> dict[str, Any]:
     """The frame of one slot of an env's answer: that slot's own fields beside the fields of the whole batch."""
     return {**{key: value for key, value in answer.items() if key != SLOTS}, **answer[SLOTS][slot]}
