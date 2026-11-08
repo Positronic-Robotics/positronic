@@ -68,9 +68,8 @@ ABC_TASK_EVAL_SIGNAL = 'task_eval'
 # ABC's progress through the task at each step, from 0 to 1. ABC scores progress as its maximum over the episode.
 ABC_REWARD_SIGNAL = f'{ABC_TASK_EVAL_SIGNAL}.reward'
 
-# A MolmoSpaces task records its metrics at each step as one signal per metric, `<MOLMO_TASK_METRICS_SIGNAL>.<metric>`,
-# under the name its task info gives it. `MOLMO_REWARD_SIGNAL` is the task's reward: the share that a door or a drawer
-# is open or closed, the height of an object that the gripper lifts, or exp(-distance) from an object to its target.
+# A MolmoSpaces task records each numeric entry of its info at each step as `<MOLMO_TASK_METRICS_SIGNAL>.<entry>`.
+# `MOLMO_REWARD_SIGNAL` is the task's own reward at that step, which MolmoSpaces defines per task.
 MOLMO_TASK_METRICS_SIGNAL = 'task_metrics'
 MOLMO_REWARD_SIGNAL = f'{MOLMO_TASK_METRICS_SIGNAL}.reward'
 
