@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from pimm.time import RECEIVED_WORLD
 from positronic import keys
+from positronic.dataset import TimeBounds
 from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
@@ -294,6 +295,9 @@ class _StubEpisode:
     meta = {META_PATH: '/datasets/run-7/episode_3', 'size_mb': 12.5}
     static = {keys.TASK: 'pick the cube', 'scene': b'a mesh'}
     timelines = (RECORDED_TIME,)
+
+    def bounds(self, timelines: str) -> TimeBounds[int]:
+        return TimeBounds(1000, 2000)
 
 
 class _StubDataset:
@@ -909,6 +913,27 @@ def test_the_duration_of_streams_that_start_together_runs_to_the_last_sample(fla
     monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.json()['episodes'] == [[0, [10.0]]]
+
+
+def test_the_duration_skips_a_clock_that_only_a_signal_with_no_rows_carries(flat_with_hidden, monkeypatch):
+    signals = {
+        'marks': DummySignal([], [], timelines=(RECEIVED_WORLD,)),  # the preferred clock
+        'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECORDED_TIME,)),
+    }
+    monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    response = flat_with_hidden.get('/api/episodes')
+    assert response.status_code == 200
+    assert response.json()['episodes'] == [[0, [2.0]]]
+
+
+def test_an_episode_whose_only_signal_has_no_rows_has_no_duration(flat_with_hidden, monkeypatch):
+    episode = EpisodeContainer({'marks': DummySignal([], [], timelines=(RECORDED_TIME,))})
+    monkeypatch.setitem(app_state, 'dataset', [episode])
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration', default='—')})
+    response = flat_with_hidden.get('/api/episodes')
+    assert response.status_code == 200
+    assert response.json()['episodes'] == [[0, ['—']]]
 
 
 def test_episode_table_does_not_interpret_ticks_as_seconds(flat_with_hidden, monkeypatch):

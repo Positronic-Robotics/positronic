@@ -129,8 +129,8 @@ class Episode(ABC, Mapping[str, Any]):
         return {name: signal for name, signal in self.signals.items() if set(timelines).issubset(signal.timelines)}
 
     def _signal_bounds_on(self, timelines: tuple[str, ...]) -> list[TimeBounds[Time]]:
-        """The bounds of each signal that has every one of `timelines`."""
-        return [signal.bounds(timelines) for signal in self._signals_on(timelines).values()]
+        """The bounds of each signal that has every one of `timelines` and at least one sample."""
+        return [signal.bounds(timelines) for signal in self._signals_on(timelines).values() if len(signal)]
 
     @overload
     def bounds(self, timelines: str) -> TimeBounds[int]: ...

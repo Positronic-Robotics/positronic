@@ -223,6 +223,8 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
         joint_set.add(ep.static[_SINGULAR_JOINT_SIGNAL])
     signals = EpisodeSignals(videos=[], numerics=[], dims={}, poses=[], joints=[])
     for name, sig in ep.signals.items():
+        if not len(sig):
+            continue  # No sample to show, and no kind: the kind is read from the first sample.
         if sig.kind == Kind.IMAGE:
             try:
                 sig[0][0]
@@ -232,7 +234,7 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
             signals.videos.append(name)
             continue
 
-        first = sig[0][0] if len(sig) else 0.0
+        first = sig[0][0]
         if isinstance(first, str):
             signals.texts[name] = list(dict.fromkeys(str(value) for value in sig.values()))
             continue
@@ -579,6 +581,19 @@ def duration_timeline(timelines: Iterable[str]) -> str | None:
     return next((name for name in _DURATION_TIMELINES if name in names), None)
 
 
+def sampled_duration_timeline(ep: Episode) -> str | None:
+    """The preferred nanosecond clock that a signal with samples carries, if the viewer recognizes one."""
+    clocks = set(ep.timelines)
+    while (timeline := duration_timeline(clocks)) is not None:
+        try:
+            ep.bounds(timeline)
+        except ValueError:  # Only signals with no samples carry this clock.
+            clocks.discard(timeline)
+        else:
+            return timeline
+    return None
+
+
 # The timelines on the world clock that `recorded` names, so a `recorded` coordinate holds on them.
 _RECORDED_CLOCK_TIMELINES = frozenset({HARNESS_WORLD, RECEIVED_WORLD})
 
@@ -588,7 +603,7 @@ def _opening_timeline(ep: Episode, timeline: str | None) -> str | None:
     if timeline is not None and timeline not in ep.timelines:
         raise KeyError(timeline)
     if timeline is None:
-        timeline = duration_timeline(ep.timelines) or next(iter(ep.timelines), None)
+        timeline = sampled_duration_timeline(ep) or next(iter(ep.timelines), None)
     return timeline
 
 
