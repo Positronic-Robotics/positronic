@@ -104,6 +104,47 @@ def test_message_times_are_snapshots_of_emission_and_first_delivery(transport):
             untyped_time['capture'] = 0
 
 
+@pytest.mark.parametrize('transport', ['local', 'queue', 'shared_memory'])
+def test_a_peek_leaves_the_message_for_the_next_read_to_take_and_stamp(transport):
+    with World(virtual_time=True) as world:
+        if transport == 'local':
+            emitter, receiver = world.local_pipe()
+        else:
+            mode = TransportMode.QUEUE if transport == 'queue' else TransportMode.SHARED_MEMORY
+            emitter, receiver = world.mp_pipes(transport=mode)
+        assert isinstance(receiver, SignalReceiver)
+        clock = world.clock
+        assert isinstance(clock, VirtualClock)
+        shared = transport == 'shared_memory'
+
+        def value(message: Message | None) -> Any:
+            assert message is not None
+            return message.data.value if shared else message.data
+
+        assert receiver.peek() is None
+        emitter.emit(DummySMValue(1) if shared else 1, time=Time(capture=1))
+        clock.advance_to_ns(10)
+        for _ in range(2):
+            peeked = receiver.peek()
+            assert value(peeked) == 1 and peeked is not None and peeked.updated
+            assert peeked.time['capture'] == 1 and RECEIVED_WORLD not in peeked.time
+
+        clock.advance_to_ns(20)
+        first = receiver.read()
+        assert value(first) == 1 and first is not None and first.updated
+        assert first.time[RECEIVED_WORLD] == 20
+        stale = receiver.peek()
+        assert value(stale) == 1 and stale is not None and not stale.updated and stale.time == first.time
+        cached = receiver.read()
+        assert cached is not None and not cached.updated
+
+        emitter.emit(SignalError('lost'), time=Time(capture=2))
+        peeked = receiver.peek()
+        assert peeked is not None and peeked.updated and peeked.data.args == ('lost',)
+        error = receiver.read()
+        assert error is not None and error.updated and error.data.args == ('lost',)
+
+
 @pytest.mark.parametrize('name', [EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, 'emitted.device'])
 def test_producers_cannot_override_framework_time(name):
     with World() as world:
@@ -1257,6 +1298,13 @@ class TestFakeConnectors:
 
             # Fake receiver should not be bound, so emit should succeed
             # but the data goes nowhere
+
+    def test_fake_receiver_refuses_a_read_and_a_peek(self):
+        receiver = FakeReceiver(DummyControlSystem('consumer', steps=1))
+        with pytest.raises(RuntimeError, match='not supposed to be called'):
+            receiver.read()
+        with pytest.raises(RuntimeError, match='not supposed to be called'):
+            receiver.peek()
 
     def test_fake_emitter_to_real_receiver_no_data_flow(self):
         """Test that connecting FakeEmitter to real receiver prevents data flow."""

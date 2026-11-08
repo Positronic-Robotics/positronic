@@ -9,6 +9,7 @@ from pimm.core import (
     ControlSystemReceiver,
     DefaultingReceiver,
     Message,
+    NoOpReceiver,
     SignalEmitter,
     SignalError,
     SignalReceiver,
@@ -124,6 +125,24 @@ class TestMapSignalReceiver:
         assert result3.data == 12
         assert result3.time['source'] == 300
         assert result3.updated is True
+
+    def test_peek_maps_the_next_message_and_leaves_the_last_one(self):
+        def double_below_20(x: int) -> int | None:
+            return x * 2 if x < 20 else None
+
+        mock_reader = Mock(spec=SignalReceiver)
+        map_reader = MapSignalReceiver(mock_reader, double_below_20)
+        mock_reader.peek.return_value = Message(data=10, time=Time(source=100))
+        assert map_reader.peek() == Message(data=20, time=Time(source=100))
+        assert map_reader.last_message is None
+
+        mock_reader.peek.return_value = Message(data=30, time=Time(source=200))
+        assert map_reader.peek() is None
+
+        mock_reader.read.return_value = Message(data=10, time=Time(source=100))
+        map_reader.read()
+        assert map_reader.peek() == Message(data=20, time=Time(source=100), updated=False)
+        mock_reader.read.assert_called_once()
 
     def test_initial_state_has_no_last_message(self):
         """Test that initial state returns None when func returns None."""
@@ -325,6 +344,19 @@ class TestControlSystemReceiver:
         result = receiver.read()
 
         assert result is None
+
+    def test_peek_asks_the_bound_receiver_and_gives_none_or_the_default_without_one(self):
+        receiver = ControlSystemReceiver(Mock(spec=ControlSystem))
+        defaulting = DefaultingReceiver(Mock(spec=ControlSystem), default=42)
+        assert receiver.peek() is None and NoOpReceiver().peek() is None
+        assert defaulting.peek() == Message(data=42, time=defaulting.read().time, updated=False)
+
+        internal = Mock(spec=SignalReceiver)
+        internal.peek.return_value = Message(data=7, time=Time(source=1))
+        receiver._bind(internal)
+        defaulting._bind(internal)
+        assert receiver.peek() == defaulting.peek() == Message(data=7, time=Time(source=1))
+        internal.read.assert_not_called()
 
     def test_value_raises_the_signal_error_that_read_returns(self):
         receiver = ControlSystemReceiver(Mock(spec=ControlSystem))

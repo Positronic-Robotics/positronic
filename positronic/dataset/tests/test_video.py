@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from av.codec.codec import UnknownCodecError
+from av.error import FFmpegError
 from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 
 from positronic.cfg import video_encoder
@@ -269,6 +270,12 @@ class TestLibavEncoder:
             (stream,) = container.streams.video
             assert stream.codec_context.name == 'h264'
             assert not stream.codec_context.has_b_frames
+
+    def test_open_opens_the_codec_so_an_option_the_codec_refuses_fails_there(self, video_paths):
+        encoder = LibavEncoder(options=(('preset', 'no-such-preset'),))
+        with pytest.raises(FFmpegError):
+            encoder.open(video_paths['video'], 64, 48, fps=30, gop=30)
+        assert not video_paths['video'].exists()
 
     def test_an_absent_codec_is_refused(self):
         with pytest.raises(UnknownCodecError):

@@ -88,6 +88,10 @@ class SignalReceiver(ABC, Generic[T]):
         """Returns next message, otherwise last value. None if nothing was read yet."""
         pass
 
+    def peek(self) -> Message[T] | None:
+        """The message the next ``read`` returns, left for that read. A message no read took has no receipt time."""
+        raise NotImplementedError(f'{type(self).__name__} cannot peek')
+
     @final
     @property
     def value(self) -> T:
@@ -105,6 +109,9 @@ class NoOpEmitter(SignalEmitter[T]):
 
 class NoOpReceiver(SignalReceiver[T]):
     def read(self) -> None:
+        return None
+
+    def peek(self) -> None:
         return None
 
 
@@ -226,6 +233,9 @@ class ControlSystemReceiver(SignalReceiver[T]):
     def read(self) -> Message[T] | None:
         return self._internal.read() if self._internal is not None else None
 
+    def peek(self) -> Message[T] | None:
+        return self._internal.peek() if self._internal is not None else None
+
 
 class DefaultingReceiver(ControlSystemReceiver[T]):
     """A receiver that always has a value: whatever the signal last carried, or its default before that."""
@@ -237,6 +247,10 @@ class DefaultingReceiver(ControlSystemReceiver[T]):
     def read(self) -> Message[T]:
         msg = super().read()
         # The default is always not-updated: it is a value the signal never carried.
+        return msg if msg is not None else self._default
+
+    def peek(self) -> Message[T]:
+        msg = super().peek()
         return msg if msg is not None else self._default
 
 
@@ -263,6 +277,9 @@ class FakeReceiver(ControlSystemReceiver[T]):
 
     def read(self) -> Message[T] | None:
         raise RuntimeError('FakeReceiver.read() is not supposed to be called')
+
+    def peek(self) -> Message[T] | None:
+        raise RuntimeError('FakeReceiver.peek() is not supposed to be called')
 
     def _bind(self, receiver: SignalReceiver[T]):
         raise RuntimeError('FakeReceiver._bind() is not supposed to be called')

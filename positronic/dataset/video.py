@@ -48,7 +48,10 @@ class VideoEncoder(Protocol):
         ...
 
     def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
-        """Start a file. Frame ``index`` plays at ``index / fps`` seconds, with a keyframe every ``gop`` frames."""
+        """Start a file. Frame ``index`` plays at ``index / fps`` seconds, with a keyframe every ``gop`` frames.
+
+        The encoder opens here, so the first ``write`` does no setup.
+        """
         ...
 
 
@@ -112,6 +115,11 @@ class LibavEncoder:
         stream.height = height
         stream.pix_fmt = 'yuv420p'
         stream.gop_size = gop
+        try:
+            container.start_encoding()
+        except Exception:
+            container.close()
+            raise
         return _LibavSession(container, stream)
 
 
@@ -164,15 +172,15 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._encoder_thread: threading.Thread | None = None
         self._encoder_error: Exception | None = None
 
-    def _open_encoder(self, first_frame: np.ndarray) -> None:
-        """Open the encoder session based on first frame dimensions."""
-        if first_frame.ndim != 3 or first_frame.shape[2] != 3:
-            raise ValueError(f'Expected frame shape (H, W, 3), got {first_frame.shape}')
+    def open_encoder(self, frame: np.ndarray) -> None:
+        """Open the encoder session for frames shaped like ``frame``. The first ``append`` calls it if nothing did."""
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            raise ValueError(f'Expected frame shape (H, W, 3), got {frame.shape}')
 
-        if first_frame.dtype != np.uint8:
-            raise ValueError(f'Expected uint8 dtype, got {first_frame.dtype}')
+        if frame.dtype != np.uint8:
+            raise ValueError(f'Expected uint8 dtype, got {frame.dtype}')
 
-        height, width = first_frame.shape[:2]
+        height, width = frame.shape[:2]
         self._height, self._width = height, width
         self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
 
@@ -194,7 +202,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
         self._validate_timestamps(timestamps)
         if self._session is None:
-            self._open_encoder(data)
+            self.open_encoder(data)
         else:
             if data.shape[:2] != (self._height, self._width):
                 raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected ({self._height}, {self._width})")

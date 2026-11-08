@@ -51,18 +51,31 @@ class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
         orig_message = self.receiver.read()
         if orig_message is None:
             return None
+        message = self._map(orig_message)
+        if message is None:
+            return self._stale_last()
+        self.last_message = message
+        return self.last_message
 
-        data = orig_message.data
+    def peek(self) -> Message[U] | None:
+        orig_message = self.receiver.peek()
+        if orig_message is None:
+            return None
+        message = self._map(orig_message)
+        return message if message is not None else self._stale_last()
+
+    def _map(self, message: Message[T]) -> Message[U] | None:
+        """``message`` with its data mapped by ``func``. None when ``func`` filters it out."""
+        data = message.data
         # The Message types do not name the SignalError that any message can carry.
         transformed_data = cast(U, data) if isinstance(data, SignalError) else self.func(data)
-        if transformed_data is None:
-            if self.last_message is None:
-                return None
-            # Return a fresh stale copy, not the cached mutable Message, so earlier callers' references don't flip.
-            return Message(self.last_message.data, self.last_message.time, False)
+        return None if transformed_data is None else Message(transformed_data, message.time, message.updated)
 
-        self.last_message = Message(transformed_data, orig_message.time, orig_message.updated)
-        return self.last_message
+    def _stale_last(self) -> Message[U] | None:
+        if self.last_message is None:
+            return None
+        # Return a fresh stale copy, not the cached mutable Message, so earlier callers' references don't flip.
+        return Message(self.last_message.data, self.last_message.time, False)
 
     def _bind(self, receiver: SignalReceiver[T]):
         self.receiver = receiver

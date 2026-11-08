@@ -557,6 +557,24 @@ class Harness(pimm.ControlSystem):
             self._sample()
         return payload
 
+    def _open_signals(self) -> None:
+        """Open each signal that the first sample records, from the newest message that ``peek`` leaves in place."""
+        if self._writer is None:
+            return
+        sources = [
+            (name, self.observations[name], obs.serializer) for name, obs in self._embodiment.observations.items()
+        ]
+        sources += [(name, receiver, None) for name, receiver in self.privileged.items()]
+        with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
+            for name, receiver, serializer in sources:
+                message = receiver.peek()
+                if message is None or isinstance(message.data, pimm.SignalError):
+                    continue
+                value = serializer(message.data) if serializer is not None else message.data
+                for full_name, entry in expand_suffixed(name, value):
+                    if entry is not None:
+                        self._writer.open_signal(full_name, entry)
+
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
     ) -> pimm.Run[dict[str, Any] | None]:
@@ -577,11 +595,14 @@ class Harness(pimm.ControlSystem):
             withheld_poses, pose_codec = self._pose_handshake(rollout.policy, runtime)
             # Closing ``policy_run`` is enough: the codec run holds no resource of its own.
             stepped_run = policy_run if pose_codec is None else pose_codec.wrap(policy_run)
-            deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
-            self.deadline_ns.emit(deadline_ns)
-            self._telemetry.start_rollout(clock.now())
             try:
                 with self._recording(rollout.writer):
+                    self._open_signals()
+                    deadline_ns = (
+                        clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
+                    )
+                    self.deadline_ns.emit(deadline_ns)
+                    self._telemetry.start_rollout(clock.now())
                     payload = yield from self._rollout(
                         should_stop, task, withheld_poses, runtime, stepped_run, deadline_ns
                     )

@@ -355,6 +355,31 @@ class MultiprocessReceiver(SignalReceiver[T]):
             assert self._last_shared_message is not None
             return Message(self._last_shared_message.data, self._last_shared_message.time, False)
 
+    def _peek_queue(self) -> Message[T] | None:
+        # The manager's deque proxy serves no indexing, so a copy reads the message and leaves it in place.
+        pending = self._queue.copy()
+        if pending:
+            return Message(pending[0].data, pending[0].time)
+        if self._last_queue_message is None:
+            return None
+        return Message(self._last_queue_message.data, self._last_queue_message.time, False)
+
+    def _peek_shared_memory(self) -> Message[T] | None:
+        if not self._ensure_shared_memory_initialized():
+            return self._peek_queue()
+
+        with self._lock:
+            if not self._time_value.is_set:
+                return self._peek_queue()
+
+            assert self._readonly_buffer is not None
+            assert self._out_value is not None
+            if self._up_value.value:
+                self._out_value.read_from_buffer(self._readonly_buffer)
+                return Message(cast(T, self._out_value), self._time_value.get())
+            assert self._last_shared_message is not None
+            return Message(self._last_shared_message.data, self._last_shared_message.time, False)
+
     def _drop_errors(self) -> None:
         """Drop each ``SignalError`` that a newer shared-memory payload replaces."""
         self._last_queue_message = None
@@ -377,6 +402,11 @@ class MultiprocessReceiver(SignalReceiver[T]):
             # No data yet; underlying transport still undecided.
             return None
         return None
+
+    def peek(self) -> Message[T] | None:
+        if self.transport_mode is TransportMode.SHARED_MEMORY:
+            return self._peek_shared_memory()
+        return self._peek_queue()
 
     def close(self) -> None:
         if self._closed:
@@ -426,6 +456,13 @@ class LocalQueueReceiver(SignalReceiver[T]):
         if self._queue:
             self._last_value = self._queue.popleft()._received(self._clock)
             return self._last_value
+        if self._last_value is None:
+            return None
+        return Message(self._last_value.data, self._last_value.time, False)
+
+    def peek(self) -> Message[T] | None:
+        if self._queue:
+            return Message(self._queue[0].data, self._queue[0].time)
         if self._last_value is None:
             return None
         return Message(self._last_value.data, self._last_value.time, False)

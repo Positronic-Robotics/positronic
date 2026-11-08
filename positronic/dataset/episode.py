@@ -188,6 +188,14 @@ class EpisodeWriter(AbstractContextManager, ABC, Generic[T]):
         pass
 
     @abstractmethod
+    def open_signal(self, signal_name: str, sample: T) -> None:
+        """Set up the named signal for data like ``sample``, so that its first append does no setup.
+
+        A signal that gets no append leaves nothing in the episode.
+        """
+        pass
+
+    @abstractmethod
     def set_static(self, name: str, data: Any) -> None:
         """Record a static (per-episode) item by key."""
         pass

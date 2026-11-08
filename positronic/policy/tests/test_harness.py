@@ -280,6 +280,9 @@ class MemoryEpisode(EpisodeWriter):
     def append(self, signal_name, data, timestamps):
         self.records.append((signal_name, data, timestamps))
 
+    def open_signal(self, signal_name, sample):
+        pass
+
     def set_static(self, name, data):
         self.static[name] = data
 
@@ -437,7 +440,8 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     frame[0] = 2  # No new signal: the next episode must rebuild its observation cache.
     second = h.caller(Rollout(Task('second', None), Observe(), h.dataset))
     next(h.loop)
-    assert h.serializer.call_count == 2
+    # Each episode serializes the frame once to open its signals, and once to sample it.
+    assert h.serializer.call_count == 4
     assert [obs[POSITION][0] for obs in observations] == [1, 2]
     assert h.commands.values == [(0, 1), (12_000_000, 2)]
     assert not second.done()
@@ -582,7 +586,9 @@ def test_a_failed_episode_closes_the_generator_answers_its_call_and_the_next_cal
     opened = failure != 'startup'
     assert len(h.dataset.episodes) == int(opened)
     assert all(episode.closed and episode.aborted for episode in h.dataset.episodes)
-    assert [deadline for _, deadline in h.deadlines.values] == ([10_000_000, None] if opened else [])
+    # A conversion fails when the harness opens the episode's signals, before the episode's deadline starts.
+    deadlines = {'startup': [], 'policy': [10_000_000, None], 'conversion': [None]}[failure]
+    assert [deadline for _, deadline in h.deadlines.values] == deadlines
 
     h.serializer.side_effect = lambda value: value
     h.caller(Rollout(Task('next', None), Hold(), h.dataset))
@@ -1615,11 +1621,12 @@ def test_policy_completion_resets_the_sampling_deadline(episode_harness):
         h.world.clock.advance_to_ns(1_000_000)
         h.observation.emit(2)
         assert next(h.loop) == pimm.Sleep(0.0008)
-        assert h.serializer.call_count == 2
+        # One call opens the episode's signals, before the first sample.
+        assert h.serializer.call_count == 3
 
         h.world.clock.advance_to_ns(1_800_000)
         assert next(h.loop) == pimm.Sleep(0.001)
-        assert h.serializer.call_count == 3
+        assert h.serializer.call_count == 4
         assert observations == [0, 1]
         assert [data for name, data, _ in h.dataset.episodes[0].records if name == POSITION] == [0, 1, 2]
     finally:
@@ -1646,7 +1653,8 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         h.world.clock.advance_to_ns(100_000_000)
         next(h.loop)
         assert policy.seen == [0, 1]
-        assert h.serializer.call_count == 2
+        # One call opens the episode's signals, before the first sample.
+        assert h.serializer.call_count == 3
 
         h.world.clock.advance_to_ns(101_000_000)
         h.privileged[GROUND_TRUTH].emit(np.array([30]))
@@ -1660,6 +1668,56 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
             if name in (POSITION, GROUND_TRUTH):
                 assert timestamps[HARNESS_WORLD] == timestamps[RECEIVED_WORLD]
                 assert timestamps[HARNESS_WALL] == timestamps[RECEIVED_WALL]
+
+
+# The world time a slow encoder takes to open one signal
+OPEN_NS = 5_000_000
+
+
+class SlowOpenEpisode(MemoryEpisode):
+    """Takes ``OPEN_NS`` of world time to open each signal, and records what it opened before which append."""
+
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+        self.opened = []
+
+    def open_signal(self, signal_name, sample):
+        self.opened.append((signal_name, np.shape(sample), len(self.records)))
+        self.clock.advance_to_ns(self.clock.now_ns() + OPEN_NS)
+
+
+class SlowOpenDataset(MemoryDataset):
+    def __init__(self, clock):
+        super().__init__()
+        self.clock = clock
+
+    def new_episode(self):
+        episode = SlowOpenEpisode(self.clock)
+        self.episodes.append(episode)
+        return episode
+
+
+def test_the_harness_opens_each_signal_before_the_deadline_and_records_the_peeked_frame_first():
+    with _episode_ports(observed=(CAMERA,), privileged=(GROUND_TRUTH,)) as h:
+        dataset = SlowOpenDataset(h.world.clock)
+        frame = np.full((4, 6, 3), 7, dtype=np.uint8)
+        h.observation.emit(0)
+        h.device_observations[CAMERA].emit(frame)
+        h.privileged[GROUND_TRUTH].emit(np.array([10]))
+        h.caller(Rollout(Task('record', 1.0), Hold(), dataset))
+        next(h.loop)
+
+        (episode,) = dataset.episodes
+        assert episode.opened == [(POSITION, (), 0), (CAMERA, (4, 6, 3), 0), (GROUND_TRUTH, (1,), 0)]
+        opened_ns = 3 * OPEN_NS
+        assert h.deadlines.values == [(opened_ns, opened_ns + 1_000_000_000)]
+        # The open left each message for the first sample, which takes it after the opens.
+        first = {name: (data, timestamps) for name, data, timestamps in reversed(episode.records)}
+        data, timestamps = first[CAMERA]
+        np.testing.assert_array_equal(data, frame)
+        for name in (POSITION, CAMERA, GROUND_TRUTH):
+            assert first[name][1][RECEIVED_WORLD] == first[name][1][HARNESS_WORLD] == opened_ns
 
 
 def test_disabled_recording_does_not_read_privileged_data_or_add_sampling_wakeups():

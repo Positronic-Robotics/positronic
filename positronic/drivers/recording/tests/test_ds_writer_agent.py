@@ -39,6 +39,9 @@ class FakeEpisodeWriter(EpisodeWriter[Any]):
     def append(self, signal_name: str, data: Any, timestamps: Time) -> None:
         self.appends.append((signal_name, data, timestamps))
 
+    def open_signal(self, signal_name: str, sample: Any) -> None:
+        pass
+
     def set_static(self, name: str, data: Any) -> None:
         self.statics[name] = data
 

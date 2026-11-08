@@ -93,6 +93,10 @@ def _cached_env_writer_info() -> dict:
     return info
 
 
+def _is_video_frame(data: Any) -> bool:
+    return isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3
+
+
 class DiskEpisodeWriter(EpisodeWriter):
     """Writer for recording episode data containing multiple signals."""
 
@@ -123,6 +127,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         _mark_unfinished(self._path)
 
         self._writers: dict[str, SimpleSignalWriter | VideoSignalWriter] = {}
+        # Video signals whose encoder ``open_signal`` opened, until their first append
+        self._opened: dict[str, VideoSignalWriter] = {}
         # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
@@ -167,12 +173,12 @@ class DiskEpisodeWriter(EpisodeWriter):
             self._writers[signal_name].append(data, timestamps)
             return
 
-        if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
-            video_path = self._path / f'{signal_name}.mp4'
-            frames_index = self._path / f'{signal_name}.frames{SIGNAL_FILE_SUFFIX}'
-            writer = VideoSignalWriter(video_path, frames_index, self._video_encoder)
-        else:
-            writer = SimpleSignalWriter(self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}')
+        writer = self._opened.pop(signal_name, None)
+        if writer is None:
+            if _is_video_frame(data):
+                writer = self._video_writer(signal_name)
+            else:
+                writer = SimpleSignalWriter(self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}')
 
         try:
             writer.append(data, timestamps)
@@ -180,6 +186,29 @@ class DiskEpisodeWriter(EpisodeWriter):
             writer.abort()
             raise
         self._writers[signal_name] = writer
+
+    def open_signal(self, signal_name: str, sample: Any) -> None:
+        """Open the video encoder of ``signal_name`` for frames like ``sample``. Other samples need no setup."""
+        if signal_name in self._writers or signal_name in self._opened or not _is_video_frame(sample):
+            return
+        writer = self._video_writer(signal_name)
+        try:
+            writer.open_encoder(sample)
+        except Exception:
+            writer.abort()
+            raise
+        self._opened[signal_name] = writer
+
+    def _video_writer(self, signal_name: str) -> VideoSignalWriter:
+        video_path = self._path / f'{signal_name}.mp4'
+        frames_index = self._path / f'{signal_name}.frames{SIGNAL_FILE_SUFFIX}'
+        return VideoSignalWriter(video_path, frames_index, self._video_encoder)
+
+    def _abort_unwritten(self) -> None:
+        """Abort each opened signal that got no append, so it leaves no file."""
+        for writer in self._opened.values():
+            writer.abort()
+        self._opened.clear()
 
     def set_static(self, name: str, data: Any) -> None:
         """Set a static (non-time-varying) item by key for this episode.
@@ -218,6 +247,7 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self.abort()
             return
 
+        self._abort_unwritten()
         # Always try to close all signal writers
         for writer in self._writers.values():
             try:
@@ -252,6 +282,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
+        self._abort_unwritten()
         for w in list(self._writers.values()):
             w.abort()
 

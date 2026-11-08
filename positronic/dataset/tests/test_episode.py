@@ -11,7 +11,7 @@ from pimm.time import RECEIVED_WALL
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
-from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
+from positronic.dataset.tests.test_video import FakeEncoder, assert_frames_equal, create_frame
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY, VALUE_COLUMN
@@ -382,6 +382,44 @@ class TestEpisodeVideoIntegration:
         assert snap['a'] == 2
         cam_frame = snap['cam']
         assert_frames_equal(cam_frame, create_frame(10), tolerance=25)
+
+    def test_an_opened_signal_writes_the_same_files_as_one_its_first_append_opens(self, tmp_path):
+        frames = [create_frame(30), create_frame(120), create_frame(200)]
+        for name, opens in (('lazy', False), ('opened', True)):
+            with DiskEpisodeWriter(tmp_path / name) as w:
+                if opens:
+                    w.open_signal('cam', frames[0])
+                    w.open_signal('a', 1)
+                for i, frame in enumerate(frames):
+                    w.append('cam', frame, Time(**{RECORDED_TIME: 1000 * (i + 1)}))
+                    w.append('a', i, Time(**{RECORDED_TIME: 1000 * (i + 1)}))
+        for file in ('cam.mp4', 'cam.frames.parquet', 'a.parquet'):
+            assert (tmp_path / 'opened' / file).read_bytes() == (tmp_path / 'lazy' / file).read_bytes()
+
+    def test_open_signal_opens_the_encoder_before_the_first_frame_and_once(self, tmp_path):
+        encoder = FakeEncoder()
+        with DiskEpisodeWriter(tmp_path / 'ep', video_encoder=encoder) as w:
+            w.open_signal('cam', create_frame(0, (6, 8, 3)))
+            assert encoder.opened == [(8, 6, 100, 30)]
+            w.open_signal('cam', create_frame(0, (6, 8, 3)))
+            w.append('cam', create_frame(1, (6, 8, 3)), Time(**{RECORDED_TIME: 1000}))
+            w.open_signal('cam', create_frame(0, (6, 8, 3)))
+        assert len(encoder.opened) == 1
+        assert encoder.sessions[0].writes == [(0, 1)]
+        assert encoder.sessions[0].ended == 'finish'
+
+    @pytest.mark.parametrize('ending', ['exit', 'abort'])
+    def test_an_opened_signal_that_gets_no_frame_leaves_no_file(self, tmp_path, ending):
+        encoder = FakeEncoder()
+        with DiskEpisodeWriter(tmp_path / 'ep', video_encoder=encoder) as w:
+            w.open_signal('cam', create_frame(0))
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            if ending == 'abort':
+                w.abort()
+        assert encoder.sessions[0].ended == 'abort'
+        assert not list((tmp_path / 'ep').glob('cam.*'))
+        if ending == 'exit':
+            assert set(DiskEpisode(tmp_path / 'ep').signals) == {'a'}
 
 
 class TestCoreEpisodeTime:

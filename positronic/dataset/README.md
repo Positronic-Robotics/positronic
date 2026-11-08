@@ -234,7 +234,7 @@ Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand;
 #### Recording
 `VideoSignalWriter` takes the path to the video file, frame index file, and encoding settings (codec, GOP size, fps).
 
-* Frame dimensions (width, height) are automatically inferred from the first frame.
+* Frame dimensions (width, height) are automatically inferred from the first frame. `open_encoder(frame)` opens the encoder from a frame before the first `append`.
 * Writer encodes frames to video file using the specified codec (default: H.264).
 * For every input frame, the timestamp is appended to the `frames.parquet` index.
 * The frame number in the video corresponds to the index position in the timestamp array.
@@ -248,6 +248,8 @@ An `Episode` is a collection of `Signal`s recorded together plus static, episode
 Episodes are recorded via `EpisodeWriter` implementations. You add time-varying data by calling `append(signal_name, data, timestamps)` where coordinates never decrease and at least one increases per `Signal` name; you add episode-level metadata via `set_static(name, data)`. All static items are stored together in a single `static.json`, while each dynamic `Signal` is stored in its own format, defined by the particular `SignalWriter` implementation (e.g., Parquet for scalar/vector; video file plus frame index for image signals).
 
 Name collisions are disallowed: attempting to `append` to a name that already exists as a static item raises an error, and vice versa.
+
+`open_signal(signal_name, sample)` sets up a signal for data like `sample` before its first `append`, so that the append does no setup. `DiskEpisodeWriter` opens the video encoder of an image signal there, and does nothing for other data. A signal that gets no `append` leaves no file.
 
 Use as a context manager: exiting the `with` block finalizes all underlying `Signal` writers and persists metadata.
 Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abort, and removes the `Episode` directory. After abort, all writer operations (`append`, `set_static`) raise.
