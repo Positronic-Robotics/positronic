@@ -318,9 +318,14 @@ def _print_score(scoring: Scoring, episodes: list[Path]) -> None:
     print(score_line(scores))
 
 
-def _charged(tasks: Callable[[], Iterable[Task]], charge: bool) -> Iterator[Task]:
-    """Every task the source makes, stamped with the run's inference-time policy."""
-    return (replace(task, charge_inference_time=charge) for task in tasks())
+def _with_run_conditions(
+    tasks: Callable[[], Iterable[Task]], charge: bool, fixed_inference_sec: float | None, slow_motion: float
+) -> Iterator[Task]:
+    """Every task the source makes, stamped with the run's inference-time policy and playback speed."""
+    return (
+        replace(task, charge_inference_time=charge, fixed_inference_sec=fixed_inference_sec, slow_motion=slow_motion)
+        for task in tasks()
+    )
 
 
 def _sample(count: int | None, percent: int | None, seed: int | None) -> Sample | None:
@@ -339,6 +344,8 @@ def run(
     policy,
     output_dir=None,
     charge_inference_time: bool = True,
+    fixed_inference_sec: float | None = None,
+    slow_motion: float = 1.0,
     timing=False,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
     policy_image: str | None = None,
@@ -372,6 +379,9 @@ def run(
     ``--sample-percent`` runs a random subset of the eval's trials on the platform, and
     ``--sample-seed`` picks the draw: the same seed draws the same trials.
 
+    ``--fixed-inference-sec`` charges each model call that many seconds of sim time in place of the time it took.
+    ``--slow-motion`` plays each predicted chunk that many times slower, with the arm targets interpolated.
+
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
 
@@ -387,6 +397,8 @@ def run(
     local_only = {
         '--output-dir': output_dir,
         '--charge-inference-time': None if charge_inference_time else False,
+        '--fixed-inference-sec': fixed_inference_sec,
+        '--slow-motion': None if slow_motion == 1 else slow_motion,
         '--timing': timing or None,
         '--dataset-factory': None if dataset_factory is LocalDatasetWriter else dataset_factory,
     }
@@ -423,7 +435,10 @@ def run(
             raise CommandFailed(
                 f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval', Fault.USAGE
             )
-        chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge_inference_time))
+        chosen = replace(
+            chosen,
+            tasks=partial(_with_run_conditions, chosen.tasks, charge_inference_time, fixed_inference_sec, slow_motion),
+        )
         recorded = main(
             policy=policy, evals=[chosen], output_dir=output_dir, timing=timing, dataset_factory=dataset_factory
         )

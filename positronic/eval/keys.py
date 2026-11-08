@@ -33,6 +33,11 @@ MOUNTS = 'mounts'
 # Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
 # task asked, since it cannot hold the world still while the model thinks.
 CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
+# The trial time that the trial charged each model call in place of the time it took. Absent from an episode that
+# charged the time each call took.
+FIXED_INFERENCE_SEC = 'eval.fixed_inference_sec'
+# How many times slower the trial played each predicted chunk. Absent from an episode that played chunks as predicted.
+SLOW_MOTION = 'eval.slow_motion'
 # True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
 # the policy got.
 INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'

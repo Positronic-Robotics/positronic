@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from enum import Enum
 from functools import partial
-from math import inf
+from math import ceil, inf
 from statistics import fmean
 from sys import maxsize
 from typing import Any, Self, TypeVar
@@ -34,7 +34,7 @@ from positronic_model_server.serialization import check_int_range
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
-from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm import RobotStatus, command
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
@@ -214,7 +214,38 @@ class Trajectory:
 
     def waypoints(self) -> list[Waypoint]:
         """Commands paired with their scheduled times, without copying command values."""
-        return [Waypoint(command, self.due_ns(i)) for i, command in enumerate(self.commands)]
+        return [Waypoint(commands, self.due_ns(i)) for i, commands in enumerate(self.commands)]
+
+    def slowed(self, factor: float) -> 'Trajectory':
+        """This trajectory played ``factor`` times slower, at the same ``fps`` and from the same start.
+
+        Each new command is the original trajectory at ``index / factor`` periods. An arm target moves on a
+        straight line between the two commands around that point; every other command holds the earlier value.
+        """
+        for commands in self.commands:
+            for name, value in commands.items():
+                if keys.is_robot_command(name) and not isinstance(
+                    value, command.JointPosition | command.CartesianPosition
+                ):
+                    raise ValueError(f'slow motion interpolates absolute arm targets only, not {type(value).__name__}')
+        duration_ns = factor * (self.end_ns - self.start_ns)
+        # The tolerance keeps a float error from adding a command that would play for a nanosecond.
+        count = ceil(duration_ns / self.period_ns - 1e-6)
+        end_ns = min(self.start_ns + round(duration_ns), self.start_ns + round(count / self.fps * 1e9))
+        return Trajectory([self._at(index / factor) for index in range(count)], self.start_ns, self.fps, end_ns)
+
+    def _at(self, position: float) -> dict[str, Any]:
+        index = min(int(position), len(self.commands) - 1)
+        before = self.commands[index]
+        if index + 1 == len(self.commands):
+            return dict(before)
+        after, fraction = self.commands[index + 1], position - index
+        return {
+            name: command.interpolate(value, after[name], fraction)
+            if keys.is_robot_command(name) and name in after
+            else value
+            for name, value in before.items()
+        }
 
     def __attrs_post_init__(self) -> None:
         check_finite_positive(self.fps, 'fps')
@@ -596,8 +627,17 @@ class TrajectoryMerge:
         return cls(cls.Start(spec['start']), spec.get('horizon_sec'))
 
     def plan(
-        self, chunk: Sequence[Commands], fps: float, previous: Trajectory | None, now_ns: int, obs_time_ns: int
+        self,
+        chunk: Sequence[Commands],
+        fps: float,
+        previous: Trajectory | None,
+        now_ns: int,
+        obs_time_ns: int,
+        slow_motion: float,
     ) -> Trajectory:
+        """The trajectory that plays ``chunk``. ``slow_motion`` plays it that many times slower, after the horizon."""
+        if slow_motion != 1 and self._start is self.Start.OBSERVATION:
+            raise ValueError('slow motion plays only predictions that start after the previous one ends')
         if previous is None:
             start_ns = now_ns
         elif self._start is self.Start.OBSERVATION:
@@ -608,9 +648,9 @@ class TrajectoryMerge:
         trajectory = Trajectory(chunk, start_ns, fps, start_ns + round(duration_sec * 1e9))
         if self.horizon_sec is not None:
             trajectory.commands = [
-                command for i, command in enumerate(chunk) if trajectory.due_ns(i) < trajectory.end_ns
+                commands for i, commands in enumerate(chunk) if trajectory.due_ns(i) < trajectory.end_ns
             ]
-        return trajectory
+        return trajectory if slow_motion == 1 else trajectory.slowed(slow_motion)
 
 
 class InferenceSchedule(Policy):
@@ -735,7 +775,9 @@ class InferenceSchedule(Policy):
                     check_finite_nonnegative(estimated_latency_sec, 'duration estimate')
                     chunk = call.answer.result()
                     if chunk is not None and call.call_id >= first_valid_call_id:
-                        update = self._merge.plan(chunk, self._fps, previous, now_ns, call.observation_time_ns)
+                        update = self._merge.plan(
+                            chunk, self._fps, previous, now_ns, call.observation_time_ns, runtime.slow_motion
+                        )
                         previous = update
                     timing.update_after_answer(update, estimated_latency_sec, now_ns)
 
@@ -823,6 +865,9 @@ class ChunkedSchedule(InferenceSchedule):
     action. The observation is read at the request, before commands emitted in that same round.
 
     Inference observations include completed call timings; the lead estimate stays local.
+
+    A runtime with ``slow_motion`` above 1 plays each chunk that many times slower (``Trajectory.slowed``), so the
+    lead and the next chunk's start count from the slowed end.
 
     The optional observation argument ``replan_now`` defaults to ``False``. When true, inference is due
     immediately and its answer can start immediately. An existing pending call is kept. The argument
