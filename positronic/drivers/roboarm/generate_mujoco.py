@@ -23,16 +23,12 @@ def _add_actuators(spec: mj.MjSpec, kp: float, kv: float, actuator_type: _Actuat
         actuator.trntype = mj.mjtTrn.mjTRN_JOINT
         actuator.target = joint.name
         if actuator_type is _ActuatorType.POSITION:
-            actuator.gainprm = np.array([kp, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-            actuator.biasprm = np.array([0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0])
-            actuator.biastype = mj.mjtBias.mjBIAS_AFFINE
+            actuator.set_to_position(kp)
+            actuator.biasprm[2] = -kv  # set_to_position treats negative kv as unspecified.
             actuator.forcerange = joint.actfrcrange
             actuator.ctrlrange = np.array([-np.pi, np.pi])
         else:
-            actuator.gainprm = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-            actuator.biasprm = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-            actuator.biastype = mj.mjtBias.mjBIAS_NONE
-            actuator.gaintype = mj.mjtGain.mjGAIN_FIXED
+            actuator.set_to_motor()
             actuator.ctrlrange = joint.actfrcrange
 
 
