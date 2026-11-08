@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition
+from positronic.utils import check_finite_positive
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 
@@ -52,8 +53,7 @@ class Motion:
 
     def __post_init__(self):
         for name, value in vars(self).items():
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError(f'{name} must be finite and positive')
+            check_finite_positive(value, name)
         if not isinstance(self.max_waypoints, int):
             raise ValueError('max_waypoints must be an integer')
         duration = max(self.max_translation / self.linear_speed, self.max_rotation / self.angular_speed, 1 / self.fps)

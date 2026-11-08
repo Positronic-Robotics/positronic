@@ -6,7 +6,6 @@
 
 import json
 import logging
-import math
 import time
 from collections import deque
 from contextlib import ExitStack
@@ -25,6 +24,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd
 from positronic.policy.processors import ChunkedSchedule, EndOnField, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
+from positronic.utils import check_finite_positive
 
 from .policy import Conversation, LLMPolicy, llm
 
@@ -64,8 +64,7 @@ class LLMModel(Model):
     """
 
     def __init__(self, policy: LLMPolicy, sessions_dir: Path, decision_timeout: float):
-        if not math.isfinite(decision_timeout) or decision_timeout <= 0:
-            raise ValueError('decision_timeout must be finite and positive')
+        check_finite_positive(decision_timeout, 'decision_timeout')
         self._policy = policy
         self._sessions_dir = sessions_dir
         self._decision_timeout = decision_timeout
