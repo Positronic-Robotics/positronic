@@ -93,10 +93,6 @@ def _cached_env_writer_info() -> dict:
     return info
 
 
-def _is_video_frame(data: Any) -> bool:
-    return isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3
-
-
 class DiskEpisodeWriter(EpisodeWriter):
     """Writer for recording episode data containing multiple signals."""
 
@@ -154,6 +150,10 @@ class DiskEpisodeWriter(EpisodeWriter):
     def path(self) -> Path:
         return self._path
 
+    @staticmethod
+    def _is_video_frame(data: Any) -> bool:
+        return isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3
+
     def append(self, signal_name: str, data: Any, timestamps: Time) -> None:
         """Append data to a named signal.
 
@@ -175,7 +175,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
         writer = self._opened.pop(signal_name, None)
         if writer is None:
-            if _is_video_frame(data):
+            if self._is_video_frame(data):
                 writer = self._video_writer(signal_name)
             else:
                 writer = SimpleSignalWriter(self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}')
@@ -189,7 +189,7 @@ class DiskEpisodeWriter(EpisodeWriter):
 
     def open_signal(self, signal_name: str, sample: Any) -> None:
         """Open the video encoder of ``signal_name`` for frames like ``sample``. Other samples need no setup."""
-        if signal_name in self._writers or signal_name in self._opened or not _is_video_frame(sample):
+        if signal_name in self._writers or signal_name in self._opened or not self._is_video_frame(sample):
             return
         writer = self._video_writer(signal_name)
         try:
