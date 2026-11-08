@@ -32,7 +32,7 @@ def python_paths(root: Path, *, include_tests: bool = False) -> list[Path]:
 
 @dataclass(frozen=True)
 class Occurrence:
-    path: str
+    path: Path
     line: int
     expression: str
 
@@ -71,7 +71,7 @@ class _Shape(ast.NodeTransformer):
 
 
 class _Guards(ast.NodeVisitor):
-    def __init__(self, path: str):
+    def __init__(self, path: Path):
         self._path = path
         self._bindings: set[str] = set()
         self.groups: dict[tuple[str, str], list[Occurrence]] = defaultdict(list)
@@ -103,7 +103,7 @@ class _Guards(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def repeated_guards(sources: Mapping[str, str], *, minimum: int = 3) -> list[list[Occurrence]]:
+def repeated_guards(sources: Mapping[Path, str], *, minimum: int = 3) -> list[list[Occurrence]]:
     """Group guards with the same predicate shape and exception type; ignore diagnostic wording.
 
     Local variable spelling is ignored. Operators, literals, callable and attribute names stay significant.
@@ -114,7 +114,7 @@ def repeated_guards(sources: Mapping[str, str], *, minimum: int = 3) -> list[lis
     groups: dict[tuple[str, str], list[Occurrence]] = defaultdict(list)
     for path, source in sorted(sources.items()):
         visitor = _Guards(path)
-        visitor.visit(ast.parse(source, filename=path))
+        visitor.visit(ast.parse(source, filename=str(path)))
         for key, occurrences in visitor.groups.items():
             groups[key].extend(occurrences)
     return [occurrences for occurrences in groups.values() if len(occurrences) >= minimum]
@@ -135,7 +135,7 @@ def _candidate_blocks(function: ast.FunctionDef | ast.AsyncFunctionDef) -> Itera
                     yield id(body), block
 
 
-def repeated_control_blocks(sources: Mapping[str, str]) -> list[list[Occurrence]]:
+def repeated_control_blocks(sources: Mapping[Path, str]) -> list[list[Occurrence]]:
     """Find two-statement blocks repeated in separate control paths within a function.
 
     At least two calls must occur in each block. Values may differ; callable paths, operators and
@@ -143,7 +143,7 @@ def repeated_control_blocks(sources: Mapping[str, str]) -> list[list[Occurrence]
     """
     findings = []
     for path, source in sorted(sources.items()):
-        tree = ast.parse(source, filename=path)
+        tree = ast.parse(source, filename=str(path))
         functions = (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef))
         for function in functions:
             groups: dict[str, list[tuple[int, Occurrence]]] = defaultdict(list)
@@ -166,7 +166,7 @@ def main() -> int:
     if args.minimum < 2:
         parser.error('--minimum must be at least two')
     paths = args.paths or python_paths(Path.cwd(), include_tests=args.include_tests)
-    sources = {str(path): path.read_text() for path in paths}
+    sources = {path: path.read_text() for path in paths}
     findings = [
         {'rule': rule, 'occurrences': [asdict(item) for item in group]}
         for rule, groups in (
@@ -176,7 +176,7 @@ def main() -> int:
         for group in groups
     ]
     if args.json:
-        print(json.dumps(findings, indent=2))
+        print(json.dumps(findings, indent=2, default=str))
     else:
         for finding in findings:
             print(f'{finding["rule"]}: similar code in {len(finding["occurrences"])} places; inspect before extracting')

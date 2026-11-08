@@ -1,4 +1,4 @@
-# Opt-in review profile. Production pre-commit rules remain in pyproject.toml.
+# Manual complexity review profile.
 target-version = "py311"
 preview = true
 extend-exclude = ["stubs"]

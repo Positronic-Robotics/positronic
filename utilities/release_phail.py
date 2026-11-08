@@ -27,6 +27,7 @@ from collections import defaultdict
 import configuronic as cfn
 import numpy as np
 import pos3
+from eval_vocabulary.outcome import SUCCESSFUL_ITEMS
 from eval_vocabulary.timeline import recording_timeline
 
 from pimm.logging import init_logging
@@ -43,7 +44,7 @@ DEST_ROOT = 's3://positronic-public/phail'
 # Same cache path as PUBLIC (local_name='positronic-public') but with credentials for writing.
 PUBLIC_WRITE = dataclasses.replace(PUBLIC, public=False)
 
-REQUIRED_FIELDS = ['model', 'eval.object', 'eval.successful_items', 'eval.total_items']
+REQUIRED_FIELDS = ['model', 'eval.object', SUCCESSFUL_ITEMS, 'eval.total_items']
 
 
 @dataclasses.dataclass(frozen=True)
@@ -112,7 +113,7 @@ def verify_inference(dataset: Dataset, force: bool):
     uph_by_model: dict[str, list[tuple[int, float]]] = defaultdict(list)
     for i, ep in enumerate(dataset):
         model = ep.get('model', '')
-        successful = ep.get('eval.successful_items', 0)
+        successful = ep.get(SUCCESSFUL_ITEMS, 0)
         duration = _duration(ep)
         if successful and duration > 0:
             uph_by_model[model].append((i, successful / (duration / 3600)))

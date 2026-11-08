@@ -30,6 +30,7 @@ from typing import Any, Self, TypeVar
 
 import numpy as np
 from attr import asdict, dataclass
+from positronic_model_server.serialization import check_int_range
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
 from positronic import keys
@@ -157,8 +158,7 @@ class DelayEstimate(DurationEstimate):
             return min(value, strategy._max_sec)
 
     def __init__(self, statistic: Statistic, last: int, max_sec: float) -> None:
-        if isinstance(last, bool) or not isinstance(last, int) or not 1 <= last <= maxsize:
-            raise ValueError(f'last must be an integer between 1 and {maxsize}')
+        check_int_range(last, 1, maxsize, 'last')
         check_finite_nonnegative(max_sec, 'max_sec')
         self._statistic = statistic
         self._last = last

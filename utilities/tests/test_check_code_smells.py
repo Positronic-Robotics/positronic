@@ -8,10 +8,10 @@ import pytest
 from utilities.check_code_smells import python_paths, repeated_control_blocks, repeated_guards
 
 
-def guards(*predicates: str, exception: str = 'ValueError') -> dict[str, str]:
+def guards(*predicates: str) -> dict[Path, str]:
     return {
-        f'package_{index}/checks.py': (
-            f'def validate(value, other):\n    if {predicate}:\n        raise {exception}("bad input {index}")\n'
+        Path(f'package_{index}/checks.py'): (
+            f'def validate(value, other):\n    if {predicate}:\n        raise ValueError("bad input {index}")\n'
         )
         for index, predicate in enumerate(predicates)
     }
@@ -19,13 +19,15 @@ def guards(*predicates: str, exception: str = 'ValueError') -> dict[str, str]:
 
 def test_reports_all_locations_despite_parameter_names_and_diagnostics():
     sources = {
-        'a.py': 'def f(rate):\n    if not isfinite(rate) or rate < 0:\n        raise ValueError("rate")\n',
-        'b.py': 'def g(delay):\n    if not isfinite(delay) or delay < 0:\n        raise ValueError(f"{delay=}")\n',
-        'c.py': 'def h(age):\n    if not isfinite(age) or age < 0:\n        raise ValueError("age")\n',
+        Path('a.py'): 'def f(rate):\n    if not isfinite(rate) or rate < 0:\n        raise ValueError("rate")\n',
+        Path(
+            'b.py'
+        ): 'def g(delay):\n    if not isfinite(delay) or delay < 0:\n        raise ValueError(f"{delay=}")\n',
+        Path('c.py'): 'def h(age):\n    if not isfinite(age) or age < 0:\n        raise ValueError("age")\n',
     }
     groups = repeated_guards(sources)
     assert len(groups) == 1
-    assert [(item.path, item.line) for item in groups[0]] == [('a.py', 2), ('b.py', 2), ('c.py', 2)]
+    assert [(item.path, item.line) for item in groups[0]] == [(Path('a.py'), 2), (Path('b.py'), 2), (Path('c.py'), 2)]
     assert groups[0][0].expression == 'not isfinite(rate) or rate < 0'
 
 
@@ -48,7 +50,7 @@ def test_distinct_types_and_exception_types_are_not_merged():
         guards('not isinstance(value, str) or not value', 'not isinstance(value, list) or not value'), minimum=2
     )
     sources = guards('not value or value < 0', 'not value or value < 0')
-    sources['package_1/checks.py'] = sources['package_1/checks.py'].replace('ValueError', 'TypeError')
+    sources[Path('package_1/checks.py')] = sources[Path('package_1/checks.py')].replace('ValueError', 'TypeError')
     assert not repeated_guards(sources, minimum=2)
 
 
@@ -60,7 +62,7 @@ def test_small_guards_and_single_use_helpers_are_not_reported():
 @pytest.mark.parametrize('extra', ['        log(value)\n', '    else:\n        accept(value)\n'])
 def test_guards_with_additional_behavior_are_not_equated_with_validation(extra):
     sources = guards('not value or value < 0', 'not value or value < 0')
-    sources['package_1/checks.py'] += extra
+    sources[Path('package_1/checks.py')] += extra
     assert not repeated_guards(sources, minimum=2)
 
 
@@ -74,7 +76,7 @@ def outer(value):
     if not isinstance(value, list) or not value:
         raise ValueError('list')
 """
-    assert not repeated_guards({'types.py': source}, minimum=2)
+    assert not repeated_guards({Path('types.py'): source}, minimum=2)
 
 
 def test_local_variable_renaming_and_async_functions_are_supported():
@@ -89,12 +91,12 @@ async def second():
     if not isfinite(height) or height < 0:
         raise ValueError('height')
 """
-    assert len(repeated_guards({'async.py': source}, minimum=2)) == 1
+    assert len(repeated_guards({Path('async.py'): source}, minimum=2)) == 1
 
 
 def test_syntax_errors_and_invalid_thresholds_fail_visibly():
     with pytest.raises(SyntaxError):
-        repeated_guards({'broken.py': 'def broken('})
+        repeated_guards({Path('broken.py'): 'def broken('})
     with pytest.raises(ValueError, match='at least two'):
         repeated_guards({}, minimum=1)
 
@@ -105,7 +107,10 @@ def test_shared_validator_removes_the_finding():
     )
     assert repeated_guards(sources)
     helper = 'def check(value):\n    if not isfinite(value) or value < 0:\n        raise ValueError("value")\n'
-    assert not repeated_guards({'helper.py': helper, 'callers.py': 'check(rate)\ncheck(delay)\ncheck(age)\n'})
+    assert not repeated_guards({
+        Path('helper.py'): helper,
+        Path('callers.py'): 'check(rate)\ncheck(delay)\ncheck(age)\n',
+    })
 
 
 def test_cli_compares_files_and_returns_a_lint_exit_status(tmp_path):
@@ -142,7 +147,7 @@ def process(service, value, retry):
         result = service.send(encode(value))
     return result
 """
-    groups = repeated_control_blocks({'service.py': source})
+    groups = repeated_control_blocks({Path('service.py'): source})
     assert len(groups) == 1
     assert [item.line for item in groups[0]] == [4, 8]
 
@@ -158,7 +163,7 @@ def process(service, value, retry):
         started = clock()
         result = service.send({different})
 """
-    assert not repeated_control_blocks({'service.py': source})
+    assert not repeated_control_blocks({Path('service.py'): source})
 
 
 def test_parallel_calls_and_repetitive_declarations_are_not_duplicate_control_paths():
@@ -174,7 +179,7 @@ def options(parser):
     parser.add_argument('--mode')
     parser.add_argument('--format')
 """
-    assert not repeated_control_blocks({'parallel.py': source})
+    assert not repeated_control_blocks({Path('parallel.py'): source})
 
 
 def test_nested_functions_are_compared_independently():
@@ -186,12 +191,12 @@ def outer(service):
     started = clock()
     result = service.send(encode(1))
 """
-    assert not repeated_control_blocks({'nested.py': source})
+    assert not repeated_control_blocks({Path('nested.py'): source})
 
 
 def test_default_scope_is_tracked_python_and_tests_are_opt_in(tmp_path):
     subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
-    names = ['driver.py', 'other package/api.py', 'package/tests/test_api.py', 'stubs/generated.py']
+    names = ['driver.py', 'other package/api.py', 'package/tests/test_api.py', Path('stubs/generated.py')]
     for name in names:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -14,12 +14,12 @@ repos:
   - repo: local
     hooks:
       - id: code-smells
-        name: repeated validation and control paths (review candidates)
+        name: repeated validation and control paths
         entry: uv run --locked python -m utilities.check_code_smells
         language: system
-        types: [python]
+        always_run: true
         pass_filenames: false
-        stages: [manual]
+        stages: [pre-commit]
       - id: code-complexity
         name: complexity signals (review candidates)
         entry: uv run --locked ruff check --config utilities/code_smells.toml

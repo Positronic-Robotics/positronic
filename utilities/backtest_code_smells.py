@@ -5,7 +5,7 @@ import ast
 import json
 import subprocess
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from time import perf_counter
 
@@ -19,7 +19,7 @@ def git(root: Path, *args: str) -> str:
     return subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True, text=True).stdout
 
 
-def lint(root: Path, paths: list[str], *, source: str | None = None) -> list[dict]:
+def lint(root: Path, paths: list[Path], *, source: str | None = None) -> list[dict]:
     command = [
         'ruff',
         'check',
@@ -37,7 +37,7 @@ def lint(root: Path, paths: list[str], *, source: str | None = None) -> list[dic
         raise RuntimeError(result.stderr or result.stdout)
     findings = json.loads(result.stdout)
     for finding in findings:
-        finding['filename'] = str(Path(finding['filename']).relative_to(root))
+        finding['filename'] = Path(finding['filename']).relative_to(root)
         finding.pop('fix', None)
     return findings
 
@@ -46,67 +46,67 @@ def lint(root: Path, paths: list[str], *, source: str | None = None) -> list[dic
 class Case:
     name: str
     commit: str
-    path: str
+    path: Path
     symbol: str
     rule: str
     held_out: bool = False
 
 
 CASES = (
-    Case('Repeated finite-number validation', 'a77112635', 'positronic/policy/processors.py', '', 'QSM001'),
+    Case('Repeated finite-number validation', 'a77112635', Path('positronic/policy/processors.py'), '', 'QSM001'),
     Case(
         'Playback loop keeps too much state',
         'a77112635',
-        'positronic/policy/processors.py',
+        Path('positronic/policy/processors.py'),
         'TrajectoryPlayer.run',
         'PLR0914',
     ),
     Case(
         'Observation helper has too many arguments',
         'a6ee8bab5',
-        'positronic/policy/processors.py',
+        Path('positronic/policy/processors.py'),
         'InferenceSchedule._call_obs',
         'PLR0913',
     ),
     Case(
         'Call bookkeeping complicates the main loop',
         '38b5faa79',
-        'positronic/policy/processors.py',
+        Path('positronic/policy/processors.py'),
         'InferenceSchedule.run',
         'PLR0912',
     ),
     Case(
         'Timing bookkeeping lengthens the main loop',
         'eb903787f',
-        'positronic/policy/processors.py',
+        Path('positronic/policy/processors.py'),
         'InferenceSchedule.run',
         'PLR0915',
     ),
     Case(
         'Two inference submission paths',
         '126b77436',
-        'positronic/policy/processors.py',
+        Path('positronic/policy/processors.py'),
         '_InferenceSchedule.run',
         'QSM002',
     ),
     Case(
         'Cryptic overlapping-image selection',
         '94c29e267',
-        'positronic/policy/codecs/image.py',
+        Path('positronic/policy/codecs/image.py'),
         'TransformImages.encode',
         '*',
     ),
     Case(
         'One component borrows another component representation',
         '880404c05',
-        'positronic/policy/processors.py',
+        Path('positronic/policy/processors.py'),
         'RTCSchedule.run',
         'SLF001',
     ),
-    Case('Consolidate RTC context assembly', '396a461fc', 'positronic/policy/processors.py', '', '*', True),
-    Case('Combine adding and removing mapping keys', '2f9b02f48', 'positronic/utils/lazy.py', '', '*', True),
-    Case('Remove redundant image metadata', '763afbc02', 'positronic/policy/codecs/image.py', '', '*', True),
-    Case('Keep a private helper beside its user', 'b80805223', 'positronic/policy/processors.py', '', '*', True),
+    Case('Consolidate RTC context assembly', '396a461fc', Path('positronic/policy/processors.py'), '', '*', True),
+    Case('Combine adding and removing mapping keys', '2f9b02f48', Path('positronic/utils/lazy.py'), '', '*', True),
+    Case('Remove redundant image metadata', '763afbc02', Path('positronic/policy/codecs/image.py'), '', '*', True),
+    Case('Keep a private helper beside its user', 'b80805223', Path('positronic/policy/processors.py'), '', '*', True),
 )
 
 
@@ -126,7 +126,7 @@ def symbol_span(source: str, symbol: str) -> tuple[int, int]:
 
 def historical_case(root: Path, case: Case) -> dict:
     commit = git(root, 'rev-parse', case.commit).strip()
-    result = {**asdict(case), 'commit': commit}
+    result = asdict(replace(case, commit=commit))
     for side, revision in [('before', commit + '^'), ('after', commit)]:
         source = git(root, 'show', f'{revision}:{case.path}')
         first, last = symbol_span(source, case.symbol)
@@ -154,51 +154,48 @@ def historical_case(root: Path, case: Case) -> dict:
     return result
 
 
+def _only_forwards_arguments(node: ast.FunctionDef) -> bool:
+    body = node.body[1:] if ast.get_docstring(node) is not None else node.body
+    if node.decorator_list or len(body) != 1 or not isinstance(body[0], ast.Return):
+        return False
+    call = body[0].value
+    if not isinstance(call, ast.Call) or node.args.vararg or node.args.kwarg:
+        return False
+    parameters = [
+        arg.arg
+        for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+        if arg.arg not in ('self', 'cls')
+    ]
+    arguments = [*call.args, *(arg.value for arg in call.keywords)]
+    return (
+        bool(parameters)
+        and all(isinstance(arg, ast.Name) for arg in arguments)
+        and sorted(parameters) == sorted(arg.id for arg in arguments if isinstance(arg, ast.Name))
+    )
+
+
 def forwarding_helpers(source: str) -> list[dict]:
     """Measure the deliberately narrow candidate 'private helper only forwards its arguments'."""
-    findings = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.FunctionDef) or not node.name.startswith('_') or node.name.endswith('__'):
-            continue
-        body = [
-            item
-            for item in node.body
-            if not (
-                isinstance(item, ast.Expr)
-                and isinstance(item.value, ast.Constant)
-                and isinstance(item.value.value, str)
-            )
-        ]
-        if node.decorator_list or len(body) != 1 or not isinstance(body[0], ast.Return):
-            continue
-        call = body[0].value
-        if not isinstance(call, ast.Call) or node.args.vararg or node.args.kwarg:
-            continue
-        parameters = [
-            arg.arg
-            for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
-            if arg.arg not in ('self', 'cls')
-        ]
-        arguments = [*call.args, *(arg.value for arg in call.keywords)]
-        if (
-            parameters
-            and all(isinstance(arg, ast.Name) for arg in arguments)
-            and sorted(parameters) == sorted(arg.id for arg in arguments if isinstance(arg, ast.Name))
-        ):
-            findings.append({'line': node.lineno, 'symbol': node.name, 'body': ast.unparse(body[0])})
-    return findings
+    return [
+        {'line': node.lineno, 'symbol': node.name, 'body': ast.unparse(node.body[-1])}
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith('_')
+        and not node.name.endswith('__')
+        and _only_forwards_arguments(node)
+    ]
 
 
-def current_sources(root: Path) -> dict:
+def analyze_current_sources(root: Path) -> dict:
     paths = python_paths(root, include_tests=True)
-    findings = lint(root, [str(path) for path in paths])
+    findings = lint(root, paths)
     production = set(python_paths(root))
-    sources = {str(path): (root / path).read_text() for path in sorted(production)}
+    sources = {path: (root / path).read_text() for path in sorted(production)}
     return {
         'files': len(paths),
         'production_files': len(production),
-        'production_counts': dict(Counter(f['code'] for f in findings if Path(f['filename']) in production)),
-        'test_counts': dict(Counter(f['code'] for f in findings if Path(f['filename']) not in production)),
+        'production_counts': dict(Counter(f['code'] for f in findings if f['filename'] in production)),
+        'test_counts': dict(Counter(f['code'] for f in findings if f['filename'] not in production)),
         'findings': findings,
         'repeated_guards': [[asdict(item) for item in group] for group in repeated_guards(sources)],
         'repeated_control_blocks': [[asdict(item) for item in group] for group in repeated_control_blocks(sources)],
@@ -229,11 +226,11 @@ def main() -> None:
             'Accepted current code is not automatically a false positive: every recommendation needs review.',
         ],
         'history': [historical_case(root, case) for case in CASES],
-        'current': current_sources(root),
+        'current': analyze_current_sources(root),
         'elapsed_sec': perf_counter() - start,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + '\n')
+    args.output.write_text(json.dumps(report, indent=2, default=str) + '\n')
     for case in report['history']:
         split = 'held-out' if case['held_out'] else 'calibration'
         print(f'{split}: {case["name"]}: {case["outcome"]} ({len(case["before"])} -> {len(case["after"])})')

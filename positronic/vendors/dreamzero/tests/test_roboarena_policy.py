@@ -193,9 +193,10 @@ class TestWhatTheServerAsksFor:
         assert 'observation/exterior_image_1_left' in keys
         assert 'observation/exterior_image_2_left' not in keys
 
-    def test_a_server_wanting_more_exterior_cameras_than_the_codec_writes_is_refused(self):
+    @pytest.mark.parametrize('count', [-1, 3, True, 1.0])
+    def test_an_invalid_exterior_camera_count_is_refused(self, count):
         with pytest.raises(ValueError, match='exterior cameras'):
-            roboarena_policy.wanted_keys(announced(**{wire.NUM_EXTERIOR_CAMERAS: 3}))
+            roboarena_policy.wanted_keys(announced(**{wire.NUM_EXTERIOR_CAMERAS: count}))
 
     def test_a_server_wanting_no_wrist_camera_gets_none(self):
         keys = roboarena_policy.wanted_keys(announced(**{wire.NEEDS_WRIST_CAMERA: False}))
