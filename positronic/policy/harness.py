@@ -289,6 +289,10 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
         meta[eval_keys.EMBODIMENT] = self._embodiment.descriptor
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
+        if task.fixed_inference_sec is not None:
+            meta[eval_keys.FIXED_INFERENCE_SEC] = task.fixed_inference_sec
+        if task.slow_motion != 1:
+            meta[eval_keys.SLOW_MOTION] = task.slow_motion
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
         policy_meta = deepcopy(flatten_dict(rollout.policy.meta())) | flatten_dict(runtime.metadata_snapshot())
@@ -569,7 +573,11 @@ class Harness(pimm.ControlSystem):
             return None
 
         runtime = Executor(
-            clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
+            clock.now_ns,
+            simulated=self._embodiment.simulated,
+            charge_inference_time=task.charge_inference_time,
+            fixed_inference_sec=task.fixed_inference_sec,
+            slow_motion=task.slow_motion,
         )
         policy_run = None
         try:

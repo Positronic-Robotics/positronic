@@ -108,6 +108,11 @@ class Task:
     meta: dict[str, Any] = field(default_factory=dict)
     # Charge the trial the wall time each model call takes. Only a sim states it off: a real rig pays it.
     charge_inference_time: bool = True
+    # Charge each model call this many seconds of trial time in place of the time it took. ``None`` charges the
+    # time it took. Only a sim that charges inference time states it. The control tick rounds the charge up.
+    fixed_inference_sec: float | None = None
+    # How many times slower each predicted chunk plays, interpolated so that the arm moves with no pauses.
+    slow_motion: float = 1.0
 
 
 # rules-allow: stale-doc — a plan is read for what is left, which needs the landed steps marked

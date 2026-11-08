@@ -255,10 +255,17 @@ def test_a_failed_episode_ends_the_run_and_no_task_runs_twice(failure):
 run_module = importlib.import_module('positronic.cli.eval.run')
 
 
-@pytest.mark.parametrize('states, charged', [({}, True), ({'charge_inference_time': False}, False)])
-def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, states: dict, charged: bool):
-    """A local run charges inference time unless it states otherwise, and stamps that on every task the
-    eval makes."""
+@pytest.mark.parametrize(
+    'states, stamped',
+    [
+        ({}, (True, None, 1.0)),
+        ({'charge_inference_time': False}, (False, None, 1.0)),
+        ({'fixed_inference_sec': 0.5, 'slow_motion': 2.0}, (True, 0.5, 2.0)),
+    ],
+)
+def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, states: dict, stamped: tuple):
+    """A local run charges inference time unless it states otherwise, and stamps that and its playback speed on
+    every task the eval makes."""
     made = [Task(instruction='t', timeout_sec=1.0) for _ in range(2)]
     seen: list[Task] = []
 
@@ -270,7 +277,7 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
 
     run_command(run_module.run, eval=eval_cfg, policy='a policy', **states)
 
-    assert [task.charge_inference_time for task in seen] == [charged, charged]
+    assert [(task.charge_inference_time, task.fixed_inference_sec, task.slow_motion) for task in seen] == [stamped] * 2
 
 
 SMOKE = 'molmo.franka_pick_mini_smoke'

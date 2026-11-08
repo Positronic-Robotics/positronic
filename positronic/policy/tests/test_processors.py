@@ -16,9 +16,15 @@ from positronic_model_server.spec import ARGS, LATEST, NAME, SEQ, VERSION, compo
 
 import pimm
 from pimm.world import VirtualClock
-from positronic import keys
+from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.drivers.roboarm.command import JointPosition, PositionControl
+from positronic.drivers.roboarm.command import (
+    CartesianDelta,
+    CartesianPosition,
+    JointDelta,
+    JointPosition,
+    PositionControl,
+)
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
@@ -666,9 +672,10 @@ def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, m
 
 
 @pytest.fixture
-def execution(monkeypatch):
+def execution(monkeypatch, request):
+    slow_motion = getattr(request, 'param', 1.0)
     with pimm.World(virtual_time=True) as world:
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False, slow_motion=slow_motion)
 
         def submit(function, *args, **kwargs):
             future = Future()
@@ -1151,6 +1158,107 @@ def test_trajectory_rejects_invalid_timing(execution, fps):
 def test_trajectory_rejects_an_end_outside_its_duration(end_ns):
     with pytest.raises(ValueError, match='end_ns'):
         Trajectory([{MOTOR: 1}, {MOTOR: 2}], 0, 10, end_ns)
+
+
+def _arm_chunk(joints, grips):
+    return [
+        {keys.ROBOT_COMMAND: JointPosition(positions=np.array([joint])), keys.TARGET_GRIP: grip}
+        for joint, grip in zip(joints, grips, strict=True)
+    ]
+
+
+def _played(commands):
+    return [(float(c[keys.ROBOT_COMMAND].positions[0]), c[keys.TARGET_GRIP]) for c in commands]
+
+
+def test_a_slowed_trajectory_moves_arm_targets_on_a_line_and_holds_the_grip():
+    slowed = Trajectory(_arm_chunk([0, 1, 2], [0.0, 0.0, 1.0]), 1_000, 10, 1_000 + 3 * PERIOD_NS).slowed(2)
+    assert (slowed.start_ns, slowed.fps, slowed.end_ns) == (1_000, 10, 1_000 + 6 * PERIOD_NS)
+    assert _played(slowed.commands) == [(0, 0), (0.5, 0), (1, 0), (1.5, 0), (2, 1), (2, 1)]
+
+
+def test_a_trajectory_slowed_by_one_is_unchanged():
+    trajectory = Trajectory(_arm_chunk([0, 1, 2], [0.0, 1.0, 1.0]), 0, 10, 250_000_000)
+    slowed = trajectory.slowed(1)
+    assert _played(slowed.commands) == _played(trajectory.commands)
+    assert slowed.end_ns == trajectory.end_ns
+
+
+@pytest.mark.parametrize(('factor', 'count'), [(2, 20), (1.05, 11)])
+def test_a_slowed_trajectory_has_a_command_for_each_period_it_covers(factor, count):
+    slowed = Trajectory(_arm_chunk(range(10), [0.0] * 10), 0, 15, round(10 / 15 * 1e9)).slowed(factor)
+    assert len(slowed.commands) == count
+
+
+def test_a_slowed_trajectory_moves_a_pose_target_on_a_line():
+    poses = [geom.Transform3D(translation=np.array([x, 0.0, 0.0])) for x in (0.0, 1.0)]
+    chunk = [{keys.ROBOT_COMMAND: CartesianPosition(pose=pose)} for pose in poses]
+    slowed = Trajectory(chunk, 0, 10, 2 * PERIOD_NS).slowed(2)
+    assert [c[keys.ROBOT_COMMAND].pose.translation[0] for c in slowed.commands] == pytest.approx([0, 0.5, 1, 1])
+
+
+@pytest.mark.parametrize(
+    'target', [JointDelta(velocities=np.zeros(7)), CartesianDelta(delta=geom.Transform3D.identity), {'q': [0.0]}]
+)
+def test_slow_motion_refuses_an_arm_command_that_is_not_an_absolute_target(target):
+    trajectory = Trajectory([{keys.ROBOT_COMMAND: target}], 0, 10, PERIOD_NS)
+    with pytest.raises(ValueError, match='absolute arm targets'):
+        trajectory.slowed(2)
+
+
+@pytest.mark.parametrize('execution', [2.0], indirect=True)
+def test_a_slowed_chunk_plays_with_no_pause_and_asks_again_at_its_slowed_end(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=10)), Mock())
+    try:
+        run.send({})
+        model.answer_with(_arm_chunk([0, 1, 2], [0.0, 0.0, 1.0]))
+        played = []
+        for index in range(6):
+            clock.advance_to_ns(index * PERIOD_NS)
+            played.append(run.send({}).commands)
+        assert _played(played) == [(0, 0), (0.5, 0), (1, 0), (1.5, 0), (2, 1), (2, 1)]
+        clock.advance_to_ns(6 * PERIOD_NS)
+        run.send({})
+        assert [time for time, _ in model.calls] == [0, 6 * PERIOD_NS]
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('execution', [2.0], indirect=True)
+def test_a_slowed_chunk_keeps_the_commands_inside_the_horizon(execution, monkeypatch):
+    runtime, clock = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    run = runtime.start(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=10, horizon_sec=0.15)), Mock())
+    try:
+        run.send({})
+        model.answer_with(_arm_chunk([0, 1, 2, 3], [0.0] * 4))
+        played = []
+        for index in range(3):
+            clock.advance_to_ns(index * PERIOD_NS)
+            played.append(run.send({}).commands)
+        assert _played(played) == [(0, 0), (0.5, 0), (1, 0)]
+        assert [time for time, _ in model.calls] == [0]
+        clock.advance_to_ns(3 * PERIOD_NS)
+        run.send({})
+        assert [time for time, _ in model.calls] == [0, 3 * PERIOD_NS]
+    finally:
+        run.close()
+
+
+@pytest.mark.parametrize('execution', [2.0], indirect=True)
+def test_slow_motion_refuses_predictions_that_start_at_their_observation(execution, monkeypatch):
+    model, run, step = _rtc(execution, monkeypatch, 0.5, ConstantDuration())
+    try:
+        step(0)
+        model.answer_with(_arm_chunk([0, 1], [0.0, 0.0]))
+        with pytest.raises(ValueError, match='slow motion'):
+            step(0)
+    finally:
+        run.close()
 
 
 def test_chunked_history_only_answer_preserves_playback_and_updates_duration(execution, monkeypatch):

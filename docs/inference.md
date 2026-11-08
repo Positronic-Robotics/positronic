@@ -52,7 +52,7 @@ uv run positronic eval run --eval=.real.droid.pick_place \
   --output_dir=~/datasets/inference_logs/franka_eval
 ```
 
-`--eval` names what runs: a whole benchmark, a suite, or one task. [Evaluation](evaluation.md) lists the targets and the flags that shape a sweep — `--eval.trial_count`, `--charge_inference_time`, `--timing`. (`positronic-inference sim` is a shorthand for the same command with `--eval=.sim.positronic.stack_cubes` fixed.)
+`--eval` names what runs: a whole benchmark, a suite, or one task. [Evaluation](evaluation.md) lists the targets and the flags that shape a sweep — `--eval.trial_count`, `--charge_inference_time`, `--fixed_inference_sec`, `--slow_motion`, `--timing`. (`positronic-inference sim` is a shorthand for the same command with `--eval=.sim.positronic.stack_cubes` fixed.)
 
 **Flags name the endpoint.** `--policy.wire` is the transport by name — `websocket`, `websocket_tls`, `websocket_unix`, `grpc`, `grpc_tls` or `modal_websocket_tls`; the `_tls` members dial a TLS front, and `websocket_unix` a Unix socket (below). Each wire then takes its own address, and `--policy.address.*` fills it: `--policy.address.host` and `--policy.address.port` for a network wire (`8000` is every vendor server's websocket default; a TLS front answers on `443`), or `--policy.address=@positronic.cfg.policy.socket_address --policy.address.uds=…` for `websocket_unix`, which names no host and no port. `--policy.address.query` carries the session params:
 

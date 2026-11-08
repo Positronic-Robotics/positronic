@@ -996,8 +996,33 @@ def test_recording_writer_and_final_metadata(episode_harness, record):
     assert meta[keys.TASK] == 'move'
     assert meta[eval_keys.UNIVERSE] == 'sim'
     assert eval_keys.TIMEOUT not in meta
+    assert eval_keys.FIXED_INFERENCE_SEC not in meta
+    assert eval_keys.SLOW_MOTION not in meta
     assert meta[eval_keys.SUCCESS] is True
     assert answer.result()[eval_keys.TERMINATED] is True
+
+
+def test_a_trial_runs_and_records_its_fixed_inference_time_and_slow_motion(episode_harness):
+    h = episode_harness
+    seen = []
+
+    class Conditions(Policy):
+        def run(self, runtime):
+            seen.append(runtime.slow_motion)
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 100_000_000)
+
+    task = Task('move', None, fixed_inference_sec=0.25, slow_motion=2.0)
+    answer = h.caller(Rollout(task, Conditions(), h.dataset))
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    next(h.loop)
+    assert answer.result()[eval_keys.TERMINATED] is True
+    meta = h.dataset.episodes[-1].static
+    assert (meta[eval_keys.FIXED_INFERENCE_SEC], meta[eval_keys.SLOW_MOTION]) == (0.25, 2.0)
+    assert seen == [2.0]
 
 
 class ReadInstruction(Policy):

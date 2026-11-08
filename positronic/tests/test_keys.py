@@ -22,6 +22,8 @@ _GUARDED = {
     eval_keys.SUCCESS,
     eval_keys.TERMINATED,
     eval_keys.CHARGE_INFERENCE_TIME,
+    eval_keys.FIXED_INFERENCE_SEC,
+    eval_keys.SLOW_MOTION,
     eval_keys.UNIVERSE,
     eval_keys.EMBODIMENT,
     eval_keys.TIMEOUT,
