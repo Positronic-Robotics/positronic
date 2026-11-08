@@ -24,6 +24,7 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 
 from .test_dataset import build_dataset_with_signal, episode_ids
+from .test_video import FakeEncoder, create_frame
 from .utils import InMemoryS3
 
 
@@ -51,6 +52,19 @@ def test_writer_requires_context_entry_and_retains_allocations_across_reopens(tm
         writer.new_episode()
     with writer, writer.new_episode() as episode:
         assert episode.path != aborted.path
+
+
+def test_a_new_episode_opens_the_encoders_for_the_frame_sizes_of_the_last_closed_episode(tmp_path):
+    encoder = FakeEncoder()
+    with LocalDatasetWriter(tmp_path, video_encoder=encoder) as writer:
+        with writer.new_episode() as first:
+            assert encoder.opened == []
+            first.append('cam', create_frame(0, (6, 8, 3)), Time(**{RECORDED_TIME: 1000}))
+        with writer.new_episode() as second:
+            assert encoder.opened == [(8, 6, 100, 30), (8, 6, 100, 30)]
+            second.append('cam', create_frame(0, (6, 8, 3)), Time(**{RECORDED_TIME: 1000}))
+    assert len(encoder.opened) == 2
+    assert [session.ended for session in encoder.sessions] == ['finish', 'finish']
 
 
 def test_writer_excludes_other_instances_and_releases_after_error(tmp_path):

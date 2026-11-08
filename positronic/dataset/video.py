@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from functools import cached_property, lru_cache
 from pathlib import Path
-from typing import Protocol, overload
+from typing import NamedTuple, Protocol, overload
 
 import av
 import numpy as np
@@ -48,7 +48,10 @@ class VideoEncoder(Protocol):
         ...
 
     def open(self, path: Path, width: int, height: int, fps: int, gop: int) -> VideoEncoderSession:
-        """Start a file. Frame ``index`` plays at ``index / fps`` seconds, with a keyframe every ``gop`` frames."""
+        """Start a file. Frame ``index`` plays at ``index / fps`` seconds, with a keyframe every ``gop`` frames.
+
+        The encoder sets up here, so that the first ``write`` takes no longer than the next ones.
+        """
         ...
 
 
@@ -112,11 +115,23 @@ class LibavEncoder:
         stream.height = height
         stream.pix_fmt = 'yuv420p'
         stream.gop_size = gop
+        try:
+            stream.codec_context.open()
+        except Exception:
+            container.close()
+            raise
         return _LibavSession(container, stream)
 
 
 # libx264 at its default preset
 DEFAULT_VIDEO_ENCODER = LibavEncoder()
+
+
+class FrameSize(NamedTuple):
+    """The size of a video frame, in pixels."""
+
+    height: int
+    width: int
 
 
 class VideoSignalWriter(SignalWriter[np.ndarray]):
@@ -155,8 +170,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._frame_count = 0
 
         self._session: VideoEncoderSession | None = None
-        self._width: int | None = None
-        self._height: int | None = None
+        self._frame_size: FrameSize | None = None
         self._frame_timestamps: dict[str, list[int]] = {}
 
         # One encoder thread per writer; the bound makes ``append`` wait when the encoder falls behind.
@@ -164,17 +178,19 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._encoder_thread: threading.Thread | None = None
         self._encoder_error: Exception | None = None
 
-    def _open_encoder(self, first_frame: np.ndarray) -> None:
-        """Open the encoder session based on first frame dimensions."""
-        if first_frame.ndim != 3 or first_frame.shape[2] != 3:
-            raise ValueError(f'Expected frame shape (H, W, 3), got {first_frame.shape}')
+    @property
+    def frame_size(self) -> FrameSize | None:
+        """The frame size that the encoder session opened for, or None before it opens."""
+        return self._frame_size
 
-        if first_frame.dtype != np.uint8:
-            raise ValueError(f'Expected uint8 dtype, got {first_frame.dtype}')
-
-        height, width = first_frame.shape[:2]
-        self._height, self._width = height, width
-        self._session = self.encoder.open(self.video_path, width, height, self.fps, self.gop_size)
+    def open_encoder(self, frame_size: FrameSize) -> None:
+        """Open the encoder session for frames of ``frame_size``. The first ``append`` opens it if nothing did."""
+        if self._finished or self._aborted:
+            raise RuntimeError('Cannot open the encoder of a closed writer')
+        if self._session is not None:
+            raise RuntimeError(f'The encoder of {self.video_path} is already open')
+        self._session = self.encoder.open(self.video_path, frame_size.width, frame_size.height, self.fps, self.gop_size)
+        self._frame_size = frame_size
 
     def append(self, data: np.ndarray, timestamps: Time) -> None:
         """Append a video frame with timestamp.
@@ -193,13 +209,14 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             raise RuntimeError('Cannot append to an aborted writer')
 
         self._validate_timestamps(timestamps)
+        if data.ndim != 3 or data.shape[2] != 3:
+            raise ValueError(f'Expected frame shape (H, W, 3), got {data.shape}')
+        if data.dtype != np.uint8:
+            raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
         if self._session is None:
-            self._open_encoder(data)
-        else:
-            if data.shape[:2] != (self._height, self._width):
-                raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected ({self._height}, {self._width})")
-            if data.dtype != np.uint8:
-                raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
+            self.open_encoder(FrameSize(*data.shape[:2]))
+        elif data.shape[:2] != self._frame_size:
+            raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected {self._frame_size}")
 
         if self._encoder_error is not None:
             raise RuntimeError('Video encoding failed') from self._encoder_error
@@ -250,14 +267,16 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         self._finished = True
 
         self._stop_encoder()
-        if self._session is not None:
+        # A closed writer keeps no session, so a hardware encoder is free for the next file.
+        session, self._session = self._session, None
+        if session is not None:
             if self._encoder_error is not None:
-                self._session.abort()
+                session.abort()
                 raise RuntimeError('Video encoding failed') from self._encoder_error
             try:
-                self._session.finish()
+                session.finish()
             except Exception as e:
-                self._session.abort()
+                session.abort()
                 raise RuntimeError('Video encoding failed') from e
 
         frames = timestamp_table(self._frame_timestamps)

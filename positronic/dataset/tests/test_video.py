@@ -1,4 +1,5 @@
 import pickle
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,13 +9,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from av.codec.codec import UnknownCodecError
+from av.error import FFmpegError
 from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 
 from positronic.cfg import video_encoder
 from positronic.dataset.signal import Kind
 from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY
-from positronic.dataset.video import LibavEncoder, VideoSignal, VideoSignalWriter
+from positronic.dataset.video import FrameSize, LibavEncoder, VideoSignal, VideoSignalWriter
 
 
 def _nvenc_opens() -> bool:
@@ -153,6 +155,28 @@ class TestVideoSignalWriter:
             with pytest.raises(ValueError, match='Frame shape'):
                 w.append(create_frame(0, (50, 50, 3)), Time(**{RECORDED_TIME: 2000}))
 
+    def test_a_frame_must_fit_an_encoder_opened_before_it(self, writer):
+        writer.open_encoder(FrameSize(100, 100))
+        with writer as w:
+            with pytest.raises(ValueError, match='Frame shape'):
+                w.append(create_frame(0, (50, 50, 3)), Time(**{RECORDED_TIME: 1000}))
+            with pytest.raises(ValueError, match='Expected frame shape'):
+                w.append(np.zeros((100, 100), dtype=np.uint8), Time(**{RECORDED_TIME: 2000}))
+            w.append(create_frame(0, (100, 100, 3)), Time(**{RECORDED_TIME: 3000}))
+
+    def test_the_encoder_opens_once_and_only_on_an_open_writer(self, video_paths):
+        writer = VideoSignalWriter(video_paths['video'], video_paths['frames'])
+        writer.open_encoder(FrameSize(8, 8))
+        with pytest.raises(RuntimeError, match='already open'):
+            writer.open_encoder(FrameSize(8, 8))
+        writer.abort()
+        with pytest.raises(RuntimeError, match='closed writer'):
+            writer.open_encoder(FrameSize(8, 8))
+        with VideoSignalWriter(video_paths['video'], video_paths['frames']) as finished:
+            pass
+        with pytest.raises(RuntimeError, match='closed writer'):
+            finished.open_encoder(FrameSize(8, 8))
+
     def test_append_after_context_exit(self, writer):
         """Test that appending after finish raises an error."""
         frame = create_frame()
@@ -203,6 +227,21 @@ class FakeEncoder:
         return self.sessions[-1]
 
 
+@dataclass
+class SessionWatcher:
+    """A libx264 encoder that holds each session it opens by a weak reference only."""
+
+    sessions: list[weakref.ref] = field(default_factory=list)
+
+    def ensure_available(self) -> None:
+        pass
+
+    def open(self, path: Path, width: int, height: int, fps: int, gop: int):
+        session = LibavEncoder().open(path, width, height, fps, gop)
+        self.sessions.append(weakref.ref(session))
+        return session
+
+
 class TestVideoEncoderSeam:
     def test_encoder_gets_every_frame_in_order_then_finishes(self, video_paths):
         encoder = FakeEncoder()
@@ -215,6 +254,19 @@ class TestVideoEncoderSeam:
         assert session.writes == [(i, i) for i in range(20)]
         assert session.ended == 'finish'
         assert len(pq.read_table(video_paths['frames'])) == 20
+
+    def test_an_encoder_opened_before_the_first_frame_gets_every_frame(self, video_paths):
+        encoder = FakeEncoder()
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder, gop_size=12, fps=50)
+        w.open_encoder(FrameSize(6, 8))
+        assert encoder.opened == [(8, 6, 50, 12)]
+        with w:
+            for i in range(3):
+                w.append(create_frame(i, (6, 8, 3)), Time(**{RECORDED_TIME: 1000 * (i + 1)}))
+
+        assert encoder.opened == [(8, 6, 50, 12)]
+        assert encoder.sessions[0].writes == [(0, 0), (1, 1), (2, 2)]
+        assert encoder.sessions[0].ended == 'finish'
 
     def test_empty_writer_never_opens_the_encoder(self, video_paths):
         encoder = FakeEncoder()
@@ -276,6 +328,46 @@ class TestLibavEncoder:
         with pytest.raises(ValueError, match='not a video codec'):
             LibavEncoder(codec='aac').ensure_available()
         LibavEncoder().ensure_available()
+
+    def test_open_sets_up_the_codec_so_options_it_refuses_fail_there_and_leave_no_file(self, video_paths):
+        encoder = LibavEncoder(options=(('preset', 'no-such-preset'),))
+        with pytest.raises(FFmpegError):
+            encoder.open(video_paths['video'], 64, 64, 30, 30)
+        assert not video_paths['video'].exists()
+
+    def test_an_encoder_opened_before_its_first_frame_writes_no_file_until_a_frame(self, video_paths):
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], LibavEncoder())
+        w.open_encoder(FrameSize(64, 64))
+        assert not video_paths['video'].exists()
+        w.abort()
+        assert not video_paths['video'].exists()
+        assert not video_paths['frames'].exists()
+
+    def test_an_encoder_opened_before_the_first_frame_writes_the_same_files(self, tmp_path):
+        frames = [create_frame(i * 6, (64, 96, 3)) for i in range(40)]
+        outputs = []
+        for name, frame_size in (('lazy', None), ('early', FrameSize(64, 96))):
+            paths = (tmp_path / f'{name}.mp4', tmp_path / f'{name}.frames.parquet')
+            w = VideoSignalWriter(*paths, LibavEncoder())
+            if frame_size is not None:
+                w.open_encoder(frame_size)
+            with w:
+                for i, frame in enumerate(frames):
+                    w.append(frame, Time(**{RECORDED_TIME: 1000 * (i + 1)}))
+            outputs.append(tuple(p.read_bytes() for p in paths))
+
+        assert outputs[0] == outputs[1]
+
+    @pytest.mark.parametrize('end', ['close', 'abort'])
+    def test_a_closed_writer_keeps_no_encoder_session(self, video_paths, end):
+        encoder = SessionWatcher()
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        w.append(create_frame(0), Time(**{RECORDED_TIME: 1000}))
+        if end == 'close':
+            w.__exit__(None, None, None)
+        else:
+            w.abort()
+        assert encoder.sessions[0]() is None
 
     def test_the_check_opens_a_session_so_options_the_codec_refuses_fail_there(self):
         with pytest.raises(RuntimeError, match='cannot open an encoder session'):
