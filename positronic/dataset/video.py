@@ -174,6 +174,12 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
 
     def open_encoder(self, frame: np.ndarray) -> None:
         """Open the encoder session for frames shaped like ``frame``. The first ``append`` calls it if nothing did."""
+        if self._finished:
+            raise RuntimeError('Cannot open the encoder of a finished writer')
+        if self._aborted:
+            raise RuntimeError('Cannot open the encoder of an aborted writer')
+        if self._session is not None:
+            raise RuntimeError(f'The encoder of {self.video_path} is already open')
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError(f'Expected frame shape (H, W, 3), got {frame.shape}')
 

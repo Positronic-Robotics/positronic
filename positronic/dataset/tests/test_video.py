@@ -223,6 +223,21 @@ class TestVideoEncoderSeam:
             pass
         assert encoder.sessions == []
 
+    def test_open_encoder_refuses_an_open_encoder_and_a_closed_writer(self, video_paths):
+        encoder = FakeEncoder()
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        w.open_encoder(create_frame(0))
+        with pytest.raises(RuntimeError, match='already open'):
+            w.open_encoder(create_frame(0))
+        w.abort()
+        with pytest.raises(RuntimeError, match='aborted'):
+            w.open_encoder(create_frame(0))
+        finished = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+        finished.__exit__(None, None, None)
+        with pytest.raises(RuntimeError, match='finished'):
+            finished.open_encoder(create_frame(0))
+        assert len(encoder.sessions) == 1
+
     def test_abort_stops_the_encoder_and_deletes_the_files(self, video_paths):
         encoder = FakeEncoder()
         w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)

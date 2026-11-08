@@ -142,7 +142,8 @@ For data transformation, Pimm provides:
   returns `None`, the value is filtered: receivers return the last valid message
   while emitters skip emission entirely. This enables conditional filtering like
   `lambda x: x if x > 0 else None`. A `SignalError` passes through, and `func`
-  does not get it.
+  does not get it. A receiver calls `func` on each `peek()` and each `read()`, so
+  `func` must be a pure function.
 
 ### Message time
 

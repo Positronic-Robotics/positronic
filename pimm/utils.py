@@ -38,7 +38,7 @@ class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):
     The wrapped receiver produces ``T``; ``func`` maps it to ``U`` and this
     receiver reads ``U`` out. If func returns None, the value is filtered out
     and the receiver behaves like it didn't see the filtered message. A ``SignalError`` passes through, and ``func``
-    does not get it.
+    does not get it. ``peek`` and the next ``read`` both map the same message, so ``func`` must be a pure function.
     """
 
     def __init__(self, receiver: SignalReceiver[T], func: Callable[[T], U | None]):
