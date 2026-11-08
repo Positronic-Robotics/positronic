@@ -11,8 +11,10 @@ mesa software EGL — ``EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1``). Run
 import argparse
 
 import numpy as np
+from eval_vocabulary.episode import MOLMO_REWARD_SIGNAL, MOLMO_TASK_METRICS_SIGNAL
 
 from positronic import keys
+from positronic.dataset.serializers import expand_suffixed
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import mapping
@@ -32,8 +34,8 @@ def _check_sim_state(adapter: MolmoAdapter, raw_obs: dict) -> np.ndarray:
 
 def _check_task_metrics(adapter: MolmoAdapter, raw_obs: dict) -> dict:
     """Check that the privileged task metrics carry a finite reward."""
-    metrics = adapter.privileged(raw_obs)[mapping.OBS_TASK_METRICS]
-    reward = metrics.get(f'.{mapping.TASK_METRIC_REWARD}')
+    metrics = dict(expand_suffixed(MOLMO_TASK_METRICS_SIGNAL, adapter.privileged(raw_obs)[mapping.OBS_TASK_METRICS]))
+    reward = metrics.get(MOLMO_REWARD_SIGNAL)
     assert reward is not None and np.isfinite(reward), f'task metrics carry no finite reward: {metrics}'
     return metrics
 
