@@ -139,7 +139,7 @@ def service(socket_path):
 
 @pytest.fixture
 def runtime():
-    executor = Executor(time.monotonic_ns, simulated=False, inference_charge_sec=0)
+    executor = Executor(time.monotonic_ns, simulated=False, inference_charge_sec=None)
     yield executor
     executor.close()
 

@@ -566,6 +566,8 @@ class Harness(pimm.ControlSystem):
     ) -> pimm.Run[dict[str, Any] | None]:
         """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
+        if task.fixed_inference_sec is not None and not self._embodiment.simulated:
+            raise ValueError('fixed_inference_sec needs a simulated embodiment: a real one pays each call its time')
         self._telemetry.begin(task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, task.prepare_args)
@@ -575,7 +577,7 @@ class Harness(pimm.ControlSystem):
         runtime = Executor(
             clock.now_ns,
             simulated=self._embodiment.simulated,
-            inference_charge_sec=task.inference_charge_sec,
+            inference_charge_sec=task.inference_charge_sec if self._embodiment.simulated else None,
             slow_motion=task.slow_motion,
         )
         policy_run = None

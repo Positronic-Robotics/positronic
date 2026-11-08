@@ -115,6 +115,8 @@ class Task:
     slow_motion: float = 1.0
 
     def __post_init__(self) -> None:
+        if not 1 <= self.slow_motion < float('inf'):
+            raise ValueError(f'slow_motion must be a finite factor of at least 1, not {self.slow_motion}')
         if self.fixed_inference_sec is not None:
             check_finite_nonnegative(self.fixed_inference_sec, 'fixed_inference_sec')
             if not self.charge_inference_time:

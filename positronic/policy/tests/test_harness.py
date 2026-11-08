@@ -6,7 +6,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
-from math import inf
+from math import inf, nan
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -1026,6 +1026,16 @@ def test_a_trial_runs_and_records_its_fixed_inference_time_and_slow_motion(episo
     assert seen == [2.0]
 
 
+def test_a_real_embodiment_refuses_a_fixed_inference_time_and_records_nothing(episode_harness):
+    h = episode_harness
+    h.harness._embodiment = replace(h.embodiment, simulated=False)
+    answer = h.caller(Rollout(Task('move', None, fixed_inference_sec=0.25), Positions(), h.dataset))
+    next(h.loop)
+    with pytest.raises(ValueError, match='fixed_inference_sec'):
+        answer.result()
+    assert h.dataset.episodes == []
+
+
 @pytest.mark.parametrize(
     ('charged', 'fixed_inference_sec', 'charge_sec'), [(True, None, None), (False, None, 0.0), (True, 0.25, 0.25)]
 )
@@ -1038,6 +1048,12 @@ def test_a_trial_states_one_inference_charge(charged, fixed_inference_sec, charg
 def test_a_fixed_inference_time_needs_a_charged_trial_and_a_finite_time(charged, seconds):
     with pytest.raises(ValueError, match='fixed_inference_sec'):
         Task('move', None, charge_inference_time=charged, fixed_inference_sec=seconds)
+
+
+@pytest.mark.parametrize('factor', [0.5, 0.0, inf, nan])
+def test_a_trial_refuses_a_slow_motion_below_one_or_not_finite(factor):
+    with pytest.raises(ValueError, match='slow_motion'):
+        Task('move', None, slow_motion=factor)
 
 
 class ReadInstruction(Policy):
@@ -2160,7 +2176,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
             yield Step({}, requested_ns)
             return PolicyEnd.COMPLETE
 
-    runtime = Executor(lambda: now[0], simulated=False, inference_charge_sec=0)
+    runtime = Executor(lambda: now[0], simulated=False, inference_charge_sec=None)
     run = runtime.start(Slow())
     try:
         assert h.harness._step(Task('test', None), frozenset(), runtime, run, None) == expected_ns

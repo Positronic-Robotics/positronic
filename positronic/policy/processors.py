@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from enum import Enum
 from functools import partial
-from math import ceil, inf
+from math import ceil, inf, isclose
 from statistics import fmean
 from sys import maxsize
 from typing import Any, Self, TypeVar
@@ -235,8 +235,8 @@ class Trajectory:
         return Trajectory([self._at(index / factor) for index in range(count)], self.start_ns, self.fps, end_ns)
 
     def _at(self, position: float) -> dict[str, Any]:
-        # A sample on an action boundary can compute just below it (33 / 1.1); it plays that action, not the one before.
-        if abs(position - round(position)) < 1e-9:
+        # A sample on an action boundary can compute a float step below it (33 / 1.1); it plays that action.
+        if isclose(position, round(position), rel_tol=1e-12):
             position = round(position)
         index = min(int(position), len(self.commands) - 1)
         before = self.commands[index]

@@ -23,7 +23,7 @@ def executors():
         runtime = Executor(
             lambda: now[0],
             simulated=simulated,
-            inference_charge_sec=fixed_inference_sec if charged else 0,
+            inference_charge_sec=(fixed_inference_sec if charged else 0) if simulated else None,
             max_in_flight=max_in_flight,
         )
         created.append(runtime)
@@ -297,10 +297,10 @@ def test_a_late_fixed_charge_answer_holds_the_simulator_until_the_worker_finishe
     assert answer.result() == 42
 
 
-@pytest.mark.parametrize('seconds', [-0.1, inf, nan])
-def test_an_inference_charge_is_a_finite_time(seconds):
+@pytest.mark.parametrize(('simulated', 'seconds'), [(True, -0.1), (True, inf), (True, nan), (False, 0.0)])
+def test_an_inference_charge_is_a_finite_time_in_a_simulation(simulated, seconds):
     with pytest.raises(ValueError, match='inference_charge_sec'):
-        Executor(lambda: 0, simulated=True, inference_charge_sec=seconds)
+        Executor(lambda: 0, simulated=simulated, inference_charge_sec=seconds)
 
 
 @pytest.mark.parametrize('factor', [0.5, 0.0, inf, nan])

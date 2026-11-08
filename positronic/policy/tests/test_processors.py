@@ -1205,6 +1205,12 @@ def test_a_slowed_trajectory_holds_the_grip_on_a_sample_just_before_its_action()
     assert (joint, grip) == (pytest.approx(32 / 1.1), 0.0)
 
 
+def test_a_slowed_trajectory_holds_the_grip_on_a_sample_a_clock_tick_before_its_action():
+    # At factor 2.000000001 and 0.1 fps, sample 2 is at action 0.9999999995: 10 ns before action 1 is due.
+    slowed = Trajectory(_arm_chunk([0, 1], [0.0, 1.0]), 0, 0.1, 20_000_000_000).slowed(2.000000001)
+    assert _played(slowed.commands)[2][1] == 0.0
+
+
 def test_a_slowed_trajectory_moves_a_pose_target_on_a_line():
     poses = [geom.Transform3D(translation=np.array([x, 0.0, 0.0])) for x in (0.0, 1.0)]
     chunk = [{keys.ROBOT_COMMAND: CartesianPosition(pose=pose)} for pose in poses]

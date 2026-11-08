@@ -225,6 +225,8 @@ class Executor(Runtime):
     ) -> None:
         if inference_charge_sec is not None:
             check_finite_nonnegative(inference_charge_sec, 'inference_charge_sec')
+            if not simulated:
+                raise ValueError('inference_charge_sec needs a simulated run: real execution pays each call its time')
         if not 1 <= slow_motion < float('inf'):
             raise ValueError(f'slow_motion must be a finite factor of at least 1, not {slow_motion}')
         self._clock = clock
