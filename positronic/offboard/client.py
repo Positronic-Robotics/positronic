@@ -305,12 +305,10 @@ class InferenceSession:
                 raise TimeoutError('Pending inference calls did not finish before session close')
         if self._closed:
             return
-        if self._protocol is protocol.ProtocolVersion.V1:
-            self._closed = True
-            logger.info('InferenceSession.close: %s', self._conn.close())
-            return
-        message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
         try:
+            if self._protocol is protocol.ProtocolVersion.V1:
+                return
+            message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
             # The server can acknowledge and close before the transport confirms the final write.
             with suppress(wire.PeerDisconnected):
                 self._conn.send(serialization.serialise(message))
