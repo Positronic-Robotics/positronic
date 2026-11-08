@@ -119,13 +119,6 @@ def _step(env: RobolabEnv, action: dict) -> dict:
     return protocol.slot_frame(env.step({0: action}), 0)
 
 
-def _settle(env: RobolabEnv) -> dict:
-    out = _step(env, _HOLD)
-    for _ in range(_SETTLE_STEPS - 1):
-        out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
-    return out
-
-
 def _check_obs_contract(env: RobolabEnv) -> None:
     out = _reset(env, _TOKEN)
     control_dt = out[protocol.FRAME_CONTROL_DT]
@@ -269,12 +262,19 @@ def _check_flange_to_eef(env: RobolabEnv) -> None:
     print(f'  flange -> eef_frame: OK ({pos_err * 1000:.4f} mm / {math.degrees(rot_err):.4f} deg)')
 
 
+def _reset_and_settle(env: RobolabEnv) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reset and settle the environment, then read its end-effector position and quaternion."""
+    _reset(env, _TOKEN)
+    out = _step(env, _HOLD)
+    for _ in range(_SETTLE_STEPS - 1):
+        out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0))
+    obs = out[protocol.FRAME_OBS]
+    return torch.as_tensor(obs[protocol.OBS_EEF_POS]), torch.as_tensor(obs[protocol.OBS_EEF_QUAT])
+
+
 def _run_cartesian_cases(env: RobolabEnv) -> int:
     """The run_abs_ik_demo protocol over the wire ``cartesian`` path; returns the count of non-known failures."""
-    _reset(env, _TOKEN)
-    out = _settle(env)
-    init_pos = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS])
-    init_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT])
+    init_pos, init_quat = _reset_and_settle(env)
     zero = torch.zeros(3)
     identity = torch.tensor([1.0, 0.0, 0.0, 0.0])
     d, r = _POS_DELTA, _ROT_DELTA
@@ -301,21 +301,16 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
         # Absolute targets built from the captured initial pose, so a diverged case doesn't bias the next.
         target_pos = init_pos + dpos
         target_quat = quat_mul(dquat.reshape(1, 4), init_quat.reshape(1, 4))[0]  # world-frame rotation on top
-        command = {
-            protocol.COMMAND_TYPE: protocol.CARTESIAN,
-            protocol.COMMAND_POSE: _wire_pose(target_pos, target_quat),
-        }
-        terminated = False
-        for _ in range(_HOLD_STEPS):
-            out = _step(env, protocol.single_arm_action(command, 0.0))
+        command = protocol.single_arm_action(
+            {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: _wire_pose(target_pos, target_quat)}, 0.0
+        )
+        out = _step(env, command)
+        for _ in range(1, _HOLD_STEPS):
             if out[protocol.FRAME_DONE]:
-                terminated = True
                 break
-        if terminated:
-            _reset(env, _TOKEN)
-            out = _settle(env)
-            init_pos = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS])
-            init_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT])
+            out = _step(env, command)
+        if out[protocol.FRAME_DONE]:
+            init_pos, init_quat = _reset_and_settle(env)
             print(f'    {name:<14} {"SKIPPED":<10} {"-":>10} {"-":>11}')
             continue
         pos_err = float(np.linalg.norm(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS] - target_pos.numpy()))
@@ -332,10 +327,7 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
 
 
 def _check_cartesian_delta(env: RobolabEnv) -> None:
-    _reset(env, _TOKEN)
-    out = _settle(env)
-    cur_pos = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_POS])
-    cur_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT])
+    cur_pos, cur_quat = _reset_and_settle(env)
     dpos = torch.tensor([0.0, 0.0, -0.05])
     dquat = _quat_about_axis(math.radians(10.0), 2)
     # The contract compose: translation adds, rotation left-multiplies onto the measured pose (world frame).
