@@ -351,7 +351,7 @@ or emits a command. These coordinates align training, replay, and viewing while 
 the original message timestamps. These two names are reserved for the harness.
 Writing is synchronous and may slow execution. An episode's answer waits for recording to close.
 Before the episode's deadline starts, the harness peeks each input and opens its signal in the writer, so
-the first sample does not wait for a video encoder to open. The peek leaves each message for the first sample.
+the first sample does not wait for a video encoder to open.
 The harness stores episode metadata with the policy definition metadata before policy cleanup.
 TODO: Add per-call records for the policy stack, remote inference payloads, and custom values.
 

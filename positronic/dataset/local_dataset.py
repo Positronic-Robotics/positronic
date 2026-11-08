@@ -189,6 +189,10 @@ class DiskEpisodeWriter(EpisodeWriter):
 
     def open_signal(self, signal_name: str, sample: Any) -> None:
         """Open the video encoder of ``signal_name`` for frames like ``sample``. Other samples need no setup."""
+        if self._finished:
+            raise RuntimeError(f'Cannot open a signal on a finished writer {self._path}')
+        if self._aborted:
+            raise RuntimeError(f'Cannot open a signal on an aborted writer {self._path}')
         if signal_name in self._writers or signal_name in self._opened or not self._is_video_frame(sample):
             return
         writer = self._video_writer(signal_name)

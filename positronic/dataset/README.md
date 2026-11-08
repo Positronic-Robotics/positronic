@@ -252,7 +252,7 @@ Name collisions are disallowed: attempting to `append` to a name that already ex
 `open_signal(signal_name, sample)` sets up a signal for data like `sample` before its first `append`, so that the append does no setup. `DiskEpisodeWriter` opens the video encoder of an image signal there, and does nothing for other data. A signal that gets no `append` leaves no file.
 
 Use as a context manager: exiting the `with` block finalizes all underlying `Signal` writers and persists metadata.
-Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abort, and removes the `Episode` directory. After abort, all writer operations (`append`, `set_static`) raise.
+Aborting: `abort()` stops recording, asks each underlying `Signal` writer to abort, and removes the `Episode` directory. After abort, all writer operations (`append`, `open_signal`, `set_static`) raise.
 
 ### System Metadata (meta)
 

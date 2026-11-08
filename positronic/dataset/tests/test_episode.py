@@ -299,6 +299,18 @@ def test_episode_writer_abort_cleans_up_and_blocks_further_use(tmp_path):
             w.append('a', 2, Time(**{RECORDED_TIME: 2000}))
         with pytest.raises(RuntimeError):
             w.set_static('z', 2)
+        with pytest.raises(RuntimeError):
+            w.open_signal('cam', create_frame(0))
+        assert not ep_dir.exists()
+
+
+def test_a_finished_writer_refuses_to_open_a_signal(tmp_path):
+    ep_dir = tmp_path / 'ep_finished'
+    with DiskEpisodeWriter(ep_dir) as w:
+        w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+    with pytest.raises(RuntimeError, match='finished'):
+        w.open_signal('cam', create_frame(0))
+    assert not list(ep_dir.glob('cam.*'))
 
 
 def test_episode_writer_context_aborts_on_exception(tmp_path):
