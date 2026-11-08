@@ -24,6 +24,7 @@ from rerun.urdf import UrdfTree
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
 from positronic import geom, keys
 from positronic.dataset import Time
+from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.local_dataset import DiskEpisode, DiskEpisodeWriter, LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.tests.utils import DummySignal
@@ -1188,3 +1189,21 @@ def test_a_numeric_signal_on_the_same_jittery_timeline_is_still_thinned(rec, tmp
     kept = _decimation_indices(_JITTERY_30HZ_NS.astype('datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(_JITTERY_30HZ_NS)
     assert sent['/signals/value'][RECEIVED_WORLD] == _JITTERY_30HZ_NS[kept].tolist()
+
+
+def test_the_replay_opens_on_a_clock_that_a_signal_with_samples_carries():
+    episode = EpisodeContainer({
+        'marks': DummySignal([], [], timelines=(RECEIVED_WORLD,)),  # the preferred clock
+        'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECORDED_TIME,)),
+    })
+
+    assert dataset_utils._opening_timeline(episode, None) == RECORDED_TIME
+
+
+def test_the_replay_opens_on_the_preferred_clock_where_it_has_samples():
+    episode = EpisodeContainer({
+        'marks': DummySignal([], [], timelines=(RECORDED_TIME,)),
+        'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECEIVED_WORLD,)),
+    })
+
+    assert dataset_utils._opening_timeline(episode, None) == RECEIVED_WORLD

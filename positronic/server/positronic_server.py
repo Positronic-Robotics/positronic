@@ -44,9 +44,9 @@ from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
     ReplayLayout,
-    duration_timeline,
     get_dataset_root,
     get_episodes_list,
+    sampled_duration_timeline,
     stream_episode_rrd,
 )
 
@@ -575,7 +575,7 @@ async def episode_viewer(request: Request, episode_id: int):
             'prev_link': episode_link((episode_id - 1) % len(ds)),
             'next_link': episode_link((episode_id + 1) % len(ds)),
             'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html') + '?v=2',
-            'seek_timeline': duration_timeline(episode.timelines),
+            'seek_timeline': sampled_duration_timeline(episode),
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),
@@ -730,7 +730,7 @@ async def api_episodes(request: Request):
 
     def table_row(i: int, ep: Episode) -> dict:
         duration = None
-        timeline = duration_timeline(ep.timelines)
+        timeline = sampled_duration_timeline(ep)
         if timeline is not None:
             # Count from the first sample of any stream. `Episode.bounds` starts at the latest first sample.
             bounds = ep._signal_bounds_on((timeline,))
