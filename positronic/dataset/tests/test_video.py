@@ -154,6 +154,13 @@ class TestVideoSignalWriter:
             with pytest.raises(ValueError, match='Frame shape'):
                 w.append(create_frame(0, (50, 50, 3)), Time(**{RECORDED_TIME: 2000}))
 
+    @pytest.mark.parametrize('shape', [(100, 100), (100, 100, 4)], ids=['2d', '4-channel'])
+    def test_a_frame_after_the_encoder_opens_has_three_channels(self, writer, shape):
+        writer.open_encoder(create_frame(0, (100, 100, 3)))
+        with pytest.raises(ValueError, match='Frame shape'):
+            writer.append(np.zeros(shape, dtype=np.uint8), Time(**{RECORDED_TIME: 1000}))
+        writer.abort()
+
     def test_append_after_context_exit(self, writer):
         """Test that appending after finish raises an error."""
         frame = create_frame()

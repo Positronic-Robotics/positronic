@@ -89,7 +89,10 @@ class SignalReceiver(ABC, Generic[T]):
         pass
 
     def peek(self) -> Message[T] | None:
-        """The message the next ``read`` returns, left for that read. A message no read took has no receipt time."""
+        """The message that ``read`` would return now, left for a later read. It has no receipt time if no read took it.
+
+        A newer message replaces it before that read, as a newer message replaces any message that no read took.
+        """
         raise NotImplementedError(f'{type(self).__name__} cannot peek')
 
     @final

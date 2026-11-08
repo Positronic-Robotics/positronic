@@ -144,6 +144,12 @@ def test_a_peek_leaves_the_message_for_the_next_read_to_take_and_stamp(transport
         error = receiver.read()
         assert error is not None and error.updated and error.data.args == ('lost',)
 
+        emitter.emit(DummySMValue(3) if shared else 3, time=Time(capture=3))
+        assert value(receiver.peek()) == 3
+        emitter.emit(DummySMValue(4) if shared else 4, time=Time(capture=4))
+        newer = receiver.read()
+        assert value(newer) == 4 and newer is not None and newer.updated and newer.time['capture'] == 4
+
 
 @pytest.mark.parametrize('name', [EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD, 'emitted.device'])
 def test_producers_cannot_override_framework_time(name):

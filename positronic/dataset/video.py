@@ -210,8 +210,8 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
         if self._session is None:
             self.open_encoder(data)
         else:
-            if data.shape[:2] != (self._height, self._width):
-                raise ValueError(f"Frame shape {data.shape[:2]} doesn't match expected ({self._height}, {self._width})")
+            if data.shape != (self._height, self._width, 3):
+                raise ValueError(f"Frame shape {data.shape} doesn't match expected ({self._height}, {self._width}, 3)")
             if data.dtype != np.uint8:
                 raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
 

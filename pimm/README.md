@@ -123,9 +123,11 @@ Control loops can gate their work on that bit without extra wrappers.
 takes a `default=` instead and always has a value: until the first message it
 returns that default with `updated=False`.
 
-`peek()` returns the message that the next `read()` returns, and leaves it for
-that read. A message that no read took yet has `updated=True` and no receipt
-time. Use it to look at a value before the read that must take it.
+`peek()` returns the message that `read()` would return now, and leaves it for
+a later read. A message that no read took yet has `updated=True` and no receipt
+time. A newer message replaces it before that read, as a newer message replaces
+any message that no read took. Use it to look at a value before the read that
+must take it.
 
 An emitter sends a `pimm.SignalError` in place of data while its signal has no
 valid value, for example while a camera is lost. The error is the newest value
