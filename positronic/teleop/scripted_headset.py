@@ -13,7 +13,8 @@ import math
 import ssl
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable
+from dataclasses import replace
 from urllib.parse import urlsplit
 
 import configuronic as cfn
@@ -32,6 +33,8 @@ from .service import Button, Phase
 logger = logging.getLogger(__name__)
 
 _STATE_POLL_SEC = 0.05
+# A press of Ready that the page does not show within this time is released and pressed again.
+_READY_PRESS_AGAIN_AFTER_SEC = 1.0
 
 
 def _buttons(*down: Button) -> tuple[float, ...]:
@@ -104,15 +107,10 @@ class _Hand:
         if self._error is not None:
             raise RuntimeError('The scripted headset stopped sending samples') from self._error
 
-    def hold(self, *down: Button) -> None:
-        """Hold the buttons ``down`` and release the others, until the service read at least one sample of them."""
-        self.buttons = _buttons(*down)
-        time.sleep(self._hold_sec)
-
-    def press(self, button: Button) -> None:
-        logger.info('The scripted headset presses %s', button.name)
-        self.hold(button)
-        self.hold()
+    @property
+    def hold_sec(self) -> float:
+        """The shortest release of a button after a press."""
+        return self._hold_sec
 
 
 class _Page:
@@ -122,36 +120,68 @@ class _Page:
         self._client = client
         self._hand = hand
 
-    def phase(self) -> Phase:
+    def state(self) -> PageState:
         self._hand.check()
-        state = self._client.get(STATE_PATH).raise_for_status().json()
+        fields = self._client.get(STATE_PATH).raise_for_status().json()
         # The page state is empty until the service sends its first one.
-        return Phase(PageState(**state).phase) if state else Phase.IDLE
+        if not fields:
+            return PageState(Phase.IDLE, control=False)
+        state = PageState(**fields)
+        return replace(state, phase=Phase(state.phase))
 
-    def until(self, phases: Sequence[Phase]) -> Phase:
-        while (phase := self.phase()) not in phases:
+    def phase(self) -> Phase:
+        return self.state().phase
+
+    def until(self, condition: Callable[[PageState], bool], within: float = math.inf) -> PageState | None:
+        """The first page state that passes ``condition``, or ``None`` when none does within ``within`` seconds."""
+        deadline = time.monotonic() + within
+        while not condition(state := self.state()):
+            if time.monotonic() >= deadline:
+                return None
             time.sleep(_STATE_POLL_SEC)
-        return phase
+        return state
+
+
+def _press_until(
+    page: _Page, hand: _Hand, button: Button, seen: Callable[[PageState], bool], again_after: float = math.inf
+) -> PageState:
+    """Hold ``button`` until the page state passes ``seen``, then release it for ``hand.hold_sec``. When the page does
+    not pass ``seen`` within ``again_after``, release the button and press it again.
+
+    The press lasts until the page shows its effect: a loaded service can read no sample in a hold of fixed length. The
+    release makes the next press of the button a new press, and a press again recovers a release the service missed.
+    """
+    while True:
+        logger.info('The scripted headset presses %s', button.name)
+        hand.buttons = _buttons(button)
+        state = page.until(seen, within=again_after)
+        hand.buttons = _buttons()
+        if state is not None:
+            time.sleep(hand.hold_sec)
+            return state
+        # The page polls while the button is up, so a late effect of the press still ends the wait.
+        if (state := page.until(seen, within=hand.hold_sec)) is not None:
+            return state
 
 
 def _trial(page: _Page, hand: _Hand, trial_sec: float) -> None:
-    page.until([Phase.READY_WAIT])
-    hand.press(Button.B)
+    page.until(lambda state: state.phase is Phase.READY_WAIT)
     # A trial that ends at once after Ready, for example by a short timeout, can end before this poll sees it run.
-    if page.until([Phase.RUNNING, Phase.ENDED, Phase.IDLE]) is not Phase.RUNNING:
+    ready = _press_until(
+        page, hand, Button.B, lambda state: state.phase is not Phase.READY_WAIT, _READY_PRESS_AGAIN_AFTER_SEC
+    )
+    if ready.phase is not Phase.RUNNING:
         logger.warning('The trial ended before the scripted headset saw it run')
         return
-    hand.press(Button.A)
+    if not _press_until(page, hand, Button.A, lambda state: state.control or state.phase is not Phase.RUNNING).control:
+        logger.warning('The trial ended before the scripted headset turned control on')
     hand.moving_since = time.monotonic()
     while page.phase() is Phase.RUNNING and time.monotonic() - hand.moving_since < trial_sec:
         time.sleep(_STATE_POLL_SEC)
     # A trial that ended already, for example at its timeout, must not take this hold as the Ready of the next trial.
     if page.phase() is Phase.RUNNING:
         hand.stopped_at = time.monotonic()
-        hand.buttons = _buttons(Button.B)
-        page.until([phase for phase in Phase if phase is not Phase.RUNNING])
-    # The service sees the release of B before the next trial, so the next press of B is a new press.
-    hand.hold()
+        _press_until(page, hand, Button.B, lambda state: state.phase is not Phase.RUNNING)
     hand.moving_since = hand.stopped_at = None
 
 
@@ -171,7 +201,7 @@ def drive(
 ) -> None:
     """Do ``trials`` trials on the page of ``positronic teleop`` at the URL ``page``. Each trial moves the hand for
     ``trial_sec`` on a circle of ``radius``, once each ``circle_sec``. ``view_fps`` is the ``--view_fps`` of the
-    service. ``min_hold_sec`` is the shortest hold of a button; a loaded machine needs a longer one.
+    service. ``min_hold_sec`` is the shortest release of a button after a press; a loaded machine needs a longer one.
 
     The page of the service has a self-signed certificate, so the scripted headset does not check it.
     """

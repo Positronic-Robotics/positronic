@@ -32,7 +32,11 @@ STATE_PATH, CONTROLLER_PATH = '/state', '/ws'
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
 
 
-def _parse_controller_data(data: dict):
+def parse_controller_message(
+    data: Mapping[str, Any],
+) -> tuple[dict[str, geom.Transform3D | None], dict[str, np.ndarray | None]]:
+    """The poses and the buttons of the controllers in a message of the page on ``/ws``, the inverse of
+    ``controller_message``. A controller that the page does not track has ``None`` for both."""
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
     buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
@@ -302,7 +306,7 @@ class WebXR(pimm.ControlSystem):
                     try:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
-                        controller_positions, buttons = _parse_controller_data(data)
+                        controller_positions, buttons = parse_controller_message(data)
 
                         # apply scaling
                         for transform in controller_positions.values():

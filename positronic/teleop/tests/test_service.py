@@ -23,7 +23,9 @@ from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import ServedUnixSocket
 from positronic_wire import registry
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
+from websockets.http11 import Request, Response
 from websockets.sync.client import unix_connect
+from websockets.sync.server import ServerConnection, serve
 
 import pimm
 import positronic.cfg.simulator
@@ -33,6 +35,7 @@ from positronic import geom, keys, telemetry, telemetry_keys
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
+from positronic.drivers import webxr
 from positronic.drivers.webxr import STATE_PATH, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
@@ -47,6 +50,7 @@ from positronic.policy.remote import RemotePolicy
 from positronic.policy.sequential import Sequential
 from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
+from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import Button, ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
 from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
@@ -763,6 +767,100 @@ def test_a_scripted_headset_trial_count_that_is_not_a_positive_integer_is_refuse
 def test_a_scripted_headset_radius_that_is_negative_or_not_finite_is_refused(radius):
     with pytest.raises(ValueError, match='radius must be finite and not negative'):
         scripted_headset.drive(page='http://127.0.0.1:1', trials=1, radius=radius)
+
+
+class _PagePassingASampleAtEachPoll:
+    """A page of ``service`` that passes the latest sample of the headset to the service only when the page state is
+    polled. So the service reads no sample of a press that starts and ends between two polls."""
+
+    def __init__(self, service: TeleopService):
+        self._service = service
+        self._latest: dict | None = None
+        self._server = serve(self._take_samples, '127.0.0.1', 0, process_request=self._answer_state)
+        self.url = f'http://127.0.0.1:{self._server.socket.getsockname()[1]}'
+
+    def __enter__(self) -> '_PagePassingASampleAtEachPoll':
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._server.shutdown()
+
+    def _take_samples(self, connection: ServerConnection) -> None:
+        for message in connection:
+            self._latest = json.loads(message)
+
+    def _answer_state(self, connection: ServerConnection, request: Request) -> Response | None:
+        if request.path != STATE_PATH:
+            return None
+        if self._latest is not None:
+            positions, buttons = webxr.parse_controller_message(self._latest)
+            right = buttons[webxr.RIGHT]
+            if self._passes(right):
+                self._service.take_sample(positions[webxr.RIGHT], None if right is None else right.tolist())
+        state = self._service.state()
+        self._answered(state.phase)
+        return connection.respond(200, json.dumps(asdict(command.PageState(state.phase, state.control))))
+
+    def _passes(self, buttons: np.ndarray | None) -> bool:
+        return True
+
+    def _answered(self, phase: Phase) -> None:
+        pass
+
+
+class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
+    """A page that passes no sample with B up from the end of a trial until it showed the next Ready wait twice. So the
+    service reads B down from Complete into the first press of Ready of the next trial."""
+
+    def __init__(self, service: TeleopService):
+        super().__init__(service)
+        self._phase = Phase.IDLE
+        # The answers of the next Ready wait still to show before a release of B passes, or 0 when it passes.
+        self._ready_waits_to_miss = 0
+
+    def _passes(self, buttons: np.ndarray | None) -> bool:
+        return not (self._ready_waits_to_miss and buttons is not None and buttons[Button.B] == 0.0)
+
+    def _answered(self, phase: Phase) -> None:
+        if self._phase is Phase.RUNNING and phase is not Phase.RUNNING:
+            self._ready_waits_to_miss = 2
+        elif self._ready_waits_to_miss and phase is Phase.READY_WAIT:
+            self._ready_waits_to_miss -= 1
+        self._phase = phase
+
+
+@pytest.mark.timeout(30)
+def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=2.0, silence_limit=1.0, hold_sec=HOLD_SEC)
+    with _PagePassingASampleAtEachPoll(service) as page, ThreadPoolExecutor(max_workers=1) as pool:
+        trials = pool.submit(
+            scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
+        )
+        service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+        moves = []
+        while END not in (element := service.next_frame(FRAME_REQUEST, [])):
+            moves.append(element[ACTION][:3])
+        trials.result(timeout=10)
+    assert element[END] == PolicyEnd.COMPLETE.value
+    assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
+
+
+@pytest.mark.timeout(30)
+def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_release_of_complete(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=1.0, hold_sec=HOLD_SEC)
+    with _PageMissingTheReleaseAfterComplete(service) as page, ThreadPoolExecutor(max_workers=1) as pool:
+        trials = pool.submit(
+            scripted_headset.drive, page=page.url, trials=2, min_hold_sec=0.05, trial_sec=0.5, circle_sec=1.0
+        )
+        ends = []
+        for _ in range(2):
+            service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+            while END not in (element := service.next_frame(FRAME_REQUEST, [])):
+                pass
+            ends.append(element[END])
+        trials.result(timeout=10)
+    assert ends == [PolicyEnd.COMPLETE.value, PolicyEnd.COMPLETE.value]
 
 
 def test_the_phone_page_reads_the_fields_of_the_page_state():
