@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from pathlib import Path
 
+import numpy as np
 import pos3
 import psutil
 import yaml
@@ -84,6 +85,12 @@ def check_positive_int(value: object, name: str | None = None) -> int:
     if type(value) is not int or value < 1:
         raise ValueError(f'{name if name is not None else "value"} must be a positive integer, got {value!r}')
     return value
+
+
+def check_rgb_frame(frame: np.ndarray, name: str = 'frame') -> None:
+    """Raise ValueError unless frame has shape (H, W, 3); dtype and dimensions are unrestricted."""
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError(f'Expected {name} shape (H, W, 3), got {frame.shape}')
 
 
 def merge_dicts(dst: dict, src: dict) -> dict:

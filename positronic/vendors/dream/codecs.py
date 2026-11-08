@@ -13,6 +13,7 @@ from positronic.dataset.transforms import image
 from positronic.drivers.roboarm.models import YAM_JOINTS
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
+from positronic.utils import check_rgb_frame
 from positronic.vendors import dream
 
 # Each row of a Dream-1 chunk is one step of a 20 Hz clock, the rate of the Dream SDK station.
@@ -69,8 +70,7 @@ class DreamObservationCodec(Codec):
         return frame[top : top + cut]
 
     def _frame(self, frame: np.ndarray, key: str) -> np.ndarray:
-        if frame.ndim != 3 or frame.shape[2] != 3:
-            raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
+        check_rgb_frame(frame, f"image '{key}'")
         if self._crop_to_aspect:
             frame = self._centre_crop(frame, FRAME_SIZE[0] / FRAME_SIZE[1])
         return image.transform_frame(frame, *FRAME_SIZE, mode=image.ResizeMode.STRETCH)
