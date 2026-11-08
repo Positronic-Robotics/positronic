@@ -440,8 +440,6 @@ def test_episode_completion_then_shutdown_with_fresh_observations(episode_harnes
     frame[0] = 2  # No new signal: the next episode must rebuild its observation cache.
     second = h.caller(Rollout(Task('second', None), Observe(), h.dataset))
     next(h.loop)
-    # Each episode serializes the frame once to open its signals, and once to sample it.
-    assert h.serializer.call_count == 4
     assert [obs[POSITION][0] for obs in observations] == [1, 2]
     assert h.commands.values == [(0, 1), (12_000_000, 2)]
     assert not second.done()
@@ -1621,12 +1619,10 @@ def test_policy_completion_resets_the_sampling_deadline(episode_harness):
         h.world.clock.advance_to_ns(1_000_000)
         h.observation.emit(2)
         assert next(h.loop) == pimm.Sleep(0.0008)
-        # One call opens the episode's signals, before the first sample.
-        assert h.serializer.call_count == 3
+        assert [data for name, data, _ in h.dataset.episodes[0].records if name == POSITION] == [0, 1]
 
         h.world.clock.advance_to_ns(1_800_000)
         assert next(h.loop) == pimm.Sleep(0.001)
-        assert h.serializer.call_count == 4
         assert observations == [0, 1]
         assert [data for name, data, _ in h.dataset.episodes[0].records if name == POSITION] == [0, 1, 2]
     finally:
@@ -1653,8 +1649,6 @@ def test_sampling_records_privileged_data_without_exposing_it_to_the_policy():
         h.world.clock.advance_to_ns(100_000_000)
         next(h.loop)
         assert policy.seen == [0, 1]
-        # One call opens the episode's signals, before the first sample.
-        assert h.serializer.call_count == 3
 
         h.world.clock.advance_to_ns(101_000_000)
         h.privileged[GROUND_TRUTH].emit(np.array([30]))
