@@ -5,7 +5,13 @@ from functools import partial
 from typing import Any, Self
 
 import numpy as np
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, JpegEncoding, encode_images, encode_jpeg
+from positronic_model_server.serialization import (
+    DEFAULT_JPEG_QUALITY,
+    JpegEncoding,
+    check_jpeg_quality,
+    encode_images,
+    encode_jpeg,
+)
 from positronic_model_server.spec import ARGS, NAME, VERSION
 from positronic_model_server.tree import map_leaves, update_at
 
@@ -27,8 +33,7 @@ class EncodeImages(Codec):
     WIRE_NAME = 'encode_images'
 
     def __init__(self, paths: list[list[str | int]] | None = None, quality: int = DEFAULT_JPEG_QUALITY):
-        if type(quality) is not int or not 0 <= quality <= 100:
-            raise ValueError('JPEG quality must be an integer between 0 and 100')
+        check_jpeg_quality(quality)
         self._images = None if paths is None else tuple(JpegEncoding(tuple(path), quality) for path in paths)
         self._quality = quality
 

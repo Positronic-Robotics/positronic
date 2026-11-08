@@ -89,12 +89,12 @@ conflicts = [[
 exclude-newer = "2026-07-21T00:00:00Z"
 
 [options.exclude-newer-package]
+positronic-franka = false
 certifi = "2026-10-27T00:00:00Z"
 configuronic = false
-dreamlabs-client = "2026-10-27T00:00:00Z"
 pos3 = false
 positronic = false
-positronic-franka = false
+dreamlabs-client = "2026-10-27T00:00:00Z"
 
 [manifest]
 members = [
@@ -5839,7 +5839,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/cb/dd/c85e2def5a67395c0
 
 [[package]]
 name = "positronic-model-server"
-version = "0.3.5"
+version = "0.3.6"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },

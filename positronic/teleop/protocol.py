@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, check_jpeg_quality
 
 from positronic import geom
 
@@ -71,8 +71,7 @@ class SessionParams:
             raise ValueError(
                 f'operator_position must be one of {names}, or null for UMI mode, got {self.operator_position!r}'
             )
-        if type(self.jpeg_quality) is not int or not 0 <= self.jpeg_quality <= 100:
-            raise ValueError(f'jpeg_quality must be an integer between 0 and 100, got {self.jpeg_quality!r}')
+        check_jpeg_quality(self.jpeg_quality, 'jpeg_quality')
         if fields := {TASK, EE_POSE, GRIP} & set(self.cameras):
             raise ValueError(f'a camera name must not be a field of a frame request, got {sorted(fields)}')
         if self.headset_camera is not None and self.headset_camera not in self.cameras:

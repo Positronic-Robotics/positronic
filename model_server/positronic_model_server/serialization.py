@@ -35,6 +35,12 @@ _NDIM = b'ndim'
 DEFAULT_JPEG_QUALITY = 90
 
 
+def check_jpeg_quality(quality: int, name: str = 'JPEG quality') -> None:
+    """Raise ValueError unless quality is an integer from 0 to 100, inclusive."""
+    if type(quality) is not int or not 0 <= quality <= 100:
+        raise ValueError(f'{name} must be an integer between 0 and 100, got {quality!r}')
+
+
 @dataclass(frozen=True)
 class JpegEncoding:
     """An explicit mapping/list path to an RGB image; an empty path selects the whole value."""
@@ -45,8 +51,7 @@ class JpegEncoding:
     def __post_init__(self) -> None:
         if any(type(part) not in (str, int) for part in self.path):
             raise ValueError('Image paths contain only mapping keys and list indices')
-        if type(self.quality) is not int or not 0 <= self.quality <= 100:
-            raise ValueError('JPEG quality must be an integer between 0 and 100')
+        check_jpeg_quality(self.quality)
 
     def encode(self, value: Any) -> Any:
         """Copy the selected container path and encode its leaf, preserving unrelated values."""
@@ -74,8 +79,7 @@ def encode_jpeg(image: np.ndarray, quality: int = DEFAULT_JPEG_QUALITY) -> dict[
     """
     if image.ndim < 3 or image.shape[-1] != 3 or min(image.shape[-3:-1]) < 1:
         raise ValueError('JPEG images must have shape (..., H, W, 3) with positive height and width')
-    if type(quality) is not int or not 0 <= quality <= 100:
-        raise ValueError('JPEG quality must be an integer between 0 and 100')
+    check_jpeg_quality(quality)
     frames = image.reshape((-1, *image.shape[-3:]))
     bufs = []
     for frame in frames:

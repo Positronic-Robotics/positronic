@@ -12,7 +12,7 @@ from typing import Any
 import configuronic as cfn
 import numpy as np
 import pos3
-from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY
+from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, check_jpeg_quality
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import WebsocketWire
@@ -306,9 +306,7 @@ class Gr00tModel(Model):
             raise ValueError('image_mappings must retain the checkpoint camera names')
         if any(not isinstance(source, str) or not source for source in cameras.values()):
             raise ValueError('Camera source names must be nonempty strings')
-        quality = params[keys.JPEG_QUALITY]
-        if type(quality) is not int or not 0 <= quality <= 100:
-            raise ValueError('jpeg_quality must be an integer between 0 and 100')
+        check_jpeg_quality(params[keys.JPEG_QUALITY], keys.JPEG_QUALITY)
         if type(params[keys.COMPRESS_IMAGES]) is not bool:
             raise ValueError('compress_images must be a boolean')
         return Gr00tSession(self._policy, recipe.client_stack(self._settings, **params), rtc, fps=fps)
