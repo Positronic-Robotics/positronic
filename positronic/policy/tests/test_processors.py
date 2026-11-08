@@ -99,7 +99,7 @@ class Echo(Policy):
 @pytest.fixture
 def periodic_execution():
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
     try:
         yield runtime, now
     finally:
@@ -377,7 +377,7 @@ def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_
 
 def test_periodic_capacity_skips_samples_and_preserves_recovery_intent():
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_in_flight=2)
+    runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0, max_in_flight=2)
     started, release = threading.Event(), threading.Event()
     calls = []
 
@@ -440,7 +440,7 @@ def test_periodic_stack_spec_round_trip():
 def test_schedule_retries_after_another_branch_releases_runtime_capacity(rtc):
     now = [0]
     release = threading.Event()
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_in_flight=1)
+    runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0, max_in_flight=1)
     occupied = runtime.submit(release.wait, 2)
     schedule = RTCSchedule(10, call_after_sec=0.5, latency_estimate=ConstantDuration()) if rtc else ChunkedSchedule(10)
     calls = []
@@ -676,7 +676,7 @@ def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, m
 def execution(monkeypatch, request):
     slow_motion = getattr(request, 'param', 1.0)
     with pimm.World(virtual_time=True) as world:
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False, slow_motion=slow_motion)
+        runtime = Executor(world.clock.now_ns, simulated=True, inference_charge_sec=0, slow_motion=slow_motion)
 
         def submit(function, *args, **kwargs):
             future = Future()
@@ -1189,6 +1189,20 @@ def test_a_trajectory_slowed_by_one_is_unchanged():
 def test_a_slowed_trajectory_has_a_command_for_each_period_it_covers(factor, count):
     slowed = Trajectory(_arm_chunk(range(10), [0.0] * 10), 0, 15, round(10 / 15 * 1e9)).slowed(factor)
     assert len(slowed.commands) == count
+
+
+def test_a_slowed_trajectory_switches_the_grip_on_the_sample_that_lands_on_its_action():
+    # At factor 1.1, sample 33 is action 30, but 33 / 1.1 computes to 29.999999999999996.
+    grips = [0.0] * 30 + [1.0] * 2
+    slowed = Trajectory(_arm_chunk(range(32), grips), 0, 10, 32 * PERIOD_NS).slowed(1.1)
+    assert _played(slowed.commands)[33] == (30, 1.0)
+
+
+def test_a_slowed_trajectory_holds_the_grip_on_a_sample_just_before_its_action():
+    grips = [0.0] * 30 + [1.0] * 2
+    slowed = Trajectory(_arm_chunk(range(32), grips), 0, 10, 32 * PERIOD_NS).slowed(1.1)
+    joint, grip = _played(slowed.commands)[32]
+    assert (joint, grip) == (pytest.approx(32 / 1.1), 0.0)
 
 
 def test_a_slowed_trajectory_moves_a_pose_target_on_a_line():

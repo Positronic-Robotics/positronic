@@ -79,7 +79,7 @@ def model(monkeypatch):
 @contextmanager
 def execution(policy):
     clock = VirtualClock()
-    runtime = Executor(clock.now_ns, simulated=True, charge_inference_time=False)
+    runtime = Executor(clock.now_ns, simulated=True, inference_charge_sec=0)
     run = cast(Generator[Step, Obs, PolicyEnd], runtime.start(policy))
     try:
         yield run, runtime, clock

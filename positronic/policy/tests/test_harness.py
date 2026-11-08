@@ -6,6 +6,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
+from math import inf
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -177,7 +178,7 @@ def observed_harness():
             emitters[name], physical_receiver = world.local_pipe()
             receiver._bind(physical_receiver)
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, inference_charge_sec=0)
         policy_run = runtime.start(Observe())
         step = partial(harness._step, Task('test', None), frozenset(), runtime, policy_run, None)
         try:
@@ -1023,6 +1024,20 @@ def test_a_trial_runs_and_records_its_fixed_inference_time_and_slow_motion(episo
     meta = h.dataset.episodes[-1].static
     assert (meta[eval_keys.FIXED_INFERENCE_SEC], meta[eval_keys.SLOW_MOTION]) == (0.25, 2.0)
     assert seen == [2.0]
+
+
+@pytest.mark.parametrize(
+    ('charged', 'fixed_inference_sec', 'charge_sec'), [(True, None, None), (False, None, 0.0), (True, 0.25, 0.25)]
+)
+def test_a_trial_states_one_inference_charge(charged, fixed_inference_sec, charge_sec):
+    task = Task('move', None, charge_inference_time=charged, fixed_inference_sec=fixed_inference_sec)
+    assert task.inference_charge_sec == charge_sec
+
+
+@pytest.mark.parametrize(('charged', 'seconds'), [(False, 0.1), (True, -0.1), (True, inf)])
+def test_a_fixed_inference_time_needs_a_charged_trial_and_a_finite_time(charged, seconds):
+    with pytest.raises(ValueError, match='fixed_inference_sec'):
+        Task('move', None, charge_inference_time=charged, fixed_inference_sec=seconds)
 
 
 class ReadInstruction(Policy):
@@ -2145,7 +2160,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
             yield Step({}, requested_ns)
             return PolicyEnd.COMPLETE
 
-    runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=False, inference_charge_sec=0)
     run = runtime.start(Slow())
     try:
         assert h.harness._step(Task('test', None), frozenset(), runtime, run, None) == expected_ns
@@ -2178,7 +2193,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         emitter.emit(state)
         policy = StubPolicy()
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, inference_charge_sec=0)
         run = runtime.start(policy)
         try:
             harness._step(Task('move', None), frozenset(), runtime, run, None)

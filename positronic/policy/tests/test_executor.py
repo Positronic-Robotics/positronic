@@ -23,8 +23,7 @@ def executors():
         runtime = Executor(
             lambda: now[0],
             simulated=simulated,
-            charge_inference_time=charged,
-            fixed_inference_sec=fixed_inference_sec,
+            inference_charge_sec=fixed_inference_sec if charged else 0,
             max_in_flight=max_in_flight,
         )
         created.append(runtime)
@@ -298,22 +297,20 @@ def test_a_late_fixed_charge_answer_holds_the_simulator_until_the_worker_finishe
     assert answer.result() == 42
 
 
-@pytest.mark.parametrize(
-    'simulated, charged, seconds', [(False, True, 0.1), (True, False, 0.1), (True, True, -0.1), (True, True, inf)]
-)
-def test_a_fixed_charge_needs_a_charged_simulation_and_a_finite_time(simulated, charged, seconds):
-    with pytest.raises(ValueError, match='fixed_inference_sec'):
-        Executor(lambda: 0, simulated=simulated, charge_inference_time=charged, fixed_inference_sec=seconds)
+@pytest.mark.parametrize('seconds', [-0.1, inf, nan])
+def test_an_inference_charge_is_a_finite_time(seconds):
+    with pytest.raises(ValueError, match='inference_charge_sec'):
+        Executor(lambda: 0, simulated=True, inference_charge_sec=seconds)
 
 
 @pytest.mark.parametrize('factor', [0.5, 0.0, inf, nan])
 def test_slow_motion_is_a_finite_factor_of_at_least_one(factor):
     with pytest.raises(ValueError, match='slow_motion'):
-        Executor(lambda: 0, simulated=True, charge_inference_time=True, slow_motion=factor)
+        Executor(lambda: 0, simulated=True, inference_charge_sec=None, slow_motion=factor)
 
 
 def test_an_execution_reads_the_slow_motion_of_its_runtime():
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=True, slow_motion=2.5)
+    runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=None, slow_motion=2.5)
     with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
         assert execution.slow_motion == runtime.slow_motion == 2.5
     runtime.close()

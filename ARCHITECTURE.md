@@ -128,7 +128,8 @@ processor stack. Empty commands leave the driver's last target in place.
 **Inference cost is a fact of the trial, owned by the harness.** The policy submits
 ordinary functions through its runtime. A simulated task can request
 `charge_inference_time=False`; otherwise answer availability includes queueing and
-execution time, or a fixed `fixed_inference_sec` that the task states. The runtime exposes one clock
+execution time, or a fixed `fixed_inference_sec` that the task states. The harness hands the runtime
+one charge: the task's fixed time, zero for an uncharged task, or none for the measured time. The runtime exposes one clock
 to the policy, without revealing whether that clock is simulated. Scheduling processors read it when
 they anchor a chunk.
 

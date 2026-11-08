@@ -575,8 +575,7 @@ class Harness(pimm.ControlSystem):
         runtime = Executor(
             clock.now_ns,
             simulated=self._embodiment.simulated,
-            charge_inference_time=task.charge_inference_time,
-            fixed_inference_sec=task.fixed_inference_sec,
+            inference_charge_sec=task.inference_charge_sec,
             slow_motion=task.slow_motion,
         )
         policy_run = None

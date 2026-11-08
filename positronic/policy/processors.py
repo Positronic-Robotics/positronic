@@ -235,6 +235,9 @@ class Trajectory:
         return Trajectory([self._at(index / factor) for index in range(count)], self.start_ns, self.fps, end_ns)
 
     def _at(self, position: float) -> dict[str, Any]:
+        # A sample on an action boundary can compute just below it (33 / 1.1); it plays that action, not the one before.
+        if abs(position - round(position)) < 1e-9:
+            position = round(position)
         index = min(int(position), len(self.commands) - 1)
         before = self.commands[index]
         if index + 1 == len(self.commands):

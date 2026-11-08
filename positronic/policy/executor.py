@@ -204,10 +204,10 @@ class Executor(Runtime):
     """Run submitted functions on worker threads and expose their answers on ``clock``.
 
     Real execution exposes completed futures immediately and never waits for simulated time. In
-    simulation, charged calls include queueing and execution time. ``fixed_inference_sec`` charges each
-    call that many seconds instead: the answer is visible at the first tick at or after the charge ends, and
-    the simulator holds there while the worker runs. An uncharged call is a fixed charge of zero. Submission
-    and result reads belong to the control thread; submitted functions must not mutate episode state.
+    simulation, ``inference_charge_sec=None`` charges each call its queueing and execution time. A number
+    charges each call that many seconds instead, zero included: the answer is visible at the first tick at
+    or after the charge ends, and the simulator holds there while the worker runs. Submission and result
+    reads belong to the control thread; submitted functions must not mutate episode state.
 
     ``max_in_flight`` bounds local calls until their results are read or cancelled calls finish.
     Each ``ExecutionRuntime`` owns an independent limit and workers; every answer participates in
@@ -219,21 +219,17 @@ class Executor(Runtime):
         clock: Callable[[], int],
         *,
         simulated: bool,
-        charge_inference_time: bool,
-        fixed_inference_sec: float | None = None,
+        inference_charge_sec: float | None,
         slow_motion: float = 1.0,
         max_in_flight: int = 16,
     ) -> None:
-        if fixed_inference_sec is not None:
-            check_finite_nonnegative(fixed_inference_sec, 'fixed_inference_sec')
-            if not (simulated and charge_inference_time):
-                raise ValueError('fixed_inference_sec needs a simulated run that charges inference time')
+        if inference_charge_sec is not None:
+            check_finite_nonnegative(inference_charge_sec, 'inference_charge_sec')
         if not 1 <= slow_motion < float('inf'):
             raise ValueError(f'slow_motion must be a finite factor of at least 1, not {slow_motion}')
         self._clock = clock
         self._simulated = simulated
-        self._charge_inference_time = charge_inference_time
-        self._fixed_charge_ns = None if fixed_inference_sec is None else round(fixed_inference_sec * 1e9)
+        self._charge_ns = None if inference_charge_sec is None else round(inference_charge_sec * 1e9)
         self._slow_motion = slow_motion
         self._tick = -1
         self._tick_time_ns: int | None = None
@@ -321,12 +317,10 @@ class Executor(Runtime):
         answer: _UnchargedAnswer[T]
         if not self._simulated:
             answer = _UnchargedAnswer(workers, work)
-        elif not self._charge_inference_time:
-            answer = _FixedChargeAnswer(workers, self._clock, 0, work)
-        elif self._fixed_charge_ns is not None:
-            answer = _FixedChargeAnswer(workers, self._clock, self._fixed_charge_ns, work)
-        else:
+        elif self._charge_ns is None:
             answer = _ChargedAnswer(workers, self._clock, work)
+        else:
+            answer = _FixedChargeAnswer(workers, self._clock, self._charge_ns, work)
         self._answers.add(answer)
         return answer
 
