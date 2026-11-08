@@ -14,6 +14,7 @@ from positronic_wire.wire import ClientWire
 
 from positronic import telemetry, telemetry_keys
 from positronic.offboard import protocol as legacy_protocol
+from positronic.utils import check_positive_int
 from positronic.utils.versions import Version, resolve_version
 
 from .protocol import deserialise, serialise, typed_commands
@@ -64,9 +65,7 @@ class InferenceSession:
             'policy protocol',
         )
         self._metadata = ready[protocol.META]
-        self._max_in_flight = ready.get(protocol.MAX_IN_FLIGHT, 1)
-        if type(self._max_in_flight) is not int or self._max_in_flight < 1:
-            raise ValueError('max_in_flight must be a positive integer')
+        self._max_in_flight = check_positive_int(ready.get(protocol.MAX_IN_FLIGHT, 1), protocol.MAX_IN_FLIGHT)
         self._session_id = None if self._protocol is protocol.ProtocolVersion.V1 else ready[protocol.SESSION_ID]
         self._closed = False
         self._closing = False

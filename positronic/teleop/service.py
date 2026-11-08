@@ -9,7 +9,6 @@ The teleoperator uses the buttons of the right controller.
 
 import _thread
 import logging
-import math
 import os
 import stat
 import threading
@@ -37,6 +36,7 @@ from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.keys import END
 from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndOnField, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
+from positronic.utils import check_finite_positive
 
 from .clutch import Tracker
 from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, SessionParams
@@ -93,8 +93,7 @@ class ButtonMap:
     def __init__(self, hold_sec: float, press_threshold: float = 0.6):
         if not 0 < press_threshold <= 1:
             raise ValueError(f'press_threshold must be in (0, 1], got {press_threshold}')
-        if not 0 < hold_sec < math.inf:
-            raise ValueError(f'hold_sec must be finite and positive, got {hold_sec}')
+        check_finite_positive(hold_sec, 'hold_sec')
         self._hold_ns = round(hold_sec * 1e9)
         # A button whose value is at least this is down.
         self._press_threshold = press_threshold
@@ -214,8 +213,7 @@ class TeleopService:
         auth_token: str | None = None,
     ):
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
-            if not 0 < value < math.inf:
-                raise ValueError(f'{name} must be finite and positive, got {value}')
+            check_finite_positive(value, name)
         self._binds = served_address
         self._auth_token = auth_token
         self.ready_limit = ready_limit

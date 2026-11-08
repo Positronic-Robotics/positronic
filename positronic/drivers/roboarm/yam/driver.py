@@ -12,7 +12,6 @@ polarity, joint ranges, the mount pose (``base_pose``), teleop latency, and the 
 import contextlib
 import functools
 import logging
-import math
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import asdict, dataclass
@@ -27,7 +26,7 @@ from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.gripper import aperture
 from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
-from positronic.utils import package_assets_path
+from positronic.utils import check_finite_positive, package_assets_path
 
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
@@ -749,8 +748,8 @@ class Robot(pimm.ControlSystem):
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
-        if park_after_idle_s is not None and (not math.isfinite(park_after_idle_s) or park_after_idle_s <= 0):
-            raise ValueError('park_after_idle_s must be finite and positive, or None')
+        if park_after_idle_s is not None:
+            check_finite_positive(park_after_idle_s, 'park_after_idle_s')
         # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
         # it does, those checks and a check that each value is finite run here first.
         friction = compensation.coulomb_friction

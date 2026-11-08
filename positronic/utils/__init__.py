@@ -79,6 +79,13 @@ def check_finite_nonnegative(value: float, name: str | None = None) -> None:
         raise ValueError(f'{name if name is not None else "value"} must be finite and nonnegative')
 
 
+def check_positive_int(value: object, name: str | None = None) -> int:
+    """Return a positive built-in int or raise ValueError."""
+    if type(value) is not int or value < 1:
+        raise ValueError(f'{name if name is not None else "value"} must be a positive integer, got {value!r}')
+    return value
+
+
 def merge_dicts(dst: dict, src: dict) -> dict:
     for key, value in src.items():
         if isinstance(value, dict) and isinstance(dst.get(key), dict):

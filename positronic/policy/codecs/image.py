@@ -11,6 +11,7 @@ from positronic_model_server.tree import map_leaves, update_at
 
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample, ResizeMode
+from positronic.utils import check_positive_int
 
 from .base import Codec
 from .observation import SelectObservationFields
@@ -80,8 +81,8 @@ class TransformImages(Codec):
         resample: Resample = Resample.BILINEAR,
         paths: list[list[str | int]] | None = None,
     ):
-        if type(width) is not int or type(height) is not int or min(width, height) < 1:
-            raise ValueError('Image dimensions must be positive integers')
+        check_positive_int(width, 'width')
+        check_positive_int(height, 'height')
         if paths is not None and any(type(part) not in (str, int) for path in paths for part in path):
             raise ValueError('Image paths contain only mapping keys and list indices')
         self._width = width

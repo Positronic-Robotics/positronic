@@ -23,7 +23,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION
 from positronic.simulator.mujoco.transforms import load_spec
-from positronic.utils import package_assets_path
+from positronic.utils import check_finite_positive, package_assets_path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_DIR = Path(__file__).resolve().parent / 'fixtures' / 'act_stack'
@@ -227,8 +227,7 @@ def run(
 ):
     """Run the ACT stacking episodes against the server at ``host:port``, retaining their recordings and logs."""
     check_seeds(seeds)
-    if not np.isfinite(wall_timeout) or wall_timeout <= 0:
-        raise ValueError('wall_timeout must be finite and positive')
+    check_finite_positive(wall_timeout, 'wall_timeout')
     output_root, reference = Path(output_dir).expanduser().resolve(), Path(reference_dir).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=False)
     for seed in seeds:

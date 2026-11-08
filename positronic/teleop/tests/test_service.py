@@ -765,7 +765,7 @@ def test_a_scripted_headset_trial_count_that_is_not_a_positive_integer_is_refuse
 
 @pytest.mark.parametrize('radius', [-0.01, float('nan'), float('inf')])
 def test_a_scripted_headset_radius_that_is_negative_or_not_finite_is_refused(radius):
-    with pytest.raises(ValueError, match='radius must be finite and not negative'):
+    with pytest.raises(ValueError, match='radius must be finite and nonnegative'):
         scripted_headset.drive(page='http://127.0.0.1:1', trials=1, radius=radius)
 
 
