@@ -5,9 +5,6 @@ This module must work in an isolated interpreter without Positronic installed.
 
 import enum
 from collections.abc import Sequence
-from typing import Any
-
-import numpy as np
 
 # The arms ABC drives, in the order its 14-value action concatenates them.
 ARMS = ('left', 'right')
@@ -60,14 +57,3 @@ OBS_TASK_EVAL = 'task_eval'  # The task evaluator's numeric metrics, keyed by re
 def task_names(selection: str | Sequence[str] | None) -> list[str] | None:
     """The tasks a selection names, as a list: it names one task or several, and None selects every task."""
     return None if selection is None else [selection] if isinstance(selection, str) else list(selection)
-
-
-def task_eval_signals(task_eval: dict[str, Any]) -> dict[str, Any]:
-    """The entries of ABC's ``task_eval`` info that record as signals: numeric, non-empty, keyed ``.name``."""
-    signals = {}
-    for name, value in task_eval.items():
-        array = np.asarray(value)
-        if array.size and array.dtype.kind in 'biuf':
-            # A recorded signal holds a scalar or a 1-D vector per sample.
-            signals[f'.{name}'] = array.ravel() if array.ndim else array[()]
-    return signals

@@ -269,7 +269,7 @@ class AbcEnv(EnvProtocol):
         self._last_reported_apertures = per_arm[:, -1]
         payload: dict[str, Any] = {
             mapping.OBS_SIM_STATE: mujoco_state.integration_state(self._env.model, self._env.data),
-            mapping.OBS_TASK_EVAL: mapping.task_eval_signals(task_eval),
+            mapping.OBS_TASK_EVAL: protocol.numeric_signals(task_eval),
         }
         for index, arm in enumerate(self._arms):
             pos, rot = self._measured_eef(arm)

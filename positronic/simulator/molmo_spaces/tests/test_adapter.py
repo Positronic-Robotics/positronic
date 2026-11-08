@@ -135,12 +135,6 @@ def test_observations_fail_on_the_last_camera_name_when_none_is_present():
         _adapter().observations(payload)
 
 
-def test_privileged_forwards_sim_state():
-    state = np.arange(10, dtype=np.float64)
-    out = _adapter().privileged({mapping.OBS_SIM_STATE: state})
-    assert list(out) == [mapping.OBS_SIM_STATE] and out[mapping.OBS_SIM_STATE] is state
-
-
 def test_terminal_reports_success_only_when_done():
     adapter = _adapter()
     done_ok = {protocol.FRAME_DONE: True, protocol.FRAME_SUCCESS: True}
@@ -231,3 +225,15 @@ def test_reset_token_drops_the_object_image_points_only_when_the_adapter_asks():
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
     dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_object_image_points=False)
     assert dropped.reset_token(params)[mapping.WITH_OBJECT_IMAGE_POINTS] is False
+
+
+def test_the_privileged_channel_carries_the_physics_state_and_the_task_metrics():
+    state = np.arange(10, dtype=np.float64)
+    metrics = {'.reward': np.float64(0.5), '.success': np.False_}
+    raw = {**_payload(), mapping.OBS_SIM_STATE: state, mapping.OBS_TASK_METRICS: metrics}
+
+    privileged = _adapter().privileged(raw)
+
+    assert set(privileged) == {mapping.OBS_SIM_STATE, mapping.OBS_TASK_METRICS}
+    assert privileged[mapping.OBS_SIM_STATE] is state
+    assert privileged[mapping.OBS_TASK_METRICS] == metrics
