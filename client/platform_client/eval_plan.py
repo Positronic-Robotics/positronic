@@ -412,18 +412,11 @@ class _EndpointBase(Cascade):
             )
 
     @model_validator(mode='after')
-    def _a_session_limit_bounds_a_remote_address_or_an_image(self) -> Self:
-        if self.max_concurrent_sessions is None:
-            return self
-        if not self.names_a_locator:
+    def _a_session_limit_bounds_an_endpoint_that_names_its_policy(self) -> Self:
+        if self.max_concurrent_sessions is not None and not self.names_a_locator:
             raise ValueError(
-                f'endpoint {self.name!r} states max_concurrent_sessions and names no address or image: state it on '
-                'the plan endpoint this label names'
-            )
-        if self.kind is EndpointKind.served:
-            raise ValueError(
-                f'served endpoint {self.name!r} states max_concurrent_sessions, which only a remote or an image '
-                'endpoint carries: the platform serves this policy and opens its sessions'
+                f'endpoint {self.name!r} states max_concurrent_sessions and names no address, spec or image: state '
+                'it on the plan endpoint this label names'
             )
         return self
 
