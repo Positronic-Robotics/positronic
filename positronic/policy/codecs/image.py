@@ -8,7 +8,7 @@ import numpy as np
 from positronic_model_server.serialization import (
     DEFAULT_JPEG_QUALITY,
     JpegEncoding,
-    check_jpeg_quality,
+    check_int_range,
     encode_images,
     encode_jpeg,
 )
@@ -33,7 +33,7 @@ class EncodeImages(Codec):
     WIRE_NAME = 'encode_images'
 
     def __init__(self, paths: list[list[str | int]] | None = None, quality: int = DEFAULT_JPEG_QUALITY):
-        check_jpeg_quality(quality)
+        check_int_range(quality, 0, 100, 'JPEG quality')
         self._images = None if paths is None else tuple(JpegEncoding(tuple(path), quality) for path in paths)
         self._quality = quality
 

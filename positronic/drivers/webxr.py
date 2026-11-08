@@ -16,7 +16,7 @@ import turbojpeg
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from positronic_model_server.serialization import check_jpeg_quality
+from positronic_model_server.serialization import check_int_range
 
 import pimm
 from positronic import geom, utils
@@ -193,7 +193,7 @@ class WebXR(pimm.ControlSystem):
         sensitivity: float = 1.0,
         jpeg_quality: int = 50,
     ):
-        check_jpeg_quality(jpeg_quality, 'jpeg_quality')
+        check_int_range(jpeg_quality, 0, 100, 'jpeg_quality')
         if session_mode is SessionMode.VR and frontend is not Frontend.HEADSET:
             raise ValueError(f'session_mode VR needs the headset frontend, got {frontend!r}')
         self.port = port
