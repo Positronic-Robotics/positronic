@@ -1,5 +1,5 @@
+import gc
 import pickle
-import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from av.codec.codec import UnknownCodecError
+from av.codec.context import CodecContext
 from av.error import FFmpegError
 from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 
@@ -227,21 +228,6 @@ class FakeEncoder:
         return self.sessions[-1]
 
 
-@dataclass
-class SessionWatcher:
-    """A libx264 encoder that holds each session it opens by a weak reference only."""
-
-    sessions: list[weakref.ref] = field(default_factory=list)
-
-    def ensure_available(self) -> None:
-        pass
-
-    def open(self, path: Path, width: int, height: int, fps: int, gop: int):
-        session = LibavEncoder().open(path, width, height, fps, gop)
-        self.sessions.append(weakref.ref(session))
-        return session
-
-
 class TestVideoEncoderSeam:
     def test_encoder_gets_every_frame_in_order_then_finishes(self, video_paths):
         encoder = FakeEncoder()
@@ -359,15 +345,20 @@ class TestLibavEncoder:
         assert outputs[0] == outputs[1]
 
     @pytest.mark.parametrize('end', ['close', 'abort'])
-    def test_a_closed_writer_keeps_no_encoder_session(self, video_paths, end):
-        encoder = SessionWatcher()
-        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], encoder)
+    def test_a_closed_writer_releases_its_codec(self, video_paths, end):
+        def live_codecs() -> int:
+            return sum(isinstance(o, CodecContext) for o in gc.get_objects())
+
+        gc.collect()
+        before = live_codecs()
+        w = VideoSignalWriter(video_paths['video'], video_paths['frames'], LibavEncoder())
         w.append(create_frame(0), Time(**{RECORDED_TIME: 1000}))
+        assert live_codecs() == before + 1
         if end == 'close':
             w.__exit__(None, None, None)
         else:
             w.abort()
-        assert encoder.sessions[0]() is None
+        assert live_codecs() == before
 
     def test_the_check_opens_a_session_so_options_the_codec_refuses_fail_there(self):
         with pytest.raises(RuntimeError, match='cannot open an encoder session'):
