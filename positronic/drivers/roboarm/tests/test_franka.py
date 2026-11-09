@@ -1857,7 +1857,7 @@ def test_the_arm_state_carries_an_arm_fault_once_while_the_safety_controller_hol
 
 
 def test_a_recoverable_error_of_the_emergency_stop_input_leaves_the_arm_state_alone(desk):
-    """A person's press leaves an error on the stop's own input. The episode is hers to score, not one to run again."""
+    """A person's press leaves an error on the stop's own input, and her episode keeps its score."""
     desk.safe_input_error = True
 
     assert all(isinstance(data, franka.FrankaState) for data in _shipped(desk, CLEAR))
@@ -1879,7 +1879,7 @@ def test_an_arm_that_refuses_moves_with_no_control_box_fault_leaves_the_arm_stat
 
 
 def test_a_control_box_desk_does_not_answer_leaves_the_arm_state_alone(desk):
-    """An unread box names no fault, so the arm streams its state as before."""
+    """An unread box names no fault, so the arm streams its state."""
     desk.td2_timeout = True
     desk.unreachable = True
 

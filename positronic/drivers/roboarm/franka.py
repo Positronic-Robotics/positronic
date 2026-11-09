@@ -1250,9 +1250,9 @@ class Robot(pimm.ControlSystem):
         Answer with the error where the recovery leaves it, and with the missing connection where there is none. A
         pressed emergency stop gets the release instruction, and no recovery. ``Desk.prepare()`` runs the TD2
         self-test first where it is due within ``SELF_TEST_LEAD_SEC`` and every safe input reads clear, so its deadline
-        cannot pass during the episode. A fault of the control box that Desk holds gets the Desk step too, so the
-        episode that runs again does not fail on it at once. Otherwise a ready call takes no Desk control and opens no
-        brakes: the harness asks again and again between episodes, with nobody at the rig.
+        cannot pass during the episode. A fault of the control box that Desk holds gets the Desk step too. Otherwise a
+        ready call takes no Desk control and opens no brakes: the harness asks again and again between episodes, with
+        nobody at the rig.
         """
         with pimm.calls.raise_to(call), raise_as_device_fault(FaultKind.ARM):
             if arm.stop_pressed:
