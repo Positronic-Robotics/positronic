@@ -14,7 +14,13 @@ runs only behind DreamAPI. Dream Labs does not release the weights. Each call se
 
 `server.py` serves Dream-1 over positronic's session protocol, and calls DreamAPI with `dreamlabs-client`:
 
-- The client stacks 9 frames of each camera, 0.2 s apart (`TemporalStack`), and plays each chunk whole.
+- The client stacks 9 frames of each camera, 0.2 s apart (`TemporalStack`), each bounded to 320 pixels wide. It asks
+  for the next chunk before the current one ends, by the longest of the last 5 round trips (at most
+  `--pipeline.max_lead_s`, 1.6 s), and sends the rest of its plan. The next chunk starts when the current one ends,
+  so the server drops the rows of the answer that the client plays first, and the limiter starts from the last row
+  sent.
+- The server paces the chunks as `dreamlabs-client` does. In the client's `async` mode (a median round trip of
+  DreamAPI of at most 700 ms) a chunk keeps the next 30 rows; in `sync` mode it keeps every row.
 - The server sends the YAM station observation of the Dream SDK (`state.arm_l.joint_pos`, `image_window.top`, ...).
   DreamAPI computes each hand's pose from the joints, so no IK runs here.
 - The server blurs every face before a frame leaves it, and limits each chunk (`limits.py`): the hand moves at most
@@ -25,8 +31,8 @@ runs only behind DreamAPI. Dream Labs does not release the weights. Each call se
   gives no model version, and `dreamlabs/dream-1-beta` can change at any time.
 - Each session writes `<sessions_dir>/<session_id>.json` (the canary, and the trace id, timing and limits of each
   call) and `<session_id>.npz` (`answered`: each chunk as DreamAPI answered it; `limited`: each chunk as the limiter
-  sent it). A replan drops the rest of a chunk, so `limited` can hold rows that the client did not run. Dream Labs can
-  find a call from its trace id.
+  sent it, NaN in each row that the server did not send). A replan drops the rest of a chunk, so `limited` can hold
+  rows that the client did not run. Dream Labs can find a call from its trace id.
 
 ## Run in simulation
 
