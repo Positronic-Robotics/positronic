@@ -1,6 +1,7 @@
 """The server-side codec of Dream-1. It encodes a bimanual YAM observation as a YAM station observation of DreamAPI,
 and decodes each action row as one joint command and one grip target per arm."""
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -27,25 +28,28 @@ FRAME_PERIOD_S = 0.2
 CROP_META = 'dream.crop_to_aspect'
 
 
-def rows_ahead(inputs: Mapping[str, Any]) -> int:
-    """How many rows of its current chunk the client plays after the observation of `inputs`, rounded to whole rows,
-    from the plan that it sends (`policy_keys.RTC.ACTION_PREFIX`). With no plan, no row is ahead."""
+def _plan_rows(inputs: Mapping[str, Any]) -> float:
+    """The time from the observation of `inputs` to the end of the plan that the client sends
+    (`policy_keys.RTC.ACTION_PREFIX`), in rows: 0 with no plan or a plan that has ended."""
     prefix = inputs.get(policy_keys.RTC.ACTION_PREFIX)
     if prefix is None:
-        return 0
+        return 0.0
     rows = len(prefix[policy_keys.RTC.PREFIX_ACTIONS]) + prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] * FPS
-    return max(0, round(rows))
+    return max(0.0, rows)
+
+
+def rows_ahead(inputs: Mapping[str, Any]) -> int:
+    """How many rows of its plan the client plays after the observation of `inputs`, rounded to whole rows."""
+    return round(_plan_rows(inputs))
 
 
 def rows_queued(inputs: Mapping[str, Any]) -> int:
-    """How many rows of its plan the client had not started at the observation of `inputs`. The row before them is
-    the one that the client commanded at the observation. With no plan, no row is queued."""
-    prefix = inputs.get(policy_keys.RTC.ACTION_PREFIX)
-    if prefix is None:
-        return 0
-    rows = len(prefix[policy_keys.RTC.PREFIX_ACTIONS])
-    started = prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] <= 0
-    return max(0, rows - 1) if started else rows
+    """How many rows of its plan the client had not started at the observation of `inputs`: every row due at or after
+    it. The client sends a row in the same round that it observes at the row's due time, after the observation. The
+    row before them is the one that the client commanded at the observation."""
+    # The rows lie on one grid that ends where the plan ends, so the rows due at or after the observation are the
+    # whole rows in the time left. The margin keeps a row due at the observation itself out of the float error.
+    return math.floor(_plan_rows(inputs) + 1e-6)
 
 
 class DreamObservationCodec(Codec):
