@@ -29,6 +29,7 @@ class GrabOutcome(Enum):
     NO_IMAGE = auto()  # the grab succeeded, and the SDK gave no image
     TORN = auto()  # the grab succeeded, and the image starts with zero fill
     LOST = auto()  # the grab failed, and the camera holds the error
+    NEAR_BLACK = auto()  # the images stayed near-black too long, and the camera holds the error
 
 
 # The BGR colour that the SDK gives a raw YUV pixel of zeros. A real pixel comes near it only at full chroma, and a
@@ -39,6 +40,15 @@ ZERO_FILL_BGR = (0, 135, 0)
 def starts_with_zero_fill(raw_bgra: np.ndarray) -> bool:
     """Whether all of row 0 of an unrectified BGRA image has the zero fill colour."""
     return bool(np.all(raw_bgra[0, :, :3] == ZERO_FILL_BGR))
+
+
+# A ZED can keep sending images near 6 of 255 with no error from the SDK. A lit scene is near 100.
+NEAR_BLACK_MEAN_LEVEL = 16
+
+
+def is_near_black(bgra: np.ndarray) -> bool:
+    """Whether the mean colour level of every 8th pixel of every 8th row is below ``NEAR_BLACK_MEAN_LEVEL``."""
+    return bool(bgra[::8, ::8, :3].mean() < NEAR_BLACK_MEAN_LEVEL)
 
 
 class SLCamera(pimm.ControlSystem):
@@ -98,11 +108,12 @@ class SLCamera(pimm.ControlSystem):
         self._depth_mask_adapter = None  # Lazy init
 
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
-        # The camera a run holds open, the error it keeps until a ready call repairs the camera, and the time of
-        # its last frame
+        # The camera a run holds open, the error it keeps until a ready call repairs the camera, the time of its last
+        # frame, and the time of the first image of its current run of near-black images
         self._camera: sl.Camera | sl.CameraOne | None = None
         self._error: DeviceFault | None = None
         self._frame_at: float | None = None
+        self._near_black_since: float | None = None
 
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
@@ -110,6 +121,8 @@ class SLCamera(pimm.ControlSystem):
     STALE_FRAME_SEC = 1.0
     # A ready call grabs again after a torn frame, up to this many grabs.
     READY_GRABS = 3
+    # A camera whose images stay near-black this long holds a camera error. Each open starts the count again.
+    NEAR_BLACK_FAULT_SEC = 5.0
 
     @staticmethod
     def _is_listed(serial: int) -> bool:
@@ -202,6 +215,7 @@ class SLCamera(pimm.ControlSystem):
             self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
             return
         self._error = None
+        self._near_black_since = None
 
     def _grab_until_not_torn(self, clock: pimm.Clock) -> GrabOutcome:
         outcome = self._grab_frame(clock)
@@ -283,7 +297,8 @@ class SLCamera(pimm.ControlSystem):
         return getattr(sl.DEPTH_MODE, self._depth_mode_name.upper())
 
     def _grab_frame(self, clock: pimm.Clock) -> GrabOutcome:
-        """Grab and send one frame. Hold the error when the grab fails, and drop a torn frame."""
+        """Grab and send one frame. Hold the error when the grab fails or the images stay near-black, and drop a torn
+        frame."""
         camera = self._camera
         assert camera is not None, 'a camera that holds no error is open'
         result = camera.grab()
@@ -302,8 +317,18 @@ class SLCamera(pimm.ControlSystem):
         capture_time = pimm.Time(**{CAPTURE_TIME: camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()})
         if camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
             return GrabOutcome.NO_IMAGE
+        bgra = image.get_data()
+        now = clock.now()
+        if not is_near_black(bgra):
+            self._near_black_since = None
+        elif self._near_black_since is None:
+            self._near_black_since = now
+        elif now - self._near_black_since >= self.NEAR_BLACK_FAULT_SEC:
+            message = f'Camera {self._serial_number} sent near-black images for {self.NEAR_BLACK_FAULT_SEC:g} s'
+            self._hold(DeviceFault(message, FaultKind.CAMERA))
+            return GrabOutcome.NEAR_BLACK
         # The images are in BGRA format, convert to RGB
-        np_image = image.get_data()[:, :, [2, 1, 0]]
+        np_image = bgra[:, :, [2, 1, 0]]
 
         # Emit main frame (either single view or side-by-side)
         # Note: For side-by-side, we emit the full (H, W*2, 3) image
