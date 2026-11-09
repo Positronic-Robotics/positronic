@@ -10,7 +10,7 @@ import mujoco as mj
 import numpy as np
 
 from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_JOINTS, YAM_MJCF_PATH
-from positronic.utils import package_assets_path
+from positronic.utils import check_finite_nonnegative, package_assets_path
 
 
 @dataclass(frozen=True)
@@ -33,8 +33,7 @@ class ChunkLimits:
 
     def __post_init__(self):
         for name, value in vars(self).items():
-            if not np.isfinite(value) or value < 0:
-                raise ValueError(f'{name} must be finite and not negative, got {value}')
+            check_finite_nonnegative(value, name)
 
 
 @dataclass(frozen=True)

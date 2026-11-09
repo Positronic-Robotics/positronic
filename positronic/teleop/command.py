@@ -1,7 +1,6 @@
 """The command ``positronic teleop``: the teleop service, the WebXR page of the headset, and the window."""
 
 import logging
-import math
 import os
 import subprocess
 import sys
@@ -19,6 +18,7 @@ import pimm
 import positronic.cfg.webxr
 from positronic.drivers.webxr import RIGHT, WebXR
 from positronic.offboard.server import socket_at
+from positronic.utils import check_finite_positive
 
 from .protocol import DEFAULT_PORT, default_socket_path
 from .service import Phase, TeleopService
@@ -39,8 +39,7 @@ class _Headset(pimm.ControlSystem):
     """Pass the samples of the headset to the service, and the view of the service to the headset."""
 
     def __init__(self, service: TeleopService, view_fps: float = 30.0):
-        if not 0 < view_fps < math.inf:
-            raise ValueError(f'view_fps must be finite and positive, got {view_fps}')
+        check_finite_positive(view_fps, 'view_fps')
         self._service = service
         self._view_period_sec = 1 / view_fps
         self.controller_positions = pimm.ControlSystemReceiver(self)

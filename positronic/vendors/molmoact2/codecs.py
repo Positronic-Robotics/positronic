@@ -8,13 +8,13 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
+from positronic.utils import check_rgb_frame
 from positronic.vendors import molmoact2
 
 
 def _image(key: str, inputs: dict[str, Any]) -> np.ndarray:
     frame = np.asarray(inputs[key])
-    if frame.ndim != 3 or frame.shape[2] != 3:
-        raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
+    check_rgb_frame(frame, f"image '{key}'")
     return frame
 
 

@@ -19,6 +19,8 @@ from av.video.codeccontext import VideoCodecContext
 from av.video.stream import VideoStream
 from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN
 
+from positronic.utils import check_rgb_frame
+
 from .signal import IndicesLike, Kind, Signal, SignalMeta, SignalWriter
 from .time import Time, TimeBounds
 from .vector import SIGNAL_VERSION, SIGNAL_VERSION_KEY, ParquetTimeIndex, parquet_write_options, timestamp_table
@@ -209,8 +211,7 @@ class VideoSignalWriter(SignalWriter[np.ndarray]):
             raise RuntimeError('Cannot append to an aborted writer')
 
         self._validate_timestamps(timestamps)
-        if data.ndim != 3 or data.shape[2] != 3:
-            raise ValueError(f'Expected frame shape (H, W, 3), got {data.shape}')
+        check_rgb_frame(data)
         if data.dtype != np.uint8:
             raise ValueError(f'Expected uint8 dtype, got {data.dtype}')
         if self._session is None:

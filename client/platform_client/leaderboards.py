@@ -13,17 +13,8 @@ from typing import Annotated, Self
 from platform_client.ids import LeaderboardVersionId, SubmissionId
 from platform_client.responses import DataBackedReplayLink
 from positronic_evals.evals import EvalRef
-from pydantic import (
-    AwareDatetime,
-    BaseModel,
-    ConfigDict,
-    Field,
-    GetCoreSchemaHandler,
-    NonNegativeFloat,
-    NonNegativeInt,
-    model_validator,
-)
-from pydantic_core import core_schema
+from positronic_evals.slug import Name
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeFloat, NonNegativeInt, model_validator
 
 # A definition holds this placeholder in the place of the time limit, in seconds.
 TIME_LIMIT_PLACEHOLDER = '{seconds}'
@@ -51,52 +42,37 @@ def _refuse_other_lengths(vectors: dict[str, Sequence[object]], length: int, wha
             raise ValueError(f'{what}: {name} holds {len(vector)} values, and the axis holds {length}')
 
 
-class _Name(str):
-    """A name the platform gives, as a validated `str`: not empty, and with no whitespace."""
-
-    __slots__ = ()
-
-    def __new__(cls, value: str) -> Self:
-        if not value or any(c.isspace() for c in value):
-            raise ValueError(f'not a {cls.__name__}: {value!r}')
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source: type, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
-
-
-class LeaderboardRef(_Name):
+class LeaderboardRef(Name):
     """The slug a leaderboard is read by."""
 
     __slots__ = ()
 
 
-class LeaderboardTag(_Name):
+class LeaderboardTag(Name):
     """A tag that groups leaderboards, such as the site that shows them."""
 
     __slots__ = ()
 
 
-class ModelFamilyRef(_Name):
+class ModelFamilyRef(Name):
     """The id of a model family that `leaderboards.models` lists."""
 
     __slots__ = ()
 
 
-class CheckpointRef(_Name):
+class CheckpointRef(Name):
     """The id of one checkpoint of a model family."""
 
     __slots__ = ()
 
 
-class MetricKey(_Name):
+class MetricKey(Name):
     """The key of a metric in the descriptor of its leaderboard, as its `Metric.key`."""
 
     __slots__ = ()
 
 
-class OutcomeKey(_Name):
+class OutcomeKey(Name):
     """The key of an outcome group in the descriptor of its leaderboard, as its `OutcomeGroup.key`."""
 
     __slots__ = ()
@@ -111,25 +87,25 @@ Fraction = Annotated[float, Field(ge=0, le=1)]
 Percent = Annotated[float, Field(ge=0, le=100)]
 
 
-class UserTag(_Name):
+class UserTag(Name):
     """The tag of a user. It is the same on every leaderboard, so a user finds their own row by it."""
 
     __slots__ = ()
 
 
-class RowKey(_Name):
+class RowKey(Name):
     """The key of a row on its leaderboard. It is the same in every version, and the other parts name a row by it."""
 
     __slots__ = ()
 
 
-class LeaderboardTaskId(_Name):
+class LeaderboardTaskId(Name):
     """The id of a task that `LeaderboardResponse.tasks` lists, as its `LeaderboardTask.id`."""
 
     __slots__ = ()
 
 
-class EpisodeId(_Name):
+class EpisodeId(Name):
     """The id of a recorded episode. It is the same in every version of every leaderboard that lists the episode."""
 
     __slots__ = ()

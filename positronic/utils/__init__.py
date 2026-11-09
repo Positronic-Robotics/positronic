@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from math import isfinite
 from pathlib import Path
 
+import numpy as np
 import pos3
 import psutil
 import yaml
@@ -79,6 +80,19 @@ def check_finite_nonnegative(value: float, name: str | None = None) -> None:
         raise ValueError(f'{name if name is not None else "value"} must be finite and nonnegative')
 
 
+def check_positive_int(value: object, name: str | None = None) -> int:
+    """Return a positive built-in int or raise ValueError."""
+    if type(value) is not int or value < 1:
+        raise ValueError(f'{name if name is not None else "value"} must be a positive integer, got {value!r}')
+    return value
+
+
+def check_rgb_frame(frame: np.ndarray, name: str = 'frame') -> None:
+    """Raise ValueError unless frame has shape (H, W, 3); dtype and dimensions are unrestricted."""
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError(f'Expected {name} shape (H, W, 3), got {frame.shape}')
+
+
 def merge_dicts(dst: dict, src: dict) -> dict:
     for key, value in src.items():
         if isinstance(value, dict) and isinstance(dst.get(key), dict):
@@ -119,56 +133,49 @@ def find_uv_lock(start_dir: Path) -> Path | None:
     return None
 
 
-def get_docker_info() -> dict | None:  # noqa: C901
-    """Detect if running inside Docker and gather container metadata.
+def _container_id_from_cgroup(line: str) -> str | None:
+    """Read a short container ID from a Docker scope or a 64-digit hexadecimal path component."""
+    for part in line.split('/'):
+        if part.startswith('docker-') and part.endswith('.scope'):
+            return part.replace('docker-', '').replace('.scope', '')[:12]
+        if len(part) == 64 and all(c in '0123456789abcdef' for c in part):
+            return part[:12]
+    return None
 
-    Returns:
-        Dictionary with Docker info if running in a container, None otherwise.
-        May include: container_id, hostname, and cgroup_info.
-    """
+
+def get_docker_info() -> dict | None:
+    """Collect container markers, an available container ID and hostname; return None without markers."""
     docker_info = {}
-
-    # Check for /.dockerenv file (common Docker indicator)
     if Path('/.dockerenv').exists():
         docker_info['dockerenv_present'] = True
-
-    # Check IS_DOCKER environment variable (used in some setups)
     if os.environ.get('IS_DOCKER'):
         docker_info['is_docker_env'] = True
 
-    # Try to read container ID from cgroup
+    # Container metadata is optional; probe failures must not prevent recording.
     cgroup_path = Path('/proc/self/cgroup')
-    if cgroup_path.exists():
-        try:
-            cgroup_content = cgroup_path.read_text(encoding='utf-8')
-            # Look for docker or containerd in cgroup
-            for line in cgroup_content.splitlines():
-                if 'docker' in line or 'containerd' in line:
-                    docker_info['in_container'] = True
-                    # Try to extract container ID from cgroup path
-                    # Format is typically: .../docker/<container_id> or .../docker-<container_id>.scope
-                    parts = line.split('/')
-                    for part in parts:
-                        if part.startswith('docker-') and part.endswith('.scope'):
-                            container_id = part.replace('docker-', '').replace('.scope', '')
-                            docker_info['container_id'] = container_id[:12]  # Short format
-                            break
-                        elif len(part) == 64 and all(c in '0123456789abcdef' for c in part):
-                            # Full container ID (64 hex chars)
-                            docker_info['container_id'] = part[:12]  # Short format
-                            break
-                    break
-        except (OSError, UnicodeDecodeError):
-            pass
+    try:
+        cgroup_content = cgroup_path.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        pass
+    except (OSError, UnicodeDecodeError) as error:
+        logging.error('Cannot read container metadata from %s: %s', cgroup_path, error)
+    else:
+        for line in cgroup_content.splitlines():
+            if 'docker' not in line and 'containerd' not in line:
+                continue
+            docker_info['in_container'] = True
+            container_id = _container_id_from_cgroup(line)
+            if container_id is not None:
+                docker_info['container_id'] = container_id
+            break
 
-    # If we found any Docker indicators, add hostname
-    if docker_info:
-        try:
-            docker_info['hostname'] = socket.gethostname()
-        except OSError:
-            pass
-        return docker_info
-    return None
+    if not docker_info:
+        return None
+    try:
+        docker_info['hostname'] = socket.gethostname()
+    except OSError as error:
+        logging.error('Cannot read container hostname: %s', error)
+    return docker_info
 
 
 def run_metadata(patterns: list[str] | None = None, add_git_diff: bool = True, add_uv_lock: bool = True) -> dict:  # noqa: C901

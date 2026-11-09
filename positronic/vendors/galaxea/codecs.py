@@ -7,6 +7,7 @@ from positronic import keys
 from positronic.cfg import codecs
 from positronic.drivers.roboarm import command
 from positronic.policy.codecs import Codec, FlipGrip
+from positronic.utils import check_finite_positive
 from positronic.vendors.galaxea import protocol
 
 
@@ -27,8 +28,7 @@ class DroidCodec(Codec):
         task_key: str = keys.TASK,
         fps: float = 15.0,
     ):
-        if not np.isfinite(fps) or fps <= 0:
-            raise ValueError('fps must be finite and positive')
+        check_finite_positive(fps, 'fps')
         self._cameras = {protocol.EXTERIOR_IMAGE: exterior_camera, protocol.WRIST_IMAGE: wrist_camera}
         self._joint_key = joint_key
         self._task_key = task_key

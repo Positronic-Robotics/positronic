@@ -1,4 +1,4 @@
-"""`Slugged[E]` — an `IntEnum` stored as an int and carried as its slug on the wire.
+"""Validated names and `Slugged[E]`, an `IntEnum` carried as its slug on the wire.
 
 An unknown slug is REFUSED at the boundary (422) rather than landing on the `INVALID` sentinel, and
 neither dump mode leaks the stored integer.
@@ -7,10 +7,26 @@ neither dump mode leaks the stored integer.
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Annotated, Any, TypeVar
+from typing import Annotated, Any, Self, TypeVar
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
+
+
+class Name(str):
+    """A nonempty name without whitespace, preserving its concrete str subtype."""
+
+    __slots__ = ()
+
+    def __new__(cls, value: str) -> Self:
+        if not value or any(c.isspace() for c in value):
+            raise ValueError(f'not a {cls.__name__}: {value!r}')
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: type, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
 
 E = TypeVar('E', bound=IntEnum)
 

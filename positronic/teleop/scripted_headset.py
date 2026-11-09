@@ -26,6 +26,7 @@ from websockets.sync.connection import Connection
 from pimm.logging import init_logging
 from positronic import geom
 from positronic.drivers.webxr import CONTROLLER_PATH, RIGHT, STATE_PATH, controller_message
+from positronic.utils import check_finite_nonnegative, check_finite_positive, check_positive_int
 
 from .command import PageState
 from .service import Button, Phase
@@ -205,8 +206,7 @@ def drive(
 
     The page of the service has a self-signed certificate, so the scripted headset does not check it.
     """
-    if type(trials) is not int or trials < 1:
-        raise ValueError(f'trials must be a positive integer, got {trials!r}')
+    check_positive_int(trials, 'trials')
     for name, value in (
         ('rate_hz', rate_hz),
         ('view_fps', view_fps),
@@ -214,10 +214,8 @@ def drive(
         ('trial_sec', trial_sec),
         ('circle_sec', circle_sec),
     ):
-        if not 0 < value < math.inf:
-            raise ValueError(f'{name} must be finite and positive, got {value}')
-    if not 0 <= radius < math.inf:
-        raise ValueError(f'radius must be finite and not negative, got {radius}')
+        check_finite_positive(value, name)
+    check_finite_nonnegative(radius, 'radius')
     url = urlsplit(page)
     tls = ssl.create_default_context()
     tls.check_hostname = False

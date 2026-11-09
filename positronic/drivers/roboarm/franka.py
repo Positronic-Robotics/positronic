@@ -409,11 +409,12 @@ class _Arm(DriverRun[command.CommandType]):
         if self._robot is not None:
             self._robot.stop()
 
-    def publish(self, st: pf.State) -> None:
-        """Ship the arm as it is reported, marked ERROR while it is not where the driver put it and no clear a
-        caller asked for has worked since."""
-        faulted = self.moves.errored or st.error != 0  # the robot reports its own faults; a stall is not one
-        self.state.encode(st, RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE)
+    def publish(self, st: pf.State, status: RobotStatus | None = None) -> None:
+        """Publish a reading with an explicit status, or derive AVAILABLE/ERROR from robot and move faults."""
+        if status is None:
+            faulted = self.moves.errored or st.error != 0
+            status = RobotStatus.ERROR if faulted else RobotStatus.AVAILABLE
+        self.state.encode(st, status)
         self.emit_state()
 
     @property
@@ -623,8 +624,7 @@ class _Arm(DriverRun[command.CommandType]):
         # The first emit must not ship an unfilled state.
         with self.lose_control_on_failure():
             first = self.robot.state()
-        self.state.encode(first, RobotStatus.BUSY)
-        self.emit_state()
+        self.publish(first, RobotStatus.BUSY)
 
         deadline = self.clock.now() + self._travel_s(self.state.q, target)
 
@@ -643,8 +643,7 @@ class _Arm(DriverRun[command.CommandType]):
             for wait in self.await_goal(should_stop, self.limiter.wait):
                 with self.lose_control_on_failure():
                     st = self.robot.state()
-                self.state.encode(st, RobotStatus.BUSY)
-                self.emit_state()
+                self.publish(st, RobotStatus.BUSY)
                 if st.error != 0 and not at_teardown:
                     self.robot.recover_from_errors()
                 yield wait

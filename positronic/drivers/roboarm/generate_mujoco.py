@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from enum import StrEnum
 from pathlib import Path
 
 import configuronic as cfn
@@ -7,6 +8,28 @@ import numpy as np
 
 import positronic.cfg.hardware.roboarm.motors
 from positronic.drivers.roboarm.generate_urdf import MotorParameters, create_arm
+
+
+class _ActuatorType(StrEnum):
+    POSITION = 'position'
+    TORQUE = 'torque'
+
+
+def _add_actuators(spec: mj.MjSpec, kp: float, kv: float, actuator_type: _ActuatorType) -> None:
+    """Add one position or torque actuator per joint."""
+    for joint in spec.joints:
+        actuator = spec.add_actuator()
+        actuator.name = f'actuator_{joint.name.split("_")[1]}'
+        actuator.trntype = mj.mjtTrn.mjTRN_JOINT
+        actuator.target = joint.name
+        if actuator_type is _ActuatorType.POSITION:
+            actuator.set_to_position(kp)
+            actuator.biasprm[2] = -kv  # set_to_position treats negative kv as unspecified.
+            actuator.forcerange = joint.actfrcrange
+            actuator.ctrlrange = np.array([-np.pi, np.pi])
+        else:
+            actuator.set_to_motor()
+            actuator.ctrlrange = joint.actfrcrange
 
 
 def convert_urdf_to_mujoco(
@@ -21,9 +44,10 @@ def convert_urdf_to_mujoco(
     Returns:
         mj.MjSpec: Scene spec with actuators, sensors, sites, and visuals
     """
+    mode = _ActuatorType(actuator_type)
     spec = mj.MjSpec.from_file(urdf_path)
 
-    _add_actuators(spec, kp, kv, actuator_type)
+    _add_actuators(spec, kp, kv, mode)
     _add_sites(spec)
     _add_geoms(spec)
     _add_sensors(spec)
@@ -34,31 +58,6 @@ def convert_urdf_to_mujoco(
         spec.body('link1').quat = np.array([0, 0.707107, 0, 0.707107])
 
     return spec
-
-
-def _add_actuators(spec: mj.MjSpec, kp: float, kv: float, actuator_type: str) -> None:
-    """Add position actuators for each joint."""
-    for joint in spec.joints:
-        if actuator_type == 'position':
-            actuator = spec.add_actuator()
-            actuator.name = f'actuator_{joint.name.split("_")[1]}'
-            actuator.trntype = mj.mjtTrn.mjTRN_JOINT
-            actuator.gainprm = np.array([kp, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # kp
-            actuator.biasprm = np.array([0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0])  # kv
-            actuator.target = joint.name
-            actuator.biastype = mj.mjtBias.mjBIAS_AFFINE
-            actuator.forcerange = joint.actfrcrange
-            actuator.ctrlrange = np.array([-np.pi, np.pi])
-        elif actuator_type == 'torque':
-            actuator = spec.add_actuator()
-            actuator.name = f'actuator_{joint.name.split("_")[1]}'
-            actuator.trntype = mj.mjtTrn.mjTRN_JOINT
-            actuator.gainprm = np.array([1, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # kp
-            actuator.biasprm = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])  # kv
-            actuator.biastype = mj.mjtBias.mjBIAS_NONE
-            actuator.gaintype = mj.mjtGain.mjGAIN_FIXED
-            actuator.target = joint.name
-            actuator.ctrlrange = joint.actfrcrange
 
 
 def _add_sites(spec: mj.MjSpec) -> None:
