@@ -43,6 +43,9 @@ class PageState:
 # The field of a page input that chooses the camera of the headset: a camera name, or null for the camera of the
 # session.
 HEADSET_CAMERA = 'headset_camera'
+# The field of a page input that asks for the text of the view with no camera image, so that a page that shows black
+# as clear shows only the text: true or false.
+TEXT_ONLY = 'headset_text_only'
 
 
 class _Headset(pimm.ControlSystem):
@@ -56,6 +59,7 @@ class _Headset(pimm.ControlSystem):
         self.buttons = pimm.ControlSystemReceiver(self)
         # What the headset page asks for, as a JSON object
         self.page_input = pimm.ControlSystemReceiver(self)
+        self._text_only = False
         self.view = pimm.ControlSystemEmitter(self)
         # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemEmitter(self)
@@ -72,9 +76,10 @@ class _Headset(pimm.ControlSystem):
                 try:
                     self._service.choose_camera(page_input.data[HEADSET_CAMERA])
                 except ValueError as refused:
-                    # The page shows the cameras that it can choose, so only a stale page asks for another one.
                     logger.warning('The headset page chose no camera: %s', refused)
-            self.view.emit(self._service.view())
+            if page_input is not None and TEXT_ONLY in page_input.data:
+                self._text_only = page_input.data[TEXT_ONLY] is True
+            self.view.emit(self._service.view(camera=not self._text_only))
             state, cameras = self._service.state(), self._service.cameras()
             self.page_state.emit(
                 asdict(

@@ -798,10 +798,46 @@ def test_the_camera_that_the_teleoperator_chose_goes_before_the_one_of_the_sessi
         assert service.cameras().chosen == keys.EXTERIOR_IMAGE, 'the choice went with the trial'
 
 
+def test_a_view_with_no_camera_shows_the_text_on_black(socket_path, connect):
+    """A clear panel shows black as clear: with no camera image, only the text floats over the room."""
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    width, height = VIEW_SIZE
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        bright = np.full((height, width, 3), 200, np.uint8)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: encode_jpeg(bright)})
+        assert service.view()[height // 2, width // 2].min() > 150
+        assert not service.view(camera=False)[height // 2, width // 2].any()
+        connection.close()
+
+
+def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(socket_path, monkeypatch):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
+    asked = []
+    monkeypatch.setattr(service, 'view', lambda camera=True: asked.append(camera) or np.zeros((2, 2, 3), np.uint8))
+    bridge = command._Headset(service)
+    bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
+    bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
+    bridge.controller_positions._bind(ManualCommandReceiver())
+    bridge.buttons._bind(ManualCommandReceiver())
+    page_input = ManualCommandReceiver()
+    bridge.page_input._bind(page_input)
+    stop = types.SimpleNamespace(value=False)
+    loop = bridge.run(cast(pimm.SignalReceiver, stop), SystemClock())
+    next(loop)
+    page_input.push({command.TEXT_ONLY: True})
+    next(loop)
+    page_input.push({command.TEXT_ONLY: False})
+    next(loop)
+    assert asked == [True, False, True]
+
+
 def test_a_camera_that_neither_the_run_nor_the_station_has_cannot_be_chosen(socket_path):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE])
     with pytest.raises(ValueError, match='no camera'):
         service.choose_camera(keys.EXTERIOR_IMAGE)
+    with pytest.raises(ValueError, match='must be a string'):
+        service.choose_camera([])
     service.choose_camera(keys.WRIST_IMAGE)
     assert service.cameras().chosen == keys.WRIST_IMAGE
 
@@ -953,7 +989,7 @@ def test_the_headset_page_reads_the_fields_of_the_page_state_and_posts_to_the_in
     [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
     assert set(re.findall(r"'(\w+)'", fields)) == set(command.PageState.__dataclass_fields__)
     assert f"state: '{STATE_PATH}'" in page and f"input: '{INPUT_PATH}'" in page
-    assert f"headsetCamera: '{command.HEADSET_CAMERA}'" in page
+    assert f"headsetCamera: '{command.HEADSET_CAMERA}'" in page and f"textOnly: '{command.TEXT_ONLY}'" in page
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):

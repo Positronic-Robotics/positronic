@@ -160,10 +160,11 @@ export class WebXRVideoPlayer {
         this.videoMaterial.uniforms.clearBlack.value = this.mode === PANEL_MODE.CLEAR_BLACK ? 1.0 : 0.0;
     }
 
-    // The next mode in PANEL_CYCLE: on black, with black clear, hidden, and on black again
+    // The next mode in PANEL_CYCLE: on black, with black clear, hidden, and on black again. Returns the new mode
     cycleMode() {
         this.mode = PANEL_CYCLE[(PANEL_CYCLE.indexOf(this.mode) + 1) % PANEL_CYCLE.length];
         this.applyMode();
+        return this.mode;
     }
 
     show() {

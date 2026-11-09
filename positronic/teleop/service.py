@@ -363,7 +363,9 @@ class TeleopService:
 
     def choose_camera(self, name: str | None) -> None:
         """Show camera ``name`` in the headset from now on, or the camera of the session for ``None``. Raise
-        ``ValueError`` for a camera that neither the run nor the station has."""
+        ``ValueError`` for a name that is not a string, or a camera that neither the run nor the station has."""
+        if name is not None and not isinstance(name, str):
+            raise ValueError(f'a camera name must be a string or None, got {name!r}')
         with self._changed:
             if name is not None and name not in self._images and name not in self.station_cameras:
                 known = sorted({*self._images, *self.station_cameras})
@@ -399,11 +401,12 @@ class TeleopService:
             cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
         return view
 
-    def view(self) -> np.ndarray:
-        """The image for the headset: the camera image of the run, with the state of the trial."""
+    def view(self, camera: bool = True) -> np.ndarray:
+        """The image for the headset: the camera image of the run, or black with no ``camera``, with the state of the
+        trial."""
         with self._changed:
             state = self.state()
-            image = self._headset_image()
+            image = self._headset_image() if camera else None
         match state.phase:
             case Phase.IDLE:
                 return self._view(None, ['Waiting for a trial'])
