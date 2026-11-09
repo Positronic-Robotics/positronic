@@ -16,6 +16,7 @@ from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.camera import CAPTURE_TIME
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.drivers.utils import RecoveryOutcome
 from positronic.tests.testing_coutils import RecordingEmitter
 
 SERIAL = 39567055
@@ -467,6 +468,192 @@ def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
     stop.stopped = True
     _drive(loop, clock, until=clock.now() + 1.0)
     assert _returned(loop)
+
+
+class FakeModel(enum.Enum):
+    ZED_M = 'ZED_M'
+    ZED2 = 'ZED2'
+    ZED2i = 'ZED2i'
+
+
+# A rebooted camera stays on the device list for this long, then leaves it for `REBOOT_AWAY_S`.
+REBOOT_LEAVES_AFTER_S = 1.0
+REBOOT_AWAY_S = 4.0
+
+
+class RebootingSdk(DroppingSdk):
+    """A `DroppingSdk` over one camera of ``model`` that the SDK reboots.
+
+    The SDK refuses the reboot while a camera object holds the device open. A reboot that runs leaves a listed camera on
+    the device list for ``leaves_after_s``, then off it for ``away_s``.
+    """
+
+    def __init__(
+        self,
+        clock: MockClock,
+        model: FakeModel = FakeModel.ZED2i,
+        reboot_result: ErrorCode = ErrorCode.SUCCESS,
+        leaves_after_s: float = REBOOT_LEAVES_AFTER_S,
+        away_s: float = REBOOT_AWAY_S,
+        images_stop_at: float = NEVER,
+    ):
+        super().__init__(clock, lost_at=NEVER, listed_at=NEVER, images_stop_at=images_stop_at)
+        self.model = model
+        self.reboot_result = reboot_result
+        self.leaves_after_s = leaves_after_s
+        self.away_s = away_s
+        self.reboot_times: list[float] = []
+
+    def get_device_list(self) -> list[types.SimpleNamespace]:
+        listed = types.SimpleNamespace(serial_number=SERIAL, camera_model=self.model)
+        return [listed] if self.is_listed() else []
+
+    def reboot(self, serial: int) -> ErrorCode:
+        self.reboots.append(serial)
+        if any(camera.opened_at is not None and camera.closed_at is None for camera in self.cameras):
+            return ErrorCode.FAILURE
+        if self.reboot_result is not ErrorCode.SUCCESS:
+            return self.reboot_result
+        now = self.clock.now()
+        self.reboot_times.append(now)
+        if self.is_listed():
+            self.lost_at = now + self.leaves_after_s
+        self.listed_at = max(self.lost_at, now) + self.away_s
+        return ErrorCode.SUCCESS
+
+
+def _rebooting_camera(module, sdk: RebootingSdk, frames: RecordingEmitter, mono: bool = False):
+    """The driver for the camera `SERIAL` over ``sdk``, a mono one where ``mono`` says so."""
+    stereo = _camera(module, sdk, frames)
+    module.sl.__dict__.update(MODEL=FakeModel, CameraOne=sdk, InitParametersOne=FakeInitParameters)
+    if not mono:
+        return stereo
+    camera = module.SLCamera(serial_number=SERIAL, mono=True)
+    camera.frame._bind(frames, clock=sdk.clock)
+    return camera
+
+
+def _recoverer(world: pimm.World, camera) -> pimm.calls.Caller[None, RecoveryOutcome]:
+    caller = pimm.calls.ControlSystemCaller[None, RecoveryOutcome](camera)
+    wire_call(world, caller, camera.recover)
+    return caller
+
+
+def _drive_until_answered(loop: pimm.Run[None], clock: MockClock, answer, limit_s: float = 300.0) -> None:
+    """Drive ``loop`` until ``answer`` is done, for at most ``limit_s`` seconds of the clock."""
+    until = clock.now() + limit_s
+    while not answer.done() and clock.now() < until:
+        _drive(loop, clock, until=clock.now() + 0.01)
+
+
+def test_a_recover_call_releases_the_camera_then_reboots_it_then_opens_it_again(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+    sent = len(_frame_times(frames))
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    (rebooted_at,) = sdk.reboot_times
+    released, reopened = sdk.cameras
+    assert released.closed_at is not None and released.closed_at <= rebooted_at
+    assert reopened.opened_at is not None and reopened.opened_at >= sdk.listed_at
+    assert len(_frame_times(frames)) > sent
+    assert not _errors(frames)
+
+
+def test_a_recover_call_whose_reboot_the_sdk_refuses_opens_the_camera_again_and_answers_not_cleared(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock, reboot_result=ErrorCode.FAILURE)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+    sent = len(_frame_times(frames))
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert sdk.reboots == [SERIAL]
+    _, reopened = sdk.cameras
+    assert reopened.opened_at is not None and reopened.closed_at is None
+    assert len(_frame_times(frames)) > sent
+
+
+def test_a_recover_call_whose_camera_never_leaves_the_device_list_answers_not_cleared(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock, leaves_after_s=NEVER)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+    sent = len(_frame_times(frames))
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert len(sdk.reboot_times) == 1
+    _, reopened = sdk.cameras
+    assert reopened.opened_at is not None and reopened.closed_at is None
+    assert len(_frame_times(frames)) > sent
+
+
+def test_a_recover_call_on_a_camera_that_does_not_come_back_answers_a_camera_fault_and_holds_it(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock, away_s=NEVER)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    with pytest.raises(DeviceFault, match='did not open') as raised:
+        answer.result()
+    assert raised.value.kind is FaultKind.CAMERA
+    assert _errors(frames) == [raised.value]
+    assert not _returned(loop)
+
+
+@pytest.mark.parametrize(
+    ('images_stop_at', 'outcome'),
+    [(NEVER, RecoveryOutcome.CLEARED), (LOST_AT, RecoveryOutcome.NOT_CLEARED)],
+    ids=['sending', 'stale'],
+)
+def test_a_recover_call_does_not_touch_a_model_the_sdk_cannot_reboot(zed_module, world, images_stop_at, outcome):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock, model=FakeModel.ZED_M, images_stop_at=images_stop_at)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=5.0)
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is outcome
+    assert sdk.reboots == []
+    (held,) = sdk.cameras
+    assert held.closed_at is None
+
+
+def test_a_recover_call_does_not_reboot_a_mono_camera(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock)
+    camera = _rebooting_camera(zed_module, sdk, frames, mono=True)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert sdk.reboots == []
+    (held,) = sdk.cameras
+    assert held.closed_at is None
 
 
 def test_a_torn_frame_is_dropped_with_no_error_and_the_next_frame_is_sent(zed_module):

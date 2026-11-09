@@ -11,6 +11,7 @@ from positronic.drivers import vendor_import
 from positronic.drivers.camera import CAPTURE_TIME
 from positronic.drivers.camera.device_open_lock import device_open_lock
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
+from positronic.drivers.utils import RecoveryOutcome
 
 with vendor_import('pyzed', 'ZED camera support', platforms=('linux',)):
     import pyzed.sl as sl
@@ -108,6 +109,8 @@ class SLCamera(pimm.ControlSystem):
         self._depth_mask_adapter = None  # Lazy init
 
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
+        # Releases the camera, reboots it and opens it again, where the SDK reboots the model
+        self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
         # The camera a run holds open, the error it keeps until a ready call repairs the camera, and the time of
         # its last frame
         self._camera: sl.Camera | sl.CameraOne | None = None
@@ -118,6 +121,8 @@ class SLCamera(pimm.ControlSystem):
 
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
+    # A recover call waits at most this many polls for the rebooted camera to leave the device list.
+    REBOOT_LEAVE_MAX_POLLS = 20
     # A ready call reopens a camera whose last frame is older than this.
     STALE_FRAME_SEC = 1.0
     # A ready call grabs again after a torn frame, up to this many grabs.
@@ -136,18 +141,19 @@ class SLCamera(pimm.ControlSystem):
         return error_code == sl.ERROR_CODE.CAMERA_NOT_DETECTED or not SLCamera._is_listed(serial)
 
     @staticmethod
-    def _reboot_and_reopen(
-        zed, init_params, serial: int, failure: str, should_stop: pimm.SignalReceiver
-    ) -> Iterator[pimm.Sleep]:
-        """Reboot the camera over its HID half, with no replug, wait until the SDK lists it again, and open it once.
+    def _reboot(serial: int, failure: str) -> None:
+        """Reboot the camera over its HID half, with no replug.
 
-        The SDK refuses the reboot for a model that does not support it, such as the ZED Mini.
+        The SDK refuses the reboot for a model that does not support it, such as the ZED Mini, and while a process
+        holds the camera open.
         """
-        logger.warning(f'The SDK cannot find camera {serial}; rebooting it')
         with device_open_lock():
             result = sl.Camera.reboot(serial)
         if result != sl.ERROR_CODE.SUCCESS:
             raise CameraOpenError(f'{failure}; the SDK did not reboot camera {serial}: {result}')
+
+    @staticmethod
+    def _wait_until_listed(serial: int, failure: str, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
         for _ in range(SLCamera.REBOOTED_CAMERA_MAX_POLLS):
             if SLCamera._is_listed(serial):
                 break
@@ -157,6 +163,15 @@ class SLCamera(pimm.ControlSystem):
         else:
             raise CameraOpenError(f'{failure}; camera {serial} is still not listed after its reboot')
         logger.info(f'Camera {serial} is listed again after its reboot')
+
+    @staticmethod
+    def _reboot_and_reopen(
+        zed, init_params, serial: int, failure: str, should_stop: pimm.SignalReceiver
+    ) -> Iterator[pimm.Sleep]:
+        """Reboot the camera, wait until the SDK lists it again, and open it once."""
+        logger.warning(f'The SDK cannot find camera {serial}; rebooting it')
+        SLCamera._reboot(serial, failure)
+        yield from SLCamera._wait_until_listed(serial, failure, should_stop)
         with device_open_lock():
             error_code = zed.open(init_params)
         if error_code != sl.ERROR_CODE.SUCCESS:
@@ -226,6 +241,27 @@ class SLCamera(pimm.ControlSystem):
             outcome = self._grab_frame(clock)
         return outcome
 
+    def _sends_recent_frames(self, clock: pimm.Clock) -> bool:
+        return (
+            self._error is None and self._frame_at is not None and clock.now() - self._frame_at <= self.STALE_FRAME_SEC
+        )
+
+    def _release(self) -> None:
+        if self._camera is not None:
+            self._camera.close()
+            self._camera = None
+
+    def _open_until_frame(
+        self, clock: pimm.Clock, should_stop: pimm.SignalReceiver
+    ) -> Generator[pimm.Sleep, None, DeviceFault | None]:
+        """Open a new camera and grab. None once it sends a frame, else the error that it holds."""
+        yield from self._open_or_hold(should_stop)
+        if self._error is None and self._grab_until_not_torn(clock) is GrabOutcome.SENT:
+            return None
+        if self._error is not None:
+            return self._error
+        return self._hold(DeviceFault(f'Camera {self._serial_number} opened and sent no frame', FaultKind.CAMERA))
+
     def _make_ready(
         self, call: pimm.calls.Call[None, None], clock: pimm.Clock, should_stop: pimm.SignalReceiver
     ) -> Generator[pimm.Sleep, None, None]:
@@ -233,21 +269,75 @@ class SLCamera(pimm.ControlSystem):
 
         Otherwise reopen the camera, and answer once it sends a frame, or with the error that it holds.
         """
-        if self._error is None and self._frame_at is not None and clock.now() - self._frame_at <= self.STALE_FRAME_SEC:
+        if self._sends_recent_frames(clock):
             call.set_result(None)
             return
         logger.info('Reopening camera %s to make it ready', self._serial_number)
-        if self._camera is not None:
-            self._camera.close()
-            self._camera = None
-        yield from self._open_or_hold(should_stop)
-        if self._error is None and self._grab_until_not_torn(clock) is GrabOutcome.SENT:
-            call.set_result(None)
-            return
-        error = self._error
+        self._release()
+        error = yield from self._open_until_frame(clock, should_stop)
         if error is None:
-            error = self._hold(DeviceFault(f'Camera {self._serial_number} opened and sent no frame', FaultKind.CAMERA))
-        call.set_exception(error)
+            call.set_result(None)
+        else:
+            call.set_exception(error)
+
+    @staticmethod
+    def _listed_model(serial: int) -> 'sl.MODEL | None':
+        """The model of the camera ``serial``, or None while the SDK does not list it."""
+        with device_open_lock():
+            devices = sl.Camera.get_device_list()
+        return next((device.camera_model for device in devices if device.serial_number == serial), None)
+
+    def _rebootable_serial(self) -> int | None:
+        """The serial number of a ZED 2 or a ZED 2i, or of a camera the SDK does not list. None for any other camera."""
+        if self._mono or self._serial_number is None:
+            return None
+        model = self._listed_model(self._serial_number)
+        return self._serial_number if model is None or model in (sl.MODEL.ZED2, sl.MODEL.ZED2i) else None
+
+    @staticmethod
+    def _wait_until_unlisted(serial: int, failure: str, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+        for _ in range(SLCamera.REBOOT_LEAVE_MAX_POLLS):
+            if should_stop.value or not SLCamera._is_listed(serial):
+                return
+            yield pimm.Sleep(SLCamera.DEVICE_LIST_POLL_SEC)
+        raise CameraOpenError(f'{failure}; camera {serial} stayed on the device list after its reboot')
+
+    def _release_and_reboot(
+        self, serial: int, should_stop: pimm.SignalReceiver
+    ) -> Generator[pimm.Sleep, None, CameraOpenError | None]:
+        """Close the camera, reboot it, and wait until the SDK lists it again. None once listed, else the error."""
+        logger.warning('A recover call releases camera %s to reboot it', serial)
+        self._release()
+        failure = f'A recover call asked to reboot camera {serial}'
+        try:
+            self._reboot(serial, failure)
+            yield from self._wait_until_unlisted(serial, failure, should_stop)
+            yield from self._wait_until_listed(serial, failure, should_stop)
+        except CameraOpenError as e:
+            logger.error('%s', e)
+            return e
+        return None
+
+    def _recover(
+        self, call: pimm.calls.Call[None, RecoveryOutcome], clock: pimm.Clock, should_stop: pimm.SignalReceiver
+    ) -> Generator[pimm.Sleep, None, None]:
+        """Release, reboot and reopen a camera that the SDK reboots, and answer once it sends a frame.
+
+        Leave any other camera as it is, and answer CLEARED while its last frame is recent.
+        """
+        serial = self._rebootable_serial()
+        if serial is None:
+            sends = self._sends_recent_frames(clock)
+            if not sends:
+                logger.error('Camera %s sends no frames, and a recover call does not reboot it', self._serial_number)
+            call.set_result(RecoveryOutcome.CLEARED if sends else RecoveryOutcome.NOT_CLEARED)
+            return
+        reboot_error = yield from self._release_and_reboot(serial, should_stop)
+        error = yield from self._open_until_frame(clock, should_stop)
+        if error is None:
+            call.set_result(RecoveryOutcome.CLEARED if reboot_error is None else RecoveryOutcome.NOT_CLEARED)
+        else:
+            call.set_exception(error)
 
     def _init_params(self):
         init_params = sl.InitParametersOne() if self._mono else sl.InitParameters()
@@ -372,6 +462,8 @@ class SLCamera(pimm.ControlSystem):
                 fps_counter.tick()
             for call in self.ready.incoming():
                 yield from self._make_ready(call, clock, should_stop)
+            for call in self.recover.incoming():
+                yield from self._recover(call, clock, should_stop)
             yield pimm.Sleep(0.01)
         if self._camera is not None:
             self._camera.close()
