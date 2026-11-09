@@ -13,12 +13,14 @@ Usage
 """
 
 import base64
+import collections
 import dataclasses
 import hashlib
 import json
 import logging
 import ssl
 import time
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -106,9 +108,9 @@ class _Session:
         self.elapsed_s = 0.0
         # When the last call answered, on the monotonic clock.
         self.answered_s: float | None = None
-        # The rows of each arm that the last call sent, `(rows, 7)`. The next chunk starts after the last of them unless
-        # the client replans.
-        self.sent: dict[str, np.ndarray] | None = None
+        # The rows of each arm that the last two calls sent, `(rows, 7)`, oldest first. With one call pending at most,
+        # the client plays at most the rest of the older and all of the newer after an observation.
+        self.sent: collections.deque[dict[str, np.ndarray]] = collections.deque(maxlen=2)
         # Each chunk as DreamAPI answered it and as the limiter sent it, `(rows, 14)`, left arm first, NaN in `limited`
         # where the server did not send the row. A replan at the client drops rows that the server cannot see.
         self.answered: list[np.ndarray] = []
@@ -117,6 +119,13 @@ class _Session:
 
     def close(self) -> None:
         self.client.close()
+
+
+class Pacing(StrEnum):
+    """How `dreamlabs-client` paces chunks: `ASYNC` asks for the next one while the arm plays this one, `SYNC` after."""
+
+    ASYNC = dream_pacing.ASYNC
+    SYNC = dream_pacing.SYNC
 
 
 def _ends_by(deadline: float, duration_s: float) -> bool:
@@ -231,7 +240,7 @@ class DreamModel(Model):
                 stale_sent = False
 
     def _call_record(
-        self, session: _Session, rows: int, dropped: int, mode: str, reports: dict[str, LimitReport]
+        self, session: _Session, rows: int, dropped: int, mode: Pacing, reports: dict[str, LimitReport]
     ) -> dict[str, Any]:
         timing = session.client.last_timing or {}
         return {
@@ -270,13 +279,14 @@ class DreamModel(Model):
         }
 
     @staticmethod
-    def _commanded(sent: dict[str, np.ndarray], ahead: int) -> dict[str, list[float]] | None:
+    def _commanded(sent: collections.deque[dict[str, np.ndarray]], ahead: int) -> dict[str, list[float]] | None:
         """The row of each arm that the client commanded last before an observation with `ahead` rows of `sent` still
         to play, keyed as DreamAPI's chunks; `None` when the client had not started `sent` yet."""
-        index = len(sent[keys.LEFT_ARM]) - 1 - ahead
+        plan = {arm: np.concatenate([chunk[arm] for chunk in sent]) for arm in keys.BIMANUAL_ARMS}
+        index = len(plan[keys.LEFT_ARM]) - 1 - ahead
         if index < 0:
             return None
-        return {dream.CHUNKS[arm]: rows[index].tolist() for arm, rows in sent.items()}
+        return {dream.CHUNKS[arm]: rows[index].tolist() for arm, rows in plan.items()}
 
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         session = self._sessions.get(session_id)
@@ -289,21 +299,26 @@ class DreamModel(Model):
         if replan:
             session.elapsed_s = 0.0
             session.record['replans'] += 1
-        if replan or session.sent is None:
+        if replan or not session.sent:
+            session.sent.clear()
             start, ahead, commanded = self._measured(obs[dream.OBSERVATION]), 0, None
         else:
-            start = {arm: rows[-1] for arm, rows in session.sent.items()}
+            start = {arm: rows[-1] for arm, rows in session.sent[-1].items()}
             ahead = obs[dream.ROWS_AHEAD]
             commanded = self._commanded(session.sent, ahead)
         chunks = self._send(session, dict(obs), commanded)
         answered = len(chunks[keys.LEFT_ARM])
         dropped = min(ahead, answered - 1)
-        mode = session.client.mode
-        end = answered if mode == dream_pacing.SYNC else min(answered, dropped + session.client.execution_horizon)
+        mode = Pacing(session.client.mode)
+        match mode:
+            case Pacing.SYNC:
+                end = answered
+            case Pacing.ASYNC:
+                end = min(answered, dropped + session.client.execution_horizon)
         limited, reports = {}, {}
         for arm in keys.BIMANUAL_ARMS:
             limited[arm], reports[arm] = self._limiter.limit(chunks[arm][dropped:end], start[arm], session.elapsed_s)
-        session.sent = limited
+        session.sent.append(limited)
         rows = end - dropped
         session.elapsed_s += rows / codecs.FPS
         call = self._call_record(session, rows, dropped, mode, reports)

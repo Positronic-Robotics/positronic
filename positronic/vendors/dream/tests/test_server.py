@@ -294,6 +294,23 @@ def test_a_call_tells_dreamapi_the_row_that_the_arm_had_at_the_observation(gatew
     np.testing.assert_array_equal(commanded[2][dream.CHUNKS[keys.RIGHT_ARM]], first[KEPT - 11, 7:])
 
 
+def test_a_call_asked_before_the_last_chunk_starts_names_the_row_of_the_chunk_before(gateway, model, monkeypatch):
+    commanded = []
+    get_action = server.dream_client.DreamClient.get_action
+
+    def spy(client, **kwargs):
+        commanded.append(kwargs.get('commanded'))
+        return get_action(client, **kwargs)
+
+    monkeypatch.setattr(server.dream_client.DreamClient, 'get_action', spy)
+    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    model(_request(ahead=5), session_id='a')
+    # The client still plays 5 rows of the first chunk, then the whole second chunk.
+    model(_request(ahead=5 + KEPT), session_id='a')
+
+    np.testing.assert_array_equal(commanded[3][dream.CHUNKS[keys.LEFT_ARM]], first[KEPT - 6, :7])
+
+
 def test_a_chunk_starts_its_limits_from_the_last_row_sent(gateway, model):
     gateway.chunk = _far
     first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
