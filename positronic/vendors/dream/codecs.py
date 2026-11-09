@@ -28,13 +28,24 @@ CROP_META = 'dream.crop_to_aspect'
 
 
 def rows_ahead(inputs: Mapping[str, Any]) -> int:
-    """How many rows of its current chunk the client plays after the observation of `inputs`, from the plan that it
-    sends (`policy_keys.RTC.ACTION_PREFIX`). With no plan, no row is ahead."""
+    """How many rows of its current chunk the client plays after the observation of `inputs`, rounded to whole rows,
+    from the plan that it sends (`policy_keys.RTC.ACTION_PREFIX`). With no plan, no row is ahead."""
     prefix = inputs.get(policy_keys.RTC.ACTION_PREFIX)
     if prefix is None:
         return 0
     rows = len(prefix[policy_keys.RTC.PREFIX_ACTIONS]) + prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] * FPS
     return max(0, round(rows))
+
+
+def rows_queued(inputs: Mapping[str, Any]) -> int:
+    """How many rows of its plan the client had not started at the observation of `inputs`. The row before them is
+    the one that the client commanded at the observation. With no plan, no row is queued."""
+    prefix = inputs.get(policy_keys.RTC.ACTION_PREFIX)
+    if prefix is None:
+        return 0
+    rows = len(prefix[policy_keys.RTC.PREFIX_ACTIONS])
+    started = prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] <= 0
+    return max(0, rows - 1) if started else rows
 
 
 class DreamObservationCodec(Codec):
@@ -43,7 +54,7 @@ class DreamObservationCodec(Codec):
     Each camera is a frame stack, oldest frame first, or one frame. Each frame goes to `FRAME_SIZE` as RGB `uint8`.
     With `crop_to_aspect`, a centred crop to the aspect ratio of `FRAME_SIZE` comes first. The grip of each arm must
     be the gripper opening (1 = open), so `FlipGrip(arms=...)` composes to the left. `policy_keys.REPLAN_NOW` passes
-    through, and `dream.ROWS_AHEAD` holds `rows_ahead` of the inputs.
+    through. `dream.ROWS_AHEAD` holds `rows_ahead` of the inputs, and `dream.ROWS_QUEUED` holds `rows_queued`.
     """
 
     def __init__(
@@ -98,6 +109,7 @@ class DreamObservationCodec(Codec):
             dream.FRAMES: frames,
             policy_keys.REPLAN_NOW: replan,
             dream.ROWS_AHEAD: rows_ahead(inputs),
+            dream.ROWS_QUEUED: rows_queued(inputs),
         }
 
     @property

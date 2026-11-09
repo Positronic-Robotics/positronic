@@ -34,3 +34,5 @@ FRAMES = 'frames'
 # The field of that request that holds how many rows of its current chunk the client plays after the observation. The
 # chunk that answers the request starts after them.
 ROWS_AHEAD = 'rows_ahead'
+# The field of that request that holds how many rows of its plan the client had not started at the observation.
+ROWS_QUEUED = 'rows_queued'

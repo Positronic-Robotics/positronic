@@ -148,9 +148,10 @@ class DreamModel(Model):
 
     A chunk answers an observation that the client took while it played the chunk before. The client plays the rest
     of that chunk first, `dream.ROWS_AHEAD` rows, so the answer drops as many rows, keeps at least one, and the limiter
-    starts from the last row sent. The call tells DreamAPI's client the row that the arm had at the observation, so
-    its seam blend starts from the motion that the arm is on. In the client's `async` mode the chunk then keeps
-    `execution_horizon` rows, as the client paces it; in `sync` mode it keeps every row. A call with
+    starts from the last row sent. The call tells DreamAPI's client the row that the client commanded at the
+    observation, the row before the `dream.ROWS_QUEUED` rows not started, so its seam blend starts from the motion
+    that the arm is on. In the client's `async` mode the chunk then keeps `execution_horizon` rows, as the client
+    paces it; in `sync` mode it keeps every row. A call with
     `policy_keys.REPLAN_NOW`, or the first call of a session, drops no row, and the limiter starts from the measured
     state; a replan also starts the ramp of the limiter again.
     """
@@ -279,11 +280,11 @@ class DreamModel(Model):
         }
 
     @staticmethod
-    def _commanded(sent: collections.deque[dict[str, np.ndarray]], ahead: int) -> dict[str, list[float]] | None:
-        """The row of each arm that the client commanded last before an observation with `ahead` rows of `sent` still
-        to play, keyed as DreamAPI's chunks; `None` when the client had not started `sent` yet."""
+    def _commanded(sent: collections.deque[dict[str, np.ndarray]], queued: int) -> dict[str, list[float]] | None:
+        """The row of each arm that the client commanded at an observation with `queued` rows of `sent` not started,
+        keyed as DreamAPI's chunks; `None` when the client had not started `sent` yet."""
         plan = {arm: np.concatenate([chunk[arm] for chunk in sent]) for arm in keys.BIMANUAL_ARMS}
-        index = len(plan[keys.LEFT_ARM]) - 1 - ahead
+        index = len(plan[keys.LEFT_ARM]) - 1 - queued
         if index < 0:
             return None
         return {dream.CHUNKS[arm]: rows[index].tolist() for arm, rows in plan.items()}
@@ -305,7 +306,7 @@ class DreamModel(Model):
         else:
             start = {arm: rows[-1] for arm, rows in session.sent[-1].items()}
             ahead = obs[dream.ROWS_AHEAD]
-            commanded = self._commanded(session.sent, ahead)
+            commanded = self._commanded(session.sent, obs[dream.ROWS_QUEUED])
         chunks = self._send(session, dict(obs), commanded)
         answered = len(chunks[keys.LEFT_ARM])
         dropped = min(ahead, answered - 1)
