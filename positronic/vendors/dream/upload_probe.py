@@ -1,9 +1,8 @@
 """Time the frame path of one Dream-1 call at a given upload size, on this machine.
 
-The rig bounds each camera's window to the upload size and JPEG-encodes it, and this server decodes it, cuts it to
-`codecs.FRAME_SIZE`, blurs faces and encodes it again for DreamAPI. The probe runs each step on a window of
-`codecs.WINDOW_FRAMES` frames of `source` for each of the three cameras, and prints the median time of each step and the
-bytes the rig sends. The network time is not measured: scale the bytes by the rate of a real run.
+The probe runs each step on `codecs.WINDOW_FRAMES` frames of `source` for each of the three cameras: the client's
+resize and JPEG, and the server's decode, cut to `codecs.FRAME_SIZE`, face blur and JPEG. It prints the median time of
+each step and the bytes that the client sends, and does not measure the network.
 
 Usage
   uv run --locked --extra dream python -m positronic.vendors.dream.upload_probe --source=frame.jpg

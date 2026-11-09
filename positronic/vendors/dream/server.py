@@ -109,9 +109,8 @@ class _Session:
         # The rows of each arm that the last call sent, `(rows, 7)`. The next chunk starts after the last of them unless
         # the client replans.
         self.sent: dict[str, np.ndarray] | None = None
-        # Each chunk as DreamAPI answered it and as the limiter sent it, `(rows, 14)`, left arm first. A row that the
-        # server does not send is NaN in `limited`. A replan drops the rest of a chunk at the client, unseen by the
-        # server.
+        # Each chunk as DreamAPI answered it and as the limiter sent it, `(rows, 14)`, left arm first, NaN in `limited`
+        # where the server did not send the row. A replan at the client drops rows that the server cannot see.
         self.answered: list[np.ndarray] = []
         self.limited: list[np.ndarray] = []
         self.record: dict[str, Any] = {'calls': [], 'expired': 0, 'renewed': 0, 'replans': 0}
