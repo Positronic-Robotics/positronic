@@ -584,6 +584,24 @@ def test_a_recover_call_whose_reboot_the_sdk_refuses_opens_the_camera_again_and_
     assert len(_frame_times(frames)) > sent
 
 
+def test_a_recover_call_whose_camera_never_leaves_the_device_list_answers_not_cleared(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock, leaves_after_s=NEVER)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+    sent = len(_frame_times(frames))
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is RecoveryOutcome.NOT_CLEARED
+    assert len(sdk.reboot_times) == 1
+    _, reopened = sdk.cameras
+    assert reopened.opened_at is not None and reopened.closed_at is None
+    assert len(_frame_times(frames)) > sent
+
+
 def test_a_recover_call_on_a_camera_that_does_not_come_back_answers_a_camera_fault_and_holds_it(zed_module, world):
     clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = RebootingSdk(clock, away_s=NEVER)

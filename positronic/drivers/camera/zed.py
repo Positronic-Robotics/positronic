@@ -295,12 +295,12 @@ class SLCamera(pimm.ControlSystem):
         return self._serial_number if model is None or model in (sl.MODEL.ZED2, sl.MODEL.ZED2i) else None
 
     @staticmethod
-    def _wait_until_unlisted(serial: int, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
+    def _wait_until_unlisted(serial: int, failure: str, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
         for _ in range(SLCamera.REBOOT_LEAVE_MAX_POLLS):
             if should_stop.value or not SLCamera._is_listed(serial):
                 return
             yield pimm.Sleep(SLCamera.DEVICE_LIST_POLL_SEC)
-        logger.warning(f'Camera {serial} stayed on the device list after its reboot')
+        raise CameraOpenError(f'{failure}; camera {serial} stayed on the device list after its reboot')
 
     def _release_and_reboot(
         self, serial: int, should_stop: pimm.SignalReceiver
@@ -311,7 +311,7 @@ class SLCamera(pimm.ControlSystem):
         failure = f'A recover call asked to reboot camera {serial}'
         try:
             self._reboot(serial, failure)
-            yield from self._wait_until_unlisted(serial, should_stop)
+            yield from self._wait_until_unlisted(serial, failure, should_stop)
             yield from self._wait_until_listed(serial, failure, should_stop)
         except CameraOpenError as e:
             logger.error('%s', e)
