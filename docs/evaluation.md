@@ -39,7 +39,7 @@ uv run positronic-server --dataset.path=~/evals/libero \
 
 **One server, many targets.** Every target publishes the same observation keys (see [the wire format](connect-your-model.md#the-wire-format)), so a DROID policy served once is scored on LIBERO, RoboLab, MolmoSpaces and our rig without a restart. Running everywhere is not the same as being comparable everywhere: each benchmark points `image.exterior` at its own camera, so a checkpoint scored on a target it was never trained for measures the viewpoint gap as much as the policy. Your own model is served the same way — [Connect your model](connect-your-model.md).
 
-`--eval` takes any target the catalog exposes: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). A sim run charges the model's inference time; add `--charge_inference_time=False` to pause the world during inference instead. `--fixed_inference_sec=L` charges every call L seconds instead, and pauses the world only while a call runs past L; the control tick rounds L up. `--slow_motion=k` plays each predicted chunk k times slower: joint and pose targets move on a straight line between the predicted actions, so the arm moves at 1/k speed with no pauses, and the gripper target holds until the next action. A policy that predicts deltas cannot run in slow motion. Every trial is recorded as a Positronic dataset under `--output_dir`, carrying whatever verdict its benchmark reported.
+`--eval` takes any target the catalog exposes: a whole benchmark (`.sim.libero.all`), a suite or category (`.sim.robolab.visual`), or one task (`.sim.robolab.banana_in_bowl`). Every trial is recorded as a Positronic dataset under `--output_dir`, carrying whatever verdict its benchmark reported.
 
 `--eval` also takes the name of a public platform eval. The run then uses the config, the arguments and the trials that the platform runs under that name. It runs on the positronic you installed, and it warns when that positronic is not the commit that the platform runs ([Public evals](../client/README.md#public-evals)):
 
@@ -50,6 +50,18 @@ uv run positronic eval run --eval=molmo.franka_pick_mini_smoke \
 ```
 
 Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. Write to hi@phail.ai for those.
+
+## Inference time in sim
+
+In sim, the world runs while the model computes, as it does on a real robot. Two flags change what one model call costs:
+
+| Flag | The world during a model call |
+|---|---|
+| none | runs for as long as the call takes |
+| `--charge_inference_time=False` | stops |
+| `--fixed_inference_sec=L` | runs for exactly L seconds, however long the call takes |
+
+`--slow_motion=k` makes the arm k times slower: it plays each predicted chunk at 1/k speed, with no pauses. Use it to compare a robot that waits for its model with a robot that is only slow. It needs a policy that predicts absolute targets, not deltas.
 
 ## What a run cost
 
