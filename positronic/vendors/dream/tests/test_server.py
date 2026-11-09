@@ -15,9 +15,9 @@ from shared.faceblur import FaceBlurrer, _self_check_frame
 import pimm
 from positronic import keys
 from positronic.policy import keys as policy_keys
-from positronic.policy.base import Answer, NotAnswered
 from positronic.policy.codecs import ACTION
 from positronic.policy.executor import Executor
+from positronic.policy.tests.fakes import DueAnswer
 from positronic.vendors import dream
 from positronic.vendors.dream import codecs, server
 from positronic.vendors.dream.limits import ChunkLimits, YamChunkLimiter
@@ -458,31 +458,6 @@ def test_the_pipeline_stacks_nine_frames_of_each_camera_and_sends_its_plan():
     assert layers['inference_schedule']['merge']['horizon_sec'] is None
 
 
-class _DueAnswer(Answer):
-    def __init__(self, runtime, value, due_ns):
-        self._runtime, self._value, self._due_ns = runtime, value, due_ns
-        self._elapsed_sec = (due_ns - runtime.time_ns) / 1e9
-
-    @property
-    def elapsed_sec(self):
-        if not self.done():
-            raise NotAnswered()
-        return self._elapsed_sec
-
-    @property
-    def execution_sec(self):
-        return self.elapsed_sec
-
-    def done(self):
-        return self._runtime.time_ns >= self._due_ns
-
-    def result(self):
-        return self._value
-
-    def cancel(self):
-        pass
-
-
 def test_the_arm_plays_each_chunk_on_time_with_no_stop_between_chunks(monkeypatch):
     latency_ns, period_ns = 950_000_000, round(1e9 / codecs.FPS)
     view = np.zeros((4, 4, 3), np.uint8)
@@ -496,7 +471,7 @@ def test_the_arm_plays_each_chunk_on_time_with_no_stop_between_chunks(monkeypatc
             ahead = codecs.rows_ahead(request)
             rows = range(ahead, min(ROWS, ahead + KEPT))
             chunk = [{ACTION: observed_ns + row * period_ns} for row in rows]
-            return _DueAnswer(runtime, chunk, observed_ns + latency_ns)
+            return DueAnswer(runtime, chunk, observed_ns + latency_ns)
 
         monkeypatch.setattr(runtime, 'submit', submit)
         run = runtime.start(server.pipeline.instantiate().local, Mock())

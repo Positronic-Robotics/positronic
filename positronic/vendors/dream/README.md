@@ -33,8 +33,6 @@ runs only behind DreamAPI. Dream Labs does not release the weights. Each call se
   call) and `<session_id>.npz` (`answered`: each chunk as DreamAPI answered it; `limited`: each chunk as the limiter
   sent it, NaN in each row that the server did not send). A replan drops the rest of a chunk, so `limited` can hold
   rows that the client did not run. Dream Labs can find a call from its trace id.
-- `upload_probe.py` times the frame path of one call on this machine at a given upload size: the resize and JPEG of
-  the client, and the decode, cut, face blur and JPEG of the server.
 
 ## Run in simulation
 
