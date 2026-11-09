@@ -4,21 +4,28 @@ import json
 import ssl
 import time
 import types
+from unittest.mock import Mock
 
 import cv2
 import numpy as np
 import pytest
+from dream import pacing as dream_pacing
 from shared.faceblur import FaceBlurrer, _self_check_frame
 
+import pimm
 from positronic import keys
 from positronic.policy import keys as policy_keys
+from positronic.policy.base import Answer, NotAnswered
 from positronic.policy.codecs import ACTION
+from positronic.policy.executor import Executor
 from positronic.vendors import dream
 from positronic.vendors.dream import codecs, server
 from positronic.vendors.dream.limits import ChunkLimits, YamChunkLimiter
 
 from .fake_gateway import ROWS, FakeGateway, hold
 
+# The rows that a chunk keeps in DreamAPI's async mode, which every test call starts in.
+KEPT = dream_pacing.EXECUTION_HORIZON
 CONFIG = {'checkpoint': 'dreamlabs/dream-1-beta', 'timeout_ms': 5000, 'strict': False, '_record': False}
 POSE = [0.0, 1.0, 1.0, 0.0, 0.0, 0.0]
 
@@ -49,7 +56,7 @@ def model(gateway, blurrer, tmp_path):
     built.close()
 
 
-def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = False) -> dict:
+def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = False, ahead: int = 0) -> dict:
     if view is None:
         view = np.full((176, 320, 3), 120, np.uint8)
     observation = {dream.PROMPT: 'fold the towel', **dream.STATION_ROBOT}
@@ -61,6 +68,7 @@ def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = Fal
         dream.OBSERVATION: observation,
         dream.FRAMES: {dream.FRAME_WINDOW.format(camera=camera): window for camera in dream.CAMERAS},
         policy_keys.REPLAN_NOW: replan,
+        dream.ROWS_AHEAD: ahead,
     }
 
 
@@ -71,7 +79,7 @@ def _record(tmp_path, session_id: str) -> dict:
 def test_a_call_answers_one_action_per_row_left_arm_first(model, gateway):
     actions = model(_request(), session_id='a')
 
-    assert len(actions) == ROWS
+    assert len(actions) == KEPT
     np.testing.assert_allclose(actions[0][ACTION], POSE + [1.0] + POSE + [1.0])
 
 
@@ -119,7 +127,7 @@ def test_the_session_record_holds_the_trace_id_and_timing_of_each_call(model, ga
     calls = _record(tmp_path, 'a')['calls']
     # The first call is the canary's.
     assert [call['trace_id'] for call in calls] == [call['trace_id'] for call in gateway.calls[1:]]
-    assert all(call['rows'] == ROWS and call['gateway_ms'] == 5 for call in calls)
+    assert all(call['rows'] == KEPT and call['gateway_ms'] == 5 for call in calls)
     assert _record(tmp_path, 'a')['type'] == 'dream'
 
 
@@ -129,7 +137,7 @@ def test_a_retryable_refusal_is_sent_again(model, gateway):
 
     actions = model(_request(), session_id='a')
 
-    assert len(actions) == ROWS and gateway.calls[-2]['body']['session_id'] is not None
+    assert len(actions) == KEPT and gateway.calls[-2]['body']['session_id'] is not None
 
 
 def test_a_call_in_a_session_that_expired_is_sent_again_in_the_new_session(model, gateway, tmp_path):
@@ -140,7 +148,7 @@ def test_a_call_in_a_session_that_expired_is_sent_again_in_the_new_session(model
     model.end_session('a')
 
     expired, sent_again = gateway.calls[-2:]
-    assert len(actions) == ROWS and sent_again['body']['session_id'] != expired['body']['session_id']
+    assert len(actions) == KEPT and sent_again['body']['session_id'] != expired['body']['session_id']
     assert _record(tmp_path, 'a')['expired'] == 1
 
 
@@ -165,7 +173,7 @@ def test_a_call_on_a_connection_the_gateway_closed_is_sent_again_on_a_new_one(mo
 
     actions = model(_request(), session_id='a')
 
-    assert len(actions) == ROWS and len(gateway.calls) == calls + 1
+    assert len(actions) == KEPT and len(gateway.calls) == calls + 1
     assert gateway.calls[-1]['body']['session_id'] is not None
 
 
@@ -205,7 +213,7 @@ def test_a_call_may_find_its_connection_closed_again_after_a_wait_that_dreamapi_
     actions = model(_request(), session_id='a')
 
     # The refusal and the answer reach the gateway; the two calls on closed connections do not.
-    assert len(actions) == ROWS and len(gateway.calls) == calls + 2
+    assert len(actions) == KEPT and len(gateway.calls) == calls + 2
 
 
 def test_a_call_after_an_idle_gap_starts_a_new_session(model, gateway, tmp_path, monkeypatch):
@@ -234,6 +242,78 @@ def test_the_session_keeps_each_chunk_as_answered_and_as_limited(gateway, model,
     assert chunks['answered'][0, 0, 0] == pytest.approx(1.5) and chunks['limited'][0, 0, 0] < 1.0
 
 
+def _far(observation):
+    return {name: (np.asarray(rows) + [1.5, 0, 0, 0, 0, 0, 0]).tolist() for name, rows in hold(observation).items()}
+
+
+def test_a_chunk_drops_the_rows_that_the_client_plays_before_it_and_keeps_the_execution_horizon(
+    gateway, model, tmp_path
+):
+    gateway.chunk = _far
+    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    second = np.array([action[ACTION] for action in model(_request(ahead=10), session_id='a')])
+    model.end_session('a')
+
+    assert len(first) == KEPT and len(second) == KEPT
+    calls = _record(tmp_path, 'a')['calls']
+    assert [call['dropped'] for call in calls] == [0, 10] and {call['mode'] for call in calls} == {dream_pacing.ASYNC}
+    limited = np.load(tmp_path / 'a.npz')['limited']
+    assert np.isnan(limited[1, :10]).all() and np.isnan(limited[1, 10 + KEPT :]).all()
+    np.testing.assert_array_equal(limited[1, 10 : 10 + KEPT], second)
+
+
+def test_a_chunk_keeps_its_last_row_when_every_row_is_ahead(gateway, model):
+    model(_request(), session_id='a')
+
+    assert len(model(_request(ahead=ROWS), session_id='a')) == 1
+
+
+def test_a_chunk_in_sync_mode_keeps_every_row_after_the_dropped_ones(gateway, model, monkeypatch):
+    monkeypatch.setattr(server.dream_client.DreamClient, 'mode', property(lambda client: dream_pacing.SYNC))
+    model(_request(), session_id='a')
+
+    assert len(model(_request(ahead=10), session_id='a')) == ROWS - 10
+
+
+def test_a_call_tells_dreamapi_the_row_that_the_arm_had_at_the_observation(gateway, model, monkeypatch):
+    commanded = []
+    get_action = server.dream_client.DreamClient.get_action
+
+    def spy(client, **kwargs):
+        commanded.append(kwargs.get('commanded'))
+        return get_action(client, **kwargs)
+
+    monkeypatch.setattr(server.dream_client.DreamClient, 'get_action', spy)
+    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    model(_request(ahead=10), session_id='a')
+    model(_request(replan=True, ahead=10), session_id='a')
+
+    # The first call is the canary's.
+    assert commanded[1] is None and commanded[3] is None
+    np.testing.assert_array_equal(commanded[2][dream.CHUNKS[keys.LEFT_ARM]], first[KEPT - 11, :7])
+    np.testing.assert_array_equal(commanded[2][dream.CHUNKS[keys.RIGHT_ARM]], first[KEPT - 11, 7:])
+
+
+def test_a_chunk_starts_its_limits_from_the_last_row_sent(gateway, model):
+    gateway.chunk = _far
+    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
+    # The arm is still at the start, but the client plays the rest of the first chunk before the second one.
+    second = np.array([action[ACTION] for action in model(_request(ahead=20), session_id='a')])
+
+    assert first[-1, 0] > 0.5
+    assert np.abs(second[0, :6] - first[-1, :6]).max() < 0.1
+
+
+def test_a_replan_drops_no_row_and_starts_its_limits_from_the_measured_state(gateway, model):
+    gateway.chunk = _far
+    model(_request(), session_id='a')
+
+    replan = np.array([action[ACTION] for action in model(_request(replan=True, ahead=20), session_id='a')])
+
+    assert len(replan) == KEPT
+    assert replan[0, 0] == pytest.approx(0.5 / codecs.FPS)
+
+
 def test_a_refusal_that_is_not_retryable_raises(model, gateway):
     model(_request(), session_id='a')
     gateway.statuses.append({'code': 'DA-4000', 'reason': 'malformed', 'detail': 'bad'})
@@ -259,7 +339,7 @@ def test_a_call_that_timed_out_goes_again_only_while_a_whole_call_fits_before_th
     model._retry_deadline_s = 12.0
     calls = []
 
-    def timed_out():
+    def timed_out(commanded=None):
         calls.append(clock[0])
         clock[0] += 5.0
         raise server.dream_client.DreamTimeout('no answer')
@@ -384,7 +464,7 @@ def test_a_sessions_dir_under_the_home_directory_is_expanded(gateway, tmp_path, 
     assert (tmp_path / 'records').is_dir() and not (tmp_path / '~').exists()
 
 
-def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks():
+def test_the_pipeline_stacks_nine_frames_of_each_camera_and_sends_its_plan():
     deployment = server.pipeline.instantiate()
 
     spec = deployment.local.to_spec()
@@ -392,5 +472,66 @@ def test_the_pipeline_stacks_nine_frames_of_each_camera_and_plays_whole_chunks()
     assert layers['temporal_stack']['keys'] == [keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE]
     np.testing.assert_allclose(layers['temporal_stack']['offsets_sec'], np.arange(-1.6, 0.01, 0.2), atol=1e-9)
     assert layers['trajectory_player']['replan_on_error'] is True
-    # The limiter's ramp counts every row of a chunk as played.
+    assert layers['trajectory_player']['plan_key'] == policy_keys.PLAN
+    # The limiter's ramp counts every row that the server sends as played.
     assert layers['inference_schedule']['merge']['horizon_sec'] is None
+
+
+class _DueAnswer(Answer):
+    def __init__(self, runtime, value, due_ns):
+        self._runtime, self._value, self._due_ns = runtime, value, due_ns
+        self._elapsed_sec = (due_ns - runtime.time_ns) / 1e9
+
+    @property
+    def elapsed_sec(self):
+        if not self.done():
+            raise NotAnswered()
+        return self._elapsed_sec
+
+    @property
+    def execution_sec(self):
+        return self.elapsed_sec
+
+    def done(self):
+        return self._runtime.time_ns >= self._due_ns
+
+    def result(self):
+        return self._value
+
+    def cancel(self):
+        pass
+
+
+def test_the_arm_plays_each_chunk_on_time_with_no_stop_between_chunks(monkeypatch):
+    latency_ns, period_ns = 950_000_000, round(1e9 / codecs.FPS)
+    view = np.zeros((4, 4, 3), np.uint8)
+    obs = dict.fromkeys((keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE), view)
+    with pimm.World(virtual_time=True) as world:
+        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+
+        def submit(function, request):
+            # Each row holds the time that DreamAPI plans it for: the observation, and then one row per period.
+            observed_ns = runtime.time_ns
+            ahead = codecs.rows_ahead(request)
+            rows = range(ahead, min(ROWS, ahead + KEPT))
+            chunk = [{ACTION: observed_ns + row * period_ns} for row in rows]
+            return _DueAnswer(runtime, chunk, observed_ns + latency_ns)
+
+        monkeypatch.setattr(runtime, 'submit', submit)
+        run = runtime.start(server.pipeline.instantiate().local, Mock())
+        played = []
+        try:
+            for tick in range(600):
+                world.clock.advance_to_ns(tick * period_ns)
+                played.append((tick * period_ns, run.send(obs).commands.get(ACTION)))
+        finally:
+            run.close()
+            runtime.close()
+
+    first = next(index for index, (_, planned) in enumerate(played) if planned is not None)
+    moving = [(now, planned) for now, planned in played[first:] if planned is not None]
+    planned = [planned for _, planned in moving]
+    assert planned == sorted(planned)
+    # The first chunk starts when it comes, from an arm that held still. A later one starts on time.
+    assert max(now - planned for now, planned in moving[KEPT:]) <= period_ns
+    assert len(moving) / len(played[first:]) > 0.95
