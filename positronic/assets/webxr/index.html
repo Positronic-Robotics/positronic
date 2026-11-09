@@ -8,6 +8,20 @@
 
     <title>Input Tracking</title>
     <script src="/three.min.js"></script>
+    <style>
+      #cameras { display: none; font-family: sans-serif; margin: 12px 0; padding: 12px; border: 1px solid #888;
+                 border-radius: 8px; max-width: 640px; }
+      #cameras.cameras--shown { display: block; }
+      #cameras h2 { font-size: 18px; margin: 0 0 8px; }
+      #phase { margin: 0 0 8px; color: #555; }
+      #camera-list button { display: flex; align-items: center; gap: 8px; width: 100%; margin: 4px 0; padding: 10px;
+                            font-size: 16px; text-align: left; border: 1px solid #aaa; border-radius: 6px;
+                            background: #f4f4f4; cursor: pointer; }
+      #camera-list button.camera--shown { border-color: #2a7; background: #e3f6ec; font-weight: bold; }
+      .dot { width: 12px; height: 12px; border-radius: 50%; background: #aaa; flex: none; }
+      .dot--live { background: #2a7; }
+      #camera-hint { margin: 8px 0 0; color: #555; font-size: 14px; }
+    </style>
   </head>
   <body>
     <header>
@@ -18,12 +32,37 @@
           and sends the data to a server.
         </p>
     </header>
+    <section id="cameras">
+      <h2>Cameras</h2>
+      <p id="phase"></p>
+      <div id="camera-list"></div>
+      <p id="camera-hint">
+        A green dot: the run sends this camera now. Tap a camera to show it in the headset; Auto shows the camera of
+        the session. In the headset, Y on the left controller cycles the panel: on black, black clear, hidden.
+      </p>
+    </section>
     <script type="module">
         import { WebXRVideoPlayer } from './video-player.js';
         import { startXRApp } from '/core.js';
 
+        // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
+        const ROUTES = { state: '/state', input: '/input' };
+        const STATE_FIELD = {
+          phase: 'phase', control: 'control', cameras: 'cameras', live: 'live', shown: 'shown', chosen: 'chosen',
+        };
+        // The field of an input that chooses the camera of the headset: a name, or null for the camera of the session
+        const INPUT_FIELD = { headsetCamera: 'headset_camera' };
+        const PHASE_TEXT = {
+          idle: 'Waiting for a trial', ready_wait: 'A trial waits for Ready', running: 'Trial running',
+          ended: 'The trial ended',
+        };
+        // The Y button of the left controller cycles the panel of the headset
+        const Y_BUTTON = 5;
+        const STATE_POLL_MS = 500;
+
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
+        let yWasPressed = false;
 
         function initControllerAxes(scene) {
           // Create axis visualizers for both controllers
@@ -114,9 +153,69 @@
               controllerAxes[hand].visible = false;
             }
           }
+          const left = controllers.left;
+          const yPressed = left !== null && left.buttons.length > Y_BUTTON && left.buttons[Y_BUTTON] > 0.5;
+          if (yPressed && !yWasPressed && videoPlayer) videoPlayer.cycleMode();
+          yWasPressed = yPressed;
           if (videoPlayer) videoPlayer.update();
           return controllers;
         }
+
+        function cameraButton(name, label, live, shown) {
+          const button = document.createElement('button');
+          const dot = document.createElement('span');
+          dot.className = live ? 'dot dot--live' : 'dot';
+          button.append(dot, label);
+          button.classList.toggle('camera--shown', shown);
+          button.addEventListener('click', () => choose(name));
+          return button;
+        }
+
+        // Show the cameras of the page state. A state with no cameras field comes from a run with no teleop service.
+        function showCameras(state) {
+          const panel = document.getElementById('cameras');
+          const names = state[STATE_FIELD.cameras];
+          panel.classList.toggle('cameras--shown', Array.isArray(names));
+          if (!Array.isArray(names)) return;
+          document.getElementById('phase').textContent = PHASE_TEXT[state[STATE_FIELD.phase]] || '';
+          const live = state[STATE_FIELD.live] || [];
+          const shown = state[STATE_FIELD.shown];
+          const chosen = state[STATE_FIELD.chosen] ?? null;
+          const list = document.getElementById('camera-list');
+          list.replaceChildren(
+            cameraButton(null, 'Auto: the camera of the session', false, chosen === null),
+            ...names.map(name => cameraButton(name, name, live.includes(name), name === shown)),
+          );
+          if (names.length === 0) {
+            const none = document.createElement('p');
+            none.textContent = 'No cameras: start `positronic teleop` with --cameras, or name them in the plan.';
+            list.append(none);
+          }
+        }
+
+        async function choose(name) {
+          try {
+            await fetch(ROUTES.input, {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ [INPUT_FIELD.headsetCamera]: name }),
+            });
+          } catch (error) {
+            console.error('Cannot choose the camera:', error);
+          }
+          pollState();
+        }
+
+        async function pollState() {
+          try {
+            const response = await fetch(ROUTES.state, { cache: 'no-store' });
+            if (response.ok) showCameras(await response.json());
+          } catch (error) {
+            console.error('Cannot read the state:', error);
+          }
+        }
+
+        setInterval(pollState, STATE_POLL_MS);
+        pollState();
 
         // Start the XR application and WebSocket connection using shared core
         startXRApp({ onInit, onFrame });

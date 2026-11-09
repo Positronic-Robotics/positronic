@@ -95,11 +95,17 @@ A run records the union of two camera sets:
 Conversion for training picks its own keys from the recording.
 
 - The eval names the recorded cameras in its `camera_dict`.
-- The session parameter `cameras` names the cameras that the person sees, in that order. By default the person sees
-  no camera (see Session parameters).
+- The session parameter `cameras` names the cameras that the person sees, in that order (see Session parameters).
+- A session that names no cameras gets the cameras of the station. Name them once when you start the service:
+  `positronic teleop --cameras='["image.exterior", "image.wrist"]'`. Each name must be a camera that the runs of the
+  station send, or the run fails at its first frame. With neither, the person sees no camera.
 - The window shows the cameras of the policy in a grid, each with its name.
-- The headset video shows one camera: the first one, or the one that the session parameter `headset_camera` names.
-  The phone page shows no video.
+- The headset video shows one camera. The headset page (before Enter AR) lists the cameras, with a green dot on each
+  camera whose images come now. Tap a camera to show it in the headset. The choice holds over the trials until you tap
+  Auto. Auto shows the camera that the session parameter `headset_camera` names, or the first camera.
+- In the headset, Y on the left controller cycles the video panel: on black, with black clear (the text and the bright
+  parts of the image float over the room), and hidden.
+- The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480. A camera with another aspect gets black bars.
 - `positronic teleop` sends the headset video at JPEG quality 90. `--webxr.jpeg_quality=<0..100>` changes it. Lower
   it if the video stutters on a slow Wi-Fi.

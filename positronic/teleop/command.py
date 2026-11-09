@@ -29,10 +29,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PageState:
-    """The state of the trial that the phone page shows. Its field names are the fields of the JSON object."""
+    """The state of the trial that the phone page and the headset page show. Its field names are the fields of the
+    JSON object. ``cameras``, ``live``, ``shown`` and ``chosen`` are a ``CameraState``."""
 
     phase: Phase
     control: bool
+    cameras: tuple[str, ...] = ()
+    live: tuple[str, ...] = ()
+    shown: str | None = None
+    chosen: str | None = None
+
+
+# The field of a page input that chooses the camera of the headset: a camera name, or null for the camera of the
+# session.
+HEADSET_CAMERA = 'headset_camera'
 
 
 class _Headset(pimm.ControlSystem):
@@ -44,6 +54,8 @@ class _Headset(pimm.ControlSystem):
         self._view_period_sec = 1 / view_fps
         self.controller_positions = pimm.ControlSystemReceiver(self)
         self.buttons = pimm.ControlSystemReceiver(self)
+        # What the headset page asks for, as a JSON object
+        self.page_input = pimm.ControlSystemReceiver(self)
         self.view = pimm.ControlSystemEmitter(self)
         # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemEmitter(self)
@@ -55,9 +67,20 @@ class _Headset(pimm.ControlSystem):
                 buttons = self.buttons.read()
                 right = None if buttons is None else buttons.data[RIGHT]
                 self._service.take_sample(positions.data[RIGHT], right)
+            page_input = pimm.read_updated(self.page_input)
+            if page_input is not None and HEADSET_CAMERA in page_input.data:
+                try:
+                    self._service.choose_camera(page_input.data[HEADSET_CAMERA])
+                except ValueError as refused:
+                    # The page shows the cameras that it can choose, so only a stale page asks for another one.
+                    logger.warning('The headset page chose no camera: %s', refused)
             self.view.emit(self._service.view())
-            state = self._service.state()
-            self.page_state.emit(asdict(PageState(state.phase, state.control)))
+            state, cameras = self._service.state(), self._service.cameras()
+            self.page_state.emit(
+                asdict(
+                    PageState(state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen)
+                )
+            )
             yield pimm.Sleep(self._view_period_sec)
 
 
@@ -170,6 +193,7 @@ def serve(
     press_threshold: float = 0.6,
     view_fps: float = 30.0,
     open_window: bool = True,
+    cameras: Sequence[str] = (),
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
@@ -178,6 +202,8 @@ def serve(
     ``AUTH_TOKEN_ENV``, and serves open when that is unset. A run sets the parameters of its session (``SessionParams``)
     in the query of its address.
     ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
+    ``cameras`` names the cameras of the station, such as ``'["image.exterior", "image.wrist"]'``. A run whose address
+    names no cameras sends these, and the headset page offers them.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
@@ -193,7 +219,7 @@ def serve(
                 served_address.port,
             )
     service = TeleopService(
-        served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token
+        served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token, cameras=cameras
     )
     headset = _Headset(service, view_fps)
     text = (
@@ -204,6 +230,7 @@ def serve(
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
+        world.connect(webxr.page_input, headset.page_input)
         world.connect(headset.view, webxr.frame)
         world.connect(headset.page_state, webxr.page_state)
         if ready_notice is not None:

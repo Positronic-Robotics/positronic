@@ -10,11 +10,12 @@ import traceback
 from collections.abc import Iterator, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 import turbojpeg
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from positronic_model_server.serialization import check_int_range
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 LEFT, RIGHT = 'left', 'right'
 
 # The routes of the page state and of the controller stream.
-STATE_PATH, CONTROLLER_PATH = '/state', '/ws'
+STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
 
 # The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
@@ -168,6 +169,8 @@ class WebXR(pimm.ControlSystem):
     - `/`                -> selected frontend; it redirects to `/?mode=teleop` for phone teleop, and to `/` for
                             any other query
     - `/state`           -> the last `page_state` value as JSON
+    - `/input`           -> POST a JSON object from the page, such as a choice of the teleoperator; ``page_input``
+                            emits it
     - `/ws`              -> JSON controller stream from client to server
     - `/video`           -> optional base64 JPEG frames (server to client)
     - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`, `/session-mode.js`
@@ -207,6 +210,8 @@ class WebXR(pimm.ControlSystem):
         # A JSON object that the page polls at ``/state``, such as the state of a trial. It is empty while nothing
         # sends one.
         self.page_state = pimm.ControlSystemReceiver(self)
+        # Each JSON object that the page posts to ``/input``.
+        self.page_input = pimm.ControlSystemEmitter(self)
         self.controller_positions = pimm.ControlSystemEmitter(self)
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
@@ -235,6 +240,22 @@ class WebXR(pimm.ControlSystem):
         async def page_state():
             message = self.page_state.read()
             return JSONResponse({} if message is None else message.data)
+
+        @app.post(INPUT_PATH)
+        async def page_input(request: Request):
+            # A browser sends `Origin` with each cross-site POST: a page on another site cannot choose for the
+            # teleoperator. A client that sends none passes, as the controller stream does.
+            origin = request.headers.get('origin')
+            if origin is not None and urlparse(origin).netloc != request.url.netloc:
+                raise HTTPException(403, 'cross-origin request refused')
+            try:
+                body = await request.json()
+            except ValueError:
+                raise HTTPException(422, 'the input must be JSON') from None
+            if not isinstance(body, dict):
+                raise HTTPException(422, 'the input must be a JSON object')
+            self.page_input.emit(body)
+            return JSONResponse({})
 
         @app.get('/three.min.js')
         async def three_min():

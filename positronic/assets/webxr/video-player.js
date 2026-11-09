@@ -1,6 +1,11 @@
 /**
  * WebXR Video Player class that displays a video stream on a plane in AR
  */
+
+// How the plane shows the video: as it is, with black clear so that only bright parts float over the room, or not at all
+export const PANEL_MODE = { ON_BLACK: 'on_black', CLEAR_BLACK: 'clear_black', HIDDEN: 'hidden' };
+const PANEL_CYCLE = [PANEL_MODE.ON_BLACK, PANEL_MODE.CLEAR_BLACK, PANEL_MODE.HIDDEN];
+
 export class WebXRVideoPlayer {
     constructor() {
         this.videoTexture = null;
@@ -25,7 +30,9 @@ export class WebXRVideoPlayer {
             uniforms: {
                 map: { value: this.videoTexture },
                 blueBoost: { value: 1.0 },
-                contrast: { value: 1.0 }  // 1.0 is normal, >1.0 increases contrast
+                contrast: { value: 1.0 },  // 1.0 is normal, >1.0 increases contrast
+                // 1.0 shows black as clear: text on black floats over the room
+                clearBlack: { value: 0.0 }
             },
             vertexShader: `
                 varying vec2 vUv;
@@ -38,6 +45,7 @@ export class WebXRVideoPlayer {
                 uniform sampler2D map;
                 uniform float blueBoost;
                 uniform float contrast;
+                uniform float clearBlack;
                 varying vec2 vUv;
                 void main() {
                     vec4 texColor = texture2D(map, vUv);
@@ -47,6 +55,10 @@ export class WebXRVideoPlayer {
                     texColor.b = min(1.0, texColor.b * blueBoost);
                     // Clamp final colors to valid range
                     texColor.rgb = clamp(texColor.rgb, 0.0, 1.0);
+                    float brightest = max(texColor.r, max(texColor.g, texColor.b));
+                    if (clearBlack > 0.5 && brightest < 0.15) {
+                        texColor.a = 0.0;
+                    }
                     gl_FragColor = texColor;
                 }
             `,
@@ -68,7 +80,8 @@ export class WebXRVideoPlayer {
         this.videoGroup = new THREE.Group();
         this.videoGroup.add(this.videoPlane);
         this.scene.add(this.videoGroup);
-        this.videoGroup.visible = true;
+        this.mode = PANEL_MODE.ON_BLACK;
+        this.applyMode();
 
 
         // Connect to video websocket
@@ -139,6 +152,18 @@ export class WebXRVideoPlayer {
         // Update video plane position and orientation
         this.videoGroup.position.copy(cameraPosition).add(offset);
         this.videoGroup.quaternion.copy(cameraQuaternion);
+    }
+
+    applyMode() {
+        if (!this.videoGroup) return;
+        this.videoGroup.visible = this.mode !== PANEL_MODE.HIDDEN;
+        this.videoMaterial.uniforms.clearBlack.value = this.mode === PANEL_MODE.CLEAR_BLACK ? 1.0 : 0.0;
+    }
+
+    // The next mode in PANEL_CYCLE: on black, with black clear, hidden, and on black again
+    cycleMode() {
+        this.mode = PANEL_CYCLE[(PANEL_CYCLE.indexOf(this.mode) + 1) % PANEL_CYCLE.length];
+        this.applyMode();
     }
 
     show() {
