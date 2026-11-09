@@ -288,10 +288,7 @@ class SLCamera(pimm.ControlSystem):
         return next((device.camera_model for device in devices if device.serial_number == serial), None)
 
     def _rebootable_serial(self) -> int | None:
-        """The serial number of a ZED 2 or a ZED 2i, or of a camera the SDK does not list. None for any other camera.
-
-        The SDK reboots a camera by its serial number, and an `sl.CameraOne` has none.
-        """
+        """The serial number of a ZED 2 or a ZED 2i, or of a camera the SDK does not list. None for any other camera."""
         if self._mono or self._serial_number is None:
             return None
         model = self._listed_model(self._serial_number)
