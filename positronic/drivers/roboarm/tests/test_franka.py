@@ -229,6 +229,8 @@ class FakeDesk:
         # A joint fault that Desk holds and that its prepare acknowledges.
         self.generic_joint_error = False
         self.programming_mode = False
+        # The seconds until the next TD2 self-test is due. A run starts a day away from it.
+        self.time_to_td2 = 86400
         self.status_reads = 0
         # The Desk login that holds robot control, where a session of the driver does not.
         self.holder: str | None = None
@@ -305,6 +307,7 @@ class FakeDesk:
         return {
             franka.SAFE_INPUT_STATE: dict(self.safe_inputs),
             franka.BRAKE_STATE: brakes,
+            franka.TIME_TO_TD2: self.time_to_td2,
             franka.RECOVERABLE_ERRORS: {
                 franka.FSOE_CONNECTION_ERROR: self.fsoe_error,
                 'genericJointError': self.generic_joint_error,
@@ -2332,6 +2335,57 @@ def test_a_ready_call_on_an_error_the_recovery_leaves_answers_it_and_takes_no_de
         assert answered.value.kind is FaultKind.ARM
         assert isinstance(answered.value.__cause__, RuntimeError)
 
+    assert desk.calls[mark:] == []
+
+
+def test_a_ready_call_runs_the_td2_self_test_that_would_fall_due_during_the_episode(desk, world, monkeypatch):
+    """A run outlives the time Desk gives to the next TD2 self-test. The ready call before an episode runs the test
+    through ``Desk.prepare()``, with the brakes locked and FCI off, so the deadline cannot stop the arm mid-episode."""
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    desk.time_to_td2 = franka.SELF_TEST_LEAD_SEC - 1
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    assert answer.result() is None
+    assert desk.calls[mark:] == [Call.ENSURE_CONTROL, Call.CLOSE_BRAKES, Call.DEACTIVATE_FCI, Call.PREPARE]
+    assert Call.SET_CONTROL_MODE in reconnected.calls
+
+
+def test_a_ready_call_takes_no_desk_step_while_the_td2_self_test_is_due_after_the_lead(desk, world, monkeypatch):
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    desk.time_to_td2 = franka.SELF_TEST_LEAD_SEC + 1
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    assert answer.result() is None
+    assert desk.calls[mark:] == []
+
+
+def test_a_ready_call_runs_no_td2_self_test_while_a_safe_input_holds_the_arm(desk, world, monkeypatch):
+    """A person may hold the arm, and the self-test locks and opens its brakes. The episode starts as before."""
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
+    arm = FakeArm(PARK)
+    desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device, and only they let it go
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    desk.time_to_td2 = franka.SELF_TEST_LEAD_SEC - 1
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    assert answer.result() is None
     assert desk.calls[mark:] == []
 
 

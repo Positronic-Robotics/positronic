@@ -38,7 +38,13 @@ with vendor_import(
     platforms=('linux',),
 ):
     import positronic_franka._franka as pf
-    from positronic_franka.desk import ControlHeldElsewhere, Desk, ProgrammingModeError, SafetyControllerError
+    from positronic_franka.desk import (
+        SELF_TEST_LEAD_SEC,
+        ControlHeldElsewhere,
+        Desk,
+        ProgrammingModeError,
+        SafetyControllerError,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +147,8 @@ EMERGENCY_STOP_PRESSED = 'Release the emergency stop button'
 NO_CONNECTION = 'The driver has no connection to the arm'
 # The recoverable error that Desk reports for a lost safety bus. Desk refuses to open the brakes until a reboot.
 FSOE_CONNECTION_ERROR = 'fsoeConnectionError'
+# The field Desk answers the seconds until its next TD2 self-test is due in.
+TIME_TO_TD2 = 'timeToTd2'
 
 
 class _SafeInputLevel(StrEnum):
@@ -1200,18 +1208,36 @@ class Robot(pimm.ControlSystem):
             if asked:
                 self.recovery_step.emit(RecoveryStep.IDLE)
 
-    def _ready(self, arm: _Arm, call: pimm.calls.Call[None, None]) -> None:
+    @staticmethod
+    def _self_test_due(session: _DeskSession) -> bool:
+        """Whether Desk's next TD2 self-test is due within ``SELF_TEST_LEAD_SEC``. False with no Desk session, and
+        where Desk does not answer."""
+        if session.desk is None:
+            return False
+        try:
+            return session.desk.safety_status()[TIME_TO_TD2] <= SELF_TEST_LEAD_SEC
+        # rules-allow: swallowed-error — an unread deadline runs no self-test, so the episode starts as it did before
+        except Exception as exc:
+            logger.error(f'Cannot read when the TD2 self-test is due ({type(exc).__name__}: {exc})')
+            return False
+
+    def _ready(self, session: _DeskSession, arm: _Arm, brakes: _Brakes, call: pimm.calls.Call[None, None]) -> None:
         """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
 
         Answer with the error where the recovery leaves it, and with the missing connection where there is none. A
-        pressed emergency stop gets the release instruction, and no recovery. A ready call takes no Desk control and
-        opens no brakes: the harness asks again and again between episodes, with nobody at the rig.
+        pressed emergency stop gets the release instruction, and no recovery. Where the TD2 self-test is due within
+        ``SELF_TEST_LEAD_SEC`` and every safe input reads clear, ``Desk.prepare()`` runs it first: Desk stops the arm
+        when the deadline passes, also in an episode. Otherwise a ready call takes no Desk control and opens no
+        brakes: the harness asks again and again between episodes, with nobody at the rig.
         """
         with pimm.calls.raise_to(call), raise_as_device_fault(FaultKind.ARM):
             if arm.stop_pressed:
                 raise DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)
             if not arm.connected:
                 raise arm.no_connection_fault()
+            if self._self_test_due(session) and self._safe_to_prepare(arm):
+                logger.info(f'The TD2 self-test is due within {SELF_TEST_LEAD_SEC}s; Desk runs it before the episode')
+                self._prepare_and_connect(session, arm, brakes)
             with arm.lose_control_on_failure():
                 faulted = arm.robot.state().error != 0
             if faulted and arm.recover() is RecoveryOutcome.NOT_CLEARED:
@@ -1239,7 +1265,7 @@ class Robot(pimm.ControlSystem):
 
             while not should_stop.value:
                 for call in self.ready.incoming():
-                    self._ready(arm, call)
+                    self._ready(session, arm, brakes, call)
                 if not arm.connected:
                     arm.emit_state()  # the emergency stop's error comes and goes over the missing connection's
                     arm.refuse_moves()
