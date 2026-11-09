@@ -160,13 +160,21 @@ def test_the_world_stopping_while_a_rebooted_camera_is_away_ends_the_open(zed_mo
     assert sdk.list_calls < zed_module.SLCamera.REBOOTED_CAMERA_MAX_POLLS
 
 
+def _noisy_scene(low: int, high: int, shape: tuple[int, int] = (72, 128)) -> np.ndarray:
+    """A BGRA image whose colour values spread at random from ``low`` up to ``high``, with opaque alpha."""
+    rng = np.random.default_rng(0)
+    scene = np.full((*shape, 4), 255, dtype=np.uint8)
+    scene[..., :3] = rng.integers(low, high, size=(*shape, 3), dtype=np.uint8)
+    return scene
+
+
 class DroppingSdk:
     """Stands in for `sl.Camera` over one ZED that leaves the device list at ``lost_at`` and returns at ``listed_at``.
 
     A camera opened before the drop grabs again only from ``sdk_recovers_at``. ``None`` is a model whose loss the SDK
     never recovers, such as the ZED Mini. The first ``failed_reopens`` opens after the drop fail. A camera opened
-    before ``images_stop_at`` grabs with no error from then on, and gives no image. Every image shows ``scene``, and
-    the grabs that ``torn_grabs`` counts from 0 give a torn image.
+    before ``images_stop_at`` grabs with no error from then on, and gives no image. Every image shows ``scene``, a lit
+    room by default, and the grabs that ``torn_grabs`` counts from 0 give a torn image.
     """
 
     def __init__(
@@ -186,7 +194,7 @@ class DroppingSdk:
         self.sdk_recovers_at = sdk_recovers_at
         self.failed_reopens = failed_reopens
         self.images_stop_at = images_stop_at
-        self.scene = np.zeros((4, 6, 4), dtype=np.uint8) if scene is None else scene
+        self.scene = _noisy_scene(60, 160) if scene is None else scene
         self.torn_grabs = torn_grabs
         self.grab_times: list[float] = []
         self.cameras: list[FakeCamera] = []
@@ -489,19 +497,73 @@ def test_a_ready_call_that_reopens_the_camera_grabs_again_after_a_torn_frame(zed
     assert len(sdk.cameras) == 2
 
 
-def _dark_scene() -> np.ndarray:
-    """A dark room at 720p: BGR values near black with sensor noise, opaque alpha."""
-    rng = np.random.default_rng(0)
-    scene = np.full((720, 1280, 4), 255, dtype=np.uint8)
-    scene[..., :3] = rng.integers(0, 12, size=(720, 1280, 3), dtype=np.uint8)
-    return scene
-
-
 @pytest.mark.parametrize(
-    'scene', [np.full((720, 1280, 4), (0, 0, 0, 255), np.uint8), _dark_scene()], ids=['black', 'dark']
+    'scene',
+    [np.full((720, 1280, 4), (0, 0, 0, 255), np.uint8), _noisy_scene(0, 12, (720, 1280))],
+    ids=['black', 'dark'],
 )
 def test_a_black_or_dark_frame_is_sent(zed_module, scene):
     clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, scene=scene)
     _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=0.2)
     assert _frame_times(frames) == pytest.approx(sdk.grab_times)
+
+
+# The mean levels of these images are near 6 of 255, as a failing ZED sends, near 32 for a dim room, and near 110.
+NEAR_BLACK = _noisy_scene(0, 12)
+DIM = _noisy_scene(16, 48)
+LIT = _noisy_scene(60, 160)
+NEAR_BLACK_FOR_LONG = 30.0
+
+
+def test_images_that_stay_near_black_send_a_camera_fault_that_the_camera_keeps(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, scene=LIT)
+    loop = _camera(zed_module, sdk, frames).run(stop, clock)
+    _drive(loop, clock, until=1.0)
+    sdk.scene, black_from = NEAR_BLACK, clock.now()
+    _drive(loop, clock, until=black_from + NEAR_BLACK_FOR_LONG)
+
+    (error,) = _errors(frames)
+    assert isinstance(error, DeviceFault) and error.kind is FaultKind.CAMERA
+    assert 'near-black' in str(error)
+    assert isinstance(frames.emitted[-1][1], pimm.SignalError)
+    assert max(_frame_times(frames)) == pytest.approx(black_from + zed_module.SLCamera.NEAR_BLACK_FAULT_SEC, abs=0.05)
+
+
+def test_near_black_stretches_shorter_than_the_limit_send_no_fault(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, scene=LIT)
+    loop = _camera(zed_module, sdk, frames).run(stop, clock)
+    short = zed_module.SLCamera.NEAR_BLACK_FAULT_SEC - 1.0
+    for scene, seconds in [(NEAR_BLACK, short), (LIT, 0.1), (NEAR_BLACK, short), (LIT, 1.0)]:
+        sdk.scene = scene
+        _drive(loop, clock, until=clock.now() + seconds)
+    assert not _errors(frames)
+    assert _frame_times(frames) == pytest.approx(sdk.grab_times)
+
+
+def test_dim_images_send_no_fault(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, scene=DIM)
+    _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=NEAR_BLACK_FOR_LONG)
+    assert not _errors(frames)
+    assert _frame_times(frames) == pytest.approx(sdk.grab_times)
+
+
+def test_a_camera_reopened_after_a_near_black_fault_gets_the_full_limit_again(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, scene=NEAR_BLACK)
+    camera = _camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=NEAR_BLACK_FOR_LONG)
+    assert len(_errors(frames)) == 1
+
+    answer = _readier(world, camera)(None)
+    _drive(loop, clock, until=clock.now() + 0.01)
+    assert answer.result() is None
+    reopened_at = sdk.cameras[-1].opened_at
+    _drive(loop, clock, until=clock.now() + NEAR_BLACK_FOR_LONG)
+
+    assert len(_errors(frames)) == 2
+    assert max(_frame_times(frames)) == pytest.approx(reopened_at + zed_module.SLCamera.NEAR_BLACK_FAULT_SEC, abs=0.05)
