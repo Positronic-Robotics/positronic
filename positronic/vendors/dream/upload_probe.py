@@ -13,6 +13,7 @@ Usage
 import statistics
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import configuronic as cfn
@@ -38,9 +39,11 @@ def _median_ms(step: Callable[[], Any], runs: int) -> tuple[float, Any]:
 @cfn.config(upload_width=server.UPLOAD_SIZE[0], upload_height=server.UPLOAD_SIZE[1], camera_width=1280, runs=5)
 def probe(source: str, upload_width: int, upload_height: int, camera_width: int, runs: int) -> None:
     """Print the time of each step of the frame path for frames of `source`, scaled to `camera_width`."""
-    image = cv2.imread(source)
+    # configuronic passes a command-line value as `str`.
+    path = Path(source)
+    image = cv2.imread(str(path))
     if image is None:
-        raise ValueError(f'{source} is not an image')
+        raise ValueError(f'{path} is not an image')
     height = round(image.shape[0] * camera_width / image.shape[1])
     frame = cv2.cvtColor(cv2.resize(image, (camera_width, height)), cv2.COLOR_BGR2RGB)
     window = np.stack([frame] * codecs.WINDOW_FRAMES)
