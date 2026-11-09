@@ -583,6 +583,10 @@ class Harness(pimm.ControlSystem):
         policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
+            if task.slow_motion != 1 and not runtime.slow_motion_applied:
+                raise ValueError(
+                    f'slow_motion needs a policy that plays it, and {type(rollout.policy).__name__} does not'
+                )
             withheld_poses, pose_codec = self._pose_handshake(rollout.policy, runtime)
             # Closing ``policy_run`` is enough: the codec run holds no resource of its own.
             stepped_run = policy_run if pose_codec is None else pose_codec.wrap(policy_run)

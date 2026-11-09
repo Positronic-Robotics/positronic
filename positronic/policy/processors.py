@@ -622,6 +622,10 @@ class TrajectoryMerge:
         """Start at the request's observation time, except the first prediction starts now."""
         return cls(cls.Start.OBSERVATION)
 
+    def check_slow_motion(self, factor: float) -> None:
+        if factor != 1 and self._start is self.Start.OBSERVATION:
+            raise ValueError('slow motion plays only predictions that start after the previous one ends')
+
     def to_spec(self) -> dict[str, Any]:
         return {'start': self._start.value, 'horizon_sec': self.horizon_sec}
 
@@ -639,8 +643,6 @@ class TrajectoryMerge:
         slow_motion: float,
     ) -> Trajectory:
         """The trajectory that plays ``chunk``. ``slow_motion`` plays it that many times slower, after the horizon."""
-        if slow_motion != 1 and self._start is self.Start.OBSERVATION:
-            raise ValueError('slow motion plays only predictions that start after the previous one ends')
         if previous is None:
             start_ns = now_ns
         elif self._start is self.Start.OBSERVATION:
@@ -754,6 +756,8 @@ class InferenceSchedule(Policy):
                 call.answer.cancel()
 
     def run(self, runtime: Runtime, infer: Callable[[Obs], Sequence[Commands] | None]) -> PolicyRun:
+        slow_motion = runtime.apply_slow_motion()
+        self._merge.check_slow_motion(slow_motion)
         duration = self._latency_estimate.run()
         timing = self._request_timing.run()
         calls = self._CallQueue(runtime)
@@ -779,7 +783,7 @@ class InferenceSchedule(Policy):
                     chunk = call.answer.result()
                     if chunk is not None and call.call_id >= first_valid_call_id:
                         update = self._merge.plan(
-                            chunk, self._fps, previous, now_ns, call.observation_time_ns, runtime.slow_motion
+                            chunk, self._fps, previous, now_ns, call.observation_time_ns, slow_motion
                         )
                         previous = update
                     timing.update_after_answer(update, estimated_latency_sec, now_ns)

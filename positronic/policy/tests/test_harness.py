@@ -1009,7 +1009,7 @@ def test_a_trial_runs_and_records_its_fixed_inference_time_and_slow_motion(episo
 
     class Conditions(Policy):
         def run(self, runtime):
-            seen.append(runtime.slow_motion)
+            seen.append(runtime.apply_slow_motion())
             yield
             while True:
                 yield Step({}, runtime.time_ns + 100_000_000)
@@ -1024,6 +1024,15 @@ def test_a_trial_runs_and_records_its_fixed_inference_time_and_slow_motion(episo
     meta = h.dataset.episodes[-1].static
     assert (meta[eval_keys.FIXED_INFERENCE_SEC], meta[eval_keys.SLOW_MOTION]) == (0.25, 2.0)
     assert seen == [2.0]
+
+
+def test_a_policy_that_plays_no_slow_motion_refuses_it_and_records_nothing(episode_harness):
+    h = episode_harness
+    answer = h.caller(Rollout(Task('move', None, slow_motion=2.0), Positions(), h.dataset))
+    next(h.loop)
+    with pytest.raises(ValueError, match='slow_motion'):
+        answer.result()
+    assert h.dataset.episodes == []
 
 
 def test_a_real_embodiment_refuses_a_fixed_inference_time_and_records_nothing(episode_harness):

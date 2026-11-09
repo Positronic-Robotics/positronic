@@ -174,9 +174,8 @@ class ExecutionRuntime(Runtime):
     def tick(self) -> int:
         return self._runtime.tick
 
-    @property
-    def slow_motion(self) -> float:
-        return self._runtime.slow_motion
+    def apply_slow_motion(self) -> float:
+        return self._runtime.apply_slow_motion()
 
     def set_metadata(self, name: str, value: Any) -> None:
         self._runtime.set_metadata(name, value)
@@ -233,6 +232,7 @@ class Executor(Runtime):
         self._simulated = simulated
         self._charge_ns = None if inference_charge_sec is None else round(inference_charge_sec * 1e9)
         self._slow_motion = slow_motion
+        self._slow_motion_applied = False
         self._tick = -1
         self._tick_time_ns: int | None = None
         self._closed = False
@@ -251,9 +251,14 @@ class Executor(Runtime):
     def time_ns(self) -> int:
         return self._clock()
 
-    @property
-    def slow_motion(self) -> float:
+    def apply_slow_motion(self) -> float:
+        self._slow_motion_applied = True
         return self._slow_motion
+
+    @property
+    def slow_motion_applied(self) -> bool:
+        """Whether a processor of this episode called ``apply_slow_motion``."""
+        return self._slow_motion_applied
 
     @property
     def tick(self) -> int:

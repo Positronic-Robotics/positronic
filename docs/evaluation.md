@@ -61,7 +61,7 @@ In sim, the world runs while the model computes, as it does on a real robot. Two
 | `--charge_inference_time=False` | stops |
 | `--fixed_inference_sec=L` | runs for exactly L seconds, however long the call takes |
 
-`--slow_motion=k` makes the arm k times slower: it plays each predicted chunk at 1/k speed, with no pauses. Use it to compare a robot that waits for its model with a robot that is only slow. It needs a policy that predicts absolute targets, not deltas.
+`--slow_motion=k` makes the arm k times slower: it plays each predicted chunk at 1/k speed, with no pauses. Use it to compare a robot that waits for its model with a robot that is only slow. It needs a policy that predicts absolute targets, not deltas, and a schedule that starts each chunk after the one before it ends. A run with any other policy fails before the episode records anything.
 
 ## What a run cost
 

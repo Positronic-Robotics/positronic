@@ -103,10 +103,12 @@ class Runtime(ABC):
         """The current tick number."""
         pass
 
-    @property
     @abstractmethod
-    def slow_motion(self) -> float:
-        """How many times slower a schedule plays each predicted chunk. 1 plays it as predicted."""
+    def apply_slow_motion(self) -> float:
+        """How many times slower to play each predicted chunk. 1 plays it as predicted.
+
+        A schedule that plays the factor calls this as it starts. An episode refuses a factor that nothing applies.
+        """
 
     @staticmethod
     def _timed_run(run: ProcessorRun[InputT, OutputT, ReturnT], name: str) -> ProcessorRun[InputT, OutputT, ReturnT]:

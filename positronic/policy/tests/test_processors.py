@@ -1271,15 +1271,13 @@ def test_a_slowed_chunk_keeps_the_commands_inside_the_horizon(execution, monkeyp
 
 
 @pytest.mark.parametrize('execution', [2.0], indirect=True)
-def test_slow_motion_refuses_predictions_that_start_at_their_observation(execution, monkeypatch):
-    model, run, step = _rtc(execution, monkeypatch, 0.5, ConstantDuration())
-    try:
-        step(0)
-        model.answer_with(_arm_chunk([0, 1], [0.0, 0.0]))
-        with pytest.raises(ValueError, match='slow motion'):
-            step(0)
-    finally:
-        run.close()
+def test_slow_motion_refuses_predictions_that_start_at_their_observation_before_the_first_call(execution, monkeypatch):
+    runtime, _ = execution
+    model = SlowModel(runtime)
+    monkeypatch.setattr(runtime, 'submit', model.submit)
+    with pytest.raises(ValueError, match='slow motion'):
+        _rtc(execution, monkeypatch, 0.5, ConstantDuration())
+    assert model.calls == []
 
 
 def test_chunked_history_only_answer_preserves_playback_and_updates_duration(execution, monkeypatch):

@@ -309,10 +309,12 @@ def test_slow_motion_is_a_finite_factor_of_at_least_one(factor):
         Executor(lambda: 0, simulated=True, inference_charge_sec=None, slow_motion=factor)
 
 
-def test_an_execution_reads_the_slow_motion_of_its_runtime():
+def test_an_execution_applies_the_slow_motion_of_its_runtime():
     runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=None, slow_motion=2.5)
+    assert not runtime.slow_motion_applied
     with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
-        assert execution.slow_motion == runtime.slow_motion == 2.5
+        assert execution.apply_slow_motion() == 2.5
+    assert runtime.slow_motion_applied
     runtime.close()
 
 
