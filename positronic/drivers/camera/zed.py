@@ -108,11 +108,12 @@ class SLCamera(pimm.ControlSystem):
         self._depth_mask_adapter = None  # Lazy init
 
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
-        # The camera a run holds open, the error it keeps until a ready call repairs the camera, the time of its last
-        # frame, and the time of the first image of its current run of near-black images
+        # The camera a run holds open, the error it keeps until a ready call repairs the camera, and the time of
+        # its last frame
         self._camera: sl.Camera | sl.CameraOne | None = None
         self._error: DeviceFault | None = None
         self._frame_at: float | None = None
+        # The time of the first image of the current run of near-black images. None when the last image was not one.
         self._near_black_since: float | None = None
 
     DEVICE_LIST_POLL_SEC = 0.5
