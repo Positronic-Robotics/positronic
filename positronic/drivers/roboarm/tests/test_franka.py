@@ -2373,7 +2373,7 @@ def test_a_ready_call_takes_no_desk_step_while_the_td2_self_test_is_due_after_th
 
 
 def test_a_ready_call_runs_no_td2_self_test_while_a_safe_input_holds_the_arm(desk, world, monkeypatch):
-    """A person may hold the arm, and the self-test locks and opens its brakes. The episode starts as before."""
+    """A person may hold the arm, and the self-test locks and opens its brakes. The ready call takes no Desk step."""
     monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
     arm = FakeArm(PARK)
     desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device, and only they let it go

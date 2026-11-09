@@ -1216,7 +1216,7 @@ class Robot(pimm.ControlSystem):
             return False
         try:
             return session.desk.safety_status()[TIME_TO_TD2] <= SELF_TEST_LEAD_SEC
-        # rules-allow: swallowed-error — an unread deadline runs no self-test, so the episode starts as it did before
+        # rules-allow: swallowed-error — an unread deadline runs no self-test; the ready call answers on the arm's state
         except Exception as exc:
             logger.error(f'Cannot read when the TD2 self-test is due ({type(exc).__name__}: {exc})')
             return False
@@ -1225,10 +1225,10 @@ class Robot(pimm.ControlSystem):
         """Answer ``call`` once the arm takes moves, clearing an error or a fault it holds first.
 
         Answer with the error where the recovery leaves it, and with the missing connection where there is none. A
-        pressed emergency stop gets the release instruction, and no recovery. Where the TD2 self-test is due within
-        ``SELF_TEST_LEAD_SEC`` and every safe input reads clear, ``Desk.prepare()`` runs it first: Desk stops the arm
-        when the deadline passes, also in an episode. Otherwise a ready call takes no Desk control and opens no
-        brakes: the harness asks again and again between episodes, with nobody at the rig.
+        pressed emergency stop gets the release instruction, and no recovery. ``Desk.prepare()`` runs the TD2
+        self-test first where it is due within ``SELF_TEST_LEAD_SEC`` and every safe input reads clear, so its deadline
+        cannot pass during the episode. Otherwise a ready call takes no Desk control and opens no brakes: the harness
+        asks again and again between episodes, with nobody at the rig.
         """
         with pimm.calls.raise_to(call), raise_as_device_fault(FaultKind.ARM):
             if arm.stop_pressed:
