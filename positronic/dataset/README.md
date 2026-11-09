@@ -234,7 +234,7 @@ Returned frame type is **decoded uint8 image (H×W×3)**. Decoding is on-demand;
 #### Recording
 `VideoSignalWriter` takes the path to the video file, frame index file, and encoding settings (codec, GOP size, fps).
 
-* Frame dimensions (width, height) are automatically inferred from the first frame.
+* The first frame sets the frame size. `open_encoder(frame_size)` opens the encoder for a size before the first frame.
 * Writer encodes frames to video file using the specified codec (default: H.264).
 * For every input frame, the timestamp is appended to the `frames.parquet` index.
 * The frame number in the video corresponds to the index position in the timestamp array.

@@ -9,11 +9,12 @@ import sys
 import time
 import uuid
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -41,7 +42,7 @@ from .episode import (
 from .signal import Signal
 from .time import Time
 from .vector import SimpleSignal, SimpleSignalWriter
-from .video import DEFAULT_VIDEO_ENCODER, VideoEncoder, VideoSignal, VideoSignalWriter
+from .video import DEFAULT_VIDEO_ENCODER, FrameSize, VideoEncoder, VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
 
@@ -104,6 +105,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         created_ts_ns: int | None = None,
         uid: str | None = None,
         video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
+        video_frame_sizes: Mapping[str, FrameSize] = MappingProxyType({}),
     ) -> None:
         """Initialize episode writer.
 
@@ -115,6 +117,8 @@ class DiskEpisodeWriter(EpisodeWriter):
             uid: Optional episode identity (defaults to a fresh uuid4 hex).
                 Use this to preserve identity when copying an existing recording.
             video_encoder: The encoder for video signals.
+            video_frame_sizes: The frame size of each video signal whose encoder opens here, before its first frame.
+                A signal whose first frame has another size opens a new encoder.
         """
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
@@ -123,6 +127,8 @@ class DiskEpisodeWriter(EpisodeWriter):
         _mark_unfinished(self._path)
 
         self._writers: dict[str, SimpleSignalWriter | VideoSignalWriter] = {}
+        # Video writers with an open encoder, until the first frame of their signal
+        self._waiting: dict[str, VideoSignalWriter] = {}
         # Accumulated static items to be stored in a single static.json
         self._static_items: dict[str, Any] = {}
         self._finished = False
@@ -144,9 +150,35 @@ class DiskEpisodeWriter(EpisodeWriter):
         }
         self._meta[META_PATH] = str(self._path.resolve(strict=True))
 
+        try:
+            for name, frame_size in video_frame_sizes.items():
+                writer = self._waiting[name] = self._video_writer(name)
+                writer.open_encoder(frame_size)
+        except Exception:
+            self.abort()
+            raise
+
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def video_frame_sizes(self) -> dict[str, FrameSize]:
+        """The frame size of each video signal that got a frame."""
+        return {
+            name: frame_size
+            for name, writer in self._writers.items()
+            if isinstance(writer, VideoSignalWriter) and (frame_size := writer.frame_size) is not None
+        }
+
+    @staticmethod
+    def _is_video_frame(data: Any) -> bool:
+        return isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3
+
+    def _video_writer(self, signal_name: str) -> VideoSignalWriter:
+        video_path = self._path / f'{signal_name}.mp4'
+        frames_index = self._path / f'{signal_name}.frames{SIGNAL_FILE_SUFFIX}'
+        return VideoSignalWriter(video_path, frames_index, self._video_encoder)
 
     def append(self, signal_name: str, data: Any, timestamps: Time) -> None:
         """Append data to a named signal.
@@ -167,12 +199,15 @@ class DiskEpisodeWriter(EpisodeWriter):
             self._writers[signal_name].append(data, timestamps)
             return
 
-        if isinstance(data, np.ndarray) and data.dtype == np.uint8 and data.ndim == 3 and data.shape[2] == 3:
-            video_path = self._path / f'{signal_name}.mp4'
-            frames_index = self._path / f'{signal_name}.frames{SIGNAL_FILE_SUFFIX}'
-            writer = VideoSignalWriter(video_path, frames_index, self._video_encoder)
-        else:
-            writer = SimpleSignalWriter(self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}')
+        writer = self._waiting.pop(signal_name, None)
+        if writer is not None and not (self._is_video_frame(data) and data.shape[:2] == writer.frame_size):
+            writer.abort()
+            writer = None
+        if writer is None:
+            if self._is_video_frame(data):
+                writer = self._video_writer(signal_name)
+            else:
+                writer = SimpleSignalWriter(self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}')
 
         try:
             writer.append(data, timestamps)
@@ -218,6 +253,7 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self.abort()
             return
 
+        self._abort_waiting()
         # Always try to close all signal writers
         for writer in self._writers.values():
             try:
@@ -252,11 +288,18 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
+        self._abort_waiting()
         for w in list(self._writers.values()):
             w.abort()
 
         shutil.rmtree(self._path, ignore_errors=True)
         self._aborted = True
+
+    def _abort_waiting(self) -> None:
+        """Close each open encoder whose signal got no frame. Such a signal leaves no file."""
+        for writer in self._waiting.values():
+            writer.abort()
+        self._waiting.clear()
 
     @property
     def meta(self) -> dict:
@@ -476,6 +519,7 @@ class LocalDatasetWriter(DatasetWriter):
     - Exclusively locks the directory and scans existing episode numbers on context entry.
     - `new_episode()` allocates a new episode directory and returns a
       DiskEpisodeWriter.
+    - Each new episode opens its video encoders for the frame sizes of the last closed episode.
     """
 
     def __init__(self, root: Path, *, video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER) -> None:
@@ -484,6 +528,7 @@ class LocalDatasetWriter(DatasetWriter):
         self._video_encoder = video_encoder
         self._next_episode_id = 0
         self._lock: ExitStack | None = None
+        self._video_frame_sizes: dict[str, FrameSize] = {}
 
     def __enter__(self) -> LocalDatasetWriter:
         if self._lock is not None:
@@ -533,8 +578,17 @@ class LocalDatasetWriter(DatasetWriter):
         # responsible for creating it and expects it to not exist yet.
         ep_dir = block_dir / f'{eid:012d}'
 
-        writer = DiskEpisodeWriter(ep_dir, created_ts_ns=created_ts_ns, uid=uid, video_encoder=self._video_encoder)
-        return writer
+        return DiskEpisodeWriter(
+            ep_dir,
+            on_close=self._keep_video_frame_sizes,
+            created_ts_ns=created_ts_ns,
+            uid=uid,
+            video_encoder=self._video_encoder,
+            video_frame_sizes=self._video_frame_sizes,
+        )
+
+    def _keep_video_frame_sizes(self, episode: DiskEpisodeWriter) -> None:
+        self._video_frame_sizes = episode.video_frame_sizes
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._lock is not None:
