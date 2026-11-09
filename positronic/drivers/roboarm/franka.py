@@ -149,15 +149,20 @@ NO_CONNECTION = 'The driver has no connection to the arm'
 FSOE_CONNECTION_ERROR = 'fsoeConnectionError'
 # The field Desk answers the seconds until its next TD2 self-test is due in.
 TIME_TO_TD2 = 'timeToTd2'
-# The recoverable error that Desk reports once the TD2 self-test deadline passed and the safety controller stopped it.
-TD2_TIMEOUT = 'td2Timeout'
-# The recoverable error that Desk reports for a fault of a joint.
-GENERIC_JOINT_ERROR = 'genericJointError'
-# The recoverable errors of the control box's own faults. A person's stop and a policy's collision raise none of them.
-CONTROL_BOX_FAULTS = frozenset({TD2_TIMEOUT, FSOE_CONNECTION_ERROR, GENERIC_JOINT_ERROR})
 # How the error starts that the arm's state carries while the safety controller holds the arm for one of those faults.
 # The error adds the faults after this text.
 SAFETY_CONTROLLER_STOP = "The arm's safety controller stopped it for a fault of the control box"
+
+
+class ControlBoxFault(StrEnum):
+    """A recoverable error of the control box's own fault, by the name Desk reports it under. A person's stop and a
+    policy's collision raise none of them."""
+
+    # The TD2 self-test deadline passed, and the safety controller stopped the arm.
+    TD2_TIMEOUT = 'td2Timeout'
+    FSOE_CONNECTION_ERROR = FSOE_CONNECTION_ERROR
+    # A fault of a joint.
+    GENERIC_JOINT_ERROR = 'genericJointError'
 
 
 class _SafeInputLevel(StrEnum):
@@ -443,7 +448,8 @@ class _Arm(DriverRun[command.CommandType]):
     @property
     def control_box_fault(self) -> str | None:
         """The error that names the faults of the control box the last reading found; None where it found none."""
-        faults = sorted(CONTROL_BOX_FAULTS.intersection(self.safe_inputs.recoverable_errors))
+        held = self.safe_inputs.recoverable_errors
+        faults = sorted(fault.value for fault in ControlBoxFault if fault in held)
         return f'{SAFETY_CONTROLLER_STOP}: {", ".join(faults)}' if faults else None
 
     def emit_state(self) -> None:

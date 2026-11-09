@@ -314,8 +314,8 @@ class FakeDesk:
             franka.TIME_TO_TD2: self.time_to_td2,
             franka.RECOVERABLE_ERRORS: {
                 franka.FSOE_CONNECTION_ERROR: self.fsoe_error,
-                franka.GENERIC_JOINT_ERROR: self.generic_joint_error,
-                franka.TD2_TIMEOUT: self.td2_timeout,
+                franka.ControlBoxFault.GENERIC_JOINT_ERROR: self.generic_joint_error,
+                franka.ControlBoxFault.TD2_TIMEOUT: self.td2_timeout,
                 # A recoverable error of the emergency stop's own input, which a person's press leaves.
                 'safeInputErrorX31': self.safe_input_error,
             },
@@ -1842,7 +1842,7 @@ def test_the_arm_state_comes_back_once_the_emergency_stop_is_released(desk):
     assert kinds == [FaultKind.E_STOP, franka.FrankaState, FaultKind.E_STOP]
 
 
-@pytest.mark.parametrize('error', sorted(franka.CONTROL_BOX_FAULTS))
+@pytest.mark.parametrize('error', [fault.value for fault in franka.ControlBoxFault])
 def test_the_arm_state_carries_an_arm_fault_once_while_the_safety_controller_holds_it_for_a_control_box_fault(
     desk, error
 ):
@@ -3025,13 +3025,13 @@ def _until_the_watch_reads_again(desk: FakeDesk) -> None:
 def _hold_in_desk(desk: FakeDesk, error: str) -> None:
     if error == franka.FSOE_CONNECTION_ERROR:
         desk.fsoe_error = True
-    elif error == franka.TD2_TIMEOUT:
+    elif error == franka.ControlBoxFault.TD2_TIMEOUT:
         desk.td2_timeout = True
     else:
         desk.generic_joint_error = True
 
 
-@pytest.mark.parametrize('error', [franka.GENERIC_JOINT_ERROR, franka.FSOE_CONNECTION_ERROR])
+@pytest.mark.parametrize('error', [franka.ControlBoxFault.GENERIC_JOINT_ERROR, franka.FSOE_CONNECTION_ERROR])
 def test_a_recover_call_that_libfranka_clears_runs_the_desk_step_while_desk_holds_an_error(
     desk, world, monkeypatch, error
 ):
