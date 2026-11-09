@@ -13,7 +13,6 @@ Usage
 """
 
 import base64
-import collections
 import dataclasses
 import hashlib
 import json
@@ -108,9 +107,8 @@ class _Session:
         self.elapsed_s = 0.0
         # When the last call answered, on the monotonic clock.
         self.answered_s: float | None = None
-        # The rows of each arm that the last two calls sent, `(rows, 7)`, oldest first. With one call pending at most,
-        # the client plays at most the rest of the older and all of the newer after an observation.
-        self.sent: collections.deque[dict[str, np.ndarray]] = collections.deque(maxlen=2)
+        # The last row of each arm that the last call sent; `None` before the first call of the session.
+        self.last_sent: dict[str, np.ndarray] | None = None
         # Each chunk as DreamAPI answered it and as the limiter sent it, `(rows, 14)`, left arm first, NaN in `limited`
         # where the server did not send the row. A replan at the client drops rows that the server cannot see.
         self.answered: list[np.ndarray] = []
@@ -148,12 +146,10 @@ class DreamModel(Model):
 
     A chunk answers an observation that the client took while it played the chunk before. The client plays the rest
     of that chunk first, `dream.ROWS_AHEAD` rows, so the answer drops as many rows, keeps at least one, and the limiter
-    starts from the last row sent. The call tells DreamAPI's client the row that the client commanded at the
-    observation, the row before the `dream.ROWS_QUEUED` rows not started, so its seam blend starts from the motion
-    that the arm is on. In the client's `async` mode the chunk then keeps `execution_horizon` rows, as the client
-    paces it; in `sync` mode it keeps every row. A call with
-    `policy_keys.REPLAN_NOW`, or the first call of a session, drops no row, and the limiter starts from the measured
-    state; a replan also starts the ramp of the limiter again.
+    starts from the last row sent. In the client's `async` mode the chunk then keeps `execution_horizon` rows, as the
+    client paces it; in `sync` mode it keeps every row. A call with `policy_keys.REPLAN_NOW`, or the first call of a
+    session, drops no row, and the limiter starts from the measured state; a replan also starts the ramp of the
+    limiter again.
     """
 
     def __init__(
@@ -183,11 +179,8 @@ class DreamModel(Model):
             raise RuntimeError('A frame does not encode as JPEG')
         return base64.b64encode(buffer.tobytes()).decode('ascii')
 
-    def _send(
-        self, session: _Session, request: dict[str, Any], commanded: dict[str, list[float]] | None = None
-    ) -> dict[str, np.ndarray]:
-        """The chunk of each arm that DreamAPI answers to `request`, as `(rows, 7)`. `commanded` is the
-        `get_action` argument of the client."""
+    def _send(self, session: _Session, request: dict[str, Any]) -> dict[str, np.ndarray]:
+        """The chunk of each arm that DreamAPI answers to `request`, as `(rows, 7)`."""
         observation = request[dream.OBSERVATION]
         windows = {key: [self._jpeg(frame) for frame in stack] for key, stack in request[dream.FRAMES].items()}
         counts = {len(window) for window in windows.values()}
@@ -200,17 +193,17 @@ class DreamModel(Model):
             session.frame_s += codecs.FRAME_PERIOD_S
             frames = {key: window[index] for key, window in windows.items()}
             session.client.set_observation(frames, observation, timestamp=session.frame_s)
-        reply = self._get_action(session, commanded)
+        reply = self._get_action(session)
         session.answered_s = time.monotonic()
         return {arm: np.asarray(reply[dream.CHUNKS[arm]], dtype=np.float64) for arm in keys.BIMANUAL_ARMS}
 
-    def _get_action(self, session: _Session, commanded: dict[str, list[float]] | None) -> dict[str, Any]:
+    def _get_action(self, session: _Session) -> dict[str, Any]:
         """DreamAPI's reply to the observation that `session` holds."""
         deadline = time.monotonic() + self._retry_deadline_s
         stale_sent = False
         while True:
             try:
-                return session.client.get_action(commanded=commanded)
+                return session.client.get_action()
             except dream_client.DreamProtocolError as error:
                 # dreamlabs-client 1.0.9 sends a call again on a fresh connection when the gateway has closed its idle
                 # keep-alive one, but over TLS that close raises `ssl.SSLEOFError`, which it reports as a gateway it
@@ -279,16 +272,6 @@ class DreamModel(Model):
             for arm, slot in dream.ARM_SLOTS.items()
         }
 
-    @staticmethod
-    def _commanded(sent: collections.deque[dict[str, np.ndarray]], queued: int) -> dict[str, list[float]] | None:
-        """The row of each arm that the client commanded at an observation with `queued` rows of `sent` not started,
-        keyed as DreamAPI's chunks; `None` when the client had not started `sent` yet."""
-        plan = {arm: np.concatenate([chunk[arm] for chunk in sent]) for arm in keys.BIMANUAL_ARMS}
-        index = len(plan[keys.LEFT_ARM]) - 1 - queued
-        if index < 0:
-            return None
-        return {dream.CHUNKS[arm]: rows[index].tolist() for arm, rows in plan.items()}
-
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
         session = self._sessions.get(session_id)
         if session is None:
@@ -300,14 +283,11 @@ class DreamModel(Model):
         if replan:
             session.elapsed_s = 0.0
             session.record['replans'] += 1
-        if replan or not session.sent:
-            session.sent.clear()
-            start, ahead, commanded = self._measured(obs[dream.OBSERVATION]), 0, None
+        if replan or session.last_sent is None:
+            start, ahead = self._measured(obs[dream.OBSERVATION]), 0
         else:
-            start = {arm: rows[-1] for arm, rows in session.sent[-1].items()}
-            ahead = obs[dream.ROWS_AHEAD]
-            commanded = self._commanded(session.sent, obs[dream.ROWS_QUEUED])
-        chunks = self._send(session, dict(obs), commanded)
+            start, ahead = session.last_sent, obs[dream.ROWS_AHEAD]
+        chunks = self._send(session, dict(obs))
         answered = len(chunks[keys.LEFT_ARM])
         dropped = min(ahead, answered - 1)
         mode = Pacing(session.client.mode)
@@ -319,7 +299,7 @@ class DreamModel(Model):
         limited, reports = {}, {}
         for arm in keys.BIMANUAL_ARMS:
             limited[arm], reports[arm] = self._limiter.limit(chunks[arm][dropped:end], start[arm], session.elapsed_s)
-        session.sent.append(limited)
+        session.last_sent = {arm: rows[-1] for arm, rows in limited.items()}
         rows = end - dropped
         session.elapsed_s += rows / codecs.FPS
         call = self._call_record(session, rows, dropped, mode, reports)

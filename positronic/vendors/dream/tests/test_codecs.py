@@ -75,28 +75,6 @@ def test_no_rows_are_ahead_when_the_arm_holds_its_last_row_or_no_plan_comes():
     assert _encode(_obs())[dream.ROWS_AHEAD] == 0
 
 
-def test_the_queued_rows_leave_out_the_row_that_plays_at_the_observation_however_far_into_it():
-    # 0.4 and 0.8 of a period into the row that plays now: the rows ahead round two ways, the queued rows do not.
-    assert _encode(_obs(**_prefix(12, -0.02)))[dream.ROWS_QUEUED] == 11
-    assert _encode(_obs(**_prefix(12, -0.04)))[dream.ROWS_QUEUED] == 11
-    assert _encode(_obs(**_prefix(12, -0.0001)))[dream.ROWS_QUEUED] == 11
-
-
-def test_a_row_due_at_the_observation_is_queued():
-    assert _encode(_obs(**_prefix(12, 0.0)))[dream.ROWS_QUEUED] == 12
-
-
-def test_the_rows_before_the_plan_starts_are_queued_too():
-    # The client asks in the round that reads an answer: the plan holds the new chunk, which starts after 2 more rows
-    # of the chunk before.
-    assert _encode(_obs(**_prefix(12, 0.1)))[dream.ROWS_QUEUED] == 14
-
-
-def test_no_rows_are_queued_when_the_arm_holds_its_last_row_or_no_plan_comes():
-    assert _encode(_obs(**_prefix(0, -0.3)))[dream.ROWS_QUEUED] == 0
-    assert _encode(_obs())[dream.ROWS_QUEUED] == 0
-
-
 def test_each_camera_goes_at_dreams_frame_size_under_its_station_window():
     frames = _encode(_obs())[dream.FRAMES]
 

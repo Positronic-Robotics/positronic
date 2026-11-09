@@ -56,9 +56,7 @@ def model(gateway, blurrer, tmp_path):
     built.close()
 
 
-def _request(
-    frames: int = 3, view: np.ndarray | None = None, replan: bool = False, ahead: int = 0, queued: int | None = None
-) -> dict:
+def _request(frames: int = 3, view: np.ndarray | None = None, replan: bool = False, ahead: int = 0) -> dict:
     if view is None:
         view = np.full((176, 320, 3), 120, np.uint8)
     observation = {dream.PROMPT: 'fold the towel', **dream.STATION_ROBOT}
@@ -71,7 +69,6 @@ def _request(
         dream.FRAMES: {dream.FRAME_WINDOW.format(camera=camera): window for camera in dream.CAMERAS},
         policy_keys.REPLAN_NOW: replan,
         dream.ROWS_AHEAD: ahead,
-        dream.ROWS_QUEUED: max(0, ahead - 1) if queued is None else queued,
     }
 
 
@@ -278,41 +275,6 @@ def test_a_chunk_in_sync_mode_keeps_every_row_after_the_dropped_ones(gateway, mo
     assert len(model(_request(ahead=10), session_id='a')) == ROWS - 10
 
 
-@pytest.fixture
-def commanded(monkeypatch) -> list:
-    """The `commanded` argument of each `get_action` call, in order."""
-    calls = []
-    get_action = server.dream_client.DreamClient.get_action
-
-    def spy(client, **kwargs):
-        calls.append(kwargs.get('commanded'))
-        return get_action(client, **kwargs)
-
-    monkeypatch.setattr(server.dream_client.DreamClient, 'get_action', spy)
-    return calls
-
-
-def test_a_call_tells_dreamapi_the_row_that_the_client_commanded_at_the_observation(gateway, model, commanded):
-    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
-    # 0.4 of a period into a row: 10 rows ahead, rounded, and 9 rows not started.
-    model(_request(ahead=10, queued=9), session_id='a')
-    model(_request(replan=True, ahead=10), session_id='a')
-
-    # The first call is the canary's.
-    assert commanded[1] is None and commanded[3] is None
-    np.testing.assert_array_equal(commanded[2][dream.CHUNKS[keys.LEFT_ARM]], first[KEPT - 10, :7])
-    np.testing.assert_array_equal(commanded[2][dream.CHUNKS[keys.RIGHT_ARM]], first[KEPT - 10, 7:])
-
-
-def test_a_call_asked_before_the_last_chunk_starts_names_the_row_of_the_chunk_before(gateway, model, commanded):
-    first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
-    model(_request(ahead=5), session_id='a')
-    # The client still plays 5 rows of the first chunk, then the whole second chunk.
-    model(_request(ahead=5 + KEPT), session_id='a')
-
-    np.testing.assert_array_equal(commanded[3][dream.CHUNKS[keys.LEFT_ARM]], first[KEPT - 5, :7])
-
-
 def test_a_chunk_starts_its_limits_from_the_last_row_sent(gateway, model):
     gateway.chunk = _far
     first = np.array([action[ACTION] for action in model(_request(), session_id='a')])
@@ -358,7 +320,7 @@ def test_a_call_that_timed_out_goes_again_only_while_a_whole_call_fits_before_th
     model._retry_deadline_s = 12.0
     calls = []
 
-    def timed_out(commanded=None):
+    def timed_out():
         calls.append(clock[0])
         clock[0] += 5.0
         raise server.dream_client.DreamTimeout('no answer')

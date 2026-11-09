@@ -19,10 +19,8 @@ runs only behind DreamAPI. Dream Labs does not release the weights. Each call se
   `--pipeline.max_lead_s`, 1.6 s), and sends the rest of its plan. The next chunk starts when the current one ends,
   so the server drops the rows of the answer that the client plays first, and the limiter starts from the last row
   sent.
-- The server paces the chunks as `dreamlabs-client` does. It gives the client the row that the arm had at the
-  observation (`get_action(commanded=...)`), so the seam blend of the client starts from that motion. In the client's
-  `async` mode (a median round trip of DreamAPI of at most 700 ms) a chunk keeps the next 30 rows; in `sync` mode it
-  keeps every row.
+- The server paces the chunks as `dreamlabs-client` does. In the client's `async` mode (a median round trip of
+  DreamAPI of at most 700 ms) a chunk keeps the next 30 rows; in `sync` mode it keeps every row.
 - The server sends the YAM station observation of the Dream SDK (`state.arm_l.joint_pos`, `image_window.top`, ...).
   DreamAPI computes each hand's pose from the joints, so no IK runs here.
 - The server blurs every face before a frame leaves it, and limits each chunk (`limits.py`): the hand moves at most
