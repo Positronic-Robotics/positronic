@@ -6,14 +6,15 @@ and accepts them here with the version that they read.
 
 import configuronic as cfn
 from platform_client.client import PlatformClient
-from platform_client.terms import ProgramEntry, Terms, accepted
+from platform_client.config import ACCEPT_TERMS_COMMAND
+from platform_client.terms import ProgramEntry, Terms
 
 from positronic.cli.account.gateway import CommandFailed, Fault, gateway
 
 
 def accept_command(version: str) -> str:
     """The command that accepts `version`. The inner quotes keep a version such as `1.3` text on the command line."""
-    return f'positronic account accept-terms --version=\'"{version}"\''
+    return f'{ACCEPT_TERMS_COMMAND} --version=\'"{version}"\''
 
 
 def terms_lines(terms: Terms) -> list[str]:
@@ -46,7 +47,7 @@ def terms(platform_url: str | None = None):
             print('The platform has no terms.')
             return
         entry = client.platform_entry()
-    if accepted(current, entry):
+    if entry is not None and entry.terms_version == current.version:
         print(f'The platform terms, version {current.version}: {current.url}')
         print(f'You accepted version {current.version}.')
         return

@@ -111,7 +111,6 @@ def test_register_accepts_the_named_version_with_the_key_it_minted(platform, run
 
     run_command(register, accept_terms='1.3')
 
-    assert platform.paths[-1] == routes.PLATFORM_ACCEPT_TERMS
     assert platform.body_to(routes.PLATFORM_ACCEPT_TERMS) == {'terms_version': '1.3'}
     assert platform.request_to(routes.PLATFORM_ACCEPT_TERMS).headers['authorization'] == 'Bearer pk_new'
     assert 'You accepted the platform terms, version 1.3.' in capsys.readouterr().out

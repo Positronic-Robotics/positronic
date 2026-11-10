@@ -64,8 +64,3 @@ class AcceptTermsRequest(BaseModel):
     model_config = INPUT_MODEL_CONFIG
 
     terms_version: str = Field(min_length=1)
-
-
-def accepted(terms: Terms, entry: ProgramEntry | None) -> bool:
-    """Whether `entry` holds the acceptance of `terms`."""
-    return entry is not None and entry.terms_version == terms.version

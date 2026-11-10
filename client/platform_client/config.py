@@ -24,6 +24,8 @@ CONFIG_FILENAME = 'config.json'
 
 # The command that writes the record, named in every message that asks for one.
 REGISTER_COMMAND = 'positronic account register'
+# The command that accepts the platform terms. It takes `--version`, the version that the person read.
+ACCEPT_TERMS_COMMAND = 'positronic account accept-terms'
 
 
 def checked_api_key(value: str) -> str:
