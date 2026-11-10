@@ -58,6 +58,7 @@ help:
 	@echo "  make build-training  Build the training image"
 	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
 	@echo "  make build-serve-galaxea  Build the private Galaxea serving image (needs HF_TOKEN)"
+	@echo "  make build-serve-abc-dit  Build the private ABC-DiT serving image for yambox"
 	@echo "  make build-openpi-base  Build positro/openpi-base from the openpi fork at OPENPI_REF"
 	@echo "  make build-molmospaces  Build the public MolmoSpaces eval image"
 	@echo "  make build           Build training, openpi and groot images"
@@ -174,6 +175,13 @@ GALAXEA_REPO ?= $(NEBIUS_REGISTRY)/galaxea
 SERVE_BUILD_FLAGS_galaxea := $(HF_TOKEN_BUILD_FLAGS)
 $(eval $(call SERVE_IMAGE,galaxea,$(GALAXEA_REPO)))
 push-serve-galaxea: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(GALAXEA_REPO)),nebius-login)
+
+# ABC-DiT on the yambox views goes to the private registry, built and pushed by hand. It is not in SERVE_IMAGES.
+# CROP, SCHEDULE and SIM_PREFIX set the defaults the image starts with: `make build-serve-abc-dit CROP=yambox`.
+ABC_DIT_REPO ?= $(NEBIUS_REGISTRY)/abc-dit-yam
+SERVE_BUILD_FLAGS_abc-dit = $(foreach arg,CROP SCHEDULE SIM_PREFIX,$(if $($(arg)),--build-arg $(arg)=$($(arg))))
+$(eval $(call SERVE_IMAGE,abc-dit,$(ABC_DIT_REPO)))
+push-serve-abc-dit: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(ABC_DIT_REPO)),nebius-login)
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
@@ -371,6 +379,7 @@ clean:
 	-docker rmi $(IMAGE_NAME_MOLMOSPACES):$(IMAGE_TAG)
 	-docker rmi $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
 	-docker rmi $(GALAXEA_REPO):local
+	-docker rmi $(ABC_DIT_REPO):local
 	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local; done
 	@echo "Image cleanup attempts complete. Check the output for removal errors."
 

@@ -109,3 +109,12 @@ uv run --locked python -m positronic.vendors.abc_dit.server multitask_200k \
 `multitask_200k_yambox_crop_no_sim_prefix` adds `sim_prefix=false`.
 
 `--model.fast_inference=False` runs the DiT in float32 with no compilation. That mode also runs on a CPU, slowly.
+
+## Docker image
+
+[`docker/Dockerfile.serve-abc-dit`](../../../docker/Dockerfile.serve-abc-dit) builds a policy image that the
+platform runs as a `kind: image` endpoint: ABC's environment, the checkpoint and the CLIP text encoder inside, offline,
+serving on `:8000`. `make -C docker push-serve-abc-dit` builds it and pushes it to the private Nebius registry, as
+`abc-dit-yam`. The image starts `multitask_200k` with `crop=yambox_wide_top`, `schedule=rtc` and `sim_prefix=True`.
+The build arguments `CROP`, `SCHEDULE` and `SIM_PREFIX` set other defaults, for example
+`make -C docker push-serve-abc-dit CROP=yambox`, and so do `-e ABC_DIT_CROP=…` and the session query at run time.
