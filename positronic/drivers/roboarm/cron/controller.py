@@ -200,13 +200,22 @@ class CronController:
         for _ in range(_STOP_REPEATS):
             rctl.cmd_joint_direct_vel(np.zeros(JOINTS))
 
-    def move_to(self, q: np.ndarray, max_speed: float, max_accel: float) -> None:
-        """Start a move of the planner of the controller to the joints ``q``."""
-        # After a velocity stream the planner starts at the end of its last move, not at the joints, and the jump
-        # stopped the arm on a following error (2.6 rad, 2026-11-10). A move from HOLD starts at the joints
+    def to_hold(self) -> None:
+        """Stop the planner and take HOLD, for a change between a velocity stream and a planned move.
+
+        After a stream the planner starts a move at the end of its last move, not at the joints, and the jump stopped
+        the arm on a following error (2.6 rad, 2026-11-10). A stream that starts while the planner still finishes a
+        move stopped the arm with `JOINT_VEL: TIMEOUT` (3 times in 12). Both start well from HOLD.
+        """
+        if self.motion is MotionMode.MOVE:
+            self.stop_move()
         if self.motion is not MotionMode.HOLD:
             rctl.cmd_hold()
-            self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD before a move', _HOLD_POLL_S)
+            self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD', _HOLD_POLL_S)
+
+    def move_to(self, q: np.ndarray, max_speed: float, max_accel: float) -> None:
+        """Start a move of the planner of the controller to the joints ``q``."""
+        self.to_hold()
         self._waypoint_id += 1
         rctl.cmd_add_waypoint_joint(q, [max_speed, max_accel], 0.0, self._waypoint_id)
         rctl.cmd_move_run()
