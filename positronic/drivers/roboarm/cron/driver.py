@@ -27,6 +27,14 @@ _MOVE_GRACE_S = 3.0
 # The planner of the controller travels at about 0.75 of the speed it is asked for (2026-11-05: 164 deg in 35 s at
 # 0.1 rad/s), so the time a move gets is its travel at the asked speed, times this
 _MOVE_SLACK = 1.5
+# The elbow, whose bend says how far the arm stretches, and the joint of the wrist that lines up the axes of joints 4
+# and 6 at 0 and at a half turn
+_ELBOW, _WRIST = 2, 4
+# A streamed target that turns a joint further than this from the previous one jumps to another branch of the
+# solutions: up from the start pose, the IK turned the wrist by 144 and 180 degrees for 1 cm of the tool
+_MAX_TARGET_TURN = 0.5  # rad
+# The halvings of the path to a target that the arm cannot hold, to find the furthest point it can
+_LIMIT_SEARCH_STEPS = 12
 
 
 class CronState(State, pimm.shared_memory.NumpySMAdapter):
@@ -79,15 +87,20 @@ class _Arm(DriverRun[command.CommandType]):
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
-        max_reach: float | None = None,
+        min_elbow: float | None = None,
+        min_wrist: float | None = None,
+        min_shoulder: float | None = None,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_HZ)
         self.controller = controller
-        # A Cartesian target whose wrist is further than this from the shoulder moves, with the same rotation, until
-        # the wrist is on the sphere of this radius: near full stretch the joints turn fast for a small move of the
-        # tool, and the controller stopped the arm on a following error there
-        self.max_reach = max_reach
-        self._at_reach = False
+        # The margins from the three poses where joints turn with no limit for a small move of the tool: the elbow
+        # straight, joint 5 at 0 or a half turn (radians each), and the wrist on the axis of joint 1 (metres, see
+        # `CronController.shoulder_clearance`). The arm does not take a Cartesian target inside a margin. Near full
+        # stretch the controller stopped the arm on a following error, and near the axis of joint 1 on a JOINT_VEL error
+        self.min_elbow = min_elbow
+        self.min_wrist = min_wrist
+        self.min_shoulder = min_shoulder
+        self._at_limit = False
         self.out = out
         self.state = CronState()
         self.max_speed = dynamics_factor * _MAX_JOINT_SPEED
@@ -113,32 +126,63 @@ class _Arm(DriverRun[command.CommandType]):
             self._deferred = None
             self.controller.stop_move()
 
-    def _within_reach(self, pose: geom.Transform3D) -> geom.Transform3D:
-        """``pose``, or ``pose`` moved toward the shoulder until its wrist is ``max_reach`` from it."""
-        reach = self.controller.wrist(pose) - self.controller.shoulder
-        distance = float(np.linalg.norm(reach))
-        if self.max_reach is None or distance <= self.max_reach:
-            self._at_reach = False
-            return pose
-        if not self._at_reach:
-            logger.info(
-                f'{self.controller.ip}: a target with the wrist {distance:.2f} m from the shoulder is held at '
-                f'{self.max_reach} m'
-            )
-            self._at_reach = True
-        return geom.Transform3D(pose.translation + reach * (self.max_reach / distance - 1), pose.rotation)
+    def _holdable(self, pose: geom.Transform3D, seed: np.ndarray, max_turn: float | None) -> np.ndarray | None:
+        """The joints for ``pose`` next to ``seed``, or None where the arm cannot hold ``pose``: no solution, the elbow
+        inside a margin from a pose where joints turn with no limit, or a joint turned further than ``max_turn`` from
+        ``seed``."""
+        try:
+            joints = self.controller.inverse(pose, seed)
+        except ValueError:
+            return None
+        elbow = abs(float(np.remainder(joints[_ELBOW] + np.pi, 2 * np.pi) - np.pi))
+        if self.min_elbow is not None and elbow < self.min_elbow:
+            return None
+        if self.min_wrist is not None and abs(np.sin(joints[_WRIST])) < np.sin(self.min_wrist):
+            return None
+        if self.min_shoulder is not None and self.controller.shoulder_clearance(joints) < self.min_shoulder:
+            return None
+        if max_turn is not None and np.max(np.abs(joints - seed)) > max_turn:
+            return None
+        return joints
 
-    def _to_joints(self, cmd: command.CommandType) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold, solved from the joints it reads now."""
+    def _toward(self, pose: geom.Transform3D, seed: np.ndarray) -> np.ndarray:
+        """The joints for ``pose``, or for the furthest pose on the way to it from ``seed`` that the arm can hold."""
+        joints = self._holdable(pose, seed, _MAX_TARGET_TURN)
+        if joints is not None:
+            self._at_limit = False
+            return joints
+        if not self._at_limit:
+            logger.info(f'{self.controller.ip}: the arm cannot hold {pose}: the target stops at the limit on the way')
+            self._at_limit = True
+        start, joints, low, high = self.controller.forward(seed), seed, 0.0, 1.0
+        for _ in range(_LIMIT_SEARCH_STEPS):
+            middle = (low + high) / 2
+            found = self._holdable(start.interpolate(pose, middle), seed, _MAX_TARGET_TURN)
+            if found is None:
+                high = middle
+            else:
+                low, joints = middle, found
+        return joints
+
+    def _solve(self, pose: geom.Transform3D, seed: np.ndarray, streamed: bool) -> np.ndarray:
+        if streamed:
+            return self._toward(pose, seed)
+        joints = self._holdable(pose, seed, None)
+        if joints is None:
+            raise ValueError(f'the arm cannot hold {pose}')
+        return joints
+
+    def _to_joints(self, cmd: command.CommandType, streamed: bool) -> np.ndarray:
+        """The joints ``cmd`` asks the arm to hold. A streamed Cartesian target that the arm cannot hold stops at the
+        limit on the way to it; a move that a caller waits for fails."""
         # TODO: PositionControl and Impedance need a controller that takes them; the velocity loop runs its own law
         command.require_native_mode(cmd, 'CRON')
+        seed = self.target if streamed and self.target is not None else self.reading.q
         match cmd:
             case command.CartesianPosition(pose):
-                joints = self.controller.inverse(self._within_reach(pose), self.reading.q)
+                joints = self._solve(pose, seed, streamed)
             case command.CartesianDelta() as delta_cmd:
-                held = self.reading.q if self.target is None else self.target
-                target = self._within_reach(delta_cmd.apply(self.controller.forward(held)))
-                joints = self.controller.inverse(target, held)
+                joints = self._solve(delta_cmd.apply(self.controller.forward(seed)), seed, streamed)
             case command.JointPosition(positions):
                 joints = np.asarray(positions, dtype=np.float64)
             case other:
@@ -150,12 +194,12 @@ class _Arm(DriverRun[command.CommandType]):
 
     def track(self, cmd: command.CommandType) -> None:
         """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival."""
-        self.target = self._to_joints(cmd)
+        self.target = self._to_joints(cmd, streamed=True)
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there."""
         with pimm.calls.raise_to(call):
-            target = self._to_joints(call.request)
+            target = self._to_joints(call.request, streamed=False)
             if self.target is not None:
                 self.target = None
                 self.velocity[:] = 0.0
@@ -235,7 +279,9 @@ class Robot(pimm.ControlSystem):
         power_off_on_exit: bool = True,
         tool_length: float = 0.0,
         projects: Sequence[str] = (),
-        max_reach: float | None = None,
+        min_elbow: float | None = None,
+        min_wrist: float | None = None,
+        min_shoulder: float | None = None,
     ) -> None:
         # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
@@ -244,7 +290,9 @@ class Robot(pimm.ControlSystem):
         self.power_off_on_exit = power_off_on_exit
         self.tool_length = tool_length
         self.projects = tuple(projects)
-        self.max_reach = max_reach
+        self.min_elbow = min_elbow
+        self.min_wrist = min_wrist
+        self.min_shoulder = min_shoulder
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[CronState](self)
@@ -260,7 +308,9 @@ class Robot(pimm.ControlSystem):
             self.relative_dynamics_factor,
             should_stop,
             clock,
-            self.max_reach,
+            self.min_elbow,
+            self.min_wrist,
+            self.min_shoulder,
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:

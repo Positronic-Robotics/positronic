@@ -79,9 +79,11 @@ def kinova(ip, relative_dynamics_factor):
     power_off_on_exit=True,
     tool_length=0.195,
     projects=(),
-    max_reach=None,
+    min_elbow=None,
+    min_wrist=None,
+    min_shoulder=None,
 )
-def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, max_reach):
+def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, min_elbow, min_wrist, min_shoulder):
     from positronic.drivers.roboarm.cron.driver import Robot
 
     return Robot(
@@ -90,14 +92,17 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects,
         power_off_on_exit=power_off_on_exit,
         tool_length=tool_length,
         projects=projects,
-        max_reach=max_reach,
+        min_elbow=min_elbow,
+        min_wrist=min_wrist,
+        min_shoulder=min_shoulder,
     )
 
 
 # A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box. The
-# reach is held under full stretch, where the controller stopped the arm on following errors: the two long links
-# (0.852 m) less the wrist link (0.0975 m) keep joint 5 inside the span for each rotation of the tool
-cron_with_gripper = cron.override(projects=['gripper_bridge'], max_reach=0.75)
+# arm keeps 20 degrees from a straight elbow and 10 degrees from a straight wrist, and the wrist 3 cm from the cylinder
+# around the axis of joint 1. Hand B from its start pose, 2026-11-10: up 0.49 m, away from the base 0.62 m, outward
+# 0.62 m and toward the base 0.10 m, with no controller error
+cron_with_gripper = cron.override(projects=['gripper_bridge'], min_elbow=0.35, min_wrist=0.17, min_shoulder=0.03)
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)

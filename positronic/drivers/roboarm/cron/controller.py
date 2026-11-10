@@ -27,6 +27,8 @@ _CONNECT_TIMEOUT_S = 5.0
 _POWER_TIMEOUT_S = 15.0
 _HOLD_TIMEOUT_S = 0.5
 _POLL_S = 0.05
+# The controller takes HOLD in about 3 ms
+_HOLD_POLL_S = 0.001
 # After RUN the controller moves the joints once, to take up the brake slack
 _STARTUP_S = 1.0
 # Velocity commands that stop the arm, sent more than once so that one lost command does not leave it moving
@@ -117,11 +119,8 @@ class CronController:
         self.projects = tuple(projects)
         self.tool = geom.Transform3D(translation=np.array([0.0, 0.0, tool_length]))
         self.mount = geom.Transform3D.identity
-        # The shoulder (on the axis of joint 2) and the move from a tool pose to the wrist (on the axis of joint 6, one
-        # link short of the flange), from the model of the controller. The two long links set how far the wrist can go
-        # from the shoulder
-        self.shoulder = np.zeros(3)
-        self._tool_to_wrist = self.tool.inv
+        # The DH rows of the model of the controller: a, d, alpha and theta of each joint
+        self._dh: list[dict[str, float]] = []
         self._has_control = False
         self._waypoint_id = 0
 
@@ -139,9 +138,7 @@ class CronController:
             if not np.linalg.norm(up) > 0:
                 raise RuntimeError(f'the controller has no gravity set ({up}): the up direction of the base is unknown')
             self.mount = level(up)
-            dh = rctl.model_get_dh()
-            self.shoulder = (self.mount * geom.Transform3D(translation=np.array([0.0, 0.0, dh[0]['d']]))).translation
-            self._tool_to_wrist = self.tool.inv * geom.Transform3D(translation=np.array([0.0, 0.0, -dh[-1]['d']]))
+            self._dh = rctl.model_get_dh()
             rctl.take_control()
             self._has_control = True
             self._clear_errors()
@@ -205,6 +202,11 @@ class CronController:
 
     def move_to(self, q: np.ndarray, max_speed: float, max_accel: float) -> None:
         """Start a move of the planner of the controller to the joints ``q``."""
+        # After a velocity stream the planner starts at the end of its last move, not at the joints, and the jump
+        # stopped the arm on a following error (2.6 rad, 2026-11-10). A move from HOLD starts at the joints
+        if self.motion is not MotionMode.HOLD:
+            rctl.cmd_hold()
+            self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD before a move', _HOLD_POLL_S)
         self._waypoint_id += 1
         rctl.cmd_add_waypoint_joint(q, [max_speed, max_accel], 0.0, self._waypoint_id)
         rctl.cmd_move_run()
@@ -219,9 +221,20 @@ class CronController:
             raise ValueError(f'no pose for joints {np.round(q, 3)}: {solved["err_code"]}')
         return self.mount * to_pose(np.asarray(solved['pose'], dtype=np.float64)) * self.tool
 
-    def wrist(self, pose: geom.Transform3D) -> np.ndarray:
-        """The point of the wrist when the tool is at ``pose``."""
-        return np.asarray((pose * self._tool_to_wrist).translation, dtype=np.float64)
+    def shoulder_clearance(self, q: np.ndarray) -> float:
+        """How far the wrist (the origin of the frame of joint 5) is at the joints ``q`` from the cylinder around the
+        axis of joint 1 where joint 1 turns with no limit for a small move of the tool. The cylinder has the radius of
+        the offset of the forearm from the upper arm."""
+        transform = np.eye(4)
+        for row, angle in zip(self._dh[:4], q[:4], strict=True):
+            turn, twist = angle + row['theta'], row['alpha']
+            transform = transform @ np.array([
+                [np.cos(turn), -np.sin(turn) * np.cos(twist), np.sin(turn) * np.sin(twist), row['a'] * np.cos(turn)],
+                [np.sin(turn), np.cos(turn) * np.cos(twist), -np.cos(turn) * np.sin(twist), row['a'] * np.sin(turn)],
+                [0.0, np.sin(twist), np.cos(twist), row['d']],
+                [0.0, 0.0, 0.0, 1.0],
+            ])
+        return float(np.hypot(transform[0, 3], transform[1, 3]) - abs(self._dh[3]['d']))
 
     def inverse(self, pose: geom.Transform3D, seed: np.ndarray) -> np.ndarray:
         """The joints that put the tool at ``pose``, of the controller's solutions the nearest to ``seed``."""
@@ -255,13 +268,14 @@ class CronController:
         return self.power is wanted
 
     @staticmethod
-    def _await(done, timeout_s: float, what: str) -> None:
+    def _await(done, timeout_s: float, what: str, poll_s: float = _POLL_S) -> None:
         deadline = time.monotonic() + timeout_s
         while not done():
             if time.monotonic() > deadline:
                 raise TimeoutError(f'no {what} after {timeout_s} s')
-            # blocking-sleep-ok: connect-time handshake, before any control loop exists to yield from
-            time.sleep(_POLL_S)
+            # A handshake with the controller: at connect, at exit, or for HOLD (about 3 ms) before a planned move
+            # blocking-sleep-ok: the loop has no velocity to send while it waits
+            time.sleep(poll_s)
 
     @staticmethod
     def _attempt(step) -> None:
