@@ -826,8 +826,8 @@ def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, c
         running = service.view(camera=False)
         connection.close()
     # One line of the hint while no camera shows, and the camera above it while one does
-    assert idle[height - 40 :].any() and not idle[height - 40 : height - 25].any()
-    assert running[height - 40 : height - 25].any()
+    assert idle[height - 26 :].any() and not idle[height - 48 : height - 30].any()
+    assert running[height - 48 : height - 30].any()
 
 
 def test_a_camera_stays_live_between_trials_and_not_longer_than_the_live_window(socket_path, connect, monkeypatch):

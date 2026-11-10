@@ -400,11 +400,11 @@ class TeleopService:
         blank = (height, width, 3)
         # A copy: the text goes on the view, not on the image that the service holds.
         view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
-        placed = [((8, 22 + 24 * row), line, 0.6) for row, line in enumerate(lines)]
-        placed += [((8, height - 10 - 18 * row), line, 0.45) for row, line in enumerate(reversed(footer))]
+        placed = [((10, 26 + 30 * row), line, 0.75) for row, line in enumerate(lines)]
+        placed += [((10, height - 10 - 22 * row), line, 0.55) for row, line in enumerate(reversed(footer))]
         for origin, line, scale in placed:
             cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
         return view
 
     def view(self, camera: bool = True) -> np.ndarray:
