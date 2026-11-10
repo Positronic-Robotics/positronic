@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import numpy as np
@@ -31,7 +31,7 @@ _MOVE_SLACK = 1.5
 
 class CronState(State, pimm.shared_memory.NumpySMAdapter):
     def __init__(self):
-        super().__init__(shape=(JOINTS + JOINTS + 7 + 1,), dtype=np.float32)
+        super().__init__(shape=(JOINTS + JOINTS + 7 + 1,), dtype=np.dtype(np.float32))
 
     def instantiation_params(self) -> tuple[Any, ...]:
         return ()
@@ -229,7 +229,7 @@ class Robot(pimm.ControlSystem):
         relative_dynamics_factor: float = 0.2,
         power_off_on_exit: bool = True,
         tool_length: float = 0.0,
-        project: str | None = None,
+        projects: Sequence[str] = (),
         max_reach: float | None = None,
     ) -> None:
         # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
@@ -238,7 +238,7 @@ class Robot(pimm.ControlSystem):
         self.relative_dynamics_factor = relative_dynamics_factor
         self.power_off_on_exit = power_off_on_exit
         self.tool_length = tool_length
-        self.project = project
+        self.projects = tuple(projects)
         self.max_reach = max_reach
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
@@ -259,7 +259,7 @@ class Robot(pimm.ControlSystem):
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with CronController(self.ip, self.power_off_on_exit, self.tool_length, self.project) as controller:
+        with CronController(self.ip, self.power_off_on_exit, self.tool_length, self.projects) as controller:
             with self._arm(controller, should_stop, clock) as arm:
                 self.robot_meta.emit(NO_MODEL_ROBOT_META)
                 while not should_stop.value:
