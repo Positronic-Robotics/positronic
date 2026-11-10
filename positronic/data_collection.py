@@ -30,7 +30,7 @@ from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.simulator.mujoco.transforms import MujocoSceneTransform
 
 # TODO: Replace this module with a run of `cfg.policy.teleop`, and keep the clutch only in `positronic.teleop`.
-from positronic.teleop.clutch import OperatorPosition, Tracker
+from positronic.teleop.clutch import CONTROLLER_AXES, OperatorPosition, Tracker
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 
@@ -64,10 +64,10 @@ class DataCollectionController(pimm.ControlSystem):
         output_path: Path | None = None,
         static_meta: dict | None = None,
         metadata_getter: Callable[[], dict] | None = None,
-        controller_axes: bool = True,
+        controller_axes: geom.Rotation | None = CONTROLLER_AXES,
     ):
         self.operator_position = operator_position
-        # Count the moves of the operator in the axes of the controller (see `Tracker`)
+        # The axes of the controller in the frame of the headset, or None for the axes of the headset (see `Tracker`)
         self.controller_axes = controller_axes
         self._output_path = output_path
         self._nominal_joints = np.asarray(nominal_joints, dtype=np.float64)
@@ -253,7 +253,7 @@ def main(
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
-    controller_axes: bool = True,
+    controller_axes: geom.Rotation | None = CONTROLLER_AXES,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -341,7 +341,7 @@ def main_sim(
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
-    controller_axes: bool = True,
+    controller_axes: geom.Rotation | None = CONTROLLER_AXES,
 ):
     """Runs data collection in simulator."""
 

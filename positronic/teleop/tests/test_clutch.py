@@ -55,7 +55,7 @@ def test_with_the_headset_axes_a_move_in_the_room_moves_the_robot_whichever_way_
     tilted = geom.Transform3D(straight.translation, geom.Rotation.from_euler([0.7, -0.4, 1.1]))
     robots = []
     for hand in (straight, tilted):
-        tracker = Tracker(OperatorPosition.BACK.value, controller_axes=False)
+        tracker = Tracker(OperatorPosition.BACK.value, controller_axes=None)
         tracker.turn_on(geom.Transform3D(), hand)
         robots.append(tracker.update(shift * hand).translation)
     np.testing.assert_allclose(robots[0], robots[1], atol=1e-9)
@@ -71,3 +71,11 @@ def test_control_does_not_follow_a_start_pose_that_its_owner_writes_again():
     np.asarray(hand.translation)[:] = 9.0
     unmoved = tracker.update(geom.Transform3D(np.array([1.0, -2.0, 0.5])))
     np.testing.assert_allclose(unmoved.translation, [0.4, 0.1, 0.3])
+
+
+def test_a_station_sets_its_own_axes_of_the_controller():
+    """Another controller or grip. With the identity, a move along the controller is that move in the room."""
+    tracker = Tracker(OperatorPosition.FRONT.value, controller_axes=geom.Rotation.identity)
+    hand = geom.Transform3D([0.2, 1.0, -0.3], geom.Rotation.from_euler([0.3, 0.5, -0.2]))
+    moved = _moved(tracker, hand, geom.Transform3D(np.array([0.0, 0.1, 0.0])))
+    np.testing.assert_allclose(moved.translation, OperatorPosition.FRONT.value.rotation([0.0, 0.1, 0.0]), atol=1e-9)

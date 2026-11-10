@@ -38,7 +38,7 @@ from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndO
 from positronic.policy.sequential import Sequential
 from positronic.utils import check_finite_positive
 
-from .clutch import Tracker
+from .clutch import CONTROLLER_AXES, Tracker
 from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, SessionParams
 
 logger = logging.getLogger(__name__)
@@ -211,13 +211,13 @@ class TeleopService:
         hold_sec: float,
         press_threshold: float = 0.6,
         auth_token: str | None = None,
-        controller_axes: bool = True,
+        controller_axes: geom.Rotation | None = CONTROLLER_AXES,
     ):
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
             check_finite_positive(value, name)
         self._binds = served_address
         self._auth_token = auth_token
-        # Count the moves of the teleoperator in the axes of the controller (see `Tracker`)
+        # The axes of the controller in the frame of the headset, or None for the axes of the headset (see `Tracker`)
         self.controller_axes = controller_axes
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit

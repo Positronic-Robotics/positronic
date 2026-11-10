@@ -6,8 +6,9 @@ import numpy as np
 
 from positronic import geom
 
-# The axes of a controller in the frame of the headset, as a teleoperator holds it: x to the right, y back to the
-# teleoperator, z down. A quarter turn about the x axis; checked by an operator on the CRON stand.
+# The axes of a Quest controller in the frame of the headset, as a teleoperator holds it: x to the right, y back to
+# the teleoperator, z down. A quarter turn about the x axis; checked by an operator on the CRON stand. The default of
+# `Tracker`; a station with another controller or grip sets its own.
 CONTROLLER_AXES = geom.Rotation.from_rotvec(np.array([np.pi / 2, 0.0, 0.0]))
 
 
@@ -17,11 +18,14 @@ class Tracker:
     With no ``operator_position``, control is always on and the hand pose is the robot pose (UMI mode).
 
     With ``controller_axes``, a shift or a turn of the hand counts in the axes that the controller had when control came
-    on, as ``CONTROLLER_AXES`` puts them, and not in the axes of the headset. So the way the operator faces does not
-    count. Without it, a shift right in the room is a shift right of the robot, whichever way the controller points.
+    on, and not in the axes of the headset, so the way the operator faces does not count. ``controller_axes`` puts the
+    axes of the controller in the frame of the headset. With None, a shift right in the room is a shift right of the
+    robot, whichever way the controller points.
     """
 
-    def __init__(self, operator_position: geom.Transform3D | None, controller_axes: bool = True):
+    def __init__(
+        self, operator_position: geom.Transform3D | None, controller_axes: geom.Rotation | None = CONTROLLER_AXES
+    ):
         self._operator_position = operator_position
         self._controller_axes = controller_axes
         self._offset = geom.Transform3D()
@@ -60,9 +64,9 @@ class Tracker:
         if operator is None:
             return tracker_pos
 
-        if self._controller_axes:
+        if self._controller_axes is not None:
             moved = self._hand_start.inv * tracker_pos
-            axes = operator.rotation * CONTROLLER_AXES
+            axes = operator.rotation * self._controller_axes
             turn = axes * moved.rotation * axes.inv
             return geom.Transform3D(
                 self._robot_start.translation + axes(moved.translation), turn * self._robot_start.rotation
