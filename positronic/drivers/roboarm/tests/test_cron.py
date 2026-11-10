@@ -145,6 +145,10 @@ class FakeRctl:
     def cmd_joint_direct_vel(self, velocities):
         self.velocity = np.array(velocities, dtype=np.float64)
         self.commanded.append(self.velocity.copy())
+        if self.mode is MotionMode.MOVE and self.moving:
+            # The real controller stops the arm with JOINT_VEL: TIMEOUT for a stream that starts while a move runs
+            self.error, self.moving = True, False
+            return
         if self.power is PowerState.RUN:
             self.mode = MotionMode.JOINT_VEL
             self.q = self.q + self.velocity * TICK
@@ -348,6 +352,32 @@ def test_a_planned_move_after_a_stream_starts_from_the_joints_that_the_arm_has(w
     assert answer.result() is None
     assert not rctl.error
     np.testing.assert_allclose(rctl.q, _joints(0.0), atol=cron._ARRIVED_TOL)
+
+
+def test_a_stream_after_a_planned_move_starts_once_the_planner_stops(world, rctl, driven):
+    """The planner still finishes a move when the arm reads within the arrival tolerance."""
+    driver, _, commands, clock, loop = driven(factor=0.1)
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump_until(loop, clock, answer)
+    answer.result()
+
+    commands.push(command.JointPosition(_joints(0.0)))
+    _pump(loop, clock, 3000)
+
+    assert not rctl.error
+    np.testing.assert_allclose(rctl.q, _joints(0.0), atol=cron._ARRIVED_TOL)
+
+
+def test_a_streamed_target_across_a_straight_wrist_stops_before_it(rctl, driven):
+    """A step of the IK can cross the margin and land past it on the other side of joint 5 at 0."""
+    _, _, commands, clock, loop = driven(min_wrist=0.05)
+    rolled = geom.Transform3D(np.zeros(3), geom.Rotation.from_euler([0.2, 0.0, 0.0]))
+    _stream(commands, loop, clock, command.CartesianPosition(rolled))
+
+    across = geom.Transform3D(np.zeros(3), geom.Rotation.from_euler([-0.2, 0.0, 0.0]))
+    _stream(commands, loop, clock, command.CartesianPosition(across))
+
+    np.testing.assert_allclose(rctl.q[4], 0.05, atol=0.01)
 
 
 def test_a_move_to_a_pose_that_the_arm_cannot_hold_fails(world, rctl, driven):

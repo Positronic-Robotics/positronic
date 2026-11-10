@@ -37,6 +37,12 @@ _MAX_TARGET_TURN = 0.5  # rad
 _LIMIT_SEARCH_STEPS = 12
 
 
+def _crosses(joints: np.ndarray, seed: np.ndarray, joint: int) -> bool:
+    """Whether ``joint`` goes from ``seed`` to ``joints`` across 0 or a half turn. A start on one of them crosses
+    nothing."""
+    return bool(np.sin(joints[joint]) * np.sin(seed[joint]) < 0)
+
+
 class CronState(State, pimm.shared_memory.NumpySMAdapter):
     def __init__(self):
         super().__init__(shape=(JOINTS + JOINTS + 7 + 1,), dtype=np.dtype(np.float32))
@@ -135,9 +141,12 @@ class _Arm(DriverRun[command.CommandType]):
         except ValueError:
             return None
         elbow = abs(float(np.remainder(joints[_ELBOW] + np.pi, 2 * np.pi) - np.pi))
-        if self.min_elbow is not None and elbow < self.min_elbow:
+        # A step can cross a straight elbow or wrist and land past the margin on the other side
+        if self.min_elbow is not None and (elbow < self.min_elbow or _crosses(joints, seed, _ELBOW)):
             return None
-        if self.min_wrist is not None and abs(np.sin(joints[_WRIST])) < np.sin(self.min_wrist):
+        if self.min_wrist is not None and (
+            abs(np.sin(joints[_WRIST])) < np.sin(self.min_wrist) or _crosses(joints, seed, _WRIST)
+        ):
             return None
         if self.min_shoulder is not None and self.controller.shoulder_clearance(joints) < self.min_shoulder:
             return None
@@ -194,6 +203,8 @@ class _Arm(DriverRun[command.CommandType]):
 
     def track(self, cmd: command.CommandType) -> None:
         """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival."""
+        if self.target is None:
+            self.controller.to_hold()
         self.target = self._to_joints(cmd, streamed=True)
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
