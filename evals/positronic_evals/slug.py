@@ -16,8 +16,8 @@ from pydantic_core import core_schema
 class Name(str):
     """A nonempty name without whitespace, preserving its concrete str subtype.
 
-    A refusal reads `not <described_as>: <value>`. A subclass states how a person names its kind, with the article:
-    `class EvalRef(Name, described_as='an eval name')`. `Name` and a subclass that states none are named by their class.
+    A refusal reads `not <described_as>: <value>`, as in `class EvalRef(Name, described_as='an eval name')`. `Name`
+    and a subclass that states none are named by their class.
     """
 
     __slots__ = ()
