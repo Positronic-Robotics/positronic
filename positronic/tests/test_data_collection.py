@@ -485,12 +485,12 @@ def test_the_page_input_emits_each_object_that_the_page_posts(world):
     inputs = RecordingEmitter()
     served.page_input._bind(inputs, clock=world.clock)
     with _served_webxr(webxr=served) as base:
-        assert httpx.post(base + '/input', json={'headset_camera': 'image.wrist'}, timeout=1.0).status_code == 200
+        assert httpx.post(base + '/input', json={'headset_camera': keys.WRIST_IMAGE}, timeout=1.0).status_code == 200
         assert httpx.post(base + '/input', json=['not', 'an', 'object'], timeout=1.0).status_code == 422
         assert httpx.post(base + '/input', content=b'not json', timeout=1.0).status_code == 422
         foreign = {'origin': 'https://elsewhere.example'}
         assert httpx.post(base + '/input', json={}, headers=foreign, timeout=1.0).status_code == 403
-    assert [data for _, data in inputs.emitted] == [{'headset_camera': 'image.wrist'}]
+    assert [data for _, data in inputs.emitted] == [{'headset_camera': keys.WRIST_IMAGE}]
 
 
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
