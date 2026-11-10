@@ -125,13 +125,12 @@ dict, sends it into the policy run, emits the returned commands, and runs the ep
 lifecycle. Scheduling, blending, history stacking, and fault handling live in the
 processor stack. Empty commands leave the driver's last target in place.
 
-**A driver reports a misbehaving device; a ready or recover call repairs it.** When a driver
+**A driver reports a misbehaving device and does not repair it on its own.** When a driver
 detects that its device does not obey, it holds a `DeviceFault` on the device's signal and answers
-the move in flight with it. It does not start a repair itself. The harness asks a device in error
-to be ready between episodes, and an operator asks through the driver's `recover` call. The driver
-repairs the device when one of these calls comes. Only the driver sees the misbehaviour, and only
-the harness knows when a repair is safe: a repair can move the device, and a gripper drops what it
-holds.
+the move in flight with it. A repair runs only on a ready call or a recover call, and
+[docs/inference.md](docs/inference.md) says which repairs a ready call may take. Only the driver
+sees the misbehaviour, and only the caller knows when a repair is safe: a repair can move the
+device.
 
 **Inference cost is a fact of the trial, owned by the harness.** The policy submits
 ordinary functions through its runtime. A simulated task can request

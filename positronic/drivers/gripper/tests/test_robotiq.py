@@ -353,7 +353,6 @@ def test_a_ready_or_recover_call_reactivates_a_gripper_held_for_fingers_bound_sh
 
 
 def test_a_streamed_width_on_fingers_bound_shut_holds_no_fault(monkeypatch):
-    """A policy streams widths during an episode, and a fault there would fail the episode."""
     bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
     _, requests, loop = _driven(monkeypatch, bus, clock, widths)
     _bind_shut(bus, requests, loop, clock)
