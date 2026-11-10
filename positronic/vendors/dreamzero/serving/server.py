@@ -11,6 +11,7 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
+from positronic_model_server.serialization import check_int_range
 from positronic_model_server.server import Model, ModelServer, Session
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import WebsocketWire
@@ -173,8 +174,7 @@ class DreamZeroModel(Model):
         ):
             raise ValueError('image_mappings must map all three native cameras to observation fields')
         quality = params['jpeg_quality']
-        if type(quality) is not int or not 0 <= quality <= 100:
-            raise ValueError('jpeg_quality must be an integer between 0 and 100')
+        check_int_range(quality, 0, 100, 'jpeg_quality')
         stack = recipe.client_stack(
             mode,
             fps=params['fps'],

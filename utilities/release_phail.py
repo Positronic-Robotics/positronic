@@ -27,6 +27,7 @@ from collections import defaultdict
 import configuronic as cfn
 import numpy as np
 import pos3
+from eval_vocabulary.outcome import SUCCESSFUL_ITEMS
 from eval_vocabulary.timeline import recording_timeline
 
 from pimm.logging import init_logging
@@ -43,7 +44,7 @@ DEST_ROOT = 's3://positronic-public/phail'
 # Same cache path as PUBLIC (local_name='positronic-public') but with credentials for writing.
 PUBLIC_WRITE = dataclasses.replace(PUBLIC, public=False)
 
-REQUIRED_FIELDS = ['model', 'eval.object', 'eval.successful_items', 'eval.total_items']
+REQUIRED_FIELDS = ['model', 'eval.object', SUCCESSFUL_ITEMS, 'eval.total_items']
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,24 +106,23 @@ def _duration(ep: Episode) -> float:
 
 
 @cfn.config(dataset=analysis_cfg.phail_inference_prod_v1_0, force=False)
-def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
+def verify_inference(dataset: Dataset, force: bool):
     """Verify inference episodes for consistency. Raises SystemExit on failure unless force=False."""
     issues = []
 
-    uph_by_model: dict[str, list[float]] = defaultdict(list)
+    uph_by_model: dict[str, list[tuple[int, float]]] = defaultdict(list)
     for i, ep in enumerate(dataset):
         model = ep.get('model', '')
-        items = ep.get('eval.successful_items', 0)
+        successful = ep.get(SUCCESSFUL_ITEMS, 0)
         duration = _duration(ep)
-        if items and duration > 0:
-            uph_by_model[model].append(items / (duration / 3600))
+        if successful and duration > 0:
+            uph_by_model[model].append((i, successful / (duration / 3600)))
 
         for field in REQUIRED_FIELDS:
             if field not in ep:
                 issues.append(f'  [{i}] {model}: missing required field {field!r}')
 
         outcome = ep.get('eval.outcome', '')
-        successful = ep.get('eval.successful_items', 0)
         total = ep.get('eval.total_items', 0)
         if outcome == 'Success' and successful != total:
             issues.append(f'  [{i}] {model}: Success but {successful}/{total}')
@@ -132,19 +132,13 @@ def verify_inference(dataset: Dataset, force: bool):  # noqa: C901
     for model, uphs in uph_by_model.items():
         if len(uphs) < 3:
             continue
-        arr = np.array(uphs)
+        arr = np.array([uph for _, uph in uphs])
         mean, std = arr.mean(), arr.std()
         if std == 0:
             continue
-        for i, ep in enumerate(dataset):
-            if ep.get('model', '') != model:
-                continue
-            ep_items = ep.get('eval.successful_items', 0)
-            ep_duration = _duration(ep)
-            if ep_items and ep_duration > 0:
-                uph = ep_items / (ep_duration / 3600)
-                if abs(uph - mean) > 3 * std:
-                    issues.append(f'  [{i}] {model}: UPH={uph:.1f} is >3σ from mean={mean:.1f}±{std:.1f}')
+        for i, uph in uphs:
+            if abs(uph - mean) > 3 * std:
+                issues.append(f'  [{i}] {model}: UPH={uph:.1f} is >3σ from mean={mean:.1f}±{std:.1f}')
 
     if issues:
         logging.warning(f'{len(issues)} issues found:')

@@ -1,6 +1,7 @@
 """The server-side codec of Dream-1. It encodes a bimanual YAM observation as a YAM station observation of DreamAPI,
 and decodes each action row as one joint command and one grip target per arm."""
 
+from collections.abc import Mapping
 from typing import Any
 
 import configuronic as cfn
@@ -12,6 +13,7 @@ from positronic.dataset.transforms import image
 from positronic.drivers.roboarm.models import YAM_JOINTS
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
+from positronic.utils import check_rgb_frame
 from positronic.vendors import dream
 
 # Each row of a Dream-1 chunk is one step of a 20 Hz clock, the rate of the Dream SDK station.
@@ -26,13 +28,23 @@ FRAME_PERIOD_S = 0.2
 CROP_META = 'dream.crop_to_aspect'
 
 
+def rows_ahead(inputs: Mapping[str, Any]) -> int:
+    """How many rows of its plan (`policy_keys.RTC.ACTION_PREFIX`) the client plays after the observation of `inputs`,
+    rounded to whole rows: 0 with no plan or a plan that has ended."""
+    prefix = inputs.get(policy_keys.RTC.ACTION_PREFIX)
+    if prefix is None:
+        return 0
+    rows = len(prefix[policy_keys.RTC.PREFIX_ACTIONS]) + prefix[policy_keys.RTC.OBSERVATION_OFFSET_SEC] * FPS
+    return max(0, round(rows))
+
+
 class DreamObservationCodec(Codec):
     """Encodes a bimanual YAM observation as the YAM station observation of DreamAPI.
 
     Each camera is a frame stack, oldest frame first, or one frame. Each frame goes to `FRAME_SIZE` as RGB `uint8`.
     With `crop_to_aspect`, a centred crop to the aspect ratio of `FRAME_SIZE` comes first. The grip of each arm must
     be the gripper opening (1 = open), so `FlipGrip(arms=...)` composes to the left. `policy_keys.REPLAN_NOW` passes
-    through.
+    through. `dream.ROWS_AHEAD` holds `rows_ahead` of the inputs.
     """
 
     def __init__(
@@ -58,8 +70,7 @@ class DreamObservationCodec(Codec):
         return frame[top : top + cut]
 
     def _frame(self, frame: np.ndarray, key: str) -> np.ndarray:
-        if frame.ndim != 3 or frame.shape[2] != 3:
-            raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
+        check_rgb_frame(frame, f"image '{key}'")
         if self._crop_to_aspect:
             frame = self._centre_crop(frame, FRAME_SIZE[0] / FRAME_SIZE[1])
         return image.transform_frame(frame, *FRAME_SIZE, mode=image.ResizeMode.STRETCH)
@@ -82,7 +93,12 @@ class DreamObservationCodec(Codec):
             for camera, key in self._cameras.items()
         }
         replan = bool(inputs.get(policy_keys.REPLAN_NOW, False))
-        return {dream.OBSERVATION: observation, dream.FRAMES: frames, policy_keys.REPLAN_NOW: replan}
+        return {
+            dream.OBSERVATION: observation,
+            dream.FRAMES: frames,
+            policy_keys.REPLAN_NOW: replan,
+            dream.ROWS_AHEAD: rows_ahead(inputs),
+        }
 
     @property
     def meta(self) -> dict[str, Any]:

@@ -72,6 +72,29 @@ first loses the key the platform minted. Pass `timeout=client.register_timeout()
 deadline for the WorkOS check, and covers the longest check the platform runs. Without `timeout`,
 `register` sends one request and waits 90 s.
 
+## Platform terms
+
+The platform can refuse a call from an account that has not accepted its terms. The refusal is
+`403 forbidden`, and its message names the version, the page of the terms, and the command that
+accepts them. A person reads the terms and accepts them once. A new version of the terms can need a
+new acceptance.
+
+`PlatformClient.program_terms(Program.platform)` reads the current version and the page, with no key.
+`program_entry(Program.platform)` reads the version that the account accepted last. `accept_platform_terms(version)`
+records the acceptance. The version is a check, and the platform refuses one that is not current. The
+models live in `platform_client.terms`.
+
+From the command line, `positronic account terms` prints the terms and the acceptance on record, and
+`positronic account accept-terms` accepts the version that you read. `positronic account register`
+prints the terms after it registers, and `--accept_terms` accepts them with the key that it mints.
+A version such as `1.3` reads as a number on the command line, so quote it with inner quotes.
+
+```bash
+uv run positronic account terms
+uv run positronic account accept-terms --version='"<version>"'
+uv run positronic account register --alias=<display name> --accept_terms='"<version>"'
+```
+
 ## Credit accounts
 
 `PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.
@@ -90,6 +113,8 @@ The `packaged` mode uses the organization's configured invoice terms. The `pay_a
 `PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
 Reuse the same key to read the same owned purchase after a lost response. A new purchase requires the billing spender role.
 The configured package fixes its credit units, currency, and amount in currency minor units.
+A personal organization can buy any whole number of credits N between the smallest and the largest purchase: the package id is `credits-N`.
+The account response of such an organization lists one example package, `credits-20`.
 `currency` is the lowercase ISO 4217 code used to verify the Stripe price and payment.
 For example, `amount_minor=17` means 17 yen for `jpy`, or 0.17 dollars for `usd`.
 The currency does not change the package's credit units.
@@ -105,6 +130,7 @@ An organization member can read purchase history. A reviewed or credited purchas
 ```bash
 positronic account credits account --org=acme
 positronic account credits buy --org=acme --package-id=<configured-package> --transaction-key=<stable-key>
+positronic account credits buy --org=acme --package-id=credits-50 --transaction-key=<stable-key>
 positronic account credits get-purchase --id=<purchase-id>
 positronic account credits list-purchases --org=acme
 positronic account credits list-purchases --org=acme --limit=50 --after='"last-purchase-id"'
@@ -128,8 +154,14 @@ episodes each endpoint takes on each task. A plan either states its own `tasks` 
 the catalogue expands into them; both arrive at the same set. The plan states the count once. A task may override it for that task, and an endpoint may
 override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
 plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter`, `scene_seed`
-and `start_pose`. An endpoint states only its count. `episodes_total` is a checksum a caller may state.
-`max_cap_per_episode_sec` is the upper bound on every task's cap.
+and `start_pose`. An endpoint states its count, its `cap_per_episode_sec` and its `policy_preset`, and
+no other field of the cascade. `episodes_total` is a checksum a caller may state.
+`max_cap_per_episode_sec` is the upper bound on every cap a plan states, an endpoint's cap included.
+
+An endpoint's cap and preset take the same order as its count: the entry on the task, then the plan
+endpoint that a bare label names, then the task, then the plan. So one task can run several policies,
+each with its own episode window, in one random episode order. A task or the plan still states a cap and
+a preset.
 
 `request_type` is required and states the rules a plan runs under. `private_eval` runs for the org
 it names, and the caller must be a member of that org. The org's approvals decide the evals, the
@@ -163,6 +195,7 @@ endpoints:
     kind: served
     spec: dreamzero
     wire: grpc
+    cap_per_episode_sec: 240              # an endpoint may state its own window and preset
 episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
@@ -250,7 +283,9 @@ under. Read it with the org's own credential for that bucket: `submissions.artif
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
-vantage, the clutter objects and the episode order. A level states a value, else the task's
+vantage, the clutter objects and the episode order. An endpoint that states its own cap or preset
+carries it, and an episode on an endpoint that states none runs with the task's
+(`ResolvedTask.cap_of`, `ResolvedTask.preset_of`). A level states a value, else the task's
 catalogue entry gives it, else the platform draws it. The platform makes each draw once per plan, so every run of
 the plan lays out that scene and that table, and runs the episodes in that order.
 `submissions.get` carries the same `resolved`. A rig plan whose task resolves no

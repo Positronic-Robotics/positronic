@@ -92,7 +92,7 @@ On the rig, point the `.real.yam.bimanual` eval at the server:
 
 ```bash
 uv run --locked --extra yam positronic eval run --eval=.real.yam.bimanual \
-  --eval.instruction='fold the towel' \
+  --eval.instruction='put the plastic bottles in the bin' \
   --policy=.remote --policy.address.host=<server> --policy.address.port=8000 \
   --output_dir=~/datasets/molmoact2_yam
 ```

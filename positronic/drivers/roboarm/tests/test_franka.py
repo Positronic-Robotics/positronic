@@ -228,7 +228,12 @@ class FakeDesk:
         self.fsoe_error = False
         # A joint fault that Desk holds and that its prepare acknowledges.
         self.generic_joint_error = False
+        # The TD2 self-test deadline passed: the safety controller stopped the arm, and prepare acknowledges it.
+        self.td2_timeout = False
+        self.safe_input_error = False
         self.programming_mode = False
+        # The seconds until the next TD2 self-test is due. A run starts a day away from it.
+        self.time_to_td2 = 86400
         self.status_reads = 0
         # The Desk login that holds robot control, where a session of the driver does not.
         self.holder: str | None = None
@@ -286,6 +291,7 @@ class FakeDesk:
         if self.programming_mode:
             raise franka.ProgrammingModeError()
         self.generic_joint_error = False
+        self.td2_timeout = False
         self.brakes = [franka._BrakeState.UNLOCKED] * 7
 
     def ensure_control(self) -> None:
@@ -305,9 +311,13 @@ class FakeDesk:
         return {
             franka.SAFE_INPUT_STATE: dict(self.safe_inputs),
             franka.BRAKE_STATE: brakes,
+            franka.TIME_TO_TD2: self.time_to_td2,
             franka.RECOVERABLE_ERRORS: {
                 franka.FSOE_CONNECTION_ERROR: self.fsoe_error,
-                'genericJointError': self.generic_joint_error,
+                franka.ControlBoxFault.GENERIC_JOINT_ERROR: self.generic_joint_error,
+                franka.ControlBoxFault.TD2_TIMEOUT: self.td2_timeout,
+                # A recoverable error of the emergency stop's own input, which a person's press leaves.
+                'safeInputErrorX31': self.safe_input_error,
             },
         }
 
@@ -1832,6 +1842,66 @@ def test_the_arm_state_comes_back_once_the_emergency_stop_is_released(desk):
     assert kinds == [FaultKind.E_STOP, franka.FrankaState, FaultKind.E_STOP]
 
 
+@pytest.mark.parametrize('error', [fault.value for fault in franka.ControlBoxFault])
+def test_the_arm_state_carries_an_arm_fault_once_while_the_safety_controller_holds_it_for_a_control_box_fault(
+    desk, error
+):
+    """A brake self-test deadline, a lost safety bus or a joint fault stops the arm mid-episode, and libfranka reports
+    it in the words of an operator's stop. An ARM fault fails the attempt, so the episode runs again."""
+    _hold_in_desk(desk, error)
+
+    [fault] = _shipped(desk, CLEAR)
+
+    assert isinstance(fault, DeviceFault) and fault.kind is FaultKind.ARM
+    assert str(fault) == f'{franka.SAFETY_CONTROLLER_STOP}: {error}'
+
+
+def test_a_recoverable_error_of_the_emergency_stop_input_leaves_the_arm_state_alone(desk):
+    """A person's press leaves an error on the stop's own input, and her episode keeps its score."""
+    desk.safe_input_error = True
+
+    assert all(isinstance(data, franka.FrankaState) for data in _shipped(desk, CLEAR))
+
+
+def test_an_arm_that_refuses_moves_with_no_control_box_fault_leaves_the_arm_state_alone(desk):
+    """A policy's collision latches a reflex that refuses every move, and Desk holds no error: the episode scores."""
+    driver = _driver(FakeArm(PARK))
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    arm = _arm(driver, clock)
+    arm.note_refusals(REFUSED)
+    for _ in range(3):
+        arm.publish(arm.robot.state())
+
+    assert arm.rejects_moves
+    assert all(isinstance(data, franka.FrankaState) for _, data in states.emitted)
+
+
+def test_a_control_box_desk_does_not_answer_leaves_the_arm_state_alone(desk):
+    """An unread box names no fault, so the arm streams its state."""
+    desk.td2_timeout = True
+    desk.unreachable = True
+
+    assert all(isinstance(data, franka.FrankaState) for data in _shipped(desk, CLEAR))
+
+
+def test_the_arm_state_comes_back_once_desk_clears_the_control_box_fault(desk):
+    driver = _driver(FakeArm(PARK))
+    states = RecordingEmitter()
+    clock = MockClock()
+    driver.state._bind(states, clock=clock)
+    desk.td2_timeout = True
+    arm = _arm(driver, clock)
+    arm.publish(arm.robot.state())
+    desk.td2_timeout = False
+    arm.safe_inputs.sample()
+    arm.publish(arm.robot.state())
+
+    kinds = [data.kind if isinstance(data, DeviceFault) else type(data) for _, data in states.emitted]
+    assert kinds == [FaultKind.ARM, franka.FrankaState]
+
+
 def test_a_console_recover_call_is_answered_that_the_fault_cleared(desk, world):
     """A console calls the arm to clear a latched fault: the driver runs the recovery and the answer to
     that call carries what it returned."""
@@ -2333,6 +2403,110 @@ def test_a_ready_call_on_an_error_the_recovery_leaves_answers_it_and_takes_no_de
         assert isinstance(answered.value.__cause__, RuntimeError)
 
     assert desk.calls[mark:] == []
+
+
+def test_a_ready_call_runs_the_td2_self_test_that_would_fall_due_during_the_episode(desk, world, monkeypatch):
+    """A run outlives the time Desk gives to the next TD2 self-test. The ready call before an episode runs the test
+    through ``Desk.prepare()``, with the brakes locked and FCI off, so the deadline cannot stop the arm mid-episode."""
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    desk.time_to_td2 = franka.SELF_TEST_LEAD_SEC - 1
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    assert answer.result() is None
+    assert desk.calls[mark:] == [Call.ENSURE_CONTROL, Call.CLOSE_BRAKES, Call.DEACTIVATE_FCI, Call.PREPARE]
+    assert Call.SET_CONTROL_MODE in reconnected.calls
+
+
+def test_a_ready_call_takes_no_desk_step_while_the_td2_self_test_is_due_after_the_lead(desk, world, monkeypatch):
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    desk.time_to_td2 = franka.SELF_TEST_LEAD_SEC + 1
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    assert answer.result() is None
+    assert desk.calls[mark:] == []
+
+
+def test_a_ready_call_runs_no_td2_self_test_while_a_safe_input_holds_the_arm(desk, world, monkeypatch):
+    """A person may hold the arm, and the self-test locks and opens its brakes. The ready call takes no Desk step."""
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
+    arm = FakeArm(PARK)
+    desk.safe_inputs['x4'] = 'Active'  # a person holds the enabling device, and only they let it go
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    desk.time_to_td2 = franka.SELF_TEST_LEAD_SEC - 1
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    assert answer.result() is None
+    assert desk.calls[mark:] == []
+
+
+def test_a_run_that_desk_prepares_over_a_held_fault_streams_the_state_without_waiting_for_the_watch(
+    desk, world, monkeypatch
+):
+    """Desk.prepare() acknowledges the fault as a run starts; a reading taken before it must not stand in for the
+    first states until the watch reads again."""
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 3600.0)  # the watch takes no second reading in this test
+    desk.td2_timeout = True
+
+    run = _start_run(world, _driver(FakeArm(PARK)), ticks=3)
+
+    assert not desk.td2_timeout
+    assert run.streamed and all(isinstance(data, franka.FrankaState) for data in run.streamed)
+
+
+def test_a_ready_call_clears_a_control_box_fault_through_desk_before_the_episode(desk, world, monkeypatch):
+    """Otherwise the episode that runs again fails on the same held fault at its first state."""
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    reconnected = FakeArm(PARK)
+    _reconnect_to(monkeypatch, reconnected)
+    run = _start_run(world, _driver(FakeArm(PARK)), ticks=3)
+    desk.generic_joint_error = True
+    _until_the_watch_reads_again(desk)
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    assert answer.result() is None
+    assert Call.PREPARE in desk.calls[mark:]
+    assert not desk.generic_joint_error
+
+
+def test_a_ready_call_answers_a_control_box_fault_desk_cannot_clear_while_a_safe_input_holds_the_arm(
+    desk, world, monkeypatch
+):
+    """A person may hold the arm, so Desk takes no step, and the fault answers the call."""
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    monkeypatch.setattr(franka.pf, 'Robot', lambda *_args, **_kwargs: pytest.fail('the driver connected again'))
+    run = _start_run(world, _driver(FakeArm(PARK)), ticks=3)
+    desk.generic_joint_error = True
+    desk.safe_inputs['x4'] = 'Active'
+    _until_the_watch_reads_again(desk)
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    with pytest.raises(DeviceFault, match=franka.SAFETY_CONTROLLER_STOP) as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert Call.PREPARE not in desk.calls[mark:]
 
 
 def test_a_recover_call_on_an_error_the_recovery_leaves_runs_the_desk_step_and_clears_it(desk, world, monkeypatch):
@@ -2851,11 +3025,13 @@ def _until_the_watch_reads_again(desk: FakeDesk) -> None:
 def _hold_in_desk(desk: FakeDesk, error: str) -> None:
     if error == franka.FSOE_CONNECTION_ERROR:
         desk.fsoe_error = True
+    elif error == franka.ControlBoxFault.TD2_TIMEOUT:
+        desk.td2_timeout = True
     else:
         desk.generic_joint_error = True
 
 
-@pytest.mark.parametrize('error', ['genericJointError', franka.FSOE_CONNECTION_ERROR])
+@pytest.mark.parametrize('error', [franka.ControlBoxFault.GENERIC_JOINT_ERROR, franka.FSOE_CONNECTION_ERROR])
 def test_a_recover_call_that_libfranka_clears_runs_the_desk_step_while_desk_holds_an_error(
     desk, world, monkeypatch, error
 ):
@@ -2876,6 +3052,60 @@ def test_a_recover_call_that_libfranka_clears_runs_the_desk_step_while_desk_hold
     assert Call.PREPARE in desk.calls[mark:]
     assert (Call.REBOOT in desk.calls[mark:]) == (error == franka.FSOE_CONNECTION_ERROR)
     assert not desk.generic_joint_error and not desk.fsoe_error
+
+
+_ONLY_A_REBOOT_CLEARS = [
+    StartFailure.SAFETY_ERROR,
+    StartFailure.STRANDED_TOKEN,
+    StartFailure.FSOE,
+    StartFailure.PROGRAMMING_MODE,
+]
+
+
+def _run_with_a_control_box_fault_desk_refuses(desk, world, monkeypatch, failure: StartFailure) -> _Run:
+    """A run whose arm the safety controller holds for a control box fault, where the Desk step meets ``failure``."""
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    _reconnect_to(monkeypatch, FakeArm(PARK))
+    desk.generic_joint_error = True
+    failure.script(desk, driver, arm, monkeypatch)
+    _until_the_watch_reads_again(desk)
+    return run
+
+
+@pytest.mark.parametrize('failure', _ONLY_A_REBOOT_CLEARS)
+def test_a_ready_call_on_a_control_box_fault_only_a_reboot_clears_reboots_nothing_and_answers_why(
+    desk, world, monkeypatch, failure
+):
+    """A ready call comes with nobody at the rig asking, so the start stays refused until a recover call."""
+    run = _run_with_a_control_box_fault_desk_refuses(desk, world, monkeypatch, failure)
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    with pytest.raises(DeviceFault, match='only a control box reboot clears') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert Call.REBOOT not in desk.calls[mark:]
+    assert RecoveryStep.REBOOTING not in run.step_names
+
+
+@pytest.mark.parametrize('failure', _ONLY_A_REBOOT_CLEARS)
+def test_a_recover_call_on_a_control_box_fault_only_a_reboot_clears_reboots_once_and_clears_it(
+    desk, world, monkeypatch, failure
+):
+    run = _run_with_a_control_box_fault_desk_refuses(desk, world, monkeypatch, failure)
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert desk.calls[mark:].count(Call.REBOOT) == 1
+    assert not desk.generic_joint_error
 
 
 def test_a_recover_call_that_libfranka_clears_runs_no_desk_step_while_desk_holds_no_error(desk, world, monkeypatch):

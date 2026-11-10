@@ -47,6 +47,8 @@ jobs:
         else
           echo "No Python files changed"
         fi
+    - name: Check repeated validation and control paths
+      run: uv run --locked python -m utilities.check_code_smells
     - name: Check tests location
       run: |
         CHANGED_PY_FILES=$(git diff --name-only --diff-filter=d $BASE_SHA ${{ github.sha }} | grep -E "\.py$" || true)

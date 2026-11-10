@@ -840,6 +840,32 @@ def test_every_sim_reports_an_arm_under_the_shared_wire_names():
     assert names == ('joint_pos', 'joint_vel', 'eef_pos', 'eef_quat', 'grip')
 
 
+def test_the_task_metrics_keep_every_numeric_entry_as_a_suffixed_signal():
+    signals = protocol.numeric_signals({
+        'reward': 0.5,
+        'success': False,
+        'num_bottles_in_bin': 1,
+        'bottle_in_bin_mask': [True, False, False],
+    })
+
+    assert signals['.reward'] == 0.5
+    assert signals['.success'] == np.False_
+    assert signals['.num_bottles_in_bin'] == 1
+    assert np.array_equal(signals['.bottle_in_bin_mask'], [True, False, False])
+
+
+def test_a_task_metric_with_rows_arrives_flat():
+    signals = protocol.numeric_signals({'bottle_center_offsets': [[0.0, 0.0, 0.1], [0.0, 0.0, 0.2]]})
+
+    assert np.array_equal(signals['.bottle_center_offsets'], [0.0, 0.0, 0.1, 0.0, 0.0, 0.2])
+
+
+def test_the_task_metrics_drop_names_and_empty_lists():
+    signals = protocol.numeric_signals({'bottles_in_bin': ['bottle_0'], 'bottle_names': [], 'reward': 1.0})
+
+    assert set(signals) == {'.reward'}
+
+
 @pytest.mark.timeout(60.0)
 def test_remote_eval_runs_to_timeout_without_done(env_server, tmp_path):
     """A timed-out trial must record canonical signals without reporting termination or success."""

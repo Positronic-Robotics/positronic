@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 import pos3
 import pytest
+from eval_vocabulary.episode import MOLMO_REWARD_SIGNAL, MOLMO_TASK_METRICS_SIGNAL
 
 from positronic import keys
 from positronic.cfg.eval.sim import molmo as molmo_cfg
@@ -296,7 +297,15 @@ class _MolmoObservationEnv(EnvProtocol):
         self.selections = []
         self.tokens = []
         self.actions = []
-        self.observation = {**build_payload(), mapping.OBS_SIM_STATE: np.arange(10, dtype=np.float64)}
+        self.observation = {
+            **build_payload(),
+            mapping.OBS_SIM_STATE: np.arange(10, dtype=np.float64),
+            mapping.OBS_TASK_METRICS: protocol.numeric_signals({
+                mapping.TASK_METRIC_REWARD: 0.25,
+                'success': False,
+                'receptacle_pos_displacement': [0.0, 0.01, 0.0],
+            }),
+        }
 
     def tasks(self, spec):
         self.selections.append(spec)
@@ -389,6 +398,10 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
         assert eval_keys.SUCCESS not in episode.static
     recorded = {keys.JOINTS, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2, mapping.OBS_SIM_STATE}
     assert recorded <= episode.signals.keys()
+    assert {v for v, _ in episode.signals[MOLMO_REWARD_SIGNAL]} == {0.25}
+    assert not any(v for v, _ in episode.signals[f'{MOLMO_TASK_METRICS_SIGNAL}.success'])
+    displacement, _ = episode.signals[f'{MOLMO_TASK_METRICS_SIGNAL}.receptacle_pos_displacement'][0]
+    np.testing.assert_array_equal(displacement, [0.0, 0.01, 0.0])
 
 
 @pytest.mark.timeout(60.0)

@@ -14,6 +14,7 @@ from threading import Lock
 from typing import Any
 
 import numpy as np
+from positronic_model_server.serialization import check_int_range
 from positronic_wire import roboarena as roboarena_wire
 
 from positronic.offboard.roboarena import RoboarenaClient
@@ -45,11 +46,7 @@ def wanted_keys(config: Mapping[str, Any]) -> frozenset[str]:
     if config[roboarena.NEEDS_WRIST_CAMERA]:
         keys.add(roboarena.WRIST_IMAGE)
     exteriors = config[roboarena.NUM_EXTERIOR_CAMERAS]
-    if not 0 <= exteriors <= EXTERIOR_IMAGES:
-        raise ValueError(
-            f'the roboarena server asks for {exteriors} exterior cameras, and this codec writes '
-            f'{EXTERIOR_IMAGES}; every observation would miss a key that server requires'
-        )
+    check_int_range(exteriors, 0, EXTERIOR_IMAGES, 'exterior cameras')
     keys.update(exterior_camera(i) for i in range(exteriors))
     if config[roboarena.NEEDS_SESSION_ID]:
         keys.add(roboarena.SESSION_ID)

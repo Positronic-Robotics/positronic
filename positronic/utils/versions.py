@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Generic, TypeVar
 
+from positronic.utils import check_positive_int
+
 T = TypeVar('T')
 
 
@@ -59,8 +61,7 @@ class Version(Generic[T]):
 
 def resolve_version(versions: Mapping[int, Version[T]], version: object, label: str) -> T:
     """Resolve exactly the requested version; no upgrade or fallback is implicit."""
-    if type(version) is not int or version < 1:
-        raise ValueError(f'{label} version must be a positive integer, got {version!r}')
+    version = check_positive_int(version, f'{label} version')
     if version not in versions:
         supported = [number for number, entry in versions.items() if entry.implementation is not None]
         raise ValueError(

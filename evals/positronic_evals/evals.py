@@ -9,26 +9,17 @@ The platform holds the definitions of the evals it does not publish.
 from __future__ import annotations
 
 from eval_vocabulary.episode import SEED
-from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, JsonValue, PositiveInt
-from pydantic_core import core_schema
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, PositiveInt
 
 from positronic_evals.labels import ABC_LABELER, MOLMO_LABELER
 from positronic_evals.scoring import MeanEpisodeScore, Scoring
+from positronic_evals.slug import Name
 
 
-class EvalRef(str):
+class EvalRef(Name, described_as='an eval name'):
     """The name of an eval the platform offers, as a validated `str`."""
 
     __slots__ = ()
-
-    def __new__(cls, value: str) -> EvalRef:
-        if not value or any(c.isspace() for c in value):
-            raise ValueError(f'not an eval name: {value!r}')
-        return super().__new__(cls, value)
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source: type, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
-        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 _DEFINITION_CONFIG = ConfigDict(extra='forbid', frozen=True)

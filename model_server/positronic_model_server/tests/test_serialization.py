@@ -113,3 +113,14 @@ def test_invalid_image_shape_is_rejected(shape):
 def test_invalid_quality_is_rejected(quality):
     with pytest.raises(ValueError, match='JPEG quality'):
         serialization.encode_jpeg(np.zeros((8, 12, 3), dtype=np.uint8), quality)
+
+
+@pytest.mark.parametrize('value', [-5, -3, -1])
+def test_integer_range_includes_both_bounds(value):
+    serialization.check_int_range(value, -5, -1)
+
+
+@pytest.mark.parametrize('value', [-6, 0, -3.0, '-3', True, None])
+def test_integer_range_rejects_other_values(value):
+    with pytest.raises(ValueError, match='offset must be an integer between -5 and -1'):
+        serialization.check_int_range(value, -5, -1, 'offset')

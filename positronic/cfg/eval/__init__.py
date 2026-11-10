@@ -1,4 +1,3 @@
-import math
 import random
 from dataclasses import replace
 from typing import Any
@@ -7,6 +6,7 @@ import configuronic as cfn
 
 from positronic.eval import Task
 from positronic.eval import keys as eval_keys
+from positronic.utils import check_finite_positive
 
 
 @cfn.config()
@@ -17,8 +17,8 @@ def unset():
 
 
 def require_finite_positive(arg: str, value: float | None) -> None:
-    if value is not None and (not math.isfinite(value) or value <= 0):
-        raise ValueError(f'--eval.{arg} must be finite and positive, got {value}')
+    if value is not None:
+        check_finite_positive(value, f'--eval.{arg}')
 
 
 def spec(**selection) -> dict[str, Any]:

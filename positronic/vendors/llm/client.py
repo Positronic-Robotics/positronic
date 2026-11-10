@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-import math
 import os
 import secrets
 import sys
@@ -20,6 +19,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
 from positronic import telemetry, telemetry_keys
+from positronic.utils import check_finite_positive
 
 
 class Client(NamedTuple):
@@ -60,8 +60,7 @@ class Endpoint:
         settings: ModelSettings | None = None,
         cache_breakpoints: bool = False,
     ):
-        if not math.isfinite(timeout) or timeout <= 0:
-            raise ValueError('timeout must be finite and positive')
+        check_finite_positive(timeout, 'timeout')
         # An `OpenAIResponsesModel` exists only after its module loads the SDK of the optional `llm-openai` extra.
         if cache_breakpoints and isinstance(model, Model) and 'pydantic_ai.models.openai' in sys.modules:
             from pydantic_ai.models.openai import OpenAIResponsesModel  # noqa: PLC0415

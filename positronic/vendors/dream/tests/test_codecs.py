@@ -56,6 +56,25 @@ def test_a_replan_of_the_client_passes_through():
     assert _encode(_obs())[policy_keys.REPLAN_NOW] is False
 
 
+def _prefix(rows: int, offset_s: float) -> dict:
+    actions = [{'row': index} for index in range(rows)]
+    prefix = {policy_keys.RTC.PREFIX_ACTIONS: actions, policy_keys.RTC.OBSERVATION_OFFSET_SEC: offset_s}
+    return {policy_keys.RTC.ACTION_PREFIX: prefix}
+
+
+def test_the_rows_ahead_are_the_rows_of_the_plan_that_play_after_the_observation():
+    # The row that plays now became due 0.02 s before the observation: 12 rows of 0.05 s end 0.58 s after it.
+    assert _encode(_obs(**_prefix(12, -0.02)))[dream.ROWS_AHEAD] == 12
+    assert _encode(_obs(**_prefix(12, -0.04)))[dream.ROWS_AHEAD] == 11
+    # A plan that starts 0.1 s after the observation plays 2 rows of hold first.
+    assert _encode(_obs(**_prefix(12, 0.1)))[dream.ROWS_AHEAD] == 14
+
+
+def test_no_rows_are_ahead_when_the_arm_holds_its_last_row_or_no_plan_comes():
+    assert _encode(_obs(**_prefix(0, -0.3)))[dream.ROWS_AHEAD] == 0
+    assert _encode(_obs())[dream.ROWS_AHEAD] == 0
+
+
 def test_each_camera_goes_at_dreams_frame_size_under_its_station_window():
     frames = _encode(_obs())[dream.FRAMES]
 

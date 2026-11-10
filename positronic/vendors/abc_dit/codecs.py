@@ -7,11 +7,13 @@ from typing import Any
 
 import configuronic as cfn
 import numpy as np
+from positronic_model_server.serialization import check_int_range
 
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
 from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
+from positronic.utils import check_rgb_frame
 from positronic.vendors import abc_dit
 
 # ABC's policies learn from 30 Hz recordings, and each action is one step of that clock.
@@ -65,10 +67,8 @@ class ActionPrefix:
     executed: int
 
     def __post_init__(self):
-        if not 1 <= self.length <= MAX_PREFIX_LENGTH:
-            raise ValueError(f'An action prefix holds 1 to {MAX_PREFIX_LENGTH} actions, got {self.length}')
-        if not self.length <= self.executed <= CHUNK_LENGTH - self.length:
-            raise ValueError(f'The prefix and the played actions must fit in one chunk of {CHUNK_LENGTH}, got {self}')
+        check_int_range(self.length, 1, MAX_PREFIX_LENGTH, 'length')
+        check_int_range(self.executed, self.length, CHUNK_LENGTH - self.length, 'executed')
 
 
 # The session metadata fields that name what the codec does: the crop box of each view, in fractions of the frame,
@@ -114,8 +114,7 @@ class AbcObservationCodec(Codec):
     @staticmethod
     def _channels_first_view(frame: Any, key: str, box: CropBox) -> np.ndarray:
         frame = np.asarray(frame)
-        if frame.ndim != 3 or frame.shape[2] != 3:
-            raise ValueError(f"Image '{key}' must be HWC with 3 channels, got {frame.shape}")
+        check_rgb_frame(frame, f"image '{key}'")
         width, height = VIEW_SIZE
         frame = image.transform_frame(box.crop(frame), width, height, mode=image.ResizeMode.PAD)
         return np.ascontiguousarray(frame.transpose(2, 0, 1))

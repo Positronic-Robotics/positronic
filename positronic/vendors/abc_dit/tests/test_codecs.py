@@ -132,7 +132,7 @@ def test_a_codec_with_an_action_prefix_tells_the_server_the_prefix_and_the_playe
     assert abc_dit.PREFIX_LENGTH not in without.encode(_obs()) and without.meta[codecs.PREFIX_LENGTH_META] == 0
 
 
-@pytest.mark.parametrize(('length', 'executed'), [(0, 16), (8, 16), (4, 3), (7, 24)])
+@pytest.mark.parametrize(('length', 'executed'), [(0, 16), (8, 16), (4, 3), (7, 24), (True, 16), (4.0, 16), (4, 16.0)])
 def test_an_action_prefix_the_checkpoint_did_not_train_on_or_that_overflows_a_chunk_is_refused(length, executed):
     with pytest.raises(ValueError):
         codecs.ActionPrefix(length=length, executed=executed)

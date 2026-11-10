@@ -76,6 +76,7 @@ from positronic.policy.processors import (
     Waypoint,
 )
 from positronic.policy.sequential import Sequential
+from positronic.policy.tests.fakes import DueAnswer
 from positronic.utils.versions import Deprecation, Version
 
 MOTOR = 'motor'
@@ -2620,28 +2621,6 @@ class _EndingModel:
         return chunk
 
 
-class _DueAnswer(Answer):
-    def __init__(self, runtime, value, due_ns):
-        self._runtime, self._value, self._due_ns = runtime, value, due_ns
-        self._elapsed_sec = (due_ns - runtime.time_ns) / 1e9
-
-    @property
-    def elapsed_sec(self):
-        if not self.done():
-            raise NotAnswered()
-        return self._elapsed_sec
-
-    @property
-    def execution_sec(self):
-        return self.elapsed_sec
-
-    def done(self):
-        return self._runtime.time_ns >= self._due_ns
-
-    def result(self):
-        return self._value
-
-
 def _answer_after(runtime, monkeypatch, *latencies_ns):
     """Make call k answer ``latencies_ns[k]`` after its submission; later calls take the last latency."""
     calls = []
@@ -2649,7 +2628,7 @@ def _answer_after(runtime, monkeypatch, *latencies_ns):
     def submit(function, *args):
         latency_ns = latencies_ns[min(len(calls), len(latencies_ns) - 1)]
         calls.append(latency_ns)
-        return _DueAnswer(runtime, function(*args), runtime.time_ns + latency_ns)
+        return DueAnswer(runtime, function(*args), runtime.time_ns + latency_ns)
 
     monkeypatch.setattr(runtime, 'submit', submit)
 

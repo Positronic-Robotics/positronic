@@ -8,22 +8,93 @@
 
     <title>Input Tracking</title>
     <script src="/three.min.js"></script>
+    <style>
+      body { margin: 0 auto; max-width: 720px; padding: 24px 20px; background: #fff; color: #1a1a1a;
+             font: 20px/1.5 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+      /* The canvas of core.js has the size of the window. The immersive session draws to its own layer, not to it */
+      body > canvas { display: none; }
+      h1 { margin: 0; font-size: 26px; font-weight: 650; }
+      header p { margin: 6px 0 0; color: #6b6b6b; font-size: 17px; }
+      /* The Enter button of webxr-button.js, with a system font: its own CSS loads the Karla font from the web */
+      header button.webvr-ui-button { display: flex; flex-direction: row-reverse; align-items: center;
+                                      justify-content: center; gap: 14px; width: 100%; height: auto; min-height: 88px;
+                                      margin: 24px 0; padding: 0 24px; border: 0; border-radius: 14px;
+                                      font: 650 28px/1 system-ui, -apple-system, sans-serif; letter-spacing: .06em;
+                                      color: #0a2540; background: #6bb8ff; }
+      header button.webvr-ui-button:hover { background: #57adff; }
+      header button.webvr-ui-button:active { background: #3f9ff5; }
+      header button.webvr-ui-button:focus-visible { outline: 3px solid #0a2540; outline-offset: 3px; }
+      header button.webvr-ui-button[disabled=true] { opacity: 1; background: #ececec; color: #8a8a8a;
+                                                     cursor: not-allowed; }
+      header .webvr-ui-title { position: static; padding: 0; font-size: inherit; color: inherit; }
+      header .webvr-ui-logo { position: static; width: auto; height: auto; }
+      header .webvr-ui-svg, header .webvr-ui-svg-error { fill: currentColor; margin: 0; width: 1.4em; height: auto; }
+      #cameras { display: none; border-top: 1px solid #e5e5e5; padding-top: 20px; }
+      #cameras.cameras--shown { display: block; }
+      #cameras h2 { margin: 0 0 6px; font-size: 15px; font-weight: 600; letter-spacing: .08em;
+                    text-transform: uppercase; color: #8a8a8a; }
+      #phase { margin: 0 0 16px; font-size: 24px; font-weight: 600; }
+      #phase::before { content: ''; display: inline-block; width: 12px; height: 12px; margin: 0 10px 2px 0;
+                       border-radius: 50%; background: #c4c4c4; vertical-align: middle; }
+      #phase[data-phase=running]::before { background: #1f9d55; }
+      .camera { display: flex; align-items: center; gap: 14px; min-height: 56px; padding: 0 4px;
+                border-bottom: 1px solid #eee; color: #8a8a8a; }
+      .camera:first-child { border-top: 1px solid #eee; }
+      .camera:has(.dot--live) { color: #1a1a1a; }
+      .camera--shown { font-weight: 650; }
+      .camera-tag { margin-left: auto; font-size: 15px; font-weight: 400; color: #6b6b6b; }
+      .dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid #c4c4c4; box-sizing: border-box;
+             flex: none; }
+      .dot--live { background: #1f9d55; border-color: #1f9d55; }
+      #camera-hint { margin: 16px 0 0; color: #6b6b6b; font-size: 16px; }
+    </style>
   </head>
   <body>
     <header>
-      <details open>
-        <summary>Input Tracking</summary>
-        <p>
-          This application tracks user input in an immersive AR environment using WebXR
-          and sends the data to a server.
-        </p>
+      <h1>Input Tracking</h1>
+      <p>
+        This application tracks user input in an immersive AR environment using WebXR
+        and sends the data to a server.
+      </p>
     </header>
+    <section id="cameras">
+      <h2>Cameras</h2>
+      <p id="phase"></p>
+      <div id="camera-list"></div>
+      <p id="camera-hint">
+        A green dot: the run sent images of this camera in the last 30 s. In the headset, Y on the left controller: a
+        press shows the next camera, and a hold of 1 s cycles the panel (on black, only the text over the room, hidden).
+      </p>
+    </section>
     <script type="module">
-        import { WebXRVideoPlayer } from './video-player.js';
+        import { PANEL_MODE, WebXRVideoPlayer } from './video-player.js';
         import { startXRApp } from '/core.js';
+
+        // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
+        const ROUTES = { state: '/state', input: '/input' };
+        const STATE_FIELD = {
+          phase: 'phase', control: 'control', cameras: 'cameras', live: 'live', shown: 'shown', chosen: 'chosen',
+        };
+        // The fields of an input: the camera of the headset, a name or null for the camera of the session; and whether
+        // the view comes with no camera image, so that the clear panel shows only the text
+        const INPUT_FIELD = { headsetCamera: 'headset_camera', textOnly: 'headset_text_only' };
+        const PHASE_TEXT = {
+          idle: 'Waiting for a trial', ready_wait: 'A trial waits for Ready', running: 'Trial running',
+          ended: 'The trial ended',
+        };
+        // The Y button of the left controller: a press shows the next camera, a hold cycles the panel of the headset.
+        // A teleoperator changes the camera often and the panel about once a trial
+        const Y_BUTTON = 5;
+        const Y_HOLD_MS = 1000;
+        const STATE_POLL_MS = 500;
 
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
+        // The `performance.now()` instant of the Y press that is down, and whether its hold cycled the panel
+        let yDownAt = null;
+        let yHeld = false;
+        // The last page state, for the camera that a Y press shows next
+        let lastState = {};
 
         function initControllerAxes(scene) {
           // Create axis visualizers for both controllers
@@ -114,9 +185,99 @@
               controllerAxes[hand].visible = false;
             }
           }
+          const left = controllers.left;
+          const yPressed = left !== null && left.buttons.length > Y_BUTTON && left.buttons[Y_BUTTON] > 0.5;
+          const now = performance.now();
+          if (yPressed && yDownAt === null) {
+            yDownAt = now;
+            yHeld = false;
+          } else if (yPressed && !yHeld && now - yDownAt >= Y_HOLD_MS) {
+            yHeld = true;
+            if (videoPlayer) sendInput({ [INPUT_FIELD.textOnly]: videoPlayer.cycleMode() === PANEL_MODE.CLEAR_BLACK });
+          } else if (!yPressed && yDownAt !== null) {
+            if (!yHeld) showNextCamera();
+            yDownAt = null;
+          }
           if (videoPlayer) videoPlayer.update();
           return controllers;
         }
+
+        function cameraRow(name, live, shown, chosen) {
+          const row = document.createElement('div');
+          row.className = shown ? 'camera camera--shown' : 'camera';
+          const dot = document.createElement('span');
+          dot.className = live ? 'dot dot--live' : 'dot';
+          row.append(dot, name);
+          if (shown) {
+            const tag = document.createElement('span');
+            tag.className = 'camera-tag';
+            tag.textContent = chosen ? 'in the headset' : 'in the headset (of the session)';
+            row.append(tag);
+          }
+          return row;
+        }
+
+        // Show the cameras of the page state. A state with no cameras field comes from a run with no teleop service.
+        function showCameras(state) {
+          const panel = document.getElementById('cameras');
+          const names = state[STATE_FIELD.cameras];
+          panel.classList.toggle('cameras--shown', Array.isArray(names));
+          if (!Array.isArray(names)) return;
+          const phase = document.getElementById('phase');
+          phase.textContent = PHASE_TEXT[state[STATE_FIELD.phase]] || '';
+          phase.dataset.phase = state[STATE_FIELD.phase] || '';
+          const live = state[STATE_FIELD.live] || [];
+          const shown = state[STATE_FIELD.shown];
+          const chosen = state[STATE_FIELD.chosen] ?? null;
+          const list = document.getElementById('camera-list');
+          list.replaceChildren(
+            ...names.map(name => cameraRow(name, live.includes(name), name === shown, chosen === name)),
+          );
+          if (names.length === 0) {
+            const none = document.createElement('p');
+            none.textContent = 'No cameras: start `positronic teleop` with --cameras, or name them in the plan.';
+            list.append(none);
+          }
+        }
+
+        async function sendInput(input) {
+          try {
+            await fetch(ROUTES.input, {
+              method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+            });
+          } catch (error) {
+            console.error('Cannot send the input:', error);
+          }
+          pollState();
+        }
+
+        function choose(name) {
+          sendInput({ [INPUT_FIELD.headsetCamera]: name });
+        }
+
+        // Show the camera after the one that the headset shows, among the cameras whose images come now
+        function showNextCamera() {
+          const live = lastState[STATE_FIELD.live] || [];
+          if (live.length === 0) return;
+          const next = live[(live.indexOf(lastState[STATE_FIELD.shown]) + 1) % live.length];
+          choose(next);
+        }
+
+        async function pollState() {
+          try {
+            const response = await fetch(ROUTES.state, { cache: 'no-store' });
+            if (response.ok) {
+              lastState = await response.json();
+              showCameras(lastState);
+            }
+          } catch (error) {
+            console.error('Cannot read the state:', error);
+          }
+        }
+
+        setInterval(pollState, STATE_POLL_MS);
+        // A page that loads shows the panel on black, so the view comes with its camera
+        sendInput({ [INPUT_FIELD.textOnly]: false });
 
         // Start the XR application and WebSocket connection using shared core
         startXRApp({ onInit, onFrame });

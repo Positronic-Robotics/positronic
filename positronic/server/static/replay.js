@@ -62,6 +62,8 @@
 //   - A file that answers 404 shows "gone".
 //   - A file that answers 202 shows "building". The element asks for it again after its `Retry-After`.
 //   - The 3D replay plays in the rerun viewer beside this file. The viewer page adds no browser history entry.
+//   - A viewer that has started stays between episodes: each next 3D replay opens in it, and it drops the one
+//     before.
 //   - A screen under 961 px wide plays the row's `phone` video in place of its cameras and its 3D replay.
 //   - On such a screen, the dock covers the page.
 //   - The longest camera that is ready leads the controls. The other cameras follow it.

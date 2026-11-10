@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from PIL import Image as PilImage
 
+from positronic.utils import check_rgb_frame
 from positronic.utils.lazy import LazySequence
 
 from ..signal import Signal
@@ -70,8 +71,7 @@ def resize(
     interp_flag = int(interpolation)
 
     def per_frame(img: np.ndarray) -> np.ndarray:
-        if img.ndim != 3 or img.shape[2] != 3:
-            raise ValueError(f'Expected frame shape (H, W, 3), got {img.shape}')
+        check_rgb_frame(img)
         return cv2.resize(img, dsize=(width, height), interpolation=interp_flag)
 
     def fn(x: Sequence[np.ndarray]) -> Sequence[np.ndarray]:

@@ -5,17 +5,18 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from av.error import FFmpegError
 from eval_vocabulary.episode import LEGACY_FRAMES_TIME_COLUMN, LEGACY_TIME_COLUMN, TIMESTAMP_COLUMN_PREFIX
 
 from pimm.time import RECEIVED_WALL
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
-from positronic.dataset.tests.test_video import assert_frames_equal, create_frame
+from positronic.dataset.tests.test_video import FakeEncoder, assert_frames_equal, create_frame
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY, VALUE_COLUMN
-from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, LibavEncoder
+from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, FrameSize, LibavEncoder
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
 
@@ -382,6 +383,52 @@ class TestEpisodeVideoIntegration:
         assert snap['a'] == 2
         cam_frame = snap['cam']
         assert_frames_equal(cam_frame, create_frame(10), tolerance=25)
+
+    def test_an_encoder_opened_for_a_frame_size_takes_the_frames_of_that_size(self, tmp_path):
+        encoder = FakeEncoder()
+        sizes = {'cam': FrameSize(6, 8)}
+        with DiskEpisodeWriter(tmp_path / 'ep', video_encoder=encoder, video_frame_sizes=sizes) as w:
+            assert encoder.opened == [(8, 6, 100, 30)]
+            for i in range(3):
+                w.append('cam', create_frame(i, (6, 8, 3)), Time(**{RECORDED_TIME: 1000 * (i + 1)}))
+
+        assert encoder.opened == [(8, 6, 100, 30)]
+        assert encoder.sessions[0].writes == [(0, 0), (1, 1), (2, 2)]
+        assert encoder.sessions[0].ended == 'finish'
+        assert w.video_frame_sizes == sizes
+
+    @pytest.mark.parametrize('first', [create_frame(0, (4, 4, 3)), 7], ids=['another size', 'not a frame'])
+    def test_a_first_value_that_does_not_fit_the_open_encoder_closes_it(self, tmp_path, first):
+        encoder = FakeEncoder()
+        with DiskEpisodeWriter(tmp_path / 'ep', video_encoder=encoder, video_frame_sizes={'cam': FrameSize(6, 8)}) as w:
+            w.append('cam', first, Time(**{RECORDED_TIME: 1000}))
+
+        assert encoder.sessions[0].ended == 'abort'
+        if isinstance(first, np.ndarray):
+            assert encoder.opened == [(8, 6, 100, 30), (4, 4, 100, 30)]
+            assert w.video_frame_sizes == {'cam': FrameSize(4, 4)}
+        else:
+            assert DiskEpisode(w.path)['cam'][0] == (7, Time(**{RECORDED_TIME: 1000}))
+
+    @pytest.mark.parametrize('end', ['close', 'abort'])
+    def test_an_encoder_opened_for_a_signal_that_gets_no_frame_leaves_no_file(self, tmp_path, end):
+        encoder = FakeEncoder()
+        path = tmp_path / 'ep'
+        with DiskEpisodeWriter(path, video_encoder=encoder, video_frame_sizes={'cam': FrameSize(6, 8)}) as w:
+            w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
+            if end == 'abort':
+                w.abort()
+
+        assert encoder.sessions[0].ended == 'abort'
+        if end == 'close':
+            assert set(DiskEpisode(path).signals) == {'a'}
+            assert not list(path.glob('cam.*'))
+
+    def test_an_encoder_that_fails_to_open_leaves_no_episode(self, tmp_path):
+        encoder = LibavEncoder(options=(('preset', 'no-such-preset'),))
+        with pytest.raises(FFmpegError):
+            DiskEpisodeWriter(tmp_path / 'ep', video_encoder=encoder, video_frame_sizes={'cam': FrameSize(64, 64)})
+        assert not (tmp_path / 'ep').exists()
 
 
 class TestCoreEpisodeTime:

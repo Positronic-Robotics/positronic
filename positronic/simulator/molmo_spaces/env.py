@@ -239,11 +239,12 @@ class MolmoSpacesEnv(EnvProtocol):
             token[mapping.WITH_RIGHT_SHOULDER],
             token.get(mapping.WITH_OBJECT_IMAGE_POINTS, True),
         )
-        obs, _info = self._task.reset()  # One observation dict per environment.
+        obs, infos = self._task.reset()  # One observation dict and one info dict per environment.
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
+        metrics = self._task_metrics(self._task.get_reward(), infos)
         return {
-            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs, arm_error=False)}],
+            protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs, metrics, arm_error=False)}],
             protocol.FRAME_META: self._meta,
             protocol.FRAME_ROBOT_META: {},  # The client supplies the robot model through static_meta.
             protocol.FRAME_CONTROL_DT: self._control_dt,
@@ -257,16 +258,17 @@ class MolmoSpacesEnv(EnvProtocol):
             wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
-        obs, _reward, _term, _trunc, _infos = self._task.step({
+        obs, rewards, _term, _trunc, infos = self._task.step({
             mapping.MOLMO_ARM_GROUP: measured if arm is None else arm,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
         })
+        metrics = self._task_metrics(rewards, infos)
         success = bool(self._task.judge_success())
         done = success or bool(self._task.is_done())
         return {
             protocol.SLOTS: [
                 {
-                    protocol.FRAME_OBS: self._observe(obs[0], arm_error=arm is None),
+                    protocol.FRAME_OBS: self._observe(obs[0], metrics, arm_error=arm is None),
                     protocol.FRAME_DONE: done,
                     protocol.FRAME_SUCCESS: success,
                 }
@@ -298,7 +300,12 @@ class MolmoSpacesEnv(EnvProtocol):
         )
         return None if solution is None else solution[mapping.MOLMO_ARM_GROUP]
 
-    def _observe(self, env_obs: dict[str, Any], *, arm_error: bool) -> dict[str, Any]:
+    @staticmethod
+    def _task_metrics(rewards: np.ndarray, infos: list[dict[str, Any]]) -> dict[str, Any]:
+        """The first environment's reward and info entries, as signals."""
+        return protocol.numeric_signals({**infos[0], mapping.TASK_METRIC_REWARD: rewards[0]})
+
+    def _observe(self, env_obs: dict[str, Any], metrics: dict[str, Any], *, arm_error: bool) -> dict[str, Any]:
         """Raw observations, including the grasp-site pose in the arm base frame."""
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
         scene = self._robot_view.mj_data
@@ -314,6 +321,7 @@ class MolmoSpacesEnv(EnvProtocol):
                 mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
             mapping.OBS_SIM_STATE: mujoco_state.integration_state(scene.model, scene),
+            mapping.OBS_TASK_METRICS: metrics,
             protocol.OBS_ARM_ERROR: arm_error,
         }
         for name in self._camera_names:

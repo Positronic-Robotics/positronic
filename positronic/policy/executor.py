@@ -15,6 +15,7 @@ from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Answer, NotAnswered, QueueFull, Runtime
+from positronic.utils import check_positive_int
 
 P = ParamSpec('P')
 T = TypeVar('T')
@@ -128,8 +129,7 @@ class ExecutionRuntime(Runtime):
     """Own workers and a call limit while sharing the enclosing runtime's episode state."""
 
     def __init__(self, runtime: Runtime, *, max_in_flight: int):
-        if type(max_in_flight) is not int or max_in_flight < 1:
-            raise ValueError('max_in_flight must be a positive integer')
+        check_positive_int(max_in_flight, 'max_in_flight')
         self._runtime = runtime
         self._limit = max_in_flight
         self._workers = ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix='policy-fn')

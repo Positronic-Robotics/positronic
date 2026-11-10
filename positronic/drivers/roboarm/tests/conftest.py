@@ -75,6 +75,7 @@ def _install_vendor_stub() -> None:
         SafetyControllerError=type('SafetyControllerError', (RuntimeError,), {}),
         ProgrammingModeError=ProgrammingModeError,
         ControlHeldElsewhere=ControlHeldElsewhere,
+        SELF_TEST_LEAD_SEC=3600,
     )
 
     package = types.ModuleType(PACKAGE)
