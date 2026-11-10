@@ -9,7 +9,6 @@ The teleoperator uses the buttons of the right controller.
 
 import _thread
 import logging
-import math
 import os
 import stat
 import threading
@@ -363,9 +362,11 @@ class TeleopService:
 
     def cameras(self) -> CameraState:
         with self._changed:
-            names = tuple(self._images) or self.station_cameras or tuple(self._seen)
             now = time.monotonic()
-            live = tuple(name for name in names if now - self._seen.get(name, -math.inf) < self.LIVE_SEC)
+            recent = tuple(name for name, seen_at in self._seen.items() if now - seen_at < self.LIVE_SEC)
+            # Between trials: the cameras of the station, and the cameras of the last run that are still live
+            names = tuple(self._images) or tuple(dict.fromkeys((*self.station_cameras, *recent)))
+            live = tuple(name for name in names if name in recent)
             return CameraState(names, live, self._shown_camera(), self._chosen_camera)
 
     def choose_camera(self, name: str | None) -> None:

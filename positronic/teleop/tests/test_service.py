@@ -830,6 +830,20 @@ def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, c
     assert running[height - 48 : height - 30].any()
 
 
+def test_a_camera_of_the_run_that_the_station_does_not_name_stays_listed_and_live_between_trials(socket_path, connect):
+    query = session_query(cameras=[keys.EXTERIOR_IMAGE])
+    image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE]) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.EXTERIOR_IMAGE: image})
+        connection.frame({**FRAME_REQUEST, keys.EXTERIOR_IMAGE: image})
+        connection.close()
+        _until_cleared(service)
+        cameras = service.cameras()
+    assert cameras.names == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+    assert cameras.live == (keys.EXTERIOR_IMAGE,)
+
+
 def test_a_camera_stays_live_between_trials_and_not_longer_than_the_live_window(socket_path, connect, monkeypatch):
     """Images come only while a trial runs, when the teleoperator is in the headset and does not see the page."""
     query = session_query(cameras=[keys.WRIST_IMAGE])
