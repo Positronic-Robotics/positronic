@@ -39,8 +39,9 @@ of one cleanly checked. Each needs its rule and a way to tell which code changed
 not know how that code came to be: a cold-headed reviewer answering one question, not a colleague who
 sat through the reasoning.
 
-Every prompt is the same four parts: the rule pasted whole and verbatim, the scope Step 1 settled, the
-return format below, and the instructions that follow it. Nothing else goes in.
+Every prompt is the same five parts: the `[check-rules checker]` marker line below, the rule pasted
+whole and verbatim, the scope Step 1 settled, the return format below, and the instructions that follow
+it. Nothing else goes in.
 
 Whatever you would add comes from knowing the change, and that knowledge is what kept you from seeing
 the violation yourself. Emphasis, an example, a "pay attention to", a scope trimmed to the lines you
