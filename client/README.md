@@ -90,6 +90,8 @@ The `packaged` mode uses the organization's configured invoice terms. The `pay_a
 `PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
 Reuse the same key to read the same owned purchase after a lost response. A new purchase requires the billing spender role.
 The configured package fixes its credit units, currency, and amount in currency minor units.
+A personal organization can buy any whole number of credits N between the smallest and the largest purchase: the package id is `credits-N`.
+The account response of such an organization lists one example package, `credits-20`.
 `currency` is the lowercase ISO 4217 code used to verify the Stripe price and payment.
 For example, `amount_minor=17` means 17 yen for `jpy`, or 0.17 dollars for `usd`.
 The currency does not change the package's credit units.
@@ -105,6 +107,7 @@ An organization member can read purchase history. A reviewed or credited purchas
 ```bash
 positronic account credits account --org=acme
 positronic account credits buy --org=acme --package-id=<configured-package> --transaction-key=<stable-key>
+positronic account credits buy --org=acme --package-id=credits-50 --transaction-key=<stable-key>
 positronic account credits get-purchase --id=<purchase-id>
 positronic account credits list-purchases --org=acme
 positronic account credits list-purchases --org=acme --limit=50 --after='"last-purchase-id"'
