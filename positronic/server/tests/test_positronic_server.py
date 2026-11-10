@@ -8,6 +8,7 @@ from collections import namedtuple
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import psutil
 import pytest
@@ -1021,13 +1022,13 @@ def _dataset_info(*statics: dict, table=None, summary_column: str | None = OUTCO
         return TestClient(app).get('/api/dataset_info').json()
 
 
-def _summary_of(*statics: dict, table=None) -> dict:
-    summary = _dataset_info(*statics, table=table)[DATASET_SUMMARY]
+def _summary_of(*statics: dict, table=None, summary_column: str = OUTCOME) -> dict:
+    summary = _dataset_info(*statics, table=table, summary_column=summary_column)[DATASET_SUMMARY]
     assert summary is not None
     return summary
 
 
-def _counts(*pairs: tuple[str, int]) -> list[dict]:
+def _counts(*pairs: tuple[Any, int]) -> list[dict]:
     """The `counts` of a `ColumnSummary` as the route sends them."""
     return [asdict(ValueCount(value, count)) for value, count in pairs]
 
@@ -1081,3 +1082,24 @@ def test_a_summary_column_that_is_no_column_of_the_episode_table_is_refused():
             layout=None,
             summary_column=OUTCOME,
         )
+
+
+def test_the_header_counts_a_formatted_column_as_the_table_cell_shows_it():
+    table = {OUTCOME: ColumnConfig(label='Items', format='%d items')}
+    summary = _summary_of({OUTCOME: 2}, {OUTCOME: 2}, {OUTCOME: 1}, table=table)
+
+    assert _sent_counts(summary) == _counts(([2, '2 items'], 2), ([1, '1 items'], 1))
+
+
+def test_the_header_counts_a_column_of_lists_and_dicts():
+    table = {OUTCOME: ColumnConfig(label='Tags')}
+    summary = _summary_of({OUTCOME: ['a', 'b']}, {OUTCOME: ['a', 'b']}, {OUTCOME: {'k': 1}}, table=table)
+
+    assert _sent_counts(summary) == _counts((['a', 'b'], 2), ({'k': 1}, 1))
+
+
+def test_the_header_counts_a_synthetic_column_from_the_value_the_table_computes():
+    table = {'__index__': ColumnConfig(label='#')}
+    summary = _summary_of({OUTCOME: 'Fail'}, {OUTCOME: 'Fail'}, table=table, summary_column='__index__')
+
+    assert _sent_counts(summary) == _counts((0, 1), (1, 1))

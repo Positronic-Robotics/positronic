@@ -11,7 +11,7 @@ import socket
 import subprocess
 import tempfile
 import threading
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field, fields
@@ -81,6 +81,8 @@ class PageConfig:
 
 # The app state's key for the `PageConfig` every page reads.
 _PAGE_CONFIG_KEY = 'pages'
+# The app state's key for the episode-table column whose values the page header counts.
+_SUMMARY_COLUMN_KEY = 'summary_column'
 
 # Global app state
 app_state: dict[str, object] = {
@@ -94,7 +96,7 @@ app_state: dict[str, object] = {
     'layout': None,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
-    'summary_column': None,
+    _SUMMARY_COLUMN_KEY: None,
     _PAGE_CONFIG_KEY: PageConfig(),
 }
 
@@ -605,7 +607,7 @@ async def api_dataset_info():
 
 def _dataset_summary(ds: Dataset) -> dict | None:
     """The summary column's counts over `ds`, read once per dataset and table settings; None with no summary column."""
-    key = cast(str | None, app_state['summary_column'])
+    key = cast(str | None, app_state[_SUMMARY_COLUMN_KEY])
     if key is None:
         return None
     cache_key = ('dataset_summary',)
@@ -719,23 +721,30 @@ class ColumnSummary:
 
 
 def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
-    """The value each episode shows in the `key` column, with its count.
+    """The cell each episode shows in the `key` column of the episode table, with its count.
 
-    An episode with no value counts as the column's default; with no default, it is not counted. The values a
-    renderer lists come first, in its order, and the others follow by count.
+    A value is the cell the episode table sends, so it carries the column's format and default. An episode whose
+    cell is empty is not counted. The values a renderer lists come first, in its order, and the others follow by
+    count.
     """
-    stored = (episode.static.get(key) for episode in ds)
-    # As a table cell reads it: a None value shows the default.
-    shown = (cfg.default if value is None else value for value in stored)
-    counts = Counter(value for value in shown if value is not None)
+    (column,), formatters, defaults = parse_table_cfg({key: cfg})
+    rows = get_episodes_list(
+        (episode_table_row(i, episode) for i, episode in enumerate(ds)), [key], formatters, defaults
+    )
+    counted: dict[str, ValueCount] = {}
+    for _, (cell,), *_ in rows:
+        if cell is not None:
+            # A cell can be a list or a dict, so it is counted by its JSON spelling.
+            spelling = json.dumps(cell, sort_keys=True, default=str)
+            previous = counted.get(spelling)
+            counted[spelling] = ValueCount(cell, previous.count + 1 if previous else 1)
     listed = {filter_spelling(value): rank for rank, value in enumerate(cfg.renderer.options if cfg.renderer else ())}
 
-    def place(item: tuple[Any, int]) -> tuple[int, int, str]:
-        value, count = item
-        return listed.get(filter_spelling(value), len(listed)), -count, str(value)
+    def place(item: tuple[str, ValueCount]) -> tuple[int, int, str]:
+        spelling, entry = item
+        return listed.get(filter_spelling(entry.value), len(listed)), -entry.count, spelling
 
-    (column,), _, _ = parse_table_cfg({key: cfg})
-    return ColumnSummary(column, [ValueCount(value, count) for value, count in sorted(counts.items(), key=place)])
+    return ColumnSummary(column, [entry for _, entry in sorted(counted.items(), key=place)])
 
 
 def parse_table_cfg(table_cfg: TableConfig) -> tuple:
@@ -774,6 +783,19 @@ def filter_spelling(value: object) -> str | None:
     return None if value is None else str(value)
 
 
+def episode_table_row(index: int, episode: Episode) -> dict:
+    """The mapping the episode table reads its cells from: the static values and the synthetic columns."""
+    duration = None
+    timeline = sampled_duration_timeline(episode)
+    if timeline is not None:
+        # Count from the first sample of any stream. `Episode.bounds` starts at the latest first sample.
+        bounds = episode._signal_bounds_on((timeline,))
+        first = min(bound.start[timeline] for bound in bounds)
+        last = max(bound.finish[timeline] for bound in bounds)
+        duration = (last - first) / 1e9
+    return {'__episode_index__': index, '__meta__': episode.meta, '__duration__': duration, **episode.static}
+
+
 @app.get(f'/{API_ROUTE}/episodes')
 @require_dataset
 async def api_episodes(request: Request):
@@ -789,18 +811,7 @@ async def api_episodes(request: Request):
     def matches(ep: Episode) -> bool:
         return all(filter_spelling(ep.static.get(k)) == v for k, v in filters.items())
 
-    def table_row(i: int, ep: Episode) -> dict:
-        duration = None
-        timeline = sampled_duration_timeline(ep)
-        if timeline is not None:
-            # Count from the first sample of any stream. `Episode.bounds` starts at the latest first sample.
-            bounds = ep._signal_bounds_on((timeline,))
-            first = min(bound.start[timeline] for bound in bounds)
-            last = max(bound.finish[timeline] for bound in bounds)
-            duration = (last - first) / 1e9
-        return {'__episode_index__': i, '__meta__': ep.meta, '__duration__': duration, **ep.static}
-
-    ep_it = (table_row(i, ep) for i, ep in enumerate(ds) if matches(ep))
+    ep_it = (episode_table_row(i, ep) for i, ep in enumerate(ds) if matches(ep))
     episodes = get_episodes_list(ep_it, list(config), formatters=formatters, defaults=defaults)
     result = {'columns': columns, 'episodes': episodes}
     _api_cache[cache_key] = result
@@ -1171,7 +1182,7 @@ def configure_tables(
     app_state['max_hz'] = max_hz
     app_state['layout'] = layout
     app_state['home_page'] = home_page
-    app_state['summary_column'] = summary_column
+    app_state[_SUMMARY_COLUMN_KEY] = summary_column
     _api_cache.clear()
 
 
