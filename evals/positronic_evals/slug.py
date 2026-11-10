@@ -17,11 +17,11 @@ class Name(str):
     """A nonempty name without whitespace, preserving its concrete str subtype.
 
     A refusal reads `not <described_as>: <value>`. A subclass states how a person names its kind, with the article:
-    `class EvalRef(Name, described_as='an eval name')`. A subclass that states none is named by its class.
+    `class EvalRef(Name, described_as='an eval name')`. `Name` and a subclass that states none are named by their class.
     """
 
     __slots__ = ()
-    _described_as: ClassVar[str]
+    _described_as: ClassVar[str] = 'a Name'
 
     def __init_subclass__(cls, described_as: str | None = None, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
