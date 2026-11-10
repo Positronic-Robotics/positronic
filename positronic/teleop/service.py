@@ -211,11 +211,14 @@ class TeleopService:
         hold_sec: float,
         press_threshold: float = 0.6,
         auth_token: str | None = None,
+        controller_axes: bool = True,
     ):
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
             check_finite_positive(value, name)
         self._binds = served_address
         self._auth_token = auth_token
+        # Count the moves of the teleoperator in the axes of the controller (see `Tracker`)
+        self.controller_axes = controller_axes
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
         self._buttons = ButtonMap(hold_sec, press_threshold)
@@ -416,7 +419,7 @@ class TeleopService:
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
             ready, self._phase = self._ready, Phase.RUNNING if self._ready is ReadyAnswer.READY else Phase.IDLE
             if ready is ReadyAnswer.READY:
-                self._tracker = Tracker(operator)
+                self._tracker = Tracker(operator, self.controller_axes)
         if ready is ReadyAnswer.READY:
             return
         if self._stopping or cancelled.is_set():

@@ -2,18 +2,31 @@ import logging
 from enum import Enum
 from typing import Any
 
+import numpy as np
+
 from positronic import geom
+
+# The axes of a controller in the frame of the headset, as a teleoperator holds it: x to the right, y back to the
+# teleoperator, z down. A quarter turn about the x axis; checked by an operator on the CRON stand.
+CONTROLLER_AXES = geom.Rotation.from_rotvec(np.array([np.pi / 2, 0.0, 0.0]))
 
 
 class Tracker:
     """Map a hand pose to a robot pose while control is on. Control starts from the robot pose, so it does not jump.
 
     With no ``operator_position``, control is always on and the hand pose is the robot pose (UMI mode).
+
+    With ``controller_axes``, a shift or a turn of the hand counts in the axes that the controller had when control came
+    on, as ``CONTROLLER_AXES`` puts them, and not in the axes of the headset. So the way the operator faces does not
+    count. Without it, a shift right in the room is a shift right of the robot, whichever way the controller points.
     """
 
-    def __init__(self, operator_position: geom.Transform3D | None):
+    def __init__(self, operator_position: geom.Transform3D | None, controller_axes: bool = True):
         self._operator_position = operator_position
+        self._controller_axes = controller_axes
         self._offset = geom.Transform3D()
+        self._robot_start = geom.Transform3D()
+        self._hand_start = geom.Transform3D()
         self.on = self.is_umi_mode
 
     @property
@@ -32,6 +45,8 @@ class Tracker:
         self._offset = geom.Transform3D(
             -teleop_t.translation + robot_pos.translation, teleop_t.rotation.inv * robot_pos.rotation
         )
+        # Copies: a driver can hand out views of the state that it writes again at each tick
+        self._robot_start, self._hand_start = robot_pos.copy(), hand_pos.copy()
 
     def turn_off(self):
         if self.is_umi_mode:
@@ -45,6 +60,13 @@ class Tracker:
         if operator is None:
             return tracker_pos
 
+        if self._controller_axes:
+            moved = self._hand_start.inv * tracker_pos
+            axes = operator.rotation * CONTROLLER_AXES
+            turn = axes * moved.rotation * axes.inv
+            return geom.Transform3D(
+                self._robot_start.translation + axes(moved.translation), turn * self._robot_start.rotation
+            )
         teleop_t = operator * tracker_pos * operator.inv
         return geom.Transform3D(
             teleop_t.translation + self._offset.translation, teleop_t.rotation * self._offset.rotation

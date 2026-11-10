@@ -64,8 +64,11 @@ class DataCollectionController(pimm.ControlSystem):
         output_path: Path | None = None,
         static_meta: dict | None = None,
         metadata_getter: Callable[[], dict] | None = None,
+        controller_axes: bool = True,
     ):
         self.operator_position = operator_position
+        # Count the moves of the operator in the axes of the controller (see `Tracker`)
+        self.controller_axes = controller_axes
         self._output_path = output_path
         self._nominal_joints = np.asarray(nominal_joints, dtype=np.float64)
         # A station that measured no jitter sends the arm exactly to its nominal.
@@ -133,7 +136,7 @@ class DataCollectionController(pimm.ControlSystem):
         abort_wav_path = sounds / 'recording-has-been-aborted.wav'
         error_wav_path = sounds / 'error-occurred.wav'
 
-        tracker = Tracker(self.operator_position)
+        tracker = Tracker(self.operator_position, self.controller_axes)
         button_handler = ButtonHandler()
 
         recording = False
@@ -250,6 +253,7 @@ def main(
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
+    controller_axes: bool = True,
 ):
     """Runs data collection in real hardware."""
     if (robot_arm is not None) != (len(nominal_joints) > 0):
@@ -279,7 +283,12 @@ def main(
         output_path = sync_recording_dir(output_dir)
         utils.save_run_metadata(output_path, patterns=['*.py', '*.toml'])
     data_collection = DataCollectionController(
-        operator_position.value, nominal_joints, joints_spread, output_path=output_path, static_meta=static_meta
+        operator_position.value,
+        nominal_joints,
+        joints_spread,
+        output_path=output_path,
+        static_meta=static_meta,
+        controller_axes=controller_axes,
     )
 
     with pimm.World() as world:
@@ -332,6 +341,7 @@ def main_sim(
     operator_position: OperatorPosition = OperatorPosition.FRONT,
     task: str | None = None,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
+    controller_axes: bool = True,
 ):
     """Runs data collection in simulator."""
 
@@ -353,6 +363,7 @@ def main_sim(
         output_path=output_path,
         static_meta=static_meta,
         metadata_getter=lambda: {k: v.tolist() for k, v in sim.save_state().items()},
+        controller_axes=controller_axes,
     )
 
     with pimm.World(virtual_time=True) as world:

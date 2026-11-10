@@ -170,6 +170,7 @@ def serve(
     press_threshold: float = 0.6,
     view_fps: float = 30.0,
     open_window: bool = True,
+    controller_axes: bool = True,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
@@ -178,6 +179,8 @@ def serve(
     ``AUTH_TOKEN_ENV``, and serves open when that is unset. A run sets the parameters of its session (``SessionParams``)
     in the query of its address.
     ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
+    ``controller_axes`` counts the moves of the teleoperator in the axes of the controller, so the way the teleoperator
+    faces does not count. ``--controller_axes=False`` counts them in the axes of the headset.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
@@ -193,7 +196,13 @@ def serve(
                 served_address.port,
             )
     service = TeleopService(
-        served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token
+        served_address,
+        ready_limit,
+        silence_limit,
+        hold_sec,
+        press_threshold,
+        auth_token=auth_token,
+        controller_axes=controller_axes,
     )
     headset = _Headset(service, view_fps)
     text = (
