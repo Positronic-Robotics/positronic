@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum, StrEnum
 from functools import wraps
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -728,14 +728,16 @@ SUMMARY_VALUE_TYPES = (str, int, float, bool)
 def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
     """The value each episode holds in the `key` column of the episode table, with its count.
 
-    An absent value counts as the column default; with no default, the episode is not counted. The values a
-    renderer lists come first, in its order, and the others follow by count. Raises ValueError on a value that is
-    not one of `SUMMARY_VALUE_TYPES`.
+    An absent value counts as the column default; with no default, the episode is not counted. An enum member counts
+    as its value, as the episode table sends it. The values a renderer lists come first, in its order, and the
+    others follow by count. Raises ValueError on a value that is not one of `SUMMARY_VALUE_TYPES`.
     """
     counts: Counter[tuple[type, Any]] = Counter()
     for index, episode in enumerate(ds):
         stored = {INDEX_COLUMN: index, **episode_table_row(index, episode)}.get(key)
         value = cfg.default if stored is None else stored
+        if isinstance(value, Enum):
+            value = value.value
         if value is None:
             continue
         if type(value) not in SUMMARY_VALUE_TYPES:

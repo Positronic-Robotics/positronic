@@ -6,6 +6,7 @@ import socket
 import threading
 from collections import namedtuple
 from dataclasses import asdict, fields, replace
+from enum import StrEnum
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1117,3 +1118,15 @@ def test_the_header_counts_a_synthetic_column_from_the_value_the_table_computes(
     summary = _summary_of({OUTCOME: 'Fail'}, {OUTCOME: 'Fail'}, table=table, summary_column=INDEX_COLUMN)
 
     assert _sent_counts(summary) == _counts((0, 1), (1, 1))
+
+
+class _Verdict(StrEnum):
+    PASS = 'Pass'
+    FAIL = 'Fail'
+
+
+def test_an_enum_value_counts_as_the_value_the_episode_table_sends():
+    table = {OUTCOME: ColumnConfig(label='Verdict')}
+    summary = _summary_of({OUTCOME: _Verdict.PASS}, {OUTCOME: 'Pass'}, {OUTCOME: _Verdict.FAIL}, table=table)
+
+    assert _sent_counts(summary) == _counts(('Pass', 2), ('Fail', 1))
