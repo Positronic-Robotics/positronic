@@ -9,6 +9,7 @@ The teleoperator uses the buttons of the right controller.
 
 import _thread
 import logging
+import math
 import os
 import stat
 import threading
