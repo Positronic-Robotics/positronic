@@ -32,6 +32,8 @@ class FakeRctl:
         self.velocity = np.zeros(JOINTS)
         self.power = PowerState.OFF
         self.mode = MotionMode.NONE
+        # Where the planner of the controller starts a move that does not start from HOLD
+        self.planner_start = np.zeros(JOINTS)
         self.hold_lag = 0
         self._hold_in: int | None = None
         self.mode_at_power_off: MotionMode | None = None
@@ -40,12 +42,13 @@ class FakeRctl:
         self.safety_latched = False
         self.stop_pressed = False
         self.gravity = np.array([0.0, 0.0, 9.81])
-        # Only the offset of the first row (the height of the shoulder) and of the last (the link from the wrist to the
-        # flange) reach the driver
+        # The model of the arm: only the first four rows (the wrist from the axis of joint 1) reach the driver
         self.dh = [{'a': 0.0, 'd': 0.0, 'alpha': 0.0, 'theta': 0.0} for _ in range(JOINTS)]
         # The real controller can answer IK with no error and NaN solutions
         self.ik_nan_solutions = 0
         self.ik_only_nan = False
+        # A turn of the fourth joint in each solution, as on a jump to another branch of the solutions
+        self.ik_branch_turn = 0.0
         self.error = False
         self.fail_power_run = False
         self.blocked = False
@@ -153,6 +156,13 @@ class FakeRctl:
 
     def cmd_move_run(self, main=True):
         self._call('move_run')
+        # The planner starts at the joints only from HOLD; else it starts at the end of its last move
+        start = self.q if self.mode in (MotionMode.HOLD, MotionMode.NONE) else self.planner_start
+        if np.linalg.norm(self.q - start) > 0.034907:
+            self.error, self.moving = True, False
+            return
+        self.planner_start = self.waypoint.copy() if self.waypoint is not None else self.q.copy()
+        self.mode = MotionMode.MOVE
         self.moving = True
 
     def cmd_move_pause(self, acceleration):
@@ -182,19 +192,20 @@ class FakeRctl:
         return self.compute_fk(self.q)['pose']
 
     def rpy2quat(self, rpy):
-        return [0.0, 0.0, math.sin(rpy[2] / 2), math.cos(rpy[2] / 2)]
+        return list(geom.Rotation.from_euler(rpy).as_quat_xyzw)
 
     def quat2rpy(self, quat):
-        return [0.0, 0.0, 2 * math.atan2(quat[2], quat[3])]
+        return list(geom.Rotation.from_quat_xyzw(list(quat)).as_euler)
 
     def compute_fk(self, q):
-        return {'err': False, 'err_code': 'NONE', 'pose': np.array([q[0], q[1], q[2], 0.0, 0.0, q[5]])}
+        return {'err': False, 'err_code': 'NONE', 'pose': np.array([q[0], q[1], q[2], q[4], 0.0, q[5]])}
 
     def compute_ik(self, pose, seed):
         if np.any(np.abs(pose[:3]) > 1.0):
             return {'err': True, 'err_code': 'NO_SOLUTION', 'solutions': []}
         near = np.array(seed, dtype=np.float64)
-        near[:3], near[5] = pose[:3], pose[5]
+        near[:3], near[4], near[5] = pose[:3], pose[3], pose[5]
+        near[3] += self.ik_branch_turn
         far = near.copy()
         far[0] += 2 * math.pi
         nans = [np.full(JOINTS, np.nan)] * self.ik_nan_solutions
@@ -267,29 +278,86 @@ def test_the_arm_is_powered_straight_to_run_with_control_taken_first(rctl, drive
     assert rctl.power is PowerState.RUN
 
 
-def test_a_target_beyond_the_reach_is_held_on_the_sphere_of_the_reach(rctl, driven):
-    """Near full reach the joints turn fast for a small move of the tool, and the controller stops the arm."""
-    _, _, commands, clock, loop = driven(max_reach=0.6)
-    far = geom.Transform3D(translation=np.array([0.8, 0.6, 0.0]))
-    commands.push(command.CartesianPosition(far))
-
-    _pump(loop, clock, 800)
-
-    np.testing.assert_allclose(rctl.q[:3], [0.48, 0.36, 0.0], atol=0.01)
+def _stream(commands, loop, clock: MockClock, cmd: command.CommandType, ticks: int = 2000) -> None:
+    """Send ``cmd`` again every 20 ticks, as a teleoperator who holds the hand still does."""
+    for _ in range(ticks // 20):
+        commands.push(cmd)
+        _pump(loop, clock, 20)
 
 
-def test_a_target_beyond_the_reach_moves_until_its_wrist_is_on_the_sphere_around_the_shoulder(rctl, driven):
-    """The two long links set the reach: the limit is on the wrist from the shoulder, not the tool from the base."""
-    rctl.dh[0]['d'], rctl.dh[-1]['d'] = 0.2, 0.1
-    _, _, commands, clock, loop = driven(max_reach=0.5, tool_length=0.1)
-    # The tool points up, so the wrist is 0.2 m under the tool point: 0.78 m from the shoulder at [0, 0, 0.2]
-    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 0.6, 0.9]))))
+def test_a_streamed_target_past_the_reach_stops_at_the_reach_on_the_way(rctl, driven):
+    """The fake IK has no solution past 1.0 on an axis."""
+    _, _, commands, clock, loop = driven()
 
-    _pump(loop, clock, 800)
+    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([1.4, 0.0, 0.7]))))
 
-    wrist = rctl.q[:3] - [0.0, 0.0, 0.1]
-    np.testing.assert_allclose(np.linalg.norm(wrist - [0.0, 0.0, 0.2]), 0.5, atol=0.01)
-    np.testing.assert_allclose(wrist[1] / (wrist[2] - 0.2), 0.6 / 0.5, rtol=0.02)
+    np.testing.assert_allclose(rctl.q[:3], [1.0, 0.0, 0.5], atol=0.01)
+
+
+def test_a_streamed_target_with_the_elbow_straighter_than_the_limit_stops_at_the_limit(rctl, driven):
+    """The fake IK puts the third coordinate on the elbow joint."""
+    _, _, commands, clock, loop = driven(min_elbow=0.2)
+    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 0.0, 0.4]))))
+
+    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.2, 0.0, 0.0]))))
+
+    np.testing.assert_allclose(rctl.q[:3], [0.1, 0.0, 0.2], atol=0.01)
+
+
+def test_a_streamed_target_with_the_wrist_nearer_a_straight_line_than_the_limit_stops_at_the_limit(rctl, driven):
+    """The fake IK puts the roll of the tool on joint 5."""
+    _, _, commands, clock, loop = driven(min_wrist=0.2)
+    roll = geom.Rotation.from_euler([0.4, 0.0, 0.0])
+    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(np.array([0.0, 0.0, 0.0]), roll)))
+
+    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(np.array([0.2, 0.0, 0.0]))))
+
+    np.testing.assert_allclose(np.sin(rctl.q[4]), np.sin(0.2), atol=0.01)
+    np.testing.assert_allclose(rctl.q[0], 0.1, atol=0.01)
+
+
+def test_a_streamed_target_with_the_wrist_nearer_the_axis_of_joint_1_than_the_limit_stops_at_the_limit(rctl, driven):
+    """Two links of 0.5 m in the plane of joint 1: the wrist is sqrt(0.5 + 0.5 cos q2) from its axis."""
+    rctl.dh[0]['a'], rctl.dh[1]['a'] = 0.5, 0.5
+    _, _, commands, clock, loop = driven(min_shoulder=0.9)
+
+    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 1.0, 0.0]))))
+
+    np.testing.assert_allclose(np.sqrt(0.5 + 0.5 * np.cos(rctl.q[1])), 0.9, atol=0.01)
+
+
+def test_a_streamed_target_whose_solution_jumps_to_another_branch_is_not_taken(rctl, driven):
+    """Up from the start pose, the IK of the controller turned the wrist by half a turn for 1 cm of the tool."""
+    _, _, commands, clock, loop = driven()
+    rctl.ik_branch_turn = 1.0
+
+    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, 0.0, 0.0]))))
+
+    np.testing.assert_allclose(rctl.q, 0.0, atol=1e-6)
+
+
+def test_a_planned_move_after_a_stream_starts_from_the_joints_that_the_arm_has(world, rctl, driven):
+    """After a velocity stream the planner starts at the end of its last move, unless the move starts from HOLD."""
+    driver, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, 600)
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.0)))
+
+    _pump_until(loop, clock, answer)
+
+    assert answer.result() is None
+    assert not rctl.error
+    np.testing.assert_allclose(rctl.q, _joints(0.0), atol=cron._ARRIVED_TOL)
+
+
+def test_a_move_to_a_pose_that_the_arm_cannot_hold_fails(world, rctl, driven):
+    driver, _, _, clock, loop = driven(min_elbow=0.3)
+    answer = _mover(world, driver)(command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 0.0, 0.1]))))
+
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='cannot hold'):
+        answer.result()
 
 
 def test_each_project_of_the_controller_is_started_once_control_is_taken(rctl, driven):
@@ -612,14 +680,15 @@ def test_a_nan_solution_that_the_controller_reports_with_no_error_is_not_picked(
     np.testing.assert_allclose(rctl.q[:3], [0.1, 0.2, 0.3], atol=0.01)
 
 
-def test_a_cartesian_target_with_only_nan_solutions_is_not_a_setpoint(rctl, driven):
+def test_a_streamed_target_with_only_nan_solutions_holds_the_arm_where_it_is(rctl, driven):
     rctl.ik_nan_solutions, rctl.ik_only_nan = 8, True
     _, _, commands, clock, loop = driven()
     commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, 0.2, 0.3]))))
 
-    _pump(loop, clock, 20)
+    _pump(loop, clock, 200)
 
-    assert rctl.commanded == []
+    assert all(np.all(np.isfinite(velocity)) for velocity in rctl.commanded)
+    np.testing.assert_allclose(rctl.q, 0.0, atol=1e-6)
 
 
 def test_a_joint_target_that_is_not_finite_is_not_a_setpoint(rctl, driven):
@@ -631,13 +700,14 @@ def test_a_joint_target_that_is_not_finite_is_not_a_setpoint(rctl, driven):
     assert rctl.commanded == []
 
 
-def test_a_cartesian_target_out_of_reach_is_not_a_setpoint(rctl, driven):
+def test_a_streamed_target_with_no_reachable_point_on_the_way_holds_the_arm_where_it_is(rctl, driven):
     _, _, commands, clock, loop = driven()
+    rctl.ik_branch_turn = 1.0
     commands.push(command.CartesianPosition(geom.Transform3D(translation=np.full(3, 100.0))))
 
-    _pump(loop, clock, 20)
+    _pump(loop, clock, 200)
 
-    assert rctl.commanded == []
+    np.testing.assert_allclose(rctl.q, 0.0, atol=1e-6)
 
 
 def test_an_arm_that_leaves_run_is_not_commanded_and_does_not_resume_its_target(rctl, driven):
