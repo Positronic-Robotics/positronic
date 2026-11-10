@@ -24,7 +24,7 @@ from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.server import positronic_server
-from positronic.server.dataset_utils import ReplayLayout
+from positronic.server.dataset_utils import INDEX_COLUMN, ReplayLayout
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
@@ -1003,23 +1003,23 @@ _OUTCOME_TABLE = {
 }
 
 
+@app_state_restored()
 def _dataset_info(*statics: dict, table=None, summary_column: str | None = OUTCOME) -> dict:
     """The dataset_info route's response for episodes holding `statics`."""
-    with app_state_restored():
-        configure_tables(
-            root='',
-            cache_dir=Path(),
-            ep_table_cfg=table or _OUTCOME_TABLE,
-            group_tables=None,
-            home_page=None,
-            max_resolution=64,
-            max_hz=0,
-            layout=None,
-            summary_column=summary_column,
-        )
-        app_state['dataset'] = _Statics(*statics)
-        app_state['loading_state'] = False
-        return TestClient(app).get('/api/dataset_info').json()
+    configure_tables(
+        root='',
+        cache_dir=Path(),
+        ep_table_cfg=table or _OUTCOME_TABLE,
+        group_tables=None,
+        home_page=None,
+        max_resolution=64,
+        max_hz=0,
+        layout=None,
+        summary_column=summary_column,
+    )
+    app_state['dataset'] = _Statics(*statics)
+    app_state['loading_state'] = False
+    return TestClient(app).get('/api/dataset_info').json()
 
 
 def _summary_of(*statics: dict, table=None, summary_column: str = OUTCOME) -> dict:
@@ -1113,7 +1113,7 @@ def test_a_summary_column_holding_a_list_is_refused_when_the_header_reads_it():
 
 
 def test_the_header_counts_a_synthetic_column_from_the_value_the_table_computes():
-    table = {'__index__': ColumnConfig(label='#')}
-    summary = _summary_of({OUTCOME: 'Fail'}, {OUTCOME: 'Fail'}, table=table, summary_column='__index__')
+    table = {INDEX_COLUMN: ColumnConfig(label='#')}
+    summary = _summary_of({OUTCOME: 'Fail'}, {OUTCOME: 'Fail'}, table=table, summary_column=INDEX_COLUMN)
 
     assert _sent_counts(summary) == _counts((0, 1), (1, 1))
