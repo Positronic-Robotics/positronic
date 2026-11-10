@@ -154,6 +154,13 @@ class PurchaseView(BaseModel):
         return self
 
 
+class CouponRedemption(BaseModel):
+    """`billing.coupons.redeem`: the organization that got the credits, and the credit units it got."""
+
+    org: OrgSlug
+    units: CreditUnits = Field(gt=0)
+
+
 class PurchaseListResponse(BaseModel):
     purchases: list[PurchaseView]
     next: PurchaseId | None

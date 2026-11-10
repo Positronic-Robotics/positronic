@@ -1,0 +1,77 @@
+"""`positronic account redeem`."""
+
+import pytest
+from platform_client import routes
+from platform_client.billing import CREDIT_SCALE, CouponRedemption
+from platform_client.enums import ErrorCode
+from platform_client.ids import OrgSlug
+from platform_client.requests import CouponRedeemRequest
+
+from positronic.cli.account.coupons import credits_text, redeem
+from positronic.cli.account.gateway import CommandFailed, Fault
+from positronic.cli.conftest import KEY, refusal
+
+ORG = OrgSlug('user-a0')
+THIRTY_CREDITS = CouponRedemption(org=ORG, units=30 * CREDIT_SCALE)
+
+
+def test_redeem_sends_the_code_with_the_key_and_prints_the_credits_and_the_org(platform, run_command, capsys):
+    platform.answer_by_route({routes.BILLING_COUPONS_REDEEM: (THIRTY_CREDITS, 200)})
+
+    run_command(redeem, code='PCR-7K2M-9QXA')
+
+    body = CouponRedeemRequest.model_validate(platform.body_to(routes.BILLING_COUPONS_REDEEM))
+    assert body == CouponRedeemRequest(code='PCR-7K2M-9QXA')
+    assert platform.request_to(routes.BILLING_COUPONS_REDEEM).headers['authorization'] == f'Bearer {KEY}'
+    assert capsys.readouterr().out.strip() == (
+        f'Added 30.00 credits ({30 * CREDIT_SCALE} units) to the organization user-a0.'
+    )
+
+
+def test_redeem_prints_the_answer_as_json_with_the_flag(platform, run_command, capsys):
+    platform.answer_by_route({routes.BILLING_COUPONS_REDEEM: (THIRTY_CREDITS, 200)})
+
+    run_command(redeem, code='PCR-7K2M-9QXA', json=True)
+
+    assert CouponRedemption.model_validate_json(capsys.readouterr().out) == THIRTY_CREDITS
+
+
+@pytest.mark.parametrize('code', [None, '', 20261110, 1.5])
+def test_redeem_refuses_a_code_that_is_not_text_before_any_call(platform, run_command, code):
+    # The CLI reads `--code=20261110` as a number.
+    with pytest.raises(CommandFailed) as raised:
+        run_command(redeem, code=code)
+
+    assert raised.value.fault is Fault.USAGE
+    assert platform.seen is None
+
+
+@pytest.mark.parametrize(
+    ('code', 'message'),
+    [
+        (ErrorCode.not_found, 'no coupon has this code'),
+        (ErrorCode.bad_request, 'this coupon was redeemed on 2026-11-09'),
+        (
+            ErrorCode.forbidden,
+            'this needs the platform terms, version 1.3. When the person accepts them, run '
+            '`positronic account accept-terms --version=\'"1.3"\'`',
+        ),
+    ],
+)
+def test_redeem_prints_the_refusal_of_the_platform_as_the_callers_fault(platform, run_command, code, message):
+    status = {ErrorCode.not_found: 404, ErrorCode.bad_request: 400, ErrorCode.forbidden: 403}[code]
+    platform.answer_by_route({routes.BILLING_COUPONS_REDEEM: (refusal(code, message), status)})
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(redeem, code='PCR-7K2M-9QXA')
+
+    assert raised.value.fault is Fault.CALLER
+    assert message in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ('units', 'shown'),
+    [(CREDIT_SCALE, '1.00'), (CREDIT_SCALE * 100 // 3, '33.33'), (CREDIT_SCALE // 100 - 1, '0.00'), (1, '0.00')],
+)
+def test_credits_text_rounds_down_to_two_decimals(units, shown):
+    assert credits_text(units) == shown

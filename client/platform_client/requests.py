@@ -153,6 +153,14 @@ class BillingPurchaseGetQuery(BaseModel):
     id: PurchaseId = Field(min_length=1)
 
 
+class CouponRedeemRequest(BaseModel):
+    """`billing.coupons.redeem`. `code` is the coupon code as the mail of the coupon gives it."""
+
+    model_config = INPUT_MODEL_CONFIG
+
+    code: str = Field(min_length=1, max_length=128)
+
+
 class BillingPurchaseCreateRequest(BaseModel):
     model_config = INPUT_MODEL_CONFIG
 

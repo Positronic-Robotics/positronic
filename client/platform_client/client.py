@@ -22,7 +22,7 @@ from typing import Any, ClassVar, Self, TypeVar
 import httpx
 from packaging.version import InvalidVersion, Version
 from platform_client import routes
-from platform_client.billing import BillingAccount, PurchaseListResponse, PurchaseView
+from platform_client.billing import BillingAccount, CouponRedemption, PurchaseListResponse, PurchaseView
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
@@ -48,6 +48,7 @@ from platform_client.requests import (
     BillingPurchaseGetQuery,
     BillingPurchaseListQuery,
     CancelRequest,
+    CouponRedeemRequest,
     LeaderboardChartsQuery,
     LeaderboardListQuery,
     LeaderboardPartQuery,
@@ -261,6 +262,11 @@ class PlatformClient:
         """Read one history page. Pass its `next` as `after` until `next` is None."""
         query = BillingPurchaseListQuery(org=org, after=after, limit=limit)
         return self._get(routes.BILLING_PURCHASES_LIST, PurchaseListResponse, query=query)
+
+    def redeem_coupon(self, code: str) -> CouponRedemption:
+        """Add the credits of a coupon to the caller's personal organization. The platform refuses a code that is
+        unknown, used, expired or revoked."""
+        return self._post(routes.BILLING_COUPONS_REDEEM, CouponRedeemRequest(code=code), CouponRedemption)
 
     def create_submission(self, plan: EvalPlan) -> SubmissionCreateResponse:
         """Run one plan. A plan that states its own tasks needs a customer grant: a key without one
