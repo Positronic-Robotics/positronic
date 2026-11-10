@@ -29,6 +29,7 @@ class FakeBus:
 
     A fall of ``rACT`` resets the gripper. A rise starts an activation of ``activation_reads`` reads, which
     leaves the fingers open, obeying again, and with the fault byte ``fault_after_activation``. With
+    ``activation_frees`` off it leaves the fingers where they stand and still not obeying. With
     ``completes`` off the activation never ends. A position request moves the fingers ``STEP`` counts a read,
     to no more than ``SHUT``, and closing stops at ``object_at``. With ``obeying`` off the fingers stay where
     they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set, and
@@ -41,6 +42,7 @@ class FakeBus:
         self.object_at = object_at
         self.obeying = True
         self.completes = True
+        self.activation_frees = True
         self.activation_reads = ACTIVATION_READS
         self.fault_after_activation = 0
         self.fault = 0
@@ -95,8 +97,9 @@ class FakeBus:
             if self.completes:
                 self._activation_left -= 1
                 if self._activation_left == 0:
-                    self._activation, self.position, self.obeying = Activation.COMPLETED, 0, True
-                    self.fault = self.fault_after_activation
+                    self._activation, self.fault = Activation.COMPLETED, self.fault_after_activation
+                    if self.activation_frees:
+                        self.position, self.obeying = 0, True
         elif self._fingers is Fingers.MOVING and not self.obeying:
             self._fingers = Fingers.AT_REQUEST
         elif self._fingers is Fingers.MOVING:
@@ -304,6 +307,58 @@ def _mover(world: pimm.World, driver: robotiq.Robotiq2F) -> pimm.calls.Caller[fl
     caller = pimm.calls.ControlSystemCaller[float, None](driver)
     wire_call(world, caller, driver.sync_move)
     return caller
+
+
+def _bind_shut(bus: FakeBus, requests: ManualCommandReceiver, loop, clock: MockClock) -> None:
+    """Close the fingers on nothing, then stop them obeying, as a gripper bound shut does."""
+    requests.push(1.0)
+    _pump(loop, clock, 10)
+    bus.obeying = False
+
+
+def test_a_move_on_fingers_bound_shut_reactivates_the_gripper_and_opens_them(monkeypatch, world):
+    """A gripper bound shut takes an open request and reports the fingers at it, with no fault, while they stay
+    shut. A move a caller waits on re-activates the gripper, then opens the fingers before its time runs out."""
+    bus, clock = FakeBus(), MockClock()
+    driver, requests, loop = _driven(monkeypatch, bus, clock)
+    _bind_shut(bus, requests, loop, clock)
+    before = len(bus.writes)
+
+    move = _mover(world, driver)(0.0)
+    _pump(loop, clock, 40, seconds=0.1)
+
+    assert move.result() is None
+    assert bus.position == 0
+    assert bus.writes[before:].count([0x0100, 0x0000, 0x0000]) == 1
+
+
+def test_a_streamed_width_on_fingers_bound_shut_reactivates_nothing(monkeypatch):
+    """A policy streams widths during an episode, and an activation drops what the fingers hold."""
+    bus, clock = FakeBus(), MockClock()
+    _, requests, loop = _driven(monkeypatch, bus, clock)
+    _bind_shut(bus, requests, loop, clock)
+    before = len(bus.writes)
+
+    requests.push(0.0)
+    _pump(loop, clock, 40, seconds=0.1)
+
+    assert bus.position == SHUT
+    assert [write[0] for write in bus.writes[before:]] == [0x0900]
+
+
+def test_a_move_reactivates_the_gripper_once_and_gives_up_on_fingers_still_bound(monkeypatch, world):
+    bus, clock = FakeBus(), MockClock()
+    driver, requests, loop = _driven(monkeypatch, bus, clock)
+    _bind_shut(bus, requests, loop, clock)
+    bus.activation_frees = False
+    before = len(bus.writes)
+
+    move = _mover(world, driver)(0.0)
+    _pump(loop, clock, 80, seconds=0.1)
+
+    with pytest.raises(TimeoutError, match='short of 0.0'):
+        move.result()
+    assert bus.writes[before:].count([0x0100, 0x0000, 0x0000]) == 1
 
 
 def _last(widths: RecordingEmitter):

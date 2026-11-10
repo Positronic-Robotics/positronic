@@ -9,7 +9,7 @@ from typing import cast
 import pimm
 from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
-from positronic.drivers.utils import DriverRun, Moves, RecoveryOutcome, grip_setpoint
+from positronic.drivers.utils import DriverRun, Moves, RecoveryOutcome, grip_setpoint, restart_grip
 
 # pymodbus lives in the `hardware` extra, which the type-check environment does not install.
 with vendor_import('pymodbus', 'Gripper support'):
@@ -144,6 +144,13 @@ class _Gripper(DriverRun[float]):
         self._tuning = tuning
         self._status: Status | None = None
         self._disobeys = False
+        # Set once the move in flight re-activated the gripper, cleared when no move is in flight
+        self.reactivated_this_move = False
+
+    def disobeys_move(self, reading: Reading, target: float) -> bool:
+        """The gripper took ``target`` as its request, and reports its fingers there while they stand far from it."""
+        took_target = abs(reading.requested - int(target * 255)) <= 1
+        return took_target and reading.claims_arrival_farther_than(self._tuning.arrival_tolerance)
 
     def observe(self) -> Reading:
         """Read the gripper, publish how closed the fingers are, and log what changed."""
@@ -266,18 +273,40 @@ class Robotiq2F(pimm.ControlSystem):
             return gripper.hold_error(exc)
         return gripper.hold_unless_cleared(outcome)
 
+    def _reactivate_for_move(
+        self, gripper: _Gripper, moves: Moves[float], clock: pimm.Clock
+    ) -> Generator[pimm.Command, None, DeviceFault | None]:
+        """Re-activate a gripper that disobeys the move in flight, then put the move's width on the fingers again
+        with its full time.
+
+        The activation strokes the fingers and drops what they hold, so only a move a caller waits on asks for it,
+        once. None once the activation completes with no fault, else the error now on ``grip``, which answers the move.
+        """
+        logger.warning(
+            'The Robotiq gripper disobeys a move to %.3f; it re-activates before the move gives up', moves.target
+        )
+        gripper.reactivated_this_move = True
+        held = yield from self._activate_or_hold(gripper)
+        if held is None:
+            self._command(gripper, restart_grip(moves, clock.now()))
+        return held
+
     def _serve(
         self, gripper: _Gripper, moves: Moves[float], clock: pimm.Clock
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Serve one tick of calls and moves. None while the bus answers, else the error now on ``grip``."""
         try:
-            grip = gripper.observe().width
+            reading = gripper.observe()
             for call in self.ready.incoming():
                 call.set_result(None)
             if asked := list(self.recover.incoming()):
                 return (yield from self._reactivate(gripper, asked))
+            if not moves.active:
+                gripper.reactivated_this_move = False
+            elif not gripper.reactivated_this_move and gripper.disobeys_move(reading, float(moves.target)):
+                return (yield from self._reactivate_for_move(gripper, moves, clock))
 
-            target = grip_setpoint(moves, grip, clock.now())
+            target = grip_setpoint(moves, reading.width, clock.now())
             if target is not None:
                 self._command(gripper, target)
             moves.answer()  # the width a settled move is answered with is on the fingers

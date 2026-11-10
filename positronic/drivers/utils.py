@@ -161,6 +161,11 @@ class Moves(Generic[T]):
             return MoveStatus.GAVE_UP
         return MoveStatus.MOVING
 
+    def restart(self, now: float, timeout_s: float) -> None:
+        """Give the move in flight `timeout_s` from `now` to arrive, as at its acceptance."""
+        assert self._call is not None, 'no move is in flight'
+        self._deadline = now + timeout_s
+
     def answer(self) -> None:
         """Hand a settled move its outcome, once the state that goes with it is published."""
         if self._settled is None:
@@ -218,6 +223,12 @@ def _clamped(grip: float) -> float:
     if not math.isfinite(grip):
         raise ValueError(f'{grip} is not a grip width')
     return max(0.0, min(1.0, grip))
+
+
+def restart_grip(moves: Moves[float], now: float) -> float:
+    """Give the grip move in flight its full time again from ``now``, and answer the width to command for it."""
+    moves.restart(now, _GRIP_TIMEOUT_S)
+    return float(moves.target)
 
 
 def grip_setpoint(moves: Moves[float], grip: float, now: float) -> float | None:
