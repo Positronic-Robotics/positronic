@@ -29,7 +29,6 @@ class FakeBus:
 
     A fall of ``rACT`` resets the gripper. A rise starts an activation of ``activation_reads`` reads, which
     leaves the fingers open, obeying again, and with the fault byte ``fault_after_activation``. With
-    ``activation_frees`` off it leaves the fingers where they stand and still not obeying. With
     ``completes`` off the activation never ends. A position request moves the fingers ``STEP`` counts a read,
     to no more than ``SHUT``, and closing stops at ``object_at``. With ``obeying`` off the fingers stay where
     they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set, and
@@ -42,7 +41,6 @@ class FakeBus:
         self.object_at = object_at
         self.obeying = True
         self.completes = True
-        self.activation_frees = True
         self.activation_reads = ACTIVATION_READS
         self.fault_after_activation = 0
         self.fault = 0
@@ -98,8 +96,7 @@ class FakeBus:
                 self._activation_left -= 1
                 if self._activation_left == 0:
                     self._activation, self.fault = Activation.COMPLETED, self.fault_after_activation
-                    if self.activation_frees:
-                        self.position, self.obeying = 0, True
+                    self.position, self.obeying = 0, True
         elif self._fingers is Fingers.MOVING and not self.obeying:
             self._fingers = Fingers.AT_REQUEST
         elif self._fingers is Fingers.MOVING:
