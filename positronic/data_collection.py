@@ -470,9 +470,12 @@ def main_bimanual(
     left_nominal_joints: Sequence[float],
     right_nominal_joints: Sequence[float],
     operator_position: OperatorPosition = OperatorPosition.FRONT,
-    twist_gain: float = 1.0,
-    # Count the shifts and the turns in the axes of the controller (see _ROBOT_FROM_CONTROLLER), not of the headset
-    controller_axes: bool = False,
+    left_twist_gain: float = 1.0,
+    right_twist_gain: float = 1.0,
+    # Count the shifts and the turns of each controller in its own axes (see _ROBOT_FROM_CONTROLLER), not in the axes
+    # of the headset
+    left_controller_axes: bool = False,
+    right_controller_axes: bool = False,
     # The trigger of each controller closes the gripper on its side, through trigger_grip
     left_gripper: pimm.ControlSystem | None = None,
     right_gripper: pimm.ControlSystem | None = None,
@@ -485,6 +488,7 @@ def main_bimanual(
         LEFT: (left_arm, left_nominal_joints, left_gripper),
         RIGHT: (right_arm, right_nominal_joints, right_gripper),
     }
+    tracking = {LEFT: (left_twist_gain, left_controller_axes), RIGHT: (right_twist_gain, right_controller_axes)}
     for side, (_, joints, _) in arms.items():
         if not len(joints) or not np.all(np.isfinite(joints)):
             raise ValueError(f'--{side}_nominal_joints names joint angles: give each joint a finite value')
@@ -494,6 +498,7 @@ def main_bimanual(
         world.connect(panel.frame, webxr.frame)
         controllers = []
         for side, (arm, joints, gripper) in arms.items():
+            twist_gain, controller_axes = tracking[side]
             controller = DataCollectionController(
                 operator_position.value,
                 joints,
@@ -648,11 +653,17 @@ cron_bimanual = cfn.Config(
     left_nominal_joints=positronic.cfg.hardware.roboarm.CRON_LEFT_NOMINAL_JOINTS,
     right_nominal_joints=positronic.cfg.hardware.roboarm.CRON_RIGHT_NOMINAL_JOINTS,
     operator_position=OperatorPosition.FRONT,
-    twist_gain=2.0,
-    controller_axes=True,
+    left_twist_gain=2.0,
+    right_twist_gain=2.0,
+    left_controller_axes=True,
+    right_controller_axes=True,
     left_gripper=positronic.cfg.hardware.gripper.cron_dh_gripper,
     right_gripper=positronic.cfg.hardware.gripper.cron_dh_gripper.override(port='socket://192.168.68.66:7663'),
 )
+
+# A side by side test of the two ways to track: the left arm tracks as the teleop service does (the axes of the
+# headset, enter AR facing the rack; the turns 1:1), the right arm in the axes of the controller.
+cron_bimanual_compare = cron_bimanual.override(left_twist_gain=1.0, left_controller_axes=False)
 
 
 human = cfn.Config(
@@ -682,6 +693,7 @@ def _internal_main():
         'droid': droid,
         'droid_3cam': droid_3cam,
         'cron_bimanual': cron_bimanual,
+        'cron_bimanual_compare': cron_bimanual_compare,
         'human': human,
     })
 
