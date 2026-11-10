@@ -836,13 +836,16 @@ def test_a_camera_that_neither_the_run_nor_the_station_has_cannot_be_chosen(sock
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE])
     with pytest.raises(ValueError, match='no camera'):
         service.choose_camera(keys.EXTERIOR_IMAGE)
-    with pytest.raises(ValueError, match='must be a string'):
-        service.choose_camera([])
     service.choose_camera(keys.WRIST_IMAGE)
     assert service.cameras().chosen == keys.WRIST_IMAGE
 
 
-def test_the_headset_bridge_takes_the_camera_that_the_page_chose(socket_path):
+@pytest.mark.parametrize(
+    ('camera', 'chosen'), [(keys.WRIST_IMAGE, keys.WRIST_IMAGE), ([], None), ({'name': keys.WRIST_IMAGE}, None)]
+)
+def test_the_headset_bridge_takes_the_camera_that_the_page_chose_and_logs_a_camera_that_is_no_name(
+    socket_path, camera, chosen
+):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE])
     bridge = command._Headset(service)
     sent = RecordingEmitter[dict]()
@@ -851,12 +854,12 @@ def test_the_headset_bridge_takes_the_camera_that_the_page_chose(socket_path):
     bridge.controller_positions._bind(ManualCommandReceiver())
     bridge.buttons._bind(ManualCommandReceiver())
     page_input = ManualCommandReceiver()
-    page_input.push({command.HEADSET_CAMERA: keys.WRIST_IMAGE})
+    page_input.push({command.HEADSET_CAMERA: camera})
     bridge.page_input._bind(page_input)
     stop = types.SimpleNamespace(value=False)
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
-    assert state['chosen'] == keys.WRIST_IMAGE and state['cameras'] == (keys.WRIST_IMAGE,)
+    assert state['chosen'] == chosen and state['cameras'] == (keys.WRIST_IMAGE,)
 
 
 @pytest.mark.parametrize('view_fps', [0.0, -1.0, float('nan'), float('inf')])

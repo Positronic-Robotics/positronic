@@ -73,10 +73,14 @@ class _Headset(pimm.ControlSystem):
                 self._service.take_sample(positions.data[RIGHT], right)
             page_input = pimm.read_updated(self.page_input)
             if page_input is not None and HEADSET_CAMERA in page_input.data:
-                try:
-                    self._service.choose_camera(page_input.data[HEADSET_CAMERA])
-                except ValueError as refused:
-                    logger.warning('The headset page chose no camera: %s', refused)
+                camera = page_input.data[HEADSET_CAMERA]
+                if camera is not None and not isinstance(camera, str):
+                    logger.warning('The headset page chose no camera: %r is not a camera name', camera)
+                else:
+                    try:
+                        self._service.choose_camera(camera)
+                    except ValueError as refused:
+                        logger.warning('The headset page chose no camera: %s', refused)
             if page_input is not None and TEXT_ONLY in page_input.data:
                 self._text_only = page_input.data[TEXT_ONLY] is True
             self.view.emit(self._service.view(camera=not self._text_only))

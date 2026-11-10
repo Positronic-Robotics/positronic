@@ -364,9 +364,7 @@ class TeleopService:
 
     def choose_camera(self, name: str | None) -> None:
         """Show camera ``name`` in the headset from now on, or the camera of the session for ``None``. Raise
-        ``ValueError`` for a name that is not a string, or a camera that neither the run nor the station has."""
-        if name is not None and not isinstance(name, str):
-            raise ValueError(f'a camera name must be a string or None, got {name!r}')
+        ``ValueError`` for a camera that neither the run nor the station has."""
         with self._changed:
             if name is not None and name not in self._images and name not in self.station_cameras:
                 known = sorted({*self._images, *self.station_cameras})
