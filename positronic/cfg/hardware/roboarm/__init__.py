@@ -95,8 +95,9 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects,
 
 
 # A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box. The
-# reach is held under full stretch, where the controller stopped the arm on following errors
-cron_with_gripper = cron.override(projects=['gripper_bridge'], max_reach=0.85)
+# reach is held under full stretch, where the controller stopped the arm on following errors: the two long links
+# (0.852 m) less the wrist link (0.0975 m) keep joint 5 inside the span for each rotation of the tool
+cron_with_gripper = cron.override(projects=['gripper_bridge'], max_reach=0.75)
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)

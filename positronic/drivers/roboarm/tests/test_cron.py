@@ -40,6 +40,9 @@ class FakeRctl:
         self.safety_latched = False
         self.stop_pressed = False
         self.gravity = np.array([0.0, 0.0, 9.81])
+        # Only the offset of the first row (the height of the shoulder) and of the last (the link from the wrist to the
+        # flange) reach the driver
+        self.dh = [{'a': 0.0, 'd': 0.0, 'alpha': 0.0, 'theta': 0.0} for _ in range(JOINTS)]
         # The real controller can answer IK with no error and NaN solutions
         self.ik_nan_solutions = 0
         self.ik_only_nan = False
@@ -77,6 +80,9 @@ class FakeRctl:
 
     def get_gravity(self):
         return self.gravity.copy()
+
+    def model_get_dh(self):
+        return [dict(row) for row in self.dh]
 
     def take_control(self):
         self._call('take_control')
@@ -270,6 +276,20 @@ def test_a_target_beyond_the_reach_is_held_on_the_sphere_of_the_reach(rctl, driv
     _pump(loop, clock, 800)
 
     np.testing.assert_allclose(rctl.q[:3], [0.48, 0.36, 0.0], atol=0.01)
+
+
+def test_a_target_beyond_the_reach_moves_until_its_wrist_is_on_the_sphere_around_the_shoulder(rctl, driven):
+    """The two long links set the reach: the limit is on the wrist from the shoulder, not the tool from the base."""
+    rctl.dh[0]['d'], rctl.dh[-1]['d'] = 0.2, 0.1
+    _, _, commands, clock, loop = driven(max_reach=0.5, tool_length=0.1)
+    # The tool points up, so the wrist is 0.2 m under the tool point: 0.78 m from the shoulder at [0, 0, 0.2]
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 0.6, 0.9]))))
+
+    _pump(loop, clock, 800)
+
+    wrist = rctl.q[:3] - [0.0, 0.0, 0.1]
+    np.testing.assert_allclose(np.linalg.norm(wrist - [0.0, 0.0, 0.2]), 0.5, atol=0.01)
+    np.testing.assert_allclose(wrist[1] / (wrist[2] - 0.2), 0.6 / 0.5, rtol=0.02)
 
 
 def test_each_project_of_the_controller_is_started_once_control_is_taken(rctl, driven):
