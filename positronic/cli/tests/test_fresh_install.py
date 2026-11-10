@@ -43,6 +43,9 @@ LEADERBOARD_DESCRIPTOR = {
 # the first time it is read, so a polling example terminates on its first pass.
 ANSWERS: dict[str, object] = {
     routes.AUTH_CONFIG: {'github_registration': True, 'workos': None},
+    routes.TERMS_GET: {'program': 'platform', 'terms': {'version': '1.3', 'url': 'https://example.com/terms'}},
+    routes.PROGRAMS_ENTRY: {'program': 'platform', 'entry': None},
+    routes.PLATFORM_ACCEPT_TERMS: {'program': 'platform', 'entered_at': AT, 'terms_version': '1.3'},
     routes.USERS_REGISTER: {
         'user_id': 'a0',
         'artifact_location': 's3://bucket/users/a0/',
@@ -190,6 +193,17 @@ def run_from_a_clean_environment(
 
 DOCUMENTED_COMMANDS = {
     'account-register': ['uv', 'run', 'positronic', 'account', 'register', '--alias=demo'],
+    'account-register-accepting-the-terms': [
+        'uv',
+        'run',
+        'positronic',
+        'account',
+        'register',
+        '--alias=demo',
+        '--accept_terms="1.3"',
+    ],
+    'account-terms': ['uv', 'run', 'positronic', 'account', 'terms'],
+    'account-accept-terms': ['uv', 'run', 'positronic', 'account', 'accept-terms', '--version="1.3"'],
     'eval-run-on-platform': [
         'uv',
         'run',

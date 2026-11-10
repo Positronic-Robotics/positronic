@@ -3,6 +3,7 @@
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 import configuronic as cfn
 import httpx
@@ -23,6 +24,7 @@ from platform_client.requests import RegisterRequest, team_name
 from platform_client.responses import RegisterResponse
 
 from positronic.cli.account.gateway import CREDENTIAL_ENV, CommandFailed, Fault, gateway, refusing_bad_input
+from positronic.cli.account.terms import accept, terms_lines, version_text
 
 
 def _register_by_sign_in(
@@ -68,13 +70,19 @@ def _naming_rotate_when_the_answer_is_lost(*, credential_from_environment: bool)
 
 @cfn.config()
 def register(
-    alias: str | None = None, rotate: bool = False, platform_url: str | None = None, plaintext_http: bool = False
+    alias: str | None = None,
+    rotate: bool = False,
+    platform_url: str | None = None,
+    plaintext_http: bool = False,
+    accept_terms: object = None,
 ):
     """Register with the platform, or rotate an existing registration's API key.
 
     Signs in through the device flow the platform names, or takes a credential from the environment, never
     from an argument. Saves the key it mints in the config record every other command reads.
-    `plaintext_http` lets the sign-in token reach an http platform that is not loopback.
+    `plaintext_http` lets the sign-in token reach an http platform that is not loopback. `accept_terms` is the
+    version of the platform terms that the person read: the command accepts it with the key it mints. Without it,
+    the command prints the terms and the command that accepts them.
     """
     # configuronic literal-evaluates a CLI value, so `--alias=5` arrives as an int. The sign-in runs before
     # the request model sees these values, so these refusals come first.
@@ -89,6 +97,7 @@ def register(
     for name, value in (('rotate', rotate), ('plaintext_http', plaintext_http)):
         if not isinstance(value, bool):
             raise CommandFailed(f'{name} is True or False, not {value!r}', Fault.USAGE)
+    accepted_version = None if accept_terms is None else version_text(accept_terms)
     credential = os.environ.get(CREDENTIAL_ENV)
     # Unset runs the sign-in. Empty is a script whose secret did not arrive, and a sign-in would wait for a person.
     if credential == '':
@@ -96,23 +105,26 @@ def register(
     # A key is minted once and cannot be fetched again, so the destination is named before the
     # platform mints one: a config directory that cannot be resolved would otherwise cost the key.
     directory = config_dir(os.environ)
-    with (
-        gateway(platform_url, key_required=False) as client,
-        _naming_rotate_when_the_answer_is_lost(credential_from_environment=credential is not None),
-    ):
-        if credential is not None:
-            request = RegisterRequest(credential=credential, alias=alias, rotate=rotate)
-            response = client.register(request, timeout=client.register_timeout())
+    with gateway(platform_url, key_required=False) as client:
+        with _naming_rotate_when_the_answer_is_lost(credential_from_environment=credential is not None):
+            if credential is not None:
+                request = RegisterRequest(credential=credential, alias=alias, rotate=rotate)
+                response = client.register(request, timeout=client.register_timeout())
+            else:
+                response = _register_by_sign_in(client, alias=alias, rotate=rotate, plaintext_http=plaintext_http)
+        print(f'user {response.user_id} ({response.key_status.name})')
+        if response.api_key is None:
+            print(
+                f'You already have an API key. Set {API_KEY_ENV} to it. '
+                f'Lost it? Run {REGISTER_COMMAND} --rotate. This stops the old key.'
+            )
         else:
-            response = _register_by_sign_in(client, alias=alias, rotate=rotate, plaintext_http=plaintext_http)
-        base_url = client.base_url
-    print(f'user {response.user_id} ({response.key_status.name})')
-    if response.api_key is None:
-        print(
-            f'You already have an API key. Set {API_KEY_ENV} to it. '
-            f'Lost it? Run {REGISTER_COMMAND} --rotate. This stops the old key.'
-        )
-        return
+            _save(directory, client.base_url, response)
+        _terms_step(client, accepted_version, key_minted=response.api_key is not None)
+
+
+def _save(directory: Path, base_url: str, response: RegisterResponse) -> None:
+    assert response.api_key is not None
     try:
         write_config(directory, Config(platform_url=base_url, api_key=response.api_key))
     except OSError as exc:
@@ -124,3 +136,18 @@ def register(
             Fault.CALLER,
         ) from exc
     print(f'key saved in {directory / CONFIG_FILENAME}')
+
+
+def _terms_step(client: PlatformClient, accepted_version: str | None, *, key_minted: bool) -> None:
+    """Accept `accepted_version` with the key that the registration minted, or print the terms and how to accept
+    them. A registration that minted no key holds no key to accept with."""
+    if accepted_version is not None and key_minted:
+        accept(client, accepted_version)
+        return
+    current = client.platform_terms()
+    if current is None:
+        return
+    for line in terms_lines(current):
+        print(line)
+    if accepted_version is not None:
+        print(f'This registration minted no key, so it did not accept the terms. Set {API_KEY_ENV} to your key first.')

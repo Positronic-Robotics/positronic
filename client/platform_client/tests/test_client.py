@@ -1074,6 +1074,9 @@ def test_every_endpoint_has_exactly_one_method():
         'create_purchase',
         'get_purchase',
         'list_purchases',
+        'platform_terms',
+        'platform_entry',
+        'accept_platform_terms',
     }
     assert len(declared) == len(methods)
     assert methods <= set(vars(PlatformClient))

@@ -72,6 +72,30 @@ first loses the key the platform minted. Pass `timeout=client.register_timeout()
 deadline for the WorkOS check, and covers the longest check the platform runs. Without `timeout`,
 `register` sends one request and waits 90 s.
 
+## Platform terms
+
+The platform can refuse a call from an account that has not accepted its terms. The refusal is
+`403 forbidden`, and its message names the version, the page of the terms, and the command that
+accepts them. A person reads the terms and accepts them once. A new version of the terms can need a
+new acceptance.
+
+`PlatformClient.platform_terms()` reads the current version and the page, with no key.
+`platform_entry()` reads the version that the account accepted last. `accept_platform_terms(version)`
+records the acceptance. The version is a check: the platform refuses one that is not current, so a
+version published after the person read the terms is never accepted in their place. The models
+live in `platform_client.terms`.
+
+From the command line, `positronic account terms` prints the terms and the acceptance on record, and
+`positronic account accept-terms` accepts the version that you read. `positronic account register`
+prints the terms after it registers, and `--accept_terms` accepts them with the key that it mints.
+A version such as `1.3` reads as a number on the command line, so quote it with inner quotes.
+
+```bash
+uv run positronic account terms
+uv run positronic account accept-terms --version='"<version>"'
+uv run positronic account register --alias=<display name> --accept_terms='"<version>"'
+```
+
 ## Credit accounts
 
 `PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.

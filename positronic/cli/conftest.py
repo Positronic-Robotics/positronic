@@ -41,6 +41,8 @@ def runs_of_four(secret: str) -> set[str]:
 
 
 GITHUB_ONLY_AUTH_CONFIG = {'github_registration': True, 'workos': None}
+# A platform with no terms, unless a test answers `terms.get`.
+NO_PLATFORM_TERMS = {'program': 'platform', 'terms': None}
 # What a platform built against this client names in every answer.
 SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 
@@ -49,7 +51,8 @@ class StubPlatform:
     """Records what a command sent, and the URL and key it was sent with, and answers a canned payload.
 
     A payload that is a model goes out as the library dumps it; any other payload goes out as it is. It
-    takes GitHub tokens alone unless a test answers `auth.config`.
+    takes GitHub tokens alone unless a test answers `auth.config`, and has no terms unless a test answers
+    `terms.get`.
     """
 
     def __init__(self):
@@ -59,6 +62,7 @@ class StubPlatform:
         self.by_route: dict[str, tuple[object, int]] = {}
         self.in_turn: dict[str, list[tuple[object, int]]] = {}
         self.paths: list[str] = []
+        self.sent: list[httpx.Request] = []
         self.base_url: str | None = None
         self.api_key: ApiKey | None = None
         self.no_answer: httpx.TransportError | None = None
@@ -78,6 +82,7 @@ class StubPlatform:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.seen = request
+        self.sent.append(request)
         self.paths.append(request.url.path)
         if self.no_answer is not None and self.no_answer_on in (None, request.url.path):
             raise self.no_answer
@@ -85,6 +90,8 @@ class StubPlatform:
             payload, status = queued.pop(0)
         elif request.url.path == routes.AUTH_CONFIG and routes.AUTH_CONFIG not in self.by_route:
             payload, status = GITHUB_ONLY_AUTH_CONFIG, 200
+        elif request.url.path == routes.TERMS_GET and routes.TERMS_GET not in self.by_route:
+            payload, status = NO_PLATFORM_TERMS, 200
         else:
             payload, status = self.by_route.get(request.url.path, (self.payload, self.status))
         body = payload.model_dump(mode='json') if isinstance(payload, BaseModel) else payload
@@ -98,6 +105,15 @@ class StubPlatform:
     @property
     def body(self) -> dict:
         return json.loads(self.request.content)
+
+    def request_to(self, path: str) -> httpx.Request:
+        """The last request to `path`, for a command that calls more than one route."""
+        found = [request for request in self.sent if request.url.path == path]
+        assert found, f'no request reached {path}'
+        return found[-1]
+
+    def body_to(self, path: str) -> dict:
+        return json.loads(self.request_to(path).content)
 
 
 @pytest.fixture

@@ -71,6 +71,15 @@ from platform_client.responses import (
     SubmissionListResponse,
     SubmissionView,
 )
+from platform_client.terms import (
+    AcceptTermsRequest,
+    Program,
+    ProgramEntry,
+    ProgramEntryResponse,
+    ProgramQuery,
+    Terms,
+    TermsResponse,
+)
 from pydantic import BaseModel, TypeAdapter
 
 M = TypeVar('M', bound=BaseModel)
@@ -223,6 +232,21 @@ class PlatformClient:
 
     def me(self) -> MeResponse:
         return self._get(routes.USERS_ME, MeResponse)
+
+    def platform_terms(self) -> Terms | None:
+        """The current platform terms, or None where the platform has none. It sends no key."""
+        query = ProgramQuery(program=Program.platform)
+        return self._get(routes.TERMS_GET, TermsResponse, query=query, auth=Auth.NONE).terms
+
+    def platform_entry(self) -> ProgramEntry | None:
+        """The caller's entry in the platform program, which holds the terms version it accepted last."""
+        query = ProgramQuery(program=Program.platform)
+        return self._get(routes.PROGRAMS_ENTRY, ProgramEntryResponse, query=query).entry
+
+    def accept_platform_terms(self, version: str) -> ProgramEntry:
+        """Record that the person accepted the platform terms of `version`. The platform refuses a version that
+        is not current. A repeat keeps the time of the first acceptance."""
+        return self._post(routes.PLATFORM_ACCEPT_TERMS, AcceptTermsRequest(terms_version=version), ProgramEntry)
 
     def billing_account(self, org: OrgSlug) -> BillingAccount:
         return self._get(routes.BILLING_ACCOUNT, BillingAccount, query=BillingOrgQuery(org=org))
