@@ -83,8 +83,9 @@ class _Arm(DriverRun[command.CommandType]):
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_HZ)
         self.controller = controller
-        # A Cartesian target further than this from the base is held on the sphere of this radius: near full reach the
-        # joints turn fast for a small move of the tool, and the controller stopped the arm on a following error there
+        # A Cartesian target whose wrist is further than this from the shoulder moves, with the same rotation, until
+        # the wrist is on the sphere of this radius: near full stretch the joints turn fast for a small move of the
+        # tool, and the controller stopped the arm on a following error there
         self.max_reach = max_reach
         self._at_reach = False
         self.out = out
@@ -113,15 +114,19 @@ class _Arm(DriverRun[command.CommandType]):
             self.controller.stop_move()
 
     def _within_reach(self, pose: geom.Transform3D) -> geom.Transform3D:
-        """``pose``, or the pose on the sphere of ``max_reach`` toward it, with the same rotation."""
-        distance = float(np.linalg.norm(pose.translation))
+        """``pose``, or ``pose`` moved toward the shoulder until its wrist is ``max_reach`` from it."""
+        reach = self.controller.wrist(pose) - self.controller.shoulder
+        distance = float(np.linalg.norm(reach))
         if self.max_reach is None or distance <= self.max_reach:
             self._at_reach = False
             return pose
         if not self._at_reach:
-            logger.info(f'{self.controller.ip}: a target {distance:.2f} m away is held at {self.max_reach} m')
+            logger.info(
+                f'{self.controller.ip}: a target with the wrist {distance:.2f} m from the shoulder is held at '
+                f'{self.max_reach} m'
+            )
             self._at_reach = True
-        return geom.Transform3D(np.asarray(pose.translation) * (self.max_reach / distance), pose.rotation)
+        return geom.Transform3D(pose.translation + reach * (self.max_reach / distance - 1), pose.rotation)
 
     def _to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints ``cmd`` asks the arm to hold, solved from the joints it reads now."""

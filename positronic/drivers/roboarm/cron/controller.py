@@ -117,6 +117,11 @@ class CronController:
         self.projects = tuple(projects)
         self.tool = geom.Transform3D(translation=np.array([0.0, 0.0, tool_length]))
         self.mount = geom.Transform3D.identity
+        # The shoulder (on the axis of joint 2) and the move from a tool pose to the wrist (on the axis of joint 6, one
+        # link short of the flange), from the model of the controller. The two long links set how far the wrist can go
+        # from the shoulder
+        self.shoulder = np.zeros(3)
+        self._tool_to_wrist = self.tool.inv
         self._has_control = False
         self._waypoint_id = 0
 
@@ -134,6 +139,9 @@ class CronController:
             if not np.linalg.norm(up) > 0:
                 raise RuntimeError(f'the controller has no gravity set ({up}): the up direction of the base is unknown')
             self.mount = level(up)
+            dh = rctl.model_get_dh()
+            self.shoulder = (self.mount * geom.Transform3D(translation=np.array([0.0, 0.0, dh[0]['d']]))).translation
+            self._tool_to_wrist = self.tool.inv * geom.Transform3D(translation=np.array([0.0, 0.0, -dh[-1]['d']]))
             rctl.take_control()
             self._has_control = True
             self._clear_errors()
@@ -210,6 +218,10 @@ class CronController:
         if solved['err']:
             raise ValueError(f'no pose for joints {np.round(q, 3)}: {solved["err_code"]}')
         return self.mount * to_pose(np.asarray(solved['pose'], dtype=np.float64)) * self.tool
+
+    def wrist(self, pose: geom.Transform3D) -> np.ndarray:
+        """The point of the wrist when the tool is at ``pose``."""
+        return np.asarray((pose * self._tool_to_wrist).translation, dtype=np.float64)
 
     def inverse(self, pose: geom.Transform3D, seed: np.ndarray) -> np.ndarray:
         """The joints that put the tool at ``pose``, of the controller's solutions the nearest to ``seed``."""
