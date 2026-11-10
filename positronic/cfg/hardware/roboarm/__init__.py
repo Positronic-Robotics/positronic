@@ -96,8 +96,16 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects,
     )
 
 
+# The DH AG-160-95 on its adapter in the collision model: 225 mm from the flange to the finger tips, 162 by 76 mm
+# across, on the axis of the flange. Four capsules of the half thickness, two along each axis of the flange, cover the
+# wide side in either direction
+_DH_GRIPPER_CAPSULES = [
+    {'length': 0.225 - 2 * 0.038, 'radius': 0.038, 'xyz': [x, y, 0.038], 'rpy': [0.0, 0.0, 0.0]}
+    for x, y in ((0.043, 0.0), (-0.043, 0.0), (0.0, 0.043), (0.0, -0.043))
+]
+
 # A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
-cron_with_gripper = cron.override(projects=['gripper_bridge'])
+cron_with_gripper = cron.override(projects=['gripper_bridge'], tool_capsules=_DH_GRIPPER_CAPSULES)
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)
