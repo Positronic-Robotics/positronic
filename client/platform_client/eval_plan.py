@@ -291,9 +291,9 @@ def credential_from_file(username: str, password_file: Path) -> RegistryCredenti
     return RegistryCredential(username=username, password=SecretStr(password_from_file(password_file)))
 
 
-# An endpoint overrides one cascading property; every other property of `Cascade` is per task.
-_ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
-_PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
+# An endpoint overrides its count, its episode window and its preset; every other property of `Cascade` is per task.
+_ENDPOINT_OVERRIDES = frozenset({'episodes_per_endpoint', 'cap_per_episode_sec', 'policy_preset'})
+_PER_TASK_ONLY = frozenset(Cascade.model_fields) - _ENDPOINT_OVERRIDES
 
 
 class _EndpointBase(Cascade):
@@ -437,7 +437,7 @@ class _EndpointBase(Cascade):
         return self
 
     @model_validator(mode='after')
-    def _overrides_only_the_count(self) -> Self:
+    def _overrides_only_its_own_settings(self) -> Self:
         # A dump carries every field, and a plan read back from its own JSON therefore sets them
         # all, so what is refused is a per-task field carrying a value rather than one a dump names.
         fields = type(self).model_fields
@@ -449,7 +449,7 @@ class _EndpointBase(Cascade):
         if stated:
             raise ValueError(
                 f'endpoint {self.name!r} states {", ".join(stated)}, which are per-task properties: '
-                f'an endpoint overrides only {_ENDPOINT_OVERRIDES}'
+                f'an endpoint overrides only {", ".join(sorted(_ENDPOINT_OVERRIDES))}'
             )
         return self
 
@@ -647,9 +647,9 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
     count per endpoint.
 
     The plan states the count once. A task may override it for that task, and an endpoint for that
-    endpoint. It either states its own tasks or names an eval the platform offers, and the catalogue
-    expands that name into the same tasks. The plan carries no client field: the gateway reads the
-    client from the key's grant.
+    endpoint; an endpoint may also state its own episode window and preset. It either states its own
+    tasks or names an eval the platform offers, and the catalogue expands that name into the same
+    tasks. The plan carries no client field: the gateway reads the client from the key's grant.
     """
 
     _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*Cascade._OMITTED_WHEN_NONE, 'sample')
@@ -791,6 +791,12 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
             if cap is not None and cap > ceiling:
                 raise ValueError(
                     f'task {task.task_id!r} takes {cap} s per episode, over the plan ceiling of {ceiling} s'
+                )
+        for entry in self.endpoints + [entry for task in self.tasks for entry in task.endpoints or []]:
+            cap = entry.cap_per_episode_sec
+            if cap is not None and cap > ceiling:
+                raise ValueError(
+                    f'endpoint {entry.name!r} takes {cap} s per episode, over the plan ceiling of {ceiling} s'
                 )
         return self
 

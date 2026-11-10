@@ -127,9 +127,16 @@ def test_a_task_label_names_a_plan_endpoint():
         a_plan(tasks=[{'task_id': SPOONS, 'endpoints': ['phantom']}])
 
 
-def test_an_endpoint_overrides_only_its_count():
-    with pytest.raises(ValidationError, match='per-task properties'):
-        a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 60}])
+def test_an_endpoint_states_its_own_cap_and_preset():
+    plan = a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 480, 'policy_preset': 'long'}, CANDIDATE])
+    assert plan.endpoints[0].cap_per_episode_sec == 480 and plan.endpoints[0].policy_preset == 'long'
+    assert plan.endpoints[1].cap_per_episode_sec is None and plan.endpoints[1].policy_preset is None
+
+
+def test_a_task_entry_states_its_own_cap_and_preset():
+    plan = a_plan(tasks=[{'task_id': SPOONS, 'endpoints': [{'name': 'baseline', 'cap_per_episode_sec': 480}]}])
+    entries = plan.tasks[0].endpoints
+    assert entries is not None and entries[0].cap_per_episode_sec == 480
 
 
 def test_a_served_endpoint_names_its_spec_and_its_wire_and_no_address():
@@ -140,12 +147,16 @@ def test_a_served_endpoint_names_its_spec_and_its_wire_and_no_address():
         Endpoint.model_validate({**remote('pi05'), 'kind': 'served', 'provider': 'cohost', 'spec': 's'})
 
 
-def test_an_endpoint_states_only_a_locator_and_its_own_count():
+def test_an_endpoint_states_only_a_locator_and_its_own_settings():
     # The check names what an endpoint may state, so a field added to `Cascade` is refused here
     # rather than accepted in silence, and the refusal names every field it found.
     with pytest.raises(ValidationError, match='which are per-task properties'):
-        Endpoint.model_validate({**BASELINE, 'policy_preset': 'p'})
-    with pytest.raises(ValidationError, match='cap_per_episode_sec, tote_placement'):
+        Endpoint.model_validate({**BASELINE, 'scene_seed': 'scene-a'})
+    with pytest.raises(ValidationError, match='start_pose, tote_placement'):
+        Endpoint.model_validate({**BASELINE, 'tote_placement': 'left', 'start_pose': 'droid_reset'})
+    with pytest.raises(
+        ValidationError, match='overrides only cap_per_episode_sec, episodes_per_endpoint, policy_preset'
+    ):
         Endpoint.model_validate({**BASELINE, 'tote_placement': 'left', 'cap_per_episode_sec': 30})
     allowed = Endpoint.model_validate({**BASELINE, 'episodes_per_endpoint': 2})
     assert allowed.episodes_per_endpoint == 2
@@ -154,13 +165,16 @@ def test_an_endpoint_states_only_a_locator_and_its_own_count():
 def test_an_endpoint_reads_back_from_its_own_dump():
     # A dump names every field, so the check reads what each one carries: a plan the client sends
     # is one the platform validates from that JSON.
-    entry = Endpoint.model_validate({**BASELINE, 'episodes_per_endpoint': 2})
+    entry = Endpoint.model_validate({
+        **BASELINE,
+        'episodes_per_endpoint': 2,
+        'cap_per_episode_sec': 480,
+        'policy_preset': 'long',
+    })
     assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
 
 
 A_PER_TASK_VALUE = {
-    'cap_per_episode_sec': 60,
-    'policy_preset': 'other',
     'tote_placement': 'left',
     'camera_vantage': 'phail',
     'external_cameras': {'side': 'left'},
@@ -171,9 +185,9 @@ A_PER_TASK_VALUE = {
 
 
 def test_an_endpoint_refuses_every_per_task_property():
-    """An endpoint refuses every property of `Cascade` but the count. The equality assert keeps
+    """An endpoint refuses every property of `Cascade` but the ones it overrides. The equality assert keeps
     `A_PER_TASK_VALUE` complete, so a field added to `Cascade` fails here until it has a value."""
-    assert _ENDPOINT_OVERRIDES in Cascade.model_fields
+    assert _ENDPOINT_OVERRIDES <= set(Cascade.model_fields)
     assert set(A_PER_TASK_VALUE) == _PER_TASK_ONLY
     # A field of `Endpoint` itself does not cascade, so it is never per task.
     assert not _PER_TASK_ONLY & (set(Endpoint.model_fields) - set(Cascade.model_fields))
@@ -182,8 +196,13 @@ def test_an_endpoint_refuses_every_per_task_property():
             Endpoint.model_validate({**BASELINE, name: value})
 
 
-def test_an_endpoint_states_the_one_property_it_overrides():
-    assert Endpoint.model_validate({**BASELINE, _ENDPOINT_OVERRIDES: 2}).episodes_per_endpoint == 2
+AN_ENDPOINT_SETTING = {'episodes_per_endpoint': 2, 'cap_per_episode_sec': 480, 'policy_preset': 'long'}
+
+
+def test_an_endpoint_states_each_property_it_overrides():
+    assert set(AN_ENDPOINT_SETTING) == _ENDPOINT_OVERRIDES
+    for name, value in AN_ENDPOINT_SETTING.items():
+        assert getattr(Endpoint.model_validate({**BASELINE, name: value}), name) == value
 
 
 def test_a_scene_is_flat_on_every_level():
@@ -257,6 +276,22 @@ def test_every_cap_sits_under_the_ceiling():
     with pytest.raises(ValidationError, match='over the plan ceiling'):
         a_plan(max_cap_per_episode_sec=100, tasks=[{'task_id': SPOONS, 'cap_per_episode_sec': 120}])
     assert a_plan(max_cap_per_episode_sec=100, cap_per_episode_sec=100).cap_per_episode_sec == 100
+
+
+def test_the_ceiling_bounds_the_cap_of_a_plan_endpoint():
+    with pytest.raises(ValidationError, match="endpoint 'baseline' takes 120 s per episode, over the plan ceiling"):
+        a_plan(max_cap_per_episode_sec=100, endpoints=[{**BASELINE, 'cap_per_episode_sec': 120}, CANDIDATE])
+
+
+def test_the_ceiling_bounds_the_cap_of_a_task_entry():
+    entry = {'name': 'baseline', 'cap_per_episode_sec': 120}
+    with pytest.raises(ValidationError, match="endpoint 'baseline' takes 120 s per episode, over the plan ceiling"):
+        a_plan(max_cap_per_episode_sec=100, tasks=[{'task_id': SPOONS, 'endpoints': [entry]}])
+
+
+def test_an_endpoint_cap_at_the_ceiling_passes():
+    plan = a_plan(max_cap_per_episode_sec=100, endpoints=[{**BASELINE, 'cap_per_episode_sec': 100}, CANDIDATE])
+    assert plan.endpoints[0].cap_per_episode_sec == 100
 
 
 def test_a_plan_names_its_rig_shape_and_runs_on_a_franka_when_it_names_none():

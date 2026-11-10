@@ -1114,6 +1114,39 @@ def test_the_episode_order_serves_each_endpoint_its_count():
         ResolvedTask.model_validate({**RESOLVED_TASK.model_dump(mode='json'), 'episode_order': ['pi05', 'baseline']})
 
 
+def test_an_episode_runs_with_the_window_and_preset_its_endpoint_states():
+    own = ResolvedEndpoint(
+        name='pi05',
+        kind=EndpointKind.served,
+        wire=Wire.websocket_unix,
+        provider='droid_cohost',
+        spec='pi05',
+        episodes=1,
+        cap_per_episode_sec=480,
+        policy_preset='long',
+    )
+    task = RESOLVED_TASK.model_copy()
+    task.endpoints = [RESOLVED_TASK.endpoints[0], own]
+    assert (task.cap_of('pi05'), task.preset_of('pi05')) == (480, 'long')
+
+
+def test_an_endpoint_that_states_no_window_or_preset_runs_with_the_task_s():
+    assert (RESOLVED_TASK.cap_of('baseline'), RESOLVED_TASK.preset_of('baseline')) == (90, 'example_candidate')
+
+
+def test_an_answer_with_no_endpoint_window_reads_the_task_s():
+    # An answer from a platform that names no window on an endpoint.
+    payload = RESOLVED_TASK.model_dump(mode='json')
+    for endpoint in payload['endpoints']:
+        del endpoint['cap_per_episode_sec'], endpoint['policy_preset']
+    assert ResolvedTask.model_validate(payload).cap_of('pi05') == 90
+
+
+def test_the_window_of_an_endpoint_the_task_does_not_run_is_refused():
+    with pytest.raises(KeyError):
+        RESOLVED_TASK.cap_of('phantom')
+
+
 def test_a_resolved_endpoint_names_a_wire():
     # A resolved endpoint is concrete: every kind names the wire its session runs over.
     payload = RESOLVED_TASK.endpoints[0].model_dump(mode='json')
