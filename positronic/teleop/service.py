@@ -233,7 +233,7 @@ class TeleopService:
         self._binds = served_address
         self._auth_token = auth_token
         # The cameras of the station: a session that names no cameras gets these
-        self.station_cameras = camera_names(list(cameras))
+        self.station_cameras = camera_names(cameras)
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
         self._buttons = ButtonMap(hold_sec, press_threshold)

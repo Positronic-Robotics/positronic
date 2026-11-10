@@ -490,7 +490,10 @@ def test_the_page_input_emits_each_object_that_the_page_posts(world):
         assert httpx.post(base + '/input', content=b'not json', timeout=1.0).status_code == 422
         foreign = {'origin': 'https://elsewhere.example'}
         assert httpx.post(base + '/input', json={}, headers=foreign, timeout=1.0).status_code == 403
-    assert [data for _, data in inputs.emitted] == [{'headset_camera': keys.WRIST_IMAGE}]
+        other_scheme = {'origin': base.replace('http://', 'https://')}
+        assert httpx.post(base + '/input', json={}, headers=other_scheme, timeout=1.0).status_code == 403
+        assert httpx.post(base + '/input', json={'x': 1}, headers={'origin': base}, timeout=1.0).status_code == 200
+    assert [data for _, data in inputs.emitted] == [{'headset_camera': keys.WRIST_IMAGE}, {'x': 1}]
 
 
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():

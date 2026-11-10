@@ -246,7 +246,8 @@ class WebXR(pimm.ControlSystem):
             # A browser sends `Origin` with each cross-site POST: a page on another site cannot choose for the
             # teleoperator. A client that sends none passes, as the controller stream does.
             origin = request.headers.get('origin')
-            if origin is not None and urlparse(origin).netloc != request.url.netloc:
+            parsed = None if origin is None else urlparse(origin)
+            if parsed is not None and (parsed.scheme, parsed.netloc) != (request.url.scheme, request.url.netloc):
                 raise HTTPException(403, 'cross-origin request refused')
             try:
                 body = await request.json()

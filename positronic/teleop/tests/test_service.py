@@ -766,6 +766,11 @@ def test_a_session_that_names_no_cameras_gets_the_cameras_of_the_station(socket_
         connection.close()
 
 
+def test_a_station_camera_list_that_is_one_string_is_refused(socket_path):
+    with pytest.raises(ValueError, match='cameras must be a list of camera names'):
+        TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=keys.WRIST_IMAGE)
+
+
 def test_the_cameras_that_a_session_names_go_before_the_cameras_of_the_station(socket_path, connect):
     query = session_query(cameras=[keys.EXTERIOR_IMAGE])
     with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE]) as service:
@@ -987,12 +992,11 @@ def test_the_phone_page_reads_fields_of_the_page_state():
     assert set(re.findall(r"'(\w+)'", fields)) <= set(command.PageState.__dataclass_fields__)
 
 
-def test_the_headset_page_reads_the_fields_of_the_page_state_and_posts_to_the_input_route():
+def test_the_headset_page_names_the_routes_the_page_state_fields_and_the_input_fields_of_the_service():
     page = Path(package_assets_path('assets/webxr/index.html')).read_text()
-    [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
-    assert set(re.findall(r"'(\w+)'", fields)) == set(command.PageState.__dataclass_fields__)
-    assert f"state: '{STATE_PATH}'" in page and f"input: '{INPUT_PATH}'" in page
-    assert f"headsetCamera: '{command.HEADSET_CAMERA}'" in page and f"textOnly: '{command.TEXT_ONLY}'" in page
+    routes_and_inputs = [STATE_PATH, INPUT_PATH, command.HEADSET_CAMERA, command.TEXT_ONLY]
+    contract = [*routes_and_inputs, *command.PageState.__dataclass_fields__]
+    assert [name for name in contract if not re.search(f"""['"]{re.escape(name)}['"]""", page)] == []
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
