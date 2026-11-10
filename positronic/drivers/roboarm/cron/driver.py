@@ -17,7 +17,9 @@ _HZ = 200
 # At relative_dynamics_factor 1.0. TODO: read the limits of the arm from the controller
 _MAX_JOINT_SPEED = 1.0  # rad/s
 _MAX_JOINT_ACCEL = 4.0  # rad/s^2
-_GAIN = 6.0  # 1/s
+# The joints of the wrist (4 to 6) carry only the tool, and a turn of the flange is slow at the speed of the shoulder
+_WRIST_SCALE = np.array([1.0, 1.0, 1.0, 2.0, 2.0, 2.0])
+_GAIN = 8.0  # 1/s
 # A loop that runs late must not step the velocity by more than a few ticks
 _MAX_STEP_S = 5.0 / _HZ
 # Radians; the arm reports joints but no goal, so arrival is judged from the joints it reads
@@ -128,8 +130,8 @@ class _Arm(DriverRun[command.CommandType]):
         self.controller = controller
         self.out = out
         self.state = CronState()
-        self.max_speed = dynamics_factor * _MAX_JOINT_SPEED
-        self.max_accel = dynamics_factor * _MAX_JOINT_ACCEL
+        self.max_speed = dynamics_factor * _MAX_JOINT_SPEED * _WRIST_SCALE
+        self.max_accel = dynamics_factor * _MAX_JOINT_ACCEL * _WRIST_SCALE
         self.reading = controller.read()
         self._condition = (self.reading.power, self.reading.in_error)
         self.target: np.ndarray | None = None
@@ -153,7 +155,7 @@ class _Arm(DriverRun[command.CommandType]):
             self._deferred = None
             self.controller.stop_move()
 
-    def _follow(self, pose: geom.Transform3D, seed: np.ndarray, max_turn: float) -> np.ndarray:
+    def _follow(self, pose: geom.Transform3D, seed: np.ndarray, max_turn: np.ndarray) -> np.ndarray:
         """The joints a few damped least squares steps from ``seed`` toward the tool at ``pose``, each joint at most
         ``max_turn`` from ``seed``, with the elbow on its side, and not nearer the arm itself than the clearance."""
         joints = np.array(seed, dtype=np.float64)
@@ -172,7 +174,7 @@ class _Arm(DriverRun[command.CommandType]):
             if side * elbow < least:
                 joints[_ELBOW] += side * least - elbow
         turn = joints - seed
-        joints = seed + turn * min(1.0, max_turn / max(float(np.max(np.abs(turn))), 1e-12))
+        joints = seed + turn * min(1.0, float(np.min(max_turn / np.maximum(np.abs(turn), 1e-12))))
         if _drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
             return np.array(seed, dtype=np.float64)
         clearance = self.controller.clearance(joints)
@@ -225,8 +227,10 @@ class _Arm(DriverRun[command.CommandType]):
                 self.controller.resume()
                 self._deferred = target
             else:
-                self.controller.move_to(target, self.max_speed, self.max_accel)
-            travel_s = _MOVE_GRACE_S + _MOVE_SLACK * float(np.max(np.abs(target - self.reading.q)) / self.max_speed)
+                self.controller.move_to(target, float(self.max_speed.min()), float(self.max_accel.min()))
+            travel_s = _MOVE_GRACE_S + _MOVE_SLACK * float(
+                np.max(np.abs(target - self.reading.q)) / self.max_speed.min()
+            )
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), travel_s)
 
     def step(self) -> None:
@@ -242,7 +246,7 @@ class _Arm(DriverRun[command.CommandType]):
             self.velocity[:] = 0.0
             return
         if self._deferred is not None:
-            self.controller.move_to(self._deferred, self.max_speed, self.max_accel)
+            self.controller.move_to(self._deferred, float(self.max_speed.min()), float(self.max_accel.min()))
             self._deferred = None
         if self.target is None:
             return
