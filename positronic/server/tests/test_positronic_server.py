@@ -1084,25 +1084,32 @@ def test_a_summary_column_that_is_no_column_of_the_episode_table_is_refused():
         )
 
 
-def test_the_header_counts_a_formatted_column_as_the_table_cell_shows_it():
-    table = {OUTCOME: ColumnConfig(label='Items', format='%d items')}
-    summary = _summary_of({OUTCOME: 2}, {OUTCOME: 2}, {OUTCOME: 1}, table=table)
+def test_a_summary_column_with_a_format_is_refused():
+    with app_state_restored(), pytest.raises(ValueError, match='has a format'):
+        configure_tables(
+            root='',
+            cache_dir=Path(),
+            ep_table_cfg={OUTCOME: ColumnConfig(label='Items', format='%d items')},
+            group_tables=None,
+            home_page=None,
+            max_resolution=64,
+            max_hz=0,
+            layout=None,
+            summary_column=OUTCOME,
+        )
 
-    assert _sent_counts(summary) == _counts(([2, '2 items'], 2), ([1, '1 items'], 1))
+
+def test_a_bool_and_an_equal_number_count_as_two_values():
+    table = {OUTCOME: ColumnConfig(label='Done')}
+    summary = _summary_of({OUTCOME: True}, {OUTCOME: 1}, {OUTCOME: 1}, {OUTCOME: False}, {OUTCOME: 0}, table=table)
+
+    assert _sent_counts(summary) == _counts((1, 2), (False, 1), (True, 1), (0, 1))
 
 
 def test_a_summary_column_holding_a_list_is_refused_when_the_header_reads_it():
     table = {OUTCOME: ColumnConfig(label='Tags')}
     with pytest.raises(ValueError, match='holds a list in episode 1'):
         _summary_of({OUTCOME: 'a'}, {OUTCOME: ['a', 'b']}, table=table)
-
-
-def test_a_formatted_column_keeps_the_order_its_renderer_lists():
-    renderer = RendererConfig(type='badge', options={2: {'label': 'Two'}, 1: {'label': 'One'}})
-    table = {OUTCOME: ColumnConfig(label='Items', format='%d items', renderer=renderer)}
-    summary = _summary_of({OUTCOME: 1}, {OUTCOME: 1}, {OUTCOME: 2}, table=table)
-
-    assert _sent_counts(summary) == _counts(([2, '2 items'], 1), ([1, '1 items'], 2))
 
 
 def test_the_header_counts_a_synthetic_column_from_the_value_the_table_computes():

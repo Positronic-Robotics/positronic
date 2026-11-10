@@ -133,8 +133,8 @@ def _log_static_trail(rec: rr.RecordingStream, entity_path: str, positions: np.n
 INDEX_COLUMN = '__index__'
 
 
-def format_cell(value: Any, formatter: str | None, default: Any) -> Any:
-    """The table cell for `value`: `[raw, formatted]` with a formatter or a datetime, else the value or `default`."""
+def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
+    """Formats a single value based on its type and provided formatters/defaults."""
     if isinstance(value, datetime):
         formatted_date = value.strftime(formatter) if formatter else value.isoformat()
         return [value.timestamp(), formatted_date]
@@ -154,7 +154,7 @@ def get_episodes_list(
         try:
             episode_index = ep.pop('__episode_index__', idx)
             mapping = {INDEX_COLUMN: episode_index, **ep}
-            episode_data = [format_cell(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
+            episode_data = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
             row = [episode_index, episode_data]
 
             # Include group metadata if available for using it in URL

@@ -45,7 +45,6 @@ from positronic.server.dataset_utils import (
     DEFAULT_MAX_RESOLUTION,
     INDEX_COLUMN,
     ReplayLayout,
-    format_cell,
     get_dataset_root,
     get_episodes_list,
     sampled_duration_timeline,
@@ -722,40 +721,37 @@ class ColumnSummary:
     counts: list[ValueCount]
 
 
-# The value types a summary column counts.
-SUMMARY_VALUE_TYPES = (str, int, float, bool, datetime)
+# The value types a summary column counts. Each counts apart, so `True` and `1` are two values.
+SUMMARY_VALUE_TYPES = (str, int, float, bool)
 
 
 def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
-    """The value each episode shows in the `key` column of the episode table, with its count.
+    """The value each episode holds in the `key` column of the episode table, with its count.
 
-    The episodes are counted by the raw value, or by the column default where the value is absent. Each count sends
-    the cell the table draws for that value, with the column's format. An episode with neither is not counted. The
-    values a renderer lists come first, in its order, and the others follow by count. Raises ValueError on a value
-    that is not one of `SUMMARY_VALUE_TYPES`.
+    An absent value counts as the column default; with no default, the episode is not counted. The values a
+    renderer lists come first, in its order, and the others follow by count. Raises ValueError on a value that is
+    not one of `SUMMARY_VALUE_TYPES`.
     """
-    counts: Counter[Any] = Counter()
+    counts: Counter[tuple[type, Any]] = Counter()
     for index, episode in enumerate(ds):
         stored = {INDEX_COLUMN: index, **episode_table_row(index, episode)}.get(key)
         value = cfg.default if stored is None else stored
         if value is None:
             continue
-        if not isinstance(value, SUMMARY_VALUE_TYPES):
+        if type(value) not in SUMMARY_VALUE_TYPES:
             raise ValueError(
                 f'summary_column {key!r} holds a {type(value).__name__} in episode {index}; a summary counts '
                 f'{", ".join(kind.__name__ for kind in SUMMARY_VALUE_TYPES)} values only'
             )
-        counts[value] += 1
+        counts[type(value), value] += 1
     listed = {filter_spelling(value): rank for rank, value in enumerate(cfg.renderer.options if cfg.renderer else ())}
 
-    def place(item: tuple[Any, int]) -> tuple[int, int, str]:
-        value, count = item
-        return listed.get(filter_spelling(value), len(listed)), -count, str(value)
+    def place(item: tuple[tuple[type, Any], int]) -> tuple[int, int, str, str]:
+        (kind, value), count = item
+        return listed.get(filter_spelling(value), len(listed)), -count, kind.__name__, str(value)
 
     (column,), _, _ = parse_table_cfg({key: cfg})
-    return ColumnSummary(
-        column, [ValueCount(format_cell(value, cfg.format, None), n) for value, n in sorted(counts.items(), key=place)]
-    )
+    return ColumnSummary(column, [ValueCount(value, n) for (_, value), n in sorted(counts.items(), key=place)])
 
 
 def parse_table_cfg(table_cfg: TableConfig) -> tuple:
@@ -1157,7 +1153,8 @@ def configure_tables(
 
     `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
     each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
-    `summary_column` names a column of the episode table whose values the page header counts, or None for no count.
+    `summary_column` names a column of the episode table with no format whose values the page header counts, or
+    None for no count.
     A recording's videos are re-encoded down to `max_resolution` on the long side, and its raw image streams and
     its numeric signals with a known nanosecond clock are thinned to `max_hz`; 0 disables thinning. It shows its
     views as `layout` places them, or as `stream_episode_rrd` places them without one. `root` is the dataset
@@ -1185,6 +1182,8 @@ def configure_tables(
             f'summary_column {summary_column!r} is no column of the episode table; '
             f'the columns are {sorted(episode_columns)}'
         )
+    if summary_column is not None and (ep_table_cfg or {})[summary_column].format is not None:
+        raise ValueError(f'summary_column {summary_column!r} has a format; the header shows a raw value only')
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['episode_table_cfg'] = ep_table_cfg or {}
