@@ -3054,6 +3054,60 @@ def test_a_recover_call_that_libfranka_clears_runs_the_desk_step_while_desk_hold
     assert not desk.generic_joint_error and not desk.fsoe_error
 
 
+_ONLY_A_REBOOT_CLEARS = [
+    StartFailure.SAFETY_ERROR,
+    StartFailure.STRANDED_TOKEN,
+    StartFailure.FSOE,
+    StartFailure.PROGRAMMING_MODE,
+]
+
+
+def _run_with_a_control_box_fault_desk_refuses(desk, world, monkeypatch, failure: StartFailure) -> _Run:
+    """A run whose arm the safety controller holds for a control box fault, where the Desk step meets ``failure``."""
+    monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    run = _start_run(world, driver, ticks=3)
+    _reconnect_to(monkeypatch, FakeArm(PARK))
+    desk.generic_joint_error = True
+    failure.script(desk, driver, arm, monkeypatch)
+    _until_the_watch_reads_again(desk)
+    return run
+
+
+@pytest.mark.parametrize('failure', _ONLY_A_REBOOT_CLEARS)
+def test_a_ready_call_on_a_control_box_fault_only_a_reboot_clears_reboots_nothing_and_answers_why(
+    desk, world, monkeypatch, failure
+):
+    """A ready call comes with nobody at the rig asking, so the start stays refused until a recover call."""
+    run = _run_with_a_control_box_fault_desk_refuses(desk, world, monkeypatch, failure)
+    mark = len(desk.calls)
+
+    answer = run.ready(None)
+    run.tick()
+
+    with pytest.raises(DeviceFault, match='only a control box reboot clears') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert Call.REBOOT not in desk.calls[mark:]
+    assert RecoveryStep.REBOOTING not in run.step_names
+
+
+@pytest.mark.parametrize('failure', _ONLY_A_REBOOT_CLEARS)
+def test_a_recover_call_on_a_control_box_fault_only_a_reboot_clears_reboots_once_and_clears_it(
+    desk, world, monkeypatch, failure
+):
+    run = _run_with_a_control_box_fault_desk_refuses(desk, world, monkeypatch, failure)
+    mark = len(desk.calls)
+
+    answer = run.recover(None)
+    run.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert desk.calls[mark:].count(Call.REBOOT) == 1
+    assert not desk.generic_joint_error
+
+
 def test_a_recover_call_that_libfranka_clears_runs_no_desk_step_while_desk_holds_no_error(desk, world, monkeypatch):
     monkeypatch.setattr(franka._SafeInputs, '_POLL_S', 0.01)
     run = _start_run(world, _driver(FakeArm(PARK)))
