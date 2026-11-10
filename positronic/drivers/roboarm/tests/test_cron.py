@@ -12,7 +12,7 @@ from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm.cron import controller as cron_controller
 from positronic.drivers.roboarm.cron import driver as cron
-from positronic.drivers.roboarm.cron.controller import JOINTS, MotionMode, PowerState
+from positronic.drivers.roboarm.cron.controller import JOINTS, MotionMode, PowerState, to_pose
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
@@ -42,13 +42,14 @@ class FakeRctl:
         self.safety_latched = False
         self.stop_pressed = False
         self.gravity = np.array([0.0, 0.0, 9.81])
-        # The model of the arm: only the first four rows (the wrist from the axis of joint 1) reach the driver
-        self.dh = [{'a': 0.0, 'd': 0.0, 'alpha': 0.0, 'theta': 0.0} for _ in range(JOINTS)]
         # The real controller can answer IK with no error and NaN solutions
         self.ik_nan_solutions = 0
         self.ik_only_nan = False
-        # A turn of the fourth joint in each solution, as on a jump to another branch of the solutions
-        self.ik_branch_turn = 0.0
+        # A joint that moves nothing, as at a pose where the jacobian loses a rank
+        self.dead_joint: int | None = None
+        # The collision model: the clearance of the arm is how far the first joint is under this, if set
+        self.wall: float | None = None
+        self.tool_capsules: list[dict] = []
         self.error = False
         self.fail_power_run = False
         self.blocked = False
@@ -83,9 +84,6 @@ class FakeRctl:
 
     def get_gravity(self):
         return self.gravity.copy()
-
-    def model_get_dh(self):
-        return [dict(row) for row in self.dh]
 
     def take_control(self):
         self._call('take_control')
@@ -202,14 +200,32 @@ class FakeRctl:
         return list(geom.Rotation.from_quat_xyzw(list(quat)).as_euler)
 
     def compute_fk(self, q):
+        q = np.array(q, dtype=np.float64)
+        if self.dead_joint is not None:
+            q[self.dead_joint] = 0.0
         return {'err': False, 'err_code': 'NONE', 'pose': np.array([q[0], q[1], q[2], q[4], 0.0, q[5]])}
+
+    def model_set_tool_capsules(self, capsules):
+        self.tool_capsules = [dict(capsule) for capsule in capsules]
+
+    def model_is_collision(self, q):
+        clearance = 1.0 if self.wall is None else self.wall - q[0]
+        return {'lim': 0, 'coll': int(clearance <= 0), 'min_dist': max(clearance, 0.0), 'threshold': 0.005}
+
+    def jacob(self, q, in_tcp):
+        """As the controller gives it: the flange in the base frame, rows vx, vy, vz, wx, wy, wz."""
+        start, step, columns = to_pose(self.compute_fk(q)['pose']), 1e-7, []
+        for joint in range(JOINTS):
+            moved = to_pose(self.compute_fk(np.asarray(q) + step * np.eye(JOINTS)[joint])['pose'])
+            turn = (moved.rotation * start.rotation.inv).as_rotvec
+            columns.append(np.concatenate([(moved.translation - start.translation) / step, turn / step]))
+        return np.stack(columns, axis=1)
 
     def compute_ik(self, pose, seed):
         if np.any(np.abs(pose[:3]) > 1.0):
             return {'err': True, 'err_code': 'NO_SOLUTION', 'solutions': []}
         near = np.array(seed, dtype=np.float64)
         near[:3], near[4], near[5] = pose[:3], pose[3], pose[5]
-        near[3] += self.ik_branch_turn
         far = near.copy()
         far[0] += 2 * math.pi
         nans = [np.full(JOINTS, np.nan)] * self.ik_nan_solutions
@@ -289,57 +305,6 @@ def _stream(commands, loop, clock: MockClock, cmd: command.CommandType, ticks: i
         _pump(loop, clock, 20)
 
 
-def test_a_streamed_target_past_the_reach_stops_at_the_reach_on_the_way(rctl, driven):
-    """The fake IK has no solution past 1.0 on an axis."""
-    _, _, commands, clock, loop = driven()
-
-    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([1.4, 0.0, 0.7]))))
-
-    np.testing.assert_allclose(rctl.q[:3], [1.0, 0.0, 0.5], atol=0.01)
-
-
-def test_a_streamed_target_with_the_elbow_straighter_than_the_limit_stops_at_the_limit(rctl, driven):
-    """The fake IK puts the third coordinate on the elbow joint."""
-    _, _, commands, clock, loop = driven(min_elbow=0.2)
-    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 0.0, 0.4]))))
-
-    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.2, 0.0, 0.0]))))
-
-    np.testing.assert_allclose(rctl.q[:3], [0.1, 0.0, 0.2], atol=0.01)
-
-
-def test_a_streamed_target_with_the_wrist_nearer_a_straight_line_than_the_limit_stops_at_the_limit(rctl, driven):
-    """The fake IK puts the roll of the tool on joint 5."""
-    _, _, commands, clock, loop = driven(min_wrist=0.2)
-    roll = geom.Rotation.from_euler([0.4, 0.0, 0.0])
-    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(np.array([0.0, 0.0, 0.0]), roll)))
-
-    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(np.array([0.2, 0.0, 0.0]))))
-
-    np.testing.assert_allclose(np.sin(rctl.q[4]), np.sin(0.2), atol=0.01)
-    np.testing.assert_allclose(rctl.q[0], 0.1, atol=0.01)
-
-
-def test_a_streamed_target_with_the_wrist_nearer_the_axis_of_joint_1_than_the_limit_stops_at_the_limit(rctl, driven):
-    """Two links of 0.5 m in the plane of joint 1: the wrist is sqrt(0.5 + 0.5 cos q2) from its axis."""
-    rctl.dh[0]['a'], rctl.dh[1]['a'] = 0.5, 0.5
-    _, _, commands, clock, loop = driven(min_shoulder=0.9)
-
-    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 1.0, 0.0]))))
-
-    np.testing.assert_allclose(np.sqrt(0.5 + 0.5 * np.cos(rctl.q[1])), 0.9, atol=0.01)
-
-
-def test_a_streamed_target_whose_solution_jumps_to_another_branch_is_not_taken(rctl, driven):
-    """Up from the start pose, the IK of the controller turned the wrist by half a turn for 1 cm of the tool."""
-    _, _, commands, clock, loop = driven()
-    rctl.ik_branch_turn = 1.0
-
-    _stream(commands, loop, clock, command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, 0.0, 0.0]))))
-
-    np.testing.assert_allclose(rctl.q, 0.0, atol=1e-6)
-
-
 def test_a_planned_move_after_a_stream_starts_from_the_joints_that_the_arm_has(world, rctl, driven):
     """After a velocity stream the planner starts at the end of its last move, unless the move starts from HOLD."""
     driver, _, commands, clock, loop = driven()
@@ -366,28 +331,6 @@ def test_a_stream_after_a_planned_move_starts_once_the_planner_stops(world, rctl
 
     assert not rctl.error
     np.testing.assert_allclose(rctl.q, _joints(0.0), atol=cron._ARRIVED_TOL)
-
-
-def test_a_streamed_target_across_a_straight_wrist_stops_before_it(rctl, driven):
-    """A step of the IK can cross the margin and land past it on the other side of joint 5 at 0."""
-    _, _, commands, clock, loop = driven(min_wrist=0.05)
-    rolled = geom.Transform3D(np.zeros(3), geom.Rotation.from_euler([0.2, 0.0, 0.0]))
-    _stream(commands, loop, clock, command.CartesianPosition(rolled))
-
-    across = geom.Transform3D(np.zeros(3), geom.Rotation.from_euler([-0.2, 0.0, 0.0]))
-    _stream(commands, loop, clock, command.CartesianPosition(across))
-
-    np.testing.assert_allclose(rctl.q[4], 0.05, atol=0.01)
-
-
-def test_a_move_to_a_pose_that_the_arm_cannot_hold_fails(world, rctl, driven):
-    driver, _, _, clock, loop = driven(min_elbow=0.3)
-    answer = _mover(world, driver)(command.CartesianPosition(geom.Transform3D(translation=np.array([0.0, 0.0, 0.1]))))
-
-    _pump_until(loop, clock, answer)
-
-    with pytest.raises(ValueError, match='cannot hold'):
-        answer.result()
 
 
 def test_each_project_of_the_controller_is_started_once_control_is_taken(rctl, driven):
@@ -700,25 +643,131 @@ def test_a_controller_with_no_gravity_is_refused_before_control_is_taken(rctl, d
     assert 'take_control' not in rctl.calls
 
 
-def test_a_nan_solution_that_the_controller_reports_with_no_error_is_not_picked(rctl, driven):
+def test_a_nan_solution_that_the_controller_reports_with_no_error_is_not_picked(world, rctl, driven):
     rctl.ik_nan_solutions = 2
-    _, _, commands, clock, loop = driven()
-    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, 0.2, 0.3]))))
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, 0.2, 0.3]))))
 
-    _pump(loop, clock, 600)
+    _pump_until(loop, clock, answer)
 
+    assert answer.result() is None
     np.testing.assert_allclose(rctl.q[:3], [0.1, 0.2, 0.3], atol=0.01)
 
 
-def test_a_streamed_target_with_only_nan_solutions_holds_the_arm_where_it_is(rctl, driven):
+def test_a_move_to_a_pose_with_only_nan_solutions_fails_and_is_not_planned(world, rctl, driven):
     rctl.ik_nan_solutions, rctl.ik_only_nan = 8, True
-    _, _, commands, clock, loop = driven()
-    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, 0.2, 0.3]))))
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, 0.2, 0.3]))))
 
-    _pump(loop, clock, 200)
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='out of reach'):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+
+
+def test_a_move_to_a_pose_out_of_reach_fails(world, rctl, driven):
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.CartesianPosition(geom.Transform3D(translation=np.full(3, 5.0))))
+
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='out of reach'):
+        answer.result()
+
+
+def test_a_streamed_cartesian_target_is_reached_after_one_command(rctl, driven):
+    """The damped steps go on each tick toward the last Cartesian target, not once per command."""
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.6, -0.4, 0.5]))))
+
+    _pump(loop, clock, 2000)
+
+    np.testing.assert_allclose(rctl.q[:3], [0.6, -0.4, 0.5], atol=0.01)
+
+
+def test_a_streamed_cartesian_target_turns_no_joint_more_than_the_step_limit_in_a_tick(rctl, driven, monkeypatch):
+    """The steps of the target stay small, so the joints do not jump to another branch of the solutions."""
+    monkeypatch.setattr(cron, '_DLS_ITERATIONS', 1)
+    steps = []
+    follow = cron._Arm._follow
+
+    def recorded(arm, pose, seed, max_turn):
+        joints = follow(arm, pose, seed, max_turn)
+        steps.append(float(np.max(np.abs(joints - seed))))
+        return joints
+
+    monkeypatch.setattr(cron._Arm, '_follow', recorded)
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.9, 0.0, 0.0]))))
+
+    _pump(loop, clock, 20)
+
+    assert steps and max(steps) <= cron._DLS_MAX_STEP + 1e-9
+
+
+def test_the_joints_of_a_far_cartesian_target_move_no_faster_than_the_arm_can_follow(rctl, driven, monkeypatch):
+    """Near a pose where joints turn fast for a small move of the tool, the target slows down with the arm."""
+    steps = []
+    follow = cron._Arm._follow
+
+    def recorded(arm, pose, seed, max_turn):
+        joints = follow(arm, pose, seed, max_turn)
+        steps.append(float(np.max(np.abs(joints - seed))))
+        return joints
+
+    monkeypatch.setattr(cron._Arm, '_follow', recorded)
+    _, _, commands, clock, loop = driven(factor=0.3)
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.9, 0.0, 0.0]))))
+
+    _pump(loop, clock, 50)
+
+    assert steps and max(steps) <= 0.3 * cron._MAX_JOINT_SPEED * cron._MAX_STEP_S + 1e-9
+
+
+def test_a_streamed_cartesian_target_keeps_the_elbow_on_its_side(rctl, driven):
+    """The fake IK puts the third coordinate on the elbow joint: through a straight elbow the arm turns over."""
+    rctl.q = np.array([0.0, 0.0, 0.4, 0.0, 0.0, 0.0])
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.2, 0.0, -0.4]))))
+
+    _pump(loop, clock, 3000)
+
+    np.testing.assert_allclose(rctl.q[2], cron._MIN_ELBOW, atol=0.01)
+    np.testing.assert_allclose(rctl.q[0], 0.2, atol=0.01)
+
+
+def test_a_streamed_cartesian_target_stops_short_of_the_arm_itself(rctl, driven):
+    """The fake collision model puts a wall at 0.5 on the first joint."""
+    rctl.wall = 0.5
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.8, 0.0, 0.0]))))
+
+    _pump(loop, clock, 3000)
+
+    assert 0.5 - cron._MIN_CLEARANCE - 0.06 <= rctl.q[0] <= 0.5 - cron._MIN_CLEARANCE + 1e-6
+
+
+def test_the_capsules_of_the_tool_go_to_the_collision_model(rctl, driven):
+    capsule = {'length': 0.15, 'radius': 0.05, 'xyz': [0.0, 0.0, 0.03], 'rpy': [0.0, 0.0, 0.0]}
+    _, _, _, clock, loop = driven(tool_capsules=[capsule])
+
+    _pump(loop, clock, 1)
+
+    assert rctl.tool_capsules == [capsule]
+
+
+def test_a_streamed_cartesian_target_at_a_pose_where_a_joint_does_nothing_keeps_the_joints_finite(rctl, driven):
+    """With a column of the jacobian at zero the plain least squares step has no solution; the damping gives one."""
+    rctl.dead_joint = 1
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.3, 0.2, 0.1]))))
+
+    _pump(loop, clock, 2000)
 
     assert all(np.all(np.isfinite(velocity)) for velocity in rctl.commanded)
-    np.testing.assert_allclose(rctl.q, 0.0, atol=1e-6)
+    np.testing.assert_allclose(rctl.q[[0, 2]], [0.3, 0.1], atol=0.01)
+    np.testing.assert_allclose(rctl.q[1], 0.0, atol=1e-6)
 
 
 def test_a_joint_target_that_is_not_finite_is_not_a_setpoint(rctl, driven):
@@ -728,16 +777,6 @@ def test_a_joint_target_that_is_not_finite_is_not_a_setpoint(rctl, driven):
     _pump(loop, clock, 20)
 
     assert rctl.commanded == []
-
-
-def test_a_streamed_target_with_no_reachable_point_on_the_way_holds_the_arm_where_it_is(rctl, driven):
-    _, _, commands, clock, loop = driven()
-    rctl.ik_branch_turn = 1.0
-    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.full(3, 100.0))))
-
-    _pump(loop, clock, 200)
-
-    np.testing.assert_allclose(rctl.q, 0.0, atol=1e-6)
 
 
 def test_an_arm_that_leaves_run_is_not_commanded_and_does_not_resume_its_target(rctl, driven):

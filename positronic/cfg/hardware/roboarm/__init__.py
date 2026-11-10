@@ -18,8 +18,8 @@ YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
 # The two CRON arms on one stand, with the tool axis level and the tool x axis vertical. The left pose is the mirror of
 # the right pose, joint by joint. Of the tool positions near the first start pose, this one has the most even reach
-# within the margins of `cron_with_gripper` (2026-11-10): 0.53 m up, 0.31 m toward the base, 0.55 m away from it and
-# 0.70 m or more outward, inward and down.
+# (2026-11-10, with the IK of the controller and a margin from each pose where joints turn with no limit): 0.53 m up,
+# 0.31 m toward the base, 0.55 m away from it and 0.70 m or more outward, inward and down.
 CRON_LEFT_NOMINAL_JOINTS = [-3.36325, -1.34565, -2.27067, 3.64774, 4.45932, 2.36322]
 CRON_RIGHT_NOMINAL_JOINTS = [0.22166, -1.79594, 2.27067, -0.50615, 1.82387, 7.06156]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
@@ -81,11 +81,9 @@ def kinova(ip, relative_dynamics_factor):
     power_off_on_exit=True,
     tool_length=0.195,
     projects=(),
-    min_elbow=None,
-    min_wrist=None,
-    min_shoulder=None,
+    tool_capsules=(),
 )
-def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, min_elbow, min_wrist, min_shoulder):
+def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, tool_capsules):
     from positronic.drivers.roboarm.cron.driver import Robot
 
     return Robot(
@@ -94,17 +92,12 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects,
         power_off_on_exit=power_off_on_exit,
         tool_length=tool_length,
         projects=projects,
-        min_elbow=min_elbow,
-        min_wrist=min_wrist,
-        min_shoulder=min_shoulder,
+        tool_capsules=tool_capsules,
     )
 
 
-# A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box. The
-# arm keeps 20 degrees from a straight elbow and 10 degrees from a straight wrist, and the wrist 3 cm from the cylinder
-# around the axis of joint 1. Hand B from its start pose, 2026-11-10: up 0.49 m, away from the base 0.62 m, outward
-# 0.62 m and toward the base 0.10 m, with no controller error
-cron_with_gripper = cron.override(projects=['gripper_bridge'], min_elbow=0.35, min_wrist=0.17, min_shoulder=0.03)
+# A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
+cron_with_gripper = cron.override(projects=['gripper_bridge'])
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)
