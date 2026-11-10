@@ -96,12 +96,17 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects,
     )
 
 
-# The DH AG-160-95 on its adapter in the collision model: 225 mm from the flange to the finger tips, 162 by 76 mm
-# across, on the axis of the flange. Four capsules of the half thickness, two along each axis of the flange, cover the
-# wide side in either direction
+# The DH AG-160-95 on its adapter in the collision model: 225 mm from the flange to the finger tips, on the axis of
+# the flange; the open jaws are 162 mm across, along the y axis of the flange (horizontal in the start pose). The model
+# of the controller (v1.10.11) reads a capsule as a sphere at `xyz` and ignores `length` and `rpy`, so the body is a
+# row of spheres along the axis and the jaws are two pairs of spheres near the tips
 _DH_GRIPPER_CAPSULES = [
-    {'length': 0.225 - 2 * 0.038, 'radius': 0.038, 'xyz': [x, y, 0.038], 'rpy': [0.0, 0.0, 0.0]}
-    for x, y in ((0.043, 0.0), (-0.043, 0.0), (0.0, 0.043), (0.0, -0.043))
+    *({'length': 0.0, 'radius': 0.045, 'xyz': [0.0, 0.0, z], 'rpy': [0.0, 0.0, 0.0]} for z in (0.03, 0.07, 0.11, 0.15)),
+    *(
+        {'length': 0.0, 'radius': 0.025, 'xyz': [0.0, y, z], 'rpy': [0.0, 0.0, 0.0]}
+        for z in (0.19, 0.215)
+        for y in (-0.06, 0.06)
+    ),
 ]
 
 # A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
