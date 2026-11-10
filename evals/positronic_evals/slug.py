@@ -7,20 +7,29 @@ neither dump mode leaks the stored integer.
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Annotated, Any, Self, TypeVar
+from typing import Annotated, Any, ClassVar, Self, TypeVar
 
 from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
 
 class Name(str):
-    """A nonempty name without whitespace, preserving its concrete str subtype."""
+    """A nonempty name without whitespace, preserving its concrete str subtype.
+
+    A refusal reads `not <described_as>: <value>`. A subclass states how a person names its kind, with the article:
+    `class EvalRef(Name, described_as='an eval name')`. A subclass that states none is named by its class.
+    """
 
     __slots__ = ()
+    _described_as: ClassVar[str]
+
+    def __init_subclass__(cls, described_as: str | None = None, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls._described_as = described_as if described_as is not None else f'a {cls.__name__}'
 
     def __new__(cls, value: str) -> Self:
         if not value or any(c.isspace() for c in value):
-            raise ValueError(f'not a {cls.__name__}: {value!r}')
+            raise ValueError(f'not {cls._described_as}: {value!r}')
         return super().__new__(cls, value)
 
     @classmethod

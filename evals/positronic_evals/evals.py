@@ -16,7 +16,7 @@ from positronic_evals.scoring import MeanEpisodeScore, Scoring
 from positronic_evals.slug import Name
 
 
-class EvalRef(Name):
+class EvalRef(Name, described_as='an eval name'):
     """The name of an eval the platform offers, as a validated `str`."""
 
     __slots__ = ()
