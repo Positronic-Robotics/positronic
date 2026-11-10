@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import threading
 from collections.abc import Iterator
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from platform_client import routes
 from platform_client.client import API_KEY_ENV, API_URL_ENV, CLIENT_VERSION, CREDENTIAL_ENV, PLATFORM_VERSION_HEADER
 from platform_client.config import CONFIG_DIR_ENV
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY
+from platform_client.terms import Program, ProgramEntry, ProgramEntryResponse, Terms, TermsResponse
 
 from positronic.cli.examples.nebius_competition.leaderboards import LEADERBOARD_TAG
 
@@ -43,9 +45,13 @@ LEADERBOARD_DESCRIPTOR = {
 # the first time it is read, so a polling example terminates on its first pass.
 ANSWERS: dict[str, object] = {
     routes.AUTH_CONFIG: {'github_registration': True, 'workos': None},
-    routes.TERMS_GET: {'program': 'platform', 'terms': {'version': '1.3', 'url': 'https://example.com/terms'}},
-    routes.PROGRAMS_ENTRY: {'program': 'platform', 'entry': None},
-    routes.PLATFORM_ACCEPT_TERMS: {'program': 'platform', 'entered_at': AT, 'terms_version': '1.3'},
+    routes.TERMS_GET: TermsResponse(
+        program=Program.platform, terms=Terms(version='1.3', url='https://example.com/terms')
+    ).model_dump(mode='json'),
+    routes.PROGRAMS_ENTRY: ProgramEntryResponse(program=Program.platform, entry=None).model_dump(mode='json'),
+    routes.PLATFORM_ACCEPT_TERMS: ProgramEntry(
+        program=Program.platform, entered_at=datetime.fromisoformat(AT), terms_version='1.3'
+    ).model_dump(mode='json'),
     routes.USERS_REGISTER: {
         'user_id': 'a0',
         'artifact_location': 's3://bucket/users/a0/',

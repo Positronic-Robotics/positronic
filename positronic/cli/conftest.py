@@ -17,6 +17,7 @@ from platform_client.client import CLIENT_VERSION, PLATFORM_VERSION_HEADER, Plat
 from platform_client.enums import ErrorCode
 from platform_client.errors import ApiErrorBody, ErrorEnvelope
 from platform_client.ids import ApiKey, SubmissionId, UserId
+from platform_client.terms import Program, TermsResponse
 from pydantic import BaseModel
 
 from positronic.cli.account import gateway as gateway_module
@@ -42,7 +43,7 @@ def runs_of_four(secret: str) -> set[str]:
 
 GITHUB_ONLY_AUTH_CONFIG = {'github_registration': True, 'workos': None}
 # A platform with no terms, unless a test answers `terms.get`.
-NO_PLATFORM_TERMS = {'program': 'platform', 'terms': None}
+NO_PLATFORM_TERMS = TermsResponse(program=Program.platform, terms=None)
 # What a platform built against this client names in every answer.
 SERVES_THIS_CLIENT = {PLATFORM_VERSION_HEADER: str(CLIENT_VERSION)}
 
