@@ -106,8 +106,8 @@ class CronController:
         self.ip = ip
         self.power_off_on_exit = power_off_on_exit
         # A project of the controller that runs beside the arm, for example a bridge to the gripper on the wrist. The
-        # controller starts it only for a client that has control, and keeps it running after the client leaves. A
-        # second start of a running project does nothing
+        # controller starts it only for a client that has control and only with no error, and keeps it running after
+        # the client leaves. A second start of a running project does nothing. A refused start raises nothing
         self.project = project
         self.tool = geom.Transform3D(translation=np.array([0.0, 0.0, tool_length]))
         self.mount = geom.Transform3D.identity
@@ -130,9 +130,9 @@ class CronController:
             self.mount = level(up)
             rctl.take_control()
             self._has_control = True
+            self._clear_errors()
             if self.project is not None:
                 rctl.exr_run(self.project)
-            self._clear_errors()
             # Straight to RUN, as the RCUI does. On an arm whose multi-turn encoder asks for a preset (Hand B, motor 4,
             # 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed 3 times in 3
             self._power_to(PowerState.RUN, rctl.cmd_power_run)
