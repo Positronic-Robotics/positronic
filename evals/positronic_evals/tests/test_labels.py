@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -130,7 +131,7 @@ def test_a_label_reads_back_from_its_wire_form():
 
 @pytest.mark.parametrize('value', ['', ' ', 'two words'])
 def test_a_value_that_could_never_name_a_labeler_is_refused(value: str):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=f'^not a labeler name: {re.escape(repr(value))}$'):
         LabelerRef(value)
 
 

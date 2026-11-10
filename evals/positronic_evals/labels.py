@@ -48,7 +48,7 @@ from positronic_evals.slug import Name, Slugged
 log = logging.getLogger(__name__)
 
 
-class LabelerRef(Name):
+class LabelerRef(Name, described_as='a labeler name'):
     """The name of a labeler, as a validated `str`."""
 
     __slots__ = ()
