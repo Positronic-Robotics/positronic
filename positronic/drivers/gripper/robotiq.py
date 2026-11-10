@@ -284,7 +284,7 @@ class Robotiq2F(pimm.ControlSystem):
                 call.set_result(None)
             if asked := list(self.recover.incoming()):
                 return (yield from self._reactivate(gripper, asked))
-            # Only a move that a caller waits on is checked against the fingers; a streamed width raises no fault
+            # A streamed width raises no fault: the fingers are checked against a move that a caller waits on
             if moves.active and gripper.disobeys_move(reading, float(moves.target)):
                 disobeys = RuntimeError(
                     f'reports its fingers at the request of a move to {moves.target:.3f}: {reading}'
