@@ -316,26 +316,49 @@ def _bind_shut(bus: FakeBus, requests: ManualCommandReceiver, loop, clock: MockC
     bus.obeying = False
 
 
-def test_a_move_on_fingers_bound_shut_reactivates_the_gripper_and_opens_them(monkeypatch, world):
+def test_a_move_on_fingers_bound_shut_holds_a_gripper_fault_and_answers_the_move_with_it(monkeypatch, world):
     """A gripper bound shut takes an open request and reports the fingers at it, with no fault, while they stay
-    shut. A move a caller waits on re-activates the gripper, then opens the fingers before its time runs out."""
-    bus, clock = FakeBus(), MockClock()
-    driver, requests, loop = _driven(monkeypatch, bus, clock)
+    shut. A move a caller waits on puts a GRIPPER fault on the width and answers with it, and activates nothing."""
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    driver, requests, loop = _driven(monkeypatch, bus, clock, widths)
     _bind_shut(bus, requests, loop, clock)
     before = len(bus.writes)
 
     move = _mover(world, driver)(0.0)
-    _pump(loop, clock, 40, seconds=0.1)
+    _pump(loop, clock, 5)
 
+    with pytest.raises(DeviceFault, match='reports its fingers at the request') as raised:
+        move.result()
+    assert raised.value.kind is FaultKind.GRIPPER
+    assert _errors(widths) == [raised.value]
+    assert [0x0100, 0x0000, 0x0000] not in bus.writes[before:]
+
+
+@pytest.mark.parametrize(('ask', 'cleared'), [(_readier, None), (_recoverer, RecoveryOutcome.CLEARED)])
+def test_a_ready_or_recover_call_reactivates_a_gripper_held_for_fingers_bound_shut(monkeypatch, world, ask, cleared):
+    bus, clock = FakeBus(), MockClock()
+    driver, requests, loop = _driven(monkeypatch, bus, clock)
+    _bind_shut(bus, requests, loop, clock)
+    mover = _mover(world, driver)
+    move = mover(0.0)
+    _pump(loop, clock, 5)
+    with pytest.raises(DeviceFault):
+        move.result()
+
+    answer = ask(world, driver)(None)
+    _pump(loop, clock, ACTIVATION_READS + 3)
+    assert answer.result() is cleared
+
+    move = mover(0.0)
+    _pump(loop, clock, 20)
     assert move.result() is None
     assert bus.position == 0
-    assert bus.writes[before:].count([0x0100, 0x0000, 0x0000]) == 1
 
 
-def test_a_streamed_width_on_fingers_bound_shut_reactivates_nothing(monkeypatch):
-    """A policy streams widths during an episode, and an activation drops what the fingers hold."""
-    bus, clock = FakeBus(), MockClock()
-    _, requests, loop = _driven(monkeypatch, bus, clock)
+def test_a_streamed_width_on_fingers_bound_shut_holds_no_fault(monkeypatch):
+    """A policy streams widths during an episode, and a fault there would fail the episode."""
+    bus, clock, widths = FakeBus(), MockClock(), RecordingEmitter()
+    _, requests, loop = _driven(monkeypatch, bus, clock, widths)
     _bind_shut(bus, requests, loop, clock)
     before = len(bus.writes)
 
@@ -343,22 +366,24 @@ def test_a_streamed_width_on_fingers_bound_shut_reactivates_nothing(monkeypatch)
     _pump(loop, clock, 40, seconds=0.1)
 
     assert bus.position == SHUT
+    assert _errors(widths) == []
     assert [write[0] for write in bus.writes[before:]] == [0x0900]
 
 
-def test_a_move_reactivates_the_gripper_once_and_gives_up_on_fingers_still_bound(monkeypatch, world):
-    bus, clock = FakeBus(), MockClock()
-    driver, requests, loop = _driven(monkeypatch, bus, clock)
-    _bind_shut(bus, requests, loop, clock)
-    bus.activation_frees = False
-    before = len(bus.writes)
+@pytest.mark.parametrize('object_at', [None, OBJECT])
+def test_a_move_that_closes_on_nothing_or_on_an_object_holds_no_fault(monkeypatch, world, object_at):
+    """A full close stops short of the request, and an object stops the fingers far from it. The move gives up
+    when its time runs out, and the gripper holds no fault."""
+    bus, clock, widths = FakeBus(object_at=object_at), MockClock(), RecordingEmitter()
+    driver, _, loop = _driven(monkeypatch, bus, clock, widths)
 
-    move = _mover(world, driver)(0.0)
-    _pump(loop, clock, 80, seconds=0.1)
+    move = _mover(world, driver)(1.0)
+    _pump(loop, clock, 40, seconds=0.1)
 
-    with pytest.raises(TimeoutError, match='short of 0.0'):
+    with pytest.raises(TimeoutError, match='short of 1.0'):
         move.result()
-    assert bus.writes[before:].count([0x0100, 0x0000, 0x0000]) == 1
+    assert _errors(widths) == []
+    assert bus.position == (SHUT if object_at is None else OBJECT)
 
 
 def _last(widths: RecordingEmitter):

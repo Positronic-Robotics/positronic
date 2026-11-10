@@ -9,7 +9,7 @@ from typing import cast
 import pimm
 from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
-from positronic.drivers.utils import DriverRun, Moves, RecoveryOutcome, grip_setpoint, restart_grip
+from positronic.drivers.utils import DriverRun, Moves, RecoveryOutcome, grip_setpoint
 
 # pymodbus lives in the `hardware` extra, which the type-check environment does not install.
 with vendor_import('pymodbus', 'Gripper support'):
@@ -144,8 +144,6 @@ class _Gripper(DriverRun[float]):
         self._tuning = tuning
         self._status: Status | None = None
         self._disobeys = False
-        # Set once the move in flight re-activated the gripper, cleared when no move is in flight
-        self.reactivated_this_move = False
 
     def disobeys_move(self, reading: Reading, target: float) -> bool:
         """The gripper took ``target`` as its request, and reports its fingers there while they stand far from it."""
@@ -205,9 +203,12 @@ class _Gripper(DriverRun[float]):
         if response.isError():
             raise ModbusException(f'the gripper refused a write: {response}')
 
-    def hold_error(self, cause: Exception) -> DeviceFault:
-        """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus."""
-        error = device_fault(cause, FaultKind.GRIPPER, f'The Robotiq gripper is lost: {cause}')
+    def hold_error(self, cause: Exception, message: str = '') -> DeviceFault:
+        """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus.
+
+        ``message`` defaults to saying the gripper is lost.
+        """
+        error = device_fault(cause, FaultKind.GRIPPER, message or f'The Robotiq gripper is lost: {cause}')
         logger.error(f'{error}; it holds the error until a ready call activates it again')
         # The Message types do not name the SignalError that any message can carry.
         self._out.emit(cast(float, error))
@@ -229,7 +230,7 @@ class Robotiq2F(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
-        # Answers at once while the bus answers. On a lost gripper it activates the gripper again first.
+        # Answers at once while the bus answers. On a gripper in error it activates the gripper again first.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # Re-activates the gripper: the fingers stroke fully open and closed, and drop what they hold.
         self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
@@ -273,24 +274,6 @@ class Robotiq2F(pimm.ControlSystem):
             return gripper.hold_error(exc)
         return gripper.hold_unless_cleared(outcome)
 
-    def _reactivate_for_move(
-        self, gripper: _Gripper, moves: Moves[float], clock: pimm.Clock
-    ) -> Generator[pimm.Command, None, DeviceFault | None]:
-        """Re-activate a gripper that disobeys the move in flight, then put the move's width on the fingers again
-        with its full time.
-
-        The activation strokes the fingers and drops what they hold, so only a move a caller waits on asks for it,
-        once. None once the activation completes with no fault, else the error now on ``grip``, which answers the move.
-        """
-        logger.warning(
-            'The Robotiq gripper disobeys a move to %.3f; it re-activates before the move gives up', moves.target
-        )
-        gripper.reactivated_this_move = True
-        held = yield from self._activate_or_hold(gripper)
-        if held is None:
-            self._command(gripper, restart_grip(moves, clock.now()))
-        return held
-
     def _serve(
         self, gripper: _Gripper, moves: Moves[float], clock: pimm.Clock
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
@@ -301,10 +284,12 @@ class Robotiq2F(pimm.ControlSystem):
                 call.set_result(None)
             if asked := list(self.recover.incoming()):
                 return (yield from self._reactivate(gripper, asked))
-            if not moves.active:
-                gripper.reactivated_this_move = False
-            elif not gripper.reactivated_this_move and gripper.disobeys_move(reading, float(moves.target)):
-                return (yield from self._reactivate_for_move(gripper, moves, clock))
+            # A policy's streamed widths take no fault: it would fail an episode the gripper may still finish
+            if moves.active and gripper.disobeys_move(reading, float(moves.target)):
+                disobeys = RuntimeError(
+                    f'reports its fingers at the request of a move to {moves.target:.3f}: {reading}'
+                )
+                return gripper.hold_error(disobeys, f'The Robotiq gripper {disobeys}')
 
             target = grip_setpoint(moves, reading.width, clock.now())
             if target is not None:
@@ -328,7 +313,7 @@ class Robotiq2F(pimm.ControlSystem):
         if not readies and not recovers:
             yield gripper.limiter.wait()
             return held
-        logger.info('A call asked to activate the lost Robotiq gripper again')
+        logger.info('A call asked to activate the Robotiq gripper in error again')
         try:
             outcome = yield from gripper.activate()
         except _BUS_FAULTS as exc:
