@@ -1,8 +1,7 @@
 """The platform terms: the version a person accepts, and the acceptance the platform records.
 
 The platform serves the current version at `terms.get`, and records an acceptance at `platform.accept_terms`. The
-version that a request names is a check: the platform refuses one that is not current, so a version published after
-the person read the terms is never accepted in their place.
+version that a request names is a check: the platform refuses one that is not current.
 """
 
 from __future__ import annotations

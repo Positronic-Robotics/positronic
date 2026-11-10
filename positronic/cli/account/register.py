@@ -141,7 +141,7 @@ def _save(directory: Path, base_url: str, response: RegisterResponse) -> None:
 
 def _terms_step(client: PlatformClient, accepted_version: str | None, *, key_minted: bool) -> None:
     """Accept `accepted_version` with the key that the registration minted, or print the terms and how to accept
-    them. A registration that minted no key holds no key to accept with."""
+    them."""
     if accepted_version is not None and key_minted:
         accept(client, accepted_version)
         return
