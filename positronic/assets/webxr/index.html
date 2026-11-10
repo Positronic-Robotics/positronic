@@ -62,8 +62,8 @@
       <p id="phase"></p>
       <div id="camera-list"></div>
       <p id="camera-hint">
-        A green dot: the run sends this camera now. In the headset, Y on the left controller: a hold of 1 s shows the
-        next camera, and a press cycles the panel (on black, only the text over the room, hidden).
+        A green dot: the run sent images of this camera in the last 30 s. In the headset, Y on the left controller: a
+        press shows the next camera, and a hold of 1 s cycles the panel (on black, only the text over the room, hidden).
       </p>
     </section>
     <script type="module">
@@ -82,17 +82,18 @@
           idle: 'Waiting for a trial', ready_wait: 'A trial waits for Ready', running: 'Trial running',
           ended: 'The trial ended',
         };
-        // The Y button of the left controller: a press cycles the panel of the headset, a hold shows the next camera
+        // The Y button of the left controller: a press shows the next camera, a hold cycles the panel of the headset.
+        // A teleoperator changes the camera often and the panel about once a trial
         const Y_BUTTON = 5;
         const Y_HOLD_MS = 1000;
         const STATE_POLL_MS = 500;
 
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
-        // The `performance.now()` instant of the Y press that is down, and whether its hold showed the next camera
+        // The `performance.now()` instant of the Y press that is down, and whether its hold cycled the panel
         let yDownAt = null;
         let yHeld = false;
-        // The last page state, for the camera that a Y hold shows next
+        // The last page state, for the camera that a Y press shows next
         let lastState = {};
 
         function initControllerAxes(scene) {
@@ -192,11 +193,9 @@
             yHeld = false;
           } else if (yPressed && !yHeld && now - yDownAt >= Y_HOLD_MS) {
             yHeld = true;
-            showNextCamera();
+            if (videoPlayer) sendInput({ [INPUT_FIELD.textOnly]: videoPlayer.cycleMode() === PANEL_MODE.CLEAR_BLACK });
           } else if (!yPressed && yDownAt !== null) {
-            if (!yHeld && videoPlayer) {
-              sendInput({ [INPUT_FIELD.textOnly]: videoPlayer.cycleMode() === PANEL_MODE.CLEAR_BLACK });
-            }
+            if (!yHeld) showNextCamera();
             yDownAt = null;
           }
           if (videoPlayer) videoPlayer.update();

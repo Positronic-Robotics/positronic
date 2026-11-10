@@ -816,6 +816,35 @@ def test_a_view_with_no_camera_shows_the_text_on_black(socket_path, connect):
         connection.close()
 
 
+def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, connect):
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    width, height = VIEW_SIZE
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        idle = service.view()
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: encode_jpeg(np.zeros((height, width, 3), np.uint8))})
+        running = service.view(camera=False)
+        connection.close()
+    # One line of the hint while no camera shows, and the camera above it while one does
+    assert idle[height - 40 :].any() and not idle[height - 40 : height - 25].any()
+    assert running[height - 40 : height - 25].any()
+
+
+def test_a_camera_stays_live_between_trials_and_not_longer_than_the_live_window(socket_path, connect, monkeypatch):
+    """Images come only while a trial runs, when the teleoperator is in the headset and does not see the page."""
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: image})
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: image})
+        connection.close()
+        _until_cleared(service)
+        assert service.cameras().live == (keys.WRIST_IMAGE,)
+        monkeypatch.setattr(TeleopService, 'LIVE_SEC', 0.0)
+        assert service.cameras().live == ()
+
+
 def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(socket_path, monkeypatch):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
     asked = []

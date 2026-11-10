@@ -104,10 +104,11 @@ Conversion for training picks its own keys from the recording.
 - The headset video shows one camera: the one that the teleoperator chose last, else the one that the session
   parameter `headset_camera` names, else the first camera. The choice holds over the trials.
 - The headset page (before Enter AR) shows the state of the cameras: each camera, a green dot on each camera whose
-  images come now, and the camera that the headset shows.
-- In the headset, Y on the left controller works the video panel. A hold of 1 s shows the next camera whose images
-  come now. A press cycles the panel: on black with the camera, the text alone over the room (the service then sends
-  the view with no camera, and the page shows black as clear), and hidden.
+  images came in the last 30 s (also between trials), and the camera that the headset shows.
+- In the headset, Y on the left controller works the video panel. A press shows the next camera whose images come
+  now. A hold of 1 s cycles the panel: on black with the camera, the text alone over the room (the service then sends
+  the view with no camera, and the page shows black as clear), and hidden. The bottom of the view names the camera
+  and the use of Y.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480. A camera with another aspect gets black bars.
 - `positronic teleop` sends the headset video at JPEG quality 90. `--webxr.jpeg_quality=<0..100>` changes it. Lower

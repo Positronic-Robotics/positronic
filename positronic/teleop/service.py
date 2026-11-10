@@ -179,6 +179,10 @@ class TrialState:
     cameras: tuple[str, ...]
 
 
+# The use of Y on the left controller, at the bottom of the view
+Y_HINT = 'Y: next camera. Hold Y: panel'
+
+
 @dataclass(frozen=True)
 class CameraState:
     """The cameras that the headset page offers: the cameras of the run, or of the station before a run sends one;
@@ -213,8 +217,9 @@ class TeleopService:
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
     CANCEL_POLL_SEC = 0.1
-    # The images of a camera are live while its last image is younger than this.
-    LIVE_SEC = 1.0
+    # A camera is live while its last image is younger than this. Images come only while a trial runs, when the
+    # teleoperator is in the headset, so the window spans the gap between trials for the page before Enter AR.
+    LIVE_SEC = 30.0
     # A client opens a session again within its reconnect deadline when the connection drops before its first answer.
     RESUME_LIMIT_SEC = DEFAULT_RECONNECT_DEADLINE
 
@@ -247,8 +252,8 @@ class TeleopService:
         self._tracker: Tracker | None = None
         # The last camera images of the run, by name, in the order that the client sends them.
         self._images: dict[str, np.ndarray] = {}
-        # The `time.monotonic()` instant of the last images of the run.
-        self._images_at = -math.inf
+        # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
+        self._seen: dict[str, float] = {}
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
         self._headset_camera: str | None = None
         # The camera that the teleoperator chose on the headset page. It holds over trials, and goes before the camera
@@ -358,8 +363,9 @@ class TeleopService:
 
     def cameras(self) -> CameraState:
         with self._changed:
-            names = tuple(self._images) or self.station_cameras
-            live = tuple(self._images) if time.monotonic() - self._images_at < self.LIVE_SEC else ()
+            names = tuple(self._images) or self.station_cameras or tuple(self._seen)
+            now = time.monotonic()
+            live = tuple(name for name in names if now - self._seen.get(name, -math.inf) < self.LIVE_SEC)
             return CameraState(names, live, self._shown_camera(), self._chosen_camera)
 
     def choose_camera(self, name: str | None) -> None:
@@ -388,16 +394,17 @@ class TeleopService:
             self._changed.notify_all()
 
     @staticmethod
-    def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top."""
+    def _view(image: np.ndarray | None, lines: Sequence[str], footer: Sequence[str] = ()) -> np.ndarray:
+        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom."""
         width, height = VIEW_SIZE
         blank = (height, width, 3)
         # A copy: the text goes on the view, not on the image that the service holds.
         view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
-        for row, line in enumerate(lines):
-            origin = (10, 30 + 36 * row)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 5, cv2.LINE_AA)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+        placed = [((8, 22 + 24 * row), line, 0.6) for row, line in enumerate(lines)]
+        placed += [((8, height - 10 - 18 * row), line, 0.45) for row, line in enumerate(reversed(footer))]
+        for origin, line, scale in placed:
+            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
+            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 1, cv2.LINE_AA)
         return view
 
     def view(self, camera: bool = True) -> np.ndarray:
@@ -405,16 +412,20 @@ class TeleopService:
         trial."""
         with self._changed:
             state = self.state()
+            shown = self._shown_camera()
             image = self._headset_image() if camera else None
+        footer = [Y_HINT]
         match state.phase:
             case Phase.IDLE:
-                return self._view(None, ['Waiting for a trial'])
+                return self._view(None, ['Waiting for a trial'], footer)
             case Phase.READY_WAIT:
-                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'])
+                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'], footer)
             case Phase.ENDED:
-                return self._view(None, ['The trial ended', 'Give the verdict on the console'])
+                return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer)
+        if shown is not None:
+            footer = [f'Camera: {shown}', *footer]
         control = 'Control on (A: off)' if state.control else 'Control off (A: on)'
-        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'])
+        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer)
 
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
@@ -490,7 +501,7 @@ class TeleopService:
                 raise ValueError(f'a frame request came in the {self._phase} phase')
             self._task = str(request[TASK])
             self._images = {name: request[name] for name in cameras}
-            self._images_at = time.monotonic()
+            self._seen.update(dict.fromkeys(cameras, time.monotonic()))
             if self._hold is None:
                 self._hold = robot_pose, float(np.asarray(request[GRIP], dtype=float).reshape(-1)[0])
             sample = self._next_sample(self._sample.number, deadline)
@@ -534,7 +545,7 @@ class TeleopService:
     def _clear_trial(self) -> None:
         """Show no trial. Hold the lock."""
         self._phase, self._events = Phase.IDLE, []
-        self._task, self._tracker, self._images, self._images_at = '', None, {}, -math.inf
+        self._task, self._tracker, self._images = '', None, {}
         self._headset_camera, self._hold, self._frames, self._resumable_until = None, None, 0, None
         self._end = None
 
