@@ -1125,7 +1125,8 @@ def test_an_episode_runs_with_the_window_and_preset_its_endpoint_states():
         cap_per_episode_sec=480,
         policy_preset='long',
     )
-    task = ResolvedTask(**{**dict(RESOLVED_TASK), 'endpoints': [RESOLVED_TASK.endpoints[0], own]})
+    task = RESOLVED_TASK.model_copy()
+    task.endpoints = [RESOLVED_TASK.endpoints[0], own]
     assert (task.cap_of('pi05'), task.preset_of('pi05')) == (480, 'long')
 
 
