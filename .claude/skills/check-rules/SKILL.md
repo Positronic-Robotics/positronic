@@ -66,6 +66,15 @@ WAIVERS
 <file>:<line> — <the reason the waiver gives>
 ```
 
+Start every agent's prompt with this exact line, alone on the first line:
+
+```
+[check-rules checker]
+```
+
+The fixed marker lets tooling that reads session transcripts recognise a checker run and leave it out
+of what it indexes.
+
 Instruct every agent to:
 
 - give every violation a file and a line, best effort — a finding with nowhere to point is not a finding;
