@@ -18,7 +18,7 @@ from positronic.cli.account.gateway import CommandFailed, Fault, gateway
 def accept_command(version: str) -> str:
     """The command that accepts `version`. The argument is a string literal, so the CLI reads `1.3` as text, and the
     shell passes it as one word."""
-    return f'{ACCEPT_TERMS_COMMAND} --version={shlex.quote(json.dumps(version))}'
+    return f'{ACCEPT_TERMS_COMMAND} --version={shlex.quote(json.dumps(version, ensure_ascii=False))}'
 
 
 def terms_lines(terms: Terms) -> list[str]:
