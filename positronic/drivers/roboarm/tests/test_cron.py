@@ -722,7 +722,18 @@ def test_the_joints_of_a_far_cartesian_target_move_no_faster_than_the_arm_can_fo
 
     _pump(loop, clock, 50)
 
-    assert steps and max(steps) <= 0.3 * cron._MAX_JOINT_SPEED * cron._MAX_STEP_S + 1e-9
+    assert steps and max(steps) <= 0.3 * cron._MAX_JOINT_SPEED * cron._WRIST_SCALE.max() * cron._MAX_STEP_S + 1e-9
+
+
+def test_the_joints_of_the_wrist_turn_faster_than_the_joints_of_the_shoulder(rctl, driven):
+    _, _, commands, clock, loop = driven(factor=0.5)
+    commands.push(command.JointPosition(np.full(JOINTS, 1.0)))
+
+    _pump(loop, clock, 400)
+
+    fastest = np.max(np.abs(np.array(rctl.commanded)), axis=0)
+    np.testing.assert_allclose(fastest[:3], 0.5 * cron._MAX_JOINT_SPEED, rtol=1e-6)
+    np.testing.assert_allclose(fastest[3:], 0.5 * cron._MAX_JOINT_SPEED * 2.0, rtol=1e-6)
 
 
 def test_a_streamed_cartesian_target_keeps_the_elbow_on_its_side(rctl, driven):
