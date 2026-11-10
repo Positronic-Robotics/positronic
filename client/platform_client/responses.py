@@ -180,7 +180,8 @@ class PlanOutcome(BaseModel):
 
 
 class ResolvedEndpoint(BaseModel):
-    """One endpoint of a resolved task: where its policy comes from, and the episodes it takes there."""
+    """One endpoint of a resolved task: where its policy comes from, the episodes it takes there, and the
+    window and the preset it states for itself."""
 
     name: str
     kind: Slugged[EndpointKind]
@@ -192,6 +193,9 @@ class ResolvedEndpoint(BaseModel):
     # The checkpoint a served endpoint runs; None on a remote or image endpoint.
     spec: str | None = None
     episodes: int = Field(ge=1)
+    # None where the endpoint states no value of its own: its episodes run with the task's (`ResolvedTask.cap_of`).
+    cap_per_episode_sec: int | None = Field(default=None, ge=1)
+    policy_preset: str | None = Field(default=None, min_length=1)
 
 
 # The sides a resolution may not carry: a draw is made before the plan is answered.
@@ -207,12 +211,14 @@ class ResolvedTask(BaseModel):
     """One task of a plan as the rig runs it: every property with its final value.
 
     The nearest level that states a value gives it; where none does, the task's catalogue entry gives
-    it, and where that gives none, the platform draws it (`README.md` §Eval plans).
-    `ResolvedPlan.tasks` lists the tasks in the plan's order.
+    it, and where that gives none, the platform draws it (`README.md` §Eval plans). An endpoint that
+    states its own window or preset carries it, and `cap_of` and `preset_of` give the value an episode
+    on an endpoint runs with. `ResolvedPlan.tasks` lists the tasks in the plan's order.
     """
 
     task_id: TaskRef
     endpoints: list[ResolvedEndpoint] = Field(min_length=1)
+    # The task's episode window and preset. An endpoint that states its own runs with that one instead.
     cap_per_episode_sec: int = Field(ge=1)
     policy_preset: str = Field(min_length=1)
     # `none` where the task has no tote.
@@ -233,6 +239,20 @@ class ResolvedTask(BaseModel):
     def episodes(self) -> int:
         """Every episode this task takes, over all of its endpoints."""
         return sum(endpoint.episodes for endpoint in self.endpoints)
+
+    def cap_of(self, endpoint: str) -> int:
+        """The episode window of an episode on the endpoint named `endpoint`: its own, else the task's."""
+        own = self._endpoint(endpoint).cap_per_episode_sec
+        return own if own is not None else self.cap_per_episode_sec
+
+    def preset_of(self, endpoint: str) -> str:
+        """The preset of an episode on the endpoint named `endpoint`: its own, else the task's."""
+        own = self._endpoint(endpoint).policy_preset
+        return own if own is not None else self.policy_preset
+
+    def _endpoint(self, name: str) -> ResolvedEndpoint:
+        """The endpoint of this task named `name`. Raises `KeyError` where the task runs none of that name."""
+        return {endpoint.name: endpoint for endpoint in self.endpoints}[name]
 
     @model_validator(mode='after')
     def _every_side_is_drawn(self) -> Self:

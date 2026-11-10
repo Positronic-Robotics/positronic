@@ -131,8 +131,14 @@ episodes each endpoint takes on each task. A plan either states its own `tasks` 
 the catalogue expands into them; both arrive at the same set. The plan states the count once. A task may override it for that task, and an endpoint may
 override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
 plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter`, `scene_seed`
-and `start_pose`. An endpoint states only its count. `episodes_total` is a checksum a caller may state.
-`max_cap_per_episode_sec` is the upper bound on every task's cap.
+and `start_pose`. An endpoint states its count, its `cap_per_episode_sec` and its `policy_preset`, and
+no other field of the cascade. `episodes_total` is a checksum a caller may state.
+`max_cap_per_episode_sec` is the upper bound on every cap a plan states, an endpoint's cap included.
+
+An endpoint's cap and preset take the same order as its count: the entry on the task, then the plan
+endpoint that a bare label names, then the task, then the plan. So one task can run several policies,
+each with its own episode window, in one random episode order. A task or the plan still states a cap and
+a preset.
 
 `request_type` is required and states the rules a plan runs under. `private_eval` runs for the org
 it names, and the caller must be a member of that org. The org's approvals decide the evals, the
@@ -166,6 +172,7 @@ endpoints:
     kind: served
     spec: dreamzero
     wire: grpc
+    cap_per_episode_sec: 240              # an endpoint may state its own window and preset
 episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
@@ -253,7 +260,9 @@ under. Read it with the org's own credential for that bucket: `submissions.artif
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
-vantage, the clutter objects and the episode order. A level states a value, else the task's
+vantage, the clutter objects and the episode order. An endpoint that states its own cap or preset
+carries it, and an episode on an endpoint that states none runs with the task's
+(`ResolvedTask.cap_of`, `ResolvedTask.preset_of`). A level states a value, else the task's
 catalogue entry gives it, else the platform draws it. The platform makes each draw once per plan, so every run of
 the plan lays out that scene and that table, and runs the episodes in that order.
 `submissions.get` carries the same `resolved`. A rig plan whose task resolves no
