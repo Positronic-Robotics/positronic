@@ -4,6 +4,7 @@ The platform can refuse an account that has not accepted its current terms. A pe
 and accepts them here with the version that they read.
 """
 
+import json
 import shlex
 
 import configuronic as cfn
@@ -15,9 +16,9 @@ from positronic.cli.account.gateway import CommandFailed, Fault, gateway
 
 
 def accept_command(version: str) -> str:
-    """The command that accepts `version`, quoted for a shell. The inner quotes keep a version such as `1.3` text."""
-    text = shlex.quote(f'"{version}"')
-    return f'{ACCEPT_TERMS_COMMAND} --version={text}'
+    """The command that accepts `version`. The argument is a string literal, so the CLI reads `1.3` as text, and the
+    shell passes it as one word."""
+    return f'{ACCEPT_TERMS_COMMAND} --version={shlex.quote(json.dumps(version))}'
 
 
 def terms_lines(terms: Terms) -> list[str]:

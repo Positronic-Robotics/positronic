@@ -1,5 +1,6 @@
 """`positronic account terms`, `positronic account accept-terms` and the terms step of `register`."""
 
+import ast
 import shlex
 
 import pytest
@@ -137,11 +138,11 @@ def test_register_refuses_a_terms_version_that_is_not_text_before_the_sign_in(pl
     assert platform.seen is None
 
 
-def test_the_printed_command_quotes_a_version_for_the_shell():
-    # A platform names the version, so a quote in it must not end the shell argument.
-    assert shlex.split(accept_command("1.3'; rm -rf ~")) == [
-        'positronic',
-        'account',
-        'accept-terms',
-        '--version="1.3\'; rm -rf ~"',
-    ]
+@pytest.mark.parametrize('version', ['1.3', "1.3'; rm -rf ~", '1."3', 'a\\nb', 'line\nbreak'])
+def test_the_printed_command_gives_back_the_version_through_the_shell_and_the_cli(version):
+    # A platform names the version, so no character of it may end the shell word or the CLI literal.
+    *command, argument = shlex.split(accept_command(version))
+    name, _, value = argument.partition('=')
+
+    assert command == ['positronic', 'account', 'accept-terms'] and name == '--version'
+    assert ast.literal_eval(value) == version
