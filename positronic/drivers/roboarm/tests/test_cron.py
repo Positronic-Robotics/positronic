@@ -82,7 +82,8 @@ class FakeRctl:
         self._call('take_control')
 
     def exr_run(self, project_name):
-        self._call(f'exr_run {project_name}')
+        # The real controller logs "Robot is in error state, program execution is prohibited" and returns
+        self._call(f'exr_run {project_name}' + (' refused' if self.error else ''))
 
     def release_control(self):
         self._call('release_control')
@@ -271,6 +272,17 @@ def test_a_project_of_the_controller_is_started_once_control_is_taken(rctl, driv
     _pump(loop, clock, 1)
 
     assert rctl.calls == ['connect', 'sync_robot_model', 'take_control', 'exr_run gripper_bridge', 'run']
+
+
+def test_a_project_of_the_controller_is_started_after_a_safety_stop_is_cleared(rctl, driven):
+    """The controller refuses to start a project while it holds an error, as after a press of the stop button."""
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    _, _, _, clock, loop = driven(project='gripper_bridge')
+
+    _pump(loop, clock, 1)
+
+    connected = ['connect', 'sync_robot_model', 'take_control']
+    assert rctl.calls == [*connected, 'resume', 'off', 'exr_run gripper_bridge', 'run']
 
 
 def test_an_error_left_by_an_earlier_session_is_cleared_before_the_arm_is_powered(rctl, driven):
