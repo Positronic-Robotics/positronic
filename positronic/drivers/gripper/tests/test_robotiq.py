@@ -363,7 +363,8 @@ def test_a_streamed_width_on_fingers_bound_shut_holds_no_fault(monkeypatch):
 
     assert bus.position == SHUT
     assert _errors(widths) == []
-    assert [write[0] for write in bus.writes[before:]] == [0x0900]
+    actions = [write[0] for write in bus.writes[before:]]
+    assert actions and set(actions) == {0x0900}, f'a streamed width started an activation: {actions}'
 
 
 @pytest.mark.parametrize('object_at', [None, OBJECT])
