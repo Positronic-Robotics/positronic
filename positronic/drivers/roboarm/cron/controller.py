@@ -6,8 +6,8 @@ The client is a Linux x86-64 wheel that the controller serves at ``http://<contr
 import enum
 import logging
 import time
-from collections.abc import Sequence
-from typing import NamedTuple
+from collections.abc import Mapping, Sequence
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -110,7 +110,14 @@ class CronController:
     up: the gravity setting of the controller gives the up direction of a base mounted at an angle.
     """
 
-    def __init__(self, ip: str, power_off_on_exit: bool = True, tool_length: float = 0.0, projects: Sequence[str] = ()):
+    def __init__(
+        self,
+        ip: str,
+        power_off_on_exit: bool = True,
+        tool_length: float = 0.0,
+        projects: Sequence[str] = (),
+        tool_capsules: Sequence[Mapping[str, Any]] = (),
+    ):
         self.ip = ip
         self.power_off_on_exit = power_off_on_exit
         # The projects of the controller that run beside the arm, for example a bridge to the gripper on the wrist. The
@@ -118,9 +125,10 @@ class CronController:
         # after the client leaves. A second start of a running project does nothing. A refused start raises nothing
         self.projects = tuple(projects)
         self.tool = geom.Transform3D(translation=np.array([0.0, 0.0, tool_length]))
+        # The tool in the collision model, as capsules on the flange: {'length', 'radius', 'xyz', 'rpy'}. They go to the
+        # local copy of the model only, not to the controller
+        self.tool_capsules = [dict(capsule) for capsule in tool_capsules]
         self.mount = geom.Transform3D.identity
-        # The DH rows of the model of the controller: a, d, alpha and theta of each joint
-        self._dh: list[dict[str, float]] = []
         self._has_control = False
         self._waypoint_id = 0
 
@@ -138,7 +146,8 @@ class CronController:
             if not np.linalg.norm(up) > 0:
                 raise RuntimeError(f'the controller has no gravity set ({up}): the up direction of the base is unknown')
             self.mount = level(up)
-            self._dh = rctl.model_get_dh()
+            if self.tool_capsules:
+                rctl.model_set_tool_capsules(self.tool_capsules)
             rctl.take_control()
             self._has_control = True
             self._clear_errors()
@@ -230,20 +239,22 @@ class CronController:
             raise ValueError(f'no pose for joints {np.round(q, 3)}: {solved["err_code"]}')
         return self.mount * to_pose(np.asarray(solved['pose'], dtype=np.float64)) * self.tool
 
-    def shoulder_clearance(self, q: np.ndarray) -> float:
-        """How far the wrist (the origin of the frame of joint 5) is at the joints ``q`` from the cylinder around the
-        axis of joint 1 where joint 1 turns with no limit for a small move of the tool. The cylinder has the radius of
-        the offset of the forearm from the upper arm."""
-        transform = np.eye(4)
-        for row, angle in zip(self._dh[:4], q[:4], strict=True):
-            turn, twist = angle + row['theta'], row['alpha']
-            transform = transform @ np.array([
-                [np.cos(turn), -np.sin(turn) * np.cos(twist), np.sin(turn) * np.sin(twist), row['a'] * np.cos(turn)],
-                [np.sin(turn), np.cos(turn) * np.cos(twist), -np.cos(turn) * np.sin(twist), row['a'] * np.sin(turn)],
-                [0.0, np.sin(twist), np.cos(twist), row['d']],
-                [0.0, 0.0, 0.0, 1.0],
-            ])
-        return float(np.hypot(transform[0, 3], transform[1, 3]) - abs(self._dh[3]['d']))
+    def clearance(self, q: np.ndarray) -> float:
+        """Metres: how near the arm, with the capsules of the tool, comes to itself at the joints ``q``; 0 in a
+        collision."""
+        checked = rctl.model_is_collision(list(q))
+        return 0.0 if checked['coll'] else float(checked['min_dist'])
+
+    def jacobian(self, q: np.ndarray) -> np.ndarray:
+        """The 6x6 map from joint speeds at ``q`` to the speed of the tool point and the turn rate of the tool, in the
+        leveled base frame: rows vx, vy, vz, wx, wy, wz."""
+        # The controller gives it for the flange in its own base frame
+        flange = np.asarray(rctl.jacob(list(q), False), dtype=np.float64).reshape(6, JOINTS)
+        turn = self.mount.rotation.as_rotation_matrix
+        linear, angular = turn @ flange[:3], turn @ flange[3:]
+        lever = self.forward(q).rotation(self.tool.translation)
+        skew = np.array([[0.0, -lever[2], lever[1]], [lever[2], 0.0, -lever[0]], [-lever[1], lever[0], 0.0]])
+        return np.vstack([linear - skew @ angular, angular])
 
     def inverse(self, pose: geom.Transform3D, seed: np.ndarray) -> np.ndarray:
         """The joints that put the tool at ``pose``, of the controller's solutions the nearest to ``seed``."""

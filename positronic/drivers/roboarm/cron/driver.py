@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -27,20 +27,50 @@ _MOVE_GRACE_S = 3.0
 # The planner of the controller travels at about 0.75 of the speed it is asked for (2026-11-05: 164 deg in 35 s at
 # 0.1 rad/s), so the time a move gets is its travel at the asked speed, times this
 _MOVE_SLACK = 1.5
-# The elbow, whose bend says how far the arm stretches, and the joint of the wrist that lines up the axes of joints 4
-# and 6 at 0 and at a half turn
-_ELBOW, _WRIST = 2, 4
-# A streamed target that turns a joint further than this from the previous one jumps to another branch of the
-# solutions: up from the start pose, the IK turned the wrist by 144 and 180 degrees for 1 cm of the tool
-_MAX_TARGET_TURN = 0.5  # rad
-# The halvings of the path to a target that the arm cannot hold, to find the furthest point it can
-_LIMIT_SEARCH_STEPS = 12
+# A streamed Cartesian target is followed by damped least squares steps on each tick, as on the Franka: the damping
+# grows as the smallest singular value of the jacobian falls under _DLS_SINGULAR, so near a pose where joints turn with
+# no limit the arm slows down and follows less exactly, and does not stop
+_DLS_ITERATIONS = 3
+_DLS_DAMPING = 0.05
+_DLS_SINGULAR = 0.08
+# Radians: the largest turn of a joint in one step of the solver
+_DLS_MAX_STEP = 0.05
+# The elbow keeps its side and this bend, as a joint limit of the solver: through a straight elbow the arm turns over
+_ELBOW, _MIN_ELBOW = 2, np.radians(5.0)
+# At the edge of the reach the steps move the tool sideways and turn it, and the tool drifts from where the operator
+# points (0.5 m and 60 degrees on Hand B). Such a step takes the tool further from the target along an axis or in its
+# turn, and brings it nearer by less than _MIN_PROGRESS of how far it moves it; it is not taken. A step that does only
+# one of the two is taken: on a curved way a straight step leaves the way a little, and where a part of the target is
+# out of reach a step that serves the rest brings the tool nearer by little
+_MIN_PROGRESS = 0.5
+_DRIFT_M, _DRIFT_RAD = 1e-4, 1e-3
+# Metres: a step that takes the arm nearer than this to itself, by the collision model of the controller, is not taken
+_MIN_CLEARANCE = 0.01
 
 
-def _crosses(joints: np.ndarray, seed: np.ndarray, joint: int) -> bool:
-    """Whether ``joint`` goes from ``seed`` to ``joints`` across 0 or a half turn. A start on one of them crosses
-    nothing."""
-    return bool(np.sin(joints[joint]) * np.sin(seed[joint]) < 0)
+def _pose_error(target: geom.Transform3D, pose: geom.Transform3D) -> float:
+    """How far ``pose`` is from ``target``: metres of the tool point plus radians of the turn."""
+    turn = float(np.linalg.norm((target.rotation * pose.rotation.inv).as_rotvec))
+    return float(np.linalg.norm(np.asarray(target.translation) - np.asarray(pose.translation))) + turn
+
+
+def _drifts(target: geom.Transform3D, before: geom.Transform3D, after: geom.Transform3D) -> bool:
+    """Whether the step from ``before`` to ``after`` takes the tool further from ``target`` along an axis or in its
+    turn, and brings it nearer by less than ``_MIN_PROGRESS`` of how far it moves it."""
+    shift_before = np.abs(np.asarray(target.translation) - np.asarray(before.translation))
+    shift_after = np.abs(np.asarray(target.translation) - np.asarray(after.translation))
+    turn_before = float(np.linalg.norm((target.rotation * before.rotation.inv).as_rotvec))
+    turn_after = float(np.linalg.norm((target.rotation * after.rotation.inv).as_rotvec))
+    away = np.any(shift_after - shift_before > _DRIFT_M) or turn_after - turn_before > _DRIFT_RAD
+    gain = _pose_error(target, before) - _pose_error(target, after)
+    return bool(away and gain < _MIN_PROGRESS * _pose_error(after, before))
+
+
+def _finite(cmd: command.CommandType, joints: np.ndarray) -> np.ndarray:
+    # The controller refuses a velocity that is not finite and stops the arm with a TIMEOUT error
+    if not np.all(np.isfinite(joints)):
+        raise ValueError(f'{cmd} asks for joints that are not finite: {joints}')
+    return joints
 
 
 class CronState(State, pimm.shared_memory.NumpySMAdapter):
@@ -93,20 +123,9 @@ class _Arm(DriverRun[command.CommandType]):
         dynamics_factor: float,
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
-        min_elbow: float | None = None,
-        min_wrist: float | None = None,
-        min_shoulder: float | None = None,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_HZ)
         self.controller = controller
-        # The margins from the three poses where joints turn with no limit for a small move of the tool: the elbow
-        # straight, joint 5 at 0 or a half turn (radians each), and the wrist on the axis of joint 1 (metres, see
-        # `CronController.shoulder_clearance`). The arm does not take a Cartesian target inside a margin. Near full
-        # stretch the controller stopped the arm on a following error, and near the axis of joint 1 on a JOINT_VEL error
-        self.min_elbow = min_elbow
-        self.min_wrist = min_wrist
-        self.min_shoulder = min_shoulder
-        self._at_limit = False
         self.out = out
         self.state = CronState()
         self.max_speed = dynamics_factor * _MAX_JOINT_SPEED
@@ -114,6 +133,8 @@ class _Arm(DriverRun[command.CommandType]):
         self.reading = controller.read()
         self._condition = (self.reading.power, self.reading.in_error)
         self.target: np.ndarray | None = None
+        # The tool pose of a streamed Cartesian target, which the damped steps of each tick follow
+        self._pose: geom.Transform3D | None = None
         # A move asked for while the controller holds an error: it starts once the error clears
         self._deferred: np.ndarray | None = None
         self.velocity = np.zeros(JOINTS)
@@ -132,87 +153,71 @@ class _Arm(DriverRun[command.CommandType]):
             self._deferred = None
             self.controller.stop_move()
 
-    def _holdable(self, pose: geom.Transform3D, seed: np.ndarray, max_turn: float | None) -> np.ndarray | None:
-        """The joints for ``pose`` next to ``seed``, or None where the arm cannot hold ``pose``: no solution, the elbow
-        inside a margin from a pose where joints turn with no limit, or a joint turned further than ``max_turn`` from
-        ``seed``."""
-        try:
-            joints = self.controller.inverse(pose, seed)
-        except ValueError:
-            return None
-        elbow = abs(float(np.remainder(joints[_ELBOW] + np.pi, 2 * np.pi) - np.pi))
-        # A step can cross a straight elbow or wrist and land past the margin on the other side
-        if self.min_elbow is not None and (elbow < self.min_elbow or _crosses(joints, seed, _ELBOW)):
-            return None
-        if self.min_wrist is not None and (
-            abs(np.sin(joints[_WRIST])) < np.sin(self.min_wrist) or _crosses(joints, seed, _WRIST)
-        ):
-            return None
-        if self.min_shoulder is not None and self.controller.shoulder_clearance(joints) < self.min_shoulder:
-            return None
-        if max_turn is not None and np.max(np.abs(joints - seed)) > max_turn:
-            return None
+    def _follow(self, pose: geom.Transform3D, seed: np.ndarray, max_turn: float) -> np.ndarray:
+        """The joints a few damped least squares steps from ``seed`` toward the tool at ``pose``, each joint at most
+        ``max_turn`` from ``seed``, with the elbow on its side, and not nearer the arm itself than the clearance."""
+        joints = np.array(seed, dtype=np.float64)
+        side = 1.0 if np.sin(seed[_ELBOW]) >= 0 else -1.0
+        # An elbow already straighter than the limit does not get straighter, and is not pushed out either
+        least = min(_MIN_ELBOW, side * float(np.remainder(seed[_ELBOW] + np.pi, 2 * np.pi) - np.pi))
+        for _ in range(_DLS_ITERATIONS):
+            now = self.controller.forward(joints)
+            error = np.concatenate([pose.translation - now.translation, (pose.rotation * now.rotation.inv).as_rotvec])
+            jacobian = self.controller.jacobian(joints)
+            smallest = float(np.linalg.svd(jacobian, compute_uv=False)[-1])
+            damping = _DLS_DAMPING**2 * max(0.0, 1.0 - (smallest / _DLS_SINGULAR) ** 2)
+            step = jacobian.T @ np.linalg.solve(jacobian @ jacobian.T + damping * np.eye(6), error)
+            joints += step * min(1.0, _DLS_MAX_STEP / max(float(np.max(np.abs(step))), 1e-12))
+            elbow = float(np.remainder(joints[_ELBOW] + np.pi, 2 * np.pi) - np.pi)
+            if side * elbow < least:
+                joints[_ELBOW] += side * least - elbow
+        turn = joints - seed
+        joints = seed + turn * min(1.0, max_turn / max(float(np.max(np.abs(turn))), 1e-12))
+        if _drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
+            return np.array(seed, dtype=np.float64)
+        clearance = self.controller.clearance(joints)
+        if clearance < _MIN_CLEARANCE and clearance < self.controller.clearance(seed):
+            return np.array(seed, dtype=np.float64)
         return joints
 
-    def _toward(self, pose: geom.Transform3D, seed: np.ndarray) -> np.ndarray:
-        """The joints for ``pose``, or for the furthest pose on the way to it from ``seed`` that the arm can hold."""
-        joints = self._holdable(pose, seed, _MAX_TARGET_TURN)
-        if joints is not None:
-            self._at_limit = False
-            return joints
-        if not self._at_limit:
-            logger.info(f'{self.controller.ip}: the arm cannot hold {pose}: the target stops at the limit on the way')
-            self._at_limit = True
-        start, joints, low, high = self.controller.forward(seed), seed, 0.0, 1.0
-        for _ in range(_LIMIT_SEARCH_STEPS):
-            middle = (low + high) / 2
-            found = self._holdable(start.interpolate(pose, middle), seed, _MAX_TARGET_TURN)
-            if found is None:
-                high = middle
-            else:
-                low, joints = middle, found
-        return joints
-
-    def _solve(self, pose: geom.Transform3D, seed: np.ndarray, streamed: bool) -> np.ndarray:
-        if streamed:
-            return self._toward(pose, seed)
-        joints = self._holdable(pose, seed, None)
-        if joints is None:
-            raise ValueError(f'the arm cannot hold {pose}')
-        return joints
-
-    def _to_joints(self, cmd: command.CommandType, streamed: bool) -> np.ndarray:
-        """The joints ``cmd`` asks the arm to hold. A streamed Cartesian target that the arm cannot hold stops at the
-        limit on the way to it; a move that a caller waits for fails."""
+    def _pose_of(self, cmd: command.CommandType, seed: np.ndarray) -> geom.Transform3D | None:
+        """The tool pose that a Cartesian ``cmd`` asks for from the joints ``seed``, or None for a joint target."""
         # TODO: PositionControl and Impedance need a controller that takes them; the velocity loop runs its own law
         command.require_native_mode(cmd, 'CRON')
-        seed = self.target if streamed and self.target is not None else self.reading.q
         match cmd:
             case command.CartesianPosition(pose):
-                joints = self._solve(pose, seed, streamed)
+                return pose
             case command.CartesianDelta() as delta_cmd:
-                joints = self._solve(delta_cmd.apply(self.controller.forward(seed)), seed, streamed)
-            case command.JointPosition(positions):
-                joints = np.asarray(positions, dtype=np.float64)
+                return delta_cmd.apply(self.controller.forward(seed))
+            case command.JointPosition():
+                return None
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
-        # The controller refuses a velocity that is not finite and stops the arm with a TIMEOUT error
-        if not np.all(np.isfinite(joints)):
-            raise ValueError(f'{cmd} asks for joints that are not finite: {joints}')
-        return joints
+
+    def _to_joints(self, cmd: command.CommandType) -> np.ndarray:
+        """The joints that a move ``cmd`` goes to: a Cartesian target through the exact solution of the controller."""
+        pose = self._pose_of(cmd, self.reading.q)
+        if pose is not None:
+            return self.controller.inverse(pose, self.reading.q)
+        assert isinstance(cmd, command.JointPosition)
+        return _finite(cmd, np.asarray(cmd.positions, dtype=np.float64))
 
     def track(self, cmd: command.CommandType) -> None:
-        """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival."""
+        """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival. A Cartesian target is the
+        goal of the damped steps of each tick: the joints move toward it no faster than the arm can follow."""
+        seed = self.reading.q if self.target is None else self.target
+        pose = self._pose_of(cmd, seed)
+        joints = np.array(seed, dtype=np.float64) if pose is not None else self._to_joints(cmd)
         if self.target is None:
             self.controller.to_hold()
-        self.target = self._to_joints(cmd, streamed=True)
+        self.target, self._pose = _finite(cmd, joints), pose
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there."""
         with pimm.calls.raise_to(call):
-            target = self._to_joints(call.request, streamed=False)
+            target = self._to_joints(call.request)
             if self.target is not None:
-                self.target = None
+                self.target, self._pose = None, None
                 self.velocity[:] = 0.0
                 self.controller.stop()
             if self.reading.in_error:
@@ -233,7 +238,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._last_step = now
         if not self.usable:
             # An arm that left RUN holds no target: it must not resume one when it comes back
-            self.target = None
+            self.target, self._pose = None, None
             self.velocity[:] = 0.0
             return
         if self._deferred is not None:
@@ -241,6 +246,8 @@ class _Arm(DriverRun[command.CommandType]):
             self._deferred = None
         if self.target is None:
             return
+        if self._pose is not None:
+            self.target = self._follow(self._pose, self.target, self.max_speed * dt)
         error = self.target - self.reading.q
         # Not faster than the arm can stop from in the error left: at the gain alone, braking would need more
         # than max_accel and the arm would overshoot
@@ -290,9 +297,7 @@ class Robot(pimm.ControlSystem):
         power_off_on_exit: bool = True,
         tool_length: float = 0.0,
         projects: Sequence[str] = (),
-        min_elbow: float | None = None,
-        min_wrist: float | None = None,
-        min_shoulder: float | None = None,
+        tool_capsules: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
@@ -301,9 +306,7 @@ class Robot(pimm.ControlSystem):
         self.power_off_on_exit = power_off_on_exit
         self.tool_length = tool_length
         self.projects = tuple(projects)
-        self.min_elbow = min_elbow
-        self.min_wrist = min_wrist
-        self.min_shoulder = min_shoulder
+        self.tool_capsules = tuple(tool_capsules)
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[CronState](self)
@@ -312,20 +315,14 @@ class Robot(pimm.ControlSystem):
     def _arm(self, controller: CronController, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
         """The arm this run drives, built from the driver's configuration."""
         return _Arm(
-            controller,
-            self.sync_move,
-            self.commands,
-            self.state,
-            self.relative_dynamics_factor,
-            should_stop,
-            clock,
-            self.min_elbow,
-            self.min_wrist,
-            self.min_shoulder,
+            controller, self.sync_move, self.commands, self.state, self.relative_dynamics_factor, should_stop, clock
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        with CronController(self.ip, self.power_off_on_exit, self.tool_length, self.projects) as controller:
+        controller = CronController(
+            self.ip, self.power_off_on_exit, self.tool_length, self.projects, self.tool_capsules
+        )
+        with controller:
             with self._arm(controller, should_stop, clock) as arm:
                 self.robot_meta.emit(NO_MODEL_ROBOT_META)
                 while not should_stop.value:
