@@ -479,6 +479,23 @@ def test_the_page_state_is_empty_until_something_sends_one(world):
         assert httpx.get(base + '/state', timeout=1.0).json() == {'phase': 'running', 'control': True}
 
 
+def test_the_page_input_emits_each_object_that_the_page_posts(world):
+    """The teleoperator chooses on the page, such as the camera of the headset. A page on another site cannot."""
+    served = WebXR(port=free_port(), use_https=False)
+    inputs = RecordingEmitter()
+    served.page_input._bind(inputs, clock=world.clock)
+    with _served_webxr(webxr=served) as base:
+        assert httpx.post(base + '/input', json={'headset_camera': keys.WRIST_IMAGE}, timeout=1.0).status_code == 200
+        assert httpx.post(base + '/input', json=['not', 'an', 'object'], timeout=1.0).status_code == 422
+        assert httpx.post(base + '/input', content=b'not json', timeout=1.0).status_code == 422
+        foreign = {'origin': 'https://elsewhere.example'}
+        assert httpx.post(base + '/input', json={}, headers=foreign, timeout=1.0).status_code == 403
+        other_scheme = {'origin': base.replace('http://', 'https://')}
+        assert httpx.post(base + '/input', json={}, headers=other_scheme, timeout=1.0).status_code == 403
+        assert httpx.post(base + '/input', json={'x': 1}, headers={'origin': base}, timeout=1.0).status_code == 200
+    assert [data for _, data in inputs.emitted] == [{'headset_camera': keys.WRIST_IMAGE}, {'x': 1}]
+
+
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
     message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0]})
