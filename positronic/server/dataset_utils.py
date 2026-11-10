@@ -129,8 +129,12 @@ def _log_static_trail(rec: rr.RecordingStream, entity_path: str, positions: np.n
     rr.log(entity_path, rr.LineStrips3D(segments, colors=colors, radii=0.0005), static=True, recording=rec)
 
 
-def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
-    """Formats a single value based on its type and provided formatters/defaults."""
+# The episode-table column that shows an episode's index in the dataset.
+INDEX_COLUMN = '__index__'
+
+
+def format_cell(value: Any, formatter: str | None, default: Any) -> Any:
+    """The table cell for `value`: `[raw, formatted]` with a formatter or a datetime, else the value or `default`."""
     if isinstance(value, datetime):
         formatted_date = value.strftime(formatter) if formatter else value.isoformat()
         return [value.timestamp(), formatted_date]
@@ -149,8 +153,8 @@ def get_episodes_list(
     for idx, ep in enumerate(ds):
         try:
             episode_index = ep.pop('__episode_index__', idx)
-            mapping = {'__index__': episode_index, **ep}
-            episode_data = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
+            mapping = {INDEX_COLUMN: episode_index, **ep}
+            episode_data = [format_cell(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
             row = [episode_index, episode_data]
 
             # Include group metadata if available for using it in URL

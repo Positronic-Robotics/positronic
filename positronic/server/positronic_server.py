@@ -11,7 +11,7 @@ import socket
 import subprocess
 import tempfile
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field, fields
@@ -43,7 +43,9 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
+    INDEX_COLUMN,
     ReplayLayout,
+    format_cell,
     get_dataset_root,
     get_episodes_list,
     sampled_duration_timeline,
@@ -720,31 +722,40 @@ class ColumnSummary:
     counts: list[ValueCount]
 
 
-def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
-    """The cell each episode shows in the `key` column of the episode table, with its count.
+# The value types a summary column counts.
+SUMMARY_VALUE_TYPES = (str, int, float, bool, datetime)
 
-    A value is the cell the episode table sends, so it carries the column's format and default. An episode whose
-    cell is empty is not counted. The values a renderer lists come first, in its order, and the others follow by
-    count.
+
+def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
+    """The value each episode shows in the `key` column of the episode table, with its count.
+
+    The episodes are counted by the raw value, or by the column default where the value is absent. Each count sends
+    the cell the table draws for that value, with the column's format. An episode with neither is not counted. The
+    values a renderer lists come first, in its order, and the others follow by count. Raises ValueError on a value
+    that is not one of `SUMMARY_VALUE_TYPES`.
     """
-    (column,), formatters, defaults = parse_table_cfg({key: cfg})
-    rows = get_episodes_list(
-        (episode_table_row(i, episode) for i, episode in enumerate(ds)), [key], formatters, defaults
-    )
-    counted: dict[str, ValueCount] = {}
-    for _, (cell,), *_ in rows:
-        if cell is not None:
-            # A cell can be a list or a dict, so it is counted by its JSON spelling.
-            spelling = json.dumps(cell, sort_keys=True, default=str)
-            previous = counted.get(spelling)
-            counted[spelling] = ValueCount(cell, previous.count + 1 if previous else 1)
+    counts: Counter[Any] = Counter()
+    for index, episode in enumerate(ds):
+        stored = {INDEX_COLUMN: index, **episode_table_row(index, episode)}.get(key)
+        value = cfg.default if stored is None else stored
+        if value is None:
+            continue
+        if not isinstance(value, SUMMARY_VALUE_TYPES):
+            raise ValueError(
+                f'summary_column {key!r} holds a {type(value).__name__} in episode {index}; a summary counts '
+                f'{", ".join(kind.__name__ for kind in SUMMARY_VALUE_TYPES)} values only'
+            )
+        counts[value] += 1
     listed = {filter_spelling(value): rank for rank, value in enumerate(cfg.renderer.options if cfg.renderer else ())}
 
-    def place(item: tuple[str, ValueCount]) -> tuple[int, int, str]:
-        spelling, entry = item
-        return listed.get(filter_spelling(entry.value), len(listed)), -entry.count, spelling
+    def place(item: tuple[Any, int]) -> tuple[int, int, str]:
+        value, count = item
+        return listed.get(filter_spelling(value), len(listed)), -count, str(value)
 
-    return ColumnSummary(column, [entry for _, entry in sorted(counted.items(), key=place)])
+    (column,), _, _ = parse_table_cfg({key: cfg})
+    return ColumnSummary(
+        column, [ValueCount(format_cell(value, cfg.format, None), n) for value, n in sorted(counts.items(), key=place)]
+    )
 
 
 def parse_table_cfg(table_cfg: TableConfig) -> tuple:

@@ -1091,11 +1091,18 @@ def test_the_header_counts_a_formatted_column_as_the_table_cell_shows_it():
     assert _sent_counts(summary) == _counts(([2, '2 items'], 2), ([1, '1 items'], 1))
 
 
-def test_the_header_counts_a_column_of_lists_and_dicts():
+def test_a_summary_column_holding_a_list_is_refused_when_the_header_reads_it():
     table = {OUTCOME: ColumnConfig(label='Tags')}
-    summary = _summary_of({OUTCOME: ['a', 'b']}, {OUTCOME: ['a', 'b']}, {OUTCOME: {'k': 1}}, table=table)
+    with pytest.raises(ValueError, match='holds a list in episode 1'):
+        _summary_of({OUTCOME: 'a'}, {OUTCOME: ['a', 'b']}, table=table)
 
-    assert _sent_counts(summary) == _counts((['a', 'b'], 2), ({'k': 1}, 1))
+
+def test_a_formatted_column_keeps_the_order_its_renderer_lists():
+    renderer = RendererConfig(type='badge', options={2: {'label': 'Two'}, 1: {'label': 'One'}})
+    table = {OUTCOME: ColumnConfig(label='Items', format='%d items', renderer=renderer)}
+    summary = _summary_of({OUTCOME: 1}, {OUTCOME: 1}, {OUTCOME: 2}, table=table)
+
+    assert _sent_counts(summary) == _counts(([2, '2 items'], 1), ([1, '1 items'], 2))
 
 
 def test_the_header_counts_a_synthetic_column_from_the_value_the_table_computes():
