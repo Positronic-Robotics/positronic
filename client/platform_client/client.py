@@ -233,15 +233,13 @@ class PlatformClient:
     def me(self) -> MeResponse:
         return self._get(routes.USERS_ME, MeResponse)
 
-    def platform_terms(self) -> Terms | None:
-        """The current platform terms, or None where the platform has none. It sends no key."""
-        query = ProgramQuery(program=Program.platform)
-        return self._get(routes.TERMS_GET, TermsResponse, query=query, auth=Auth.NONE).terms
+    def program_terms(self, program: Program) -> Terms | None:
+        """The current terms of `program`, or None where it has none. It sends no key."""
+        return self._get(routes.TERMS_GET, TermsResponse, query=ProgramQuery(program=program), auth=Auth.NONE).terms
 
-    def platform_entry(self) -> ProgramEntry | None:
-        """The caller's entry in the platform program, which holds the terms version it accepted last."""
-        query = ProgramQuery(program=Program.platform)
-        return self._get(routes.PROGRAMS_ENTRY, ProgramEntryResponse, query=query).entry
+    def program_entry(self, program: Program) -> ProgramEntry | None:
+        """The caller's entry in `program`, which holds the terms version it accepted last."""
+        return self._get(routes.PROGRAMS_ENTRY, ProgramEntryResponse, query=ProgramQuery(program=program)).entry
 
     def accept_platform_terms(self, version: str) -> ProgramEntry:
         """Record that the person accepted the platform terms of `version`. A repeat keeps the time of the first

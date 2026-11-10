@@ -22,6 +22,7 @@ from platform_client.device_flow import (
 from platform_client.identity_providers import REQUEST_TIMEOUT
 from platform_client.requests import RegisterRequest, team_name
 from platform_client.responses import RegisterResponse
+from platform_client.terms import Program
 
 from positronic.cli.account.gateway import CREDENTIAL_ENV, CommandFailed, Fault, gateway, refusing_bad_input
 from positronic.cli.account.terms import accept, terms_lines, version_text
@@ -144,7 +145,7 @@ def _terms_step(client: PlatformClient, accepted_version: str | None, *, key_min
     if accepted_version is not None and key_minted:
         accept(client, accepted_version)
         return
-    current = client.platform_terms()
+    current = client.program_terms(Program.platform)
     if current is None:
         return
     for line in terms_lines(current):

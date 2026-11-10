@@ -4,17 +4,20 @@ The platform can refuse an account that has not accepted its current terms. A pe
 and accepts them here with the version that they read.
 """
 
+import shlex
+
 import configuronic as cfn
 from platform_client.client import PlatformClient
 from platform_client.config import ACCEPT_TERMS_COMMAND
-from platform_client.terms import ProgramEntry, Terms
+from platform_client.terms import Program, ProgramEntry, Terms
 
 from positronic.cli.account.gateway import CommandFailed, Fault, gateway
 
 
 def accept_command(version: str) -> str:
-    """The command that accepts `version`. The inner quotes keep a version such as `1.3` text on the command line."""
-    return f'{ACCEPT_TERMS_COMMAND} --version=\'"{version}"\''
+    """The command that accepts `version`, quoted for a shell. The inner quotes keep a version such as `1.3` text."""
+    text = shlex.quote(f'"{version}"')
+    return f'{ACCEPT_TERMS_COMMAND} --version={text}'
 
 
 def terms_lines(terms: Terms) -> list[str]:
@@ -42,11 +45,11 @@ def accept(client: PlatformClient, version: str) -> ProgramEntry:
 def terms(platform_url: str | None = None):
     """Print the current platform terms, and whether this account accepted them."""
     with gateway(platform_url) as client:
-        current = client.platform_terms()
+        current = client.program_terms(Program.platform)
         if current is None:
             print('The platform has no terms.')
             return
-        entry = client.platform_entry()
+        entry = client.program_entry(Program.platform)
     if entry is not None and entry.terms_version == current.version:
         print(f'The platform terms, version {current.version}: {current.url}')
         print(f'You accepted version {current.version}.')

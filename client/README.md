@@ -79,8 +79,8 @@ The platform can refuse a call from an account that has not accepted its terms. 
 accepts them. A person reads the terms and accepts them once. A new version of the terms can need a
 new acceptance.
 
-`PlatformClient.platform_terms()` reads the current version and the page, with no key.
-`platform_entry()` reads the version that the account accepted last. `accept_platform_terms(version)`
+`PlatformClient.program_terms(Program.platform)` reads the current version and the page, with no key.
+`program_entry(Program.platform)` reads the version that the account accepted last. `accept_platform_terms(version)`
 records the acceptance. The version is a check, and the platform refuses one that is not current. The
 models live in `platform_client.terms`.
 

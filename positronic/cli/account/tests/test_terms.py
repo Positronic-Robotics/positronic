@@ -1,5 +1,7 @@
 """`positronic account terms`, `positronic account accept-terms` and the terms step of `register`."""
 
+import shlex
+
 import pytest
 from platform_client import routes
 from platform_client.enums import ErrorCode, KeyStatus
@@ -8,7 +10,7 @@ from platform_client.responses import RegisterResponse
 
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.cli.account.register import register
-from positronic.cli.account.terms import accept_terms, terms
+from positronic.cli.account.terms import accept_command, accept_terms, terms
 from positronic.cli.conftest import AT, KEY, USER, refusal
 
 TERMS = {'program': 'platform', 'terms': {'version': '1.3', 'url': 'https://example.com/terms'}}
@@ -133,3 +135,13 @@ def test_register_refuses_a_terms_version_that_is_not_text_before_the_sign_in(pl
 
     assert raised.value.fault is Fault.USAGE
     assert platform.seen is None
+
+
+def test_the_printed_command_quotes_a_version_for_the_shell():
+    # A platform names the version, so a quote in it must not end the shell argument.
+    assert shlex.split(accept_command("1.3'; rm -rf ~")) == [
+        'positronic',
+        'account',
+        'accept-terms',
+        '--version="1.3\'; rm -rf ~"',
+    ]
