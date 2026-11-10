@@ -81,9 +81,8 @@ new acceptance.
 
 `PlatformClient.platform_terms()` reads the current version and the page, with no key.
 `platform_entry()` reads the version that the account accepted last. `accept_platform_terms(version)`
-records the acceptance. The version is a check: the platform refuses one that is not current, so a
-version published after the person read the terms is never accepted in their place. The models
-live in `platform_client.terms`.
+records the acceptance. The version is a check, and the platform refuses one that is not current. The
+models live in `platform_client.terms`.
 
 From the command line, `positronic account terms` prints the terms and the acceptance on record, and
 `positronic account accept-terms` accepts the version that you read. `positronic account register`

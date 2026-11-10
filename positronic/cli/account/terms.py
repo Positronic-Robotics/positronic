@@ -32,7 +32,7 @@ def version_text(version: object) -> str:
 
 
 def accept(client: PlatformClient, version: str) -> ProgramEntry:
-    """Record the acceptance of `version` and print it. The platform refuses a version that is not current."""
+    """Record the acceptance of `version` and print it."""
     entry = client.accept_platform_terms(version)
     print(f'You accepted the platform terms, version {entry.terms_version}.')
     return entry

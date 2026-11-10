@@ -244,8 +244,8 @@ class PlatformClient:
         return self._get(routes.PROGRAMS_ENTRY, ProgramEntryResponse, query=query).entry
 
     def accept_platform_terms(self, version: str) -> ProgramEntry:
-        """Record that the person accepted the platform terms of `version`. The platform refuses a version that
-        is not current. A repeat keeps the time of the first acceptance."""
+        """Record that the person accepted the platform terms of `version`. A repeat keeps the time of the first
+        acceptance."""
         return self._post(routes.PLATFORM_ACCEPT_TERMS, AcceptTermsRequest(terms_version=version), ProgramEntry)
 
     def billing_account(self, org: OrgSlug) -> BillingAccount:
