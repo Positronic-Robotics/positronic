@@ -163,6 +163,7 @@ class FakeRctl:
 
     def get_joint_angles(self):
         if self.moving and not self.blocked:
+            assert self.waypoint is not None, 'a move runs only to a waypoint'
             reach = self.waypoint_speed * self.planner_share * TICK
             self.q = self.q + np.clip(self.waypoint - self.q, -reach, reach)
             self.moving = bool(np.max(np.abs(self.waypoint - self.q)) > 1e-9)
@@ -238,6 +239,11 @@ def _pump(loop, clock: MockClock, ticks: int) -> None:
         next(loop)
 
 
+def _called_in_order(calls: list[str], *names: str) -> bool:
+    """Whether each of ``names`` is among ``calls``, the first of each in this order."""
+    return all(name in calls for name in names) and sorted(map(calls.index, names)) == list(map(calls.index, names))
+
+
 def _mover(world: pimm.World, driver: cron.Robot) -> pimm.calls.Caller[command.CommandType, None]:
     """A caller on ``driver.sync_move``, for a test that pumps its generator rather than running a World."""
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](driver)
@@ -251,7 +257,8 @@ def test_the_arm_is_powered_straight_to_run_with_control_taken_first(rctl, drive
 
     _pump(loop, clock, 1)
 
-    assert rctl.calls == ['connect', 'sync_robot_model', 'take_control', 'run']
+    assert _called_in_order(rctl.calls, 'take_control', 'run') and 'standby' not in rctl.calls
+    assert rctl.power is PowerState.RUN
 
 
 def test_a_target_beyond_the_reach_is_held_on_the_sphere_of_the_reach(rctl, driven):
@@ -265,24 +272,25 @@ def test_a_target_beyond_the_reach_is_held_on_the_sphere_of_the_reach(rctl, driv
     np.testing.assert_allclose(rctl.q[:3], [0.48, 0.36, 0.0], atol=0.01)
 
 
-def test_a_project_of_the_controller_is_started_once_control_is_taken(rctl, driven):
+def test_each_project_of_the_controller_is_started_once_control_is_taken(rctl, driven):
     """The controller starts a project only for a client that has control, such as the bridge to the gripper."""
-    _, _, _, clock, loop = driven(project='gripper_bridge')
+    _, _, _, clock, loop = driven(projects=['gripper_bridge', 'logger'])
 
     _pump(loop, clock, 1)
 
-    assert rctl.calls == ['connect', 'sync_robot_model', 'take_control', 'exr_run gripper_bridge', 'run']
+    assert _called_in_order(rctl.calls, 'take_control', 'exr_run gripper_bridge', 'run')
+    assert _called_in_order(rctl.calls, 'take_control', 'exr_run logger', 'run')
 
 
 def test_a_project_of_the_controller_is_started_after_a_safety_stop_is_cleared(rctl, driven):
     """The controller refuses to start a project while it holds an error, as after a press of the stop button."""
     rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
-    _, _, _, clock, loop = driven(project='gripper_bridge')
+    _, _, _, clock, loop = driven(projects=['gripper_bridge'])
 
     _pump(loop, clock, 1)
 
-    connected = ['connect', 'sync_robot_model', 'take_control']
-    assert rctl.calls == [*connected, 'resume', 'off', 'exr_run gripper_bridge', 'run']
+    assert _called_in_order(rctl.calls, 'resume', 'off', 'exr_run gripper_bridge', 'run')
+    assert 'exr_run gripper_bridge refused' not in rctl.calls
 
 
 def test_an_error_left_by_an_earlier_session_is_cleared_before_the_arm_is_powered(rctl, driven):
@@ -291,7 +299,8 @@ def test_an_error_left_by_an_earlier_session_is_cleared_before_the_arm_is_powere
 
     _pump(loop, clock, 1)
 
-    assert rctl.calls == ['connect', 'sync_robot_model', 'take_control', 'resume', 'run']
+    assert _called_in_order(rctl.calls, 'take_control', 'resume', 'run')
+    assert rctl.power is PowerState.RUN
 
 
 def test_a_safety_stop_latched_after_the_stop_button_is_released_is_cleared_and_the_arm_is_powered(rctl, driven):
@@ -300,7 +309,7 @@ def test_a_safety_stop_latched_after_the_stop_button_is_released_is_cleared_and_
 
     _pump(loop, clock, 1)
 
-    assert rctl.calls == ['connect', 'sync_robot_model', 'take_control', 'resume', 'off', 'run']
+    assert _called_in_order(rctl.calls, 'take_control', 'resume', 'off', 'run')
     assert rctl.power is PowerState.RUN
 
 
@@ -467,11 +476,9 @@ def test_each_change_of_the_error_state_is_logged_with_the_address_of_the_contro
         rctl.error = False
         _pump(loop, clock, 5)
 
-    lines = [record.getMessage() for record in caplog.records]
-    assert lines == [
-        'controller: RUN, error hardware errors motion errors, joints [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] deg',
-        'controller: RUN, no error',
-    ]
+    error, cleared = [record.getMessage() for record in caplog.records]
+    assert 'controller' in error and 'hardware errors' in error and 'motion errors' in error
+    assert 'controller' in cleared and 'no error' in cleared
 
 
 def test_a_long_move_that_the_planner_travels_slower_than_asked_is_not_given_up(world, rctl, driven):

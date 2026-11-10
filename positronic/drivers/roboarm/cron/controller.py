@@ -6,12 +6,18 @@ The client is a Linux x86-64 wheel that the controller serves at ``http://<contr
 import enum
 import logging
 import time
+from collections.abc import Sequence
 from typing import NamedTuple
 
 import numpy as np
-from rctlstd import rctlext as rctl
 
 from positronic import geom
+from positronic.drivers import vendor_import
+
+_RCTLSTD_HINT = 'Re-run with the wheel that the controller serves:\n  uv run --locked --with <rctlstd wheel> ...\n'
+
+with vendor_import('rctlstd', 'CRON support', hint=_RCTLSTD_HINT):
+    from rctlstd import rctlext as rctl  # pyright: ignore[reportMissingImports]
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +74,7 @@ def to_pose(vector: np.ndarray) -> geom.Transform3D:
     """The pose of ``[x, y, z, rx, ry, rz]``, where ``rx, ry, rz`` are the Euler angles of the vendor library."""
     return geom.Transform3D(
         translation=np.asarray(vector[:3], dtype=np.float64),
-        rotation=geom.Rotation.from_quat_xyzw(np.asarray(rctl.rpy2quat(list(vector[3:])), dtype=np.float64)),
+        rotation=geom.Rotation.from_quat_xyzw(np.asarray(rctl.rpy2quat(list(vector[3:])), dtype=np.float64).tolist()),
     )
 
 
@@ -102,13 +108,13 @@ class CronController:
     up: the gravity setting of the controller gives the up direction of a base mounted at an angle.
     """
 
-    def __init__(self, ip: str, power_off_on_exit: bool = True, tool_length: float = 0.0, project: str | None = None):
+    def __init__(self, ip: str, power_off_on_exit: bool = True, tool_length: float = 0.0, projects: Sequence[str] = ()):
         self.ip = ip
         self.power_off_on_exit = power_off_on_exit
-        # A project of the controller that runs beside the arm, for example a bridge to the gripper on the wrist. The
-        # controller starts it only for a client that has control and only with no error, and keeps it running after
-        # the client leaves. A second start of a running project does nothing. A refused start raises nothing
-        self.project = project
+        # The projects of the controller that run beside the arm, for example a bridge to the gripper on the wrist. The
+        # controller starts a project only for a client that has control and only with no error, and keeps it running
+        # after the client leaves. A second start of a running project does nothing. A refused start raises nothing
+        self.projects = tuple(projects)
         self.tool = geom.Transform3D(translation=np.array([0.0, 0.0, tool_length]))
         self.mount = geom.Transform3D.identity
         self._has_control = False
@@ -131,8 +137,8 @@ class CronController:
             rctl.take_control()
             self._has_control = True
             self._clear_errors()
-            if self.project is not None:
-                rctl.exr_run(self.project)
+            for project in self.projects:
+                rctl.exr_run(project)
             # Straight to RUN, as the RCUI does. On an arm whose multi-turn encoder asks for a preset (Hand B, motor 4,
             # 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed 3 times in 3
             self._power_to(PowerState.RUN, rctl.cmd_power_run)
