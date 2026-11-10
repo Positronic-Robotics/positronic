@@ -11,7 +11,7 @@ import socket
 import subprocess
 import tempfile
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field, fields
@@ -94,6 +94,7 @@ app_state: dict[str, object] = {
     'layout': None,
     'group_tables_cfg': {},
     'home_page': None,  # None = episodes, or group name like 'tasks'
+    'summary_column': None,
     _PAGE_CONFIG_KEY: PageConfig(),
 }
 
@@ -210,6 +211,8 @@ async def cache_rerun_assets(request: Request, call_next):
 # holding its values.
 GROUP_FILTERS = 'group_filters'
 FILTER_VALUES = 'values'
+# The field of a dataset_info response that holds its `ColumnSummary`, or null where none is configured.
+DATASET_SUMMARY = 'summary'
 # A static export holds a group table as one file per filter set some episode satisfies, and this index beside them.
 GROUP_INDEX_FILE = 'index.json'
 # A static export holds an API response read whole at the route's path with this suffix.
@@ -295,6 +298,8 @@ def _episode_page_affixes() -> tuple[str, str]:
 def _server_names() -> dict[str, str]:
     """Every name the page reads from the server rather than spelling it again: a route, a file, a field."""
     params, file = (field.name for field in fields(GroupFile))
+    summary_column, summary_counts = (field.name for field in fields(ColumnSummary))
+    count_value, count_count = (field.name for field in fields(ValueCount))
     before_index, after_index = _episode_page_affixes()
     return {
         'dataset_status': _route(api_dataset_status),
@@ -308,6 +313,11 @@ def _server_names() -> dict[str, str]:
         'entry_file': file,
         'group_filters': GROUP_FILTERS,
         'filter_values': FILTER_VALUES,
+        'dataset_summary': DATASET_SUMMARY,
+        'summary_column': summary_column,
+        'summary_counts': summary_counts,
+        'count_value': count_value,
+        'count_count': count_count,
     }
 
 
@@ -590,7 +600,19 @@ async def episode_viewer(request: Request, episode_id: int):
 @require_dataset
 async def api_dataset_info():
     ds = cast(Dataset, app_state['dataset'])
-    return {'root': _shown_root(), 'num_episodes': len(ds)}
+    return {'root': _shown_root(), 'num_episodes': len(ds), DATASET_SUMMARY: _dataset_summary(ds)}
+
+
+def _dataset_summary(ds: Dataset) -> dict | None:
+    """The summary column's counts over `ds`, read once per dataset and table settings; None with no summary column."""
+    key = cast(str | None, app_state['summary_column'])
+    if key is None:
+        return None
+    cache_key = ('dataset_summary',)
+    if cache_key not in _api_cache:
+        cfg = cast(TableConfig, app_state['episode_table_cfg'])[key]
+        _api_cache[cache_key] = asdict(column_summary(ds, key, cfg))
+    return _api_cache[cache_key]
 
 
 @dataclass
@@ -675,6 +697,45 @@ class GroupTableConfig:
     format_table: TableConfig
     group_filter_keys: dict[str, str] = field(default_factory=dict)
     default_sort: SortConfig | None = None
+
+
+@dataclass(frozen=True)
+class ValueCount:
+    """How many episodes hold one value of the summary column."""
+
+    value: Any
+    count: int
+
+
+@dataclass(frozen=True)
+class ColumnSummary:
+    """The values of one episode-table column, with the count of each, for the page header.
+
+    `column` is the column as the episode table sends it, so the header draws a value as a cell does.
+    """
+
+    column: dict[str, Any]
+    counts: list[ValueCount]
+
+
+def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
+    """The value each episode shows in the `key` column, with its count.
+
+    An episode with no value counts as the column's default; with no default, it is not counted. The values a
+    renderer lists come first, in its order, and the others follow by count.
+    """
+    stored = (episode.static.get(key) for episode in ds)
+    # As a table cell reads it: a None value shows the default.
+    shown = (cfg.default if value is None else value for value in stored)
+    counts = Counter(value for value in shown if value is not None)
+    listed = {filter_spelling(value): rank for rank, value in enumerate(cfg.renderer.options if cfg.renderer else ())}
+
+    def place(item: tuple[Any, int]) -> tuple[int, int, str]:
+        value, count = item
+        return listed.get(filter_spelling(value), len(listed)), -count, str(value)
+
+    (column,), _, _ = parse_table_cfg({key: cfg})
+    return ColumnSummary(column, [ValueCount(value, count) for value, count in sorted(counts.items(), key=place)])
 
 
 def parse_table_cfg(table_cfg: TableConfig) -> tuple:
@@ -1068,11 +1129,13 @@ def configure_tables(
     max_resolution: int,
     max_hz: float,
     layout: ReplayLayout | None,
+    summary_column: str | None = None,
 ) -> None:
     """Set what the tables show and how a recording is built.
 
     `ep_table_cfg` maps an episode's static keys to the columns of the episode table. `group_tables` holds
     each grouped table by name, and `home_page` names the one served at the root, or None for the episodes.
+    `summary_column` names a column of the episode table whose values the page header counts, or None for no count.
     A recording's videos are re-encoded down to `max_resolution` on the long side, and its raw image streams and
     its numeric signals with a known nanosecond clock are thinned to `max_hz`; 0 disables thinning. It shows its
     views as `layout` places them, or as `stream_episode_rrd` places them without one. `root` is the dataset
@@ -1095,6 +1158,11 @@ def configure_tables(
                 )
     if home_page and home_page not in (group_tables or {}):
         raise ValueError(f'home_page {home_page!r} names no group table; the tables are {sorted(group_tables or {})}')
+    if summary_column is not None and summary_column not in episode_columns:
+        raise ValueError(
+            f'summary_column {summary_column!r} is no column of the episode table; '
+            f'the columns are {sorted(episode_columns)}'
+        )
     app_state['root'] = root
     app_state['cache_dir'] = cache_dir
     app_state['episode_table_cfg'] = ep_table_cfg or {}
@@ -1103,6 +1171,7 @@ def configure_tables(
     app_state['max_hz'] = max_hz
     app_state['layout'] = layout
     app_state['home_page'] = home_page
+    app_state['summary_column'] = summary_column
     _api_cache.clear()
 
 
@@ -1129,6 +1198,7 @@ def main(
     title: str = '',
     show_paths: bool = True,
     layout: ReplayLayout | None = None,
+    summary_column: str | None = None,
 ):
     """Visualize a Dataset with Rerun.
 
@@ -1185,6 +1255,7 @@ def main(
         show_paths: Whether the pages report where the dataset lives
         layout: Where an episode's replay shows its views, for example
             ``positronic.cfg.server.single_arm_replay_layout``. None keeps the default replay
+        summary_column: A column of the episode table whose values the page header counts; None shows no count
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'
     deb_level = logging.DEBUG if debug else logging.INFO
@@ -1201,6 +1272,7 @@ def main(
         max_resolution=max_resolution,
         max_hz=max_hz,
         layout=layout,
+        summary_column=summary_column,
     )
     configure_pages(base_href=base_href, title=title, show_paths=show_paths)
     app_state['loading_state'] = True

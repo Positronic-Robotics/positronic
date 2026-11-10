@@ -9,6 +9,7 @@ import threading
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict, fields
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -474,6 +475,15 @@ def test_the_tables_an_export_writes_are_what_the_app_serves_reading_every_episo
         for entry in index:
             served = _fetch(client, '/api/groups/outcomes', entry['params'])[0]
             assert (out / 'api/groups/outcomes' / entry['file']).read_bytes() == served
+
+
+def test_an_export_writes_the_count_of_each_value_of_the_summary_column(dataset, tmp_path):
+    out = tmp_path / 'out'
+    an_export(dataset, out, summary_column=OUTCOME)
+
+    summary = json.loads((out / 'api/dataset_info.json').read_text())[positronic_server.DATASET_SUMMARY]
+    counts = [asdict(positronic_server.ValueCount(value, 1)) for value in ('Failure', 'Success')]
+    assert summary[fields(positronic_server.ColumnSummary)[1].name] == counts
 
 
 def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_starts_late(tmp_path):

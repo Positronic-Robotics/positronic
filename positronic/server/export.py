@@ -611,6 +611,7 @@ def export_static(
     ep_table_cfg: TableConfig | None = None,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
+    summary_column: str | None = None,
     max_resolution: int = DEFAULT_MAX_RESOLUTION,
     max_hz: float = DEFAULT_MAX_HZ,
     layout: ReplayLayout | None = None,
@@ -640,6 +641,7 @@ def export_static(
     - `assets` writes the app's scripts, styles and viewer under `asset_dir`, a directory under `static/` at the
       host root, so it takes the root base href. An export under a prefix shares the host's copy. A host that
       serves several exports names a directory per set of assets.
+    - `summary_column` names a column of `ep_table_cfg` whose values the page header counts.
     - An export holds the app's state from its first step to its last. A second export in the process waits for
       it, and an export into the same directory is then refused.
 
@@ -675,6 +677,7 @@ def export_static(
             max_resolution=max_resolution,
             max_hz=max_hz,
             layout=layout,
+            summary_column=summary_column,
         )
         configure_pages(
             base_href=base_href,
@@ -720,6 +723,7 @@ def main(
     layout: ReplayLayout | None = None,
     group_tables: dict[str, GroupTableConfig] | None = None,
     home_page: str | None = None,
+    summary_column: str | None = None,
     base_href: str = '/',
     title: str = '',
     show_paths: bool = False,
@@ -739,6 +743,7 @@ def main(
         layout: Where an episode's replay shows its views; None keeps the default replay
         group_tables: Grouped tables, by name
         home_page: The group table served at the root, or None for the episodes
+        summary_column: A column of the episode table whose values the page header counts; None shows no count
         base_href: Path at the host root the export is served under
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
@@ -753,6 +758,7 @@ def main(
         ep_table_cfg=ep_table_cfg,
         group_tables=group_tables,
         home_page=home_page,
+        summary_column=summary_column,
         max_resolution=max_resolution,
         max_hz=max_hz,
         layout=layout,
