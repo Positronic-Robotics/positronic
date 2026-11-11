@@ -39,6 +39,13 @@ class Tracker:
     def is_umi_mode(self):
         return self._operator_position is None
 
+    @staticmethod
+    def _angle_about_z(turn: geom.Rotation) -> float:
+        """The angle of ``turn`` about the z axis, when ``turn`` is a tilt after a turn about z."""
+        w, _, _, z = turn.as_quat
+        # A half turn about an axis in the xy plane has no turn about z
+        return 0.0 if np.hypot(w, z) < 1e-9 else float(2.0 * np.arctan2(z, w))
+
     def turn_on(self, robot_pos: geom.Transform3D, hand_pos: geom.Transform3D):
         operator = self._operator_position
         if operator is None:
@@ -51,7 +58,8 @@ class Tracker:
         if self._controller_axes is not None:
             # How far the controller is turned from the way the operator holds it facing ahead, in the robot frame
             turned = operator.rotation * self._controller_axes * hand_pos.rotation.inv * operator.rotation.inv
-            self._axes = geom.Rotation.from_rotvec(np.array([0.0, 0.0, _angle_about_z(turned)])) * operator.rotation
+            heading = geom.Rotation.from_rotvec(np.array([0.0, 0.0, self._angle_about_z(turned)]))
+            self._axes = heading * operator.rotation
         # Copies: a driver can hand out views of the state that it writes again at each tick
         self._robot_start, self._hand_start = robot_pos.copy(), hand_pos.copy()
 
@@ -71,13 +79,6 @@ class Tracker:
         shift = axes(tracker_pos.translation - start.translation)
         turn = axes * tracker_pos.rotation * start.rotation.inv * axes.inv
         return geom.Transform3D(self._robot_start.translation + shift, turn * self._robot_start.rotation)
-
-
-def _angle_about_z(turn: geom.Rotation) -> float:
-    """The angle of ``turn`` about the z axis, when ``turn`` is a tilt after a turn about z."""
-    w, _, _, z = turn.as_quat
-    # A half turn about an axis in the xy plane has no turn about z
-    return 0.0 if np.hypot(w, z) < 1e-9 else float(2.0 * np.arctan2(z, w))
 
 
 class OperatorPosition(Enum):
