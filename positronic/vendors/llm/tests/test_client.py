@@ -288,16 +288,24 @@ def test_request_after_a_rejected_tool_call_keeps_the_cache_point_of_the_request
 @pytest.mark.parametrize('cache_ttl', ['5m', '1h'])
 def test_anthropic_request_sends_each_cache_point_with_the_configured_ttl_and_records_it(monkeypatch, cache_ttl):
     pytest.importorskip('anthropic')
-    requests = serve(monkeypatch, [anthropic_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})])
+    waypoint = {'x': 0.01, 'y': 0, 'z': 0, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 0}
+    move = anthropic_reply('move_path', {'waypoints': [waypoint], 'note': 'Approach the cube.'})
+    finished = anthropic_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})
+    requests = serve(monkeypatch, [move, move, finished])
     monkeypatch.delenv(ANTHROPIC_API_KEYS_ENV, raising=False)
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-secret-do-not-record')
-    policy = llm(model='anthropic:test-model', cache_ttl=cache_ttl)
+    policy = llm(model='anthropic:test-model', image_horizon=1, cache_ttl=cache_ttl)
     with execution(policy) as (active, rt, clock):
-        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
-    body = json.loads(requests[0].content)
-    controls = [body['messages'][i]['content'][j]['cache_control'] for i, j in anthropic_marks(body)]
-    assert controls
-    assert all(control == {'type': 'ephemeral', 'ttl': cache_ttl} for control in controls)
+        for second in range(1, 4):
+            clock.advance_to_ns(second * 1_000_000_000)
+            end = complete(active, rt, clock, observation())
+        assert end is PolicyEnd.COMPLETE
+    bodies = [json.loads(request.content) for request in requests]
+    controls = [
+        [body['messages'][i]['content'][j]['cache_control'] for i, j in anthropic_marks(body)] for body in bodies
+    ]
+    assert len(controls[-1]) == 2
+    assert all(control == {'type': 'ephemeral', 'ttl': cache_ttl} for marks in controls for control in marks)
     assert policy.meta()['cache_ttl'] == cache_ttl
 
 

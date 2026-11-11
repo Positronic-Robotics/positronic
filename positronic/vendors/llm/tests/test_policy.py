@@ -22,6 +22,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.settings import ModelSettings
 
 from pimm.world import VirtualClock
 from positronic import keys
@@ -160,9 +161,18 @@ def test_image_horizon_must_be_positive():
         LLMPolicy(Endpoint('test'), Motion(), image_horizon=0)
 
 
-def test_cache_ttl_must_be_one_the_providers_accept():
+def test_cache_ttl_must_be_one_of_the_ttls_that_providers_accept():
     with pytest.raises(ValueError, match='cache_ttl'):
         LLMPolicy(Endpoint('test'), Motion(), cache_ttl='2h')
+
+
+@pytest.mark.parametrize(
+    'setting',
+    ['anthropic_cache_tool_definitions', 'anthropic_cache', 'bedrock_cache_messages', 'openrouter_cache_instructions'],
+)
+def test_policy_refuses_a_provider_cache_setting(setting):
+    with pytest.raises(ValueError, match='provider caching'):
+        LLMPolicy(Endpoint('test', settings=cast(ModelSettings, {setting: True})), Motion())
 
 
 def test_on_demand_pictures_reveal_only_requested_cameras(model):
