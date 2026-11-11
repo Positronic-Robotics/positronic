@@ -54,6 +54,8 @@ class FakeRctl:
         self.wall: float | None = None
         # A second wall, under the first joint
         self.floor: float | None = None
+        # A thin part of the arm: the first joint collides between these two angles, and is clear on both sides
+        self.band: tuple[float, float] | None = None
         # The model refuses forward kinematics, as it can for a pose
         self.fk_fails = False
         self.tool_capsules: list[dict] = []
@@ -256,6 +258,9 @@ class FakeRctl:
         clearance = min(
             1.0 if self.wall is None else self.wall - q[0], 1.0 if self.floor is None else q[0] - self.floor
         )
+        if self.band is not None:
+            low, high = self.band
+            clearance = min(clearance, 0.0 if low <= q[0] <= high else min(abs(q[0] - low), abs(q[0] - high)))
         return {'lim': 0, 'coll': int(clearance <= 0), 'min_dist': max(clearance, 0.0), 'threshold': 0.005}
 
     def jacob(self, q, in_tcp):
@@ -875,6 +880,19 @@ def test_a_streamed_joint_target_stops_short_of_the_arm_itself(rctl, driven):
     assert 0.5 - cron._MIN_CLEARANCE - 0.06 <= rctl.q[0] <= 0.5 - cron._MIN_CLEARANCE + 1e-6
 
 
+def test_a_streamed_step_does_not_jump_over_a_narrow_collision(rctl, driven):
+    """A late tick makes a long step: both of its ends can be clear of a thin part of the arm."""
+    rctl.band = (0.1355, 0.1395)  # between the ends 0.125 and 0.15 of a step, more than the clearance from each
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(0.5)))
+
+    for _ in range(300):
+        clock.advance(cron._MAX_STEP_S)  # each tick late: a step of 0.025 rad
+        next(loop)
+
+    assert rctl.q[0] < 0.1355
+
+
 def test_a_streamed_target_does_not_move_an_arm_that_is_in_a_collision(rctl, driven):
     """The model gives no depth in a collision: a step in one could go deeper."""
     rctl.wall, rctl.q = 0.5, _joints(0.6)
@@ -1213,7 +1231,7 @@ def test_a_refused_move_reports_how_far_the_arm_moved_while_the_driver_cleared_t
     _pump(loop, clock, 10)
 
     rctl.q = rctl.q + _joints(0.02)
-    _pump_until(loop, clock, answer, ticks=5000)
+    _pump_until(loop, clock, answer, ticks=int(2 * cron._RECOVER_S / TICK))
 
     with pytest.raises(MoveRefused) as refused:
         answer.result()

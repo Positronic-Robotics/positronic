@@ -63,9 +63,9 @@ _DRIFT_M, _DRIFT_RAD = 1e-4, 1e-3
 _MIN_CLEARANCE = 0.01
 # Radians: the spacing of the points where the clearance of a planned move is checked
 _PATH_STEP = np.radians(1.0)
-# How long a move waits for the controller to clear its error: a FAILURE needs a power off and a power up, and a
-# request for RUN that is lost is sent again after POWER_TIMEOUT_S
-_RECOVER_S = POWER_TIMEOUT_S + STARTUP_S + 9.0
+# How long a move waits for the controller to clear its error: a FAILURE or a STANDBY needs a power off and a power up,
+# each of which can take POWER_TIMEOUT_S, and then the joint move after RUN
+_RECOVER_S = 2 * POWER_TIMEOUT_S + STARTUP_S + 4.0
 # A move that waits asks the controller to clear its error again after this: one request did not always clear it
 _RESUME_EVERY_S = 1.0
 # The ticks of a stream that an error report looks back over
@@ -236,11 +236,15 @@ class _Arm(DriverRun[command.CommandType]):
         return self._clear_of_itself(seed, seed + np.clip(goal - seed, -max_turn, max_turn))
 
     def _clear_of_itself(self, seed: np.ndarray, joints: np.ndarray) -> np.ndarray:
-        """``joints``, or ``seed`` if ``joints`` take the arm nearer than the clearance to itself, by the collision
-        model of the controller. The model gives no depth in a collision, so a step into one is never taken."""
-        clearance = self.controller.clearance(joints)
-        if clearance <= 0.0 or (clearance < _MIN_CLEARANCE and clearance < self.controller.clearance(seed)):
-            return np.array(seed, dtype=np.float64)
+        """``joints``, or ``seed`` if the step from ``seed`` to ``joints`` takes the arm nearer than the clearance to
+        itself, by the collision model of the controller, at points ``_PATH_STEP`` apart. The model gives no depth in a
+        collision, so a step into one is never taken."""
+        start = self.controller.clearance(seed)
+        points = max(1, int(np.ceil(np.max(np.abs(joints - seed)) / _PATH_STEP)))
+        for share in np.linspace(0.0, 1.0, points + 1)[1:]:
+            clearance = self.controller.clearance(seed + share * (joints - seed))
+            if clearance <= 0.0 or (clearance < _MIN_CLEARANCE and clearance < start):
+                return np.array(seed, dtype=np.float64)
         return joints
 
     def _check_move(self, target: np.ndarray) -> None:
