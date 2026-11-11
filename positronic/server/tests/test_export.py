@@ -9,6 +9,7 @@ import threading
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict, fields
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -31,7 +32,13 @@ from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.server import export, positronic_server
-from positronic.server.dataset_utils import DEFAULT_MAX_HZ, ReplayLayout, get_dataset_root
+from positronic.server.dataset_utils import (
+    DEFAULT_MAX_HZ,
+    DURATION_COLUMN,
+    INDEX_COLUMN,
+    ReplayLayout,
+    get_dataset_root,
+)
 from positronic.server.export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
@@ -68,7 +75,7 @@ HIDDEN_VALUE = 's3://internal/checkpoints/step_1000'
 OBJECTS = ('Plastic banana', 'Wooden block')
 
 TABLE = {
-    '__index__': ColumnConfig(label='#', format='%d'),
+    INDEX_COLUMN: ColumnConfig(label='#', format='%d'),
     OUTCOME: ColumnConfig(label='Outcome', filter=True),
     OBJECT: ColumnConfig(label='Object', filter=True),
     ATTEMPT: ColumnConfig(label='Attempt'),
@@ -407,7 +414,7 @@ def test_two_views_of_one_dataset_through_one_scratch_dir_each_get_their_own_rec
 STAGE = 'stage'
 STAGED_TABLE = {
     **TABLE,
-    '__duration__': ColumnConfig(label='Duration', format='%.3f sec'),
+    DURATION_COLUMN: ColumnConfig(label='Duration', format='%.3f sec'),
     STAGE: ColumnConfig(label='Stage', filter=True),
     # A column whose value is a download in the `dataset` fixture.
     'notes': ColumnConfig(label='Notes'),
@@ -476,6 +483,29 @@ def test_the_tables_an_export_writes_are_what_the_app_serves_reading_every_episo
             assert (out / 'api/groups/outcomes' / entry['file']).read_bytes() == served
 
 
+def test_an_export_writes_the_count_of_each_value_of_the_summary_column(dataset, tmp_path):
+    out = tmp_path / 'out'
+    an_export(dataset, out, summary_column=OUTCOME)
+
+    summary = json.loads((out / 'api/dataset_info.json').read_text())[positronic_server.DATASET_SUMMARY]
+    counts = [asdict(positronic_server.ValueCount(value, 1)) for value in ('Failure', 'Success')]
+    assert summary[fields(positronic_server.ColumnSummary)[1].name] == counts
+
+
+def test_a_summary_value_the_header_cannot_count_stops_the_export_before_its_episode_is_written(tmp_path):
+    dataset = a_dataset(
+        tmp_path / 'dataset',
+        {keys.TASK: 'Put the banana on the plate', OUTCOME: 'Success'},
+        {keys.TASK: 'Put the banana on the plate', OUTCOME: ['Success', 'Failure']},
+    )
+    out = tmp_path / 'out'
+
+    with pytest.raises(ValueError, match='holds a list in episode 1'):
+        export_all(dataset, out, ep_table_cfg=TABLE, summary_column=OUTCOME, max_resolution=64, assets=False, workers=1)
+    assert (out / 'episode/0/index.html').exists()
+    assert not (out / 'episode/1').exists()
+
+
 def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_starts_late(tmp_path):
     with LocalDatasetWriter(tmp_path / 'dataset') as writer, writer.new_episode() as episode:
         for second in range(1, 12):
@@ -483,7 +513,7 @@ def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_s
         for second in (4, 10):
             episode.append(keys.TARGET_GRIP, 0.5, Time(**{RECORDED_TIME: second * 1_000_000_000}))
     out = tmp_path / 'out'
-    duration = {'__duration__': ColumnConfig(label='Duration')}
+    duration = {DURATION_COLUMN: ColumnConfig(label='Duration')}
     export_all(load_all_datasets(tmp_path / 'dataset'), out, ep_table_cfg=duration, max_resolution=64, assets=False)
 
     assert json.loads((out / 'api/episodes.json').read_text())['episodes'] == [[0, [10.0]]]
@@ -496,7 +526,7 @@ def test_an_episode_with_a_signal_of_no_rows_is_exported(tmp_path):
     [episode_dir] = [path.parent for path in (tmp_path / 'dataset').rglob('meta.json')]
     write_empty_scalar_file(episode_dir, 'marks')
     out = tmp_path / 'out'
-    duration = {'__duration__': ColumnConfig(label='Duration')}
+    duration = {DURATION_COLUMN: ColumnConfig(label='Duration')}
     export_all(load_all_datasets(tmp_path / 'dataset'), out, ep_table_cfg=duration, max_resolution=64, assets=False)
 
     assert json.loads((out / 'api/episodes.json').read_text())['episodes'] == [[0, [2.0]]]

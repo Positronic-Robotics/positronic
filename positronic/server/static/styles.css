@@ -399,6 +399,19 @@ tbody tr.lb-row--baseline:hover {
   color: #fca5a5;
   border: 1px solid rgba(248, 113, 113, 0.3);
 }
+.dataset-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin-top: 0.6rem;
+}
+
+.dataset-summary__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 /* Filtered episode navigation */
 .episode-nav {
   display: inline-flex;

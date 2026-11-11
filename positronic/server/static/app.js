@@ -137,8 +137,25 @@ async function fetchJSON(url) {
 async function loadDatasetInfo() {
   const data = await fetchJSON(await apiUrl(NAMES.dataset_info));
   if (!data) return;
-  document.getElementById('dataset-stats').innerHTML =
-    `<p><strong>${data.num_episodes}</strong> episodes.</p>`;
+  const stats = document.getElementById('dataset-stats');
+  stats.innerHTML = `<strong>${data.num_episodes}</strong> episodes.`;
+  const summary = data[NAMES.dataset_summary];
+  if (summary) stats.append(summaryLine(summary, data.num_episodes));
+}
+
+// The count of each value of the summary column, each value drawn as the episode table draws its cell.
+function summaryLine(summary, total) {
+  const line = document.createElement('span');
+  line.classList.add('dataset-summary');
+  for (const entry of summary[NAMES.summary_counts]) {
+    const count = entry[NAMES.count_count];
+    const item = document.createElement('span');
+    item.classList.add('dataset-summary__item');
+    const share = total ? ` (${Math.round((100 * count) / total)}%)` : '';
+    item.append(cellValue(entry[NAMES.count_value], summary[NAMES.summary_column]), ` ${count}${share}`);
+    line.append(item);
+  }
+  return line;
 }
 
 async function loadEpisodes(filters = {}) {
