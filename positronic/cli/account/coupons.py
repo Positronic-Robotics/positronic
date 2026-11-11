@@ -25,8 +25,9 @@ def redeem(code: object = None, platform_url: str | None = None, json: bool = Fa
     """Redeem a coupon. `code` is the code in the coupon mail."""
     if code is None:
         raise CommandFailed('name the code of the coupon: --code=<code>', Fault.USAGE)
+    text = code_text(code)
     with gateway(platform_url, refusal_as_json=json) as client:
-        redemption = client.redeem_coupon(code_text(code))
+        redemption = client.redeem_coupon(text)
     if json:
         print(redemption.model_dump_json(indent=2))
         return

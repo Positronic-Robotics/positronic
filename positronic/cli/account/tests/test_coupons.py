@@ -3,7 +3,7 @@
 import pytest
 from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, CouponRedemption
-from platform_client.client import AUTH_HEADER
+from platform_client.client import API_KEY_ENV, AUTH_HEADER
 from platform_client.enums import ErrorCode
 from platform_client.ids import CouponCode, OrgSlug
 from platform_client.requests import CouponRedeemRequest
@@ -45,6 +45,16 @@ def test_redeem_refuses_a_code_that_is_not_text_before_any_call(platform, run_co
 
     assert raised.value.fault is Fault.USAGE
     assert platform.seen is None
+
+
+def test_redeem_refuses_a_code_that_is_not_text_on_a_box_with_no_key(platform, run_command, monkeypatch):
+    monkeypatch.delenv(API_KEY_ENV)
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(redeem, code=20261110)
+
+    assert raised.value.fault is Fault.USAGE
+    assert 'quote it' in str(raised.value)
 
 
 @pytest.mark.parametrize(
