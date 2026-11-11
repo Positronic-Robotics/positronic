@@ -242,6 +242,14 @@ def test_a_stage_signal_is_plotted_by_the_place_of_each_stage_on_the_ladder(tmp_
     assert _collect_signal_groups(ep).plotted_texts == {STATE_SIGNAL: ladder, _ANNOTATION_STATE: ladder}
 
 
+def test_a_state_mark_with_a_code_off_the_ladder_keeps_its_own_order(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {f'{AUTOLABEL_CHANNEL}.model-v2.{STATE_MARK}': ['floating', 'nudged']})
+
+    assert _collect_signal_groups(ep).plotted_texts == {
+        f'{AUTOLABEL_CHANNEL}.model-v2.{STATE_MARK}': ['floating', 'nudged']
+    }
+
+
 def test_a_text_signal_that_is_no_state_mark_keeps_its_own_order_when_its_values_are_stages(tmp_path):
     ep = _text_episode(tmp_path / 'ep', {'device.mode': ['control', 'floating']})
 
