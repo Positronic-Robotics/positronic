@@ -43,7 +43,11 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.server.dataset_utils import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
+    DURATION_COLUMN,
+    EPISODE_INDEX_FIELD,
+    GROUP_META_KEY,
     INDEX_COLUMN,
+    META_FIELD,
     ReplayLayout,
     get_dataset_root,
     get_episodes_list,
@@ -764,12 +768,12 @@ def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
         value = summary_value(index, episode, key, cfg)
         if value is not None:
             counts[type(value), value] += 1
-    options = cfg.renderer.options if cfg.renderer else ()
-    listed = {filter_spelling(_plain(option)): rank for rank, option in enumerate(options)}
+    options = (_plain(option) for option in (cfg.renderer.options if cfg.renderer else ()))
+    listed = {(type(option), option): rank for rank, option in enumerate(options)}
 
     def place(item: tuple[tuple[type, Any], int]) -> tuple[int, int, str, str]:
         (kind, value), count = item
-        return listed.get(filter_spelling(value), len(listed)), -count, kind.__name__, str(value)
+        return listed.get((kind, value), len(listed)), -count, kind.__name__, str(value)
 
     (column,), _, _ = parse_table_cfg({key: cfg})
     return ColumnSummary(column, [ValueCount(value, n) for (_, value), n in sorted(counts.items(), key=place)])
@@ -821,7 +825,7 @@ def episode_table_row(index: int, episode: Episode) -> dict:
         first = min(bound.start[timeline] for bound in bounds)
         last = max(bound.finish[timeline] for bound in bounds)
         duration = (last - first) / 1e9
-    return {'__episode_index__': index, '__meta__': episode.meta, '__duration__': duration, **episode.static}
+    return {EPISODE_INDEX_FIELD: index, META_FIELD: episode.meta, DURATION_COLUMN: duration, **episode.static}
 
 
 @app.get(f'/{API_ROUTE}/episodes')
@@ -907,7 +911,7 @@ async def api_groups(request: Request, suffix: str):
     rows = []
     for group_id, episodes in groups.items():
         key_fields = {k: group_id[i] for i, k in enumerate(group_keys)}
-        rows.append({**key_fields, '__meta__': {'group': key_fields}, **cfg.group_fn(episodes)})
+        rows.append({**key_fields, META_FIELD: {GROUP_META_KEY: key_fields}, **cfg.group_fn(episodes)})
 
     episodes = get_episodes_list(rows, cfg.format_table.keys(), formatters=formatters, defaults=defaults)
     result = {'columns': columns, 'episodes': episodes, GROUP_FILTERS: group_filters}
@@ -1053,8 +1057,8 @@ async def api_episode_rrd(episode_id: int):
 @cfn.config()
 def default_table() -> TableConfig:
     return {
-        '__index__': ColumnConfig(label='#', format='%d'),
-        '__duration__': ColumnConfig(label='Duration', format='%.2f sec'),
+        INDEX_COLUMN: ColumnConfig(label='#', format='%d'),
+        DURATION_COLUMN: ColumnConfig(label='Duration', format='%.2f sec'),
         'task': ColumnConfig(label='Task', filter=True),
     }
 

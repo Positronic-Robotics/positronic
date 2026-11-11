@@ -25,7 +25,7 @@ from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.server import positronic_server
-from positronic.server.dataset_utils import INDEX_COLUMN, ReplayLayout
+from positronic.server.dataset_utils import DURATION_COLUMN, INDEX_COLUMN, ReplayLayout
 from positronic.server.positronic_server import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
@@ -900,7 +900,7 @@ def test_episode_table_handles_disjoint_timelines(flat_with_hidden, monkeypatch,
         'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(axis,)),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, [2.0]]]
@@ -912,7 +912,7 @@ def test_the_duration_runs_from_the_first_sample_when_a_command_stream_starts_la
         'command': DummySignal([4_000_000_000, 11_000_000_000], [1, 2]),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.json()['episodes'] == [[0, [10.0]]]
 
@@ -923,7 +923,7 @@ def test_the_duration_of_streams_that_start_together_runs_to_the_last_sample(fla
         'command': DummySignal([1_000_000_000, 10_500_000_000], [1, 2]),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.json()['episodes'] == [[0, [10.0]]]
 
@@ -934,7 +934,7 @@ def test_the_duration_skips_a_clock_that_only_a_signal_with_no_rows_carries(flat
         'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECORDED_TIME,)),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, [2.0]]]
@@ -943,7 +943,7 @@ def test_the_duration_skips_a_clock_that_only_a_signal_with_no_rows_carries(flat
 def test_an_episode_whose_only_signal_has_no_rows_has_no_duration(flat_with_hidden, monkeypatch):
     episode = EpisodeContainer({'marks': DummySignal([], [], timelines=(RECORDED_TIME,))})
     monkeypatch.setitem(app_state, 'dataset', [episode])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration', default='—')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration', default='—')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, ['—']]]
@@ -952,7 +952,7 @@ def test_an_episode_whose_only_signal_has_no_rows_has_no_duration(flat_with_hidd
 def test_episode_table_does_not_interpret_ticks_as_seconds(flat_with_hidden, monkeypatch):
     episode = EpisodeContainer({'value': DummySignal([1, 2], [10, 20], timelines=('tick',))})
     monkeypatch.setitem(app_state, 'dataset', [episode])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration', default='—')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration', default='—')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, ['—']]]
@@ -1149,3 +1149,11 @@ def test_a_plain_enum_column_counts_in_the_order_its_renderer_lists_the_members(
     summary = _summary_of({OUTCOME: _Grade.LOW}, {OUTCOME: _Grade.LOW}, {OUTCOME: _Grade.HIGH}, table=table)
 
     assert _sent_counts(summary) == _counts(('high', 1), ('low', 2))
+
+
+def test_the_renderer_order_tells_a_bool_from_its_string_spelling():
+    badge = RendererConfig(type='badge', options={'True': {'label': 'Text'}, True: {'label': 'Flag'}})
+    table = {OUTCOME: ColumnConfig(label='Done', renderer=badge)}
+    summary = _summary_of({OUTCOME: True}, {OUTCOME: 'True'}, table=table)
+
+    assert _sent_counts(summary) == _counts(('True', 1), (True, 1))

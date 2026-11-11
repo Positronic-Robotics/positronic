@@ -15,7 +15,7 @@ from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.server.dataset_utils import ARM_CHARTS, ReplayLayout
+from positronic.server.dataset_utils import ARM_CHARTS, DURATION_COLUMN, INDEX_COLUMN, ReplayLayout
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
 from positronic.server.positronic_server import main as server_main
@@ -35,8 +35,8 @@ def eval_table():
     ``eval.terminated`` separates a task the policy failed from one whose budget ran out.
     """
     return {
-        '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.2f sec'),
+        INDEX_COLUMN: C(label='#', format='%d'),
+        DURATION_COLUMN: C(label='Duration', format='%.2f sec'),
         keys.TASK: C(label='Task', filter=True),
         eval_keys.SUCCESS: C(
             label='Pass',
@@ -107,8 +107,8 @@ ft_eval_ds = ds.transform.override(
 @cfn.config()
 def finetune_episodes_table():
     return {
-        '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.0f sec'),
+        INDEX_COLUMN: C(label='#', format='%d'),
+        DURATION_COLUMN: C(label='Duration', format='%.0f sec'),
         'task': C(label='Task', filter=True),
         'units': C(label='Units'),
         'uph': C(label='UPH', format='%.1f'),
@@ -195,8 +195,8 @@ rollouts_ds = ds.transform.override(
 @cfn.config()
 def rollouts_episodes_table():
     return {
-        '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.0f sec'),
+        INDEX_COLUMN: C(label='#', format='%d'),
+        DURATION_COLUMN: C(label='Duration', format='%.0f sec'),
         keys.TASK: C(label='Task', filter=True),
         DERIVED_MODEL: C(label='Model', filter=True),
         DERIVED_OUTCOME: C(label='Outcome', renderer=OUTCOME_BADGE, filter=True, align='center'),

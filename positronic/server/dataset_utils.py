@@ -131,6 +131,13 @@ def _log_static_trail(rec: rr.RecordingStream, entity_path: str, positions: np.n
 
 # The episode-table column that shows an episode's index in the dataset.
 INDEX_COLUMN = '__index__'
+# The episode-table column that shows an episode's duration in seconds.
+DURATION_COLUMN = '__duration__'
+# The field of a table row that holds the index of its episode in the dataset.
+EPISODE_INDEX_FIELD = '__episode_index__'
+# The field of a table row that holds its episode's meta. A group row holds its group under `GROUP_META_KEY` there.
+META_FIELD = '__meta__'
+GROUP_META_KEY = 'group'
 
 
 def _format_value(value: Any, formatter: str | None, default: Any) -> Any:
@@ -152,18 +159,18 @@ def get_episodes_list(
     result = []
     for idx, ep in enumerate(ds):
         try:
-            episode_index = ep.pop('__episode_index__', idx)
+            episode_index = ep.pop(EPISODE_INDEX_FIELD, idx)
             mapping = {INDEX_COLUMN: episode_index, **ep}
             episode_data = [_format_value(mapping.get(key), formatters.get(key), defaults.get(key)) for key in keys]
             row = [episode_index, episode_data]
 
             # Include group metadata if available for using it in URL
-            if ep.get('__meta__') and 'group' in ep['__meta__']:
-                row.append(ep['__meta__']['group'])
+            if ep.get(META_FIELD) and GROUP_META_KEY in ep[META_FIELD]:
+                row.append(ep[META_FIELD][GROUP_META_KEY])
 
             result.append(row)
         except Exception as e:
-            raise Exception(f'Error getting episode {idx}: {ep.get("__meta__", {})}') from e
+            raise Exception(f'Error getting episode {idx}: {ep.get(META_FIELD, {})}') from e
     return result
 
 
