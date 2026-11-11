@@ -15,9 +15,11 @@ Usage
 """
 
 import csv
+import dataclasses
 import json
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -42,6 +44,7 @@ from positronic.vendors.cosmos3 import droid_dataset as droid
 from positronic.vendors.lerobot.to_lerobot import _collate_fn, _raise_fd_limit
 
 TREES = ('train', 'heldout')
+START_TRIM_FILE = 'start_trim.csv'
 # Each DROID view and the recorded camera that fills it. A recording with one exterior camera fills both slots.
 _VIEWS = {
     droid.EXTERIOR_IMAGE_1: (keys.EXTERIOR_IMAGE,),
@@ -75,9 +78,36 @@ def _prompt(episode: Episode) -> str:
 _STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
 
 
+@dataclass(frozen=True)
+class KeptFrames:
+    """The rows, the resized views and the prompt of the frames that the trim keeps."""
+
+    rows: dict[str, np.ndarray]
+    images: dict[str, list[np.ndarray]]
+    prompt: str
+
+
+@dataclass(frozen=True)
+class TrimmedEpisode:
+    uid: str
+    frames: int
+    cut: int | None
+    kept: KeptFrames | None
+
+
+@dataclass(frozen=True)
+class TrimRow:
+    """A line of `start_trim.csv`. `tree` is empty for an episode that the trim leaves out."""
+
+    uid: str
+    tree: str
+    frames: int
+    cut_frame: int | None
+    cut_s: float | None
+
+
 class DroidEpisodes(torch.utils.data.Dataset):
-    """The trimmed rows, views and prompt of each episode, sampled at 15 Hz. An episode that the trim leaves out has
-    no rows."""
+    """Each episode, sampled at 15 Hz and trimmed at its start."""
 
     def __init__(self, dataset: Dataset):
         self.dataset = dataset
@@ -85,7 +115,7 @@ class DroidEpisodes(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx: int) -> dict:
+    def __getitem__(self, idx: int) -> TrimmedEpisode:
         episode = self.dataset[idx]
         views = _views(episode)
         used = EpisodeContainer({name: episode.signals[name] for name in {*_STATE_SIGNALS, *views.values()}})
@@ -94,10 +124,9 @@ class DroidEpisodes(torch.utils.data.Dataset):
         grid = [Time(**{timeline: t}) for t in np.arange(start, finish, 1e9 / droid.FPS, dtype=np.int64)]
         state = {name: np.asarray(used.signals[name].time[grid].values(), dtype=np.float64) for name in _STATE_SIGNALS}
         ee_pose = state[keys.EE_POSE]
-        result = {META_UID: episode.meta[META_UID], 'frames': len(grid), 'cut': None, 'rows': None}
         cut = droid.start_cut_frame(ee_pose[:, 2])
         if cut is None or len(grid) - cut < 2:
-            return result
+            return TrimmedEpisode(episode.meta[META_UID], len(grid), None, None)
         rows = droid.droid_rows(state[keys.JOINTS], state[keys.GRIP], state[keys.TARGET_GRIP], ee_pose, cut)
         kept = grid[cut : len(grid) - 1]
         decoded = {name: used.signals[name].time[kept].values() for name in set(views.values())}
@@ -105,15 +134,15 @@ class DroidEpisodes(torch.utils.data.Dataset):
             view: [transform_frame(frame, _WIDTH, _HEIGHT, mode=ResizeMode.PAD) for frame in decoded[name]]
             for view, name in views.items()
         }
-        return {**result, 'cut': cut, 'rows': rows, 'images': images, 'prompt': _prompt(episode)}
+        return TrimmedEpisode(episode.meta[META_UID], len(grid), cut, KeptFrames(rows, images, _prompt(episode)))
 
 
-def _add_episode(lr_dataset: LeRobotDataset, item: dict) -> None:
+def _add_episode(lr_dataset: LeRobotDataset, kept: KeptFrames) -> None:
     # LeRobot stamps frame i at float32(i / 15), which equals the float32 grid bit for bit (a test pins it).
-    for i in range(len(item['rows'][droid.JOINT_POSITIONS])):
-        frame = {name: values[i] for name, values in item['rows'].items()}
-        frame.update({view: frames[i] for view, frames in item['images'].items()})
-        lr_dataset.add_frame({**frame, 'task': item['prompt']})
+    for i in range(len(kept.rows[droid.JOINT_POSITIONS])):
+        frame = {name: values[i] for name, values in kept.rows.items()}
+        frame.update({view: frames[i] for view, frames in kept.images.items()})
+        lr_dataset.add_frame({**frame, 'task': kept.prompt})
     lr_dataset.save_episode(parallel_encoding=False)
 
 
@@ -133,34 +162,33 @@ def convert(dataset: Dataset, output_dir: str, heldout: str | None, num_workers:
     output = Path(pos3.sync(output_dir, interval=None, sync_on_error=False))
     targets: dict[str, LeRobotDataset] = {}
     lengths: dict[str, dict[str, int]] = {tree: {} for tree in TREES}
-    report = []
+    report: list[TrimRow] = []
     loader = torch.utils.data.DataLoader(
         DroidEpisodes(dataset), batch_size=1, num_workers=num_workers, collate_fn=_collate_fn,
         prefetch_factor=1 if num_workers else None,
     )  # fmt: skip
     for item in tqdm.tqdm(loader, desc='Episodes'):
-        uid, cut = item[META_UID], item['cut']
-        tree = 'heldout' if uid in held else 'train'
-        report.append({'uid': uid, 'tree': tree if cut is not None else '', 'frames': item['frames'],
-                       'cut_frame': cut, 'cut_s': None if cut is None else round(cut / droid.FPS, 3)})  # fmt: skip
-        if cut is None:
-            logging.info(f'Left out {uid}: the end effector never gets {droid.MIN_START_DROP_M} m below its start')
+        tree = 'heldout' if item.uid in held else 'train'
+        cut_s = None if item.cut is None else round(item.cut / droid.FPS, 3)
+        report.append(TrimRow(item.uid, tree if item.kept else '', item.frames, item.cut, cut_s))
+        if item.kept is None:
+            logging.info(f'Left out {item.uid}: the end effector never gets {droid.MIN_START_DROP_M} m below its start')
             continue
         if tree not in targets:
             root = output / tree / droid.DATASET_DIR / droid.SUCCESS_DIR
             targets[tree] = LeRobotDataset.create(repo_id='local', fps=droid.FPS, root=root, features=FEATURES)
-        _add_episode(targets[tree], item)
-        lengths[tree][uid] = len(item['rows'][droid.JOINT_POSITIONS])
+        _add_episode(targets[tree], item.kept)
+        lengths[tree][item.uid] = len(item.kept.rows[droid.JOINT_POSITIONS])
     for tree, target in targets.items():
         target.finalize()
         root = output / tree / droid.DATASET_DIR
         _add_episode_ids(root / droid.SUCCESS_DIR, list(lengths[tree]))
         ranges = {droid.keep_ranges_key(uid): [[0, n]] for uid, n in lengths[tree].items()}
         (root / droid.KEEP_RANGES_FILE).write_text(json.dumps(ranges, indent=1) + '\n')
-    with (output / 'start_trim.csv').open('w', newline='') as f:
-        writer = csv.DictWriter(f, ['uid', 'tree', 'frames', 'cut_frame', 'cut_s'])
+    with (output / START_TRIM_FILE).open('w', newline='') as f:
+        writer = csv.DictWriter(f, [field.name for field in dataclasses.fields(TrimRow)])
         writer.writeheader()
-        writer.writerows(report)
+        writer.writerows(dataclasses.asdict(row) for row in report)
 
 
 @cfn.config(group='eval.object', share=0.1, seed=0)

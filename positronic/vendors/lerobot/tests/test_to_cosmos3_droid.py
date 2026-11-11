@@ -19,7 +19,7 @@ if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':
 
 os.environ['HF_HUB_OFFLINE'] = '1'
 
-from positronic.vendors.lerobot.to_cosmos3_droid import convert  # noqa: E402
+from positronic.vendors.lerobot.to_cosmos3_droid import START_TRIM_FILE, TrimRow, convert  # noqa: E402
 
 _FRAMES = 8
 _STEP_NS = 1_000_000_000 // droid.FPS
@@ -60,16 +60,20 @@ def test_a_kept_episode_starts_at_the_first_frame_15_cm_down(converted):
     assert np.array_equal(timestamps.view(np.uint32), droid.frame_timestamps(2).view(np.uint32))
 
 
+def _trim_rows(converted) -> list[TrimRow]:
+    return [TrimRow(**row) for row in csv.DictReader((converted.parent.parent / START_TRIM_FILE).open())]
+
+
 def test_an_episode_that_never_gets_15_cm_down_is_left_out_and_listed(converted):
-    rows = list(csv.DictReader((converted.parent.parent / 'start_trim.csv').open()))
-    assert [(row['tree'], row['cut_frame']) for row in rows] == [('train', '4'), ('', '')]
+    rows = _trim_rows(converted)
+    assert [(row.tree, row.cut_frame) for row in rows] == [('train', '4'), ('', '')]
     episodes = pq.read_table(next((converted / droid.SUCCESS_DIR / 'meta' / 'episodes').rglob('*.parquet')))
-    assert episodes[droid.EPISODE_ID].to_pylist() == [rows[0]['uid']]
+    assert episodes[droid.EPISODE_ID].to_pylist() == [rows[0].uid]
 
 
 def test_the_keep_ranges_cover_each_kept_episode_by_its_id(converted):
     ranges = json.loads((converted / droid.KEEP_RANGES_FILE).read_text())
-    uid = next(csv.DictReader((converted.parent.parent / 'start_trim.csv').open()))['uid']
+    uid = _trim_rows(converted)[0].uid
     assert ranges == {droid.keep_ranges_key(uid): [[0, 2]]}
 
 
