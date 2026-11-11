@@ -390,6 +390,17 @@ def test_a_safety_stop_whose_error_clears_before_the_arm_is_off_is_powered_once_
     assert rctl.power is PowerState.RUN
 
 
+def test_a_failure_left_with_no_error_flag_is_cleared_before_the_arm_is_powered(rctl, driven):
+    """An earlier client cleared the error flag, and left before the arm was off."""
+    rctl.power = PowerState.FAILURE
+    _, _, _, clock, loop = driven()
+
+    _pump(loop, clock, 1)
+
+    assert _called_in_order(rctl.calls, 'take_control', 'off', 'run')
+    assert rctl.power is PowerState.RUN
+
+
 def test_an_error_left_by_an_earlier_session_is_cleared_before_the_arm_is_powered(rctl, driven):
     rctl.error = True
     _, _, _, clock, loop = driven()

@@ -290,8 +290,9 @@ class CronController:
 
     def _clear_errors(self) -> None:
         """Clear what an earlier session left: a latched motion error blocks every power request."""
-        if rctl.is_error():
-            logger.warning(f'{self.ip}: clearing errors: {self.errors}')
+        # A FAILURE can stay with no error flag: an earlier client cleared the flag, and left before the arm was off
+        if rctl.is_error() or self.power is PowerState.FAILURE:
+            logger.warning(f'{self.ip}: clearing errors: {self.power.name}, {self.errors}')
             # A safety stop (RB SFTY) also latches FAILURE: the OFF request clears it once the stop is released
             self.resume()
         # The error flag can clear before the power state leaves FAILURE, and RUN is refused from FAILURE
