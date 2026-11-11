@@ -34,6 +34,8 @@ _POSE_WEIGHTS = np.ones(6)
 _POSITION_FIRST_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 _POSITION_TOLERANCE = 0.01
 _LOOKAHEAD_STEPS = 20
+# The look-ahead needs only where the steps go, so each of its steps runs fewer iterations than a control step.
+_LOOKAHEAD_ITERATIONS = 10
 _STALL_STEPS = 3
 
 # The Panda's modified Denavit-Hartenberg parameters (a, d, alpha) of joints 1 to 7, then of the flange.
@@ -168,7 +170,7 @@ def joint_targets(
             # The position is out of reach from these joints. Bring the tool to it with every joint, the stretched
             # elbow included, and turn the tool as far as that allows.
             return _step(target, q0, flange_to_tool, lower, upper, _POSITION_FIRST_WEIGHTS)
-        path = _step(target, path, flange_to_tool, lower, folded_upper, _POSE_WEIGHTS)
+        path = _step(target, path, flange_to_tool, lower, folded_upper, _POSE_WEIGHTS, _LOOKAHEAD_ITERATIONS)
         errors.append(position_error(path))
     return q
 
@@ -180,6 +182,7 @@ def _step(
     lower: np.ndarray,
     upper: np.ndarray,
     weights: np.ndarray,
+    iterations: int = _ITERATIONS,
 ) -> np.ndarray:
     """The joints of one step from ``q0`` towards the pose ``target``, with the pose error scaled by ``weights``."""
     jacobian0 = tool_kinematics(q0, flange_to_tool)[1]
@@ -204,7 +207,7 @@ def _step(
     q = np.clip(q0, lo, hi)
     q_cost = cost(q)
     eye = np.eye(len(q0))
-    for _ in range(_ITERATIONS):
+    for _ in range(iterations):
         tool, jacobian = tool_kinematics(q, flange_to_tool)
         e = weights * pose_error(tool, target)
         jacobian = weights[:, None] * jacobian
