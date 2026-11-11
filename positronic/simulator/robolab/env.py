@@ -40,6 +40,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
@@ -498,6 +499,10 @@ class RobolabEnv(EnvProtocol):
         for slot in slots:
             flange_to_tool = np.linalg.inv(pose_ik.panda_flange(joint_pos[slot])) @ measured[slot]
             lower, upper = limits[slot, :, 0], limits[slot, :, 1]
+            past = np.maximum(lower - joint_pos[slot], joint_pos[slot] - upper)
+            if past.max() > pose_ik.MAX_JOINT_STEP:
+                # The solve clamps such a joint to its limit. Print it, so that a physics fault stays visible.
+                print(f'slot {slot}: joints {np.round(past, 3).tolist()} rad past their limits', file=sys.stderr)
             targets.append(pose_ik.joint_targets(target[slot], joint_pos[slot], flange_to_tool, lower, upper))
         return torch.as_tensor(np.stack(targets), dtype=torch.float32, device=self._env.device)
 

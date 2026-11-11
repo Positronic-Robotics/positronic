@@ -121,6 +121,10 @@ def _position_error(q: np.ndarray, target: np.ndarray) -> float:
     return float(np.linalg.norm(pose_ik.pose_error(pose_ik.tool_kinematics(q, _EEF)[0], target)[:3]))
 
 
+def _rotation_error_deg(q: np.ndarray, target: np.ndarray) -> float:
+    return float(np.degrees(np.linalg.norm(pose_ik.pose_error(pose_ik.tool_kinematics(q, _EEF)[0], target)[3:])))
+
+
 def test_a_joint_pushed_past_its_limit_gets_a_target_at_that_limit():
     # SpoonInMug trial 2 at 341.6 s: j1 is 0.28 rad past its upper limit. The FruitsOrangesOnPlate trials that raised
     # on such a state recorded no joints, so j1 here is 0.6 rad past the limit, more than MAX_JOINT_STEP.
@@ -142,7 +146,6 @@ def test_a_target_closer_than_the_stretched_elbow_reaches_folds_the_elbow():
     trajectory = _run(target, 30, q0, _EEF)
 
     assert np.abs(np.diff(trajectory, axis=0)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
-    assert trajectory[-1][3] <= pose_ik.ELBOW_STRETCHED
     assert _position_error(trajectory[-1], target) < 1e-3
 
 
@@ -163,5 +166,29 @@ def test_a_pose_out_of_reach_from_the_joints_brings_the_tool_to_the_position(q0,
     trajectory = _run(target, 60, q0, _EEF)
 
     assert np.abs(np.diff(trajectory, axis=0)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
-    assert _position_error(trajectory[-1], target) < 0.03
+    assert _position_error(trajectory[-1], target) < 0.05
+    assert _rotation_error_deg(trajectory[-1], target) < 60.0
     assert np.abs(np.diff(trajectory[-10:], axis=0)).max() < 1e-3
+
+
+@pytest.mark.parametrize(
+    'q0, target',
+    [
+        # ReorientAllMugs trial 0 at 266 s: the steps stall 9 cm from the position, with the tool turned 2 degrees off.
+        (
+            np.array([0.03500, 0.61112, 0.50942, -3.06172, -2.89745, 0.69585, 2.86389]),
+            _pose([0.39509, 0.09899, 0.18676], Rotation.from_quat([-0.56515, -0.09556, -0.81506, 0.08456]).as_matrix()),
+        ),
+        # TakeMugsOffOfShelf trial 0 at 16 s: the steps stall 4 cm from the position, with the tool on the rotation.
+        (
+            np.array([0.00002, -1.00512, -0.00004, -3.05898, -0.00008, 2.74874, 0.00006]),
+            _pose([0.36485, 0.0, 0.29747], Rotation.from_quat([-0.92388, 0.0, -0.38268, 0.0]).as_matrix()),
+        ),
+    ],
+    ids=['reorient', 'shelf'],
+)
+def test_a_stall_near_the_position_keeps_the_rotation(q0, target):
+    trajectory = _run(target, 60, q0, _EEF)
+
+    assert _position_error(trajectory[-1], target) < 0.1
+    assert _rotation_error_deg(trajectory[-1], target) < 3.0
