@@ -40,7 +40,7 @@ from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import (
+from positronic.dataset_viewer.rerun_replay import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
     DURATION_COLUMN,
@@ -1151,7 +1151,7 @@ def _generate_self_signed_cert(hosts: list[str]) -> _SelfSignedCert:
             '365',
             '-nodes',
             '-subj',
-            '/CN=positronic-server',
+            '/CN=positronic-dataset-viewer',
             '-addext',
             f'subjectAltName={",".join([*entries, "DNS:localhost"])}',
         ],
@@ -1300,7 +1300,7 @@ def main(
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
         layout: Where an episode's replay shows its views, for example
-            ``positronic.cfg.server.single_arm_replay_layout``. None keeps the default replay
+            ``positronic.cfg.dataset_viewer.single_arm_replay_layout``. None keeps the default replay
         summary_column: A column of the episode table whose values the page header counts; None shows no count
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'

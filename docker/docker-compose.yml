@@ -137,10 +137,10 @@ services:
       MUJOCO_GL: egl
       PYOPENGL_PLATFORM: egl
 
-  positronic-server:
+  positronic-dataset-viewer:
     <<: *positronic-common  # We need internal package for datasets
-    container_name: positronic-server
-    entrypoint: ["uv", "run", "--python", "3.13", "positronic-server"]
+    container_name: positronic-dataset-viewer
+    entrypoint: ["uv", "run", "--python", "3.13", "positronic-dataset-viewer"]
     ports:
       - "8400:8400"
 

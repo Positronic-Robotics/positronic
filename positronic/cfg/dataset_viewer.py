@@ -1,4 +1,4 @@
-"""Server configurations for positronic-server UI."""
+"""Configurations for the positronic-dataset-viewer UI."""
 
 from datetime import datetime
 
@@ -13,13 +13,13 @@ from positronic import keys
 from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Group, Identity, Rename
+from positronic.dataset_viewer.rerun_replay import ARM_CHARTS, DURATION_COLUMN, INDEX_COLUMN, ReplayLayout
+from positronic.dataset_viewer.rollout_cells import OUTCOME_BADGE, StageCell, rate_cell, stage_cell
+from positronic.dataset_viewer.web_app import ColumnConfig as C
+from positronic.dataset_viewer.web_app import GroupTableConfig, RendererConfig, SortConfig
+from positronic.dataset_viewer.web_app import main as server_main
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.server.dataset_utils import ARM_CHARTS, DURATION_COLUMN, INDEX_COLUMN, ReplayLayout
-from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig, RendererConfig, SortConfig
-from positronic.server.positronic_server import main as server_main
-from positronic.server.rollouts import OUTCOME_BADGE, StageCell, rate_cell, stage_cell
 
 from . import analysis as analysis_cfg
 from . import ds
@@ -161,7 +161,7 @@ def rollout_outcome(ep: Episode) -> str:
 
 
 def highest_rollout_stage(ep: Episode) -> StageCell:
-    """The highest rung the arm reached, as the cell `positronic.server.rollouts` defines."""
+    """The highest rung the arm reached, as the cell `positronic.dataset_viewer.rollout_cells` defines."""
     marked = {value for value, _ in ep[STATE_SIGNAL]} if STATE_SIGNAL in ep else set()
     return stage_cell(marked)
 
@@ -248,7 +248,7 @@ finetune_server = server_main.override(
 )
 
 # Manual rollout rounds:
-#   uv run --locked python -m positronic.cfg.server rollouts --dataset.base.path=s3://inference/droid_three_way/020926/
+#   uv run --locked python -m positronic.cfg.dataset_viewer rollouts --dataset.base.path=s3://inference/droid_three_way/020926/
 rollouts_server = server_main.override(
     dataset=rollouts_ds, ep_table_cfg=rollouts_episodes_table, group_tables={'models': rollouts_by_model}
 )

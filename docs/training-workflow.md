@@ -252,7 +252,7 @@ See [Inference Guide](inference.md) for detailed deployment and evaluation patte
 uv run positronic-data-collection sim --output_dir=~/datasets/my_task
 
 # 2. Review in viewer
-uv run positronic-server --dataset.path=~/datasets/my_task
+uv run positronic-dataset-viewer --dataset.path=~/datasets/my_task
 
 # 3. Bake dataset into LeRobot format
 cd docker && docker compose run --rm lerobot-convert convert \
