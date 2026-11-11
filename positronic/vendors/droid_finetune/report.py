@@ -25,7 +25,7 @@ class ScoredWindow:
 
 
 @dataclass(frozen=True)
-class Report:
+class Summary:
     """`action_mse` is the mean over windows of each window's mean squared action error: radians² for the seven
     joints, closed fraction² for the gripper."""
 
@@ -39,10 +39,12 @@ class Report:
     action_mse_median: float
     action_mse_per_channel: list[float]
     seconds: float
-    windows: list[ScoredWindow]
 
-    def summary(self) -> dict:
-        return {k: v for k, v in dataclasses.asdict(self).items() if k != 'windows'}
+
+@dataclass(frozen=True)
+class Report:
+    summary: Summary
+    windows: list[ScoredWindow]
 
 
 @dataclass(frozen=True)
@@ -61,34 +63,33 @@ def build_report(
     heldout: str,
     seed: int,
     windows_per_episode: int,
-    episodes: int,
     seconds: float,
 ) -> Report:
     errors = np.array([w.action_mse for w in windows])
-    return Report(
+    summary = Summary(
         framework=framework,
         checkpoint=checkpoint,
         heldout=heldout,
         seed=seed,
         windows_per_episode=windows_per_episode,
-        episodes=episodes,
+        episodes=len({w.episode_index for w in windows}),
         action_mse=float(errors.mean()),
         action_mse_median=float(np.median(errors)),
         action_mse_per_channel=[float(x) for x in per_channel],
         seconds=seconds,
-        windows=list(windows),
     )
+    return Report(summary, list(windows))
 
 
 def write_report(report: Report, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(dataclasses.asdict(report), indent=1) + '\n')
-    print(json.dumps(report.summary()))
+    print(json.dumps(dataclasses.asdict(report.summary)))
 
 
 def read_report(path: Path) -> Report:
     data = json.loads(path.read_text())
-    return Report(**{**data, 'windows': [ScoredWindow(**w) for w in data['windows']]})
+    return Report(Summary(**data['summary']), [ScoredWindow(**w) for w in data['windows']])
 
 
 def compare(a: Report, b: Report, rtol: float) -> Comparison:

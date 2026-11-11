@@ -37,9 +37,6 @@ VIEWS = {
 OBS_JOINT_POSITION = 'observation/joint_position'
 OBS_GRIPPER_POSITION = 'observation/gripper_position'
 OBS_PROMPT = 'prompt'
-# A keep-ranges key is a DROID recording path. The episode id is the path segment between these two.
-_KEY_ID_START = '/r2d2-data-full/'
-_KEY_ID_END = '/recordings/'
 
 Observation = dict[str, np.ndarray | str]
 Predictor = Callable[[Observation], np.ndarray]
@@ -66,6 +63,11 @@ class Episode:
 class Window:
     episode: Episode
     start: int
+
+
+# A keep-ranges key is a DROID recording path. The episode id is the path segment between these two.
+_KEY_ID_START = '/r2d2-data-full/'
+_KEY_ID_END = '/recordings/'
 
 
 def episode_id_of_key(key: str) -> str:

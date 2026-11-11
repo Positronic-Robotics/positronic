@@ -37,8 +37,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.vae_path is None:
         parser.error('--vae-path is required when WAN_VAE_PATH is not set')
-    # The experiment's dataset reads DROID_ROOT when the config loads.
-    os.environ.setdefault('DROID_ROOT', str(args.heldout / heldout.DATASET_DIR))
+    # The experiment's dataset reads DROID_ROOT when the config loads; it names the tree that is scored.
+    os.environ['DROID_ROOT'] = str(args.heldout / heldout.DATASET_DIR)
 
     service = RobolabPolicyService(
         RobolabServerArgs(
@@ -63,7 +63,6 @@ def main() -> None:
         heldout=str(args.heldout),
         seed=args.seed,
         windows_per_episode=args.windows_per_episode,
-        episodes=len({w.episode.index for w in windows}),
         seconds=time.perf_counter() - started,
     )
     write_report(report, args.output)

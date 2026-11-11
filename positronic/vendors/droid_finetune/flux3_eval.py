@@ -13,6 +13,7 @@ the tree and the exports. It prints the summary of the report as one JSON line.
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -82,13 +83,18 @@ def evaluate_command(
     ]
 
 
+def path_key(path: Path) -> str:
+    """A short name for `path`, so that a work directory keeps one index per tree and one export per checkpoint."""
+    return hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:12]
+
+
 def policy_package(checkpoint: Path, exports: Path, profile: str) -> Path:
     """`checkpoint` itself when it is a package, else the export of the training checkpoint, made once."""
     if (checkpoint / PACKAGE_WEIGHTS).is_file():
         return checkpoint
     if not (checkpoint / CHECKPOINT_COMPLETE).is_file():
         raise ValueError(f'{checkpoint} is neither a policy package nor a complete training checkpoint')
-    package = exports / f'{checkpoint.name}-{profile}'
+    package = exports / f'{checkpoint.name}-{profile}-{path_key(checkpoint)}'
     if not package.is_dir():
         partial = package.with_name(package.name + '.partial')
         shutil.rmtree(partial, ignore_errors=True)
@@ -109,7 +115,6 @@ def report_from_flux(
         heldout=str(heldout_tree),
         seed=seed,
         windows_per_episode=per_episode,
-        episodes=flux_report['episodes'],
         seconds=seconds,
     )
 
@@ -128,7 +133,7 @@ def main() -> None:
 
     started = time.perf_counter()
     source_root = args.heldout / heldout.DATASET_DIR
-    index_dir = args.work_dir / 'index'
+    index_dir = args.work_dir / 'index' / path_key(source_root)
     if not (index_dir / 'manifest.json').is_file():
         subprocess.run(index_command(source_root, index_dir), check=True)
     package = policy_package(args.checkpoint, args.work_dir / 'exports', args.profile)

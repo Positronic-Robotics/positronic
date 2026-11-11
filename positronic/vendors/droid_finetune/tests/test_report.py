@@ -14,7 +14,6 @@ def _report(errors: list[float], starts: list[int] | None = None):
         heldout='tree',
         seed=0,
         windows_per_episode=len(errors),
-        episodes=1,
         seconds=1.0,
     )
 
@@ -40,4 +39,4 @@ def test_a_written_report_reads_back_equal(tmp_path):
     write_report(report, tmp_path / 'r.json')
 
     assert read_report(tmp_path / 'r.json') == report
-    assert report.action_mse == pytest.approx(0.2)
+    assert report.summary.action_mse == pytest.approx(0.2)

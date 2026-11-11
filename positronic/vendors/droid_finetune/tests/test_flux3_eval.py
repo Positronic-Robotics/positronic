@@ -78,14 +78,19 @@ def test_a_training_checkpoint_is_exported_once_per_profile(tmp_path, monkeypatc
     first = flux3_eval.policy_package(step, tmp_path / 'exports', 'ema_0p10')
     second = flux3_eval.policy_package(step, tmp_path / 'exports', 'ema_0p10')
 
-    assert first == second == tmp_path / 'exports' / 'step-1000-ema_0p10'
+    assert first == second == tmp_path / 'exports' / f'step-1000-ema_0p10-{flux3_eval.path_key(step)}'
     assert first.is_dir() and len(commands) == 1
     assert '--dtype=bfloat16' in commands[0] and '--profile=ema_0p10' in commands[0]
 
 
+def test_two_runs_with_the_same_step_name_get_separate_exports(tmp_path):
+    assert flux3_eval.path_key(tmp_path / 'run-a' / 'step-1000') != flux3_eval.path_key(
+        tmp_path / 'run-b' / 'step-1000'
+    )
+
+
 def test_the_report_carries_the_raw_action_error_of_flux_action_evaluate():
     flux_report = {
-        'episodes': 2,
         'action_mse_raw': 0.2,
         'action_mse_raw_per_channel': [0.1] * 8,
         'windows': [
@@ -98,6 +103,6 @@ def test_the_report_carries_the_raw_action_error_of_flux_action_evaluate():
         flux_report, checkpoint=Path('ckpt'), heldout_tree=Path('tree'), seed=0, per_episode=8, seconds=1.0
     )
 
-    assert report.action_mse == pytest.approx(0.2)
+    assert report.summary.action_mse == pytest.approx(0.2)
     assert [(w.episode_index, w.start, w.action_mse) for w in report.windows] == [(0, 0, 0.1), (1, 4, 0.3)]
-    assert report.framework == 'flux3' and report.episodes == 2
+    assert report.summary.framework == 'flux3' and report.summary.episodes == 2
