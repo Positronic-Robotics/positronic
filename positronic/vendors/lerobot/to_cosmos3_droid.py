@@ -126,7 +126,7 @@ class DroidEpisodes(torch.utils.data.Dataset):
         }
         ee_pose = state[keys.EE_POSE]
         cut = droid.start_cut_frame(ee_pose[:, 2])
-        if cut is None or len(grid) - cut < 2:
+        if cut is None:
             return TrimmedEpisode(episode.meta[META_UID], len(grid), None, None)
         rows = droid.droid_rows(state[keys.JOINTS], state[keys.GRIP], state[keys.TARGET_GRIP], ee_pose, cut)
         kept = grid[cut : len(grid) - 1]
