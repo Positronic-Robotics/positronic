@@ -32,7 +32,8 @@ uv run --python 3.13 --extra molmoact2 python -m positronic.vendors.molmoact2.se
 
 The server serves the HuggingFace model through a named policy pipeline, the codec. `droid` is the
 default subcommand; `droid_3cam` and `yam_bimanual` are the others. The codec lives server-side, so clients send raw
-observations and receive decoded joint commands. `--websocket`, `--grpc` and
+observations and receive decoded joint commands. Each pipeline asks the client to send its camera frames as JPEG
+(`--pipeline.compress_images`, true by default), and the server decodes them before the codec. `--websocket`, `--grpc` and
 `--idle_timeout_min` are the server's flags: each wire carries the address it binds, so
 `--websocket.served_address.port` moves the WebSocket wire and
 `--websocket.served_address=@positronic.offboard.server.socket_at --websocket.served_address.uds=/run/policy.sock` binds it to a

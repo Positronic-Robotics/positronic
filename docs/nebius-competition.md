@@ -290,8 +290,8 @@ closes. -->
 
 ## Your policy image
 
-The platform pulls your image and starts it on a GPU beside the simulator. Then it plays the competition
-eval against the server in the image.
+The platform pulls your image and starts it on a GPU machine. The simulator runs on another machine and
+plays the competition eval against the server in the image over the network.
 
 ### What the platform runs
 
@@ -308,6 +308,13 @@ eval against the server in the image.
   The server must answer all of them. A model that keeps state from one call to the next, such as a queue
   of actions, keeps one state for each session. The
   [rules](https://competition.phail.ai/rules#evaluation) state this in "Many episodes at once".
+- Ask the client for JPEG frames. Raw frames from three 640x360 cameras are about 2 MB for each call.
+  They add time to each call in simulation, and much more on the real robot in the finale, where the robot
+  reaches your container over the internet. A server built on `PolicyDeployment` asks for JPEG at quality
+  90 by default: do not set `compress_images=False`. A server that writes its own handshake sets
+  `"compress_images": true` and decodes each `__jpeg__` envelope
+  ([Serialization](https://github.com/Positronic-Robotics/positronic/blob/main/docs/connect-your-model.md#serialization)).
+  A protocol v3 server ends the client stack that it declares with `component("encode_images", quality=90)`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
 - The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
   of the card's compute.
