@@ -3,6 +3,7 @@
 import pytest
 from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, CouponRedemption
+from platform_client.client import AUTH_HEADER
 from platform_client.enums import ErrorCode
 from platform_client.ids import CouponCode, OrgSlug
 from platform_client.requests import CouponRedeemRequest
@@ -22,7 +23,7 @@ def test_redeem_sends_the_code_with_the_key_and_prints_the_credits_and_the_org(p
 
     body = CouponRedeemRequest.model_validate(platform.body_to(routes.BILLING_COUPONS_REDEEM))
     assert body == CouponRedeemRequest(code=CouponCode('PCR-7K2M-9QXA'))
-    assert platform.request_to(routes.BILLING_COUPONS_REDEEM).headers['authorization'] == f'Bearer {KEY}'
+    assert platform.request_to(routes.BILLING_COUPONS_REDEEM).headers[AUTH_HEADER] == f'Bearer {KEY}'
     assert capsys.readouterr().out.strip() == (
         f'Added 30.00 credits ({30 * CREDIT_SCALE} units) to the organization user-a0.'
     )
@@ -67,6 +68,18 @@ def test_redeem_prints_the_refusal_of_the_platform_as_the_callers_fault(platform
 
     assert raised.value.fault is Fault.CALLER
     assert message in str(raised.value)
+
+
+def test_redeem_leaves_the_rule_of_a_long_code_to_the_platform(platform, run_command):
+    message = 'no coupon has this code'
+    platform.answer_by_route({routes.BILLING_COUPONS_REDEEM: (refusal(ErrorCode.not_found, message), 404)})
+
+    with pytest.raises(CommandFailed) as raised:
+        run_command(redeem, code='X' * 300)
+
+    assert raised.value.fault is Fault.CALLER
+    assert message in str(raised.value)
+    assert CouponRedeemRequest.model_validate(platform.body_to(routes.BILLING_COUPONS_REDEEM)).code == 'X' * 300
 
 
 @pytest.mark.parametrize(

@@ -166,7 +166,7 @@ class CouponRedeemRequest(BaseModel):
 
     model_config = INPUT_MODEL_CONFIG
 
-    code: CouponCode = Field(min_length=1, max_length=128)
+    code: CouponCode = Field(min_length=1)
 
 
 class BillingPurchaseCreateRequest(BaseModel):
