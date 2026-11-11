@@ -942,6 +942,36 @@ def test_a_cartesian_delta_applies_to_the_pose_that_the_arm_reads_and_not_to_the
     np.testing.assert_allclose(rctl.q[:3], lagging[:3] + [0.0, 0.05, 0.0], atol=0.01)
 
 
+def test_a_move_clears_an_error_that_comes_after_it_was_asked_for(world, rctl, driven):
+    """The operator can press the stick just as the arm stops on an error."""
+    driver, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(2.0)))
+    _pump(loop, clock, 100)
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.0)))
+    _pump(loop, clock, 2)
+
+    rctl.error = True
+    _pump_until(loop, clock, answer, ticks=5000)
+
+    assert answer.result() is None
+    assert _called_in_order(rctl.calls, 'resume', 'waypoint', 'move_run')
+
+
+def test_a_move_asks_again_to_clear_an_error_that_stays_through_the_first_request(world, rctl, driven):
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched = True, True
+    _pump(loop, clock, 2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, int(2.5 / TICK))
+    assert rctl.calls.count('resume') >= 2
+
+    rctl.safety_latched = False
+    _pump_until(loop, clock, answer, ticks=5000)
+
+    assert answer.result() is None
+
+
 def test_a_move_to_the_joints_of_the_arm_is_not_answered_while_the_controller_holds_an_error(world, rctl, driven):
     """The move did not start: it cannot arrive."""
     driver, _, _, clock, loop = driven()
