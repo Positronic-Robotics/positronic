@@ -127,6 +127,28 @@ dotted paths into the pipeline config with JSON-literal values (e.g. `?fps=10`).
 **Overlapping sessions:** The server serves several sessions at the same time, one inference at a time. Each
 session keeps its own action queue and processor state, and all sessions use one copy of the weights.
 
+## Cosmos3-DROID training sets
+
+`to_cosmos3_droid` writes recordings in the Cosmos3-DROID layout, which the DROID fine-tune recipes of Cosmos3-Nano
+and FLUX 3 Action read: `droid_plus_lerobot_640x360_20260412/success/` at 15 Hz with three 640x360 views, an
+`episode_id` column and a `keep_ranges.json`. A recording with one exterior camera fills both exterior views.
+
+```bash
+uv run --extra lerobot python -m positronic.vendors.lerobot.to_cosmos3_droid split \
+  --dataset=@positronic.cfg.ds.local_all --dataset.path=<recordings> --output=heldout.json
+uv run --extra lerobot python -m positronic.vendors.lerobot.to_cosmos3_droid convert \
+  --dataset=@positronic.cfg.ds.local_all --dataset.path=<recordings> --output_dir=<dir> --heldout=heldout.json
+```
+
+- The joint action of frame t is the joint state of frame t + 1. The gripper state is the raw `grip` and the
+  gripper action is `target_grip`; each recipe flips the gripper itself.
+- Each kept episode starts at its first frame 15 cm below the end-effector height of its first frame. This drops a
+  teleoperator's wait before the first reach. An episode that never gets that low is left out.
+  `<dir>/start_trim.csv` gives the cut of each episode.
+- `split` holds out whole sessions (one UTC day of one `eval.object`), about 10% of each object. `convert` writes
+  the held-out episodes to `<dir>/heldout/` and the others to `<dir>/train/`.
+- The Cosmos3 DROID loader opens `success/` and `failure/` unless its dataset sets `use_success_only=True`.
+
 ## See Also
 
 **Positronic Documentation:**
