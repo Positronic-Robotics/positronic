@@ -14,6 +14,7 @@ _LOWER = np.array([-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973
 _UPPER = np.array([2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973])
 _HOME = np.array([0.0, -0.628, 0.0, -2.513, 0.0, 1.885, 0.0])
 _DOWN = np.diag([1.0, -1.0, -1.0])  # the tool z axis points down
+_NO_TOOL = np.eye(4)
 
 
 def _pose(position, rotation=_DOWN) -> np.ndarray:
@@ -22,11 +23,13 @@ def _pose(position, rotation=_DOWN) -> np.ndarray:
     return pose
 
 
-def _run(target: np.ndarray, steps: int, q: np.ndarray = _HOME) -> list[np.ndarray]:
+def _run(
+    target: np.ndarray, steps: int, q: np.ndarray = _HOME, flange_to_tool: np.ndarray = _NO_TOOL
+) -> list[np.ndarray]:
     """The measured joints after each control step."""
     trajectory = [q]
     for _ in range(steps):
-        trajectory.append(pose_ik.joint_targets(target, trajectory[-1], np.eye(4), _LOWER, _UPPER))
+        trajectory.append(pose_ik.joint_targets(target, trajectory[-1], flange_to_tool, _LOWER, _UPPER))
     return trajectory
 
 
@@ -107,3 +110,58 @@ def test_a_pose_beyond_reach_settles_with_the_elbow_off_its_limit():
     assert trajectory[-1][3] < _UPPER[3] - 0.1
     assert np.ptp(tool_positions, axis=0).max() < 1e-3
     assert np.abs(steps[-50:]).max() < 0.02
+
+
+# The eef control frame of the RoboLab Panda in the flange frame. The tests below start from joints and commands that
+# RoboLab episodes recorded.
+_EEF = _pose([0.0, 0.0, 0.155], np.eye(3))
+
+
+def _position_error(q: np.ndarray, target: np.ndarray) -> float:
+    return float(np.linalg.norm(pose_ik.pose_error(pose_ik.tool_kinematics(q, _EEF)[0], target)[:3]))
+
+
+def test_a_joint_pushed_past_its_limit_gets_a_target_at_that_limit():
+    # SpoonInMug trial 2 at 341.6 s: j1 is 0.28 rad past its upper limit. The FruitsOrangesOnPlate trials that raised
+    # on such a state recorded no joints, so j1 here is 0.6 rad past the limit, more than MAX_JOINT_STEP.
+    q0 = np.array([3.17858, -0.00805, -1.72896, -2.27623, -0.01310, 2.27854, 1.03406])
+    q0[0] = _UPPER[0] + 0.6
+
+    q = pose_ik.joint_targets(_pose([0.27, 0.44, 0.20]), q0, _EEF, _LOWER, _UPPER)
+
+    assert np.all(q >= _LOWER) and np.all(q <= _UPPER)
+    assert q[0] == _UPPER[0]
+    assert np.abs(q - q0)[1:].max() <= pose_ik.MAX_JOINT_STEP + 1e-9
+
+
+def test_a_target_closer_than_the_stretched_elbow_reaches_folds_the_elbow():
+    # LargerObjectRaisinBoxInBin trial 1 at 295 s: j4 at its upper limit, the tool 0.31 m from the command.
+    q0 = np.array([0.00120, 0.75619, -0.02001, -0.06980, 0.01862, 0.77877, -0.00073])
+    target = _pose([0.36, 0.0, 0.34])
+
+    trajectory = _run(target, 30, q0, _EEF)
+
+    assert np.abs(np.diff(trajectory, axis=0)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
+    assert trajectory[-1][3] <= pose_ik.ELBOW_STRETCHED
+    assert _position_error(trajectory[-1], target) < 1e-3
+
+
+@pytest.mark.parametrize(
+    'q0, target',
+    [
+        # TakeMeasuringSpoonOut trial 1 at 220 s: j2, j3 and j5 at their limits, the tool 0.40 m from the command.
+        (
+            np.array([-0.64115, 1.76280, -2.89700, -1.62606, -2.89385, 0.05128, 0.21993]),
+            _pose([0.42, -0.40, 0.055], Rotation.from_quat([-0.94765, 0.31931, 0.0, 0.0]).as_matrix()),
+        ),
+        # OneBottleInSquarePail trial 0 at 220 s: j5, j6 and j7 at their limits, the tool 0.20 m from the command.
+        (np.array([-1.91271, -0.14115, 1.83762, -2.43315, -2.89728, 3.75250, 2.87750]), _pose([0.40, 0.003, 0.32])),
+    ],
+    ids=['rotation', 'wrist'],
+)
+def test_a_pose_out_of_reach_from_the_joints_brings_the_tool_to_the_position(q0, target):
+    trajectory = _run(target, 60, q0, _EEF)
+
+    assert np.abs(np.diff(trajectory, axis=0)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
+    assert _position_error(trajectory[-1], target) < 0.03
+    assert np.abs(np.diff(trajectory[-10:], axis=0)).max() < 1e-3
