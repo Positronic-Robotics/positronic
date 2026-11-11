@@ -157,8 +157,9 @@ def joint_targets(
     """
     # Past ELBOW_STRETCHED the shoulder-wrist distance falls as j4 rises. A solve there pins j4 at its upper limit for a
     # target that needs a shorter arm, and the folded elbow reaches every distance that the stretched one does.
+    # A j4 above it folds by at most MAX_JOINT_STEP a step, and a j4 past its limit goes to that limit first.
     folded_upper = upper.copy()
-    folded_upper[3] = min(upper[3], ELBOW_STRETCHED)
+    folded_upper[3] = min(upper[3], max(ELBOW_STRETCHED, q0[3] - MAX_JOINT_STEP))
 
     def position_error(q: np.ndarray) -> float:
         return float(np.linalg.norm(tool_kinematics(q, flange_to_tool)[0][:3, 3] - target[:3, 3]))

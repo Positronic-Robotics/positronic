@@ -125,17 +125,19 @@ def _rotation_error_deg(q: np.ndarray, target: np.ndarray) -> float:
     return float(np.degrees(np.linalg.norm(pose_ik.pose_error(pose_ik.tool_kinematics(q, _EEF)[0], target)[3:])))
 
 
-def test_a_joint_pushed_past_its_limit_gets_a_target_at_that_limit():
+@pytest.mark.parametrize('joint', [0, 3])
+def test_a_joint_pushed_past_its_limit_gets_a_target_at_that_limit(joint):
     # SpoonInMug trial 2 at 341.6 s: j1 is 0.28 rad past its upper limit. The FruitsOrangesOnPlate trials that raised
-    # on such a state recorded no joints, so j1 here is 0.6 rad past the limit, more than MAX_JOINT_STEP.
+    # on such a state recorded no joints, so the joint here is 0.6 rad past its limit, more than MAX_JOINT_STEP.
     q0 = np.array([3.17858, -0.00805, -1.72896, -2.27623, -0.01310, 2.27854, 1.03406])
-    q0[0] = _UPPER[0] + 0.6
+    q0[0] = _UPPER[0]
+    q0[joint] = _UPPER[joint] + 0.6
 
     q = pose_ik.joint_targets(_pose([0.27, 0.44, 0.20]), q0, _EEF, _LOWER, _UPPER)
 
     assert np.all(q >= _LOWER) and np.all(q <= _UPPER)
-    assert q[0] == _UPPER[0]
-    assert np.abs(q - q0)[1:].max() <= pose_ik.MAX_JOINT_STEP + 1e-9
+    assert q[joint] == _UPPER[joint]
+    assert np.abs(np.delete(q - q0, joint)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
 
 
 def test_a_target_closer_than_the_stretched_elbow_reaches_folds_the_elbow():
