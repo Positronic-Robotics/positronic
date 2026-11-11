@@ -1,4 +1,5 @@
-from eval_vocabulary.progress import LADDER, STAGE_LABELS, Stage, highest_stage
+import pytest
+from eval_vocabulary.progress import LADDER, STAGE_LABELS, Stage, highest_stage, mark_of
 
 WIRE_CODES = ('floating', 'reaching', 'contact', 'control', 'at-target')
 
@@ -26,3 +27,21 @@ def test_a_code_outside_the_ladder_is_ignored():
 def test_an_episode_that_marked_nothing_on_the_ladder_has_no_stage():
     assert highest_stage([]) is None
     assert highest_stage(['nudged']) is None
+
+
+@pytest.mark.parametrize(
+    ('signal', 'mark'),
+    [
+        ('progress.state', 'state'),
+        ('data_annotation.delivered', 'delivered'),
+        ('autolabel.model-v2.state', 'state'),
+        ('autolabel.model.v2.fail', 'fail'),
+    ],
+)
+def test_a_mark_of_a_person_or_of_an_ai_labeler_names_its_kind(signal, mark):
+    assert mark_of(signal) == mark
+
+
+@pytest.mark.parametrize('signal', ['autolabel.state', 'device.state', 'progress', 'state'])
+def test_a_signal_that_is_no_mark_names_no_kind(signal):
+    assert mark_of(signal) is None

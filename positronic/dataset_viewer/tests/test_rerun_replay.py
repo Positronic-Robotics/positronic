@@ -232,6 +232,12 @@ def test_a_stage_signal_is_plotted_by_the_place_of_each_stage_on_the_ladder(tmp_
     assert _collect_signal_groups(ep).plotted_texts == {STATE_SIGNAL: ladder, 'data_annotation.state': ladder}
 
 
+def test_a_text_signal_that_is_no_state_mark_keeps_its_own_order_when_its_values_are_stages(tmp_path):
+    ep = _text_episode(tmp_path / 'ep', {'device.mode': ['control', 'floating']})
+
+    assert _collect_signal_groups(ep).plotted_texts == {'device.mode': ['control', 'floating']}
+
+
 def test_a_text_signal_with_too_many_values_is_named_instead_of_plotted(tmp_path):
     count = _MAX_PLOTTED_WIDTH + 1
     signals = _collect_signal_groups(_text_episode(tmp_path / 'ep', {'prompt': [f'p{i}' for i in range(count)]}))
