@@ -29,6 +29,9 @@ _CONNECT_TIMEOUT_S, _CONNECT_RETRY_S = 60.0, 0.5
 # more, they were 7.6 % of the stroke behind on average, and covered 90 % of a 30 % press in 0.35 s. Other periods
 # (0.07 to 0.2 s), steps, a debounce and a lead on the trigger speed did no better
 TARGET_PERIOD_S, TARGET_STEP = 0.1, 20
+# A gripper on the wrist of a CRON arm lost its calibration and its force while the link stayed up, as the arm powered
+# up (2026-11-11): then it takes no target. So the driver reads the calibration state again at this period
+_CALIBRATION_CHECK_S = 1.0
 
 
 class DHGripper(pimm.ControlSystem):
@@ -112,12 +115,19 @@ class DHGripper(pimm.ControlSystem):
         yield from self._connect(client, clock)
 
         last_grip = 0.0
+        checked_at = clock.now()
 
         # TODO: Should we translate these to physical units (N and m/s)?
         try:
             with Moves[float](self.sync_move, self.target_grip) as moves:
                 while not should_stop.value:
                     try:
+                        if clock.now() - checked_at >= _CALIBRATION_CHECK_S:
+                            checked_at = clock.now()
+                            if self._read(client, _INIT_STATE) != 1:
+                                logger.warning(f'{self.port}: the gripper lost its calibration, calibrating it again')
+                                self._written.clear()
+                                yield from self._initialize(client)
                         current_grip = self._width(client)
                         self.grip.emit(current_grip)
 

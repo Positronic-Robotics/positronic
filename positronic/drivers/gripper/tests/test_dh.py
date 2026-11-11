@@ -32,6 +32,10 @@ class FakeBus:
         self.drop_after_reads: int | None = None
         self._reads = 0
 
+    def reboot(self) -> None:
+        """The gripper loses its power for a moment: it forgets its calibration and the values written to it."""
+        self.registers = {dh._INIT_STATE: 0, dh._WIDTH: self.registers[dh._WIDTH]}
+
     def connect(self) -> bool:
         if self.refused_connects:
             self.refused_connects -= 1
@@ -191,3 +195,19 @@ def test_a_grip_that_does_not_change_is_written_once(monkeypatch):
     assert [value for address, value in bus.writes if address == dh._TARGET] == [1000, 0]
     assert len([address for address, _ in bus.writes if address in (dh._FORCE, dh._SPEED)]) == 2
     assert bus.registers[dh._WIDTH] == 0
+
+
+def test_a_gripper_that_loses_its_calibration_while_the_link_stays_up_is_calibrated_and_commanded_again(monkeypatch):
+    """A gripper on the wrist of a CRON arm lost its calibration and its force as the arm powered up."""
+    bus = FakeBus(calibrated=True)
+    requests, loop, clock = _driven(monkeypatch, bus)
+    requests.push(0.5)
+    _pump(loop, clock, 20)
+    del bus.writes[:]
+
+    bus.reboot()
+    _pump(loop, clock, round(dh._CALIBRATION_CHECK_S / TICK_S) + CALIBRATION_READS + 5)
+
+    assert bus.writes[0] == (dh._INIT, dh._START_INIT)
+    assert {dh._FORCE, dh._SPEED, dh._TARGET} <= {address for address, _ in bus.writes[1:]}
+    assert bus.registers[dh._WIDTH] == 500
