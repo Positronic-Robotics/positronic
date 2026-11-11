@@ -44,6 +44,7 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    STATUS_UPDATE_TIMEOUT_S,
     ConnectRetries,
     InferenceClient,
     InferenceSession,
@@ -324,16 +325,32 @@ class TestNewSessionRetriesRefusedConnects:
 
         assert slept == [deadline], f'a {deadline}s connect deadline slept {slept}'
 
-    def test_a_connect_deadline_of_zero_is_one_dial_with_the_whole_open_timeout(self):
-        fake = _FakeWire(_refused(wire.Refusal.COLD))
-        with patch('positronic.offboard.client.time.sleep'), pytest.raises(TimeoutError):
-            InferenceClient(fake, _ADDRESS, open_timeout=5.0, connect_deadline=0.0).new_session()
+    def test_the_first_dial_waits_no_longer_than_the_connect_deadline(self):
+        fake = _FakeWire(*[_refused(wire.Refusal.COLD)] * 5)
+        clock = [0.0]
+        with (
+            patch('positronic.offboard.client.InferenceSession'),
+            patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+            patch(
+                'positronic.offboard.client.time.sleep',
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+            pytest.raises(TimeoutError),
+        ):
+            InferenceClient(fake, _ADDRESS, open_timeout=5.0, connect_deadline=2.0).new_session()
 
-        assert [open_timeout for _, _, open_timeout in fake.dials] == [5.0]
+        assert fake.dials[0][2] == 2.0
+
+    def test_the_default_deadline_keeps_the_whole_open_timeout_and_status_wait(self):
+        silent = MagicMock(**{'recv.side_effect': TimeoutError('silent')})
+        fake = _FakeWire(silent, _refused(wire.Refusal.FINAL))
+        with patch('positronic.offboard.client.time.sleep'), pytest.raises(wire.ConnectRefused):
+            InferenceClient(fake, _ADDRESS).new_session()
+
+        assert fake.dials[0][2] == DEFAULT_OPEN_TIMEOUT
+        assert silent.recv.call_args.kwargs['timeout'] == STATUS_UPDATE_TIMEOUT_S
 
     def test_a_retry_dials_with_no_more_than_the_time_left_to_connect(self):
-        """The first dial gets the whole open timeout, so it can wait through a cold start. No retry is granted
-        time past the deadline."""
         fake = _FakeWire(_refused(wire.Refusal.COLD), _refused(wire.Refusal.COLD))
         clock = [0.0]
 
@@ -356,7 +373,7 @@ class TestNewSessionRetriesRefusedConnects:
         ):
             InferenceClient(fake, _ADDRESS, open_timeout=900.0, connect_deadline=60.0).new_session()
 
-        assert [open_timeout for _, _, open_timeout in fake.dials] == [900.0, 19.0]
+        assert [open_timeout for _, _, open_timeout in fake.dials] == [60.0, 19.0]
 
 
 def _ready(
@@ -601,10 +618,10 @@ class TestADroppedConnectionReconnects:
             _connection(_ready('first'), wire.PeerDisconnected('dropped')),
             _connection(_ready('second'), _answer({'action_data': [1]})),
         )
-        session = InferenceClient(fake, _ADDRESS, open_timeout=900.0, reconnect_deadline=45.0).new_session()
+        session = InferenceClient(fake, _ADDRESS, open_timeout=600.0, reconnect_deadline=45.0).new_session()
 
         assert session.infer({'image': 'test'}) == {'action_data': [1]}
-        assert [open_timeout for _, _, open_timeout in fake.dials] == [900.0, 45.0]
+        assert [open_timeout for _, _, open_timeout in fake.dials] == pytest.approx([600.0, 45.0], abs=1.0)
 
     def test_the_reconnect_deadline_bounds_a_handshake_that_never_reaches_ready(self):
         """A server that sends status updates while it loads keeps the arm waiting only for the deadline."""
@@ -691,7 +708,7 @@ class TestWaitForServer:
         assert fake.dials == []
 
     def test_a_retried_probe_waits_no_more_than_the_time_left(self):
-        """The probe takes its timeouts as a dial does: the first one gets the whole open timeout."""
+        """The probe takes its timeouts as a dial does."""
         fake = self._ProbedWire(wire.Refusal.COLD, None)
         clock = [0.0]
         with (
@@ -703,7 +720,7 @@ class TestWaitForServer:
         ):
             InferenceClient(fake, _ADDRESS, open_timeout=900.0, connect_deadline=60.0).wait_for_server()
 
-        assert fake.open_timeouts == [900.0, 19.0]
+        assert fake.open_timeouts == [60.0, 19.0]
 
 
 def test_remote_policy_hands_the_wire_the_server_and_the_headers_to_the_client():
@@ -1816,6 +1833,30 @@ def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
     client = InferenceClient(websocket.WebsocketClientWire(), address, open_timeout=0.2, connect_deadline=0.0)
     with pytest.raises(TimeoutError, match='ws://localhost:1'):
         client.new_session()
+
+
+# What a wall-clock test grants past a deadline: a thread start and a closed socket, on a loaded machine.
+_DEADLINE_SLACK_S = 2.0
+
+
+def test_a_port_that_never_accepts_ends_the_opening_by_the_connect_deadline(never_accepting_port):
+    address = dataclasses.replace(_ADDRESS, port=never_accepting_port)
+    client = InferenceClient(websocket.WebsocketClientWire(), address, open_timeout=10.0, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match=f'ws://localhost:{never_accepting_port}'):
+        client.new_session()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+
+
+def test_a_server_that_accepts_and_never_answers_ends_the_opening_by_the_connect_deadline(silent_websocket_port):
+    address = dataclasses.replace(_ADDRESS, port=silent_websocket_port)
+    client = InferenceClient(websocket.WebsocketClientWire(), address, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match=f'ws://localhost:{silent_websocket_port}'):
+        client.new_session()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
 
 
 def test_a_wire_no_registry_member_carries_is_refused():

@@ -1,4 +1,5 @@
 import os
+import socket
 import tempfile
 import threading
 from collections.abc import Callable, Generator
@@ -11,6 +12,7 @@ from positronic_model_server import grpc_wire, server_wire, websocket_wire
 from positronic_wire import wire
 from positronic_wire.grpc import GrpcClientWire
 from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWire
+from websockets.sync.server import ServerConnection, serve
 
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -123,3 +125,27 @@ def inference_server(start_server: StartServer, mock_model: MagicMock) -> tuple[
         mock_model, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
     )
     return host, port
+
+
+@pytest.fixture
+def never_accepting_port() -> Generator[int, None, None]:
+    """A port that listens and never accepts, so no handshake on it ever gets an answer."""
+    with socket.create_server(('localhost', 0)) as listener:
+        yield listener.getsockname()[1]
+
+
+@pytest.fixture
+def silent_websocket_port() -> Generator[int, None, None]:
+    """A port whose websocket server opens each connection and then sends nothing."""
+    stop = threading.Event()
+
+    def stay_silent(connection: ServerConnection) -> None:
+        stop.wait()
+
+    with serve(stay_silent, 'localhost', 0) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield server.socket.getsockname()[1]
+        stop.set()
+        server.shutdown()
+    thread.join(timeout=10.0)

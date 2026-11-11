@@ -17,7 +17,7 @@ import numpy as np
 from positronic_model_server.serialization import check_int_range
 from positronic_wire import roboarena as roboarena_wire
 
-from positronic.offboard.roboarena import RoboarenaClient
+from positronic.offboard.roboarena import DEFAULT_CONNECT_DEADLINE_S, RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy.codecs import ACTION
 from positronic.policy.keys import ACTION_FPS
@@ -166,17 +166,23 @@ class RoboarenaEndpoint:
 class RoboarenaPolicy(Policy):
     """A policy served by the roboarena server at `address`, with the DROID codec in front of it.
 
-    Each episode opens its own connection, with `headers` on its handshake. The codec's geometry and the cameras
-    it sends come from the config the server announces on that connection, so the stack is built when the episode
-    starts.
+    Each episode opens its own connection, with `headers` on its handshake, and `connect_deadline` bounds that
+    opening as in `RoboarenaClient`. The codec's geometry and the cameras it sends come from the config the server
+    announces on that connection, so the stack is built when the episode starts.
     """
 
-    def __init__(self, address: roboarena_wire.RoboarenaAddress, headers: Mapping[str, str] | None = None):
+    def __init__(
+        self,
+        address: roboarena_wire.RoboarenaAddress,
+        headers: Mapping[str, str] | None = None,
+        connect_deadline: float = DEFAULT_CONNECT_DEADLINE_S,
+    ):
         self._address = address
         self._headers = headers
+        self._connect_deadline = connect_deadline
 
     def run(self, runtime: Runtime) -> PolicyRun:
-        client = RoboarenaClient(self._address.host, self._address.port, self._headers)
+        client = RoboarenaClient(self._address.host, self._address.port, self._headers, self._connect_deadline)
         # Held by each inference, so a failure that closes the episode waits for the one in flight.
         connection_lock = Lock()
         config = client.connect()

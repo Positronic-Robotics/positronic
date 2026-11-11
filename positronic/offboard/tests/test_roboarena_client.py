@@ -1,5 +1,6 @@
 """The roboarena client, driven against a fake connection."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -62,6 +63,41 @@ def test_a_handshake_that_fails_closes_the_connection_it_opened_and_raises(failu
 
     connection.close.assert_called_once()
     assert client._connection is None
+
+
+# What a wall-clock test grants past a deadline: a thread start and a closed socket, on a loaded machine.
+_DEADLINE_SLACK_S = 2.0
+
+
+def test_a_port_that_never_accepts_ends_the_connect_by_its_deadline(never_accepting_port):
+    client = roboarena.RoboarenaClient('localhost', never_accepting_port, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(wire.ConnectRefused):
+        client.connect()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+
+
+def test_a_server_that_never_announces_its_config_ends_the_connect_by_its_deadline(silent_websocket_port):
+    client = roboarena.RoboarenaClient('localhost', silent_websocket_port, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client.connect()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+    assert client._connection is None
+
+
+def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_timeout_each():
+    connection = MagicMock(**{'recv.return_value': _ANNOUNCEMENT})
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.return_value = connection
+        client.connect()
+
+    assert client_wire.dial.call_args.args[2] == roboarena.HANDSHAKE_TIMEOUT_S
+    assert connection.recv.call_args.kwargs['timeout'] == roboarena.HANDSHAKE_TIMEOUT_S
 
 
 def test_the_client_hands_its_headers_to_every_handshake_it_opens():

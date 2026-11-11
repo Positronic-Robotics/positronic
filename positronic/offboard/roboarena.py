@@ -1,6 +1,7 @@
 """A client for a roboarena server: the msgpack frames, over the `roboarena` wire that carries them."""
 
 import logging
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -8,7 +9,7 @@ from positronic_model_server.serialization import deserialize, serialize
 from positronic_wire import registry, wire
 from positronic_wire import roboarena as roboarena_wire
 
-from positronic.offboard.client import ConnectOutcome, ConnectRetries
+from positronic.offboard.client import ConnectOutcome, ConnectRetries, time_left
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ SESSION_ID = 'session_id'
 HANDSHAKE_TIMEOUT_S = 60.0
 INFER_TIMEOUT_S = 120.0
 RESET_TIMEOUT_S = 10.0
+# How long a connect may take by default: the dial and the config read, each up to `HANDSHAKE_TIMEOUT_S`.
+DEFAULT_CONNECT_DEADLINE_S = 2 * HANDSHAKE_TIMEOUT_S
 # A silent peer must not hold a readiness probe for a handshake's wait.
 READY_PROBE_TIMEOUT_S = 5.0
 
@@ -33,10 +36,21 @@ READY_PROBE_TIMEOUT_S = 5.0
 class RoboarenaClient:
     """One connection to a roboarena server, and the msgpack frames it carries."""
 
-    def __init__(self, host: str = '127.0.0.1', port: int = 9000, headers: Mapping[str, str] | None = None):
-        """``headers`` go on every handshake this client opens: ``connect`` and ``probe`` alike."""
+    def __init__(
+        self,
+        host: str = '127.0.0.1',
+        port: int = 9000,
+        headers: Mapping[str, str] | None = None,
+        connect_deadline: float = DEFAULT_CONNECT_DEADLINE_S,
+    ):
+        """``headers`` go on every handshake this client opens: ``connect`` and ``probe`` alike.
+
+        ``connect_deadline`` bounds one ``connect``: the dial and the config read share it, and neither waits
+        more than ``HANDSHAKE_TIMEOUT_S``. A connect makes one attempt.
+        """
         self._address = roboarena_wire.RoboarenaAddress(host, port)
         self._headers = headers
+        self._connect_deadline = connect_deadline
         self._wire = registry.client_wire(roboarena_wire.RoboarenaClientWire.NAME)
         self._connection: wire.ClientConnection | None = None
         self._server_config: dict[str, Any] | None = None
@@ -44,9 +58,12 @@ class RoboarenaClient:
 
     def connect(self) -> dict[str, Any]:
         """Open the connection and answer the config the server announces on it."""
-        connection = self._wire.dial(self._address, self._headers, HANDSHAKE_TIMEOUT_S)
+        deadline = time.monotonic() + self._connect_deadline
+        connection = self._wire.dial(self._address, self._headers, min(HANDSHAKE_TIMEOUT_S, time_left(deadline)))
         try:
-            announced: dict[str, Any] = deserialize(connection.recv(timeout=HANDSHAKE_TIMEOUT_S))
+            announced: dict[str, Any] = deserialize(
+                connection.recv(timeout=min(HANDSHAKE_TIMEOUT_S, time_left(deadline)))
+            )
         except BaseException:
             # Nothing else holds this connection: `_connection` is assigned below, so an unclosed one
             # here leaks its socket until the process ends.

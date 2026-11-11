@@ -348,6 +348,17 @@ class TestTheWire:
 
         assert dial.call_args.kwargs['additional_headers'] == headers
 
+    def test_each_episode_s_connect_ends_by_the_policy_s_connect_deadline(self):
+        policy = roboarena_policy.RoboarenaPolicy(ADDRESS, connect_deadline=5.0)
+
+        with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
+            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+            run = runtime.start(policy)
+            runtime.close()
+            run.close()
+
+        assert dial.call_args.kwargs['open_timeout'] <= 5.0
+
     def test_each_episode_builds_its_stack_from_the_config_its_own_connection_announced(self, monkeypatch):
         """A server restarted between two episodes may announce another resolution."""
         second = announced(**{wire.RESOLUTION: [144, 256]})
