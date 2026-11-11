@@ -10,8 +10,10 @@ from typing import Any
 
 import numpy as np
 import pytest
+from positronic_model_server import keys as offboard_keys
 from positronic_model_server import server_wire, websocket_wire
 from positronic_model_server.protocol import AUTH_HEADER, bearer
+from positronic_model_server.spec import ARGS, SEQ
 from positronic_wire import websocket, wire
 from positronic_wire.roboarena import TextAnswer
 
@@ -328,7 +330,7 @@ def test_the_yambox_wide_top_rtc_pipeline_with_no_query_sends_the_whole_top_view
     assert meta[codecs.CROPS_META][keys.WRIST_LEFT_IMAGE] == pytest.approx([1 / 12, 0.0, 11 / 12, 1.0])
     assert meta[codecs.PROMPT_PREFIX_META] == codecs.SIM_PROMPT_PREFIX
     assert meta[codecs.PREFIX_LENGTH_META] == 4
-    assert meta['local_stack']['seq'][1]['args']['latency_estimate'] == pytest.approx(7 / 30)
+    assert meta[offboard_keys.LOCAL_STACK][SEQ][1][ARGS]['latency_estimate'] == pytest.approx(7 / 30)
     assert len(reply) == 16
 
 
