@@ -135,7 +135,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._deferred: np.ndarray | None = None
         self._deferred_call: pimm.calls.Call[command.CommandType, None] | None = None
         self._deferred_until = 0.0
-        self._resumed_at: float | None = None
+        self._cleared_at: float | None = None
         # The joints when the move was asked for, and the largest turn of a joint since: recovery can move the arm
         self._deferred_from = np.zeros(JOINTS)
         self._deferred_moved = 0.0
@@ -281,7 +281,7 @@ class _Arm(DriverRun[command.CommandType]):
             self._deferred, self._deferred_call = target, call
             self._deferred_until = self.clock.now() + _RECOVER_S
             self._deferred_from, self._deferred_moved = self.reading.q.copy(), 0.0
-            self._resumed_at = None
+            self._cleared_at = None
             # `_start_deferred` gives the move its time for the travel, from when the controller starts it
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _RECOVER_S)
 
@@ -331,16 +331,20 @@ class _Arm(DriverRun[command.CommandType]):
         self._stream.append((self.reading.q.copy(), self.velocity * dt))
 
     def _recover(self, now: float) -> None:
-        """While a move waits, clear the error of the controller: a resume, which turns a FAILURE off, and then RUN.
-        The error can come after the move was asked for."""
+        """While a move waits, clear the error of the controller: a resume, which turns a FAILURE off, and then RUN,
+        from OFF only. The error can come after the move was asked for."""
         if self._deferred is None:
             return
         if self.reading.in_error or self.reading.power is PowerState.FAILURE:
             # A power up that ends in an error is over: the next one asks for RUN again
             self._powering = False
-            if self._resumed_at is None or now - self._resumed_at >= _RESUME_EVERY_S:
+            if self._cleared_at is None or now - self._cleared_at >= _RESUME_EVERY_S:
                 self.controller.resume()
-                self._resumed_at = now
+                self._cleared_at = now
+        elif self.reading.power is PowerState.STANDBY and not self._powering:
+            if self._cleared_at is None or now - self._cleared_at >= _RESUME_EVERY_S:
+                self.controller.power_off()
+                self._cleared_at = now
         elif self.reading.power in (PowerState.OFF, PowerState.STANDBY):
             # A request that did not reach RUN in the time the controller allows is lost: ask again
             if not self._powering or now - self._powered_at >= POWER_TIMEOUT_S:

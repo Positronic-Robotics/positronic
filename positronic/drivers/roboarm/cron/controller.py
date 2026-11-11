@@ -167,8 +167,9 @@ class CronController:
         self._has_control = True
         self._clear_errors()
         self._run_projects()
-        # Straight to RUN, as the RCUI does. On an arm whose multi-turn encoder asks for a preset (Hand B, motor 4,
-        # 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed 3 times in 3
+        if self.power is PowerState.STANDBY:
+            self.power_off()
+            self._await(lambda: self.power is PowerState.OFF, POWER_TIMEOUT_S, 'power off')
         self._power_to(PowerState.RUN, rctl.cmd_power_run)
         # blocking-sleep-ok: connect-time handshake, before any control loop exists to yield from
         time.sleep(STARTUP_S)
@@ -204,7 +205,13 @@ class CronController:
         clears it, so the arm is then off."""
         rctl.cmd_resume()
         if self.power is PowerState.FAILURE:
-            rctl.cmd_power_off()
+            self.power_off()
+
+    def power_off(self) -> None:
+        """Ask for OFF, with no wait. RUN goes only from OFF: on an arm whose multi-turn encoder asks for a preset
+        (Hand B, motor 4, 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed
+        3 times in 3, as the RCUI does it."""
+        rctl.cmd_power_off()
 
     def power_up(self) -> None:
         """Start the projects and ask for RUN, with no wait. The arm moves its joints once about ``STARTUP_S`` after

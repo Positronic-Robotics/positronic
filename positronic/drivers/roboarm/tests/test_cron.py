@@ -390,6 +390,17 @@ def test_a_safety_stop_whose_error_clears_before_the_arm_is_off_is_powered_once_
     assert rctl.power is PowerState.RUN
 
 
+def test_an_arm_in_standby_at_start_is_powered_to_run_through_off(rctl, driven):
+    """RUN from STANDBY failed on an arm whose multi-turn encoder asks for a preset, and RUN from OFF passed."""
+    rctl.power = PowerState.STANDBY
+    _, _, _, clock, loop = driven()
+
+    _pump(loop, clock, 1)
+
+    assert _called_in_order(rctl.calls, 'take_control', 'off', 'run')
+    assert rctl.power is PowerState.RUN
+
+
 def test_a_failure_left_with_no_error_flag_is_cleared_before_the_arm_is_powered(rctl, driven):
     """An earlier client cleared the error flag, and left before the arm was off."""
     rctl.power = PowerState.FAILURE
@@ -1119,6 +1130,20 @@ def test_a_power_up_that_never_reaches_run_is_asked_for_again(world, rctl, drive
 
     assert answer.result() is None
     np.testing.assert_allclose(rctl.q, _joints(0.3), atol=cron._ARRIVED_TOL)
+
+
+def test_a_move_powers_an_arm_in_standby_to_run_through_off(world, rctl, driven):
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.power = PowerState.STANDBY
+    _pump(loop, clock, 2)
+    del rctl.calls[:]
+
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump_until(loop, clock, answer, ticks=5000)
+
+    assert answer.result() is None
+    assert _called_in_order(rctl.calls, 'off', 'run', 'waypoint')
 
 
 def test_a_move_clears_a_failure_by_a_power_off_and_starts_once_the_arm_is_up_again(world, rctl, driven):
