@@ -11,23 +11,37 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import httpx
 import numpy as np
 import pos3
 import pytest
 from positronic_model_server import keys as server_keys
-from positronic_model_server.protocol import AUTH_HEADER, OBSERVATION, RESULT, SESSION_ID, STATUS, ServerStatus, bearer
+from positronic_model_server.protocol import (
+    AUTH_HEADER,
+    META,
+    OBSERVATION,
+    PROTOCOL_VERSION,
+    RESULT,
+    SESSION_ID,
+    STATUS,
+    ProtocolVersion,
+    ServerStatus,
+    bearer,
+)
 from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
+from positronic_model_server.server import ModelServer
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import ServedUnixSocket
-from positronic_wire import registry
+from positronic_wire import registry, wire
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 from websockets.http11 import Request, Response
 from websockets.sync.client import unix_connect
 from websockets.sync.server import ServerConnection, serve
 
 import pimm
+import positronic.cfg.policy
 import positronic.cfg.simulator
 from pimm.time import EMITTED_WORLD
 from pimm.world import SystemClock
@@ -394,6 +408,61 @@ def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket
             assert service.phase is Phase.RUNNING
             pressing.join()
             run.close()
+
+
+# A teleoperator on a real rig can take about this long to get ready, and the opening of the session waits for it.
+TELEOPERATOR_GETS_READY_SEC = 300.0
+
+
+class _ReadyWaitOnAFakeClock(wire.ClientConnection):
+    """The opening of a teleop session on the fake clock ``clock``: a waiting status at each interval of the model
+    server, and Ready at ``ready_at``. A wait that ends before the next message advances the clock and times out."""
+
+    def __init__(self, clock: list[float], ready_at: float):
+        self._clock = clock
+        self._ready_at = ready_at
+        self._next_waiting = clock[0]
+
+    def send(self, message: bytes) -> None:
+        raise AssertionError('the opening sends nothing before Ready')
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        arrives = min(self._next_waiting, self._ready_at)
+        if timeout is not None and arrives - self._clock[0] > timeout:
+            self._clock[0] += timeout
+            raise TimeoutError('no message within the timeout')
+        self._clock[0] = max(self._clock[0], arrives)
+        if arrives == self._ready_at:
+            return serialise({
+                STATUS: ServerStatus.READY,
+                PROTOCOL_VERSION: ProtocolVersion.V3.value,
+                META: {},
+                SESSION_ID: 'teleop',
+            })
+        self._next_waiting += ModelServer.WAITING_INTERVAL_SEC
+        return serialise({STATUS: ServerStatus.WAITING})
+
+    def close(self, timeout: float | None = None) -> str:
+        return 'closed'
+
+
+def test_the_default_deadlines_of_a_teleop_policy_outlast_a_five_minute_wait_for_ready():
+    """A session of ``cfg.policy.teleop`` with its default deadlines opens when Ready comes after five minutes."""
+    clock = [0.0]
+    ready_at = TELEOPERATOR_GETS_READY_SEC + ModelServer.WAITING_INTERVAL_SEC
+    policy = positronic.cfg.policy.teleop.instantiate()
+    client = policy._client
+    with (
+        patch.object(client._wire, 'dial', return_value=_ReadyWaitOnAFakeClock(clock, ready_at)),
+        patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+        patch(
+            'positronic.offboard.client.time.sleep',
+            side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+        ),
+    ):
+        session = client.new_session()
+    assert session.session_id == 'teleop'
+    assert clock[0] == ready_at
 
 
 def test_a_silent_headset_reads_as_not_tracked_and_turns_control_off(service, socket_path, runtime):
