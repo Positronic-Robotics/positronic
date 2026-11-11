@@ -141,33 +141,37 @@ class CronController:
     def __enter__(self) -> 'CronController':
         rctl.connect(self.ip)
         try:
-            self._await(lambda: rctl.get_cycle_count() > 0, _CONNECT_TIMEOUT_S, 'the first data of the controller')
-            rctl.sync_robot_model()
-            self._await(rctl.is_model_valid, _CONNECT_TIMEOUT_S, 'the model of the robot')
-            controller_tool = np.asarray(rctl.get_tool(), dtype=np.float64)
-            if np.any(controller_tool != 0):
-                raise RuntimeError(f'the controller has the tool {controller_tool}: set it to zero, use tool_length')
-            # The controller keeps gravity as the up direction in the base frame, as UR does: [0, 0, 9.81] upright
-            up = np.asarray(rctl.get_gravity(), dtype=np.float64)
-            if not np.linalg.norm(up) > 0:
-                raise RuntimeError(f'the controller has no gravity set ({up}): the up direction of the base is unknown')
-            self.mount = level(up)
-            if self.tool_capsules:
-                rctl.model_set_tool_capsules(self.tool_capsules)
-            rctl.take_control()
-            self._has_control = True
-            self._clear_errors()
-            self._run_projects()
-            # Straight to RUN, as the RCUI does. On an arm whose multi-turn encoder asks for a preset (Hand B, motor 4,
-            # 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed 3 times in 3
-            self._power_to(PowerState.RUN, rctl.cmd_power_run)
-            # blocking-sleep-ok: connect-time handshake, before any control loop exists to yield from
-            time.sleep(STARTUP_S)
+            self._take_arm()
         # rules-allow: swallowed-error — re-raised after the arm is left safe
         except BaseException:
             self.__exit__(None, None, None)
             raise
         return self
+
+    def _take_arm(self) -> None:
+        """Check the controller, take control, clear errors, start the projects and power the arm to RUN."""
+        self._await(lambda: rctl.get_cycle_count() > 0, _CONNECT_TIMEOUT_S, 'the first data of the controller')
+        rctl.sync_robot_model()
+        self._await(rctl.is_model_valid, _CONNECT_TIMEOUT_S, 'the model of the robot')
+        controller_tool = np.asarray(rctl.get_tool(), dtype=np.float64)
+        if np.any(controller_tool != 0):
+            raise RuntimeError(f'the controller has the tool {controller_tool}: set it to zero, use tool_length')
+        # The controller keeps gravity as the up direction in the base frame, as UR does: [0, 0, 9.81] upright
+        up = np.asarray(rctl.get_gravity(), dtype=np.float64)
+        if not np.linalg.norm(up) > 0:
+            raise RuntimeError(f'the controller has no gravity set ({up}): the up direction of the base is unknown')
+        self.mount = level(up)
+        if self.tool_capsules:
+            rctl.model_set_tool_capsules(self.tool_capsules)
+        rctl.take_control()
+        self._has_control = True
+        self._clear_errors()
+        self._run_projects()
+        # Straight to RUN, as the RCUI does. On an arm whose multi-turn encoder asks for a preset (Hand B, motor 4,
+        # 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed 3 times in 3
+        self._power_to(PowerState.RUN, rctl.cmd_power_run)
+        # blocking-sleep-ok: connect-time handshake, before any control loop exists to yield from
+        time.sleep(STARTUP_S)
 
     def __exit__(self, *_) -> None:
         # Each step runs on its own: one that fails must not keep the others from running

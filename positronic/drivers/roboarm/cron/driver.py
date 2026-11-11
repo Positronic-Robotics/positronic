@@ -140,7 +140,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._deferred_from = np.zeros(JOINTS)
         self._deferred_moved = 0.0
         # The driver asked for RUN to clear a FAILURE, and when the arm reads RUN after that: the arm moves its joints
-        # once about 0.5 s after RUN, and a planned move that starts meanwhile stops on a following error
+        # once about 0.5 s after RUN, and a command meanwhile stops it on a following error. A RUN can come after the
+        # move that asked for it was refused, so these outlive the move
         self._powering = False
         self._run_at: float | None = None
         # The joints the arm read, and the travel commanded on each tick of the stream
@@ -160,7 +161,7 @@ class _Arm(DriverRun[command.CommandType]):
             moved = float(np.max(np.abs(self.reading.q - self._deferred_from)))
             self._deferred_moved = max(self._deferred_moved, moved)
             if self.clock.now() >= self._deferred_until:
-                self._deferred, self._deferred_call, self._powering = None, None, False
+                self._deferred, self._deferred_call = None, None
                 self.moves.fail(MoveRefused(self.controller.errors, self._deferred_moved))
             return
         if self.moves.settle(self.reading.q, self.clock.now()) is MoveStatus.GAVE_UP:
@@ -279,7 +280,7 @@ class _Arm(DriverRun[command.CommandType]):
             self._deferred, self._deferred_call = target, call
             self._deferred_until = self.clock.now() + _RECOVER_S
             self._deferred_from, self._deferred_moved = self.reading.q.copy(), 0.0
-            self._resumed_at, self._powering, self._run_at = None, False, None
+            self._resumed_at = None
             # `_start_deferred` gives the move its time for the travel, from when the controller starts it
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _RECOVER_S)
 
@@ -298,6 +299,11 @@ class _Arm(DriverRun[command.CommandType]):
             return
         if self._powering:
             self._powering, self._run_at = False, now
+        if self._run_at is not None:
+            # The arm gets no command until the joint move after RUN is over
+            if now - self._run_at < STARTUP_S:
+                return
+            self._run_at = None
         if self.target is None and self.velocity.any():
             self._command(np.zeros(JOINTS), dt)
             return
@@ -329,6 +335,8 @@ class _Arm(DriverRun[command.CommandType]):
         if self._deferred is None:
             return
         if self.reading.in_error or self.reading.power is PowerState.FAILURE:
+            # A power up that ends in an error is over: the next one asks for RUN again
+            self._powering = False
             if self._resumed_at is None or now - self._resumed_at >= _RESUME_EVERY_S:
                 self.controller.resume()
                 self._resumed_at = now
@@ -337,15 +345,13 @@ class _Arm(DriverRun[command.CommandType]):
             self._powering = True
 
     def _start_deferred(self, now: float) -> None:
-        """Start the move that waits, once the joint move that follows a power up is over."""
-        if self._run_at is not None and now - self._run_at < STARTUP_S:
-            return
+        """Start the move that waits."""
         assert self._deferred is not None and self._deferred_call is not None
         target, call = self._deferred, self._deferred_call
         self.controller.move_to(target, float(self.max_speed.min()), float(self.max_accel.min()))
         travel_s = _MOVE_GRACE_S + _MOVE_SLACK * float(np.max(np.abs(target - self.reading.q)) / self.max_speed.min())
         self.moves.accept(call, target, _ARRIVED_TOL, now, travel_s)
-        self._deferred, self._deferred_call, self._run_at = None, None, None
+        self._deferred, self._deferred_call = None, None
 
     def _report(self) -> None:
         """Log each change of the power state or the error state of the arm."""

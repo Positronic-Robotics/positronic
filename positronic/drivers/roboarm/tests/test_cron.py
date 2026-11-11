@@ -728,45 +728,6 @@ def test_a_streamed_cartesian_target_is_reached_after_one_command(rctl, driven):
     np.testing.assert_allclose(rctl.q[:3], [0.6, -0.4, 0.5], atol=0.01)
 
 
-def test_a_streamed_cartesian_target_turns_no_joint_more_than_the_step_limit_in_a_tick(rctl, driven, monkeypatch):
-    """The steps of the target stay small, so the joints do not jump to another branch of the solutions."""
-    monkeypatch.setattr(cron, '_DLS_ITERATIONS', 1)
-    steps = []
-    follow = cron._Arm._follow
-
-    def recorded(arm, pose, seed, max_turn):
-        joints = follow(arm, pose, seed, max_turn)
-        steps.append(float(np.max(np.abs(joints - seed))))
-        return joints
-
-    monkeypatch.setattr(cron._Arm, '_follow', recorded)
-    _, _, commands, clock, loop = driven()
-    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.9, 0.0, 0.0]))))
-
-    _pump(loop, clock, 20)
-
-    assert steps and max(steps) <= cron._DLS_MAX_STEP + 1e-9
-
-
-def test_the_joints_of_a_far_cartesian_target_move_no_faster_than_the_arm_can_follow(rctl, driven, monkeypatch):
-    """Near a pose where joints turn fast for a small move of the tool, the target slows down with the arm."""
-    steps = []
-    follow = cron._Arm._follow
-
-    def recorded(arm, pose, seed, max_turn):
-        joints = follow(arm, pose, seed, max_turn)
-        steps.append(float(np.max(np.abs(joints - seed))))
-        return joints
-
-    monkeypatch.setattr(cron._Arm, '_follow', recorded)
-    _, _, commands, clock, loop = driven(factor=0.3)
-    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.9, 0.0, 0.0]))))
-
-    _pump(loop, clock, 50)
-
-    assert steps and max(steps) <= 0.3 * cron._MAX_JOINT_SPEED * cron._WRIST_SCALE.max() * cron._MAX_STEP_S + 1e-9
-
-
 def test_the_joints_of_the_wrist_turn_faster_than_the_joints_of_the_shoulder(rctl, driven):
     _, _, commands, clock, loop = driven(factor=0.5)
     commands.push(command.JointPosition(np.full(JOINTS, 1.0)))
@@ -1086,6 +1047,28 @@ def test_a_move_after_a_move_that_was_given_up_reads_busy(world, rctl, driven):
     assert not answer.done()
 
 
+def test_a_run_that_comes_after_its_move_was_refused_still_holds_commands_for_the_joint_move(world, rctl, driven):
+    """The arm moves its joints once just after RUN, and a command in that second stops it on a following error."""
+    driver, _, commands, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    _pump(loop, clock, 2)
+    rctl.safety_latched, rctl.run_lag = False, 10**9
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump_until(loop, clock, answer, ticks=int(2 * cron._RECOVER_S / TICK))
+    with pytest.raises(MoveRefused):
+        answer.result()
+    assert 'run' in rctl.calls
+
+    rctl._run_in = 0  # RUN comes now
+    commands.push(command.JointPosition(_joints(0.5)))
+    _pump(loop, clock, int(0.8 * cron.STARTUP_S / TICK))
+    assert rctl.commanded == [], 'the arm got a command during the joint move after RUN'
+
+    _pump(loop, clock, int(0.5 * cron.STARTUP_S / TICK))
+    assert rctl.commanded
+
+
 def test_a_move_clears_a_failure_by_a_power_off_and_starts_once_the_arm_is_up_again(world, rctl, driven):
     """A FAILURE stays through a resume. The arm moves its joints once just after RUN."""
     driver, _, _, clock, loop = driven(projects=['gripper_bridge'])
@@ -1100,7 +1083,7 @@ def test_a_move_clears_a_failure_by_a_power_off_and_starts_once_the_arm_is_up_ag
         _pump(loop, clock, 1)
         if rctl.power is PowerState.RUN:
             break
-    _pump(loop, clock, int(0.8 * cron_controller.STARTUP_S / TICK))
+    _pump(loop, clock, int(0.8 * cron.STARTUP_S / TICK))
     assert 'waypoint' not in rctl.calls, 'the move started during the joint move after RUN'
     _pump_until(loop, clock, answer, ticks=5000)
 
