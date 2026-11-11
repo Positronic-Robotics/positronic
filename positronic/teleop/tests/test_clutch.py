@@ -47,6 +47,45 @@ def test_in_the_hand_axes_control_starts_at_the_robot_pose():
     np.testing.assert_allclose(tracker.update(hand).as_matrix, robot.as_matrix, atol=1e-9)
 
 
+def _heading_tracker_at(hand_turn: geom.Rotation, robot: geom.Transform3D) -> tuple[Tracker, geom.Transform3D]:
+    """A tracker in the heading of the hand, on with the hand held as ``hand_axes`` expects and then turned by
+    ``hand_turn``, given in the axes of the headset."""
+    operator = OperatorPosition.FRONT.value
+    held = operator.rotation.inv * _QUARTER_ABOUT_Z
+    hand = geom.Transform3D([1.0, -2.0, 0.5], hand_turn * held)
+    tracker = Tracker(operator, hand_axes=_QUARTER_ABOUT_Z, heading_only=True)
+    tracker.turn_on(robot, hand)
+    return tracker, hand
+
+
+def test_in_the_heading_of_the_hand_a_tilt_of_the_hand_does_not_turn_up():
+    robot = geom.Transform3D([0.4, 0.1, 0.3], geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+    # 45 degrees about the x axis of the headset: the hand points down
+    tracker, hand = _heading_tracker_at(geom.Rotation.from_rotvec(np.array([np.pi / 4, 0.0, 0.0])), robot)
+    up = geom.Transform3D(hand.translation + [0.0, 0.05, 0.0], hand.rotation)  # y is up in the headset
+
+    pose = tracker.update(up)
+
+    np.testing.assert_allclose(pose.translation, robot.translation + [0.0, 0.0, 0.05], atol=1e-9)
+    np.testing.assert_allclose(pose.rotation.as_rotation_matrix, robot.rotation.as_rotation_matrix, atol=1e-9)
+
+
+def test_in_the_heading_of_the_hand_a_turn_of_the_operator_does_not_count():
+    """A hand turned about up moves the robot along its own x as a hand held as ``hand_axes`` expects does."""
+    robot = geom.Transform3D([0.4, 0.1, 0.3], geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+    tracker, hand = _heading_tracker_at(geom.Rotation.from_rotvec(np.array([0.0, 1.2, 0.0])), robot)
+
+    pose = tracker.update(hand * geom.Transform3D([0.05, 0.0, 0.0]))
+
+    np.testing.assert_allclose(pose.translation, robot.translation + _QUARTER_ABOUT_Z([0.05, 0.0, 0.0]), atol=1e-9)
+
+
+def test_in_the_heading_of_the_hand_control_starts_at_the_robot_pose():
+    robot = geom.Transform3D([0.4, 0.1, 0.3], geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+    tracker, hand = _heading_tracker_at(geom.Rotation.from_euler([-0.4, 0.5, 1.2]), robot)
+    np.testing.assert_allclose(tracker.update(hand).as_matrix, robot.as_matrix, atol=1e-9)
+
+
 def _hand_turned(operator: geom.Transform3D, robot: geom.Transform3D, hand: geom.Transform3D, turn: geom.Rotation):
     """``hand`` turned by ``turn``, given in the frame of ``robot``."""
     teleop = operator * hand * operator.inv
