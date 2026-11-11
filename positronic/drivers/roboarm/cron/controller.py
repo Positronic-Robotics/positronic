@@ -173,12 +173,13 @@ class CronController:
         # Each step runs on its own: one that fails must not keep the others from running
         for step in (self.stop_move, self.stop, rctl.cmd_hold):
             self._attempt(step)
-        if self._has_control and self.power_off_on_exit:
-            # A power off that reaches the controller before HOLD can end a velocity stream in a TIMEOUT error
-            self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'))
-            self._attempt(rctl.cmd_power_off)
-            self._attempt(lambda: self._await(lambda: self.power is PowerState.OFF, _POWER_TIMEOUT_S, 'power off'))
         if self._has_control:
+            # A power off or a release that reaches the controller before HOLD can end a velocity stream in a TIMEOUT
+            # error
+            self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'))
+            if self.power_off_on_exit:
+                self._attempt(rctl.cmd_power_off)
+                self._attempt(lambda: self._await(lambda: self.power is PowerState.OFF, _POWER_TIMEOUT_S, 'power off'))
             self._attempt(rctl.release_control)
         self._attempt(rctl.disconnect)
 

@@ -414,16 +414,13 @@ class Robot(pimm.ControlSystem):
         self.state = pimm.ControlSystemEmitter[CronState](self)
         self.robot_meta = pimm.ControlSystemEmitter(self)
 
-    def _arm(self, controller: CronController, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> _Arm:
-        """The arm this run drives, built from the driver's configuration."""
-        return _Arm(
-            controller, self.sync_move, self.commands, self.state, self.relative_dynamics_factor, should_stop, clock
-        )
-
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
         controller = CronController(self.ip, self.power_off_on_exit, self.tool_length, self.projects, self.tool_spheres)
         with controller:
-            with self._arm(controller, should_stop, clock) as arm:
+            arm = _Arm(
+                controller, self.sync_move, self.commands, self.state, self.relative_dynamics_factor, should_stop, clock
+            )
+            with arm:
                 self.robot_meta.emit(NO_MODEL_ROBOT_META)
                 while not should_stop.value:
                     arm.settle()

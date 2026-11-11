@@ -39,6 +39,7 @@ class FakeRctl:
         self.hold_lag = 0
         self._hold_in: int | None = None
         self.mode_at_power_off: MotionMode | None = None
+        self.mode_at_release: MotionMode | None = None
         self.tool = np.zeros(6)
         # A safety stop latches FAILURE: a resume leaves it, an OFF request clears it once the stop is released
         self.safety_latched = False
@@ -101,6 +102,7 @@ class FakeRctl:
 
     def release_control(self):
         self._call('release_control')
+        self.mode_at_release = MotionMode(self.get_motion_mode())
 
     def cmd_hold(self):
         self._call('hold')
@@ -931,6 +933,22 @@ def test_a_streamed_arm_is_powered_off_only_once_the_controller_holds(rctl, driv
         _pump(loop, clock, 1)
 
     assert rctl.mode_at_power_off is MotionMode.HOLD
+
+
+def test_an_arm_left_powered_gives_control_back_only_once_the_controller_holds(rctl, driven):
+    """A release that reaches the controller in a stream can end it in a TIMEOUT error."""
+    rctl.hold_lag = 2
+    stop = StopFlag()
+    _, _, commands, clock, loop = driven(stop=stop, power_off_on_exit=False)
+    commands.push(command.JointPosition(_joints(0.5)))
+    _pump(loop, clock, 20)
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        _pump(loop, clock, 1)
+
+    assert rctl.mode_at_release is MotionMode.HOLD
+    assert 'off' not in rctl.calls
 
 
 def test_an_arm_that_fails_to_power_up_is_left_off_and_the_run_fails(rctl, driven):
