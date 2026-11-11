@@ -52,6 +52,10 @@ class FakeRctl:
         self.dead_joint: int | None = None
         # The collision model: the clearance of the arm is how far the first joint is under this, if set
         self.wall: float | None = None
+        # A second wall, under the first joint
+        self.floor: float | None = None
+        # The model refuses forward kinematics, as it can for a pose
+        self.fk_fails = False
         self.tool_capsules: list[dict] = []
         self.error = False
         self.fail_power_run = False
@@ -228,7 +232,8 @@ class FakeRctl:
         return self.velocity.copy()
 
     def get_cart_pose(self):
-        return self.compute_fk(self.q)['pose']
+        q = self.q.copy()
+        return np.array([q[0], q[1], q[2], q[4], 0.0, q[5]])
 
     def rpy2quat(self, rpy):
         return list(geom.Rotation.from_euler(rpy).as_quat_xyzw)
@@ -237,6 +242,8 @@ class FakeRctl:
         return list(geom.Rotation.from_quat_xyzw(list(quat)).as_euler)
 
     def compute_fk(self, q):
+        if self.fk_fails:
+            return {'err': True, 'err_code': 'NO_SOLUTION', 'pose': []}
         q = np.array(q, dtype=np.float64)
         if self.dead_joint is not None:
             q[self.dead_joint] = 0.0
@@ -246,7 +253,9 @@ class FakeRctl:
         self.tool_capsules = [dict(capsule) for capsule in capsules]
 
     def model_is_collision(self, q):
-        clearance = 1.0 if self.wall is None else self.wall - q[0]
+        clearance = min(
+            1.0 if self.wall is None else self.wall - q[0], 1.0 if self.floor is None else q[0] - self.floor
+        )
         return {'lim': 0, 'coll': int(clearance <= 0), 'min_dist': max(clearance, 0.0), 'threshold': 0.005}
 
     def jacob(self, q, in_tcp):
@@ -890,6 +899,45 @@ def test_a_planned_move_that_takes_the_arm_into_itself_is_refused(world, rctl, d
     assert 'waypoint' not in rctl.calls
 
 
+def test_a_planned_move_out_of_a_collision_may_not_go_into_another(world, rctl, driven):
+    rctl.wall, rctl.floor, rctl.q = 0.5, -0.2, _joints(0.6)
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.JointPosition(_joints(-0.5)))
+
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='from itself'):
+        answer.result()
+
+
+def test_a_planned_move_past_a_joint_limit_is_refused(world, rctl, driven):
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.JointPosition(np.array([0.0, 0.0, np.radians(169.0), 0.0, 0.0, 0.0])))
+
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='joint limits'):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+
+
+def test_a_planned_move_is_checked_again_from_where_the_arm_is_when_it_starts(world, rctl, driven):
+    """The arm can move between the call and the start: a brake, a recovery."""
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched = True, True
+    _pump(loop, clock, 2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.8)))
+    _pump(loop, clock, 10)
+
+    rctl.wall, rctl.safety_latched = 0.5, False
+    _pump_until(loop, clock, answer, ticks=5000)
+
+    with pytest.raises(ValueError, match='from itself'):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+
+
 def test_a_planned_move_out_of_a_collision_is_planned(world, rctl, driven):
     """The stick takes an arm out of a contact."""
     rctl.wall, rctl.q = 0.5, _joints(0.6)
@@ -1091,6 +1139,70 @@ def test_a_move_asks_again_to_clear_an_error_that_stays_through_the_first_reques
     assert answer.result() is None
 
 
+def test_a_planned_move_that_stops_on_an_error_goes_on_once_the_error_clears(world, rctl, driven):
+    driver, _, _, clock, loop = driven(factor=0.2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 200)
+    assert 0.0 < rctl.q[0] < 1.0
+    del rctl.calls[:]
+
+    rctl.error, rctl.moving = True, False  # the controller stops the planner
+    _pump_until(loop, clock, answer, ticks=int(20.0 / TICK))
+
+    assert answer.result() is None
+    assert _called_in_order(rctl.calls, 'move_pause', 'resume', 'waypoint', 'move_run')
+    np.testing.assert_allclose(rctl.q, _joints(1.0), atol=cron._ARRIVED_TOL)
+
+
+def test_a_move_whose_hold_does_not_come_waits_and_the_driver_goes_on(world, rctl, driven, monkeypatch):
+    """An error on the tick of the start of a move keeps the controller out of HOLD."""
+    monkeypatch.setattr(cron_controller, '_HOLD_TIMEOUT_S', 0.01)
+    driver, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, 20)
+    rctl.hold_lag = 10**6
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.0)))
+    _pump(loop, clock, 200)
+    assert not answer.done()
+
+    rctl.hold_lag = 0
+    _pump_until(loop, clock, answer)
+
+    assert answer.result() is None
+
+
+def test_a_streamed_target_is_not_taken_while_the_arm_holds_an_error(rctl, driven):
+    """A HOLD request out of RUN can wait for its timeout on each target."""
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, 20)
+    rctl.error, rctl.safety_latched = True, True
+    _pump(loop, clock, 2)
+    del rctl.calls[:]
+
+    for _ in range(5):
+        commands.push(command.JointPosition(_joints(0.3)))
+        _pump(loop, clock, 1)
+
+    assert 'hold' not in rctl.calls
+
+
+def test_a_tick_where_the_model_refuses_a_pose_drops_the_stream_and_the_driver_goes_on(rctl, driven, caplog):
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.3, 0.0, 0.0]))))
+    _pump(loop, clock, 20)
+
+    rctl.fk_fails = True
+    with caplog.at_level(logging.ERROR, logger=cron.__name__):
+        _pump(loop, clock, 100)
+    rctl.fk_fails = False
+    commands.push(command.JointPosition(_joints(0.5)))
+    _pump(loop, clock, 600)
+
+    assert any('dropped' in record.getMessage() for record in caplog.records)
+    np.testing.assert_allclose(rctl.q[0], 0.5, atol=0.01)
+
+
 def test_a_refused_move_reports_how_far_the_arm_moved_while_the_driver_cleared_the_error(world, rctl, driven):
     """The controller moves the joints once just after RUN."""
     driver, _, _, clock, loop = driven()
@@ -1164,12 +1276,15 @@ def test_a_run_that_comes_after_its_move_was_refused_still_holds_commands_for_th
         answer.result()
     assert 'run' in rctl.calls
 
-    rctl._run_in = 0  # RUN comes now
-    commands.push(command.JointPosition(_joints(0.5)))
-    _pump(loop, clock, int(0.8 * cron.STARTUP_S / TICK))
+    rctl._run_in = 0  # RUN comes now, and the stream goes on at each tick
+    for _ in range(int(0.8 * cron.STARTUP_S / TICK)):
+        commands.push(command.JointPosition(_joints(0.5)))
+        _pump(loop, clock, 1)
     assert rctl.commanded == [], 'the arm got a command during the joint move after RUN'
 
-    _pump(loop, clock, int(0.5 * cron.STARTUP_S / TICK))
+    for _ in range(int(0.5 * cron.STARTUP_S / TICK)):
+        commands.push(command.JointPosition(_joints(0.5)))
+        _pump(loop, clock, 1)
     assert rctl.commanded
 
 

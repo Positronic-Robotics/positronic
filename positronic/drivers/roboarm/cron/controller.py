@@ -326,7 +326,6 @@ class CronController:
         while not done():
             if time.monotonic() > deadline:
                 raise TimeoutError(f'no {what} after {timeout_s} s')
-            # A handshake with the controller: at connect, at exit, or for HOLD (about 3 ms) before a planned move
             # blocking-sleep-ok: the loop has no velocity to send while it waits
             time.sleep(poll_s)
 
