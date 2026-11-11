@@ -38,10 +38,21 @@ def test_with_controller_axes_the_operator_in_front_moves_the_robot_as_the_contr
     """In front of the robot, x of the robot points to the operator: red (x) right, green (y) to the operator, blue (z)
     down, as an operator checked on the CRON stand."""
     tracker = Tracker(OperatorPosition.FRONT.value)
-    hand = geom.Transform3D([0.2, 1.0, -0.3], geom.Rotation.from_euler([0.3, 0.5, -0.2]))
+    hand = geom.Transform3D([0.2, 1.0, -0.3], CONTROLLER_AXES)
     for along, robot in (([0.1, 0, 0], [0, 0.1, 0]), ([0, 0.1, 0], [0.1, 0, 0]), ([0, 0, 0.1], [0, 0, -0.1])):
         moved = _moved(tracker, hand, geom.Transform3D(np.array(along, dtype=float)))
         np.testing.assert_allclose(moved.translation, robot, atol=1e-9)
+
+
+def test_with_controller_axes_a_tilt_of_the_controller_does_not_change_up():
+    up = geom.Transform3D([0.0, 0.1, 0.0])  # y is up in the headset
+    robots = []
+    for tilt in ([0.0, 0.0, 0.0], [0.8, 0.0, 0.0], [0.0, 0.0, -0.6]):
+        hand = geom.Transform3D([0.2, 1.0, -0.3], geom.Rotation.from_rotvec(np.array(tilt)) * CONTROLLER_AXES)
+        tracker = Tracker(OperatorPosition.FRONT.value)
+        tracker.turn_on(geom.Transform3D(), hand)
+        robots.append(tracker.update(up * hand).translation)
+    np.testing.assert_allclose(robots, [[0.0, 0.0, 0.1]] * 3, atol=1e-9)
 
 
 def test_the_controller_axes_are_the_headset_axes_turned_a_quarter_turn_about_x():
@@ -74,8 +85,9 @@ def test_control_does_not_follow_a_start_pose_that_its_owner_writes_again():
 
 
 def test_a_station_sets_its_own_axes_of_the_controller():
-    """Another controller or grip. With the identity, a move along the controller is that move in the room."""
+    """Another controller or grip. With the identity, a controller in the axes of the headset moves the robot as the
+    axes of the headset do."""
     tracker = Tracker(OperatorPosition.FRONT.value, controller_axes=geom.Rotation.identity)
-    hand = geom.Transform3D([0.2, 1.0, -0.3], geom.Rotation.from_euler([0.3, 0.5, -0.2]))
-    moved = _moved(tracker, hand, geom.Transform3D(np.array([0.0, 0.1, 0.0])))
-    np.testing.assert_allclose(moved.translation, OperatorPosition.FRONT.value.rotation([0.0, 0.1, 0.0]), atol=1e-9)
+    hand = geom.Transform3D(np.array([0.2, 1.0, -0.3]))
+    moved = _moved(tracker, hand, geom.Transform3D(np.array([0.1, 0.05, -0.2])))
+    np.testing.assert_allclose(moved.translation, OperatorPosition.FRONT.value.rotation([0.1, 0.05, -0.2]), atol=1e-9)

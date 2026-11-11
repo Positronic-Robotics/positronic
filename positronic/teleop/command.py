@@ -181,9 +181,9 @@ def serve(
     ``AUTH_TOKEN_ENV``, and serves open when that is unset. A run sets the parameters of its session (``SessionParams``)
     in the query of its address.
     ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
-    ``controller_axes`` counts the moves of the teleoperator in the axes of the controller, so the way the teleoperator
-    faces does not count; it puts the axes of the controller in the frame of the headset. ``--controller_axes=None``
-    counts the moves in the axes of the headset.
+    ``controller_axes`` turns the axes of the moves of the teleoperator by the heading of the controller, so the way the
+    teleoperator faces does not count; it puts the axes of the controller in the frame of the headset.
+    ``--controller_axes=None`` counts the moves in the axes of the headset.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
