@@ -787,6 +787,18 @@ def test_a_streamed_cartesian_target_keeps_the_elbow_on_its_side(rctl, driven):
     np.testing.assert_allclose(rctl.q[0], 0.2, atol=0.01)
 
 
+def test_a_streamed_cartesian_target_folds_the_elbow_no_further_than_its_limit(rctl, driven):
+    """The fake IK puts the third coordinate on the elbow joint. The controller stops the elbow at 167 degrees."""
+    rctl.q = np.array([0.0, 0.0, 2.6, 0.0, 0.0, 0.0])
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.2, 0.0, 3.0]))))
+
+    _pump(loop, clock, 3000)
+
+    np.testing.assert_allclose(rctl.q[2], cron._MAX_ELBOW, atol=0.01)
+    np.testing.assert_allclose(rctl.q[0], 0.2, atol=0.01)
+
+
 def test_a_streamed_cartesian_target_stops_short_of_the_arm_itself(rctl, driven):
     """The fake collision model puts a wall at 0.5 on the first joint."""
     rctl.wall = 0.5
