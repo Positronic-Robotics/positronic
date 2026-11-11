@@ -73,3 +73,21 @@ def test_a_prompt_joins_its_distinct_instructions_with_the_droid_separator():
     assert droid.prompt(['Put the cup on the plate', 'Put the cup on the plate', 'Place the cup']) == (
         'Put the cup on the plate | Place the cup'
     )
+
+
+def _ids(prefix: str, count: int) -> list[str]:
+    return [f'{prefix}{i}' for i in range(count)]
+
+
+def test_the_held_out_sessions_are_the_ones_closest_to_the_share():
+    # A draw in session order takes the 90-episode day; the closest set to 10 of 100 is the 10-episode day.
+    sessions = {'towels': {'2025-10-14': _ids('a', 90), '2025-10-15': _ids('b', 10)}}
+    assert droid.heldout_sessions(sessions, share=0.1, seed=0) == sorted(_ids('b', 10))
+
+
+def test_the_held_out_sessions_can_join_small_days_in_each_group():
+    sessions = {
+        'towels': {'d1': _ids('a', 6), 'd2': _ids('b', 6), 'd3': _ids('c', 100)},
+        'spoons': {'d1': _ids('s', 4), 'd2': _ids('t', 36)},
+    }
+    assert droid.heldout_sessions(sessions, share=0.1, seed=0) == sorted(_ids('a', 6) + _ids('b', 6) + _ids('s', 4))

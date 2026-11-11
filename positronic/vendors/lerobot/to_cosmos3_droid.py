@@ -45,6 +45,8 @@ from positronic.vendors.lerobot.to_lerobot import _collate_fn, _raise_fd_limit
 
 TREES = ('train', 'heldout')
 START_TRIM_FILE = 'start_trim.csv'
+# LeRobot writes each frame as an image before it encodes the episode; with no writer threads the writes block the loop.
+IMAGE_WRITER_THREADS = 16
 # Each DROID view and the recorded camera that fills it. A recording with one exterior camera fills both slots.
 _VIEWS = {
     droid.EXTERIOR_IMAGE_1: (keys.EXTERIOR_IMAGE,),
@@ -144,7 +146,7 @@ def _add_episode(lr_dataset: LeRobotDataset, kept: KeptFrames) -> None:
         frame = {name: values[i] for name, values in kept.rows.items()}
         frame.update({view: frames[i] for view, frames in kept.images.items()})
         lr_dataset.add_frame({**frame, 'task': kept.prompt})
-    lr_dataset.save_episode(parallel_encoding=False)
+    lr_dataset.save_episode(parallel_encoding=True)
 
 
 def _add_episode_ids(root: Path, episode_ids: list[str]) -> None:
@@ -177,7 +179,9 @@ def convert(dataset: Dataset, output_dir: str, heldout: str | None, num_workers:
             continue
         if tree not in targets:
             root = output / tree / droid.DATASET_DIR / droid.SUCCESS_DIR
-            targets[tree] = LeRobotDataset.create(repo_id='local', fps=droid.FPS, root=root, features=FEATURES)
+            targets[tree] = LeRobotDataset.create(
+                repo_id='local', fps=droid.FPS, root=root, features=FEATURES, image_writer_threads=IMAGE_WRITER_THREADS
+            )
         _add_episode(targets[tree], item.kept)
         lengths[tree][item.uid] = len(item.kept.rows[droid.JOINT_POSITIONS])
     for tree, target in targets.items():
@@ -194,22 +198,12 @@ def convert(dataset: Dataset, output_dir: str, heldout: str | None, num_workers:
 
 @cfn.config(group='eval.object', share=0.1, seed=0)
 def split(dataset: Dataset, output: str, group: str, share: float, seed: int):
-    """Hold out whole recording sessions (one UTC day of one `group` value), about `share` of each group."""
+    """Hold out whole recording sessions, one UTC day of one `group` value each (`cosmos3_droid.heldout_sessions`)."""
     sessions: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
     for episode in dataset:
         day = datetime.fromtimestamp(episode.meta[META_CREATED_TS_NS] / 1e9, UTC).date().isoformat()
         sessions[episode.static[group]][day].append(episode.meta[META_UID])
-    rng = np.random.default_rng(seed)
-    held = []
-    for value in sorted(sessions):
-        days = sorted(sessions[value])
-        target = share * sum(len(uids) for uids in sessions[value].values())
-        taken = 0
-        for day in rng.permutation(days):
-            if taken >= target:
-                break
-            held += sessions[value][day]
-            taken += len(sessions[value][day])
+    held = droid.heldout_sessions(sessions, share, seed)
     Path(output).write_text(json.dumps(sorted(held), indent=1) + '\n')
 
 

@@ -4,6 +4,8 @@
 `positronic.vendors.lerobot.to_cosmos3_droid`.
 """
 
+import itertools
+import random
 from collections.abc import Sequence
 
 import numpy as np
@@ -87,3 +89,20 @@ def droid_rows(joints: np.ndarray, grip: np.ndarray, target_grip: np.ndarray, ee
         ACTION_JOINT_POSITION: joints[start + 1 : end + 1].astype(np.float32),
         ACTION_GRIPPER_POSITION: target_grip[start:end].reshape(-1, 1).astype(np.float32),
     }
+
+
+def heldout_sessions(sessions: dict[str, dict[str, list[str]]], share: float, seed: int) -> list[str]:
+    """The episode ids to hold out: for each group, the set of whole sessions whose episode count is closest to
+    `share` of the group's episodes. `sessions` maps each group to its sessions, and each session to its episode ids.
+    A seeded draw breaks a tie."""
+    rng = random.Random(seed)
+    held = []
+    for group in sorted(sessions):
+        by_session = sessions[group]
+        target = share * sum(len(ids) for ids in by_session.values())
+        names = sorted(by_session)
+        choices = [c for k in range(1, len(names) + 1) for c in itertools.combinations(names, k)]
+        rng.shuffle(choices)
+        best = min(choices, key=lambda chosen: abs(sum(len(by_session[name]) for name in chosen) - target))
+        held += [episode for name in best for episode in by_session[name]]
+    return sorted(held)
