@@ -400,8 +400,11 @@ class LLMPolicy(Policy):
             raise ValueError(f'cache_ttl must be one of {get_args(CacheTTL)}')
         # A provider cache setting adds cache points with their own TTL, and Anthropic refuses a shorter TTL before
         # a longer one.
-        if any(key.startswith(('anthropic_cache', 'bedrock_cache', 'openrouter_cache')) for key in endpoint.settings):
-            raise ValueError('settings must not configure provider caching; the policy places cache points')
+        caching = [
+            key for key in endpoint.settings if key.startswith(('anthropic_cache', 'bedrock_cache', 'openrouter_cache'))
+        ]
+        if caching:
+            raise ValueError(f'settings must not configure provider caching, the policy places cache points: {caching}')
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl

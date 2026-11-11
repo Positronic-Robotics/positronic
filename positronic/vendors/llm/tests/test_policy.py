@@ -171,7 +171,7 @@ def test_cache_ttl_must_be_one_of_the_ttls_that_providers_accept():
     ['anthropic_cache_tool_definitions', 'anthropic_cache', 'bedrock_cache_messages', 'openrouter_cache_instructions'],
 )
 def test_policy_refuses_a_provider_cache_setting(setting):
-    with pytest.raises(ValueError, match='provider caching'):
+    with pytest.raises(ValueError, match=f'provider caching.*{setting}'):
         LLMPolicy(Endpoint('test', settings=cast(ModelSettings, {setting: True})), Motion())
 
 
