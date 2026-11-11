@@ -61,6 +61,8 @@ _MIN_PROGRESS = 0.5
 _DRIFT_M, _DRIFT_RAD = 1e-4, 1e-3
 # Metres: a step that takes the arm nearer than this to itself, by the collision model of the controller, is not taken
 _MIN_CLEARANCE = 0.01
+# Radians: the spacing of the points where the clearance of a planned move is checked
+_PATH_STEP = np.radians(1.0)
 # How long a move waits for the controller to clear its error: a FAILURE needs a power off and a power up
 _RECOVER_S = 10.0
 # A move that waits asks the controller to clear its error again after this: one request did not always clear it
@@ -228,11 +230,22 @@ class _Arm(DriverRun[command.CommandType]):
 
     def _clear_of_itself(self, seed: np.ndarray, joints: np.ndarray) -> np.ndarray:
         """``joints``, or ``seed`` if ``joints`` take the arm nearer than the clearance to itself, by the collision
-        model of the controller."""
+        model of the controller. The model gives no depth in a collision, so a step into one is never taken."""
         clearance = self.controller.clearance(joints)
-        if clearance < _MIN_CLEARANCE and clearance < self.controller.clearance(seed):
+        if clearance <= 0.0 or (clearance < _MIN_CLEARANCE and clearance < self.controller.clearance(seed)):
             return np.array(seed, dtype=np.float64)
         return joints
+
+    def _check_path(self, target: np.ndarray) -> None:
+        """Refuse a planned move that takes the arm nearer to itself than the clearance and than it is now. The
+        controller plans a straight line in the joints, and does not know the tool spheres of the local model."""
+        start = self.reading.q
+        least = min(_MIN_CLEARANCE, self.controller.clearance(start))
+        points = max(1, int(np.ceil(np.max(np.abs(target - start)) / _PATH_STEP)))
+        for share in np.linspace(0.0, 1.0, points + 1)[1:]:
+            clearance = self.controller.clearance(start + share * (target - start))
+            if clearance < least:
+                raise ValueError(f'a move to {np.round(target, 3)} takes the arm {clearance:.3f} m from itself')
 
     def _pose_of(self, cmd: command.CommandType) -> geom.Transform3D | None:
         """The tool pose that a Cartesian ``cmd`` asks for, or None for a joint target. A delta applies to the pose
@@ -289,6 +302,7 @@ class _Arm(DriverRun[command.CommandType]):
         """
         with pimm.calls.raise_to(call):
             target = self._to_joints(call.request)
+            self._check_path(target)
             self.target, self._pose, self._joint_goal = None, None, None
             self._deferred, self._deferred_call = target, call
             self._deferred_until = self.clock.now() + _RECOVER_S

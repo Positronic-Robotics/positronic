@@ -866,6 +866,41 @@ def test_a_streamed_joint_target_stops_short_of_the_arm_itself(rctl, driven):
     assert 0.5 - cron._MIN_CLEARANCE - 0.06 <= rctl.q[0] <= 0.5 - cron._MIN_CLEARANCE + 1e-6
 
 
+def test_a_streamed_target_does_not_move_an_arm_that_is_in_a_collision(rctl, driven):
+    """The model gives no depth in a collision: a step in one could go deeper."""
+    rctl.wall, rctl.q = 0.5, _joints(0.6)
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(0.8)))
+
+    _pump(loop, clock, 200)
+
+    np.testing.assert_allclose(rctl.q[0], 0.6, atol=1e-6)
+
+
+def test_a_planned_move_that_takes_the_arm_into_itself_is_refused(world, rctl, driven):
+    """The controller plans the move without the tool spheres of the local model."""
+    rctl.wall = 0.5
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.8)))
+
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='from itself'):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+
+
+def test_a_planned_move_out_of_a_collision_is_planned(world, rctl, driven):
+    """The stick takes an arm out of a contact."""
+    rctl.wall, rctl.q = 0.5, _joints(0.6)
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.0)))
+
+    _pump_until(loop, clock, answer)
+
+    assert answer.result() is None
+
+
 def test_the_spheres_of_the_tool_go_to_the_collision_model_as_capsules_of_no_length(rctl, driven):
     _, _, _, clock, loop = driven(tool_spheres=[([0.0, 0.01, 0.03], 0.05)])
 
