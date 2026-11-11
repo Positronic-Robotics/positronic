@@ -5806,12 +5806,12 @@ dev = [
 
 [[package]]
 name = "positronic-eval-vocabulary"
-version = "0.7.3"
+version = "0.7.4"
 source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-evals"
-version = "0.2.8"
+version = "0.2.9"
 source = { editable = "evals" }
 dependencies = [
     { name = "positronic-eval-vocabulary" },
