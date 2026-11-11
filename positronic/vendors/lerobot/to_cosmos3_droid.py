@@ -4,7 +4,8 @@ Write positronic recordings as Cosmos3-DROID training sets, which the Cosmos3 an
 Each tree `<output_dir>/train/` and `<output_dir>/heldout/` holds `droid_plus_lerobot_640x360_20260412/success/`
 (LeRobot v3.0, 15 Hz, three views at 640x360) and `keep_ranges.json`. A kept episode starts at its first frame
 15 cm below the first frame's end-effector height. `<output_dir>/start_trim.csv` gives the cut of each episode and
-names the episodes that never get that low, which are left out.
+names the episodes that never get that low, which are left out. The Cosmos3 DROID loader opens `success/` and
+`failure/` unless its dataset sets `use_success_only=True`.
 
 Usage
   uv run --extra lerobot python -m positronic.vendors.lerobot.to_cosmos3_droid split \\
@@ -41,7 +42,6 @@ from positronic.vendors.cosmos3 import droid_dataset as droid
 from positronic.vendors.lerobot.to_lerobot import _collate_fn, _raise_fd_limit
 
 TREES = ('train', 'heldout')
-_STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
 # Each DROID view and the recorded camera that fills it. A recording with one exterior camera fills both slots.
 _VIEWS = {
     droid.EXTERIOR_IMAGE_1: (keys.EXTERIOR_IMAGE,),
@@ -70,6 +70,9 @@ def _prompt(episode: Episode) -> str:
     if INSTRUCTION in episode.signals:
         return droid.prompt(list(episode.signals[INSTRUCTION].values()))
     return episode.static[keys.TASK]
+
+
+_STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
 
 
 class DroidEpisodes(torch.utils.data.Dataset):

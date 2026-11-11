@@ -38,9 +38,9 @@ PROMPT_SEPARATOR = ' | '
 MIN_START_DROP_M = 0.15
 
 
-def start_cut_frame(heights: np.ndarray, min_drop_m: float = MIN_START_DROP_M) -> int | None:
-    """The first frame at least `min_drop_m` below the height of frame 0, or None if the arm never gets there."""
-    below = np.flatnonzero(heights <= heights[0] - min_drop_m)
+def start_cut_frame(heights: np.ndarray) -> int | None:
+    """The first frame at least `MIN_START_DROP_M` below the height of frame 0, or None if the arm never gets there."""
+    below = np.flatnonzero(heights <= heights[0] - MIN_START_DROP_M)
     return int(below[0]) if len(below) else None
 
 
