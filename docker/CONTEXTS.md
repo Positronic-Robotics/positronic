@@ -35,8 +35,8 @@ Build and push all: `make push`
 `Dockerfile.serve-galaxea` builds `galaxea` in the same form, and the image is private by licence.
 See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
 
-`Dockerfile.serve-abc-dit` builds the private `abc-dit-yam` image in the same form, with the yambox crop as its
-default. See [the vendor README](../positronic/vendors/abc_dit/README.md#docker-image).
+`Dockerfile.serve-abc-dit` builds the private `abc-dit-yam` image in the same form, and it starts the
+`multitask_200k_yambox_wide_top_rtc` command. See [the vendor README](../positronic/vendors/abc_dit/README.md#docker-image).
 
 ## References
 

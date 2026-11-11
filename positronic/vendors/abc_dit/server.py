@@ -245,6 +245,9 @@ def pipeline(crop: str, schedule: str, sim_prefix: bool) -> PolicyDeployment:
 
 
 yambox_crop_pipeline = pipeline.override(crop=codecs.Crop.YAMBOX.value)
+yambox_wide_top_rtc_pipeline = pipeline.override(
+    crop=codecs.Crop.YAMBOX_WIDE_TOP.value, schedule=ScheduleName.RTC.value
+)
 model_with_prefix = abc_dit_model.override(prefix_length=PREFIX_LENGTH)
 
 COMMANDS = {
@@ -252,6 +255,9 @@ COMMANDS = {
     'multitask_200k_yambox_crop': serve.override(model=model_with_prefix, pipeline=yambox_crop_pipeline),
     'multitask_200k_yambox_crop_no_sim_prefix': serve.override(
         model=model_with_prefix, pipeline=yambox_crop_pipeline.override(sim_prefix=False)
+    ),
+    'multitask_200k_yambox_wide_top_rtc': serve.override(
+        model=model_with_prefix, pipeline=yambox_wide_top_rtc_pipeline
     ),
 }
 

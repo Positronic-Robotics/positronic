@@ -24,10 +24,6 @@ ARG ABC_EXCLUDE_NEWER=2026-09-19T00:00:00Z
 ARG ABC_DATA=https://abc-data.timehorizons.org
 ARG CHECKPOINT=abc_dit_xl_200k_model
 ARG CHECKPOINT_SHA256=79754ece8d333789a930d1a964ee0d4548f5975e2ba175ddce41d018c9f51ba7
-# The defaults of the `multitask_200k` command. A session query, or `-e ABC_DIT_<NAME>` at run time, sets another.
-ARG CROP=yambox_wide_top
-ARG SCHEDULE=rtc
-ARG SIM_PREFIX=True
 
 # The weights stage does not build on the base, so a new base reuses the downloaded weights. Its own base is pinned
 # by digest: a moved tag would download the weights again and push them as a new layer. The data mirror refuses
@@ -109,21 +105,15 @@ COPY --link positronic/vendors/abc_dit/NOTICE positronic/vendors/abc_dit/LICENSE
 ENV UV_OFFLINE=1 \
     UV_NO_SYNC=1
 
-# After the weights, so other start settings rebuild no large layer.
-ARG CHECKPOINT CROP SCHEDULE SIM_PREFIX
-ENV ABC_DIT_CHECKPOINT=/opt/abc-cache/${CHECKPOINT}.pt \
-    ABC_DIT_CROP=${CROP} \
-    ABC_DIT_SCHEDULE=${SCHEDULE} \
-    ABC_DIT_SIM_PREFIX=${SIM_PREFIX}
+ARG CHECKPOINT
+ENV ABC_DIT_CHECKPOINT=/opt/abc-cache/${CHECKPOINT}.pt
 
 EXPOSE 8000
 
 # `exec` makes the server pid 1, so it receives the stop signal. The server starts ABC's interpreter itself.
 ENTRYPOINT ["/bin/sh", "-c", \
-  "exec /positronic/.venv/bin/python -m positronic.vendors.abc_dit.server multitask_200k \
-   --model.abc_python=/opt/abc/.venv/bin/python --model.checkpoint=\"$ABC_DIT_CHECKPOINT\" \
-   --pipeline.crop=\"$ABC_DIT_CROP\" --pipeline.schedule=\"$ABC_DIT_SCHEDULE\" \
-   --pipeline.sim_prefix=\"$ABC_DIT_SIM_PREFIX\" \"$@\"", "--"]
+  "exec /positronic/.venv/bin/python -m positronic.vendors.abc_dit.server multitask_200k_yambox_wide_top_rtc \
+   --model.abc_python=/opt/abc/.venv/bin/python --model.checkpoint=\"$ABC_DIT_CHECKPOINT\" \"$@\"", "--"]
 
 LABEL org.opencontainers.image.title="abc-dit" \
     org.opencontainers.image.description="ABC-DiT multi-task DiT-XL (abc_dit_xl_200k_model.pt) with ABC's policy server, served over positronic's session protocol. Built with DINOv3: see /opt/abc_dit/NOTICE." \

@@ -177,9 +177,7 @@ $(eval $(call SERVE_IMAGE,galaxea,$(GALAXEA_REPO)))
 push-serve-galaxea: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(GALAXEA_REPO)),nebius-login)
 
 # ABC-DiT on the yambox views goes to the private registry, built and pushed by hand. It is not in SERVE_IMAGES.
-# CROP, SCHEDULE and SIM_PREFIX set the defaults the image starts with: `make build-serve-abc-dit CROP=yambox`.
 ABC_DIT_REPO ?= $(NEBIUS_REGISTRY)/abc-dit-yam
-SERVE_BUILD_FLAGS_abc-dit = $(foreach arg,CROP SCHEDULE SIM_PREFIX,$(if $($(arg)),--build-arg $(arg)=$($(arg))))
 $(eval $(call SERVE_IMAGE,abc-dit,$(ABC_DIT_REPO)))
 push-serve-abc-dit: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(ABC_DIT_REPO)),nebius-login)
 
