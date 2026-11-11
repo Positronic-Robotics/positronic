@@ -59,6 +59,7 @@ help:
 	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
 	@echo "  make build-serve-galaxea  Build the private Galaxea serving image (needs HF_TOKEN)"
 	@echo "  make build-serve-abc-dit  Build the private ABC-DiT serving image for yambox"
+	@echo "  make build-serve-abc-dit-real-prompts  Build the same image with ABC's real-data prompts"
 	@echo "  make build-openpi-base  Build positro/openpi-base from the openpi fork at OPENPI_REF"
 	@echo "  make build-molmospaces  Build the public MolmoSpaces eval image"
 	@echo "  make build           Build training, openpi and groot images"
@@ -180,6 +181,13 @@ push-serve-galaxea: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(GALAXEA_REPO)),neb
 ABC_DIT_REPO ?= $(NEBIUS_REGISTRY)/abc-dit-yam
 $(eval $(call SERVE_IMAGE,abc-dit,$(ABC_DIT_REPO)))
 push-serve-abc-dit: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(ABC_DIT_REPO)),nebius-login)
+
+# The same image, started with ABC's real-data prompts as the default: the platform passes an image no session query.
+ABC_DIT_REAL_PROMPTS_REPO ?= $(NEBIUS_REGISTRY)/abc-dit-yam-real-prompts
+SERVE_DOCKERFILE_abc-dit-real-prompts := Dockerfile.serve-abc-dit
+SERVE_BUILD_FLAGS_abc-dit-real-prompts := --build-arg SERVE_COMMAND=multitask_200k_yambox_wide_top_rtc_real_prompts
+$(eval $(call SERVE_IMAGE,abc-dit-real-prompts,$(ABC_DIT_REAL_PROMPTS_REPO)))
+push-serve-abc-dit-real-prompts: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(ABC_DIT_REAL_PROMPTS_REPO)),nebius-login)
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 
@@ -378,6 +386,7 @@ clean:
 	-docker rmi $(IMAGE_NAME_MOLMOSPACES):$(GIT_SHA)
 	-docker rmi $(GALAXEA_REPO):local
 	-docker rmi $(ABC_DIT_REPO):local
+	-docker rmi $(ABC_DIT_REAL_PROMPTS_REPO):local
 	-for name in $(SERVE_IMAGES); do docker rmi positro/$$name:local; done
 	@echo "Image cleanup attempts complete. Check the output for removal errors."
 
