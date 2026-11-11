@@ -302,8 +302,8 @@ def test_a_plan_names_its_rig_shape_and_runs_on_a_franka_when_it_names_none():
     assert EvalPlan.model_validate(yam.model_dump(mode='json')) == yam
 
 
-@pytest.mark.parametrize('shape', [RigShape.molmospaces, RigShape.robolab, RigShape.abc])
-def test_a_plan_names_a_simulator_as_its_rig_shape(shape: RigShape):
+@pytest.mark.parametrize('shape', [shape for shape in RigShape if shape is not RigShape.INVALID])
+def test_a_plan_names_each_rig_shape_it_takes(shape: RigShape):
     plan = a_plan(rig_shape=slug_of(shape))
     assert plan.rig_shape is shape
     assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
