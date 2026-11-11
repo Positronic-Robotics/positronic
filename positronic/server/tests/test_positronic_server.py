@@ -6,7 +6,7 @@ import socket
 import threading
 from collections import namedtuple
 from dataclasses import asdict, fields, replace
-from enum import StrEnum
+from enum import Enum, StrEnum
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1130,3 +1130,22 @@ def test_an_enum_value_counts_as_the_value_the_episode_table_sends():
     summary = _summary_of({OUTCOME: _Verdict.PASS}, {OUTCOME: 'Pass'}, {OUTCOME: _Verdict.FAIL}, table=table)
 
     assert _sent_counts(summary) == _counts(('Pass', 2), ('Fail', 1))
+
+
+class _Grade(Enum):
+    LOW = 'low'
+    HIGH = 'high'
+
+
+def test_a_plain_enum_column_counts_in_the_order_its_renderer_lists_the_members():
+    badge = RendererConfig(
+        type='badge',
+        options={
+            _Grade.HIGH: {'label': 'High', 'variant': 'success'},
+            _Grade.LOW: {'label': 'Low', 'variant': 'danger'},
+        },
+    )
+    table = {OUTCOME: ColumnConfig(label='Grade', renderer=badge)}
+    summary = _summary_of({OUTCOME: _Grade.LOW}, {OUTCOME: _Grade.LOW}, {OUTCOME: _Grade.HIGH}, table=table)
+
+    assert _sent_counts(summary) == _counts(('high', 1), ('low', 2))

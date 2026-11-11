@@ -486,6 +486,20 @@ def test_an_export_writes_the_count_of_each_value_of_the_summary_column(dataset,
     assert summary[fields(positronic_server.ColumnSummary)[1].name] == counts
 
 
+def test_a_summary_value_the_header_cannot_count_stops_the_export_before_its_episode_is_written(tmp_path):
+    dataset = a_dataset(
+        tmp_path / 'dataset',
+        {keys.TASK: 'Put the banana on the plate', OUTCOME: 'Success'},
+        {keys.TASK: 'Put the banana on the plate', OUTCOME: ['Success', 'Failure']},
+    )
+    out = tmp_path / 'out'
+
+    with pytest.raises(ValueError, match='holds a list in episode 1'):
+        export_all(dataset, out, ep_table_cfg=TABLE, summary_column=OUTCOME, max_resolution=64, assets=False, workers=1)
+    assert (out / 'episode/0/index.html').exists()
+    assert not (out / 'episode/1').exists()
+
+
 def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_starts_late(tmp_path):
     with LocalDatasetWriter(tmp_path / 'dataset') as writer, writer.new_episode() as episode:
         for second in range(1, 12):

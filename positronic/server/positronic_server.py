@@ -725,28 +725,47 @@ class ColumnSummary:
 SUMMARY_VALUE_TYPES = (str, int, float, bool)
 
 
+def _plain(value: Any) -> Any:
+    """An enum member as its value, as the episode table sends it; any other value as it is."""
+    return value.value if isinstance(value, Enum) else value
+
+
+def summary_value(index: int, episode: Episode, key: str, cfg: ColumnConfig) -> Any:
+    """The value episode `index` holds in the `key` column of the episode table, as the summary counts it.
+
+    An absent value is the column default. None means the episode is not counted. Raises ValueError on a value that
+    is not one of `SUMMARY_VALUE_TYPES`.
+    """
+    stored = {INDEX_COLUMN: index, **episode_table_row(index, episode)}.get(key)
+    value = _plain(cfg.default if stored is None else stored)
+    if value is not None and type(value) not in SUMMARY_VALUE_TYPES:
+        raise ValueError(
+            f'summary_column {key!r} holds a {type(value).__name__} in episode {index}; a summary counts '
+            f'{", ".join(kind.__name__ for kind in SUMMARY_VALUE_TYPES)} values only'
+        )
+    return value
+
+
+def check_summary_value(index: int, episode: Episode) -> None:
+    """Raise ValueError when episode `index` holds a value the configured summary column cannot count."""
+    key = cast(str | None, app_state[_SUMMARY_COLUMN_KEY])
+    if key is not None:
+        summary_value(index, episode, key, cast(TableConfig, app_state['episode_table_cfg'])[key])
+
+
 def column_summary(ds: Dataset, key: str, cfg: ColumnConfig) -> ColumnSummary:
     """The value each episode holds in the `key` column of the episode table, with its count.
 
-    An absent value counts as the column default; with no default, the episode is not counted. An enum member counts
-    as its value, as the episode table sends it. The values a renderer lists come first, in its order, and the
-    others follow by count. Raises ValueError on a value that is not one of `SUMMARY_VALUE_TYPES`.
+    Each value is the one `summary_value` reads. The values a renderer lists come first, in its order, and the
+    others follow by count.
     """
     counts: Counter[tuple[type, Any]] = Counter()
     for index, episode in enumerate(ds):
-        stored = {INDEX_COLUMN: index, **episode_table_row(index, episode)}.get(key)
-        value = cfg.default if stored is None else stored
-        if isinstance(value, Enum):
-            value = value.value
-        if value is None:
-            continue
-        if type(value) not in SUMMARY_VALUE_TYPES:
-            raise ValueError(
-                f'summary_column {key!r} holds a {type(value).__name__} in episode {index}; a summary counts '
-                f'{", ".join(kind.__name__ for kind in SUMMARY_VALUE_TYPES)} values only'
-            )
-        counts[type(value), value] += 1
-    listed = {filter_spelling(value): rank for rank, value in enumerate(cfg.renderer.options if cfg.renderer else ())}
+        value = summary_value(index, episode, key, cfg)
+        if value is not None:
+            counts[type(value), value] += 1
+    options = cfg.renderer.options if cfg.renderer else ()
+    listed = {filter_spelling(_plain(option)): rank for rank, option in enumerate(options)}
 
     def place(item: tuple[tuple[type, Any], int]) -> tuple[int, int, str, str]:
         (kind, value), count = item

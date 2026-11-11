@@ -47,6 +47,7 @@ from positronic.server.positronic_server import (
     TableConfig,
     app,
     app_state_restored,
+    check_summary_value,
     configure_pages,
     configure_tables,
     default_table,
@@ -698,6 +699,7 @@ def export_static(
             plans_by_episode: list[list[_Planned]] = []
             for index in window:
                 plans, table_episode = _planned_episode(out, client, dataset, full, index, build_id, columns)
+                check_summary_value(index, table_episode)
                 _add_filter_values(sets_by_group, group_tables or {}, table_episode)
                 tables.append(table_episode)
                 plans_by_episode.append(plans)
