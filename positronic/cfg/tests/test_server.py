@@ -12,6 +12,7 @@ from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy import keys as policy_keys
+from positronic.server.dataset_utils import DURATION_COLUMN, INDEX_COLUMN
 from positronic.server.positronic_server import filter_spelling
 from positronic.server.rollouts import NO_RATE, NO_STAGE, StageCell
 
@@ -101,7 +102,7 @@ def test_every_column_of_the_episode_table_is_a_key_the_preset_derives():
         cfg_server.DERIVED_ITEMS,
         cfg_server.DERIVED_STARTED,
     }
-    built_in = {'__index__', '__duration__'}
+    built_in = {INDEX_COLUMN, DURATION_COLUMN}
     recorded = {'task'}
 
     columns = set(cfg_server.rollouts_episodes_table.instantiate())

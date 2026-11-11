@@ -72,9 +72,10 @@ class ActionPrefix:
 
 
 # The session metadata fields that name what the codec does: the crop box of each view, in fractions of the frame,
-# the prompt prefix, and the length of the action prefix (0 for none).
+# the prompt prefix, the prompt it sends for each task instruction, and the length of the action prefix (0 for none).
 CROPS_META = 'abc_dit.crops'
 PROMPT_PREFIX_META = 'abc_dit.prompt_prefix'
+PROMPTS_META = 'abc_dit.prompts'
 PREFIX_LENGTH_META = 'abc_dit.prefix_length'
 
 
@@ -142,6 +143,7 @@ class AbcObservationCodec(Codec):
         return {
             CROPS_META: {key: [box.left, box.top, box.right, box.bottom] for key, box in self._crops.items()},
             PROMPT_PREFIX_META: self._prompt_prefix,
+            PROMPTS_META: dict(self._prompts),
             PREFIX_LENGTH_META: 0 if prefix is None else prefix.length,
         }
 
@@ -156,6 +158,26 @@ MULTITASK_200K_PROMPTS = {
     'load plates into tabletop dish rack': 'load plates into tabletop dish rack',
     'hang mug on mug rack': 'hang the mug on the mug rack',
 }
+
+# The prompt of each task in ABC's real teleoperation data, keyed by the task instruction that ABC's sim reports. ABC's
+# dataloader makes the prompt from the task folder name of the ABC-130k release, with underscores as spaces. The
+# release holds no real data of `hang mug on mug rack`.
+ABC_130K_PROMPTS = {
+    'put the plastic bottles in the bin': 'put the plastic bottles in the bin',
+    'sweep away paper scraps from the table': 'sweep away the paper scraps from the table',
+    'turn mug right side up': 'turn the mug right side up',
+    'load plates into tabletop dish rack': 'load the plates into the dish rack',
+}
+
+
+class Prompts(StrEnum):
+    """The prompt sets that a session can name: the wording of ABC's sim data or of its real data."""
+
+    SIM = 'sim'
+    REAL = 'real'
+
+
+PROMPTS = {Prompts.SIM: MULTITASK_200K_PROMPTS, Prompts.REAL: ABC_130K_PROMPTS}
 
 # The yambox ZED views (960x600, focal length 367 px) cut to 4:3 with the field of view of ABC's D405 views.
 # README.md gives the reason for each box.
@@ -180,14 +202,18 @@ class Crop(StrEnum):
 CROPS = {Crop.NONE: {}, Crop.YAMBOX: YAMBOX_CROPS, Crop.YAMBOX_WIDE_TOP: YAMBOX_WIDE_TOP_CROPS}
 
 
-@cfn.config(training_fps=FPS, prompt_prefix=SIM_PROMPT_PREFIX, crops=None, action_prefix=None)
+@cfn.config(
+    training_fps=FPS, prompts=MULTITASK_200K_PROMPTS, prompt_prefix=SIM_PROMPT_PREFIX, crops=None, action_prefix=None
+)
 def multitask_200k(
-    training_fps: float, prompt_prefix: str, crops: dict[str, CropBox] | None, action_prefix: ActionPrefix | None
+    training_fps: float,
+    prompts: dict[str, str],
+    prompt_prefix: str,
+    crops: dict[str, CropBox] | None,
+    action_prefix: ActionPrefix | None,
 ):
     """The codec of the multi-task checkpoint, with each arm's grip in the gripper width (1 = open) that ABC speaks.
-    ``prompt_prefix``, ``crops`` and ``action_prefix`` go to ``AbcObservationCodec``."""
-    obs = AbcObservationCodec(
-        prompts=MULTITASK_200K_PROMPTS, prompt_prefix=prompt_prefix, crops=crops, action_prefix=action_prefix
-    )
+    ``prompts``, ``prompt_prefix``, ``crops`` and ``action_prefix`` go to ``AbcObservationCodec``."""
+    obs = AbcObservationCodec(prompts=prompts, prompt_prefix=prompt_prefix, crops=crops, action_prefix=action_prefix)
     pair = codecs.compose(obs=obs, action=BimanualJointsAction(num_joints=YAM_JOINTS), training_fps=training_fps)
     return FlipGrip(arms=keys.BIMANUAL_ARMS) | pair

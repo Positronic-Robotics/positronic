@@ -31,7 +31,13 @@ LEADERBOARDS_MODELS = f'{API_PREFIX}/leaderboards.models'
 CATALOG_EVALS = f'{API_PREFIX}/catalog.evals'
 CATALOG_TASKS = f'{API_PREFIX}/catalog.tasks'
 
+# The terms of a program, the caller's entry in it, and the acceptance of the platform terms. `terms.get` needs no key.
+TERMS_GET = f'{API_PREFIX}/terms.get'
+PROGRAMS_ENTRY = f'{API_PREFIX}/programs.entry'
+PLATFORM_ACCEPT_TERMS = f'{API_PREFIX}/platform.accept_terms'
+
 BILLING_ACCOUNT = f'{API_PREFIX}/billing.account'
 BILLING_PURCHASES_CREATE = f'{API_PREFIX}/billing.purchases.create'
 BILLING_PURCHASES_GET = f'{API_PREFIX}/billing.purchases.get'
 BILLING_PURCHASES_LIST = f'{API_PREFIX}/billing.purchases.list'
+BILLING_COUPONS_REDEEM = f'{API_PREFIX}/billing.coupons.redeem'

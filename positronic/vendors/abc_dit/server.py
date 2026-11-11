@@ -2,7 +2,7 @@
 
 The policy runs in ABC's own interpreter, as ABC's policy server started by `backend.py`, on this machine. Each
 command serves `abc_dit_xl_200k_model.pt`, ABC's multi-task sim policy, and sets the defaults of `pipeline`. A session
-changes them in the query of its URL, for example `?crop=yambox_wide_top&schedule=rtc&sim_prefix=false`.
+changes them in the query of its URL, for example `?crop=yambox_wide_top&schedule=rtc&prompts=real`.
 
 Usage
   python -m positronic.vendors.abc_dit.server multitask_200k --model.abc_python=<ABC's python> \
@@ -214,11 +214,14 @@ PREFIX_LENGTH = SCHEDULES[ScheduleName.RTC].prefix
 CROPPED_UPLOAD_SIZE = (2 * codecs.VIEW_SIZE[0], 2 * codecs.VIEW_SIZE[1])
 
 
-@cfn.config(crop=codecs.Crop.NONE.value, schedule=ScheduleName.SYNC.value, sim_prefix=True)
-def pipeline(crop: str, schedule: str, sim_prefix: bool) -> PolicyDeployment:
+@cfn.config(
+    crop=codecs.Crop.NONE.value, schedule=ScheduleName.SYNC.value, prompts=codecs.Prompts.SIM.value, sim_prefix=True
+)
+def pipeline(crop: str, schedule: str, prompts: str, sim_prefix: bool) -> PolicyDeployment:
     """The views cropped by the set `crop` of `codecs.CROPS`, played by the client as `schedule` of `SCHEDULES`, with
-    the sim prompt prefix when `sim_prefix`. A session sets each one in its URL query. The client shrinks each view
-    to fit ABC's view size, or twice that size for a cropped view, and the codec runs on this server."""
+    the prompt set `prompts` of `codecs.PROMPTS`. The sim prompts carry the sim prompt prefix when `sim_prefix`; the
+    real prompts never carry it. A session sets each one in its URL query. The client shrinks each view to fit ABC's
+    view size, or twice that size for a cropped view, and the codec runs on this server."""
     # The session query gives strings; each becomes its enum here.
     try:
         crop_set = codecs.Crop(crop)
@@ -230,12 +233,19 @@ def pipeline(crop: str, schedule: str, sim_prefix: bool) -> PolicyDeployment:
         raise ValueError(
             f'Unknown schedule {schedule!r}; the schedules are {sorted(name.value for name in ScheduleName)}'
         ) from None
+    try:
+        prompt_set = codecs.Prompts(prompts)
+    except ValueError:
+        raise ValueError(
+            f'Unknown prompts {prompts!r}; the prompt sets are {sorted(name.value for name in codecs.Prompts)}'
+        ) from None
     if not isinstance(sim_prefix, bool):
         raise ValueError(f'sim_prefix must be true or false, got {sim_prefix!r}')
     plan = SCHEDULES[schedule_name]
     codec = codecs.multitask_200k.override(
         crops=codecs.CROPS[crop_set],
-        prompt_prefix=codecs.SIM_PROMPT_PREFIX if sim_prefix else '',
+        prompts=codecs.PROMPTS[prompt_set],
+        prompt_prefix=codecs.SIM_PROMPT_PREFIX if sim_prefix and prompt_set is codecs.Prompts.SIM else '',
         action_prefix=plan.action_prefix(),
     ).instantiate()
     upload_size = CROPPED_UPLOAD_SIZE if codecs.CROPS[crop_set] else codecs.VIEW_SIZE
@@ -245,6 +255,9 @@ def pipeline(crop: str, schedule: str, sim_prefix: bool) -> PolicyDeployment:
 
 
 yambox_crop_pipeline = pipeline.override(crop=codecs.Crop.YAMBOX.value)
+yambox_wide_top_rtc_pipeline = pipeline.override(
+    crop=codecs.Crop.YAMBOX_WIDE_TOP.value, schedule=ScheduleName.RTC.value
+)
 model_with_prefix = abc_dit_model.override(prefix_length=PREFIX_LENGTH)
 
 COMMANDS = {
@@ -252,6 +265,9 @@ COMMANDS = {
     'multitask_200k_yambox_crop': serve.override(model=model_with_prefix, pipeline=yambox_crop_pipeline),
     'multitask_200k_yambox_crop_no_sim_prefix': serve.override(
         model=model_with_prefix, pipeline=yambox_crop_pipeline.override(sim_prefix=False)
+    ),
+    'multitask_200k_yambox_wide_top_rtc': serve.override(
+        model=model_with_prefix, pipeline=yambox_wide_top_rtc_pipeline
     ),
 }
 

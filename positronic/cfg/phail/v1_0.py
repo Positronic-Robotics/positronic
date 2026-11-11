@@ -22,6 +22,7 @@ from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.server.dataset_utils import DURATION_COLUMN, INDEX_COLUMN
 from positronic.server.positronic_server import ColumnConfig as C
 from positronic.server.positronic_server import GroupTableConfig
 from positronic.server.positronic_server import main as server_main
@@ -53,8 +54,8 @@ teleop_unified = transform.override(
 @cfn.config()
 def episodes_table():
     return {
-        '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.0f sec'),
+        INDEX_COLUMN: C(label='#', format='%d'),
+        DURATION_COLUMN: C(label='Duration', format='%.0f sec'),
         'task': C(label='Task', filter=True),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
     }
