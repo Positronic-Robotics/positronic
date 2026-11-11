@@ -951,7 +951,7 @@ def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_
 
 
 def test_the_progress_chart_plots_the_stage_and_count_of_the_operator_the_labeler_and_each_ai_labeler(tmp_path):
-    sources = (PROGRESS_CHANNEL, 'data_annotation', f'{AUTOLABEL_CHANNEL}.routed-r4', f'{AUTOLABEL_CHANNEL}.opus')
+    sources = (PROGRESS_CHANNEL, 'data_annotation', f'{AUTOLABEL_CHANNEL}.model-v2', f'{AUTOLABEL_CHANNEL}.agent-v1')
     marks = {source: [f'{source}.{kind}' for kind in ('state', 'delivered', 'fail')] for source in sources}
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
