@@ -157,14 +157,19 @@ def silent_websocket_port() -> Generator[int, None, None]:
 _WEBSOCKET_ACCEPT_GUID = b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
 
-def _accept_and_go_quiet(listener: socket.socket, held: list[socket.socket]) -> None:
+# How often the quiet peer's accept loop wakes to check whether the test has ended.
+_ACCEPT_POLL_S = 0.1
+
+
+def _accept_and_go_quiet(listener: socket.socket, held: list[socket.socket], stop: threading.Event) -> None:
     """Answer each upgrade with 101, then read nothing and send nothing, as a peer cut off after the upgrade."""
-    while True:
+    while not stop.is_set():
         try:
             peer, _ = listener.accept()
-        except OSError:
-            return
+        except TimeoutError:
+            continue
         held.append(peer)
+        peer.settimeout(None)
         request = b''
         while b'\r\n\r\n' not in request and (chunk := peer.recv(4096)):
             request += chunk
@@ -186,11 +191,15 @@ def _accept_and_go_quiet(listener: socket.socket, held: list[socket.socket]) -> 
 def unanswering_websocket_port() -> Generator[int, None, None]:
     """A port that completes each websocket upgrade and then answers nothing, not even a close."""
     held: list[socket.socket] = []
+    stop = threading.Event()
     with socket.create_server(('localhost', 0)) as listener:
-        thread = threading.Thread(target=_accept_and_go_quiet, args=(listener, held), daemon=True)
+        # macOS refuses a shutdown of a listening socket, so the loop wakes on a timeout to read `stop`.
+        listener.settimeout(_ACCEPT_POLL_S)
+        thread = threading.Thread(target=_accept_and_go_quiet, args=(listener, held, stop), daemon=True)
         thread.start()
         yield listener.getsockname()[1]
-        listener.shutdown(socket.SHUT_RDWR)
-    thread.join(timeout=10.0)
+        stop.set()
+        thread.join(timeout=10.0)
+    assert not thread.is_alive(), 'the quiet peer did not stop when asked'
     for peer in held:
         peer.close()
