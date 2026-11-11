@@ -65,16 +65,6 @@ FEATURES = {
 }
 
 
-def _views(episode: Episode) -> dict[str, str]:
-    return {view: next(name for name in sources if name in episode.signals) for view, sources in _VIEWS.items()}
-
-
-def _prompt(episode: Episode) -> str:
-    if INSTRUCTION in episode.signals:
-        return droid.prompt(list(episode.signals[INSTRUCTION].values()))
-    return episode.static[keys.TASK]
-
-
 @dataclass(frozen=True)
 class KeptFrames:
     """The rows, the resized views and the prompt of the frames that the trim keeps."""
@@ -104,6 +94,16 @@ class TrimRow:
 
 
 _STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
+
+
+def _views(episode: Episode) -> dict[str, str]:
+    return {view: next(name for name in sources if name in episode.signals) for view, sources in _VIEWS.items()}
+
+
+def _prompt(episode: Episode) -> str:
+    if INSTRUCTION in episode.signals:
+        return droid.prompt(list(episode.signals[INSTRUCTION].values()))
+    return episode.static[keys.TASK]
 
 
 class DroidEpisodes(torch.utils.data.Dataset):

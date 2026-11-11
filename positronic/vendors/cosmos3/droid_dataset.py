@@ -28,8 +28,6 @@ EPISODE_ID = 'episode_id'
 
 # The keep ranges of each episode, in the JSON that `flux-action index-droid --filter` reads.
 KEEP_RANGES_FILE = 'keep_ranges.json'
-# `flux_action.data.droid.cosmos.filter_key` and the Cosmos3 DROID loader both build this key from an episode id.
-_KEEP_RANGES_ROOT = 'gs://xembodiment_data/r2d2/r2d2-data-full/'
 # The DROID loaders split a stored prompt into its alternatives at this separator.
 PROMPT_SEPARATOR = ' | '
 
@@ -42,6 +40,10 @@ def start_cut_frame(heights: np.ndarray) -> int | None:
     """The first frame at least `MIN_START_DROP_M` below the height of frame 0, or None if the arm never gets there."""
     below = np.flatnonzero(heights <= heights[0] - MIN_START_DROP_M)
     return int(below[0]) if len(below) else None
+
+
+# `flux_action.data.droid.cosmos.filter_key` and the Cosmos3 DROID loader both build this key from an episode id.
+_KEEP_RANGES_ROOT = 'gs://xembodiment_data/r2d2/r2d2-data-full/'
 
 
 def keep_ranges_key(episode_id: str) -> str:
