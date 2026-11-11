@@ -28,7 +28,7 @@ from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_SECRETS, EvalPlan
 from platform_client.identity_providers import longest_register_timeout
-from platform_client.ids import ApiKey, LeaderboardVersionId, OrgSlug, PurchaseId, SubmissionId
+from platform_client.ids import ApiKey, CouponCode, LeaderboardVersionId, OrgSlug, PurchaseId, SubmissionId
 from platform_client.leaderboards import (
     LeaderboardChartsResponse,
     LeaderboardEpisodesResponse,
@@ -263,7 +263,7 @@ class PlatformClient:
         query = BillingPurchaseListQuery(org=org, after=after, limit=limit)
         return self._get(routes.BILLING_PURCHASES_LIST, PurchaseListResponse, query=query)
 
-    def redeem_coupon(self, code: str) -> CouponRedemption:
+    def redeem_coupon(self, code: CouponCode) -> CouponRedemption:
         """Add the credits of a coupon to the caller's personal organization. The platform refuses a code that is
         unknown, used, expired or revoked."""
         return self._post(routes.BILLING_COUPONS_REDEEM, CouponRedeemRequest(code=code), CouponRedemption)

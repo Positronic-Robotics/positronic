@@ -11,7 +11,15 @@ import unicodedata
 from typing import Annotated
 
 from platform_client.boards import BoardRef
-from platform_client.ids import LeaderboardVersionId, OrgSlug, PackageId, PurchaseId, SubmissionId, TransactionKey
+from platform_client.ids import (
+    CouponCode,
+    LeaderboardVersionId,
+    OrgSlug,
+    PackageId,
+    PurchaseId,
+    SubmissionId,
+    TransactionKey,
+)
 from platform_client.leaderboards import LeaderboardRef, LeaderboardTag, LeaderboardTaskId
 from platform_client.model_config import INPUT_MODEL_CONFIG
 from pydantic import AfterValidator, BaseModel, Field
@@ -158,7 +166,7 @@ class CouponRedeemRequest(BaseModel):
 
     model_config = INPUT_MODEL_CONFIG
 
-    code: str = Field(min_length=1, max_length=128)
+    code: CouponCode = Field(min_length=1, max_length=128)
 
 
 class BillingPurchaseCreateRequest(BaseModel):

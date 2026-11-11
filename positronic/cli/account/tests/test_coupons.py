@@ -4,7 +4,7 @@ import pytest
 from platform_client import routes
 from platform_client.billing import CREDIT_SCALE, CouponRedemption
 from platform_client.enums import ErrorCode
-from platform_client.ids import OrgSlug
+from platform_client.ids import CouponCode, OrgSlug
 from platform_client.requests import CouponRedeemRequest
 
 from positronic.cli.account.coupons import credits_text, redeem
@@ -21,7 +21,7 @@ def test_redeem_sends_the_code_with_the_key_and_prints_the_credits_and_the_org(p
     run_command(redeem, code='PCR-7K2M-9QXA')
 
     body = CouponRedeemRequest.model_validate(platform.body_to(routes.BILLING_COUPONS_REDEEM))
-    assert body == CouponRedeemRequest(code='PCR-7K2M-9QXA')
+    assert body == CouponRedeemRequest(code=CouponCode('PCR-7K2M-9QXA'))
     assert platform.request_to(routes.BILLING_COUPONS_REDEEM).headers['authorization'] == f'Bearer {KEY}'
     assert capsys.readouterr().out.strip() == (
         f'Added 30.00 credits ({30 * CREDIT_SCALE} units) to the organization user-a0.'
