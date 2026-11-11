@@ -93,9 +93,6 @@ class TrimRow:
     cut_s: float | None
 
 
-_STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
-
-
 def _views(episode: Episode) -> dict[str, str]:
     return {view: next(name for name in sources if name in episode.signals) for view, sources in _VIEWS.items()}
 
@@ -109,6 +106,8 @@ def _prompt(episode: Episode) -> str:
 class DroidEpisodes(torch.utils.data.Dataset):
     """Each episode, sampled at 15 Hz and trimmed at its start."""
 
+    _STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
+
     def __init__(self, dataset: Dataset):
         self.dataset = dataset
 
@@ -118,11 +117,13 @@ class DroidEpisodes(torch.utils.data.Dataset):
     def __getitem__(self, idx: int) -> TrimmedEpisode:
         episode = self.dataset[idx]
         views = _views(episode)
-        used = EpisodeContainer({name: episode.signals[name] for name in {*_STATE_SIGNALS, *views.values()}})
+        used = EpisodeContainer({name: episode.signals[name] for name in {*self._STATE_SIGNALS, *views.values()}})
         timeline = recording_timeline(used.timelines)
         start, finish = used.bounds(timeline)
         grid = [Time(**{timeline: t}) for t in np.arange(start, finish, 1e9 / droid.FPS, dtype=np.int64)]
-        state = {name: np.asarray(used.signals[name].time[grid].values(), dtype=np.float64) for name in _STATE_SIGNALS}
+        state = {
+            name: np.asarray(used.signals[name].time[grid].values(), dtype=np.float64) for name in self._STATE_SIGNALS
+        }
         ee_pose = state[keys.EE_POSE]
         cut = droid.start_cut_frame(ee_pose[:, 2])
         if cut is None or len(grid) - cut < 2:
