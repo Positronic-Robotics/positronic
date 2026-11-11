@@ -304,6 +304,16 @@ def test_a_session_query_sets_the_crop_the_schedule_and_the_prompt_prefix_and_th
     assert second[abc_dit.ACTION_PREFIX]['sum'] == pytest.approx(float(abc_stand_in.CHUNK[16:20].sum()), rel=1e-5)
 
 
+def test_a_session_query_for_the_real_prompts_sends_the_wording_of_abcs_real_data_without_the_sim_prefix(tmp_path):
+    policy_server = PolicyServer(_prefix_model(tmp_path), server.yambox_crop_pipeline, auth_token=TOKEN)
+
+    meta, _ = _session(policy_server, _yambox_obs(), 'prompts=real')
+
+    assert _log(tmp_path)[-1]['request'][abc_dit.PROMPT] == 'load the plates into the dish rack'
+    assert meta[codecs.PROMPT_PREFIX_META] == ''
+    assert meta[codecs.PROMPTS_META]['load plates into tabletop dish rack'] == 'load the plates into the dish rack'
+
+
 def test_a_session_with_no_query_gets_the_launch_pipeline(tmp_path):
     policy_server = PolicyServer(_prefix_model(tmp_path), server.yambox_crop_pipeline, auth_token=TOKEN)
 
@@ -311,6 +321,9 @@ def test_a_session_with_no_query_gets_the_launch_pipeline(tmp_path):
 
     assert meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == pytest.approx([4 / 15, 0.32, 5 / 6, 1.0])
     assert meta[codecs.PROMPT_PREFIX_META] == codecs.SIM_PROMPT_PREFIX
+    assert meta[codecs.PROMPTS_META]['load plates into tabletop dish rack'] == (
+        'sim load plates into tabletop dish rack'
+    )
     assert meta[codecs.PREFIX_LENGTH_META] == 0
     schedule = meta['local_stack']['seq'][1]['args']
     assert schedule['fps'] == 30.0
@@ -334,7 +347,7 @@ def test_the_yambox_wide_top_rtc_pipeline_with_no_query_sends_the_whole_top_view
     assert len(reply) == 16
 
 
-@pytest.mark.parametrize('query', ['crop=wider', 'schedule=async', 'sim_prefix=maybe', 'fps=10'])
+@pytest.mark.parametrize('query', ['crop=wider', 'schedule=async', 'sim_prefix=maybe', 'prompts=teleop', 'fps=10'])
 def test_a_session_query_with_an_unknown_value_or_name_is_refused(tmp_path, query):
     policy_server = PolicyServer(_prefix_model(tmp_path), server.yambox_crop_pipeline, auth_token=TOKEN)
 
