@@ -67,7 +67,7 @@ class RoboarenaClient:
         except BaseException:
             # Nothing else holds this connection: `_connection` is assigned below, so an unclosed one
             # here leaks its socket until the process ends.
-            connection.close()
+            connection.close(timeout=time_left(deadline))
             raise
         self._server_config = announced
         self._connection = connection

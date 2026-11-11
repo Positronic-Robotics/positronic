@@ -1859,6 +1859,16 @@ def test_a_server_that_accepts_and_never_answers_ends_the_opening_by_the_connect
     assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
 
 
+def test_a_server_that_answers_no_close_ends_the_opening_by_the_connect_deadline(unanswering_websocket_port):
+    address = dataclasses.replace(_ADDRESS, port=unanswering_websocket_port)
+    client = InferenceClient(websocket.WebsocketClientWire(), address, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match=f'ws://localhost:{unanswering_websocket_port}'):
+        client.new_session()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+
+
 def test_a_wire_no_registry_member_carries_is_refused():
     with pytest.raises(ValueError, match="No wire is called 'ws'"):
         RemotePolicy('ws', _address('localhost', 8000))

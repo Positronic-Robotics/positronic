@@ -414,7 +414,7 @@ class InferenceClient:
         try:
             return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen)
         except BaseException:
-            conn.close()
+            conn.close(timeout=time_left(ready_by))
             raise
 
     def new_session(self) -> InferenceSession:

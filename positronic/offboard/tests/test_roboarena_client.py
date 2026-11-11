@@ -88,6 +88,15 @@ def test_a_server_that_never_announces_its_config_ends_the_connect_by_its_deadli
     assert client._connection is None
 
 
+def test_a_server_that_answers_no_close_ends_the_connect_by_its_deadline(unanswering_websocket_port):
+    client = roboarena.RoboarenaClient('localhost', unanswering_websocket_port, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client.connect()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+
+
 def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_timeout_each():
     connection = MagicMock(**{'recv.return_value': _ANNOUNCEMENT})
     client = roboarena.RoboarenaClient('a-partner-host', 8000)

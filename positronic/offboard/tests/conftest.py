@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import os
 import socket
 import tempfile
@@ -149,3 +151,46 @@ def silent_websocket_port() -> Generator[int, None, None]:
         stop.set()
         server.shutdown()
     thread.join(timeout=10.0)
+
+
+# The GUID a server appends to the client's key to compute Sec-WebSocket-Accept (RFC 6455, section 1.3).
+_WEBSOCKET_ACCEPT_GUID = b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+
+def _accept_and_go_quiet(listener: socket.socket, held: list[socket.socket]) -> None:
+    """Answer each upgrade with 101, then read nothing and send nothing, as a peer cut off after the upgrade."""
+    while True:
+        try:
+            peer, _ = listener.accept()
+        except OSError:
+            return
+        held.append(peer)
+        request = b''
+        while b'\r\n\r\n' not in request and (chunk := peer.recv(4096)):
+            request += chunk
+        if b'\r\n\r\n' not in request:
+            continue
+        key = next(
+            line.split(b':', 1)[1].strip()
+            for line in request.split(b'\r\n')
+            if line.lower().startswith(b'sec-websocket-key:')
+        )
+        accept = base64.b64encode(hashlib.sha1(key + _WEBSOCKET_ACCEPT_GUID).digest())
+        peer.sendall(
+            b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+            b'Sec-WebSocket-Accept: ' + accept + b'\r\n\r\n'
+        )
+
+
+@pytest.fixture
+def unanswering_websocket_port() -> Generator[int, None, None]:
+    """A port that completes each websocket upgrade and then answers nothing, not even a close."""
+    held: list[socket.socket] = []
+    with socket.create_server(('localhost', 0)) as listener:
+        thread = threading.Thread(target=_accept_and_go_quiet, args=(listener, held), daemon=True)
+        thread.start()
+        yield listener.getsockname()[1]
+        listener.shutdown(socket.SHUT_RDWR)
+    thread.join(timeout=10.0)
+    for peer in held:
+        peer.close()
