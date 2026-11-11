@@ -787,16 +787,25 @@ def test_a_streamed_cartesian_target_keeps_the_elbow_on_its_side(rctl, driven):
     np.testing.assert_allclose(rctl.q[0], 0.2, atol=0.01)
 
 
-def test_a_streamed_cartesian_target_folds_the_elbow_no_further_than_its_limit(rctl, driven):
-    """The fake IK puts the third coordinate on the elbow joint. The controller stops the elbow at 167 degrees."""
-    rctl.q = np.array([0.0, 0.0, 2.6, 0.0, 0.0, 0.0])
+@pytest.mark.parametrize(
+    ('joint', 'start', 'goal', 'limit'),
+    [(2, 2.6, 3.0, 167.0), (2, -2.6, -3.0, -167.0), (1, -3.2, -3.6, -190.8)],
+    ids=['the elbow folded', 'the elbow folded the other way', 'the shoulder back'],
+)
+def test_a_streamed_cartesian_target_turns_a_joint_no_further_than_where_the_controller_stops_it(
+    rctl, driven, joint, start, goal, limit
+):
+    """The fake IK puts the first three coordinates on the first three joints."""
+    rctl.q = np.zeros(JOINTS)
+    rctl.q[joint] = start
     _, _, commands, clock, loop = driven()
-    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.2, 0.0, 3.0]))))
+    target = np.zeros(3)
+    target[joint] = goal
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=target)))
 
     _pump(loop, clock, 3000)
 
-    np.testing.assert_allclose(rctl.q[2], cron._MAX_ELBOW, atol=0.01)
-    np.testing.assert_allclose(rctl.q[0], 0.2, atol=0.01)
+    np.testing.assert_allclose(rctl.q[joint], np.radians(limit) - np.sign(limit) * cron._LIMIT_MARGIN, atol=0.01)
 
 
 def test_a_streamed_cartesian_target_stops_short_of_the_arm_itself(rctl, driven):

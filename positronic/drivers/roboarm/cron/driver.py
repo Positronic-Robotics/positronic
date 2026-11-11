@@ -39,9 +39,19 @@ _DLS_DAMPING = 0.05
 _DLS_SINGULAR = 0.08
 # Radians: the largest turn of a joint in one step of the solver
 _DLS_MAX_STEP = 0.05
-# The elbow keeps its side and a bend between these, as joint limits of the solver: through a straight elbow the arm
-# turns over, and the controller stops a folded elbow at 167 degrees, with a following error (Hand B, 2026-11-11)
-_ELBOW, _MIN_ELBOW, _MAX_ELBOW = 2, np.radians(5.0), np.radians(165.0)
+# The elbow keeps its side and this bend, as a joint limit of the solver: through a straight elbow the arm turns over
+_ELBOW, _MIN_ELBOW = 2, np.radians(5.0)
+# Degrees: where the controller stops a joint in a stream, with a following error (Hand B, 2026-11-11). The solver keeps
+# _LIMIT_MARGIN inside them. TODO: the limits of all joints, from the vendor; these are the ones measured
+_JOINT_LIMITS = np.radians([
+    [-np.inf, np.inf],
+    [-190.8, np.inf],
+    [-167.0, 167.0],
+    [-np.inf, np.inf],
+    [-np.inf, np.inf],
+    [-np.inf, np.inf],
+])
+_LIMIT_MARGIN = np.radians(2.0)
 # At the edge of the reach the steps move the tool sideways and turn it, and the tool drifts from where the operator
 # points (0.5 m and 60 degrees on Hand B). Such a step takes the tool further from the target along an axis or in its
 # turn, and brings it nearer by less than _MIN_PROGRESS of how far it moves it; it is not taken. A step that does only
@@ -174,9 +184,10 @@ class _Arm(DriverRun[command.CommandType]):
         ``max_turn`` from ``seed``, with the elbow on its side, and not nearer the arm itself than the clearance."""
         joints = np.array(seed, dtype=np.float64)
         side = 1.0 if np.sin(seed[_ELBOW]) >= 0 else -1.0
-        # An elbow already past a limit does not go further, and is not pushed back either
-        bend = side * float(np.remainder(seed[_ELBOW] + np.pi, 2 * np.pi) - np.pi)
-        least, most = min(_MIN_ELBOW, bend), max(_MAX_ELBOW, bend)
+        # A joint already past a limit does not go further, and is not pushed back either
+        least = min(_MIN_ELBOW, side * float(np.remainder(seed[_ELBOW] + np.pi, 2 * np.pi) - np.pi))
+        low = np.minimum(_JOINT_LIMITS[:, 0] + _LIMIT_MARGIN, seed)
+        high = np.maximum(_JOINT_LIMITS[:, 1] - _LIMIT_MARGIN, seed)
         for _ in range(_DLS_ITERATIONS):
             now = self.controller.forward(joints)
             error = np.concatenate([pose.translation - now.translation, (pose.rotation * now.rotation.inv).as_rotvec])
@@ -186,7 +197,9 @@ class _Arm(DriverRun[command.CommandType]):
             step = jacobian.T @ np.linalg.solve(jacobian @ jacobian.T + damping * np.eye(6), error)
             joints += step * min(1.0, _DLS_MAX_STEP / max(float(np.max(np.abs(step))), 1e-12))
             elbow = float(np.remainder(joints[_ELBOW] + np.pi, 2 * np.pi) - np.pi)
-            joints[_ELBOW] += side * float(np.clip(side * elbow, least, most)) - elbow
+            if side * elbow < least:
+                joints[_ELBOW] += side * least - elbow
+            joints = np.clip(joints, low, high)
         turn = joints - seed
         joints = seed + turn * min(1.0, float(np.min(max_turn / np.maximum(np.abs(turn), 1e-12))))
         if self._drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
