@@ -31,15 +31,21 @@ KEEP_RANGES_FILE = 'keep_ranges.json'
 # The DROID loaders split a stored prompt into its alternatives at this separator.
 PROMPT_SEPARATOR = ' | '
 
-# A teleoperator often waits or adjusts the arm before the first reach. A kept episode starts at the first frame
-# where the end effector is at least this far below its height in the first frame.
+# A teleoperator often waits or adjusts the arm before the first reach. A kept episode starts where the arm leaves
+# the start height on the first descent that gets this far below it.
 MIN_START_DROP_M = 0.15
+# The arm is at the start height while it stays within this distance of its height in the first frame.
+START_HEIGHT_BAND_M = 0.01
 
 
 def start_cut_frame(heights: np.ndarray) -> int | None:
-    """The first frame at least `MIN_START_DROP_M` below the height of frame 0, or None if the arm never gets there."""
+    """The start of the first descent that reaches `MIN_START_DROP_M` below the height of frame 0: the last frame
+    before it within `START_HEIGHT_BAND_M` of that height. None if the arm never gets that low."""
     below = np.flatnonzero(heights <= heights[0] - MIN_START_DROP_M)
-    return int(below[0]) if len(below) else None
+    if not len(below):
+        return None
+    at_start = np.flatnonzero(np.abs(heights[: below[0]] - heights[0]) <= START_HEIGHT_BAND_M)
+    return int(at_start[-1])
 
 
 # `flux_action.data.droid.cosmos.filter_key` and the Cosmos3 DROID loader both build this key from an episode id.

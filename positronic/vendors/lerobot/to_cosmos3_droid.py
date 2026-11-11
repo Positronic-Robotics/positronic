@@ -2,10 +2,10 @@
 Write positronic recordings as Cosmos3-DROID training sets, which the Cosmos3 and FLUX 3 Action DROID recipes read.
 
 Each tree `<output_dir>/train/` and `<output_dir>/heldout/` holds `droid_plus_lerobot_640x360_20260412/success/`
-(LeRobot v3.0, 15 Hz, three views at 640x360) and `keep_ranges.json`. A kept episode starts at its first frame
-15 cm below the first frame's end-effector height. `<output_dir>/start_trim.csv` gives the cut of each episode and
-names the episodes that never get that low, which are left out. The Cosmos3 DROID loader opens `success/` and
-`failure/` unless its dataset sets `use_success_only=True`.
+(LeRobot v3.0, 15 Hz, three views at 640x360) and `keep_ranges.json`. A kept episode starts where its first
+descent to 15 cm below the first frame's end-effector height leaves that height. `<output_dir>/start_trim.csv` gives
+the cut of each episode and names the episodes that never get that low, which are left out. The Cosmos3 DROID
+loader opens `success/` and `failure/` unless its dataset sets `use_success_only=True`.
 
 Usage
   uv run --extra lerobot python -m positronic.vendors.lerobot.to_cosmos3_droid split \\

@@ -51,13 +51,13 @@ def converted(tmp_path):
     return output / 'train' / droid.DATASET_DIR
 
 
-def test_a_kept_episode_starts_at_the_first_frame_15_cm_down(converted):
+def test_a_kept_episode_starts_where_the_descent_to_15_cm_starts(converted):
     data = pq.read_table(next((converted / droid.SUCCESS_DIR / 'data').rglob('*.parquet')))
     joints = np.asarray(data[droid.JOINT_POSITIONS].to_pylist())
-    np.testing.assert_array_equal(joints[:, 0], [4, 5])
-    np.testing.assert_array_equal(np.asarray(data[droid.ACTION_JOINT_POSITION].to_pylist())[:, 0], [5, 6])
+    np.testing.assert_array_equal(joints[:, 0], [2, 3, 4, 5])
+    np.testing.assert_array_equal(np.asarray(data[droid.ACTION_JOINT_POSITION].to_pylist())[:, 0], [3, 4, 5, 6])
     timestamps = data['timestamp'].to_numpy()
-    assert np.array_equal(timestamps.view(np.uint32), droid.frame_timestamps(2).view(np.uint32))
+    assert np.array_equal(timestamps.view(np.uint32), droid.frame_timestamps(4).view(np.uint32))
 
 
 def _trim_rows(converted) -> list[TrimRow]:
@@ -66,7 +66,7 @@ def _trim_rows(converted) -> list[TrimRow]:
 
 def test_an_episode_that_never_gets_15_cm_down_is_left_out_and_listed(converted):
     rows = _trim_rows(converted)
-    assert [(row.tree, row.cut_frame) for row in rows] == [('train', '4'), ('', '')]
+    assert [(row.tree, row.cut_frame) for row in rows] == [('train', '2'), ('', '')]
     episodes = pq.read_table(next((converted / droid.SUCCESS_DIR / 'meta' / 'episodes').rglob('*.parquet')))
     assert episodes[droid.EPISODE_ID].to_pylist() == [rows[0].uid]
 
@@ -74,7 +74,7 @@ def test_an_episode_that_never_gets_15_cm_down_is_left_out_and_listed(converted)
 def test_the_keep_ranges_cover_each_kept_episode_by_its_id(converted):
     ranges = json.loads((converted / droid.KEEP_RANGES_FILE).read_text())
     uid = _trim_rows(converted)[0].uid
-    assert ranges == {droid.keep_ranges_key(uid): [[0, 2]]}
+    assert ranges == {droid.keep_ranges_key(uid): [[0, 4]]}
 
 
 def test_one_exterior_camera_fills_both_exterior_views(converted):

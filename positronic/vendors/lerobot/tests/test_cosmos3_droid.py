@@ -35,9 +35,16 @@ def test_an_episode_whose_arm_drops_14_9_cm_is_left_out():
     assert droid.start_cut_frame(heights) is None
 
 
-def test_an_episode_whose_arm_drops_15_cm_is_cut_at_that_frame():
-    heights = 0.6 - np.array([0.0, 0.0, 0.05, 0.149, 0.15, 0.3])
-    assert droid.start_cut_frame(heights) == 4
+# The arm waits at the start height (frames 0-3, within 1 cm), descends from frame 4 and is 15 cm down at frame 6.
+_WAIT_THEN_DESCENT = 0.6 - np.array([0.0, 0.004, -0.003, 0.009, 0.03, 0.09, 0.15, 0.25])
+
+
+def test_the_cut_keeps_the_descent_that_reaches_15_cm():
+    assert droid.start_cut_frame(_WAIT_THEN_DESCENT) <= 3
+
+
+def test_the_cut_drops_the_wait_before_the_descent():
+    assert droid.start_cut_frame(_WAIT_THEN_DESCENT) >= 3
 
 
 def test_the_gripper_pointing_down_has_droid_euler_angles():
