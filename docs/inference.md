@@ -79,7 +79,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
-**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default) and `--policy.connect_deadline` the retries until the server answers (900 s). No retry waits past the deadline. Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` as long as the cold start, up to the `connect_deadline`: one dial then waits through it.
+**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default), and `--policy.connect_deadline` bounds the whole session opening with its retries (900 s). No connect, status wait or retry lasts past the deadline. Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` and a `connect_deadline` as long as the cold start: one dial then waits through it.
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
