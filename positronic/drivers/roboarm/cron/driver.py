@@ -136,6 +136,9 @@ class _Arm(DriverRun[command.CommandType]):
         self._deferred_call: pimm.calls.Call[command.CommandType, None] | None = None
         self._deferred_until = 0.0
         self._resumed_at: float | None = None
+        # The joints when the move was asked for, and the largest turn of a joint since: recovery can move the arm
+        self._deferred_from = np.zeros(JOINTS)
+        self._deferred_moved = 0.0
         # The driver asked for RUN to clear a FAILURE, and when the arm reads RUN after that: the arm moves its joints
         # once about 0.5 s after RUN, and a planned move that starts meanwhile stops on a following error
         self._powering = False
@@ -154,9 +157,11 @@ class _Arm(DriverRun[command.CommandType]):
         if not self.moves.active:
             return
         if self._deferred is not None:
+            moved = float(np.max(np.abs(self.reading.q - self._deferred_from)))
+            self._deferred_moved = max(self._deferred_moved, moved)
             if self.clock.now() >= self._deferred_until:
                 self._deferred, self._deferred_call, self._powering = None, None, False
-                self.moves.fail(MoveRefused(self.controller.errors, 0.0))
+                self.moves.fail(MoveRefused(self.controller.errors, self._deferred_moved))
             return
         if self.moves.settle(self.reading.q, self.clock.now()) is MoveStatus.GAVE_UP:
             self.controller.stop_move()
@@ -179,15 +184,21 @@ class _Arm(DriverRun[command.CommandType]):
         gain = cls._pose_error(target, before) - cls._pose_error(target, after)
         return bool(away and gain < _MIN_PROGRESS * cls._pose_error(after, before))
 
+    @staticmethod
+    def _within_limits(joints: np.ndarray, start: np.ndarray) -> np.ndarray:
+        """``joints`` with each joint ``_LIMIT_MARGIN`` inside its limit. A joint that ``start`` has past a limit
+        already does not go further, and is not pushed back either."""
+        low = np.minimum(_JOINT_LIMITS[:, 0] + _LIMIT_MARGIN, start)
+        high = np.maximum(_JOINT_LIMITS[:, 1] - _LIMIT_MARGIN, start)
+        return np.clip(joints, low, high)
+
     def _follow(self, pose: geom.Transform3D, seed: np.ndarray, max_turn: np.ndarray) -> np.ndarray:
         """The joints a few damped least squares steps from ``seed`` toward the tool at ``pose``, each joint at most
         ``max_turn`` from ``seed``, with the elbow on its side, and not nearer the arm itself than the clearance."""
         joints = np.array(seed, dtype=np.float64)
         side = 1.0 if np.sin(seed[_ELBOW]) >= 0 else -1.0
-        # A joint already past a limit does not go further, and is not pushed back either
+        # An elbow already straighter than the limit does not get straighter, and is not pushed out either
         least = min(_MIN_ELBOW, side * float(np.remainder(seed[_ELBOW] + np.pi, 2 * np.pi) - np.pi))
-        low = np.minimum(_JOINT_LIMITS[:, 0] + _LIMIT_MARGIN, seed)
-        high = np.maximum(_JOINT_LIMITS[:, 1] - _LIMIT_MARGIN, seed)
         for _ in range(_DLS_ITERATIONS):
             now = self.controller.forward(joints)
             error = np.concatenate([pose.translation - now.translation, (pose.rotation * now.rotation.inv).as_rotvec])
@@ -199,7 +210,7 @@ class _Arm(DriverRun[command.CommandType]):
             elbow = float(np.remainder(joints[_ELBOW] + np.pi, 2 * np.pi) - np.pi)
             if side * elbow < least:
                 joints[_ELBOW] += side * least - elbow
-            joints = np.clip(joints, low, high)
+            joints = self._within_limits(joints, seed)
         turn = joints - seed
         joints = seed + turn * min(1.0, float(np.min(max_turn / np.maximum(np.abs(turn), 1e-12))))
         if self._drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
@@ -248,7 +259,10 @@ class _Arm(DriverRun[command.CommandType]):
         goal of the damped steps of each tick: the joints move toward it no faster than the arm can follow."""
         seed = self.reading.q if self.target is None else self.target
         pose = self._pose_of(cmd)
-        joints = np.array(seed, dtype=np.float64) if pose is not None else self._to_joints(cmd)
+        if pose is not None:
+            joints = np.array(seed, dtype=np.float64)
+        else:
+            joints = self._within_limits(self._to_joints(cmd), self.reading.q)
         if self.target is None:
             self.controller.to_hold()
             self._stream.clear()
@@ -264,6 +278,7 @@ class _Arm(DriverRun[command.CommandType]):
             self.target, self._pose = None, None
             self._deferred, self._deferred_call = target, call
             self._deferred_until = self.clock.now() + _RECOVER_S
+            self._deferred_from, self._deferred_moved = self.reading.q.copy(), 0.0
             self._resumed_at, self._powering, self._run_at = None, False, None
             # `_start_deferred` gives the move its time for the travel, from when the controller starts it
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _RECOVER_S)

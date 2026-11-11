@@ -544,8 +544,9 @@ def test_a_move_asked_for_while_the_error_stays_is_not_planned_and_is_refused(wo
     rctl.safety_latched, rctl.error = False, False
     _pump(loop, clock, 20)
 
-    with pytest.raises(MoveRefused, match='motion errors'):
+    with pytest.raises(MoveRefused, match='motion errors') as refused:
         answer.result()
+    assert refused.value.moved_rad == 0.0
     assert 'waypoint' not in rctl.calls, 'a move refused started once the error cleared'
 
 
@@ -808,6 +809,20 @@ def test_a_streamed_cartesian_target_turns_a_joint_no_further_than_where_the_con
     np.testing.assert_allclose(rctl.q[joint], np.radians(limit) - np.sign(limit) * cron._LIMIT_MARGIN, atol=0.01)
 
 
+@pytest.mark.parametrize(('joint', 'goal', 'limit'), [(2, 3.0, 167.0), (1, -3.6, -190.8)], ids=['elbow', 'shoulder'])
+def test_a_streamed_joint_target_turns_a_joint_no_further_than_where_the_controller_stops_it(
+    rctl, driven, joint, goal, limit
+):
+    _, _, commands, clock, loop = driven()
+    target = np.zeros(JOINTS)
+    target[joint] = goal
+    commands.push(command.JointPosition(target))
+
+    _pump(loop, clock, 3000)
+
+    np.testing.assert_allclose(rctl.q[joint], np.radians(limit) - np.sign(limit) * cron._LIMIT_MARGIN, atol=0.01)
+
+
 def test_a_streamed_cartesian_target_stops_short_of_the_arm_itself(rctl, driven):
     """The fake collision model puts a wall at 0.5 on the first joint."""
     rctl.wall = 0.5
@@ -991,6 +1006,23 @@ def test_a_move_asks_again_to_clear_an_error_that_stays_through_the_first_reques
     _pump_until(loop, clock, answer, ticks=5000)
 
     assert answer.result() is None
+
+
+def test_a_refused_move_reports_how_far_the_arm_moved_while_the_driver_cleared_the_error(world, rctl, driven):
+    """The controller moves the joints once just after RUN."""
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched = True, True
+    _pump(loop, clock, 2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, 10)
+
+    rctl.q = rctl.q + _joints(0.02)
+    _pump_until(loop, clock, answer, ticks=5000)
+
+    with pytest.raises(MoveRefused) as refused:
+        answer.result()
+    assert refused.value.moved_rad == pytest.approx(0.02)
 
 
 def test_a_move_to_the_joints_of_the_arm_is_not_answered_while_the_controller_holds_an_error(world, rctl, driven):
