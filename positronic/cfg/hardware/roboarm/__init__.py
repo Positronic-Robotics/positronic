@@ -81,9 +81,9 @@ def kinova(ip, relative_dynamics_factor):
     power_off_on_exit=True,
     tool_length=0.195,
     projects=(),
-    tool_capsules=(),
+    tool_spheres=(),
 )
-def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, tool_capsules):
+def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, tool_spheres):
     from positronic.drivers.roboarm.cron.driver import Robot
 
     return Robot(
@@ -92,26 +92,22 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects,
         power_off_on_exit=power_off_on_exit,
         tool_length=tool_length,
         projects=projects,
-        tool_capsules=tool_capsules,
+        tool_spheres=tool_spheres,
     )
 
 
-# The DH AG-160-95 on its adapter in the collision model, on the axis of the flange: 225 mm from the flange to the
-# finger tips; the levers of the jaws stick out to 162 mm across from about the middle to the jaws, along the y axis of
-# the flange (horizontal in the start pose); the open jaws are 95 mm apart inside. The model of the controller
-# (v1.10.11) reads a capsule as a sphere at `xyz` and ignores `length` and `rpy`, so the gripper is rows of spheres
-_DH_GRIPPER_CAPSULES = [
-    *({'length': 0.0, 'radius': 0.045, 'xyz': [0.0, 0.0, z], 'rpy': [0.0, 0.0, 0.0]} for z in (0.03, 0.07)),
-    *(
-        {'length': 0.0, 'radius': 0.031, 'xyz': [0.0, y, z], 'rpy': [0.0, 0.0, 0.0]}
-        for z in (0.11, 0.15, 0.19)
-        for y in (-0.05, 0.0, 0.05)
-    ),
-    *({'length': 0.0, 'radius': 0.025, 'xyz': [0.0, y, 0.215], 'rpy': [0.0, 0.0, 0.0]} for y in (-0.035, 0.035)),
+# The DH AG-160-95 on its adapter in the collision model, on the axis of the flange, as spheres (centre, radius) in
+# metres: 225 mm from the flange to the finger tips; the levers of the jaws stick out to 162 mm across from about the
+# middle to the jaws, along the y axis of the flange (horizontal in the start pose); the open jaws are 95 mm apart
+# inside
+_DH_GRIPPER_SPHERES = [
+    *(([0.0, 0.0, z], 0.045) for z in (0.03, 0.07)),
+    *(([0.0, y, z], 0.031) for z in (0.11, 0.15, 0.19) for y in (-0.05, 0.0, 0.05)),
+    *(([0.0, y, 0.215], 0.025) for y in (-0.035, 0.035)),
 ]
 
 # A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
-cron_with_gripper = cron.override(projects=['gripper_bridge'], tool_capsules=_DH_GRIPPER_CAPSULES)
+cron_with_gripper = cron.override(projects=['gripper_bridge'], tool_spheres=_DH_GRIPPER_SPHERES)
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)

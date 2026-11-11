@@ -1167,19 +1167,20 @@ class Robot(pimm.ControlSystem):
             return False
 
     def _clear_with_desk_prepare(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
-        """Run ``_prepare_and_connect`` where the driver runs the Desk session and every safe input reads clear.
-
-        A failure that only a reboot clears reboots the control box once, and ``recovery_step`` says so. The step then
-        reads the safe inputs again and runs once more.
-        """
+        """Run ``_prepare_and_connect`` where the driver runs the Desk session and every safe input reads clear."""
         if not session.managed:
             return RecoveryOutcome.NOT_CLEARED
         if not self._safe_to_prepare(arm):
             return self._held_by_the_safe_inputs(arm)
         logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
         self.recovery_step.emit(RecoveryStep.CONNECTING)
+        return self._prepare_and_connect(session, arm, brakes)
+
+    def _clear_with_desk_prepare_or_reboot(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
+        """Run ``_clear_with_desk_prepare``. A failure that only a reboot clears reboots the control box once, and
+        ``recovery_step`` says so. The step then reads the safe inputs again and runs once more."""
         try:
-            return self._prepare_and_connect(session, arm, brakes)
+            return self._clear_with_desk_prepare(session, arm, brakes)
         except Exception as exc:
             if (why := self._why_only_a_reboot_clears(session, exc)) is None:
                 raise
@@ -1192,10 +1193,7 @@ class Robot(pimm.ControlSystem):
         session.reboot()
         arm.fci_active = False
         arm.safe_inputs.renew()
-        if not self._safe_to_prepare(arm):
-            return self._held_by_the_safe_inputs(arm)
-        self.recovery_step.emit(RecoveryStep.CONNECTING)
-        return self._prepare_and_connect(session, arm, brakes)
+        return self._clear_with_desk_prepare(session, arm, brakes)
 
     def _recover(
         self, session: _DeskSession, arm: _Arm, brakes: _Brakes, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
@@ -1203,8 +1201,9 @@ class Robot(pimm.ControlSystem):
         """Run the arm's error recovery once, answer every caller that asked for it on this tick, and return
         what it did.
 
-        When a caller asked and the recovery leaves the fault, ``_clear_with_desk_prepare`` runs. A throw reaches
-        the callers that asked and counts as NOT_CLEARED. One nobody asked for ends the driver's control of the arm.
+        When a caller asked and the recovery leaves the fault, ``_clear_with_desk_prepare_or_reboot`` runs. A throw
+        reaches the callers that asked and counts as NOT_CLEARED. One nobody asked for ends the driver's control of the
+        arm.
         """
         try:
             outcome = arm.recover()
@@ -1215,7 +1214,7 @@ class Robot(pimm.ControlSystem):
                 logger.warning(f'The recovery returned CLEARED, and Desk still reports {held}')
                 outcome = RecoveryOutcome.NOT_CLEARED
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
-                outcome = self._clear_with_desk_prepare(session, arm, brakes)
+                outcome = self._clear_with_desk_prepare_or_reboot(session, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked, or held on the state
@@ -1255,9 +1254,10 @@ class Robot(pimm.ControlSystem):
         Answer with the error where the recovery leaves it, and with the missing connection where there is none. A
         pressed emergency stop gets the release instruction, and no recovery. ``Desk.prepare()`` runs the TD2
         self-test first where it is due within ``SELF_TEST_LEAD_SEC`` and every safe input reads clear, so its deadline
-        cannot pass during the episode. A fault of the control box that Desk holds gets the Desk step too. Otherwise a
-        ready call takes no Desk control and opens no brakes: the harness asks again and again between episodes, with
-        nobody at the rig.
+        cannot pass during the episode. A fault of the control box that Desk holds gets the Desk step too, but never a
+        reboot: a refusal that only a reboot clears answers the call, and a recover call reboots. Otherwise a ready
+        call takes no Desk control and opens no brakes: the harness asks again and again between episodes, with nobody
+        at the rig.
         """
         with pimm.calls.raise_to(call), raise_as_device_fault(FaultKind.ARM):
             if arm.stop_pressed:
@@ -1269,7 +1269,14 @@ class Robot(pimm.ControlSystem):
                 self._prepare_and_connect(session, arm, brakes)
             if (held := arm.control_box_fault) is not None:
                 logger.warning(f'{held}; Desk clears it before the episode')
-                self._clear_with_desk_prepare(session, arm, brakes)
+                try:
+                    self._clear_with_desk_prepare(session, arm, brakes)
+                except Exception as exc:
+                    if (why := self._why_only_a_reboot_clears(session, exc)) is None:
+                        raise
+                    raise RuntimeError(
+                        f'{why}; only a control box reboot clears it, and a recover call runs one'
+                    ) from exc
                 if (still := arm.control_box_fault) is not None:
                     raise RuntimeError(still)
             with arm.lose_control_on_failure():

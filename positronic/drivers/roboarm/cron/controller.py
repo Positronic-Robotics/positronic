@@ -6,8 +6,8 @@ The client is a Linux x86-64 wheel that the controller serves at ``http://<contr
 import enum
 import logging
 import time
-from collections.abc import Mapping, Sequence
-from typing import Any, NamedTuple
+from collections.abc import Sequence
+from typing import NamedTuple
 
 import numpy as np
 
@@ -30,10 +30,12 @@ _POLL_S = 0.05
 # The controller takes HOLD in about 3 ms
 _HOLD_POLL_S = 0.001
 # After RUN the controller moves the joints once, to take up the brake slack
-_STARTUP_S = 1.0
+STARTUP_S = 1.0
 # Velocity commands that stop the arm, sent more than once so that one lost command does not leave it moving
 _STOP_REPEATS = 10
 _STOP_ACCEL = 5.0  # rad/s^2
+# The fields of the results of `compute_fk`, `compute_ik` and `model_is_collision`
+_ERR, _ERR_CODE, _POSE, _SOLUTIONS, _COLL, _MIN_DIST = 'err', 'err_code', 'pose', 'solutions', 'coll', 'min_dist'
 
 
 class PowerState(enum.IntEnum):
@@ -116,7 +118,7 @@ class CronController:
         power_off_on_exit: bool = True,
         tool_length: float = 0.0,
         projects: Sequence[str] = (),
-        tool_capsules: Sequence[Mapping[str, Any]] = (),
+        tool_spheres: Sequence[tuple[Sequence[float], float]] = (),
     ):
         self.ip = ip
         self.power_off_on_exit = power_off_on_exit
@@ -125,9 +127,13 @@ class CronController:
         # after the client leaves. A second start of a running project does nothing. A refused start raises nothing
         self.projects = tuple(projects)
         self.tool = geom.Transform3D(translation=np.array([0.0, 0.0, tool_length]))
-        # The tool in the collision model, as capsules on the flange: {'length', 'radius', 'xyz', 'rpy'}. They go to the
-        # local copy of the model only, not to the controller
-        self.tool_capsules = [dict(capsule) for capsule in tool_capsules]
+        # The tool in the collision model, as spheres (centre on the flange, radius) in metres. They go to the local
+        # copy of the model only, not to the controller. The model (v1.10.11) reads a capsule as a sphere at `xyz`, and
+        # ignores `length` and `rpy`
+        self.tool_capsules = [
+            {'length': 0.0, 'radius': float(radius), 'xyz': [float(v) for v in centre], 'rpy': [0.0, 0.0, 0.0]}
+            for centre, radius in tool_spheres
+        ]
         self.mount = geom.Transform3D.identity
         self._has_control = False
         self._waypoint_id = 0
@@ -151,13 +157,12 @@ class CronController:
             rctl.take_control()
             self._has_control = True
             self._clear_errors()
-            for project in self.projects:
-                rctl.exr_run(project)
+            self._run_projects()
             # Straight to RUN, as the RCUI does. On an arm whose multi-turn encoder asks for a preset (Hand B, motor 4,
             # 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed 3 times in 3
             self._power_to(PowerState.RUN, rctl.cmd_power_run)
             # blocking-sleep-ok: connect-time handshake, before any control loop exists to yield from
-            time.sleep(_STARTUP_S)
+            time.sleep(STARTUP_S)
         # rules-allow: swallowed-error — re-raised after the arm is left safe
         except BaseException:
             self.__exit__(None, None, None)
@@ -166,7 +171,7 @@ class CronController:
 
     def __exit__(self, *_) -> None:
         # Each step runs on its own: one that fails must not keep the others from running
-        for step in (self.stop, self.stop_move, rctl.cmd_hold):
+        for step in (self.stop_move, self.stop, rctl.cmd_hold):
             self._attempt(step)
         if self._has_control and self.power_off_on_exit:
             # A power off that reaches the controller before HOLD can end a velocity stream in a TIMEOUT error
@@ -190,8 +195,17 @@ class CronController:
         return f'{rctl.get_errors_hw()} {rctl.get_errors_mm()}'
 
     def resume(self) -> None:
-        """Ask the controller to clear a latched motion error."""
+        """Ask the controller to clear a latched motion error. A FAILURE stays through a resume, and an OFF request
+        clears it, so the arm is then off."""
         rctl.cmd_resume()
+        if self.power is PowerState.FAILURE:
+            rctl.cmd_power_off()
+
+    def power_up(self) -> None:
+        """Start the projects and ask for RUN, with no wait. The arm moves its joints once about ``STARTUP_S`` after
+        RUN."""
+        self._run_projects()
+        rctl.cmd_power_run()
 
     def read(self) -> Reading:
         return Reading(
@@ -206,6 +220,9 @@ class CronController:
         rctl.cmd_joint_direct_vel(velocities)
 
     def stop(self) -> None:
+        """End a velocity stream with zero velocities. In any other mode, a velocity is a new stream."""
+        if self.motion is not MotionMode.JOINT_VEL:
+            return
         for _ in range(_STOP_REPEATS):
             rctl.cmd_joint_direct_vel(np.zeros(JOINTS))
 
@@ -235,15 +252,15 @@ class CronController:
 
     def forward(self, q: np.ndarray) -> geom.Transform3D:
         solved = rctl.compute_fk(q)
-        if solved['err']:
-            raise ValueError(f'no pose for joints {np.round(q, 3)}: {solved["err_code"]}')
-        return self.mount * to_pose(np.asarray(solved['pose'], dtype=np.float64)) * self.tool
+        if solved[_ERR]:
+            raise ValueError(f'no pose for joints {np.round(q, 3)}: {solved[_ERR_CODE]}')
+        return self.mount * to_pose(np.asarray(solved[_POSE], dtype=np.float64)) * self.tool
 
     def clearance(self, q: np.ndarray) -> float:
         """Metres: how near the arm, with the capsules of the tool, comes to itself at the joints ``q``; 0 in a
         collision."""
         checked = rctl.model_is_collision(list(q))
-        return 0.0 if checked['coll'] else float(checked['min_dist'])
+        return 0.0 if checked[_COLL] else float(checked[_MIN_DIST])
 
     def jacobian(self, q: np.ndarray) -> np.ndarray:
         """The 6x6 map from joint speeds at ``q`` to the speed of the tool point and the turn rate of the tool, in the
@@ -259,23 +276,24 @@ class CronController:
     def inverse(self, pose: geom.Transform3D, seed: np.ndarray) -> np.ndarray:
         """The joints that put the tool at ``pose``, of the controller's solutions the nearest to ``seed``."""
         solved = rctl.compute_ik(to_vector(self.mount.inv * pose * self.tool.inv), seed)
-        candidates = np.asarray(solved['solutions'], dtype=np.float64).reshape(-1, JOINTS)
+        candidates = np.asarray(solved[_SOLUTIONS], dtype=np.float64).reshape(-1, JOINTS)
         # The controller can report no error and still give NaN solutions, and argmin would pick a NaN one
         candidates = candidates[np.all(np.isfinite(candidates), axis=1)]
-        if solved['err'] or not len(candidates):
-            raise ValueError(f'{pose} is out of reach: {solved["err_code"]}')
+        if solved[_ERR] or not len(candidates):
+            raise ValueError(f'{pose} is out of reach: {solved[_ERR_CODE]}')
         return candidates[np.argmin(np.max(np.abs(candidates - seed), axis=1))]
 
     def _clear_errors(self) -> None:
         """Clear what an earlier session left: a latched motion error blocks every power request."""
         if rctl.is_error():
             logger.warning(f'{self.ip}: clearing errors: {self.errors}')
-            rctl.cmd_resume()
-            if self.power is PowerState.FAILURE:
-                # A safety stop (RB SFTY) stays latched through a resume. An OFF request clears it once the stop is
-                # released
-                rctl.cmd_power_off()
+            # A safety stop (RB SFTY) also latches FAILURE: the OFF request clears it once the stop is released
+            self.resume()
         self._await(lambda: not rctl.is_error(), _CONNECT_TIMEOUT_S, 'clear error state (is the stop button released?)')
+
+    def _run_projects(self) -> None:
+        for project in self.projects:
+            rctl.exr_run(project)
 
     def _power_to(self, wanted: PowerState, request) -> None:
         if self.power is not wanted:

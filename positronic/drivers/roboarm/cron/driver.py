@@ -1,5 +1,6 @@
 import logging
-from collections.abc import Iterator, Mapping, Sequence
+import time
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import numpy as np
@@ -7,8 +8,8 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State, command
-from positronic.drivers.roboarm.cron.controller import JOINTS, CronController, PowerState
-from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
+from positronic.drivers.roboarm.cron.controller import JOINTS, STARTUP_S, CronController, PowerState
+from positronic.drivers.utils import DriverRun, MoveRefused, MoveStatus, log_failure
 from positronic.eval import NO_MODEL_ROBOT_META
 
 logger = logging.getLogger(__name__)
@@ -48,31 +49,8 @@ _MIN_PROGRESS = 0.5
 _DRIFT_M, _DRIFT_RAD = 1e-4, 1e-3
 # Metres: a step that takes the arm nearer than this to itself, by the collision model of the controller, is not taken
 _MIN_CLEARANCE = 0.01
-
-
-def _pose_error(target: geom.Transform3D, pose: geom.Transform3D) -> float:
-    """How far ``pose`` is from ``target``: metres of the tool point plus radians of the turn."""
-    turn = float(np.linalg.norm((target.rotation * pose.rotation.inv).as_rotvec))
-    return float(np.linalg.norm(np.asarray(target.translation) - np.asarray(pose.translation))) + turn
-
-
-def _drifts(target: geom.Transform3D, before: geom.Transform3D, after: geom.Transform3D) -> bool:
-    """Whether the step from ``before`` to ``after`` takes the tool further from ``target`` along an axis or in its
-    turn, and brings it nearer by less than ``_MIN_PROGRESS`` of how far it moves it."""
-    shift_before = np.abs(np.asarray(target.translation) - np.asarray(before.translation))
-    shift_after = np.abs(np.asarray(target.translation) - np.asarray(after.translation))
-    turn_before = float(np.linalg.norm((target.rotation * before.rotation.inv).as_rotvec))
-    turn_after = float(np.linalg.norm((target.rotation * after.rotation.inv).as_rotvec))
-    away = np.any(shift_after - shift_before > _DRIFT_M) or turn_after - turn_before > _DRIFT_RAD
-    gain = _pose_error(target, before) - _pose_error(target, after)
-    return bool(away and gain < _MIN_PROGRESS * _pose_error(after, before))
-
-
-def _finite(cmd: command.CommandType, joints: np.ndarray) -> np.ndarray:
-    # The controller refuses a velocity that is not finite and stops the arm with a TIMEOUT error
-    if not np.all(np.isfinite(joints)):
-        raise ValueError(f'{cmd} asks for joints that are not finite: {joints}')
-    return joints
+# How long a move waits for the controller to clear its error: a FAILURE needs a power off and a power up
+_RECOVER_S = 10.0
 
 
 class CronState(State, pimm.shared_memory.NumpySMAdapter):
@@ -137,8 +115,11 @@ class _Arm(DriverRun[command.CommandType]):
         self.target: np.ndarray | None = None
         # The tool pose of a streamed Cartesian target, which the damped steps of each tick follow
         self._pose: geom.Transform3D | None = None
-        # A move asked for while the controller holds an error: it starts once the error clears
+        # A move that waits to start: until the stream stops, or until the controller clears its error
         self._deferred: np.ndarray | None = None
+        self._deferred_until = 0.0
+        # When the driver asked for RUN to clear a FAILURE: the arm moves its joints once just after
+        self._powered_at: float | None = None
         self.velocity = np.zeros(JOINTS)
         self._last_step = clock.now()
 
@@ -147,13 +128,34 @@ class _Arm(DriverRun[command.CommandType]):
         return self.reading.power is PowerState.RUN and not self.reading.in_error
 
     def settle(self) -> None:
-        """Judge a move in flight against the joints the arm reads."""
+        """Judge a move in flight against the joints the arm reads. A move that did not start yet cannot arrive."""
         if not self.moves.active:
             return
+        if self._deferred is not None:
+            if self.clock.now() >= self._deferred_until:
+                self._deferred = None
+                self.moves.fail(MoveRefused(self.controller.errors, 0.0))
+            return
         if self.moves.settle(self.reading.q, self.clock.now()) is MoveStatus.GAVE_UP:
-            # A move left in place would resume once whatever blocked it goes away
-            self._deferred = None
             self.controller.stop_move()
+
+    @staticmethod
+    def _pose_error(target: geom.Transform3D, pose: geom.Transform3D) -> float:
+        """How far ``pose`` is from ``target``: metres of the tool point plus radians of the turn."""
+        turn = float(np.linalg.norm((target.rotation * pose.rotation.inv).as_rotvec))
+        return float(np.linalg.norm(np.asarray(target.translation) - np.asarray(pose.translation))) + turn
+
+    @classmethod
+    def _drifts(cls, target: geom.Transform3D, before: geom.Transform3D, after: geom.Transform3D) -> bool:
+        """Whether the step from ``before`` to ``after`` takes the tool further from ``target`` along an axis or in its
+        turn, and brings it nearer by less than ``_MIN_PROGRESS`` of how far it moves it."""
+        shift_before = np.abs(np.asarray(target.translation) - np.asarray(before.translation))
+        shift_after = np.abs(np.asarray(target.translation) - np.asarray(after.translation))
+        turn_before = float(np.linalg.norm((target.rotation * before.rotation.inv).as_rotvec))
+        turn_after = float(np.linalg.norm((target.rotation * after.rotation.inv).as_rotvec))
+        away = np.any(shift_after - shift_before > _DRIFT_M) or turn_after - turn_before > _DRIFT_RAD
+        gain = cls._pose_error(target, before) - cls._pose_error(target, after)
+        return bool(away and gain < _MIN_PROGRESS * cls._pose_error(after, before))
 
     def _follow(self, pose: geom.Transform3D, seed: np.ndarray, max_turn: np.ndarray) -> np.ndarray:
         """The joints a few damped least squares steps from ``seed`` toward the tool at ``pose``, each joint at most
@@ -175,62 +177,72 @@ class _Arm(DriverRun[command.CommandType]):
                 joints[_ELBOW] += side * least - elbow
         turn = joints - seed
         joints = seed + turn * min(1.0, float(np.min(max_turn / np.maximum(np.abs(turn), 1e-12))))
-        if _drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
+        if self._drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
             return np.array(seed, dtype=np.float64)
         clearance = self.controller.clearance(joints)
         if clearance < _MIN_CLEARANCE and clearance < self.controller.clearance(seed):
             return np.array(seed, dtype=np.float64)
         return joints
 
-    def _pose_of(self, cmd: command.CommandType, seed: np.ndarray) -> geom.Transform3D | None:
-        """The tool pose that a Cartesian ``cmd`` asks for from the joints ``seed``, or None for a joint target."""
+    def _pose_of(self, cmd: command.CommandType) -> geom.Transform3D | None:
+        """The tool pose that a Cartesian ``cmd`` asks for, or None for a joint target. A delta applies to the pose
+        that the arm reads."""
         # TODO: PositionControl and Impedance need a controller that takes them; the velocity loop runs its own law
         command.require_native_mode(cmd, 'CRON')
         match cmd:
             case command.CartesianPosition(pose):
-                return pose
+                pass
             case command.CartesianDelta() as delta_cmd:
-                return delta_cmd.apply(self.controller.forward(seed))
+                pose = delta_cmd.apply(self.reading.tcp_pose)
             case command.JointPosition():
                 return None
             case other:
                 raise NotImplementedError(f'Unsupported command {other}')
+        if not (np.all(np.isfinite(pose.translation)) and np.all(np.isfinite(pose.rotation.as_quat))):
+            raise ValueError(f'{cmd} asks for a pose that is not finite: {pose}')
+        return pose
+
+    @staticmethod
+    def _checked(cmd: command.CommandType, joints: np.ndarray) -> np.ndarray:
+        # A scalar would broadcast to every joint, and the controller stops the arm with a TIMEOUT error on a velocity
+        # that is not finite
+        if joints.shape != (JOINTS,) or not np.all(np.isfinite(joints)):
+            raise ValueError(f'{cmd} asks for joints that are not {JOINTS} finite values: {joints}')
+        return joints
 
     def _to_joints(self, cmd: command.CommandType) -> np.ndarray:
         """The joints that a move ``cmd`` goes to: a Cartesian target through the exact solution of the controller."""
-        pose = self._pose_of(cmd, self.reading.q)
+        pose = self._pose_of(cmd)
         if pose is not None:
             return self.controller.inverse(pose, self.reading.q)
         assert isinstance(cmd, command.JointPosition)
-        return _finite(cmd, np.asarray(cmd.positions, dtype=np.float64))
+        return self._checked(cmd, np.asarray(cmd.positions, dtype=np.float64))
 
     def track(self, cmd: command.CommandType) -> None:
         """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival. A Cartesian target is the
         goal of the damped steps of each tick: the joints move toward it no faster than the arm can follow."""
         seed = self.reading.q if self.target is None else self.target
-        pose = self._pose_of(cmd, seed)
+        pose = self._pose_of(cmd)
         joints = np.array(seed, dtype=np.float64) if pose is not None else self._to_joints(cmd)
         if self.target is None:
             self.controller.to_hold()
-        self.target, self._pose = _finite(cmd, joints), pose
+        self.target, self._pose = joints, pose
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
-        """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there."""
+        """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there.
+
+        The move waits while the stream brakes to a stop, and while the controller clears an error.
+        """
         with pimm.calls.raise_to(call):
             target = self._to_joints(call.request)
-            if self.target is not None:
-                self.target, self._pose = None, None
-                self.velocity[:] = 0.0
-                self.controller.stop()
-            if self.reading.in_error:
-                # The controller refuses a move while it holds an error
-                self.controller.resume()
-                self._deferred = target
-            else:
-                self.controller.move_to(target, float(self.max_speed.min()), float(self.max_accel.min()))
+            self.target, self._pose = None, None
             travel_s = _MOVE_GRACE_S + _MOVE_SLACK * float(
                 np.max(np.abs(target - self.reading.q)) / self.max_speed.min()
             )
+            if not self.usable:
+                self.controller.resume()
+                travel_s += _RECOVER_S
+            self._deferred, self._deferred_until = target, self.clock.now() + _RECOVER_S
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), travel_s)
 
     def step(self) -> None:
@@ -244,10 +256,14 @@ class _Arm(DriverRun[command.CommandType]):
             # An arm that left RUN holds no target: it must not resume one when it comes back
             self.target, self._pose = None, None
             self.velocity[:] = 0.0
+            self._power_up(now)
+            return
+        if self.target is None and self.velocity.any():
+            self._command(np.zeros(JOINTS), dt)
             return
         if self._deferred is not None:
-            self.controller.move_to(self._deferred, float(self.max_speed.min()), float(self.max_accel.min()))
-            self._deferred = None
+            self._start_deferred(now)
+            return
         if self.target is None:
             return
         if self._pose is not None:
@@ -256,10 +272,30 @@ class _Arm(DriverRun[command.CommandType]):
         # Not faster than the arm can stop from in the error left: at the gain alone, braking would need more
         # than max_accel and the arm would overshoot
         limit_speed = np.minimum(np.sqrt(2.0 * self.max_accel * np.abs(error)), self.max_speed)
-        wanted = np.clip(_GAIN * error, -limit_speed, limit_speed)
+        self._command(np.clip(_GAIN * error, -limit_speed, limit_speed), dt)
+
+    def _command(self, wanted: np.ndarray, dt: float) -> None:
+        """Command the velocity that goes toward ``wanted`` no faster than ``max_accel``."""
+        # Also on a stop: after a jump of the velocity to zero, the arm stopped on a following error (0.44 rad,
+        # 2026-11-11)
         limit = self.max_accel * dt
         self.velocity += np.clip(wanted - self.velocity, -limit, limit)
         self.controller.command_velocity(self.velocity)
+
+    def _power_up(self, now: float) -> None:
+        """Ask for RUN once a move waits and the controller is off with no error, as after a FAILURE."""
+        off = self.reading.power in (PowerState.OFF, PowerState.STANDBY)
+        if self._deferred is not None and off and not self.reading.in_error and self._powered_at is None:
+            self.controller.power_up()
+            self._powered_at = now
+
+    def _start_deferred(self, now: float) -> None:
+        """Start the move that waits, once the joint move that follows a power up is over."""
+        if self._powered_at is not None and now - self._powered_at < STARTUP_S:
+            return
+        assert self._deferred is not None
+        self.controller.move_to(self._deferred, float(self.max_speed.min()), float(self.max_accel.min()))
+        self._deferred, self._powered_at = None, None
 
     def _report(self) -> None:
         """Log each change of the power state or the error state of the arm."""
@@ -276,10 +312,12 @@ class _Arm(DriverRun[command.CommandType]):
 
     def publish(self) -> None:
         """Ship the arm as it reads now."""
-        if self.reading.in_error or self.reading.power is PowerState.FAILURE or self.moves.errored:
+        if not self.usable:
             status = RobotStatus.ERROR
         elif self.moves.active:  # the driver owns the arm until the move settles, and reads no command meanwhile
             status = RobotStatus.BUSY
+        elif self.moves.errored:
+            status = RobotStatus.ERROR
         else:
             status = RobotStatus.AVAILABLE
         self.state.encode(self.reading.q, self.reading.dq, self.reading.tcp_pose, status)
@@ -289,8 +327,13 @@ class _Arm(DriverRun[command.CommandType]):
         return self
 
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
-        """A stop halts the loop, and the arm only travels while the loop commands it; answer what was waiting."""
+        """Brake the stream to a stop, and answer what was waiting."""
         self.moves.abandon(exc)
+        while self.usable and self.velocity.any():
+            self._command(np.zeros(JOINTS), 1.0 / _HZ)
+            # blocking-sleep-ok: the loop is over, and the controller needs the velocities at its own rate
+            time.sleep(1.0 / _HZ)
+            self.reading = self.controller.read()
 
 
 class Robot(pimm.ControlSystem):
@@ -301,7 +344,7 @@ class Robot(pimm.ControlSystem):
         power_off_on_exit: bool = True,
         tool_length: float = 0.0,
         projects: Sequence[str] = (),
-        tool_capsules: Sequence[Mapping[str, Any]] = (),
+        tool_spheres: Sequence[tuple[Sequence[float], float]] = (),
     ) -> None:
         # A zero factor caps every joint at zero speed: the arm would never travel and no move could land
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
@@ -310,7 +353,7 @@ class Robot(pimm.ControlSystem):
         self.power_off_on_exit = power_off_on_exit
         self.tool_length = tool_length
         self.projects = tuple(projects)
-        self.tool_capsules = tuple(tool_capsules)
+        self.tool_spheres = tuple(tool_spheres)
         self.commands = pimm.ControlSystemReceiver[command.CommandType](self)
         self.sync_move = pimm.calls.ControlSystemHandler[command.CommandType, None](self)
         self.state = pimm.ControlSystemEmitter[CronState](self)
@@ -323,9 +366,7 @@ class Robot(pimm.ControlSystem):
         )
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        controller = CronController(
-            self.ip, self.power_off_on_exit, self.tool_length, self.projects, self.tool_capsules
-        )
+        controller = CronController(self.ip, self.power_off_on_exit, self.tool_length, self.projects, self.tool_spheres)
         with controller:
             with self._arm(controller, should_stop, clock) as arm:
                 self.robot_meta.emit(NO_MODEL_ROBOT_META)

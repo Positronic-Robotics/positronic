@@ -14,9 +14,11 @@ from positronic.drivers.roboarm.cron import controller as cron_controller
 from positronic.drivers.roboarm.cron import driver as cron
 from positronic.drivers.roboarm.cron.controller import JOINTS, MotionMode, PowerState, to_pose
 from positronic.drivers.roboarm.tests.fakes import StopFlag
+from positronic.drivers.utils import MoveRefused
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 TICK = 1.0 / cron._HZ
+_WRIST_MAX = float(cron._WRIST_SCALE.max())
 
 
 class FakeRctl:
@@ -237,7 +239,7 @@ class FakeRctl:
 def rctl(monkeypatch):
     fake = FakeRctl()
     monkeypatch.setattr(cron_controller, 'rctl', fake)
-    monkeypatch.setattr(cron_controller, '_STARTUP_S', 0.0)
+    monkeypatch.setattr(cron_controller, 'STARTUP_S', 0.0)
     return fake
 
 
@@ -296,13 +298,6 @@ def test_the_arm_is_powered_straight_to_run_with_control_taken_first(rctl, drive
 
     assert _called_in_order(rctl.calls, 'take_control', 'run') and 'standby' not in rctl.calls
     assert rctl.power is PowerState.RUN
-
-
-def _stream(commands, loop, clock: MockClock, cmd: command.CommandType, ticks: int = 2000) -> None:
-    """Send ``cmd`` again every 20 ticks, as a teleoperator who holds the hand still does."""
-    for _ in range(ticks // 20):
-        commands.push(cmd)
-        _pump(loop, clock, 20)
 
 
 def test_a_planned_move_after_a_stream_starts_from_the_joints_that_the_arm_has(world, rctl, driven):
@@ -459,15 +454,23 @@ def test_a_move_that_a_caller_waits_for_is_planned_by_the_controller_and_not_str
     assert rctl.commanded == []
 
 
-def test_a_move_stops_the_stream_before_the_controller_plans_it(world, rctl, driven):
+def test_a_move_brakes_the_stream_to_a_stop_before_the_controller_plans_it(world, rctl, driven):
+    """A jump of the velocity to zero stopped the arm on a following error."""
     driver, _, commands, clock, loop = driven()
-    commands.push(command.JointPosition(_joints(0.5)))
-    _pump(loop, clock, 20)
+    commands.push(command.JointPosition(_joints(2.0)))
+    _pump(loop, clock, 100)
+    streamed = len(rctl.commanded)
     answer = _mover(world, driver)(command.JointPosition(_joints(0.0)))
 
-    _pump(loop, clock, 2)
+    for _ in range(200):
+        _pump(loop, clock, 1)
+        if 'move_run' in rctl.calls:
+            break
 
-    np.testing.assert_array_equal(rctl.commanded[-1], np.zeros(JOINTS))
+    braking = np.array(rctl.commanded[streamed - 1 :])
+    assert len(braking) > 2, 'the stream should brake over a number of ticks'
+    assert np.max(np.abs(np.diff(braking, axis=0))) <= cron._MAX_JOINT_ACCEL * _WRIST_MAX * TICK + 1e-9
+    np.testing.assert_array_equal(braking[-1], np.zeros(JOINTS))
     assert rctl.calls[-2:] == ['waypoint', 'move_run']
     assert not answer.done()
 
@@ -511,7 +514,7 @@ def test_a_move_asked_for_while_the_controller_holds_an_error_clears_it_and_then
     np.testing.assert_allclose(rctl.q, _joints(0.3), atol=cron._ARRIVED_TOL)
 
 
-def test_a_move_asked_for_while_the_error_stays_is_not_planned_and_is_given_up(world, rctl, driven):
+def test_a_move_asked_for_while_the_error_stays_is_not_planned_and_is_refused(world, rctl, driven):
     driver, _, _, clock, loop = driven()
     _pump(loop, clock, 2)
     rctl.error, rctl.safety_latched = True, True
@@ -522,9 +525,9 @@ def test_a_move_asked_for_while_the_error_stays_is_not_planned_and_is_given_up(w
     rctl.safety_latched, rctl.error = False, False
     _pump(loop, clock, 20)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(MoveRefused, match='motion errors'):
         answer.result()
-    assert 'waypoint' not in rctl.calls, 'a move given up started once the error cleared'
+    assert 'waypoint' not in rctl.calls, 'a move refused started once the error cleared'
 
 
 def test_each_change_of_the_error_state_is_logged_with_the_address_of_the_controller(rctl, driven, caplog):
@@ -759,13 +762,12 @@ def test_a_streamed_cartesian_target_stops_short_of_the_arm_itself(rctl, driven)
     assert 0.5 - cron._MIN_CLEARANCE - 0.06 <= rctl.q[0] <= 0.5 - cron._MIN_CLEARANCE + 1e-6
 
 
-def test_the_capsules_of_the_tool_go_to_the_collision_model(rctl, driven):
-    capsule = {'length': 0.15, 'radius': 0.05, 'xyz': [0.0, 0.0, 0.03], 'rpy': [0.0, 0.0, 0.0]}
-    _, _, _, clock, loop = driven(tool_capsules=[capsule])
+def test_the_spheres_of_the_tool_go_to_the_collision_model_as_capsules_of_no_length(rctl, driven):
+    _, _, _, clock, loop = driven(tool_spheres=[([0.0, 0.01, 0.03], 0.05)])
 
     _pump(loop, clock, 1)
 
-    assert rctl.tool_capsules == [capsule]
+    assert rctl.tool_capsules == [{'length': 0.0, 'radius': 0.05, 'xyz': [0.0, 0.01, 0.03], 'rpy': [0.0, 0.0, 0.0]}]
 
 
 def test_a_streamed_cartesian_target_at_a_pose_where_a_joint_does_nothing_keeps_the_joints_finite(rctl, driven):
@@ -828,6 +830,23 @@ def test_leaving_the_run_stops_the_arm_powers_it_off_and_gives_control_back(rctl
     assert rctl.calls[-4:] == ['hold', 'off', 'release_control', 'disconnect']
 
 
+def test_leaving_the_run_during_a_planned_move_stops_the_move_and_sends_no_velocity(world, rctl, driven):
+    """A velocity that reaches the controller while a planned move runs stops the arm with `JOINT_VEL: TIMEOUT`."""
+    stop = StopFlag()
+    driver, _, _, clock, loop = driven(stop=stop, factor=0.2)
+    _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 20)
+    assert rctl.moving
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        _pump(loop, clock, 1)
+
+    assert not rctl.error
+    assert rctl.commanded == []
+    assert _called_in_order(rctl.calls, 'move_pause', 'drop_waypoints', 'hold', 'off')
+
+
 def test_a_streamed_arm_is_powered_off_only_once_the_controller_holds(rctl, driven):
     rctl.hold_lag = 2
     stop = StopFlag()
@@ -851,3 +870,114 @@ def test_an_arm_that_fails_to_power_up_is_left_off_and_the_run_fails(rctl, drive
 
     assert rctl.power is PowerState.OFF
     assert rctl.calls[-2:] == ['release_control', 'disconnect']
+
+
+@pytest.mark.parametrize('positions', [np.array(0.3), np.array([0.3])], ids=['a scalar', 'one joint'])
+def test_a_joint_target_of_the_wrong_shape_is_not_a_setpoint(rctl, driven, positions):
+    """A target of one value would broadcast to every joint."""
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(positions))
+
+    _pump(loop, clock, 20)
+
+    assert rctl.commanded == []
+
+
+def test_a_cartesian_target_that_is_not_finite_is_not_followed(rctl, driven):
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, np.nan, 0.3]))))
+
+    _pump(loop, clock, 20)
+
+    assert rctl.commanded == []
+
+
+def test_a_cartesian_delta_applies_to_the_pose_that_the_arm_reads_and_not_to_the_target(rctl, driven):
+    """The arm lags behind a far streamed target when the delta comes."""
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.6, 0.0, 0.0]))))
+    _pump(loop, clock, 20)
+    lagging = rctl.q.copy()
+    assert 0.0 < lagging[0] < 0.3
+
+    commands.push(command.CartesianDelta(geom.Transform3D(translation=np.array([0.0, 0.05, 0.0]))))
+    _pump(loop, clock, 2000)
+
+    np.testing.assert_allclose(rctl.q[:3], lagging[:3] + [0.0, 0.05, 0.0], atol=0.01)
+
+
+def test_a_move_to_the_joints_of_the_arm_is_not_answered_while_the_controller_holds_an_error(world, rctl, driven):
+    """The move did not start: it cannot arrive."""
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched = True, True
+    _pump(loop, clock, 2)
+    answer = _mover(world, driver)(command.JointPosition(rctl.q.copy()))
+
+    _pump(loop, clock, 100)
+
+    assert not answer.done()
+
+
+@pytest.mark.parametrize('power', [PowerState.OFF, PowerState.STANDBY])
+def test_an_arm_out_of_run_with_no_error_reads_as_error_on_the_wire(rctl, driven, power):
+    """A command sent now would not reach the arm."""
+    _, states, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+
+    rctl.power = power
+    _pump(loop, clock, 2)
+
+    assert states.emitted[-1][1].status is RobotStatus.ERROR
+
+
+def test_a_move_after_a_move_that_was_given_up_reads_busy(world, rctl, driven):
+    """The driver owns the arm while the move travels, and reads no command."""
+    rctl.blocked = True
+    driver, states, _, clock, loop = driven(factor=0.2)
+    move = _mover(world, driver)
+    given_up = move(command.JointPosition(_joints(0.3)))
+    _pump_until(loop, clock, given_up, ticks=10000)
+    with pytest.raises(TimeoutError):
+        given_up.result()
+    rctl.blocked = False
+
+    answer = move(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 20)
+
+    assert states.emitted[-1][1].status is RobotStatus.BUSY
+    assert not answer.done()
+
+
+def test_a_move_clears_a_failure_by_a_power_off_and_starts_once_the_arm_is_up_again(world, rctl, driven):
+    """A FAILURE stays through a resume. The arm moves its joints once just after RUN."""
+    driver, _, _, clock, loop = driven(projects=['gripper_bridge'])
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    _pump(loop, clock, 2)
+    del rctl.calls[:]
+
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, int(0.5 * cron_controller.STARTUP_S / TICK))
+    assert 'waypoint' not in rctl.calls, 'the move started during the joint move after RUN'
+    _pump_until(loop, clock, answer, ticks=5000)
+
+    assert answer.result() is None
+    assert _called_in_order(rctl.calls, 'resume', 'off', 'exr_run gripper_bridge', 'run', 'waypoint', 'move_run')
+    np.testing.assert_allclose(rctl.q, _joints(0.3), atol=cron._ARRIVED_TOL)
+
+
+def test_leaving_the_run_brakes_the_stream_to_a_stop(rctl, driven):
+    stop = StopFlag()
+    _, _, commands, clock, loop = driven(stop=stop)
+    commands.push(command.JointPosition(_joints(2.0)))
+    _pump(loop, clock, 100)
+    streamed = len(rctl.commanded)
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        _pump(loop, clock, 1)
+
+    braking = np.array(rctl.commanded[streamed - 1 : -cron_controller._STOP_REPEATS])
+    assert np.max(np.abs(np.diff(braking, axis=0))) <= cron._MAX_JOINT_ACCEL * _WRIST_MAX * TICK + 1e-9
+    np.testing.assert_array_equal(braking[-1], np.zeros(JOINTS))
