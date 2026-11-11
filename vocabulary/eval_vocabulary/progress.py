@@ -17,6 +17,9 @@ STATE_SIGNAL = f'{PROGRESS_CHANNEL}.state'
 ANNOTATION_CHANNEL = 'data_annotation'
 # The channels whose signals are the marks that a person makes.
 MARK_CHANNELS = (PROGRESS_CHANNEL, ANNOTATION_CHANNEL)
+# An AI labeler's marks on a recorded episode: one `<AUTOLABEL_CHANNEL>.<source>.<mark>` signal for each source and
+# kind of mark, where the source names the labeler and its version.
+AUTOLABEL_CHANNEL = 'autolabel'
 
 
 class Stage(StrEnum):

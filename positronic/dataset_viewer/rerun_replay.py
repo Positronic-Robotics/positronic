@@ -22,7 +22,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 import rerun_bindings
 from av.video.stream import VideoStream
-from eval_vocabulary.progress import PROGRESS_CHANNEL
+from eval_vocabulary.progress import AUTOLABEL_CHANNEL, LADDER, MARK_CHANNELS
 from eval_vocabulary.timeline import RECORDING_TIMELINE_ORDER
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
@@ -81,7 +81,8 @@ class EpisodeSignals:
     dims: dict[str, int]
     poses: list[str]
     joints: list[str]
-    # Each text signal's distinct values, in the order they first appear.
+    # Each text signal's values by the index they plot at: the stage ladder where every value is a stage, so the
+    # stage lines of several signals line up, and otherwise the distinct values in the order they first appear.
     texts: dict[str, list[str]] = field(default_factory=dict)
     neither_numeric_nor_text: list[str] = field(default_factory=list)
 
@@ -224,6 +225,8 @@ def _unplotted_notice(unplotted: dict[str, str]) -> str:
 # writes it any more — only released data carries it, and only until #587 converts that data.
 _SINGULAR_JOINT_SIGNAL = 'joint_signal'
 
+_STAGE_CODES = [stage.value for stage in LADDER]
+
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
     pose_set = set(ep.static.get(eval_keys.POSE_SIGNALS, []))
@@ -247,7 +250,8 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
 
         first = sig[0][0]
         if isinstance(first, str):
-            signals.texts[name] = list(dict.fromkeys(str(value) for value in sig.values()))
+            values = list(dict.fromkeys(str(value) for value in sig.values()))
+            signals.texts[name] = list(_STAGE_CODES) if set(values) <= set(_STAGE_CODES) else values
             continue
         if flatten_numeric(first) is None:
             signals.neither_numeric_nor_text.append(name)
@@ -553,6 +557,19 @@ def _arm_cells(
     return [(rrb.Tabs(*tabs), max(len(cells) for cells in columns.values()))] if tabs else []
 
 
+# The marks the Progress chart plots: a stage and a count of delivered objects, of each person and each AI labeler.
+_PROGRESS_MARKS = ('state', 'delivered')
+
+
+def _is_progress_mark(name: str) -> bool:
+    """Whether ``name`` is a stage or count mark of a person or of an AI labeler, which the Progress chart plots."""
+    channel, _, rest = name.partition('.')
+    if channel in MARK_CHANNELS:
+        return rest in _PROGRESS_MARKS
+    source, _, mark = rest.rpartition('.')
+    return channel == AUTOLABEL_CHANNEL and bool(source) and mark in _PROGRESS_MARKS
+
+
 # The default replay's width: the views, then the charts.
 _DEFAULT_SPLIT_SHARES = (3, 1)
 
@@ -560,7 +577,7 @@ _DEFAULT_SPLIT_SHARES = (3, 1)
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
     charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
     names = sorted([*signals.numerics, *signals.texts])
-    progress: Charts = {'Progress': [name for name in names if name.partition('.')[0] == PROGRESS_CHANNEL]}
+    progress: Charts = {'Progress': [name for name in names if _is_progress_mark(name)]}
     column = [*_arm_cells(charts_by_arm, signals, ep), *((cell, 1) for cell in _chart_cells(progress, signals, ep))]
     placed = {signal for charts in [*charts_by_arm.values(), progress] for signal in _charted(charts, signals)}
     other = _other_cell(signals, placed)
@@ -1202,8 +1219,8 @@ def stream_episode_rrd(
     Raw image streams and numeric signals with a recognized nanosecond clock are thinned to ``max_hz``; a stored
     video keeps every frame. ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
     Without a ``layout``, the replay shows the cameras and the 3D view in one grid, and on its right a column: the
-    charts of each arm, a chart of the progress marks, and Other, a group of the other signals. ``timeline`` selects
-    the initial view; all timelines are exported.
+    charts of each arm, a chart of the stage and count marks of each person and AI labeler, and Other, a group of the
+    other signals. ``timeline`` selects the initial view; all timelines are exported.
     """
 
     ep = ds[episode_id]
