@@ -1,3 +1,4 @@
+import collections
 import logging
 import time
 from collections.abc import Iterator, Sequence
@@ -51,6 +52,8 @@ _DRIFT_M, _DRIFT_RAD = 1e-4, 1e-3
 _MIN_CLEARANCE = 0.01
 # How long a move waits for the controller to clear its error: a FAILURE needs a power off and a power up
 _RECOVER_S = 10.0
+# The ticks of a stream that an error report looks back over
+_LAG_TICKS = _HZ // 2
 
 
 class CronState(State, pimm.shared_memory.NumpySMAdapter):
@@ -118,8 +121,12 @@ class _Arm(DriverRun[command.CommandType]):
         # A move that waits to start: until the stream stops, or until the controller clears its error
         self._deferred: np.ndarray | None = None
         self._deferred_until = 0.0
-        # When the driver asked for RUN to clear a FAILURE: the arm moves its joints once just after
-        self._powered_at: float | None = None
+        # The driver asked for RUN to clear a FAILURE, and when the arm reads RUN after that: the arm moves its joints
+        # once about 0.5 s after RUN, and a planned move that starts meanwhile stops on a following error
+        self._powering = False
+        self._run_at: float | None = None
+        # The joints the arm read, and the travel commanded on each tick of the stream
+        self._stream: collections.deque[tuple[np.ndarray, np.ndarray]] = collections.deque(maxlen=_LAG_TICKS)
         self.velocity = np.zeros(JOINTS)
         self._last_step = clock.now()
 
@@ -133,7 +140,7 @@ class _Arm(DriverRun[command.CommandType]):
             return
         if self._deferred is not None:
             if self.clock.now() >= self._deferred_until:
-                self._deferred = None
+                self._deferred, self._powering = None, False
                 self.moves.fail(MoveRefused(self.controller.errors, 0.0))
             return
         if self.moves.settle(self.reading.q, self.clock.now()) is MoveStatus.GAVE_UP:
@@ -226,6 +233,7 @@ class _Arm(DriverRun[command.CommandType]):
         joints = np.array(seed, dtype=np.float64) if pose is not None else self._to_joints(cmd)
         if self.target is None:
             self.controller.to_hold()
+            self._stream.clear()
         self.target, self._pose = joints, pose
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
@@ -241,6 +249,7 @@ class _Arm(DriverRun[command.CommandType]):
             )
             if not self.usable:
                 self.controller.resume()
+                self._powering = False
                 travel_s += _RECOVER_S
             self._deferred, self._deferred_until = target, self.clock.now() + _RECOVER_S
             self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), travel_s)
@@ -256,8 +265,10 @@ class _Arm(DriverRun[command.CommandType]):
             # An arm that left RUN holds no target: it must not resume one when it comes back
             self.target, self._pose = None, None
             self.velocity[:] = 0.0
-            self._power_up(now)
+            self._power_up()
             return
+        if self._powering:
+            self._powering, self._run_at = False, now
         if self.target is None and self.velocity.any():
             self._command(np.zeros(JOINTS), dt)
             return
@@ -281,21 +292,22 @@ class _Arm(DriverRun[command.CommandType]):
         limit = self.max_accel * dt
         self.velocity += np.clip(wanted - self.velocity, -limit, limit)
         self.controller.command_velocity(self.velocity)
+        self._stream.append((self.reading.q.copy(), self.velocity * dt))
 
-    def _power_up(self, now: float) -> None:
+    def _power_up(self) -> None:
         """Ask for RUN once a move waits and the controller is off with no error, as after a FAILURE."""
         off = self.reading.power in (PowerState.OFF, PowerState.STANDBY)
-        if self._deferred is not None and off and not self.reading.in_error and self._powered_at is None:
+        if self._deferred is not None and off and not self.reading.in_error and not self._powering:
             self.controller.power_up()
-            self._powered_at = now
+            self._powering = True
 
     def _start_deferred(self, now: float) -> None:
         """Start the move that waits, once the joint move that follows a power up is over."""
-        if self._powered_at is not None and now - self._powered_at < STARTUP_S:
+        if self._run_at is not None and now - self._run_at < STARTUP_S:
             return
         assert self._deferred is not None
         self.controller.move_to(self._deferred, float(self.max_speed.min()), float(self.max_accel.min()))
-        self._deferred, self._powered_at = None, None
+        self._deferred, self._run_at = None, None
 
     def _report(self) -> None:
         """Log each change of the power state or the error state of the arm."""
@@ -307,6 +319,11 @@ class _Arm(DriverRun[command.CommandType]):
             joints = np.round(np.degrees(self.reading.q), 1).tolist()
             errors = self.controller.errors
             logger.error(f'{self.controller.ip}: {self.reading.power.name}, error {errors}, joints {joints} deg')
+            if self._stream:
+                # The controller does not name the joint of a following error
+                commanded = np.sum([travel for _, travel in self._stream], axis=0)
+                lag = np.round(np.degrees(commanded - (self.reading.q - self._stream[0][0])), 1).tolist()
+                logger.error(f'{self.controller.ip}: in the last {len(self._stream)} ticks the joints lag {lag} deg')
         else:
             logger.info(f'{self.controller.ip}: {self.reading.power.name}, no error')
 
