@@ -40,5 +40,4 @@ BILLING_ACCOUNT = f'{API_PREFIX}/billing.account'
 BILLING_PURCHASES_CREATE = f'{API_PREFIX}/billing.purchases.create'
 BILLING_PURCHASES_GET = f'{API_PREFIX}/billing.purchases.get'
 BILLING_PURCHASES_LIST = f'{API_PREFIX}/billing.purchases.list'
-# A coupon code adds its credits to the caller's personal organization, one time.
 BILLING_COUPONS_REDEEM = f'{API_PREFIX}/billing.coupons.redeem'

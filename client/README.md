@@ -97,9 +97,8 @@ uv run positronic account register --alias=<display name> --accept_terms='"<vers
 
 ## Coupons
 
-A coupon adds credits to an account. It comes by mail with a code and a link to the console. The platform adds the
-credits to the caller's personal organization, one time. It refuses a code that is unknown, used, expired or revoked.
-Like other billing calls, a redemption needs the platform terms (§Platform terms).
+A coupon comes by mail with a code and a link to the console. Like other billing calls, a redemption needs the
+platform terms (§Platform terms).
 
 `PlatformClient.redeem_coupon(code)` redeems a code and answers the organization and the credit units it got. From the
 command line, `positronic account redeem` prints the credits that it added. `--json` prints the answer as JSON. Quote a

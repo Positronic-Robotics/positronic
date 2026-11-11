@@ -1,7 +1,4 @@
-"""`positronic account redeem` — add the credits of a coupon to the account.
-
-A coupon comes by mail with its code. The platform adds its credits to the caller's personal organization, one time.
-"""
+"""`positronic account redeem` — add the credits of a coupon to the account."""
 
 import configuronic as cfn
 from platform_client.billing import CREDIT_SCALE
@@ -25,7 +22,7 @@ def credits_text(units: int) -> str:
 
 @cfn.config()
 def redeem(code: object = None, platform_url: str | None = None, json: bool = False):
-    """Add the credits of a coupon to your personal organization. `code` is the code in the coupon mail."""
+    """Redeem a coupon. `code` is the code in the coupon mail."""
     if code is None:
         raise CommandFailed('name the code of the coupon: --code=<code>', Fault.USAGE)
     with gateway(platform_url, refusal_as_json=json) as client:
