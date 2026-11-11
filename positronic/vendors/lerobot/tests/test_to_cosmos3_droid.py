@@ -11,7 +11,7 @@ from positronic import keys
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.time import Time
 from positronic.drivers.recording import HARNESS_WORLD
-from positronic.vendors.cosmos3 import droid_dataset as droid
+from positronic.vendors.lerobot import cosmos3_droid as droid
 
 lerobot = pytest.importorskip('lerobot')
 if not hasattr(lerobot, '__version__') or lerobot.__version__ < '0.4':

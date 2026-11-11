@@ -40,7 +40,7 @@ from positronic.dataset import Dataset
 from positronic.dataset.episode import META_CREATED_TS_NS, META_UID, Episode, EpisodeContainer
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.image import ResizeMode, transform_frame
-from positronic.vendors.cosmos3 import droid_dataset as droid
+from positronic.vendors.lerobot import cosmos3_droid as droid
 from positronic.vendors.lerobot.to_lerobot import _collate_fn, _raise_fd_limit
 
 TREES = ('train', 'heldout')

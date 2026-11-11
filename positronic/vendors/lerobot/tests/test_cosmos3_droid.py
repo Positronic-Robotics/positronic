@@ -1,6 +1,6 @@
 import numpy as np
 
-from positronic.vendors.cosmos3 import droid_dataset as droid
+from positronic.vendors.lerobot import cosmos3_droid as droid
 
 
 def _rows(n: int = 5, start: int = 0):
