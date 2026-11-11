@@ -248,9 +248,9 @@ class _Arm(DriverRun[command.CommandType]):
         return joints
 
     def _check_move(self, target: np.ndarray) -> None:
-        """Refuse a planned move from the joints the arm reads to ``target`` that ends past a joint limit, or that
-        takes the arm nearer to itself than the clearance and than it came along the way. The controller plans a
-        straight line in the joints, and does not know the tool spheres of the local model."""
+        """Refuse a planned move from the joints the arm reads to ``target`` that ends past a joint limit or in a
+        collision, or that takes the arm nearer to itself than the clearance and than it came along the way. The
+        controller plans a straight line in the joints, and does not know the tool spheres of the local model."""
         start = self.reading.q
         if not np.array_equal(self._within_limits(target, start), target):
             raise ValueError(f'a move to {np.round(target, 3)} goes past the joint limits')
@@ -258,7 +258,8 @@ class _Arm(DriverRun[command.CommandType]):
         points = max(1, int(np.ceil(np.max(np.abs(target - start)) / _PATH_STEP)))
         for share in np.linspace(0.0, 1.0, points + 1)[1:]:
             clearance = self.controller.clearance(start + share * (target - start))
-            if clearance < least:
+            # The model gives no depth in a collision: a move that ends in one is not known to leave it
+            if clearance < least or (share == 1.0 and clearance <= 0.0):
                 raise ValueError(f'a move to {np.round(target, 3)} takes the arm {clearance:.3f} m from itself')
             least = min(_MIN_CLEARANCE, max(least, clearance))
 

@@ -928,6 +928,19 @@ def test_a_planned_move_out_of_a_collision_may_not_go_into_another(world, rctl, 
         answer.result()
 
 
+def test_a_planned_move_that_stays_in_a_collision_is_refused(world, rctl, driven):
+    """The model gives no depth in a collision: the move could go deeper."""
+    rctl.wall, rctl.q = 0.5, _joints(0.6)
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.7)))
+
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='from itself'):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+
+
 def test_a_planned_move_past_a_joint_limit_is_refused(world, rctl, driven):
     driver, _, _, clock, loop = driven()
     answer = _mover(world, driver)(command.JointPosition(np.array([0.0, 0.0, np.radians(169.0), 0.0, 0.0, 0.0])))
