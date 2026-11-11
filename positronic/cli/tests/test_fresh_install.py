@@ -24,8 +24,10 @@ from pathlib import Path
 
 import pytest
 from platform_client import routes
+from platform_client.billing import CouponRedemption
 from platform_client.client import API_KEY_ENV, API_URL_ENV, CLIENT_VERSION, CREDENTIAL_ENV, PLATFORM_VERSION_HEADER
 from platform_client.config import CONFIG_DIR_ENV
+from platform_client.ids import OrgSlug
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY
 from platform_client.terms import Program, ProgramEntry, ProgramEntryResponse, Terms, TermsResponse
 
@@ -52,6 +54,9 @@ ANSWERS: dict[str, object] = {
     routes.PLATFORM_ACCEPT_TERMS: ProgramEntry(
         program=Program.platform, entered_at=datetime.fromisoformat(AT), terms_version='1.3'
     ).model_dump(mode='json'),
+    routes.BILLING_COUPONS_REDEEM: CouponRedemption(org=OrgSlug('user-a0'), units=60_000_000_000).model_dump(
+        mode='json'
+    ),
     routes.USERS_REGISTER: {
         'user_id': 'a0',
         'artifact_location': 's3://bucket/users/a0/',
@@ -210,6 +215,7 @@ DOCUMENTED_COMMANDS = {
     ],
     'account-terms': ['uv', 'run', 'positronic', 'account', 'terms'],
     'account-accept-terms': ['uv', 'run', 'positronic', 'account', 'accept-terms', '--version="1.3"'],
+    'account-redeem': ['uv', 'run', 'positronic', 'account', 'redeem', '--code=PCR-7K2M-9QXA'],
     'eval-run-on-platform': [
         'uv',
         'run',

@@ -1077,6 +1077,7 @@ def test_every_endpoint_has_exactly_one_method():
         'program_terms',
         'program_entry',
         'accept_platform_terms',
+        'redeem_coupon',
     }
     assert len(declared) == len(methods)
     assert methods <= set(vars(PlatformClient))

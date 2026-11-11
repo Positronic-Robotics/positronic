@@ -95,6 +95,16 @@ uv run positronic account accept-terms --version='"<version>"'
 uv run positronic account register --alias=<display name> --accept_terms='"<version>"'
 ```
 
+## Coupons
+
+`PlatformClient.redeem_coupon(code)` redeems a code and answers the organization and the credit units it got. From the
+command line, `positronic account redeem` prints the credits that it added. `--json` prints the answer as JSON. Quote a
+code of digits with inner quotes.
+
+```bash
+uv run positronic account redeem --code=<code>
+```
+
 ## Credit accounts
 
 `PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.
