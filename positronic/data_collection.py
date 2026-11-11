@@ -666,6 +666,8 @@ cron_bimanual = cfn.Config(
     right_twist_gain=2.0,
     left_controller_axes=True,
     right_controller_axes=True,
+    left_heading_only=True,
+    right_heading_only=True,
     left_gripper=positronic.cfg.hardware.gripper.cron_dh_gripper,
     right_gripper=positronic.cfg.hardware.gripper.cron_dh_gripper.override(port='socket://192.168.68.66:7663'),
 )
