@@ -38,7 +38,7 @@ from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndO
 from positronic.policy.sequential import Sequential
 from positronic.utils import check_finite_positive
 
-from .clutch import Tracker
+from .clutch import CONTROLLER_AXES, Tracker
 from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, SessionParams, camera_names
 
 logger = logging.getLogger(__name__)
@@ -231,6 +231,7 @@ class TeleopService:
         press_threshold: float = 0.6,
         auth_token: str | None = None,
         cameras: Sequence[str] = (),
+        controller_axes: geom.Rotation | None = CONTROLLER_AXES,
     ):
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
             check_finite_positive(value, name)
@@ -238,6 +239,8 @@ class TeleopService:
         self._auth_token = auth_token
         # The cameras of the station: a session that names no cameras gets these
         self.station_cameras = camera_names(cameras)
+        # The axes of the controller in the frame of the headset, or None for the axes of the headset (see `Tracker`)
+        self.controller_axes = controller_axes
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
         self._buttons = ButtonMap(hold_sec, press_threshold)
@@ -473,7 +476,7 @@ class TeleopService:
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
             ready, self._phase = self._ready, Phase.RUNNING if self._ready is ReadyAnswer.READY else Phase.IDLE
             if ready is ReadyAnswer.READY:
-                self._tracker = Tracker(operator)
+                self._tracker = Tracker(operator, self.controller_axes)
         if ready is ReadyAnswer.READY:
             return
         if self._stopping or cancelled.is_set():
