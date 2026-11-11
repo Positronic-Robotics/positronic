@@ -404,7 +404,7 @@ class LLMPolicy(Policy):
             key for key in endpoint.settings if key.startswith(('anthropic_cache', 'bedrock_cache', 'openrouter_cache'))
         ]
         if caching:
-            raise ValueError(f'settings must not configure provider caching, the policy places cache points: {caching}')
+            raise ValueError(f'settings must not configure provider caching: {caching}')
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
