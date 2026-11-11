@@ -53,7 +53,7 @@ dependencies = [
     # The public evals that `positronic eval run` runs here, and the episode lists the MolmoSpaces sim server
     # reads. A workspace member in a clone; pinned exactly for the same reason the client is.
     "positronic-evals==0.2.8",
-    "psutil",  # `positronic-server` enumerates local interfaces to name a wildcard bind's addresses
+    "psutil",  # `positronic-dataset-viewer` enumerates local interfaces to name a wildcard bind's addresses
     "pyarrow",
     "pydantic",
     "pyturbojpeg<2",
@@ -68,7 +68,7 @@ dependencies = [
 
 [project.scripts]
 positronic="positronic.cli:_internal_main"
-positronic-server="positronic.dataset_viewer.web_app:_internal_main"
+positronic-dataset-viewer="positronic.dataset_viewer.web_app:_internal_main"
 positronic-inference="positronic.inference:_internal_main"
 positronic-data-collection="positronic.data_collection:_internal_main"
 # The one engagement command, kept in the engagement's own directory (positronic/cli/tests/test_vocabulary.py).

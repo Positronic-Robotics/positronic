@@ -154,12 +154,12 @@ needs, and how to rebuild the extension after a change of libfranka.
 
 After installation, the following command-line scripts will be available:
 - `positronic-data-collection`: Collect demonstrations in simulation or on hardware
-- `positronic-server`: Browse and inspect datasets
+- `positronic-dataset-viewer`: Browse and inspect datasets
 - `lerobot-0_3_3-convert`: Convert datasets to model format
 - `positronic`: Run evals in simulation or on hardware, and read back the ones sent to the platform
 - `positronic-inference`: Run an attended session on hardware, from the keyboard or from a browser console
 
-All commands work both inside an activated virtual environment and with `uv run --locked` prefix (e.g., `uv run --locked positronic-server`). Use `--locked` so the installed environment matches the committed `uv.lock` — uv errors loudly if you edited `pyproject.toml` without re-running `uv lock`.
+All commands work both inside an activated virtual environment and with `uv run --locked` prefix (e.g., `uv run --locked positronic-dataset-viewer`). Use `--locked` so the installed environment matches the committed `uv.lock` — uv errors loudly if you edited `pyproject.toml` without re-running `uv lock`.
 
 On Linux x86_64, the extras that pull torch (`molmoact2`, `lerobot`, `lerobot_0_3_3`) install its CUDA 12.8 build. That build needs NVIDIA driver 570 or newer.
 
@@ -178,7 +178,7 @@ Opens MuJoCo simulation with phone-based teleoperation. Record demonstrations by
 Then browse your episodes:
 
 ```bash
-uv run --locked positronic-server --dataset.path=~/datasets/stack_cubes_raw --port=5001
+uv run --locked positronic-dataset-viewer --dataset.path=~/datasets/stack_cubes_raw --port=5001
 ```
 
 Visit `http://localhost:5001` to view episodes. Continue to full workflow below.
@@ -216,10 +216,10 @@ uv run --locked positronic-data-collection droid --output_dir=~/datasets/droid_r
 
 ### 2. Review and Curate
 
-Browse datasets with the [positronic-server](positronic/dataset_viewer/web_app.py):
+Browse datasets with the [positronic-dataset-viewer](positronic/dataset_viewer/web_app.py):
 
 ```bash
-uv run --locked positronic-server \
+uv run --locked positronic-dataset-viewer \
     --dataset.path=~/datasets/stack_cubes_raw \
     --port=5001
 ```
@@ -229,7 +229,7 @@ Visit `http://localhost:5001` to view episodes. The viewer is read-only for now:
 To preview exactly what the training will see, pass the same codec configuration you'll use for conversion:
 
 ```bash
-uv run --locked positronic-server \
+uv run --locked positronic-dataset-viewer \
     --dataset=@positronic.cfg.ds.local_all \
     --dataset.path=~/datasets/stack_cubes_raw \
     --dataset.codec=@positronic.vendors.openpi.codecs.ee \

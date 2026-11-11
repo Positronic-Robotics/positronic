@@ -275,7 +275,7 @@ that the robot has. So every command signal starts at the episode start, and the
 ## View the recordings
 
 ```bash
-uv run positronic-server --dataset.path=~/datasets/stack_cubes_demos
+uv run positronic-dataset-viewer --dataset.path=~/datasets/stack_cubes_demos
 ```
 
 Record a few trial episodes first, and view them. One task needs 50 or more demonstrations. Keep the episodes short,

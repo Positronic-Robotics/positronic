@@ -163,11 +163,11 @@ An error that the policy itself raises reaches the caller unchanged, and so does
 
 Specify `--output_dir` to record runs as Positronic datasets. Recorded data includes robot state, camera feeds, actions, gripper commands, and timing information.
 
-Replay recorded runs: `uv run positronic-server --dataset.path=~/datasets/inference_logs/run1 --port=5001` and open `http://localhost:5001` to review episodes, identify failure modes, and extract clips for dataset augmentation.
+Replay recorded runs: `uv run positronic-dataset-viewer --dataset.path=~/datasets/inference_logs/run1 --port=5001` and open `http://localhost:5001` to review episodes, identify failure modes, and extract clips for dataset augmentation.
 
 ## Evaluation Workflow
 
-Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. To compare checkpoints, start one server for each and run the same evaluation against each server.
+Run inference with recording, review in the dataset viewer, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. To compare checkpoints, start one server for each and run the same evaluation against each server.
 
 **Iteration:** Evaluate checkpoint → identify failures in server → collect targeted demos for failure modes → append to dataset → retrain → re-evaluate. Convergence typically occurs after 3-5 iterations.
 

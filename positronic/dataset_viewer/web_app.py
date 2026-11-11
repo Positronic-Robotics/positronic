@@ -1151,7 +1151,7 @@ def _generate_self_signed_cert(hosts: list[str]) -> _SelfSignedCert:
             '365',
             '-nodes',
             '-subj',
-            '/CN=positronic-server',
+            '/CN=positronic-dataset-viewer',
             '-addext',
             f'subjectAltName={",".join([*entries, "DNS:localhost"])}',
         ],

@@ -152,7 +152,7 @@ def test_certificate_carries_a_subject_a_long_host_name_would_overflow():
     assert len(host.encode()) > 64
     cert = _certificate([host])
 
-    assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == 'positronic-server'
+    assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == 'positronic-dataset-viewer'
     assert host in _alt_names(cert).get_values_for_type(x509.DNSName)
 
 

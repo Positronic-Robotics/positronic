@@ -33,7 +33,7 @@ uv run positronic eval run --eval=.sim.libero.object \
   --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --eval.trial_count=10 --output_dir=~/evals/libero
 
-uv run positronic-server --dataset.path=~/evals/libero \
+uv run positronic-dataset-viewer --dataset.path=~/evals/libero \
   --ep_table_cfg=@positronic.cfg.dataset_viewer.eval_table
 ```
 

@@ -1,4 +1,4 @@
-"""Server configurations for positronic-server UI."""
+"""Configurations for the positronic-dataset-viewer UI."""
 
 from datetime import datetime
 
