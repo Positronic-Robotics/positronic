@@ -302,12 +302,9 @@ class CronController:
             logger.warning(f'{self.ip}: clearing errors: {self.power.name}, {self.errors}')
             # A safety stop (RB SFTY) also latches FAILURE: the OFF request clears it once the stop is released
             self.resume()
+        self._await(lambda: not rctl.is_error(), _CONNECT_TIMEOUT_S, 'clear error state (is the stop button released?)')
         # The error flag can clear before the power state leaves FAILURE, and RUN is refused from FAILURE
-        self._await(
-            lambda: not rctl.is_error() and self.power is not PowerState.FAILURE,
-            _CONNECT_TIMEOUT_S,
-            'clear error state (is the stop button released?)',
-        )
+        self._await(lambda: self.power is not PowerState.FAILURE, POWER_TIMEOUT_S, 'the arm out of FAILURE')
 
     def _run_projects(self) -> None:
         for project in self.projects:

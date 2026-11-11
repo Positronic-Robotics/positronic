@@ -60,6 +60,8 @@ class FakeRctl:
         self._run_in: int | None = None
         # Reads of the state that OFF takes after a request; the error flag clears at once
         self.off_lag = 0
+        # A request for RUN that stops in STANDBY
+        self.run_stalls = False
         self._off_in: int | None = None
         # A joint that a velocity does not move
         self.stuck_joint: int | None = None
@@ -144,6 +146,9 @@ class FakeRctl:
             self._run_in -= 1
             return
         self._run_in = None
+        if self.run_stalls:
+            self.power = PowerState.STANDBY
+            return
         self.power = PowerState.FAILURE if self.fail_power_run else PowerState.RUN
         if self.power is PowerState.RUN:
             self.mode = MotionMode.HOLD
@@ -409,6 +414,17 @@ def test_a_failure_left_with_no_error_flag_is_cleared_before_the_arm_is_powered(
     _pump(loop, clock, 1)
 
     assert _called_in_order(rctl.calls, 'take_control', 'off', 'run')
+    assert rctl.power is PowerState.RUN
+
+
+def test_a_failure_that_takes_longer_than_the_error_flag_to_leave_is_given_the_power_timeout(rctl, driven, monkeypatch):
+    monkeypatch.setattr(cron_controller, '_CONNECT_TIMEOUT_S', 0.1)
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    rctl.off_lag = 10  # reads at 0.05 s: longer than the wait for the error flag
+    _, _, _, clock, loop = driven()
+
+    _pump(loop, clock, 1)
+
     assert rctl.power is PowerState.RUN
 
 
@@ -1144,6 +1160,47 @@ def test_a_move_powers_an_arm_in_standby_to_run_through_off(world, rctl, driven)
 
     assert answer.result() is None
     assert _called_in_order(rctl.calls, 'off', 'run', 'waypoint')
+
+
+def test_a_power_up_that_stops_in_standby_goes_back_to_off_before_it_asks_for_run_again(
+    world, rctl, driven, monkeypatch
+):
+    """RUN from STANDBY failed on an arm whose multi-turn encoder asks for a preset."""
+    monkeypatch.setattr(cron, 'POWER_TIMEOUT_S', 2.0)
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    _pump(loop, clock, 2)
+    rctl.safety_latched, rctl.run_stalls = False, True
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, int(1.0 / TICK))
+    assert rctl.power is PowerState.STANDBY
+    del rctl.calls[:]
+
+    rctl.run_stalls = False
+    _pump_until(loop, clock, answer, ticks=int(cron._RECOVER_S / TICK))
+
+    assert answer.result() is None
+    assert _called_in_order(rctl.calls, 'off', 'run')
+
+
+def test_a_cartesian_delta_does_not_drive_on_to_an_earlier_target_that_the_arm_has_not_reached(rctl, driven):
+    """The seed of the steps is the arm, not the earlier target. The arm still brakes from its speed: 0.125 rad at
+    1 rad/s and 4 rad/s^2."""
+    rctl.stuck_joint = 0
+    _, _, commands, clock, loop = driven()
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.9, 0.0, 0.0]))))
+    _pump(loop, clock, 200)
+    rctl.stuck_joint = None
+
+    commands.push(command.CartesianDelta(geom.Transform3D(translation=np.array([0.0, 0.05, 0.0]))))
+    furthest = 0.0
+    for _ in range(600):
+        _pump(loop, clock, 1)
+        furthest = max(furthest, rctl.q[0])
+
+    assert furthest < 0.2, f'the arm drove {furthest:.3f} rad on toward the earlier target'
+    np.testing.assert_allclose(rctl.q[1], 0.05, atol=0.01)
 
 
 def test_a_move_clears_a_failure_by_a_power_off_and_starts_once_the_arm_is_up_again(world, rctl, driven):

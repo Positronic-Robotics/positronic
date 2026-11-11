@@ -259,7 +259,9 @@ class _Arm(DriverRun[command.CommandType]):
     def track(self, cmd: command.CommandType) -> None:
         """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival. A Cartesian target is the
         goal of the damped steps of each tick: the joints move toward it no faster than the arm can follow."""
-        seed = self.reading.q if self.target is None else self.target
+        # A delta starts from the arm: a seed at an earlier target that the arm has not reached would drive on to it
+        fresh = self.target is None or isinstance(cmd, command.CartesianDelta)
+        seed = self.reading.q if fresh else self.target
         pose = self._pose_of(cmd)
         if pose is not None:
             joints = np.array(seed, dtype=np.float64)
@@ -341,12 +343,15 @@ class _Arm(DriverRun[command.CommandType]):
             if self._cleared_at is None or now - self._cleared_at >= _RESUME_EVERY_S:
                 self.controller.resume()
                 self._cleared_at = now
-        elif self.reading.power is PowerState.STANDBY and not self._powering:
-            if self._cleared_at is None or now - self._cleared_at >= _RESUME_EVERY_S:
+        elif self.reading.power is PowerState.STANDBY:
+            # A request that did not reach RUN in the time the controller allows is lost; a power up that stopped in
+            # STANDBY goes back to OFF first
+            if self._powering and now - self._powered_at >= POWER_TIMEOUT_S:
+                self._powering = False
+            if not self._powering and (self._cleared_at is None or now - self._cleared_at >= _RESUME_EVERY_S):
                 self.controller.power_off()
                 self._cleared_at = now
-        elif self.reading.power in (PowerState.OFF, PowerState.STANDBY):
-            # A request that did not reach RUN in the time the controller allows is lost: ask again
+        elif self.reading.power is PowerState.OFF:
             if not self._powering or now - self._powered_at >= POWER_TIMEOUT_S:
                 self.controller.power_up()
                 self._powering, self._powered_at = True, now
