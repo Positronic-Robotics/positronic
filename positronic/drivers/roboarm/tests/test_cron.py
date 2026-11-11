@@ -54,6 +54,11 @@ class FakeRctl:
         self.tool_capsules: list[dict] = []
         self.error = False
         self.fail_power_run = False
+        # Reads of the state that RUN takes after a request, as the real controller takes some seconds
+        self.run_lag = 0
+        self._run_in: int | None = None
+        # A joint that a velocity does not move
+        self.stuck_joint: int | None = None
         self.blocked = False
         self.moving = False
         self.waypoint: np.ndarray | None = None
@@ -119,6 +124,16 @@ class FakeRctl:
 
     def cmd_power_run(self):
         self._call('run')
+        self._run_in = self.run_lag
+        self._update_power()
+
+    def _update_power(self):
+        if self._run_in is None:
+            return
+        if self._run_in > 0:
+            self._run_in -= 1
+            return
+        self._run_in = None
         self.power = PowerState.FAILURE if self.fail_power_run else PowerState.RUN
         if self.power is PowerState.RUN:
             self.mode = MotionMode.HOLD
@@ -131,6 +146,7 @@ class FakeRctl:
             self.safety_latched = self.error = False
 
     def get_state(self):
+        self._update_power()
         return int(self.power)
 
     def is_error(self):
@@ -151,7 +167,10 @@ class FakeRctl:
             return
         if self.power is PowerState.RUN:
             self.mode = MotionMode.JOINT_VEL
-            self.q = self.q + self.velocity * TICK
+            moved = self.velocity * TICK
+            if self.stuck_joint is not None:
+                moved[self.stuck_joint] = 0.0
+            self.q = self.q + moved
 
     def cmd_add_waypoint_joint(self, pose, limits, rblend, waypoint_id, main=True):
         self._call('waypoint')
@@ -528,6 +547,23 @@ def test_a_move_asked_for_while_the_error_stays_is_not_planned_and_is_refused(wo
     with pytest.raises(MoveRefused, match='motion errors'):
         answer.result()
     assert 'waypoint' not in rctl.calls, 'a move refused started once the error cleared'
+
+
+def test_an_error_in_a_stream_is_logged_with_how_far_each_joint_lags_its_commanded_travel(rctl, driven, caplog):
+    """The controller does not name the joint of a following error."""
+    rctl.stuck_joint = 4
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(np.full(JOINTS, 1.0)))
+    _pump(loop, clock, 50)
+
+    with caplog.at_level(logging.ERROR, logger=cron.__name__):
+        rctl.error = True
+        _pump(loop, clock, 1)
+
+    lag = next(record.getMessage() for record in caplog.records if 'lag' in record.getMessage())
+    degrees = [float(value) for value in lag.split('[')[1].split(']')[0].split(',')]
+    assert degrees[4] > 1.0
+    assert max(abs(value) for i, value in enumerate(degrees) if i != 4) < 0.1
 
 
 def test_each_change_of_the_error_state_is_logged_with_the_address_of_the_controller(rctl, driven, caplog):
@@ -957,8 +993,13 @@ def test_a_move_clears_a_failure_by_a_power_off_and_starts_once_the_arm_is_up_ag
     _pump(loop, clock, 2)
     del rctl.calls[:]
 
+    rctl.run_lag = 600
     answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
-    _pump(loop, clock, int(0.5 * cron_controller.STARTUP_S / TICK))
+    for _ in range(2000):
+        _pump(loop, clock, 1)
+        if rctl.power is PowerState.RUN:
+            break
+    _pump(loop, clock, int(0.8 * cron_controller.STARTUP_S / TICK))
     assert 'waypoint' not in rctl.calls, 'the move started during the joint move after RUN'
     _pump_until(loop, clock, answer, ticks=5000)
 
