@@ -87,7 +87,9 @@ image on the run that the data disk holds, so a VM that a preemption stopped res
 It reads `/data/run/run.env` (`TRAIN_IMAGE`, `RUN`, `FINAL_MARKER`, `S3_ENDPOINT`, `S3_REGION`) and the S3 key in
 `/data/keys/s3.json`. When the run's final marker exists, it launches nothing. Otherwise it runs
 `/data/run/run.sh` if that file is executable, or else the image's launcher on `/data/run/config.toml` (Cosmos3)
-or `/data/run/train.json` (FLUX 3 Action). Install it on the VM:
+or `/data/run/train.json` (FLUX 3 Action). When that exits 0, it writes the final marker. The Cosmos3 launcher also
+needs `DROID_ROOT` in `run.env`: the dataset directory under `/data`, named `droid_plus_lerobot_640x360_20260412`,
+that holds `success/`. Install it on the VM:
 
 ```bash
 docker run --rm "$TRAIN_IMAGE" cat /opt/train/train-resume.service > /etc/systemd/system/train-resume.service
