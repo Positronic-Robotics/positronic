@@ -181,11 +181,13 @@ def joint_targets(
     if error <= _STALL_ERROR:
         return q
     # The steps stall far from the position. Bring the tool to it, and turn the tool as far as that allows. The
-    # stretched elbow can help when other joints are at their limits, but it can also pin j4, so try both bounds.
-    candidates = [
-        _step(target, q0, flange_to_tool, lower, bound, _POSITION_FIRST_WEIGHTS) for bound in (folded_upper, upper)
-    ]
-    return min(candidates, key=position_error)
+    # stretched elbow can help when other joints are at their limits, but it can also pin j4. So when the folded bound
+    # holds j4, try the full bound too, and keep the better position.
+    folded = _step(target, q0, flange_to_tool, lower, folded_upper, _POSITION_FIRST_WEIGHTS)
+    if folded[3] < folded_upper[3] and q0[3] <= folded_upper[3]:
+        return folded
+    full = _step(target, q0, flange_to_tool, lower, upper, _POSITION_FIRST_WEIGHTS)
+    return min((folded, full), key=position_error)
 
 
 def _step(

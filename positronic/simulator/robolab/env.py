@@ -193,6 +193,9 @@ class RobolabEnv(EnvProtocol):
         self._objects: list[str] = []
         self._subtask_recorder: Any = None
         self._shown_chains: list[Any] = [None] * num_envs  # each slot's chain machine at the last frame
+        self._episode = 0  # the number of the current episode, counted by resets
+        self._episode_task = ''  # the task of the current episode
+        self._past_limit_steps = [0] * num_envs  # per slot, the steps of this episode with a joint far past a limit
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
@@ -342,6 +345,15 @@ class RobolabEnv(EnvProtocol):
 
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+        for slot, steps in enumerate(self._past_limit_steps):
+            if steps:
+                print(
+                    f'{self._episode_task} episode {self._episode} slot {slot}: {steps} steps past a limit',
+                    file=sys.stderr,
+                )
+        self._past_limit_steps = [0] * self._num_envs
+        self._episode += 1
+        self._episode_task = token[keys.TOKEN_TASK]
         key = (token[keys.TOKEN_TASK], token[keys.TOKEN_INSTRUCTION_TYPE], token.get(keys.TOKEN_EPISODE_LENGTH_S))
         if key != self._key:
             self._build(*key)
@@ -502,7 +514,13 @@ class RobolabEnv(EnvProtocol):
             past = np.maximum(lower - joint_pos[slot], joint_pos[slot] - upper)
             if past.max() > pose_ik.MAX_JOINT_STEP:
                 # The solve clamps such a joint to its limit. Print it, so that a physics fault stays visible.
-                print(f'slot {slot}: joints {np.round(past, 3).tolist()} rad past their limits', file=sys.stderr)
+                self._past_limit_steps[slot] += 1
+                if self._past_limit_steps[slot] == 1:
+                    print(
+                        f'{self._episode_task} episode {self._episode} slot {slot}: joints '
+                        f'{np.round(past, 3).tolist()} rad past their limits; the count of such steps follows at reset',
+                        file=sys.stderr,
+                    )
             targets.append(pose_ik.joint_targets(target[slot], joint_pos[slot], flange_to_tool, lower, upper))
         return torch.as_tensor(np.stack(targets), dtype=torch.float32, device=self._env.device)
 
