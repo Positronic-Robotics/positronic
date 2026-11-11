@@ -1,4 +1,4 @@
-"""Dataset utilities for Positronic dataset visualization."""
+"""The Rerun replay of one episode: its recording stream and its layout."""
 
 import functools
 import io

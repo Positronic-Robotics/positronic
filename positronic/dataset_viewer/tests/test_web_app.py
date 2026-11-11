@@ -24,9 +24,9 @@ from positronic.dataset import TimeBounds
 from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.server import positronic_server
-from positronic.server.dataset_utils import DURATION_COLUMN, INDEX_COLUMN, ReplayLayout
-from positronic.server.positronic_server import (
+from positronic.dataset_viewer import web_app
+from positronic.dataset_viewer.rerun_replay import DURATION_COLUMN, INDEX_COLUMN, ReplayLayout
+from positronic.dataset_viewer.web_app import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
     DATASET_SUMMARY,
@@ -275,7 +275,7 @@ def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch)
         yield b'half an episode'
         raise RuntimeError('encoder died')
 
-    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', _dies_partway)
+    monkeypatch.setattr(web_app, 'stream_episode_rrd', _dies_partway)
 
     with pytest.raises(RuntimeError):
         TestClient(app).get('/api/episode_rrd/0')
@@ -354,7 +354,7 @@ def test_a_base_href_gains_the_trailing_slash_a_relative_link_needs(viewer):
         assert '<base href="/v/tok/" />' in viewer.get('/').text
 
 
-_VIEWER = Path(positronic_server.__file__).parent / 'static' / VIEWER_DIR / rr.__version__
+_VIEWER = Path(web_app.__file__).parent / 'static' / VIEWER_DIR / rr.__version__
 _HISTORY_ON = 'enable_history: true,'
 
 
@@ -442,7 +442,7 @@ def test_an_episode_keeps_its_size_where_the_page_hides_paths(viewer, monkeypatc
 
 
 def test_two_exports_on_one_origin_keep_their_own_session_state():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'return `${name}:${document.baseURI}`' in app_js
     assert app_js.count("sessionStorage.setItem('") == 0
@@ -651,7 +651,7 @@ def test_a_page_hands_the_script_every_route_and_file_it_reads(viewer, page):
 
 
 def test_the_flat_table_takes_a_url_filter_only_for_a_value_some_row_carries():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'if (state.filtersData[key].includes(value)) state.filters[key] = value;' in app_js
 
@@ -764,7 +764,7 @@ def grouped(monkeypatch):
     monkeypatch.setitem(app_state, 'dataset', episodes)
     monkeypatch.setitem(app_state, 'loading_state', False)
     monkeypatch.setitem(app_state, 'group_tables_cfg', {'by_task': _BY_TASK})
-    monkeypatch.setattr(positronic_server, '_api_cache', {})
+    monkeypatch.setattr(web_app, '_api_cache', {})
     return TestClient(app)
 
 
@@ -852,7 +852,7 @@ def test_group_keys_that_are_episode_columns_are_accepted():
 
 def test_the_flat_table_applies_a_url_key_that_names_any_episode_column():
     """A View link carries a group key; the flat table filters on it when it is a column, not only a filter one."""
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'function readFiltersFromURL(serverFilterKeys, columns, episodes)' in app_js
     assert 'const index = columns.findIndex((c) => c.key === key);' in app_js
@@ -861,7 +861,7 @@ def test_the_flat_table_applies_a_url_key_that_names_any_episode_column():
 
 def test_the_flat_table_compares_a_url_filter_with_a_cell_s_raw_value():
     """A formatted cell is `[raw, formatted]`, and a View link carries the raw value as the server spells it."""
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'return String(rawValue(episodeData[colIdx])) === value;' in app_js
     assert 'const v = rawValue(episodeData[index]);' in app_js
@@ -889,7 +889,7 @@ def flat_with_hidden(monkeypatch):
     monkeypatch.setitem(app_state, 'dataset', episodes)
     monkeypatch.setitem(app_state, 'loading_state', False)
     monkeypatch.setitem(app_state, 'episode_table_cfg', ep_table_cfg)
-    monkeypatch.setattr(positronic_server, '_api_cache', {})
+    monkeypatch.setattr(web_app, '_api_cache', {})
     return TestClient(app)
 
 
@@ -982,7 +982,7 @@ def test_a_group_filter_key_that_is_a_hidden_episode_column_is_accepted():
 
 
 def test_the_page_draws_nothing_for_a_hidden_column():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'if (display === false) { headerCells.push(null); continue; }' in app_js  # no header
     assert 'if (columns[i].display === false) continue;' in app_js  # no cell

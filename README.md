@@ -216,7 +216,7 @@ uv run --locked positronic-data-collection droid --output_dir=~/datasets/droid_r
 
 ### 2. Review and Curate
 
-Browse datasets with the [positronic-server](positronic/server/positronic_server.py):
+Browse datasets with the [positronic-server](positronic/dataset_viewer/web_app.py):
 
 ```bash
 uv run --locked positronic-server \

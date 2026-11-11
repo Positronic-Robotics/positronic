@@ -94,7 +94,7 @@ export MUJOCO_GL=egl EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1
 The dataset viewer shows the video, the robot state and the result of each episode:
 
 ```bash
-positronic-server --dataset.path=~/evals/molmo_smoke --ep_table_cfg=@positronic.cfg.server.eval_table
+positronic-server --dataset.path=~/evals/molmo_smoke --ep_table_cfg=@positronic.cfg.dataset_viewer.eval_table
 ```
 
 Open https://localhost:8400. The server makes a self-signed certificate, so the browser asks you to accept it.

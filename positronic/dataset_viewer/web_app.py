@@ -40,7 +40,7 @@ from positronic import keys
 from positronic.dataset import CachedDataset, Dataset, Episode
 from positronic.dataset.episode import META_PATH, META_UID
 from positronic.dataset.local_dataset import LocalDataset
-from positronic.server.dataset_utils import (
+from positronic.dataset_viewer.rerun_replay import (
     DEFAULT_MAX_HZ,
     DEFAULT_MAX_RESOLUTION,
     DURATION_COLUMN,
@@ -1232,7 +1232,7 @@ def main(
     ep_table_cfg: TableConfig | None,
     max_resolution: int,
     max_hz: float = DEFAULT_MAX_HZ,
-    cache_dir: str = '~/.cache/positronic/server/',
+    cache_dir: str = '~/.cache/positronic/dataset_viewer/',
     host: str = '0.0.0.0',
     port: int = 8400,
     debug: bool = False,
@@ -1300,7 +1300,7 @@ def main(
         title: Header text; the dataset root when empty
         show_paths: Whether the pages report where the dataset lives
         layout: Where an episode's replay shows its views, for example
-            ``positronic.cfg.server.single_arm_replay_layout``. None keeps the default replay
+            ``positronic.cfg.dataset_viewer.single_arm_replay_layout``. None keeps the default replay
         summary_column: A column of the episode table whose values the page header counts; None shows no count
     """
     root = get_dataset_root(dataset) or 'unknown_dataset'

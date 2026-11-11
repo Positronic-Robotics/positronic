@@ -1,4 +1,4 @@
-// Positronic Dataset Viewer — frontend for positronic_server.py
+// Positronic Dataset Viewer — frontend for web_app.py
 //
 // Pages
 // -----
