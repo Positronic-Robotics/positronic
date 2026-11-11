@@ -81,9 +81,8 @@ class EpisodeSignals:
     dims: dict[str, int]
     poses: list[str]
     joints: list[str]
-    # Each text signal's values by the index they plot at: the stage ladder for a state mark whose every value is a
-    # stage, so the stage lines of several sources line up, and otherwise the distinct values in the order they
-    # first appear.
+    # Each text signal's values by plot index: the ladder for a state mark of stages, so that sources line up, and
+    # otherwise the distinct values in the order they first appear.
     texts: dict[str, list[str]] = field(default_factory=dict)
     neither_numeric_nor_text: list[str] = field(default_factory=list)
 
