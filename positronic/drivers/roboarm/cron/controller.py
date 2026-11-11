@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 JOINTS = 6
 
 _CONNECT_TIMEOUT_S = 5.0
-_POWER_TIMEOUT_S = 15.0
+POWER_TIMEOUT_S = 15.0
 _HOLD_TIMEOUT_S = 0.5
 _POLL_S = 0.05
 # The controller takes HOLD in about 3 ms
@@ -183,7 +183,7 @@ class CronController:
             self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'))
             if self.power_off_on_exit:
                 self._attempt(rctl.cmd_power_off)
-                self._attempt(lambda: self._await(lambda: self.power is PowerState.OFF, _POWER_TIMEOUT_S, 'power off'))
+                self._attempt(lambda: self._await(lambda: self.power is PowerState.OFF, POWER_TIMEOUT_S, 'power off'))
             self._attempt(rctl.release_control)
         self._attempt(rctl.disconnect)
 
@@ -294,7 +294,12 @@ class CronController:
             logger.warning(f'{self.ip}: clearing errors: {self.errors}')
             # A safety stop (RB SFTY) also latches FAILURE: the OFF request clears it once the stop is released
             self.resume()
-        self._await(lambda: not rctl.is_error(), _CONNECT_TIMEOUT_S, 'clear error state (is the stop button released?)')
+        # The error flag can clear before the power state leaves FAILURE, and RUN is refused from FAILURE
+        self._await(
+            lambda: not rctl.is_error() and self.power is not PowerState.FAILURE,
+            _CONNECT_TIMEOUT_S,
+            'clear error state (is the stop button released?)',
+        )
 
     def _run_projects(self) -> None:
         for project in self.projects:
@@ -303,7 +308,7 @@ class CronController:
     def _power_to(self, wanted: PowerState, request) -> None:
         if self.power is not wanted:
             request()
-        self._await(lambda: self._is_at(wanted), _POWER_TIMEOUT_S, f'power state {wanted.name}')
+        self._await(lambda: self._is_at(wanted), POWER_TIMEOUT_S, f'power state {wanted.name}')
 
     def _is_at(self, wanted: PowerState) -> bool:
         if self.power is PowerState.FAILURE or rctl.is_error():

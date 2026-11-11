@@ -58,6 +58,9 @@ class FakeRctl:
         # Reads of the state that RUN takes after a request, as the real controller takes some seconds
         self.run_lag = 0
         self._run_in: int | None = None
+        # Reads of the state that OFF takes after a request; the error flag clears at once
+        self.off_lag = 0
+        self._off_in: int | None = None
         # A joint that a velocity does not move
         self.stuck_joint: int | None = None
         self.blocked = False
@@ -130,6 +133,11 @@ class FakeRctl:
         self._update_power()
 
     def _update_power(self):
+        if self._off_in is not None:
+            if self._off_in > 0:
+                self._off_in -= 1
+            else:
+                self._off_in, self.power = None, PowerState.OFF
         if self._run_in is None:
             return
         if self._run_in > 0:
@@ -143,7 +151,8 @@ class FakeRctl:
     def cmd_power_off(self):
         self._call('off')
         self.mode_at_power_off = MotionMode(self.get_motion_mode())
-        self.power = PowerState.OFF
+        self._off_in = self.off_lag
+        self._update_power()
         if self.safety_latched and not self.stop_pressed:
             self.safety_latched = self.error = False
 
@@ -368,6 +377,17 @@ def test_a_project_of_the_controller_is_started_after_a_safety_stop_is_cleared(r
 
     assert _called_in_order(rctl.calls, 'resume', 'off', 'exr_run gripper_bridge', 'run')
     assert 'exr_run gripper_bridge refused' not in rctl.calls
+
+
+def test_a_safety_stop_whose_error_clears_before_the_arm_is_off_is_powered_once_it_is_off(rctl, driven):
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    rctl.off_lag = 3
+    _, _, _, clock, loop = driven()
+
+    _pump(loop, clock, 1)
+
+    assert _called_in_order(rctl.calls, 'off', 'run')
+    assert rctl.power is PowerState.RUN
 
 
 def test_an_error_left_by_an_earlier_session_is_cleared_before_the_arm_is_powered(rctl, driven):
@@ -1067,6 +1087,27 @@ def test_a_run_that_comes_after_its_move_was_refused_still_holds_commands_for_th
 
     _pump(loop, clock, int(0.5 * cron.STARTUP_S / TICK))
     assert rctl.commanded
+
+
+def test_a_power_up_that_never_reaches_run_is_asked_for_again(world, rctl, driven):
+    """A request for RUN can be lost: the arm stays off, and each later move would be refused."""
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    _pump(loop, clock, 2)
+    rctl.safety_latched, rctl.run_lag = False, 10**9
+    move = _mover(world, driver)
+    refused = move(command.JointPosition(_joints(0.3)))
+    _pump_until(loop, clock, refused, ticks=int(2 * cron._RECOVER_S / TICK))
+    with pytest.raises(MoveRefused):
+        refused.result()
+
+    rctl._run_in, rctl.run_lag = None, 0  # the request was lost
+    answer = move(command.JointPosition(_joints(0.3)))
+    _pump_until(loop, clock, answer, ticks=int(2 * cron._RECOVER_S / TICK))
+
+    assert answer.result() is None
+    np.testing.assert_allclose(rctl.q, _joints(0.3), atol=cron._ARRIVED_TOL)
 
 
 def test_a_move_clears_a_failure_by_a_power_off_and_starts_once_the_arm_is_up_again(world, rctl, driven):

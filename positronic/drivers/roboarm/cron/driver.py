@@ -9,7 +9,7 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State, command
-from positronic.drivers.roboarm.cron.controller import JOINTS, STARTUP_S, CronController, PowerState
+from positronic.drivers.roboarm.cron.controller import JOINTS, POWER_TIMEOUT_S, STARTUP_S, CronController, PowerState
 from positronic.drivers.utils import DriverRun, MoveRefused, MoveStatus, log_failure
 from positronic.eval import NO_MODEL_ROBOT_META
 
@@ -143,6 +143,7 @@ class _Arm(DriverRun[command.CommandType]):
         # once about 0.5 s after RUN, and a command meanwhile stops it on a following error. A RUN can come after the
         # move that asked for it was refused, so these outlive the move
         self._powering = False
+        self._powered_at = 0.0
         self._run_at: float | None = None
         # The joints the arm read, and the travel commanded on each tick of the stream
         self._stream: collections.deque[tuple[np.ndarray, np.ndarray]] = collections.deque(maxlen=_LAG_TICKS)
@@ -340,9 +341,11 @@ class _Arm(DriverRun[command.CommandType]):
             if self._resumed_at is None or now - self._resumed_at >= _RESUME_EVERY_S:
                 self.controller.resume()
                 self._resumed_at = now
-        elif self.reading.power in (PowerState.OFF, PowerState.STANDBY) and not self._powering:
-            self.controller.power_up()
-            self._powering = True
+        elif self.reading.power in (PowerState.OFF, PowerState.STANDBY):
+            # A request that did not reach RUN in the time the controller allows is lost: ask again
+            if not self._powering or now - self._powered_at >= POWER_TIMEOUT_S:
+                self.controller.power_up()
+                self._powering, self._powered_at = True, now
 
     def _start_deferred(self, now: float) -> None:
         """Start the move that waits."""
