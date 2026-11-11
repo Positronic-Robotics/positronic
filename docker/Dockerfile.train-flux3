@@ -1,0 +1,89 @@
+# syntax=docker/dockerfile:1.7
+# A training image for FLUX 3 Action: Black Forest Labs' training code at the commit the serving image reads, the
+# DROID policy package at the repository root, and the base repository's trunk, video VAE and text encoder. A VM runs
+# it through train-resume.service (docker/README.md § Training images).
+#
+# Usage (from the repository root)
+#   docker buildx build --platform linux/amd64 --secret id=hf_token,env=HF_TOKEN --provenance=false --sbom=false \
+#       -f docker/Dockerfile.train-flux3 -t <registry>/train-flux3:<tag> --push .
+#
+# Both FLUX 3 Action repositories are gated, so the build reads a Hugging Face token as a BuildKit secret. The
+# token enters no layer. The build downloads 39 GB of weights. The weights are under the FLUX Kommunity License v1.0
+# (positronic/vendors/flux3_action/NOTICE).
+#
+# Weights in the image, for a run's train.json:
+#   /opt/flux3/droid/model.safetensors            the DROID policy (root package), for `policy.trunk_weights`
+#   /opt/flux3/base/flux-3-action-base.safetensors the action-pretrained trunk
+#   /opt/flux3/base/video_vae.safetensors         `policy.video_vae_id`
+#   /opt/flux3/base/text_encoder                  `policy.text_encoder_id`
+
+ARG FLUX_POLICY_REPO=black-forest-labs/flux-3-action-droid
+ARG FLUX_POLICY_REVISION=3d0887bdc7acee1686b19afac267125d519ff4f1
+ARG FLUX_BASE_REPO=black-forest-labs/flux-3-action-base
+ARG FLUX_BASE_REVISION=62878e2925e59b7a89ec14463ce89932624c490d
+ARG HF_TOKEN_SECRET=hf_token
+
+# One large file per stage, and so per layer.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS hub
+RUN pip install --no-cache-dir huggingface_hub==1.30.0
+
+FROM hub AS droid
+ARG FLUX_POLICY_REPO FLUX_POLICY_REVISION HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_POLICY_REPO', revision='$FLUX_POLICY_REVISION', local_dir='/opt/flux3/droid', ignore_patterns=['variants/*', 'assets/*'])" \
+ && rm -rf /opt/flux3/droid/.cache
+
+FROM hub AS trunk
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', local_dir='/opt/flux3/base', allow_patterns=['flux-3-action-base.safetensors'])" \
+ && rm -rf /opt/flux3/base/.cache
+
+FROM hub AS encoders
+ARG FLUX_BASE_REPO FLUX_BASE_REVISION HF_TOKEN_SECRET
+RUN --mount=type=secret,id=$HF_TOKEN_SECRET \
+    export HF_TOKEN="$(cat /run/secrets/$HF_TOKEN_SECRET)" \
+ && python -c "from huggingface_hub import snapshot_download as d; d('$FLUX_BASE_REPO', revision='$FLUX_BASE_REVISION', local_dir='/opt/flux3/base', ignore_patterns=['flux-3-action-base.safetensors'])" \
+ && rm -rf /opt/flux3/base/.cache
+
+FROM python:3.12-slim-bookworm
+# The compiler is for Triton and Inductor. FFmpeg decodes the AV1 training videos.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential ca-certificates curl ffmpeg git jq \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /usr/local/bin/uv
+
+# BFL's code, Apache-2.0. The lock pins torch 2.10.0+cu128; the next step replaces it with the cu130 build.
+ARG FLUX_ACTION_REV=e2dd1d8dbc5977b54315d61f7548c63c043d6d4f
+WORKDIR /opt/flux-action
+RUN git clone https://github.com/black-forest-labs/flux-action.git . \
+ && git checkout "$FLUX_ACTION_REV" \
+ && uv sync --locked --no-dev --python 3.12 --extra encoders --extra data \
+ && uv cache clean
+# The same torch built for CUDA 13.0, and the NATTEN wheel for it. FOOTGUN: the cu128 NATTEN wheel fails on a
+# B300 (compute capability 10.3) at its first kernel, "Token Permute kernel launch failed", with every backend.
+# A later `uv sync` puts the cu128 torch back.
+ARG TORCH_CUDA=cu130
+RUN uv pip install --python .venv/bin/python --reinstall --index-strategy unsafe-best-match \
+      --index-url "https://download.pytorch.org/whl/$TORCH_CUDA" --extra-index-url https://pypi.org/simple \
+      "torch==2.10.0+$TORCH_CUDA" "torchvision==0.25.0+$TORCH_CUDA" \
+ && uv pip install --python .venv/bin/python --reinstall --no-deps "natten==0.21.6+torch2100$TORCH_CUDA" \
+      -f https://whl.natten.org/ \
+ && uv cache clean
+ENV PATH="/opt/flux-action/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+COPY --link --from=droid /opt/flux3/droid /opt/flux3/droid
+COPY --link --from=trunk /opt/flux3/base /opt/flux3/base
+COPY --link --from=encoders /opt/flux3/base /opt/flux3/base
+COPY --link positronic/vendors/flux3_action/NOTICE /opt/flux3/
+COPY --link docker/train-resume/train-resume.service /opt/train/train-resume.service
+COPY --link docker/train-resume/resume.sh /opt/train/resume
+COPY --link docker/train-resume/launch-flux3.sh /opt/train/launch
+
+LABEL org.opencontainers.image.title="train-flux3" \
+    org.opencontainers.image.description="FLUX 3 Action training code, the DROID policy package and the base trunk and encoders. FLUX Kommunity License v1.0: see /opt/flux3/NOTICE and /opt/flux3/droid/LICENSE.md." \
+    org.opencontainers.image.licenses="LicenseRef-FLUX-Kommunity-1.0 AND Apache-2.0" \
+    org.opencontainers.image.source="https://github.com/Positronic-Robotics/positronic"
