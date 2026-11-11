@@ -75,9 +75,6 @@ def _prompt(episode: Episode) -> str:
     return episode.static[keys.TASK]
 
 
-_STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
-
-
 @dataclass(frozen=True)
 class KeptFrames:
     """The rows, the resized views and the prompt of the frames that the trim keeps."""
@@ -104,6 +101,9 @@ class TrimRow:
     frames: int
     cut_frame: int | None
     cut_s: float | None
+
+
+_STATE_SIGNALS = (keys.JOINTS, keys.GRIP, keys.TARGET_GRIP, keys.EE_POSE)
 
 
 class DroidEpisodes(torch.utils.data.Dataset):
