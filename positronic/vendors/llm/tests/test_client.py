@@ -285,6 +285,22 @@ def test_request_after_a_rejected_tool_call_keeps_the_cache_point_of_the_request
     assert all(item.get('content') != [] for item in retry.get('input', retry.get('messages')))
 
 
+@pytest.mark.parametrize('cache_ttl', ['5m', '1h'])
+def test_anthropic_request_sends_each_cache_point_with_the_configured_ttl_and_records_it(monkeypatch, cache_ttl):
+    pytest.importorskip('anthropic')
+    requests = serve(monkeypatch, [anthropic_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})])
+    monkeypatch.delenv(ANTHROPIC_API_KEYS_ENV, raising=False)
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'test-secret-do-not-record')
+    policy = llm(model='anthropic:test-model', cache_ttl=cache_ttl)
+    with execution(policy) as (active, rt, clock):
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
+    body = json.loads(requests[0].content)
+    controls = [body['messages'][i]['content'][j]['cache_control'] for i, j in anthropic_marks(body)]
+    assert controls
+    assert all(control == {'type': 'ephemeral', 'ttl': cache_ttl} for control in controls)
+    assert policy.meta()['cache_ttl'] == cache_ttl
+
+
 def test_each_anthropic_episode_sends_a_key_from_the_pool_and_records_only_its_fingerprint(monkeypatch):
     pytest.importorskip('anthropic')
     pool = ['test-secret-first-org', 'test-secret-second-org']

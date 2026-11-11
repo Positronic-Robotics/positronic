@@ -160,6 +160,11 @@ def test_image_horizon_must_be_positive():
         LLMPolicy(Endpoint('test'), Motion(), image_horizon=0)
 
 
+def test_cache_ttl_must_be_one_the_providers_accept():
+    with pytest.raises(ValueError, match='cache_ttl'):
+        LLMPolicy(Endpoint('test'), Motion(), cache_ttl='2h')
+
+
 def test_on_demand_pictures_reveal_only_requested_cameras(model):
     requests, replies = model
     picture = ModelResponse([

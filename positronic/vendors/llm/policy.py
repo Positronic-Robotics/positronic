@@ -12,7 +12,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, get_args
 
 import configuronic as cfn
 import numpy as np
@@ -286,13 +286,13 @@ class Conversation:
     def _ends_with_prompt(message: ModelMessage) -> bool:
         return isinstance(message, ModelRequest) and isinstance(message.parts[-1], UserPromptPart)
 
-    @staticmethod
-    def _with_cache_point(message: ModelMessage) -> ModelMessage:
+    def _with_cache_point(self, message: ModelMessage) -> ModelMessage:
         assert isinstance(message, ModelRequest)
         *parts, part = message.parts
         assert isinstance(part, UserPromptPart)
         content = [part.content] if isinstance(part.content, str) else part.content
-        return replace(message, parts=[*parts, replace(part, content=[*content, CachePoint()])])
+        cache_point = CachePoint(ttl=self._policy.cache_ttl)
+        return replace(message, parts=[*parts, replace(part, content=[*content, cache_point])])
 
     @property
     def budget_spent(self) -> bool:
@@ -373,6 +373,9 @@ class Conversation:
         return parts
 
 
+CacheTTL = Literal['5m', '1h']
+
+
 class LLMPolicy(Policy):
     """An API-backed, single-arm Cartesian policy with independent episode conversations."""
 
@@ -387,14 +390,17 @@ class LLMPolicy(Policy):
         image_horizon: int = 3,
         max_calls: int = 100,
         max_invalid: int = 3,
+        cache_ttl: CacheTTL = '5m',
     ):
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
             raise ValueError('camera_keys must name at least one camera, without duplicates')
+        if cache_ttl not in get_args(CacheTTL):
+            raise ValueError(f'cache_ttl must be one of {get_args(CacheTTL)}')
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
-        self.max_calls, self.max_invalid = max_calls, max_invalid
+        self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
         self.tools = [
             ToolDefinition(
                 name=tool.value, description=schema.__doc__ or '', parameters_json_schema=schema.model_json_schema()
@@ -411,6 +417,7 @@ class LLMPolicy(Policy):
             policy_keys.MODEL: self.endpoint.model_id,
             'settings': dict(self.endpoint.settings),
             'cache_breakpoints': self.endpoint.cache_breakpoints,
+            'cache_ttl': self.cache_ttl,
             'motion': asdict(self.motion),
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
@@ -474,6 +481,7 @@ class LLMPolicy(Policy):
     max_calls=100,
     max_invalid=3,
     cache_breakpoints=False,
+    cache_ttl='5m',
 )
 def llm(
     model: str | Model,
@@ -487,6 +495,7 @@ def llm(
     max_calls: int,
     max_invalid: int,
     cache_breakpoints: bool,
+    cache_ttl: CacheTTL,
 ) -> LLMPolicy:
     """The LLM policy over a direct model API."""
     return LLMPolicy(
@@ -498,4 +507,5 @@ def llm(
         image_horizon=image_horizon,
         max_calls=max_calls,
         max_invalid=max_invalid,
+        cache_ttl=cache_ttl,
     )
