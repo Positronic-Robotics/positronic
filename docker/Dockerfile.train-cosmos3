@@ -95,10 +95,12 @@ COPY --link docker/train-resume/train-resume.service /opt/train/train-resume.ser
 COPY --link docker/train-resume/resume.sh /opt/train/resume
 COPY --link docker/train-resume/marker.py /opt/train/marker.py
 COPY --link docker/train-resume/launch-cosmos3.sh /opt/train/launch
+COPY --link positronic/vendors/droid_finetune /opt/train/python/droid_finetune
 
 # The run's TOML reads both through `${oc.env:...}`, as the upstream recipe does.
 ENV BASE_CHECKPOINT_PATH=/opt/cosmos3/dcp \
-    WAN_VAE_PATH=/opt/cosmos3/wan22_vae/Wan2.2_VAE.pth
+    WAN_VAE_PATH=/opt/cosmos3/wan22_vae/Wan2.2_VAE.pth \
+    PYTHONPATH=/opt/train/python
 WORKDIR /workspace
 
 LABEL org.opencontainers.image.title="train-cosmos3" \

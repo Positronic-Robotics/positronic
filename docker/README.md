@@ -99,7 +99,7 @@ systemctl daemon-reload && systemctl enable --now train-resume.service
 ### Held-out evaluation
 
 [`positronic/vendors/droid_finetune`](../positronic/vendors/droid_finetune) runs in both training images, where
-positronic is not installed. Copy the directory to the data disk and put its parent on `PYTHONPATH`. Each command
+positronic is not installed. Each image carries it at `/opt/train/python`, which is on `PYTHONPATH`. Each command
 scores a checkpoint on a held-out Cosmos3-DROID tree and writes a report. The report gives the mean squared action
 error, against the recorded actions, over a fixed set of windows with one noise seed. A Cosmos3 and a FLUX 3 Action
 report of one tree score the same windows.
