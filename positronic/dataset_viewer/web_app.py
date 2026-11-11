@@ -1232,7 +1232,7 @@ def main(
     ep_table_cfg: TableConfig | None,
     max_resolution: int,
     max_hz: float = DEFAULT_MAX_HZ,
-    cache_dir: str = '~/.cache/positronic/dataset_viewer/',
+    cache_dir: str = '~/.cache/positronic/server/',
     host: str = '0.0.0.0',
     port: int = 8400,
     debug: bool = False,
