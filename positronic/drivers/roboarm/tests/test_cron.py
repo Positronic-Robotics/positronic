@@ -855,6 +855,17 @@ def test_a_streamed_cartesian_target_stops_short_of_the_arm_itself(rctl, driven)
     assert 0.5 - cron._MIN_CLEARANCE - 0.06 <= rctl.q[0] <= 0.5 - cron._MIN_CLEARANCE + 1e-6
 
 
+def test_a_streamed_joint_target_stops_short_of_the_arm_itself(rctl, driven):
+    """The fake collision model puts a wall at 0.5 on the first joint."""
+    rctl.wall = 0.5
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(0.8)))
+
+    _pump(loop, clock, 3000)
+
+    assert 0.5 - cron._MIN_CLEARANCE - 0.06 <= rctl.q[0] <= 0.5 - cron._MIN_CLEARANCE + 1e-6
+
+
 def test_the_spheres_of_the_tool_go_to_the_collision_model_as_capsules_of_no_length(rctl, driven):
     _, _, _, clock, loop = driven(tool_spheres=[([0.0, 0.01, 0.03], 0.05)])
 

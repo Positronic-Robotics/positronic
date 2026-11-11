@@ -131,6 +131,8 @@ class _Arm(DriverRun[command.CommandType]):
         self.target: np.ndarray | None = None
         # The tool pose of a streamed Cartesian target, which the damped steps of each tick follow
         self._pose: geom.Transform3D | None = None
+        # The joints of a streamed joint target, which the steps of each tick go to
+        self._joint_goal: np.ndarray | None = None
         # A move that waits to start: until the stream stops, or until the controller clears its error
         self._deferred: np.ndarray | None = None
         self._deferred_call: pimm.calls.Call[command.CommandType, None] | None = None
@@ -217,6 +219,16 @@ class _Arm(DriverRun[command.CommandType]):
         joints = seed + turn * min(1.0, float(np.min(max_turn / np.maximum(np.abs(turn), 1e-12))))
         if self._drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
             return np.array(seed, dtype=np.float64)
+        return self._clear_of_itself(seed, joints)
+
+    def _toward(self, goal: np.ndarray, seed: np.ndarray, max_turn: np.ndarray) -> np.ndarray:
+        """The joints a step from ``seed`` toward ``goal``, each joint at most ``max_turn`` from ``seed``, and not
+        nearer the arm itself than the clearance."""
+        return self._clear_of_itself(seed, seed + np.clip(goal - seed, -max_turn, max_turn))
+
+    def _clear_of_itself(self, seed: np.ndarray, joints: np.ndarray) -> np.ndarray:
+        """``joints``, or ``seed`` if ``joints`` take the arm nearer than the clearance to itself, by the collision
+        model of the controller."""
         clearance = self.controller.clearance(joints)
         if clearance < _MIN_CLEARANCE and clearance < self.controller.clearance(seed):
             return np.array(seed, dtype=np.float64)
@@ -257,20 +269,18 @@ class _Arm(DriverRun[command.CommandType]):
         return self._checked(cmd, np.asarray(cmd.positions, dtype=np.float64))
 
     def track(self, cmd: command.CommandType) -> None:
-        """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival. A Cartesian target is the
-        goal of the damped steps of each tick: the joints move toward it no faster than the arm can follow."""
+        """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival. The target is the goal of
+        steps on each tick, damped least squares steps for a Cartesian target: the joints move toward it no faster than
+        the arm can follow, and not into the arm itself."""
         # A delta starts from the arm: a seed at an earlier target that the arm has not reached would drive on to it
         fresh = self.target is None or isinstance(cmd, command.CartesianDelta)
         seed = self.reading.q if fresh else self.target
         pose = self._pose_of(cmd)
-        if pose is not None:
-            joints = np.array(seed, dtype=np.float64)
-        else:
-            joints = self._within_limits(self._to_joints(cmd), self.reading.q)
+        goal = None if pose is not None else self._within_limits(self._to_joints(cmd), self.reading.q)
         if self.target is None:
             self.controller.to_hold()
             self._stream.clear()
-        self.target, self._pose = joints, pose
+        self.target, self._pose, self._joint_goal = np.array(seed, dtype=np.float64), pose, goal
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there.
@@ -279,7 +289,7 @@ class _Arm(DriverRun[command.CommandType]):
         """
         with pimm.calls.raise_to(call):
             target = self._to_joints(call.request)
-            self.target, self._pose = None, None
+            self.target, self._pose, self._joint_goal = None, None, None
             self._deferred, self._deferred_call = target, call
             self._deferred_until = self.clock.now() + _RECOVER_S
             self._deferred_from, self._deferred_moved = self.reading.q.copy(), 0.0
@@ -296,7 +306,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._last_step = now
         if not self.usable:
             # An arm that left RUN holds no target: it must not resume one when it comes back
-            self.target, self._pose = None, None
+            self.target, self._pose, self._joint_goal = None, None, None
             self.velocity[:] = 0.0
             self._recover(now)
             return
@@ -317,6 +327,8 @@ class _Arm(DriverRun[command.CommandType]):
             return
         if self._pose is not None:
             self.target = self._follow(self._pose, self.target, self.max_speed * dt)
+        elif self._joint_goal is not None:
+            self.target = self._toward(self._joint_goal, self.target, self.max_speed * dt)
         error = self.target - self.reading.q
         # Not faster than the arm can stop from in the error left: at the gain alone, braking would need more
         # than max_accel and the arm would overshoot
