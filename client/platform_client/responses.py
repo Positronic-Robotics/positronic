@@ -409,19 +409,54 @@ STATUS_FIELD = 'status'
 ID_FIELD = 'id'
 
 
+class EvalView(BaseModel):
+    """What a submission shows for one of its evals. A submission of one eval has one; a submission of a composite
+    eval has one per part, in the part order of the composite. `eval` is absent for a rig plan, and in a payload from
+    a platform that sends no list.
+
+    `episodes` counts what the run asked for and what it has landed, and `runs` lists the launches that served it.
+    A run the platform executes itself reports one launch; a plan the lab rig serves reports one per start.
+    """
+
+    eval: EvalRef | None = None
+    status: Slugged[SubmissionStatus]
+    scores: Scores | None = None
+    artifacts: ArtifactRefs | None = None
+    episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
+    runs: list[RunSummary] = Field(default_factory=list)
+
+
+# The list of a view's evals, and the field of an entry that names its eval, named for the same reason.
+EVALS_FIELD, EVAL_FIELD = 'evals', 'eval'
+# The fields of an `EvalView` that a platform with no `evals` sends on the view itself.
+_PER_EVAL_FIELDS = frozenset(EvalView.model_fields) - {EVAL_FIELD, STATUS_FIELD}
+
+
 class _TaggedView(BaseModel):
     """One `submissions.get` variant. The union selects it by its `status` default, so a payload
     carrying any other status belongs to a different variant and is refused rather than validated
     into this one.
+
+    `evals` holds what the submission shows for each of its evals, and always has an entry. `episodes` and `runs`
+    read the first entry, and so do `scores` and `artifacts` where a variant has them. They are not serialized. A
+    payload with no `evals` comes from an older platform: its `episodes`, `runs`, `scores` and `artifacts` make the
+    one entry.
     """
 
     status: Slugged[SubmissionStatus]
-    # What the run asked for and what it has landed, and the launches that served it. A run the
-    # platform executes itself reports one launch; a plan the lab rig serves reports one per start.
-    episodes: EpisodeCounts = Field(default_factory=EpisodeCounts)
-    runs: list[RunSummary] = Field(default_factory=list)
+    evals: list[EvalView] = Field(default_factory=list)
     # A rig plan as it runs; `submissions.create` answered with the same. None on a simulator run.
     resolved: ResolvedPlan | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _one_eval_from_an_older_platform(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get(EVALS_FIELD):
+            return data
+        single = {name: data[name] for name in _PER_EVAL_FIELDS if name in data}
+        rest = {name: value for name, value in data.items() if name not in _PER_EVAL_FIELDS}
+        status = data.get(STATUS_FIELD, cls.model_fields[STATUS_FIELD].default)
+        return {**rest, EVALS_FIELD: [{STATUS_FIELD: status, **single}]}
 
     @model_validator(mode='after')
     def _the_status_is_this_variants_tag(self) -> Self:
@@ -429,6 +464,14 @@ class _TaggedView(BaseModel):
         if self.status is not tag:
             raise ValueError(f'{type(self).__name__} carries status {self.status.name}, not {tag.name}')
         return self
+
+    @property
+    def episodes(self) -> EpisodeCounts:
+        return self.evals[0].episodes
+
+    @property
+    def runs(self) -> list[RunSummary]:
+        return self.evals[0].runs
 
 
 class PendingSubmissionView(_TaggedView):
@@ -463,24 +506,44 @@ class ErroredSubmissionView(_TaggedView):
     id: SubmissionId
     reason_code: Slugged[ReasonCode] | None = None
     reason: str | None = None
-    artifacts: ArtifactRefs | None = None
-    scores: Scores | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.errored
+
+    @property
+    def artifacts(self) -> ArtifactRefs | None:
+        return self.evals[0].artifacts
+
+    @property
+    def scores(self) -> Scores | None:
+        return self.evals[0].scores
 
 
 class FinishedSubmissionView(_TaggedView):
-    """Terminal success.
+    """Terminal success. The first entry of `evals` carries `artifacts`.
 
     `replay` plays the recorded episodes back, `report` shows their results, and `outcome` counts them per endpoint.
     """
 
     id: SubmissionId
-    scores: Scores = Field(default_factory=Scores)
-    artifacts: ArtifactRefs
     replay: ReplayLink | None = None
     report: ReportLink | None = None
     outcome: PlanOutcome | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.finished
+
+    @model_validator(mode='after')
+    def _the_first_eval_carries_artifacts(self) -> Self:
+        if self.evals[0].artifacts is None:
+            raise ValueError('a finished submission carries the artifacts of its first eval')
+        return self
+
+    @property
+    def artifacts(self) -> ArtifactRefs:
+        artifacts = self.evals[0].artifacts
+        assert artifacts is not None, 'the validator requires them'
+        return artifacts
+
+    @property
+    def scores(self) -> Scores:
+        return self.evals[0].scores or Scores()
 
 
 class CancelledSubmissionView(_TaggedView):
