@@ -119,9 +119,7 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, infe
     return model
 
 
-# The codec of ABC-DiT with ABC's real-data prompt of the one task: the views go cropped under ABC's camera names,
-# the grip goes as the gripper width (1 = open), and the 14 action values per step go back to one joint command and
-# one grip target per arm.
+# The ABC-DiT codec, with ABC's real-data prompt of the one task.
 bottles_codec = abc_codecs.multitask_200k.override(prompts={TASK: abc_codecs.ABC_130K_PROMPTS[TASK]}, prompt_prefix='')
 
 
