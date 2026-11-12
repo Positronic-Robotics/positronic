@@ -1549,10 +1549,10 @@ TURNED_IMPEDANCE = command.Impedance(
 )
 
 
-def _streamed_mode(mode: command.Impedance) -> Any:
+def _streamed_mode(mode: command.Impedance, **driver_kwargs) -> Any:
     """The pf mode the arm runs once a streamed joint command under ``mode`` lands."""
     arm = FakeArm(PARK)
-    driver = _driver(arm)
+    driver = _driver(arm, **driver_kwargs)
     feed = ManualCommandReceiver()
     driver.commands._bind(feed)
     loop = driver.run(StopFlag(), MockClock())
@@ -1577,6 +1577,19 @@ def test_an_impedance_frame_reaches_the_arm_as_its_stiffness_point_on_the_flange
     """``Impedance.frame`` is measured from ``gripper``, and the arm takes the point in flange axes."""
     mode = _streamed_mode(dataclasses.replace(IMPEDANCE, frame=frame))
     np.testing.assert_allclose(mode.stiffness_point, point, atol=1e-12)
+
+
+def test_an_impedance_mode_caps_the_reference_at_1_rad_s_per_joint_and_0_7_m_s_at_the_gripper(desk):
+    mode = _streamed_mode(IMPEDANCE)
+    assert mode.max_reference_speed == [1.0] * 7
+    assert mode.max_tool_point_speed == 0.7
+    np.testing.assert_allclose(mode.tool_point, FLANGE_TO_GRIPPER.translation, atol=1e-12)
+
+
+def test_the_reference_speed_caps_come_from_the_driver_configuration(desk):
+    mode = _streamed_mode(IMPEDANCE, max_reference_speed=1.3, max_gripper_point_speed=None)
+    assert mode.max_reference_speed == [1.3] * 7
+    assert mode.max_tool_point_speed is None
 
 
 def test_a_streamed_impedance_at_a_turned_frame_leaves_the_arm_alone(desk):

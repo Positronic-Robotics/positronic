@@ -44,9 +44,15 @@ def _install_vendor_stub() -> None:
             kxd=(37.0, 37.0, 37.0, 2.0, 2.0, 2.0),
             *,
             stiffness_point=(0.0, 0.0, 0.0),
+            max_reference_speed=(1.5,) * 7,
+            max_tool_point_speed=None,
+            tool_point=(0.0, 0.0, 0.0),
         ):
             self.kq, self.kqd, self.kx, self.kxd = list(kq), list(kqd), list(kx), list(kxd)
             self.stiffness_point = list(stiffness_point)
+            self.max_reference_speed = list(max_reference_speed)
+            self.max_tool_point_speed = max_tool_point_speed
+            self.tool_point = list(tool_point)
 
     vendor = types.ModuleType(VENDOR)
     vendor.__dict__.update(

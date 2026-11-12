@@ -358,6 +358,8 @@ class _Arm(DriverRun[command.CommandType]):
         should_stop: pimm.SignalReceiver,
         clock: pimm.Clock,
         safe_inputs: _SafeInputs,
+        max_reference_speed: float,
+        max_gripper_point_speed: float | None,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=2000)
         self._robot: pf.Robot | None = None
@@ -369,6 +371,8 @@ class _Arm(DriverRun[command.CommandType]):
         self.state = FrankaState()
         self._dynamics_factor = dynamics_factor
         self.safe_inputs = safe_inputs
+        self._max_reference_speed = max_reference_speed
+        self._max_gripper_point_speed = max_gripper_point_speed
         self._refusals = 0
         self._refused = False
         self._quiet_at = 0.0
@@ -544,8 +548,7 @@ class _Arm(DriverRun[command.CommandType]):
         while isinstance(asked := self.next_request(), pimm.calls.Call):
             asked.set_exception(self.no_connection_fault())
 
-    @staticmethod
-    def _to_pf_mode(mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
+    def _to_pf_mode(self, mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
         """The pf mode carrying ``mode``'s gains; ``None`` — no pin — and a bare ``PositionControl`` take pf's own."""
         match mode:
             case None:
@@ -557,7 +560,14 @@ class _Arm(DriverRun[command.CommandType]):
                     raise ValueError(f'this arm takes a stiffness point, not a turned stiffness frame: {frame}')
                 point = (_flange_to_gripper() * frame).translation
                 return pf.SoftwareImpedance(
-                    kq=list(kq), kqd=list(kqd), kx=list(kx), kxd=list(kxd), stiffness_point=point.tolist()
+                    kq=list(kq),
+                    kqd=list(kqd),
+                    kx=list(kx),
+                    kxd=list(kxd),
+                    stiffness_point=point.tolist(),
+                    max_reference_speed=[self._max_reference_speed] * len(self._joint_names),
+                    max_tool_point_speed=self._max_gripper_point_speed,
+                    tool_point=_flange_to_gripper().translation.tolist(),
                 )
 
     def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
@@ -925,6 +935,8 @@ class Robot(pimm.ControlSystem):
         collision_coeff: float = 2.0,
         manage_desk: bool = True,
         brake_after_idle_s: float | None = None,
+        max_reference_speed: float = 1.0,
+        max_gripper_point_speed: float | None = 0.7,
     ) -> None:
         """
         A run sends the model the arm reports each time it connects, and no model before its first connection.
@@ -940,8 +952,14 @@ class Robot(pimm.ControlSystem):
         :param brake_after_idle_s: How long the arm may sit with no command and no move in flight before the driver
             closes the brakes; the next command opens them again. None holds the brakes open for the whole run.
             Needs ``manage_desk``.
+        :param max_reference_speed: Under an ``Impedance`` mode, the speed in rad/s at which the reference moves each
+            joint to a new target.
+        :param max_gripper_point_speed: Under an ``Impedance`` mode, the most speed in m/s at which the reference
+            moves the gripper point. None caps nothing.
         """
         assert 0 < relative_dynamics_factor <= 1, relative_dynamics_factor
+        assert max_reference_speed > 0, max_reference_speed
+        assert max_gripper_point_speed is None or max_gripper_point_speed > 0, max_gripper_point_speed
         assert brake_after_idle_s is None or brake_after_idle_s > 0, brake_after_idle_s
         if brake_after_idle_s is not None and not manage_desk:
             raise ValueError(
@@ -964,6 +982,8 @@ class Robot(pimm.ControlSystem):
         self._collision_coeff = collision_coeff
         self._desk_credentials = _read_desk_credentials() if manage_desk else None
         self._brake_after_idle_s = brake_after_idle_s
+        self._max_reference_speed = max_reference_speed
+        self._max_gripper_point_speed = max_gripper_point_speed
 
     @staticmethod
     def _build_robot_meta(robot) -> dict:
@@ -1015,7 +1035,7 @@ class Robot(pimm.ControlSystem):
             lower_force_threshold_nominal=(coeff * force_threshold_nominal).tolist(),
             upper_force_threshold_nominal=(coeff * force_threshold_nominal * 2).tolist(),
         )
-        robot.set_control_mode(_Arm._to_pf_mode(None))
+        robot.set_control_mode(pf.InternalImpedance())
         if self._load is not None:
             logger.info(f'Setting load to {self._load}')
             robot.set_load(*self._load)
@@ -1037,7 +1057,15 @@ class Robot(pimm.ControlSystem):
     def _arm(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock, safe_inputs: _SafeInputs) -> _Arm:
         """The arm this run drives, built from the driver's configuration, with no connection yet."""
         return _Arm(
-            self.sync_move, self.commands, self.state, self._relative_dynamics_factor, should_stop, clock, safe_inputs
+            self.sync_move,
+            self.commands,
+            self.state,
+            self._relative_dynamics_factor,
+            should_stop,
+            clock,
+            safe_inputs,
+            self._max_reference_speed,
+            self._max_gripper_point_speed,
         )
 
     def _connect(self, arm: _Arm) -> None:
