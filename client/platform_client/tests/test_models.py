@@ -1435,7 +1435,9 @@ def test_a_payload_with_the_list_ignores_single_fields_that_disagree_with_it():
 def test_a_copy_with_a_new_list_reads_the_new_first_eval():
     view = FinishedSubmissionView.model_validate(_FINISHED_TWO_EVALS)
     first = EvalView(status=SubmissionStatus.finished, scores=SCORES, artifacts=ArtifactRefs(result=RESULT_URL))
-    assert view.model_copy(update={'evals': [first]}).scores == SCORES
+    copy = view.model_copy()
+    copy.evals = [first]
+    assert copy.scores == SCORES
 
 
 def test_a_single_accessor_refuses_assignment():
