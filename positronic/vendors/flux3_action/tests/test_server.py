@@ -156,7 +156,7 @@ def _commands_played_from_one_chunk(stack: Processor, chunk_length: int) -> int:
         return [{keys.TARGET_GRIP: float(index)} for index in range(chunk_length)]
 
     with pimm.World(virtual_time=True) as world:
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, inference_charge_sec=0)
         run = runtime.start(stack, infer)
         played = 0
         try:

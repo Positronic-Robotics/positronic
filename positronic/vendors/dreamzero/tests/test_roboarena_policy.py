@@ -362,7 +362,7 @@ class TestTheWire:
             policy = roboarena_policy.RoboarenaPolicy(address, connect_deadline=CONNECT_DEADLINE_S)
             started = time.monotonic()
             with pytest.raises(ConnectRefused):
-                Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
+                Executor(Clock(), simulated=True, inference_charge_sec=0).start(policy)
 
         assert time.monotonic() - started < CONNECT_DEADLINE_S + DEADLINE_SLACK_S
 
