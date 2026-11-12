@@ -11,12 +11,30 @@ from enum import StrEnum
 
 # An operator's marks as the arm works: one `<PROGRESS_CHANNEL>.<mark>` signal for each kind of mark.
 PROGRESS_CHANNEL = 'progress'
+# The kind of mark that holds the state codes, and the kind that holds the count of delivered objects.
+STATE_MARK = 'state'
+DELIVERED_MARK = 'delivered'
 # The signal a marked episode carries the state codes in.
-STATE_SIGNAL = f'{PROGRESS_CHANNEL}.state'
+STATE_SIGNAL = f'{PROGRESS_CHANNEL}.{STATE_MARK}'
 # An annotator's marks on a recorded episode: one `<ANNOTATION_CHANNEL>.<mark>` signal for each kind of mark.
 ANNOTATION_CHANNEL = 'data_annotation'
 # The channels whose signals are the marks that a person makes.
 MARK_CHANNELS = (PROGRESS_CHANNEL, ANNOTATION_CHANNEL)
+# An AI labeler's marks on a recorded episode: one `<AUTOLABEL_CHANNEL>.<source>.<mark>` signal for each source and
+# kind of mark, where the source names the labeler and its version.
+AUTOLABEL_CHANNEL = 'autolabel'
+
+
+def mark_of(signal: str) -> str | None:
+    """The kind of mark that `signal` records, or None where `signal` is not a mark.
+
+    A mark is `<channel>.<mark>` for a channel in `MARK_CHANNELS`, or `<AUTOLABEL_CHANNEL>.<source>.<mark>`.
+    """
+    channel, _, rest = signal.partition('.')
+    if channel in MARK_CHANNELS:
+        return rest or None
+    source, _, mark = rest.rpartition('.')
+    return mark if channel == AUTOLABEL_CHANNEL and source and mark else None
 
 
 class Stage(StrEnum):

@@ -42,7 +42,7 @@ from eval_vocabulary.episode import (
     VALUE_COLUMN,
     EndedBy,
 )
-from eval_vocabulary.progress import STATE_SIGNAL
+from eval_vocabulary.progress import ANNOTATION_CHANNEL, STATE_MARK, STATE_SIGNAL
 from eval_vocabulary.timeline import EMITTED_WALL, EMITTED_WORLD, HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME
 from positronic_evals import labels
 from positronic_evals.labels import (
@@ -485,7 +485,7 @@ def test_a_signal_that_does_not_parse_leaves_the_episode_without_a_label(
 
 NS_PER_S = 1_000_000_000
 TRY_OPEN_NS = 1000 * NS_PER_S
-ANNOTATOR_STATE = 'data_annotation.state'
+ANNOTATOR_STATE = f'{ANNOTATION_CHANNEL}.{STATE_MARK}'
 
 
 def _at(*seconds: float) -> list[int]:
