@@ -96,6 +96,26 @@ docker run --rm "$TRAIN_IMAGE" cat /opt/train/train-resume.service > /etc/system
 systemctl daemon-reload && systemctl enable --now train-resume.service
 ```
 
+### Held-out evaluation
+
+[`positronic/vendors/droid_finetune`](../positronic/vendors/droid_finetune) runs in both training images, where
+positronic is not installed. Each image carries it at `/opt/train/python`, which is on `PYTHONPATH`. Each command
+scores a checkpoint on a held-out Cosmos3-DROID tree and writes a report. The report gives the mean squared action
+error, against the recorded actions, over a fixed set of windows with one noise seed. A Cosmos3 and a FLUX 3 Action
+report of one tree score the same windows.
+
+```bash
+python -m droid_finetune.cosmos3_eval --checkpoint=/opt/cosmos3/dcp --heldout=<tree> --output=start.json
+python -m droid_finetune.flux3_eval --checkpoint=/opt/flux3/droid --heldout=<tree> --work-dir=<work> \
+    --output=start.json
+python -m droid_finetune.report compare start.json start-again.json   # exit 1 unless every window matches
+```
+
+`flux-action train` gives fresh weights to any embodiment head that its start file lacks, and reports no error.
+`python -m droid_finetune.flux3_train` loads the heads of the DROID package and stops when one is missing. For
+Cosmos3, set `checkpoint.strict_resume=True` and leave the head names out of `checkpoint.keys_to_skip_loading`.
+Keep `net_ema.` in that list, because the image's checkpoint holds no EMA weights.
+
 ## GR00T N1.7 containers
 
 `make build-groot` pulls the published `positro/gr00t-base:latest` image. The fork image contains

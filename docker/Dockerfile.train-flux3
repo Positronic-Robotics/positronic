@@ -77,6 +77,7 @@ RUN uv venv --python 3.12 /opt/train/venv \
  && uv pip install --python /opt/train/venv/bin/python boto3==1.35.99 \
  && uv cache clean
 ENV PATH="/opt/flux-action/.venv/bin:$PATH" \
+    PYTHONPATH=/opt/train/python \
     PYTHONUNBUFFERED=1
 
 COPY --link --from=droid /opt/flux3/droid /opt/flux3/droid
@@ -88,6 +89,7 @@ COPY --link docker/train-resume/train-resume.service /opt/train/train-resume.ser
 COPY --link docker/train-resume/resume.sh /opt/train/resume
 COPY --link docker/train-resume/marker.py /opt/train/marker.py
 COPY --link docker/train-resume/launch-flux3.sh /opt/train/launch
+COPY --link positronic/vendors/droid_finetune /opt/train/python/droid_finetune
 
 LABEL org.opencontainers.image.title="train-flux3" \
     org.opencontainers.image.description="FLUX 3 Action training code, the DROID policy package and the base trunk and encoders. FLUX Kommunity License v1.0: see /opt/flux3/NOTICE and /opt/flux3/droid/LICENSE.md." \
