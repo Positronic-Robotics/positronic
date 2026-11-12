@@ -261,6 +261,11 @@ def test_a_socket_address_refuses_a_relative_path():
         wire.UnixSocketAddress(Path('policy.sock'), wire.SESSION_PATH, '')
 
 
+def test_a_record_of_an_address_carries_every_field_but_the_pin():
+    assert wire.recorded_fields(wire.HostPortAddress) == ('host', 'port', 'path', 'query')
+    assert wire.recorded_fields(wire.UnixSocketAddress) == ('uds', 'path', 'query')
+
+
 def test_an_address_refuses_a_pin_of_no_ip_address():
     """A pin of no address would leave the wire nothing to dial, and the wire never resolves a pinned host."""
     with pytest.raises(ValueError, match='names no IP address'):

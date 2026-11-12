@@ -659,7 +659,7 @@ def test_each_wire_dials_the_fields_its_registry_member_declares():
     declared = {}
     for name, member in registry.CLIENT_WIRES.items():
         assert dataclasses.is_dataclass(member.ADDRESS)
-        declared[name] = [field.name for field in dataclasses.fields(member.ADDRESS)]
+        declared[name] = list(wire.recorded_fields(member.ADDRESS))
     carried = {slug_of(wire): list(address.model_fields) for wire, address in ADDRESS_OF_WIRE.items()}
     assert carried == declared
 

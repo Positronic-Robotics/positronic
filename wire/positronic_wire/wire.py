@@ -29,6 +29,16 @@ def bracket_ipv6(host: str) -> str:
 
 IPAddress = IPv4Address | IPv6Address
 
+# The field metadata of an address field that the dialler sets at dial time, and that no record of the address carries.
+_DIALLED_ONLY = 'dialled_only'
+DIALLED_ONLY = {_DIALLED_ONLY: True}
+
+
+def recorded_fields(address: type['SessionAddress']) -> tuple[str, ...]:
+    """The fields of ``address`` that a record of an endpoint carries: all of them less the ``DIALLED_ONLY`` ones."""
+    assert dataclasses.is_dataclass(address), f'{address.__name__} is an address, so it is a dataclass'
+    return tuple(field.name for field in dataclasses.fields(address) if not field.metadata.get(_DIALLED_ONLY))
+
 
 def refuse_an_empty_pin(pinned_ips: tuple[IPAddress, ...] | None) -> None:
     """Raises ``ValueError`` on a pin of no address: a wire dials none of it, and resolves no host in its place."""
@@ -58,14 +68,15 @@ class HostPortAddress(SessionAddress):
 
     ``pinned_ips`` pins the host to the IP addresses a wire dials for it, in the order the wire tries them. With a
     pin, nothing resolves the host: the wire connects to a pinned address, and still names the host to TLS, which
-    checks the certificate against it, and in the ``Host`` header. ``None`` resolves the host at each dial.
+    checks the certificate against it, and in the ``Host`` header. ``None`` resolves the host at each dial. The
+    dialler sets the pin, so no record of the endpoint carries it.
     """
 
     host: str
     port: int
     path: str
     query: str
-    pinned_ips: tuple[IPAddress, ...] | None = dataclasses.field(default=None, kw_only=True)
+    pinned_ips: tuple[IPAddress, ...] | None = dataclasses.field(default=None, kw_only=True, metadata=DIALLED_ONLY)
 
     def __post_init__(self) -> None:
         refuse_an_empty_pin(self.pinned_ips)

@@ -289,6 +289,10 @@ def test_a_pin_nothing_answers_on_is_no_answer():
     assert refused.value.refusal is wire.Refusal.SILENT
 
 
+def test_a_record_of_the_address_carries_the_host_and_the_port_but_not_the_pin():
+    assert wire.recorded_fields(roboarena.RoboarenaAddress) == ('host', 'port')
+
+
 def test_the_address_refuses_a_pin_of_no_ip_address():
     with pytest.raises(ValueError, match='names no IP address'):
         roboarena.RoboarenaAddress('policy.test', 8000, pinned_ips=())

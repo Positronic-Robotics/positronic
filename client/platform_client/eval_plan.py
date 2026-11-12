@@ -196,7 +196,7 @@ class RoboarenaAddress(BaseModel):
 
 EndpointAddress = HostPortAddress | UnixSocketAddress | RoboarenaAddress
 
-# The fields each wire dials: `ClientWire.ADDRESS` of the wire the registry names.
+# The fields a record of each wire carries: `recorded_fields` of the `ClientWire.ADDRESS` the registry names.
 ADDRESS_OF_WIRE: dict[Wire, type[EndpointAddress]] = {
     Wire.websocket: HostPortAddress,
     Wire.websocket_tls: HostPortAddress,

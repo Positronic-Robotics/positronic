@@ -18,7 +18,9 @@ class RoboarenaAddress(wire.SessionAddress):
     host: str
     port: int
     # The IP addresses to dial for ``host``, as ``wire.HostPortAddress`` pins them.
-    pinned_ips: tuple[wire.IPAddress, ...] | None = dataclasses.field(default=None, kw_only=True)
+    pinned_ips: tuple[wire.IPAddress, ...] | None = dataclasses.field(
+        default=None, kw_only=True, metadata=wire.DIALLED_ONLY
+    )
     # Bare assignments, so neither is a field: the protocol routes on a key inside each frame, and the
     # server closes any path but the root with `1008 Unsupported WebSocket path`.
     path = ''
