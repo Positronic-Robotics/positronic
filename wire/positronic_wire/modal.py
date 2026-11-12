@@ -90,9 +90,9 @@ class ModalClientConnection(wire.ClientConnection):
             self._dropped = True
             raise
 
-    def close(self) -> str:
+    def close(self, timeout: float | None = None) -> str:
         try:
-            return self._inner.close()
+            return self._inner.close(timeout)
         finally:
             release, self._release = self._release, None
             if release is not None:
