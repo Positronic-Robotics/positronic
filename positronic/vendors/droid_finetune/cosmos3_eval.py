@@ -7,8 +7,9 @@ Usage (in the train-cosmos3 image, with the parent of this package on PYTHONPATH
       --output=<dir>/iter_000001000.json
 
 `--checkpoint` is a DCP checkpoint: the image's start weights, or one that a training run of
-`action_policy_droid_nano` wrote. Every window samples with the same noise seed. The server's own defaults choose
-the sampler and the prompt format, as when it serves the policy. It prints the summary of the report as one JSON line.
+`action_policy_droid_nano` wrote. Every window samples with the same noise seed and the same kernels, so two runs
+on one checkpoint give the same report. The server's own defaults choose the sampler and the prompt format, as when
+it serves the policy. It prints the summary of the report as one JSON line.
 """
 
 import argparse
@@ -16,24 +17,45 @@ import os
 import time
 from pathlib import Path
 
-from cosmos_framework.scripts.action_policy_server_robolab import RobolabPolicyService, RobolabServerArgs
-
 from . import heldout
 from .report import build_report, write_report
 
 EXPERIMENT = 'action_policy_droid_nano'
+# The deterministic mode of cosmos_framework/scripts/train.py. The experiment turns on cudnn autotuning, and the
+# server compiles the model; both choose kernels by their measured speed, so two runs can use different kernels.
+DETERMINISTIC_ENV = {'CUBLAS_WORKSPACE_CONFIG': ':4096:8', 'FLASH_ATTENTION_DETERMINISTIC': '1'}
+DETERMINISTIC_OVERRIDES = ('trainer.cudnn.deterministic=True', 'trainer.cudnn.benchmark=False')
+# The guardrails download gated weights and filter no action. The image's start checkpoint holds no EMA weights,
+# so every checkpoint is scored on its regular weights.
+SETUP_UPDATE = {'guardrails': False, 'use_ema_weights': False, 'use_torch_compile': False}
 
 
-class OfflinePolicyService(RobolabPolicyService):
-    """The policy server on the regular weights, without its guardrails.
+def make_deterministic(environ, torch) -> None:
+    """Call before the first CUDA call: cuBLAS reads its workspace setting once."""
+    environ.update(DETERMINISTIC_ENV)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-    The guardrails download gated weights and filter no action. The image's start checkpoint holds no EMA weights,
-    so every checkpoint is scored on its regular weights, with the experiment's EMA off.
-    """
 
-    def _build_setup_args(self, args: RobolabServerArgs):
-        update = {'guardrails': False, 'use_ema_weights': False}
-        return super()._build_setup_args(args).model_copy(update=update)
+def experiment_overrides(vae_path: str, extra: list[str]) -> list[str]:
+    return [
+        f'model.config.tokenizer.vae_path={vae_path}',
+        'model.config.ema.enabled=False',
+        *DETERMINISTIC_OVERRIDES,
+        *extra,
+    ]
+
+
+def policy_service(server_args):
+    """NVIDIA's RoboLab policy server with `SETUP_UPDATE` applied. Only the training image holds its code."""
+    from cosmos_framework.scripts.action_policy_server_robolab import RobolabPolicyService  # noqa: PLC0415
+
+    class OfflinePolicyService(RobolabPolicyService):
+        def _build_setup_args(self, args):
+            return super()._build_setup_args(args).model_copy(update=SETUP_UPDATE)
+
+    return OfflinePolicyService(server_args)
 
 
 def main() -> None:
@@ -51,17 +73,17 @@ def main() -> None:
         parser.error('--vae-path is required when WAN_VAE_PATH is not set')
     # The experiment's dataset reads DROID_ROOT when the config loads; it names the tree that is scored.
     os.environ['DROID_ROOT'] = str(args.heldout / heldout.DATASET_DIR)
+    # Only the training image installs torch and cosmos_framework; the tests run without them.
+    import torch  # noqa: PLC0415
+    from cosmos_framework.scripts.action_policy_server_robolab import RobolabServerArgs  # noqa: PLC0415
 
-    service = OfflinePolicyService(
+    make_deterministic(os.environ, torch)
+    service = policy_service(
         RobolabServerArgs(
             checkpoint_path=str(args.checkpoint),
             allow_dcp_checkpoint=True,
             experiment=EXPERIMENT,
-            experiment_overrides=[
-                f'model.config.tokenizer.vae_path={args.vae_path}',
-                'model.config.ema.enabled=False',
-                *args.override,
-            ],
+            experiment_overrides=experiment_overrides(args.vae_path, args.override),
             seed=args.seed,
             deterministic_seed=True,
             format_prompt_as_json=args.format_prompt_as_json,
