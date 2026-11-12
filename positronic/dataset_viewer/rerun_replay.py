@@ -22,7 +22,7 @@ import rerun as rr
 import rerun.blueprint as rrb
 import rerun_bindings
 from av.video.stream import VideoStream
-from eval_vocabulary.progress import DELIVERED_MARK, LADDER, STATE_MARK, mark_of
+from eval_vocabulary.progress import LADDER, STATE_SIGNAL
 from eval_vocabulary.timeline import RECORDING_TIMELINE_ORDER
 from rerun.blueprint.datatypes import TextLogColumn, TextLogColumnKind
 from rerun.urdf import UrdfTree
@@ -81,8 +81,8 @@ class EpisodeSignals:
     dims: dict[str, int]
     poses: list[str]
     joints: list[str]
-    # Each text signal's values by plot index: the ladder for a state mark of stages, so that sources line up, and
-    # otherwise the distinct values in the order they first appear.
+    # Each text signal's values by plot index: the ladder for a stage mark of stages, so that the marks of every
+    # channel line up, and otherwise the distinct values in the order they first appear.
     texts: dict[str, list[str]] = field(default_factory=dict)
     neither_numeric_nor_text: list[str] = field(default_factory=list)
 
@@ -225,7 +225,17 @@ def _unplotted_notice(unplotted: dict[str, str]) -> str:
 # writes it any more — only released data carries it, and only until #587 converts that data.
 _SINGULAR_JOINT_SIGNAL = 'joint_signal'
 
+
 _STAGE_CODES = [stage.value for stage in LADDER]
+# The marks the Progress chart plots under any channel: the stage reached, and the count of objects delivered.
+_STATE_MARK = STATE_SIGNAL.rpartition('.')[2]
+_PROGRESS_MARKS = (_STATE_MARK, 'delivered')
+
+
+def _mark_of(name: str) -> str | None:
+    """The last part of a `<channel>.<mark>` or `<channel>.<source>.<mark>` signal name, or None with no channel."""
+    channel, _, mark = name.rpartition('.')
+    return mark if channel else None
 
 
 def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
@@ -251,7 +261,7 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
         first = sig[0][0]
         if isinstance(first, str):
             values = list(dict.fromkeys(str(value) for value in sig.values()))
-            on_ladder = mark_of(name) == STATE_MARK and set(values) <= set(_STAGE_CODES)
+            on_ladder = _mark_of(name) == _STATE_MARK and set(values) <= set(_STAGE_CODES)
             signals.texts[name] = list(_STAGE_CODES) if on_ladder else values
             continue
         if flatten_numeric(first) is None:
@@ -565,8 +575,7 @@ _DEFAULT_SPLIT_SHARES = (3, 1)
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
     charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
     names = sorted([*signals.numerics, *signals.texts])
-    # The stage and the count of delivered objects, of each person and each AI labeler.
-    progress: Charts = {'Progress': [name for name in names if mark_of(name) in (STATE_MARK, DELIVERED_MARK)]}
+    progress: Charts = {'Progress': [name for name in names if _mark_of(name) in _PROGRESS_MARKS]}
     column = [*_arm_cells(charts_by_arm, signals, ep), *((cell, 1) for cell in _chart_cells(progress, signals, ep))]
     placed = {signal for charts in [*charts_by_arm.values(), progress] for signal in _charted(charts, signals)}
     other = _other_cell(signals, placed)
@@ -1208,8 +1217,8 @@ def stream_episode_rrd(
     Raw image streams and numeric signals with a recognized nanosecond clock are thinned to ``max_hz``; a stored
     video keeps every frame. ``max_hz=0`` with a resolution above the source keeps the recording as it was captured.
     Without a ``layout``, the replay shows the cameras and the 3D view in one grid, and on its right a column: the
-    charts of each arm, a chart of the stage and count marks of each person and AI labeler, and Other, a group of the
-    other signals. ``timeline`` selects the initial view; all timelines are exported.
+    charts of each arm, a chart of the stage and count marks of every channel, and Other, a group of the other
+    signals. ``timeline`` selects the initial view; all timelines are exported.
     """
 
     ep = ds[episode_id]
