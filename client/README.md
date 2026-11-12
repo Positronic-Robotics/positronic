@@ -261,6 +261,11 @@ the published slice of 24192 MiB. A need that no slice of the run's GPU holds is
 and so is a need above the published slice where the plan's eval keeps that slice. Only an entry
 that names its `image` states it.
 
+An `image` endpoint may state `query`, the session params the platform puts on each session URL of
+the image, for example `horizon_sec=0.5`. It holds the grammar of an address `query` (the table
+below), and it may not be empty. A `remote` endpoint writes its params in `address.query`, and a
+`served` endpoint states none. Only an entry that names its `image` states it.
+
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
 
@@ -587,11 +592,20 @@ the submitter holds no credential for the bucket. `artifacts` is absent on a run
 `diagnostics` on a run whose record was not written, and `policy_log` on a run whose container
 printed nothing.
 
+`evals` lists what the view shows for each eval of the submission, as an `EvalView`: the `eval`, its
+`status`, `scores`, `artifacts`, `episodes` and `runs`. A submission of one eval has one entry. A
+submission of an eval made of several evals has one entry per part, in the order of its parts. The wire
+carries these fields only in `evals`. `scores`, `artifacts`, `episodes` and `runs` on the view are Python
+properties that read the first entry, and a dump of the view does not hold them. A platform that sends no
+`evals` gives one entry, built from those fields.
+
 `submissions.artifacts` lists what a finished run wrote, one page at a time. It also lists a failed
 run that carries `scores`. Each entry names its `key` under the submission's own prefix, its `size`,
 and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree, so one
 attempt's episodes are `attempts/<n>/episodes/` and `result.json`'s `attempt_location` names the
-attempt that scored. Pass `after` with the `next` of the page before it to read the rest. The route
+attempt that scored. Pass `after` with the `next` of the page before it to read the rest. Pass `eval`
+to list the records of one eval of a submission of several; without it, the page lists the first. The route
+refuses an `eval` that the submission does not run. A platform that sends no `evals` ignores `eval`. The route
 refuses every other run: a run still going has a part-written prefix, and a run that failed with no
 `scores` reads its records off `submissions.get`. It refuses a rig plan, whose episodes are in the
 org's own bucket (§Eval plans).

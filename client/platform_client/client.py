@@ -81,6 +81,7 @@ from platform_client.terms import (
     Terms,
     TermsResponse,
 )
+from positronic_evals.evals import EvalRef
 from pydantic import BaseModel, TypeAdapter
 
 M = TypeVar('M', bound=BaseModel)
@@ -297,6 +298,7 @@ class PlatformClient:
         self,
         submission_id: SubmissionId,
         *,
+        eval: EvalRef | None = None,
         prefix: str | None = None,
         after: str | None = None,
         limit: int | None = None,
@@ -305,9 +307,11 @@ class PlatformClient:
 
         `prefix` keeps the page to one directory under the submission, and a page's `next` is the
         `after` of the page behind it. A failed submission that carries `scores` lists too. Any other
-        submission short of finished is refused `bad_request`.
+        submission short of finished is refused `bad_request`. `eval` picks one eval of a submission of several;
+        None lists the records of its first eval. An eval the submission does not run is refused `bad_request`. A
+        platform that sends no `evals` on a view ignores `eval`.
         """
-        query = SubmissionArtifactsQuery(id=submission_id, prefix=prefix, after=after, limit=limit)
+        query = SubmissionArtifactsQuery(id=submission_id, eval=eval, prefix=prefix, after=after, limit=limit)
         return self._get(routes.SUBMISSIONS_ARTIFACTS, ArtifactListResponse, query=query)
 
     def cancel_submission(self, request: CancelRequest) -> CancelResponse:
