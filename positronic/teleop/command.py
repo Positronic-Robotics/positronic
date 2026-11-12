@@ -16,10 +16,12 @@ from positronic_model_server.server_wire import ServedAddress, ServedHostPort
 
 import pimm
 import positronic.cfg.webxr
+from positronic import geom
 from positronic.drivers.webxr import RIGHT, WebXR
 from positronic.offboard.server import socket_at
 from positronic.utils import check_finite_positive
 
+from .clutch import CONTROLLER_AXES
 from .protocol import DEFAULT_PORT, default_socket_path
 from .service import Phase, TeleopService
 from .window import Window, window_app
@@ -203,6 +205,7 @@ def serve(
     view_fps: float = 30.0,
     open_window: bool = True,
     cameras: Sequence[str] = (),
+    controller_axes: geom.Rotation | None = CONTROLLER_AXES,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
@@ -213,6 +216,9 @@ def serve(
     ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
     ``cameras`` names the cameras of the station, such as ``'["image.exterior", "image.wrist"]'``. A run whose address
     names no cameras sends these, and the headset page offers them.
+    ``controller_axes`` turns the axes of the moves of the teleoperator by the heading of the controller, so the way the
+    teleoperator faces does not count; it puts the axes of the controller in the frame of the headset.
+    ``--controller_axes=None`` counts the moves in the axes of the headset.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
@@ -228,7 +234,14 @@ def serve(
                 served_address.port,
             )
     service = TeleopService(
-        served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token, cameras=cameras
+        served_address,
+        ready_limit,
+        silence_limit,
+        hold_sec,
+        press_threshold,
+        auth_token=auth_token,
+        cameras=cameras,
+        controller_axes=controller_axes,
     )
     headset = _Headset(service, view_fps)
     text = (

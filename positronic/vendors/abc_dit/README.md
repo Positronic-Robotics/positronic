@@ -4,16 +4,20 @@ ABC-DiT is the bimanual YAM policy of the [ABC project](https://github.com/amazo
 multi-task sim checkpoint, `abc_dit_xl_200k_model.pt`, through Positronic's session protocol. The checkpoint trained
 on real teleoperation data and on sim data of five ABC tasks:
 
-| Task instruction | Prompt it trained under |
-| --- | --- |
-| put the plastic bottles in the bin | sim throw plastic bottles in bin |
-| sweep away paper scraps from the table | sim sweep away paper scraps from the table |
-| turn mug right side up | sim turn mug right side up |
-| load plates into tabletop dish rack | sim load plates into tabletop dish rack |
-| hang mug on mug rack | sim hang the mug on the mug rack |
+| Task instruction | Prompt it trained under (sim) | Prompt of ABC's real data |
+| --- | --- | --- |
+| put the plastic bottles in the bin | sim throw plastic bottles in bin | put the plastic bottles in the bin |
+| sweep away paper scraps from the table | sim sweep away paper scraps from the table | sweep away the paper scraps from the table |
+| turn mug right side up | sim turn mug right side up | turn the mug right side up |
+| load plates into tabletop dish rack | sim load plates into tabletop dish rack | load the plates into the dish rack |
+| hang mug on mug rack | sim hang the mug on the mug rack | — |
 
-The codec sends the trained prompt for each instruction and refuses an instruction outside this table. The release
-sidecar `abc_dit_xl_200k_model.json` records the same map by task name. ABC's sim has no success evaluator for
+By default the codec sends the sim prompt for each instruction, and refuses an instruction outside this table. The
+release sidecar `abc_dit_xl_200k_model.json` records the same map by task name. With `prompts=real`, the codec sends
+the prompt of ABC's real teleoperation data in its place. ABC's dataloader makes that prompt from the task folder
+name in the [ABC-130k release](https://huggingface.co/datasets/XDOF/ABC-130k), with underscores as spaces, for
+example `load_the_plates_into_the_dish_rack`. The release holds no real data of the mug rack task, so `prompts=real`
+refuses that instruction. The release also holds `throw_the_plastic_bottles_in_the_bin`, a separate task. ABC's sim has no success evaluator for
 `hang_mug_on_mug_rack`, so that task scores no successes.
 
 ## Licences
@@ -38,7 +42,7 @@ The [codec](codecs.py) handles all embodiment conversion:
 | Views | `image.exterior`, `image.wrist_left`, `image.wrist_right` → ABC's `top`, `left`, `right`, resized with pad to 224x168, channels first |
 | State | Per arm, 6 joints then the gripper width, left arm first: 14 values |
 | Gripper state | Positronic `0=open, 1=closed` → ABC `1=open, 0=closed`, using `1 - grip` |
-| Prompt | The task instruction → the prompt that the checkpoint trained under |
+| Prompt | The task instruction → the sim prompt that the checkpoint trained under, or the prompt of ABC's real data |
 | Action | 30 actions of 14 values → one `JointPosition` and one grip target per arm, with `1 - width` for the grip |
 
 A session picks how the client plays the chunks with the `schedule` query parameter:
@@ -71,12 +75,13 @@ A crop has the client send each view at up to 448x336, so each crop still holds 
 A session picks the crop with the `crop` query parameter: `none` (the whole views), `yambox` (the table above), or
 `yambox_wide_top` (the whole exterior frame and the yambox wrist crops). In the whole exterior frame, the arm bases
 lie 0.48 of the width apart, as in ABC's top view (0.47); the `yambox` exterior crop puts them 0.84 apart. The
-16:10 frame pads to 4:3 with black rows. `sim_prefix=false` sends the prompts without the sim prefix. For example:
+16:10 frame pads to 4:3 with black rows. `sim_prefix=false` sends the sim prompts without the sim prefix, and
+`prompts=real` sends the prompts of ABC's real data, which never carry the sim prefix. For example:
 
-    ws://<host>:<port>/api/v1/session?crop=yambox_wide_top&schedule=rtc
+    ws://<host>:<port>/api/v1/session?crop=yambox_wide_top&schedule=rtc&prompts=real
 
-The session metadata names the client schedule under `local_stack`, and the crop boxes, the prompt prefix and the
-action prefix length under `abc_dit.*`.
+The session metadata names the client schedule under `local_stack`, and the crop boxes, the prompt prefix, the
+prompt for each task instruction and the action prefix length under `abc_dit.*`.
 
 ABC trained the five sim tasks under prompts that start with `sim `, within about 3553 hours of real teleoperation
 data and 98 hours of sim data. The codec's `prompt_prefix` sets that prefix, and `sim_prefix=false`
@@ -106,6 +111,16 @@ uv run --locked python -m positronic.vendors.abc_dit.server multitask_200k \
 ```
 
 `multitask_200k_yambox_crop` serves the same checkpoint with `crop=yambox` as the default, and
-`multitask_200k_yambox_crop_no_sim_prefix` adds `sim_prefix=false`.
+`multitask_200k_yambox_crop_no_sim_prefix` adds `sim_prefix=false`. `multitask_200k_yambox_wide_top_rtc` has
+`crop=yambox_wide_top` and `schedule=rtc` as its defaults.
 
 `--model.fast_inference=False` runs the DiT in float32 with no compilation. That mode also runs on a CPU, slowly.
+
+## Docker image
+
+[`docker/Dockerfile.serve-abc-dit`](../../../docker/Dockerfile.serve-abc-dit) builds a policy image that the
+platform runs as a `kind: image` endpoint: ABC's environment, the checkpoint and the CLIP text encoder inside, offline,
+serving on `:8000`. `make -C docker push-serve-abc-dit` builds it and pushes it to the private Nebius registry, as
+`abc-dit-yam`. The image starts `multitask_200k_yambox_wide_top_rtc`. The session query sets another crop, schedule
+or prompt prefix, and arguments after the image name override the command's flags, for example
+`docker run … <image> --pipeline.crop=yambox`.

@@ -79,7 +79,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
-**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default) and `--policy.connect_deadline` the retries until the server answers (900 s). No retry waits past the deadline. Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` as long as the cold start, up to the `connect_deadline`: one dial then waits through it.
+**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default), and `--policy.connect_deadline` bounds the whole session opening with its retries (900 s). No connect, status wait or retry lasts past the deadline. Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` and a `connect_deadline` as long as the cold start: one dial then waits through it.
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -164,11 +164,11 @@ An error that the policy itself raises reaches the caller unchanged, and so does
 
 Specify `--output_dir` to record runs as Positronic datasets. Recorded data includes robot state, camera feeds, actions, gripper commands, and timing information.
 
-Replay recorded runs: `uv run positronic-server --dataset.path=~/datasets/inference_logs/run1 --port=5001` and open `http://localhost:5001` to review episodes, identify failure modes, and extract clips for dataset augmentation.
+Replay recorded runs: `uv run positronic-dataset-viewer --dataset.path=~/datasets/inference_logs/run1 --port=5001` and open `http://localhost:5001` to review episodes, identify failure modes, and extract clips for dataset augmentation.
 
 ## Evaluation Workflow
 
-Run inference with recording, review in Positronic server, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. To compare checkpoints, start one server for each and run the same evaluation against each server.
+Run inference with recording, review in the dataset viewer, score manually (success/partial/failure), repeat for 10-50 trials, calculate success rate and note common failure modes. To compare checkpoints, start one server for each and run the same evaluation against each server.
 
 **Iteration:** Evaluate checkpoint → identify failures in server → collect targeted demos for failure modes → append to dataset → retrain → re-evaluate. Convergence typically occurs after 3-5 iterations.
 

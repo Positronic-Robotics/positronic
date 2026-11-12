@@ -5550,7 +5550,7 @@ wheels = [
 
 [[package]]
 name = "positronic"
-version = "0.4.4"
+version = "0.4.5"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "15.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
@@ -5806,12 +5806,12 @@ dev = [
 
 [[package]]
 name = "positronic-eval-vocabulary"
-version = "0.7.3"
+version = "0.7.4"
 source = { editable = "vocabulary" }
 
 [[package]]
 name = "positronic-evals"
-version = "0.2.8"
+version = "0.2.9"
 source = { editable = "evals" }
 dependencies = [
     { name = "positronic-eval-vocabulary" },
@@ -5839,7 +5839,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/cb/dd/c85e2def5a67395c0
 
 [[package]]
 name = "positronic-model-server"
-version = "0.3.6"
+version = "0.3.7"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5872,7 +5872,7 @@ provides-extras = ["websocket", "grpc"]
 
 [[package]]
 name = "positronic-platform-client"
-version = "0.47.18"
+version = "0.47.21"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
@@ -5894,7 +5894,7 @@ requires-dist = [
 
 [[package]]
 name = "positronic-wire"
-version = "0.12.2"
+version = "0.12.3"
 source = { editable = "wire" }
 
 [package.optional-dependencies]

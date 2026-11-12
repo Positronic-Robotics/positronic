@@ -357,7 +357,9 @@ def test_a_plan_file_stating_a_token_is_refused_at_it(tmp_path: Path):
 
 
 def test_a_plan_file_naming_the_sim_rig_shape_is_refused_with_the_shapes_it_takes(tmp_path: Path):
-    with pytest.raises(CommandFailed, match=r"rig_shape: .*'franka', 'yam', 'molmospaces' or 'robolab'") as refusal:
+    with pytest.raises(
+        CommandFailed, match=r"rig_shape: .*'franka', 'yam', 'molmospaces', 'robolab' or 'abc'"
+    ) as refusal:
         read_plan(Path(a_plan_file(tmp_path, 'plan.yaml', f'rig_shape: sim\n{PLAN_YAML}')))
     assert refusal.value.fault is Fault.USAGE
 

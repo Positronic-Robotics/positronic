@@ -95,6 +95,16 @@ uv run positronic account accept-terms --version='"<version>"'
 uv run positronic account register --alias=<display name> --accept_terms='"<version>"'
 ```
 
+## Coupons
+
+`PlatformClient.redeem_coupon(code)` redeems a code and answers the organization and the credit units it got. From the
+command line, `positronic account redeem` prints the credits that it added. `--json` prints the answer as JSON. Quote a
+code of digits with inner quotes.
+
+```bash
+uv run positronic account redeem --code=<code>
+```
+
 ## Credit accounts
 
 `PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.
@@ -169,9 +179,9 @@ tasks and the endpoint kinds it may use. `nebius_competition` names one eval and
 endpoint, and counts against the daily quota. `--org` states a `private_eval` on the command line.
 
 `rig_shape` names the embodiment a plan that states its tasks runs on: `franka`, a single-arm Franka,
-`yam`, a bimanual YAM, `molmospaces`, the MolmoSpaces simulator, or `robolab`, the RoboLab simulator.
-The client refuses every other name, and the refusal lists these four. A plan that names none runs
-on a `franka`. The platform picks the rig of that shape. A plan that names an eval runs on the
+`yam`, a bimanual YAM, `molmospaces`, the MolmoSpaces simulator, `robolab`, the RoboLab simulator,
+or `abc`, the ABC simulator. The client refuses every other name, and the refusal lists these five.
+A plan that names none runs on a `franka`. The platform picks the rig of that shape. A plan that names an eval runs on the
 embodiment the eval pins, and it is refused when it names a `rig_shape` other than `franka`. The
 platform runs every task of a plan on the rig its `rig_shape` names. Each task in `catalog.tasks` lists the shapes it runs on in
 `embodiments`. A plan that states its tasks is refused when its `rig_shape` is not one of a task's
@@ -180,7 +190,7 @@ states `rig_shape: yam`.
 
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
-rig_shape: franka                        # franka | yam | molmospaces | robolab
+rig_shape: franka                        # franka | yam | molmospaces | robolab | abc
 tasks:
   - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
   - task_id: marker-in-mug               # a mapping overrides for that task alone

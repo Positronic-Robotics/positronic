@@ -17,7 +17,9 @@ from positronic_wire import websocket, wire
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidMessage, InvalidStatus
 from websockets.http11 import Response
+from websockets.sync.client import connect
 from websockets.sync.server import serve
+from websockets.utils import accept_key
 
 _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 _WEBSOCKET = websocket.WebsocketClientWire()
@@ -579,3 +581,56 @@ def test_a_probe_ignores_a_proxy_the_environment_names(monkeypatch):
     monkeypatch.setenv('ws_proxy', f'http://{proxy_host}:{proxy_port}')
     assert _WEBSOCKET.probe(_at(host, port), None, 5.0) is None
     assert via_proxy == []
+
+
+def _upgrade_then_ignore_the_close(conn: socket.socket) -> None:
+    """Answer the upgrade with 101, then read every frame and answer none, not even a close."""
+    request = b''
+    while b'\r\n\r\n' not in request and (chunk := conn.recv(4096)):
+        request += chunk
+    key = next(
+        line.split(b':', 1)[1].strip().decode()
+        for line in request.split(b'\r\n')
+        if line.lower().startswith(b'sec-websocket-key:')
+    )
+    conn.sendall(
+        b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+        b'Sec-WebSocket-Accept: ' + accept_key(key).encode() + b'\r\n\r\n'
+    )
+    while conn.recv(4096):
+        pass
+
+
+# A wire bound far past what any close in these tests may take, and one well inside it.
+_LONG_CLOSE_S = 30.0
+_SHORT_CLOSE_S = 0.2
+# What a wall-clock test grants past a bound: a thread start and a closed socket, on a loaded machine.
+_CLOSE_SLACK_S = 2.0
+
+
+def _seconds_to_close(wire_bound: float | None, timeout: float | None = None) -> float:
+    """Seconds ``close(timeout)`` takes on a wire bound to ``wire_bound``, against a peer that never answers it."""
+    host, port = _served(_upgrade_then_ignore_the_close)
+    connection = websocket.WebsocketClientConnection(connect(f'ws://{host}:{port}/', close_timeout=wire_bound))
+    closer = threading.Thread(target=connection.close, kwargs={'timeout': timeout}, daemon=True)
+    started = time.monotonic()
+    closer.start()
+    closer.join(timeout=_LONG_CLOSE_S / 2)
+    assert not closer.is_alive(), 'the close waited past every bound it was given'
+    return time.monotonic() - started
+
+
+def test_a_close_timeout_longer_than_the_wires_own_keeps_the_wires_bound():
+    assert _seconds_to_close(_SHORT_CLOSE_S, timeout=_LONG_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S
+
+
+def test_a_close_timeout_shorter_than_the_wires_own_bounds_the_close():
+    assert _seconds_to_close(_LONG_CLOSE_S, timeout=_SHORT_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S
+
+
+def test_a_close_with_no_timeout_keeps_the_wires_bound():
+    assert _seconds_to_close(_SHORT_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S
+
+
+def test_a_close_timeout_bounds_a_close_the_wire_left_unbounded():
+    assert _seconds_to_close(None, timeout=_SHORT_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S

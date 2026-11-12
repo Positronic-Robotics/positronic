@@ -5,9 +5,11 @@ import re
 import socket
 import threading
 from collections import namedtuple
-from dataclasses import fields, replace
+from dataclasses import asdict, fields, replace
+from enum import Enum, StrEnum
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import psutil
 import pytest
@@ -22,11 +24,12 @@ from positronic.dataset import TimeBounds
 from positronic.dataset.episode import META_PATH, META_UID, EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.server import positronic_server
-from positronic.server.dataset_utils import ReplayLayout
-from positronic.server.positronic_server import (
+from positronic.dataset_viewer import web_app
+from positronic.dataset_viewer.rerun_replay import DURATION_COLUMN, INDEX_COLUMN, ReplayLayout
+from positronic.dataset_viewer.web_app import (
     _PAGE_CONFIG_KEY,
     API_FILE_SUFFIX,
+    DATASET_SUMMARY,
     FILTER_VALUES,
     GROUP_FILTERS,
     GROUP_INDEX_FILE,
@@ -35,9 +38,12 @@ from positronic.server.positronic_server import (
     VIEWER_PAGES,
     Attribution,
     ColumnConfig,
+    ColumnSummary,
     GroupFile,
     GroupTableConfig,
     PageConfig,
+    RendererConfig,
+    ValueCount,
     _access_url,
     _generate_self_signed_cert,
     _get_rrd_cache_path,
@@ -146,7 +152,7 @@ def test_certificate_carries_a_subject_a_long_host_name_would_overflow():
     assert len(host.encode()) > 64
     cert = _certificate([host])
 
-    assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == 'positronic-server'
+    assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == 'positronic-dataset-viewer'
     assert host in _alt_names(cert).get_values_for_type(x509.DNSName)
 
 
@@ -269,7 +275,7 @@ def test_a_stream_that_dies_partway_leaves_no_cached_rrd(rrd_cache, monkeypatch)
         yield b'half an episode'
         raise RuntimeError('encoder died')
 
-    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', _dies_partway)
+    monkeypatch.setattr(web_app, 'stream_episode_rrd', _dies_partway)
 
     with pytest.raises(RuntimeError):
         TestClient(app).get('/api/episode_rrd/0')
@@ -348,7 +354,7 @@ def test_a_base_href_gains_the_trailing_slash_a_relative_link_needs(viewer):
         assert '<base href="/v/tok/" />' in viewer.get('/').text
 
 
-_VIEWER = Path(positronic_server.__file__).parent / 'static' / VIEWER_DIR / rr.__version__
+_VIEWER = Path(web_app.__file__).parent / 'static' / VIEWER_DIR / rr.__version__
 _HISTORY_ON = 'enable_history: true,'
 
 
@@ -436,7 +442,7 @@ def test_an_episode_keeps_its_size_where_the_page_hides_paths(viewer, monkeypatc
 
 
 def test_two_exports_on_one_origin_keep_their_own_session_state():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'return `${name}:${document.baseURI}`' in app_js
     assert app_js.count("sessionStorage.setItem('") == 0
@@ -622,6 +628,8 @@ def test_a_page_hands_the_script_every_route_and_file_it_reads(viewer, page):
     assert written is not None, f'{page} hands the script no names'
     names = json.loads(written.group(1))
     params, file = (field.name for field in fields(GroupFile))
+    summary_column, summary_counts = (field.name for field in fields(ColumnSummary))
+    count_value, count_count = (field.name for field in fields(ValueCount))
 
     assert names.pop('episode_page_before') + '3' + names.pop('episode_page_after') == episode_link(3)
     assert names == {
@@ -634,11 +642,16 @@ def test_a_page_hands_the_script_every_route_and_file_it_reads(viewer, page):
         'entry_file': file,
         'group_filters': GROUP_FILTERS,
         'filter_values': FILTER_VALUES,
+        'dataset_summary': DATASET_SUMMARY,
+        'summary_column': summary_column,
+        'summary_counts': summary_counts,
+        'count_value': count_value,
+        'count_count': count_count,
     }
 
 
 def test_the_flat_table_takes_a_url_filter_only_for_a_value_some_row_carries():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'if (state.filtersData[key].includes(value)) state.filters[key] = value;' in app_js
 
@@ -751,7 +764,7 @@ def grouped(monkeypatch):
     monkeypatch.setitem(app_state, 'dataset', episodes)
     monkeypatch.setitem(app_state, 'loading_state', False)
     monkeypatch.setitem(app_state, 'group_tables_cfg', {'by_task': _BY_TASK})
-    monkeypatch.setattr(positronic_server, '_api_cache', {})
+    monkeypatch.setattr(web_app, '_api_cache', {})
     return TestClient(app)
 
 
@@ -839,7 +852,7 @@ def test_group_keys_that_are_episode_columns_are_accepted():
 
 def test_the_flat_table_applies_a_url_key_that_names_any_episode_column():
     """A View link carries a group key; the flat table filters on it when it is a column, not only a filter one."""
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'function readFiltersFromURL(serverFilterKeys, columns, episodes)' in app_js
     assert 'const index = columns.findIndex((c) => c.key === key);' in app_js
@@ -848,7 +861,7 @@ def test_the_flat_table_applies_a_url_key_that_names_any_episode_column():
 
 def test_the_flat_table_compares_a_url_filter_with_a_cell_s_raw_value():
     """A formatted cell is `[raw, formatted]`, and a View link carries the raw value as the server spells it."""
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'return String(rawValue(episodeData[colIdx])) === value;' in app_js
     assert 'const v = rawValue(episodeData[index]);' in app_js
@@ -876,7 +889,7 @@ def flat_with_hidden(monkeypatch):
     monkeypatch.setitem(app_state, 'dataset', episodes)
     monkeypatch.setitem(app_state, 'loading_state', False)
     monkeypatch.setitem(app_state, 'episode_table_cfg', ep_table_cfg)
-    monkeypatch.setattr(positronic_server, '_api_cache', {})
+    monkeypatch.setattr(web_app, '_api_cache', {})
     return TestClient(app)
 
 
@@ -887,7 +900,7 @@ def test_episode_table_handles_disjoint_timelines(flat_with_hidden, monkeypatch,
         'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(axis,)),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, [2.0]]]
@@ -899,7 +912,7 @@ def test_the_duration_runs_from_the_first_sample_when_a_command_stream_starts_la
         'command': DummySignal([4_000_000_000, 11_000_000_000], [1, 2]),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.json()['episodes'] == [[0, [10.0]]]
 
@@ -910,7 +923,7 @@ def test_the_duration_of_streams_that_start_together_runs_to_the_last_sample(fla
         'command': DummySignal([1_000_000_000, 10_500_000_000], [1, 2]),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.json()['episodes'] == [[0, [10.0]]]
 
@@ -921,7 +934,7 @@ def test_the_duration_skips_a_clock_that_only_a_signal_with_no_rows_carries(flat
         'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECORDED_TIME,)),
     }
     monkeypatch.setitem(app_state, 'dataset', [EpisodeContainer(signals)])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, [2.0]]]
@@ -930,7 +943,7 @@ def test_the_duration_skips_a_clock_that_only_a_signal_with_no_rows_carries(flat
 def test_an_episode_whose_only_signal_has_no_rows_has_no_duration(flat_with_hidden, monkeypatch):
     episode = EpisodeContainer({'marks': DummySignal([], [], timelines=(RECORDED_TIME,))})
     monkeypatch.setitem(app_state, 'dataset', [episode])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration', default='—')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration', default='—')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, ['—']]]
@@ -939,7 +952,7 @@ def test_an_episode_whose_only_signal_has_no_rows_has_no_duration(flat_with_hidd
 def test_episode_table_does_not_interpret_ticks_as_seconds(flat_with_hidden, monkeypatch):
     episode = EpisodeContainer({'value': DummySignal([1, 2], [10, 20], timelines=('tick',))})
     monkeypatch.setitem(app_state, 'dataset', [episode])
-    monkeypatch.setitem(app_state, 'episode_table_cfg', {'__duration__': ColumnConfig(label='Duration', default='—')})
+    monkeypatch.setitem(app_state, 'episode_table_cfg', {DURATION_COLUMN: ColumnConfig(label='Duration', default='—')})
     response = flat_with_hidden.get('/api/episodes')
     assert response.status_code == 200
     assert response.json()['episodes'] == [[0, ['—']]]
@@ -969,8 +982,178 @@ def test_a_group_filter_key_that_is_a_hidden_episode_column_is_accepted():
 
 
 def test_the_page_draws_nothing_for_a_hidden_column():
-    app_js = (Path(positronic_server.__file__).parent / 'static' / 'app.js').read_text()
+    app_js = (Path(web_app.__file__).parent / 'static' / 'app.js').read_text()
 
     assert 'if (display === false) { headerCells.push(null); continue; }' in app_js  # no header
     assert 'if (columns[i].display === false) continue;' in app_js  # no cell
     assert 'if (column.display === false) continue;' in app_js  # no dropdown
+
+
+OUTCOME = 'outcome'
+_OUTCOME_BADGE = RendererConfig(
+    type='badge',
+    options={
+        'Success': {'label': 'Success', 'variant': 'success'},
+        'Fail': {'label': 'Fail', 'variant': 'danger'},
+        'Out of time': {'label': 'Out of time', 'variant': 'default'},
+    },
+)
+_OUTCOME_TABLE = {
+    keys.TASK: ColumnConfig(label='Task'),
+    OUTCOME: ColumnConfig(label='Outcome', default='Unscored', renderer=_OUTCOME_BADGE),
+}
+
+
+@app_state_restored()
+def _dataset_info(*statics: dict, table=None, summary_column: str | None = OUTCOME) -> dict:
+    """The dataset_info route's response for episodes holding `statics`."""
+    configure_tables(
+        root='',
+        cache_dir=Path(),
+        ep_table_cfg=table or _OUTCOME_TABLE,
+        group_tables=None,
+        home_page=None,
+        max_resolution=64,
+        max_hz=0,
+        layout=None,
+        summary_column=summary_column,
+    )
+    app_state['dataset'] = _Statics(*statics)
+    app_state['loading_state'] = False
+    return TestClient(app).get('/api/dataset_info').json()
+
+
+def _summary_of(*statics: dict, table=None, summary_column: str = OUTCOME) -> dict:
+    summary = _dataset_info(*statics, table=table, summary_column=summary_column)[DATASET_SUMMARY]
+    assert summary is not None
+    return summary
+
+
+def _counts(*pairs: tuple[Any, int]) -> list[dict]:
+    """The `counts` of a `ColumnSummary` as the route sends them."""
+    return [asdict(ValueCount(value, count)) for value, count in pairs]
+
+
+def _sent_counts(summary: dict) -> list[dict]:
+    return summary[fields(ColumnSummary)[1].name]
+
+
+def test_the_header_counts_each_outcome_in_the_order_the_badge_lists_them():
+    summary = _summary_of(
+        {OUTCOME: 'Fail'}, {OUTCOME: 'Out of time'}, {OUTCOME: 'Success'}, {OUTCOME: 'Success'}, {OUTCOME: 'Fail'}
+    )
+
+    assert _sent_counts(summary) == _counts(('Success', 2), ('Fail', 2), ('Out of time', 1))
+
+
+def test_the_header_draws_a_value_with_the_column_the_episode_table_sends():
+    summary = _summary_of({OUTCOME: 'Success'})
+
+    (column,), _, _ = parse_table_cfg({OUTCOME: _OUTCOME_TABLE[OUTCOME]})
+    assert summary[fields(ColumnSummary)[0].name] == json.loads(json.dumps(column))
+
+
+def test_an_episode_with_no_value_counts_as_the_column_default_after_the_listed_values():
+    summary = _summary_of({OUTCOME: 'Fail'}, {keys.TASK: 'stack'}, {keys.TASK: 'fold'}, {OUTCOME: 'Weird'})
+
+    assert _sent_counts(summary) == _counts(('Fail', 1), ('Unscored', 2), ('Weird', 1))
+
+
+def test_an_episode_with_no_value_and_no_column_default_is_not_counted():
+    table = {OUTCOME: ColumnConfig(label='Outcome')}
+    summary = _summary_of({OUTCOME: 'b'}, {keys.TASK: 'stack'}, {OUTCOME: 'a'}, {OUTCOME: 'b'}, table=table)
+
+    assert _sent_counts(summary) == _counts(('b', 2), ('a', 1))
+
+
+def test_the_header_counts_nothing_without_a_summary_column():
+    assert _dataset_info({OUTCOME: 'Success'}, summary_column=None)[DATASET_SUMMARY] is None
+
+
+def test_a_summary_column_that_is_no_column_of_the_episode_table_is_refused():
+    with app_state_restored(), pytest.raises(ValueError, match='summary_column'):
+        configure_tables(
+            root='',
+            cache_dir=Path(),
+            ep_table_cfg={keys.TASK: ColumnConfig(label='Task')},
+            group_tables=None,
+            home_page=None,
+            max_resolution=64,
+            max_hz=0,
+            layout=None,
+            summary_column=OUTCOME,
+        )
+
+
+def test_a_summary_column_with_a_format_is_refused():
+    with app_state_restored(), pytest.raises(ValueError, match='has a format'):
+        configure_tables(
+            root='',
+            cache_dir=Path(),
+            ep_table_cfg={OUTCOME: ColumnConfig(label='Items', format='%d items')},
+            group_tables=None,
+            home_page=None,
+            max_resolution=64,
+            max_hz=0,
+            layout=None,
+            summary_column=OUTCOME,
+        )
+
+
+def test_a_bool_and_an_equal_number_count_as_two_values():
+    table = {OUTCOME: ColumnConfig(label='Done')}
+    summary = _summary_of({OUTCOME: True}, {OUTCOME: 1}, {OUTCOME: 1}, {OUTCOME: False}, {OUTCOME: 0}, table=table)
+
+    assert _sent_counts(summary) == _counts((1, 2), (False, 1), (True, 1), (0, 1))
+
+
+def test_a_summary_column_holding_a_list_is_refused_when_the_header_reads_it():
+    table = {OUTCOME: ColumnConfig(label='Tags')}
+    with pytest.raises(ValueError, match='holds a list in episode 1'):
+        _summary_of({OUTCOME: 'a'}, {OUTCOME: ['a', 'b']}, table=table)
+
+
+def test_the_header_counts_a_synthetic_column_from_the_value_the_table_computes():
+    table = {INDEX_COLUMN: ColumnConfig(label='#')}
+    summary = _summary_of({OUTCOME: 'Fail'}, {OUTCOME: 'Fail'}, table=table, summary_column=INDEX_COLUMN)
+
+    assert _sent_counts(summary) == _counts((0, 1), (1, 1))
+
+
+class _Verdict(StrEnum):
+    PASS = 'Pass'
+    FAIL = 'Fail'
+
+
+def test_an_enum_value_counts_as_the_value_the_episode_table_sends():
+    table = {OUTCOME: ColumnConfig(label='Verdict')}
+    summary = _summary_of({OUTCOME: _Verdict.PASS}, {OUTCOME: 'Pass'}, {OUTCOME: _Verdict.FAIL}, table=table)
+
+    assert _sent_counts(summary) == _counts(('Pass', 2), ('Fail', 1))
+
+
+class _Grade(Enum):
+    LOW = 'low'
+    HIGH = 'high'
+
+
+def test_a_plain_enum_column_counts_in_the_order_its_renderer_lists_the_members():
+    badge = RendererConfig(
+        type='badge',
+        options={
+            _Grade.HIGH: {'label': 'High', 'variant': 'success'},
+            _Grade.LOW: {'label': 'Low', 'variant': 'danger'},
+        },
+    )
+    table = {OUTCOME: ColumnConfig(label='Grade', renderer=badge)}
+    summary = _summary_of({OUTCOME: _Grade.LOW}, {OUTCOME: _Grade.LOW}, {OUTCOME: _Grade.HIGH}, table=table)
+
+    assert _sent_counts(summary) == _counts(('high', 1), ('low', 2))
+
+
+def test_the_renderer_order_tells_a_bool_from_its_string_spelling():
+    badge = RendererConfig(type='badge', options={'True': {'label': 'Text'}, True: {'label': 'Flag'}})
+    table = {OUTCOME: ColumnConfig(label='Done', renderer=badge)}
+    summary = _summary_of({OUTCOME: True}, {OUTCOME: 'True'}, table=table)
+
+    assert _sent_counts(summary) == _counts(('True', 1), (True, 1))
