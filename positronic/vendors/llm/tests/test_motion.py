@@ -14,7 +14,7 @@ SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'line
 
 def played(motion: Motion, start: geom.Transform3D, grip: float, path: list[Waypoint]):
     held = {None: Waypoint.at(start, grip)}
-    bounded, parts = motion.trajectory({None: start}, held, [{None: waypoint} for waypoint in path])
+    bounded, parts, _ = motion.trajectory({None: start}, held, [{None: waypoint} for waypoint in path])
     return [targets[None] for targets in bounded], [command for part in parts for command in part]
 
 
@@ -160,7 +160,7 @@ def test_a_path_needs_a_waypoint_and_an_arm_waypoint_needs_an_arm(waypoints):
 
 def test_arms_reach_each_waypoint_together_at_the_pace_of_the_slower_arm():
     motion = Motion(**SHORT_BOUNDS)
-    _, parts = motion.trajectory(*two_arms(), [{'left': at(0.04, 0.3), 'right': at(0.01, -0.3)}])
+    parts = motion.trajectory(*two_arms(), [{'left': at(0.04, 0.3), 'right': at(0.01, -0.3)}]).parts
     (segment,) = parts
     assert len(segment) == round(0.04 / motion.linear_speed * motion.fps)
     left = [arm_command(command, keys.LEFT_ARM) for command in segment]
@@ -173,7 +173,7 @@ def test_arms_reach_each_waypoint_together_at_the_pace_of_the_slower_arm():
 
 def test_a_gripper_change_of_one_arm_holds_every_hand_still():
     motion = Motion(**SHORT_BOUNDS)
-    _, (_, hold) = motion.trajectory(*two_arms(), [{'right': at(0.01, -0.3, gripper=1)}])
+    _, hold = motion.trajectory(*two_arms(), [{'right': at(0.01, -0.3, gripper=1)}]).parts
     assert len(hold) == math.ceil(motion.grip_hold * motion.fps)
     np.testing.assert_allclose(arm_command(hold[0], keys.LEFT_ARM), [0, 0.3, 0])
     np.testing.assert_allclose(arm_command(hold[-1], keys.RIGHT_ARM), [0.01, -0.3, 0])
@@ -183,17 +183,26 @@ def test_a_gripper_change_of_one_arm_holds_every_hand_still():
 
 def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_clamped_target():
     motion = Motion(**SHORT_BOUNDS)
-    bounded, parts = motion.trajectory(*two_arms(), [{'left': at(1.0, 0.3)}, {'right': at(0.01, -0.3)}])
+    bounded, parts, _ = motion.trajectory(*two_arms(), [{'left': at(1.0, 0.3)}, {'right': at(0.01, -0.3)}])
     assert [targets[keys.LEFT_ARM].x for targets in bounded] == pytest.approx([0.05, 0.05])
     np.testing.assert_allclose(arm_command(parts[-1][-1], keys.LEFT_ARM), [0.05, 0.3, 0])
 
 
+@pytest.mark.parametrize('held_x,clamped', [(1.0, True), (0.04, False)])
+def test_a_left_out_arm_is_clamped_from_its_measured_pose_toward_its_held_target(held_x, clamped):
+    starts, held = two_arms()
+    held = {**held, keys.LEFT_ARM: at(held_x, 0.3)}
+    trajectory = Motion(**SHORT_BOUNDS).trajectory(starts, held, [{'right': at(0.01, -0.3)}])
+    assert trajectory.targets[0][keys.LEFT_ARM].x == pytest.approx(min(held_x, 0.05))
+    assert trajectory.clamped is clamped
+
+
 def test_the_closest_hands_are_measured_along_the_path_and_one_arm_has_no_partner():
     motion = Motion(**SHORT_BOUNDS)
-    _, crossing = motion.trajectory(*two_arms(right_x=0.04, y=0.05), [{'left': at(0.04, 0.05), 'right': at(0, -0.05)}])
-    assert closest_hand_distances(crossing, keys.BIMANUAL_ARMS) == {keys.BIMANUAL_ARMS: pytest.approx(0.1)}
+    crossing = motion.trajectory(*two_arms(right_x=0.04, y=0.05), [{'left': at(0.04, 0.05), 'right': at(0, -0.05)}])
+    assert closest_hand_distances(crossing.parts, keys.BIMANUAL_ARMS) == {keys.BIMANUAL_ARMS: pytest.approx(0.1)}
     start = geom.Transform3D([0, 0, 0])
-    _, alone = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01)}])
+    alone = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01)}]).parts
     assert closest_hand_distances(alone, keys.ONE_ARM) == {}
 
 
@@ -201,7 +210,7 @@ def test_a_gripper_hold_is_a_part_of_its_own():
     motion = Motion(**SHORT_BOUNDS)
     path = [{None: Waypoint(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=g)} for g in (0, 1)]
     start = geom.Transform3D([0, 0, 0])
-    _, parts = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, path)
+    parts = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, path).parts
     assert [len(part) for part in parts] == [5, 1, math.ceil(motion.grip_hold * motion.fps)]
     assert {command[keys.TARGET_GRIP] for command in parts[-1]} == {1}
 

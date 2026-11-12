@@ -206,7 +206,8 @@ class Conversation:
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
             f'A path that brings two hands closer than {self._policy.min_hand_distance} m is rejected and does not '
-            'move the arms; hands that start closer may not come closer than they start. '
+            'move the arms; hands that start closer may not come closer than their measured positions or their '
+            'previous targets, whichever are closer. '
             'This check covers the hands only, not the rest of the arms. '
             if named
             else '',
@@ -375,15 +376,28 @@ class Conversation:
         messages[end] = self._with_cache_point(messages[end])
         return messages
 
-    def _hand_distance_error(self, hands: Mapping[str | None, _Hand], parts: list[list[dict]]) -> str | None:
+    def _hand_distance_error(
+        self, hands: Mapping[str | None, _Hand], held: Targets, parts: list[list[dict]]
+    ) -> str | None:
         """Why ``parts`` brings a pair of hands too close, or ``None``."""
         # Interpolated samples of a parallel move can come out a few ulp closer than the hands start.
         tolerance = 1e-6
+        limit = self._policy.min_hand_distance
         for (a, b), gap in closest_hand_distances(parts, self._policy.arms).items():
-            start = math.dist(hands[a].pose.translation, hands[b].pose.translation)
-            minimum = min(self._policy.min_hand_distance, start)
-            if gap < minimum - tolerance:
-                return f'The path brings hands {a} and {b} {gap:.3f} m apart; keep them {minimum:.3f} m apart'
+            # A measured hand is off its held target by the tracking error. A path that keeps the hands still
+            # moves them between the two, so the closer gap is the start.
+            start = min(
+                math.dist(hands[a].pose.translation, hands[b].pose.translation),
+                math.dist(held[a].pose.translation, held[b].pose.translation),
+            )
+            if gap >= min(limit, start) - tolerance:
+                continue
+            if start < limit:
+                return (
+                    f'The path brings hands {a} and {b} {gap:.4f} m apart, closer than their measured positions or '
+                    f'previous targets ({start:.4f} m apart)'
+                )
+            return f'The path brings hands {a} and {b} {gap:.4f} m apart; keep them {limit} m apart'
         return None
 
     def accept(
@@ -407,18 +421,19 @@ class Conversation:
             return PolicyEnd.COMPLETE
         hands = {arm: _Hand.read(obs, arm) for arm in self._policy.arms}
         held = {arm: self._targets.get(arm, Waypoint.at(hand.pose, hand.grip)) for arm, hand in hands.items()}
-        bounded, parts = self._policy.motion.trajectory({arm: hand.pose for arm, hand in hands.items()}, held, data)
-        if (error := self._hand_distance_error(hands, parts)) is not None:
+        bounded, parts, clamped = self._policy.motion.trajectory(
+            {arm: hand.pose for arm, hand in hands.items()}, held, data
+        )
+        if (error := self._hand_distance_error(hands, held, parts)) is not None:
             self._messages.append(
                 ModelRequest([ToolReturnPart(call.tool_name, f'Rejected: {error}', tool_call_id=call.tool_call_id)])
             )
             self._record({'event': 'rejected', 'call': self._calls, 'time_ns': time_ns, 'reason': error})
             return [[]]
         self._targets = dict(bounded[-1])
-        requested = [{**before, **waypoint} for before, waypoint in zip([held, *bounded[:-1]], data, strict=True)]
         result = {
             'waypoints': [self._dump(targets) for targets in bounded],
-            'clamped': bounded != requested,
+            'clamped': clamped,
             'duration_s': (sum(map(len, parts)) + 1) / self._policy.motion.fps,
             'feedback': 'Path scheduled. Check the next measured observation for actual arrival.',
         }

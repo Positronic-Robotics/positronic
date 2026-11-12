@@ -23,10 +23,12 @@ from positronic.vendors.llm.motion import Motion
 from positronic.vendors.llm.policy import Images, LLMPolicy, Tool
 from positronic.vendors.llm.server import LLMModel, deployment, serve
 from positronic.vendors.llm.tests.test_policy import (
+    bimanual_observation,
     complete,
     execution,
     finish,
     move,
+    move_arms,
     observation,
     without_cache_points,
 )
@@ -120,6 +122,16 @@ def test_a_path_answers_one_part_per_call_and_asks_the_model_only_after_the_last
     assert llm_model(observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
     assert len(requests) == 2
     llm_model.close()
+
+
+def test_a_rejected_path_answers_one_held_period_and_the_next_call_asks_the_model_again(model, make_model):
+    requests, replies = model
+    replies.extend([move_arms({'left': (0.0, 0.05), 'right': (0.0, -0.03)}), finish()])
+    llm_model = make_model(arms=keys.BIMANUAL_ARMS, camera_keys=(keys.EXTERIOR_IMAGE,))
+    assert llm_model(bimanual_observation(), session_id='a') == [{}]
+    assert llm_model(bimanual_observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
+    assert len(requests) == 2
+    assert 'Rejected: The path brings hands left and right' in str(requests[1])
 
 
 def test_a_finish_answers_with_its_end_and_every_later_call_repeats_it_without_a_request(model, make_model):

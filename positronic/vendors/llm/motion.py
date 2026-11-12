@@ -4,7 +4,7 @@ import itertools
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,6 +58,15 @@ class MoveArmsPath(BaseModel):
 
 # The waypoint of each arm, keyed by the arm's name; `None` names the arm of a one-arm embodiment.
 Targets = Mapping[str | None, Waypoint]
+
+
+class Trajectory(NamedTuple):
+    """The clamped targets of every arm at each waypoint, the commands of each segment and gripper hold, and
+    whether a clamp changed a requested target."""
+
+    targets: list[Targets]
+    parts: list[list[dict]]
+    clamped: bool
 
 
 @dataclass(frozen=True)
@@ -118,16 +127,18 @@ class Motion:
 
     def trajectory(
         self, starts: Mapping[str | None, geom.Transform3D], held: Targets, path: list[Targets]
-    ) -> tuple[list[Targets], list[list[dict]]]:
-        """Return the clamped targets of every arm and the commands of each segment and gripper hold, in order.
+    ) -> Trajectory:
+        """The trajectory of ``path`` from ``starts``.
 
         ``held`` is the target of each arm of ``starts`` before the path. An arm that a waypoint of ``path`` leaves
         out holds its previous clamped target. All arms reach a waypoint together.
         """
         grips = {arm: target.gripper for arm, target in held.items()}
-        bounded, parts = [], []
+        bounded, parts, clamped = [], [], False
         for waypoint in path:
-            targets = {arm: self._clamp(start, waypoint.get(arm, held[arm])) for arm, start in starts.items()}
+            requested = {arm: waypoint.get(arm, held[arm]) for arm in starts}
+            targets = {arm: self._clamp(start, requested[arm]) for arm, start in starts.items()}
+            clamped = clamped or targets != requested
             parts.append(self._segment(starts, targets))
             if any(target.gripper != grips[arm] for arm, target in targets.items()):
                 hold = self._commands({arm: target.pose for arm, target in targets.items()}, targets)
@@ -136,7 +147,7 @@ class Motion:
             starts = {arm: target.pose for arm, target in targets.items()}
             grips = {arm: target.gripper for arm, target in targets.items()}
             held = targets
-        return bounded, parts
+        return Trajectory(bounded, parts, clamped)
 
 
 def closest_hand_distances(

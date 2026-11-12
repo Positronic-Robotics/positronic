@@ -607,6 +607,32 @@ def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays
         assert 'Rejected: The path brings hands left and right' in str(conversation.request(obs, 1))
 
 
+def test_hands_inside_the_limit_hold_still_while_a_hand_is_off_its_target_but_may_not_come_closer():
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
+    assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close)) != [[]]
+    off = hands_at(bimanual_observation(), {'left': (0.0, 0.0405), 'right': (0.0, -0.04)})
+    assert decide(conversation, off, move_arms({'right': (0.0, -0.04)})) != [[]]
+    assert decide(conversation, off, move_arms({'right': (0.0, -0.03)})) == [[]]
+    (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert '0.0700 m apart' in rejected['reason']
+    assert '(0.0800 m apart)' in rejected['reason']
+
+
+def test_a_rejected_path_leaves_the_held_targets_as_they_were():
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    obs = bimanual_observation()
+    decide(conversation, obs, move_arms({'left': (0.0, 0.15), 'right': (0.0, -0.15)}))
+    assert decide(conversation, obs, move_arms({'left': (0.0, 0.05), 'right': (0.0, -0.03)})) == [[]]
+    parts = decide(conversation, obs, move_arms({'right': (0.01, -0.15)}))
+    left = keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)
+    np.testing.assert_allclose(parts[-1][-1][left].pose.translation, [0.0, 0.15, 0.1])
+    observed = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'observation'][-1]
+    assert observed['arms']['left']['previous_target']['y'] == pytest.approx(0.15)
+
+
 def test_each_pair_of_hands_keeps_its_own_distance():
     metadata = {}
     policy = LLMPolicy(Endpoint('test'), Motion(), arms=('a', 'b', 'c'), camera_keys=(keys.EXTERIOR_IMAGE,))
