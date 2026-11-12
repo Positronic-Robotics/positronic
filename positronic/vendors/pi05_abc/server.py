@@ -7,27 +7,30 @@ Usage
   python -m positronic.vendors.pi05_abc.server bottles_16k --model.checkpoint=<checkpoint dir> --model.fork=<fork>
 """
 
+import os
 import socket
+import subprocess
+from functools import partial
 from pathlib import Path
+from typing import Any
 
 import configuronic as cfn
 import numpy as np
 from platform_client.policy_container import WARMUP_DEADLINE_S
 
 from pimm.logging import init_logging
+from positronic.offboard.roboarena import RoboarenaClient
 from positronic.offboard.server import serve
-from positronic.offboard.server_utils import warmup
+from positronic.offboard.server_utils import wait_for_subprocess_ready, warmup
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
-from positronic.policy.codecs import ResizeMode, TransformImages
-from positronic.vendors import abc_dit
-from positronic.vendors.abc_dit import codecs as abc_codecs
-from positronic.vendors.abc_dit import server as abc_server
-from positronic.vendors.openpi.server import OpenpiModel, OpenpiSubprocess
+from positronic.policy.base import Obs
+from positronic.policy.codecs import ACTION, ResizeMode, TransformImages
+from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.vendors import pi05_abc
+from positronic.vendors.pi05_abc import codecs
 
-# The one task of the checkpoint, and the prompt it trained under: the task folder name of the ABC-130k release.
-TASK = 'put the plastic bottles in the bin'
 # The checkpoint directory as the Hub repository lays it out: the author's server snapshot and the task's norm stats.
 SERVER_SCRIPT = Path('inference/openpi_server.py')
 NORM_STATS = Path('assets/put_the_plastic_bottles_in_the_bin/norm_stats.json')
@@ -35,118 +38,136 @@ NORM_STATS = Path('assets/put_the_plastic_bottles_in_the_bin/norm_stats.json')
 FORK_PYTHON = Path('.venv/bin/python')
 FORK_OPENPI = Path('third_party/policy/openpi')
 # The fork's `YamInputs` reads `observation/image`, `observation/left_wrist`, `observation/right_wrist` and
-# `observation/state`; the server snapshot renames ABC's camera roles to these keys.
-IMAGE_KEY_MAP = f'{abc_dit.TOP_CAMERA}=image,{abc_dit.LEFT_CAMERA}=left_wrist,{abc_dit.RIGHT_CAMERA}=right_wrist'
+# `observation/state`; the server snapshot renames the camera roles to these keys.
+IMAGE_KEY_MAP = f'{pi05_abc.TOP_CAMERA}=image,{pi05_abc.LEFT_CAMERA}=left_wrist,{pi05_abc.RIGHT_CAMERA}=right_wrist'
 FLATTEN_PREFIX = 'observation/'
+# JAX takes most of the GPU at its first use unless this is false, so a second server on that GPU finds none free.
+PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
+# The client plays this many actions of each 50-action chunk, as the author's evaluation does.
+EXECUTED_ACTIONS = 15
 
 
-class AuthorServer(OpenpiSubprocess):
-    """The checkpoint's own openpi server snapshot, run in the fork's interpreter on loopback.
+class Pi05AbcModel(Model):
+    """The checkpoint behind the author's server in a child process, which this model owns."""
 
-    It loads the checkpoint and compiles the model before it listens, so it gets the deadline of a policy warm-up.
-    """
+    def __init__(self, backend: subprocess.Popen, port: int, meta: dict[str, Any]):
+        self._backend = backend
+        self._client = RoboarenaClient(port=port)
+        self._meta = meta
 
-    READY_TIMEOUT_S = WARMUP_DEADLINE_S
+    def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
+        return [{ACTION: action} for action in np.asarray(self._client.infer(obs)[pi05_abc.ACTIONS])]
 
-    def __init__(self, checkpoint: Path, fork: Path, config_name: str, infer_timeout: float, ws_port: int):
-        # The child runs in the fork's openpi directory, where a relative path names another file.
-        checkpoint, fork = checkpoint.resolve(), fork.resolve()
-        super().__init__(
-            checkpoint_dir=str(checkpoint),
-            config_name=config_name,
-            infer_timeout=infer_timeout,
-            openpi_root=fork / FORK_OPENPI,
-            ws_port=ws_port,
-        )
-        self._python = fork / FORK_PYTHON
+    def meta(self) -> dict[str, Any]:
+        return self._meta
 
-    def start(self):
-        # Refuse a port another server holds: the readiness probe would reach that server, not this checkpoint.
-        with socket.socket() as port_check:
-            port_check.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            port_check.bind(('127.0.0.1', self.ws_port))
-        super().start()
-
-    def _build_command(self) -> list[str]:
-        checkpoint = Path(self.checkpoint_dir)
-        # rules-allow: hardcoded-keys — the flags of the author's server as it parses them.
-        return [
-            str(self._python),
-            str(checkpoint / SERVER_SCRIPT),
-            '--host',
-            '127.0.0.1',
-            '--port',
-            str(self.ws_port),
-            '--config',
-            self.config_name,
-            '--checkpoint',
-            self.checkpoint_dir,
-            '--norm-stats-path',
-            str(checkpoint / NORM_STATS),
-            '--prompt',
-            TASK,
-            '--image-key-map',
-            IMAGE_KEY_MAP,
-            '--flatten-prefix',
-            FLATTEN_PREFIX,
-            '--state-key',
-            f'{FLATTEN_PREFIX}state',
-        ]
+    def close(self) -> None:
+        self._client.close()
+        self._backend.terminate()
+        try:
+            self._backend.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._backend.kill()
+            self._backend.wait()
 
 
-def _warm_observation() -> dict:
+def _warm_observation() -> dict[str, Any]:
     """Black views and a zero state, in the fields of the author's server."""
-    width, height = abc_codecs.VIEW_SIZE
+    width, height = codecs.VIEW_SIZE
     view = np.zeros((3, height, width), dtype=np.uint8)
-    cameras = (abc_dit.TOP_CAMERA, abc_dit.LEFT_CAMERA, abc_dit.RIGHT_CAMERA)
+    cameras = (pi05_abc.TOP_CAMERA, pi05_abc.LEFT_CAMERA, pi05_abc.RIGHT_CAMERA)
     return {
-        abc_dit.STATE: np.zeros(abc_codecs.BIMANUAL_SIZE, dtype=np.float32),
-        abc_dit.IMAGES: dict.fromkeys(cameras, view),
-        abc_dit.PROMPT: TASK,
+        pi05_abc.STATE: np.zeros(codecs.BIMANUAL_SIZE, dtype=np.float32),
+        pi05_abc.IMAGES: dict.fromkeys(cameras, view),
+        pi05_abc.PROMPT: codecs.TASK,
     }
 
 
-# `infer_timeout` bounds one inference. The author's server compiles the model before it listens.
-@cfn.config(config_name='pi05_abc130k', port=8001, infer_timeout=120.0)
-def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, infer_timeout: float) -> Model:
-    """The checkpoint directory `checkpoint`, served by its own server snapshot in the fork checkout `fork`."""
-    checkpoint_dir = Path(checkpoint)
-    backend = AuthorServer(checkpoint_dir, Path(fork), config_name, infer_timeout, port)
+def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
+    code = process.poll()
+    return code is not None, code
+
+
+@cfn.config(config_name='pi05_abc130k', port=8001)
+def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int) -> Model:
+    """The checkpoint directory `checkpoint`, served by its own server snapshot in the fork checkout `fork`.
+
+    The author's server loads the checkpoint and compiles the model before it listens.
+    """
+    # The child runs in the fork's openpi directory, where a relative path names another file.
+    checkpoint_dir, fork_dir = Path(checkpoint).resolve(), Path(fork).resolve()
+    # rules-allow: hardcoded-keys — the flags of the author's server as it parses them.
+    command = [
+        fork_dir / FORK_PYTHON,
+        checkpoint_dir / SERVER_SCRIPT,
+        '--host',
+        '127.0.0.1',
+        '--port',
+        str(port),
+        '--config',
+        config_name,
+        '--checkpoint',
+        checkpoint_dir,
+        '--norm-stats-path',
+        checkpoint_dir / NORM_STATS,
+        '--prompt',
+        codecs.TASK,
+        '--image-key-map',
+        IMAGE_KEY_MAP,
+        '--flatten-prefix',
+        FLATTEN_PREFIX,
+        '--state-key',
+        f'{FLATTEN_PREFIX}state',
+    ]
+    # Refuse a port another server holds: the readiness probe would reach that server, not this checkpoint.
+    with socket.socket() as port_check:
+        port_check.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        port_check.bind(('127.0.0.1', port))
+    env = os.environ.copy()
+    env.setdefault(PREALLOCATE_ENV, 'false')
+    backend = subprocess.Popen(command, env=env, cwd=fork_dir / FORK_OPENPI)
     meta = {
         policy_keys.CHECKPOINT_ID: checkpoint_dir.name,
         policy_keys.TYPE: 'openpi',
         policy_keys.CONFIG_NAME: config_name,
         policy_keys.CHECKPOINT_PATH: str(checkpoint_dir),
     }
+    model = Pi05AbcModel(backend, port, meta)
     try:
-        backend.start()
-        model = OpenpiModel(backend, meta)
+        probe = RoboarenaClient(port=port)
+        wait_for_subprocess_ready(
+            lambda: probe.probe() is None,
+            partial(_exit_status, backend),
+            "the author's openpi server",
+            max_wait=WARMUP_DEADLINE_S,
+        )
         # The author's server swallows a failed warm-up of its own, so this one proves that the policy answers.
         warmup(model, _warm_observation())
     except Exception:
-        backend.stop()
+        model.close()
         raise
     return model
 
 
-# The ABC-DiT codec, with ABC's real-data prompt of the one task.
-bottles_codec = abc_codecs.multitask_200k.override(prompts={TASK: abc_codecs.ABC_130K_PROMPTS[TASK]}, prompt_prefix='')
-
-
-@cfn.config(crop=abc_codecs.Crop.YAMBOX_WIDE_TOP.value)
+@cfn.config(crop=codecs.Crop.YAMBOX_WIDE_TOP.value)
 def pipeline(crop: str) -> PolicyDeployment:
-    """The views cropped by the set `crop` of `abc_codecs.CROPS`, which a session sets in its URL query. The client
-    plays the first 15 actions of each 50-action chunk at 30 Hz, as the author's evaluation does, and shrinks each
-    view to fit ABC's view size, or twice that size for a cropped view."""
+    """The views cropped by the set `crop` of `codecs.CROPS`, which a session sets in its URL query. The client plays
+    the first actions of each chunk at 30 Hz, and shrinks each view to fit the view size, or twice that size for a
+    cropped view."""
     try:
-        crop_set = abc_codecs.Crop(crop)
+        crop_set = codecs.Crop(crop)
     except ValueError:
-        raise ValueError(f'Unknown crop {crop!r}; the crops are {sorted(c.value for c in abc_codecs.Crop)}') from None
-    crops = abc_codecs.CROPS[crop_set]
-    codec = bottles_codec.override(crops=crops).instantiate()
-    upload_size = abc_server.CROPPED_UPLOAD_SIZE if crops else abc_codecs.VIEW_SIZE
-    schedule = abc_server.SCHEDULES[abc_server.ScheduleName.SYNC].client_schedule()
-    return PolicyDeployment(Sequential(schedule, TransformImages(*upload_size, mode=ResizeMode.BOUND)), codec)
+        raise ValueError(f'Unknown crop {crop!r}; the crops are {sorted(c.value for c in codecs.Crop)}') from None
+    crops = codecs.CROPS[crop_set]
+    width, height = codecs.VIEW_SIZE
+    upload_size = (2 * width, 2 * height) if crops else codecs.VIEW_SIZE
+    schedule = Sequential(
+        TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(codecs.FPS, horizon_sec=EXECUTED_ACTIONS / codecs.FPS)
+    )
+    return PolicyDeployment(
+        Sequential(schedule, TransformImages(*upload_size, mode=ResizeMode.BOUND)),
+        codecs.bottles.override(crops=crops).instantiate(),
+    )
 
 
 COMMANDS = {'bottles_16k': serve.override(model=pi05_abc_model, pipeline=pipeline)}

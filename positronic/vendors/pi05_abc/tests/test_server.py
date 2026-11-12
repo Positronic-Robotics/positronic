@@ -10,18 +10,15 @@ from typing import Any
 
 import numpy as np
 import pytest
-
-pytest.importorskip('openpi_client')
-
 from positronic_model_server import server_wire, websocket_wire
 from positronic_model_server.protocol import AUTH_HEADER, bearer
 from positronic_wire import websocket, wire
 
 from positronic import keys
+from positronic.offboard import roboarena
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
-from positronic.vendors.abc_dit import codecs as abc_codecs
-from positronic.vendors.pi05_abc import server
+from positronic.vendors.pi05_abc import codecs, server
 from positronic.vendors.pi05_abc.tests import author_server_stand_in
 
 TOKEN = 'run-token'
@@ -82,7 +79,7 @@ def _infer_in_a_session(policy_server: PolicyServer, obs: dict[str, Any], query:
         assert not thread.is_alive()
 
 
-def _obs(task: str = server.TASK) -> dict[str, Any]:
+def _obs(task: str = codecs.TASK) -> dict[str, Any]:
     return {
         keys.arm_channel(keys.ROBOT_STATE, keys.LEFT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, dtype=np.float32),
         keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM) + keys.JOINTS_SUFFIX: np.arange(6, 12, dtype=np.float32),
@@ -117,7 +114,11 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
     # rules-allow: hardcoded-keys — the fields and flags of the author's server as its code spells them, pinned apart
     # from the package constants so a typo in a constant fails here.
     images = fields.pop('images')
-    assert fields == {'state': [*range(6), 1.0, *range(6, 12), 0.0], 'prompt': 'put the plastic bottles in the bin'}
+    assert fields == {
+        'state': [*range(6), 1.0, *range(6, 12), 0.0],
+        'prompt': 'put the plastic bottles in the bin',
+        roboarena.ENDPOINT: roboarena.INFER,
+    }
     # The 4:3 views fill ABC's 224x168 view, channels first, which openpi pads to its square input.
     assert {name: view['shape'] for name, view in images.items()} == dict.fromkeys(
         ('top', 'left', 'right'), [3, 168, 224]
@@ -142,15 +143,15 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
 
 def test_a_task_other_than_the_bottles_is_refused():
     codec = server.pipeline().codec
-    with pytest.raises(ValueError, match='no prompt for the task'):
+    with pytest.raises(ValueError, match='knows only the task'):
         codec.encode(_obs('sweep away the paper scraps from the table'))
 
 
-@pytest.mark.parametrize('crop', list(abc_codecs.Crop))
+@pytest.mark.parametrize('crop', list(codecs.Crop))
 def test_a_session_crop_names_the_boxes_of_that_set(crop):
     meta = server.pipeline(crop=crop.value).codec.meta
-    crops = abc_codecs.CROPS[crop]
-    assert meta[abc_codecs.CROPS_META] == {key: [b.left, b.top, b.right, b.bottom] for key, b in crops.items()}
+    crops = codecs.CROPS[crop]
+    assert meta[codecs.CROPS_META] == {key: [b.left, b.top, b.right, b.bottom] for key, b in crops.items()}
 
 
 def test_an_unknown_crop_is_refused():
@@ -159,7 +160,7 @@ def test_an_unknown_crop_is_refused():
 
 
 def test_the_default_crop_keeps_the_whole_exterior_frame():
-    assert server.pipeline().codec.meta[abc_codecs.CROPS_META][keys.EXTERIOR_IMAGE] == [0.0, 0.0, 1.0, 1.0]
+    assert server.pipeline().codec.meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == [0.0, 0.0, 1.0, 1.0]
 
 
 def test_a_load_with_relative_paths_reaches_the_server_with_absolute_ones(tmp_path, monkeypatch):
