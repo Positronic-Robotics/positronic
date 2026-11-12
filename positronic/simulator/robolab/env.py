@@ -343,8 +343,8 @@ class RobolabEnv(EnvProtocol):
         joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
         return ~torch.isfinite(joints).all(dim=1)
 
-    @telemetry.traced(telemetry.SPAN_ENV_RESET)
-    def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+    def _report_past_limit_steps(self) -> None:
+        """Print each slot's count of this episode's steps past a limit, then zero the counts."""
         for slot, steps in enumerate(self._past_limit_steps):
             if steps:
                 print(
@@ -352,6 +352,10 @@ class RobolabEnv(EnvProtocol):
                     file=sys.stderr,
                 )
         self._past_limit_steps = [0] * self._num_envs
+
+    @telemetry.traced(telemetry.SPAN_ENV_RESET)
+    def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+        self._report_past_limit_steps()
         self._episode += 1
         self._episode_task = token[keys.TOKEN_TASK]
         key = (token[keys.TOKEN_TASK], token[keys.TOKEN_INSTRUCTION_TYPE], token.get(keys.TOKEN_EPISODE_LENGTH_S))
@@ -511,14 +515,15 @@ class RobolabEnv(EnvProtocol):
         for slot in slots:
             flange_to_tool = np.linalg.inv(pose_ik.panda_flange(joint_pos[slot])) @ measured[slot]
             lower, upper = limits[slot, :, 0], limits[slot, :, 1]
-            past = np.maximum(lower - joint_pos[slot], joint_pos[slot] - upper)
+            past = np.maximum(np.maximum(lower - joint_pos[slot], joint_pos[slot] - upper), 0.0)
             if past.max() > pose_ik.MAX_JOINT_STEP:
                 # The solve clamps such a joint to its limit. Print it, so that a physics fault stays visible.
                 self._past_limit_steps[slot] += 1
                 if self._past_limit_steps[slot] == 1:
                     print(
                         f'{self._episode_task} episode {self._episode} slot {slot}: joints '
-                        f'{np.round(past, 3).tolist()} rad past their limits; the count of such steps follows at reset',
+                        f'{np.round(past, 3).tolist()} rad past their limits; the count of such steps follows at the '
+                        'episode end',
                         file=sys.stderr,
                     )
             targets.append(pose_ik.joint_targets(target[slot], joint_pos[slot], flange_to_tool, lower, upper))
@@ -641,6 +646,7 @@ class RobolabEnv(EnvProtocol):
         ]
 
     def close(self) -> None:
+        self._report_past_limit_steps()
         if self._env is not None:
             self._env.close()
             self._env = None
