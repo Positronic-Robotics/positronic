@@ -2184,7 +2184,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), frozenset(), True, runtime, run, None) == expected_ns
+        assert h.harness._step(Task('test', None), frozenset(), frozenset(), runtime, run, None) == expected_ns
     finally:
         runtime.close()
         run.close()
