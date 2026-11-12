@@ -35,6 +35,7 @@ from positronic_model_server.server import ModelServer
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import ServedUnixSocket
 from positronic_wire import registry, wire
+from positronic_wire.websocket import WebsocketUnixClientWire
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 from websockets.http11 import Request, Response
 from websockets.sync.client import unix_connect
@@ -432,19 +433,28 @@ class _FakeTime:
         self.now += seconds
 
 
+# A client stack the fake teleop server declares on Ready.
+_TELEOP_STACK = Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=1.0))
+
+
 class _ReadyWaitOnAFakeClock(wire.ClientConnection):
-    """The opening of a teleop session on the fake clock ``clock``: a waiting status at each interval of the model
-    server, and Ready at ``ready_at``. A wait that ends before the next message advances the clock and times out."""
+    """A teleop session on the fake clock ``clock``: a waiting status at each interval of the model server, and Ready
+    at ``ready_at``. A wait that ends before the next message advances the clock and times out. After Ready, the
+    server echoes the end of the session."""
 
     def __init__(self, clock: _FakeTime, ready_at: float):
         self._clock = clock
         self._ready_at = ready_at
         self._next_waiting = clock.now
+        self._sent: list[bytes] = []
 
     def send(self, message: bytes) -> None:
-        raise AssertionError('the opening sends nothing before Ready')
+        assert self._clock.now >= self._ready_at, 'the opening sends nothing before Ready'
+        self._sent.append(message)
 
     def recv(self, timeout: float | None = None) -> bytes:
+        if self._sent:
+            return self._sent.pop(0)
         arrives = min(self._next_waiting, self._ready_at)
         if timeout is not None and arrives - self._clock.now > timeout:
             self._clock.now += timeout
@@ -454,7 +464,7 @@ class _ReadyWaitOnAFakeClock(wire.ClientConnection):
             return serialise({
                 STATUS: ServerStatus.READY,
                 PROTOCOL_VERSION: ProtocolVersion.V3.value,
-                META: {},
+                META: {server_keys.LOCAL_STACK: _TELEOP_STACK.to_spec()},
                 SESSION_ID: 'teleop',
             })
         self._next_waiting += ModelServer.WAITING_INTERVAL_SEC
@@ -464,19 +474,21 @@ class _ReadyWaitOnAFakeClock(wire.ClientConnection):
         return 'closed'
 
 
-def test_the_default_deadlines_of_a_teleop_policy_outlast_a_five_minute_wait_for_ready():
-    """A session of ``cfg.policy.teleop`` with its default deadlines opens when Ready comes after five minutes."""
+def test_the_default_deadlines_of_a_teleop_policy_outlast_a_five_minute_wait_for_ready(runtime):
+    """A run of ``cfg.policy.teleop`` with its default deadlines starts when Ready comes after five minutes."""
     clock = _FakeTime()
     ready_at = TELEOPERATOR_GETS_READY_SEC + ModelServer.WAITING_INTERVAL_SEC
     policy = positronic.cfg.policy.teleop.instantiate()
-    client = policy._client
     with (
-        patch.object(client._wire, 'dial', return_value=_ReadyWaitOnAFakeClock(clock, ready_at)),
+        patch.object(WebsocketUnixClientWire, 'dial', return_value=_ReadyWaitOnAFakeClock(clock, ready_at)),
         patch('positronic.offboard.client.time', clock),
     ):
-        session = client.new_session()
-    assert session.session_id == 'teleop'
-    assert clock.now == ready_at
+        run = runtime.start(policy)
+    try:
+        assert runtime.metadata_snapshot()[policy_keys.SESSION_ID] == 'teleop'
+        assert clock.now == ready_at
+    finally:
+        run.close()
 
 
 def test_a_silent_headset_reads_as_not_tracked_and_turns_control_off(service, socket_path, runtime):

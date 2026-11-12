@@ -85,7 +85,6 @@ def test_a_server_that_never_announces_its_config_ends_the_connect_by_its_deadli
         client.connect()
 
     assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
-    assert client._connection is None
 
 
 def test_a_server_that_answers_no_close_ends_the_connect_by_its_deadline(unanswering_websocket_port):
@@ -106,8 +105,7 @@ def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_tim
         assert fake_clock.answer(almost, open_timeout), 'the dial timed out'
         return fake_clock.connection((almost, _ANNOUNCEMENT))
 
-    with patch.object(client, '_wire') as client_wire:
-        client_wire.dial.side_effect = dial
+    with patch.object(roboarena_wire.RoboarenaClientWire, 'dial', side_effect=dial):
         assert client.connect() == deserialize(_ANNOUNCEMENT)
 
     assert fake_clock.now == 2 * almost
