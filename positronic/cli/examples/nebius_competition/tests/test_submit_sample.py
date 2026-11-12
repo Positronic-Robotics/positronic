@@ -30,7 +30,7 @@ def test_an_empty_eval_name_is_a_cli_error_before_any_request(submit_sample: dic
     monkeypatch.setenv(API_KEY_ENV, 'pk_live_secret')
     with pytest.raises(SystemExit) as exit_info:
         submit_sample['main'](['--eval=', '--policy-image=org/policy@sha256:abc'])
-    assert str(exit_info.value) == "not a EvalRef: ''"
+    assert str(exit_info.value) == "not an eval name: ''"
 
 
 def test_an_empty_transaction_key_is_a_cli_error_before_any_request(submit_sample: dict[str, Any], monkeypatch):
@@ -55,7 +55,7 @@ def test_the_key_that_register_saved_is_used_when_the_environment_has_none(
     # Past the key check, the empty eval name is the first refusal.
     with pytest.raises(SystemExit) as exit_info:
         submit_sample['main'](['--eval=', '--policy-image=org/policy@sha256:abc'])
-    assert str(exit_info.value) == "not a EvalRef: ''"
+    assert str(exit_info.value) == "not an eval name: ''"
 
 
 def test_with_no_key_and_no_record_the_refusal_names_the_register_command(submit_sample: dict[str, Any], monkeypatch):

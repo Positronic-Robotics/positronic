@@ -33,8 +33,8 @@ uv run positronic eval run --eval=.sim.libero.object \
   --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
   --eval.trial_count=10 --output_dir=~/evals/libero
 
-uv run positronic-server --dataset.path=~/evals/libero \
-  --ep_table_cfg=@positronic.cfg.server.eval_table
+uv run positronic-dataset-viewer --dataset.path=~/evals/libero \
+  --ep_table_cfg=@positronic.cfg.dataset_viewer.eval_table
 ```
 
 **One server, many targets.** Every target publishes the same observation keys (see [the wire format](connect-your-model.md#the-wire-format)), so a DROID policy served once is scored on LIBERO, RoboLab, MolmoSpaces and our rig without a restart. Running everywhere is not the same as being comparable everywhere: each benchmark points `image.exterior` at its own camera, so a checkpoint scored on a target it was never trained for measures the viewpoint gap as much as the policy. Your own model is served the same way — [Connect your model](connect-your-model.md).

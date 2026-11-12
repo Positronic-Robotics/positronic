@@ -127,9 +127,16 @@ def test_a_task_label_names_a_plan_endpoint():
         a_plan(tasks=[{'task_id': SPOONS, 'endpoints': ['phantom']}])
 
 
-def test_an_endpoint_overrides_only_its_count():
-    with pytest.raises(ValidationError, match='per-task properties'):
-        a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 60}])
+def test_an_endpoint_states_its_own_cap_and_preset():
+    plan = a_plan(endpoints=[{**BASELINE, 'cap_per_episode_sec': 480, 'policy_preset': 'long'}, CANDIDATE])
+    assert plan.endpoints[0].cap_per_episode_sec == 480 and plan.endpoints[0].policy_preset == 'long'
+    assert plan.endpoints[1].cap_per_episode_sec is None and plan.endpoints[1].policy_preset is None
+
+
+def test_a_task_entry_states_its_own_cap_and_preset():
+    plan = a_plan(tasks=[{'task_id': SPOONS, 'endpoints': [{'name': 'baseline', 'cap_per_episode_sec': 480}]}])
+    entries = plan.tasks[0].endpoints
+    assert entries is not None and entries[0].cap_per_episode_sec == 480
 
 
 def test_a_served_endpoint_names_its_spec_and_its_wire_and_no_address():
@@ -140,12 +147,16 @@ def test_a_served_endpoint_names_its_spec_and_its_wire_and_no_address():
         Endpoint.model_validate({**remote('pi05'), 'kind': 'served', 'provider': 'cohost', 'spec': 's'})
 
 
-def test_an_endpoint_states_only_a_locator_and_its_own_count():
+def test_an_endpoint_states_only_a_locator_and_its_own_settings():
     # The check names what an endpoint may state, so a field added to `Cascade` is refused here
     # rather than accepted in silence, and the refusal names every field it found.
     with pytest.raises(ValidationError, match='which are per-task properties'):
-        Endpoint.model_validate({**BASELINE, 'policy_preset': 'p'})
-    with pytest.raises(ValidationError, match='cap_per_episode_sec, tote_placement'):
+        Endpoint.model_validate({**BASELINE, 'scene_seed': 'scene-a'})
+    with pytest.raises(ValidationError, match='start_pose, tote_placement'):
+        Endpoint.model_validate({**BASELINE, 'tote_placement': 'left', 'start_pose': 'droid_reset'})
+    with pytest.raises(
+        ValidationError, match='overrides only cap_per_episode_sec, episodes_per_endpoint, policy_preset'
+    ):
         Endpoint.model_validate({**BASELINE, 'tote_placement': 'left', 'cap_per_episode_sec': 30})
     allowed = Endpoint.model_validate({**BASELINE, 'episodes_per_endpoint': 2})
     assert allowed.episodes_per_endpoint == 2
@@ -154,13 +165,16 @@ def test_an_endpoint_states_only_a_locator_and_its_own_count():
 def test_an_endpoint_reads_back_from_its_own_dump():
     # A dump names every field, so the check reads what each one carries: a plan the client sends
     # is one the platform validates from that JSON.
-    entry = Endpoint.model_validate({**BASELINE, 'episodes_per_endpoint': 2})
+    entry = Endpoint.model_validate({
+        **BASELINE,
+        'episodes_per_endpoint': 2,
+        'cap_per_episode_sec': 480,
+        'policy_preset': 'long',
+    })
     assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
 
 
 A_PER_TASK_VALUE = {
-    'cap_per_episode_sec': 60,
-    'policy_preset': 'other',
     'tote_placement': 'left',
     'camera_vantage': 'phail',
     'external_cameras': {'side': 'left'},
@@ -171,9 +185,9 @@ A_PER_TASK_VALUE = {
 
 
 def test_an_endpoint_refuses_every_per_task_property():
-    """An endpoint refuses every property of `Cascade` but the count. The equality assert keeps
+    """An endpoint refuses every property of `Cascade` but the ones it overrides. The equality assert keeps
     `A_PER_TASK_VALUE` complete, so a field added to `Cascade` fails here until it has a value."""
-    assert _ENDPOINT_OVERRIDES in Cascade.model_fields
+    assert _ENDPOINT_OVERRIDES <= set(Cascade.model_fields)
     assert set(A_PER_TASK_VALUE) == _PER_TASK_ONLY
     # A field of `Endpoint` itself does not cascade, so it is never per task.
     assert not _PER_TASK_ONLY & (set(Endpoint.model_fields) - set(Cascade.model_fields))
@@ -182,8 +196,13 @@ def test_an_endpoint_refuses_every_per_task_property():
             Endpoint.model_validate({**BASELINE, name: value})
 
 
-def test_an_endpoint_states_the_one_property_it_overrides():
-    assert Endpoint.model_validate({**BASELINE, _ENDPOINT_OVERRIDES: 2}).episodes_per_endpoint == 2
+AN_ENDPOINT_SETTING = {'episodes_per_endpoint': 2, 'cap_per_episode_sec': 480, 'policy_preset': 'long'}
+
+
+def test_an_endpoint_states_each_property_it_overrides():
+    assert set(AN_ENDPOINT_SETTING) == _ENDPOINT_OVERRIDES
+    for name, value in AN_ENDPOINT_SETTING.items():
+        assert getattr(Endpoint.model_validate({**BASELINE, name: value}), name) == value
 
 
 def test_a_scene_is_flat_on_every_level():
@@ -259,6 +278,22 @@ def test_every_cap_sits_under_the_ceiling():
     assert a_plan(max_cap_per_episode_sec=100, cap_per_episode_sec=100).cap_per_episode_sec == 100
 
 
+def test_the_ceiling_bounds_the_cap_of_a_plan_endpoint():
+    with pytest.raises(ValidationError, match="endpoint 'baseline' takes 120 s per episode, over the plan ceiling"):
+        a_plan(max_cap_per_episode_sec=100, endpoints=[{**BASELINE, 'cap_per_episode_sec': 120}, CANDIDATE])
+
+
+def test_the_ceiling_bounds_the_cap_of_a_task_entry():
+    entry = {'name': 'baseline', 'cap_per_episode_sec': 120}
+    with pytest.raises(ValidationError, match="endpoint 'baseline' takes 120 s per episode, over the plan ceiling"):
+        a_plan(max_cap_per_episode_sec=100, tasks=[{'task_id': SPOONS, 'endpoints': [entry]}])
+
+
+def test_an_endpoint_cap_at_the_ceiling_passes():
+    plan = a_plan(max_cap_per_episode_sec=100, endpoints=[{**BASELINE, 'cap_per_episode_sec': 100}, CANDIDATE])
+    assert plan.endpoints[0].cap_per_episode_sec == 100
+
+
 def test_a_plan_names_its_rig_shape_and_runs_on_a_franka_when_it_names_none():
     assert a_plan().rig_shape is RigShape.franka
     yam = a_plan(rig_shape='yam')
@@ -267,8 +302,8 @@ def test_a_plan_names_its_rig_shape_and_runs_on_a_franka_when_it_names_none():
     assert EvalPlan.model_validate(yam.model_dump(mode='json')) == yam
 
 
-@pytest.mark.parametrize('shape', [RigShape.molmospaces, RigShape.robolab])
-def test_a_plan_names_a_simulator_as_its_rig_shape(shape: RigShape):
+@pytest.mark.parametrize('shape', [shape for shape in RigShape if shape is not RigShape.INVALID])
+def test_a_plan_names_each_rig_shape_it_takes(shape: RigShape):
     plan = a_plan(rig_shape=slug_of(shape))
     assert plan.rig_shape is shape
     assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
@@ -276,7 +311,7 @@ def test_a_plan_names_a_simulator_as_its_rig_shape(shape: RigShape):
 
 @pytest.mark.parametrize('shape', ['ur5', 'sim'])
 def test_a_rig_shape_outside_the_closed_set_is_refused_with_the_shapes_it_takes(shape: str):
-    with pytest.raises(ValidationError, match="rig_shape\n.*'franka', 'yam', 'molmospaces' or 'robolab'"):
+    with pytest.raises(ValidationError, match="rig_shape\n.*'franka', 'yam', 'molmospaces', 'robolab' or 'abc'"):
         a_plan(rig_shape=shape)
 
 
@@ -406,6 +441,46 @@ def test_a_label_states_no_memory_need_of_its_own(label: dict[str, str]):
 def test_an_endpoint_without_a_memory_need_omits_it_from_its_dump(mode: str):
     assert 'min_vram_gb' not in Endpoint.model_validate(_IMAGE_ENTRY).model_dump(mode=mode)
     assert Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': 48}).model_dump(mode=mode)['min_vram_gb'] == 48
+
+
+def test_an_image_endpoint_states_the_session_params_of_its_image():
+    entry = Endpoint.model_validate({**_IMAGE_ENTRY, 'query': 'horizon_sec=0.5'})
+    assert entry.query == 'horizon_sec=0.5'
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(_IMAGE_ENTRY).query is None
+
+
+@pytest.mark.parametrize('query', ['', '?horizon_sec=0.5', 'horizon_sec=0.5#x', 'prompt=a b'])
+def test_an_image_query_holds_the_grammar_of_an_address_query(query: str):
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate({**_IMAGE_ENTRY, 'query': query})
+
+
+def test_a_remote_or_a_served_endpoint_states_no_image_query():
+    with pytest.raises(ValidationError, match='only an image endpoint carries'):
+        Endpoint.model_validate(remote('baseline', query='horizon_sec=0.5'))
+    with pytest.raises(ValidationError, match='only an image endpoint carries'):
+        Endpoint.model_validate({**_SERVED_ENTRY, 'query': 'horizon_sec=0.5'})
+
+
+@pytest.mark.parametrize('label', [{'name': 'policy'}, {'name': 'policy', 'kind': 'image'}])
+def test_a_label_states_no_image_query_of_its_own(label: dict[str, str]):
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        Endpoint.model_validate({**label, 'query': 'horizon_sec=0.5'})
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_an_image_endpoint_without_a_query_omits_it_from_its_dump(mode: str):
+    assert 'query' not in Endpoint.model_validate(_IMAGE_ENTRY).model_dump(mode=mode)
+    stated = Endpoint.model_validate({**_IMAGE_ENTRY, 'query': 'horizon_sec=0.5'}).model_dump(mode=mode)
+    assert stated['query'] == 'horizon_sec=0.5'
+
+
+def test_a_competition_plan_of_an_image_carries_its_query():
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), query='horizon_sec=0.5')
+    assert isinstance(plan.request_type, NebiusCompetition)
+    assert [entry.query for entry in plan.endpoints] == ['horizon_sec=0.5']
+    assert plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x')).endpoints[0].query is None
 
 
 def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():

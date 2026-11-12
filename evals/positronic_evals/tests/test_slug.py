@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from positronic_evals.labels import Outcome, Stage
-from positronic_evals.slug import Slugged, members_by_slug, slug_of
-from pydantic import BaseModel, ValidationError
+from positronic_evals.slug import Name, Slugged, members_by_slug, slug_of
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 class Holder(BaseModel):
@@ -80,3 +82,12 @@ def test_slug_of_is_the_lowercased_name():
 def test_the_generated_schema_advertises_the_slugs():
     schema = Holder.model_json_schema()['properties']['stage']
     assert set(schema.get('enum', [])) == set(members_by_slug(Stage))
+
+
+@pytest.mark.parametrize('value', ['', 'two words'])
+def test_the_base_name_type_refuses_a_value_by_its_class_name(value: str):
+    refusal = f'^not a Name: {re.escape(repr(value))}$'
+    with pytest.raises(ValueError, match=refusal):
+        Name(value)
+    with pytest.raises(ValidationError, match=f'not a Name: {re.escape(repr(value))}'):
+        TypeAdapter(Name).validate_python(value)

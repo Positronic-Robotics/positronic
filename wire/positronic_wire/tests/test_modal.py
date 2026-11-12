@@ -66,7 +66,7 @@ class FakeConnection(wire.ClientConnection):
             raise wire.PeerDisconnected('dropped')
         return b'frame'
 
-    def close(self) -> str:
+    def close(self, timeout: float | None = None) -> str:
         return 'closed'
 
 

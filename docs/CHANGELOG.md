@@ -1,5 +1,74 @@
 # Changelog
 
+## [0.4.5] - 2026-11-11
+
+This release publishes `positronic-platform-client` 0.47.20, and `positronic` requires that version. `positronic account` gains `redeem`, `terms` and `accept-terms`. An endpoint of a plan can state its own episode cap, policy preset and session limit, and a plan can name the `abc` simulator. The `positronic-server` command is now `positronic-dataset-viewer`. The Franka, ZED and Robotiq drivers report device faults that a console can act on, and the YAM driver can fade its Coulomb friction at rest. The MolmoAct2 pipelines send JPEG frames, and the viewer header counts the outcomes of the episodes.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.47.20 |
+| `positronic-evals` | 0.2.8 |
+| `positronic-eval-vocabulary` | 0.7.3 |
+| `positronic-model-server` | 0.3.6 |
+| `positronic-wire` | 0.12.2 |
+
+### Platform client
+- A plan can name `abc`, the ABC simulator, as its rig shape. A plan with an unknown shape is refused, and the refusal lists the five shapes ([#1219](https://github.com/Positronic-Robotics/positronic/pull/1219))
+- `positronic account redeem --code=<code>` and `PlatformClient.redeem_coupon` add the credits of a coupon to the caller's organization. `--json` prints the answer as JSON. A one-use coupon code may be a command argument, because the same command spends it ([#1207](https://github.com/Positronic-Robotics/positronic/pull/1207))
+- `positronic account terms` prints the current platform terms and the acceptance on record. `positronic account accept-terms --version=<v>` accepts a version, and `positronic account register --accept_terms=<v>` accepts it with the key that it mints. `platform_client.terms` holds the models ([#1200](https://github.com/Positronic-Robotics/positronic/pull/1200))
+- An endpoint of a plan can state `cap_per_episode_sec` and `policy_preset`, as it states `episodes_per_endpoint`. So one task node runs several policies, each with its own episode window, in one random episode order. `max_cap_per_episode_sec` bounds the cap of each endpoint ([#1199](https://github.com/Positronic-Robotics/positronic/pull/1199))
+- An `image` and a `served` endpoint can state `max_concurrent_sessions`, as a `remote` endpoint can. A `nebius_competition` plan refuses the field on every endpoint ([#1167](https://github.com/Positronic-Robotics/positronic/pull/1167)) ([#1182](https://github.com/Positronic-Robotics/positronic/pull/1182))
+- A blank eval, board or labeler name is refused with a text that names its kind again, for example "not an eval name: ''" ([#1196](https://github.com/Positronic-Robotics/positronic/pull/1196))
+- The client README says that a personal organization buys N credits with the package id `credits-N` ([#1194](https://github.com/Positronic-Robotics/positronic/pull/1194))
+
+### Competition
+- The competition guide says why a policy server asks for JPEG frames, and how a server that writes its own handshake or speaks protocol v3 asks for them ([#1212](https://github.com/Positronic-Robotics/positronic/pull/1212))
+
+### Inference
+- `--policy.cache_ttl` sets the TTL of the LLM policy's cache points to `5m` (the default) or `1h`, and the policy refuses a provider cache setting ([#1214](https://github.com/Positronic-Robotics/positronic/pull/1214))
+- An ABC-DiT session with the query `prompts=real` sends the prompt of the task in ABC's real teleoperation data, in place of the sim prompt. The real data has four of the five tasks, so such a session refuses `hang mug on mug rack` ([#1213](https://github.com/Positronic-Robotics/positronic/pull/1213))
+- Every MolmoAct2 DROID pipeline asks the client for JPEG frames at quality 90. A call with three 640x360 cameras sent about 2 MB of raw frames before ([#1212](https://github.com/Positronic-Robotics/positronic/pull/1212))
+- `docker/Dockerfile.serve-abc-dit` builds a serving image of ABC-DiT for the yambox rig, with its checkpoint and text encoder inside, so it starts with no network ([#1206](https://github.com/Positronic-Robotics/positronic/pull/1206))
+- The Dream-1 vendor paces its chunks as `dreamlabs-client` paces them, and bounds each view to 320 pixels wide before upload. `upload_probe.py` times the frame path of one call ([#1188](https://github.com/Positronic-Robotics/positronic/pull/1188))
+
+### Robots
+- The Franka driver holds an ARM `DeviceFault` when the safety controller stops the arm for a brake self-test deadline, a lost safety bus or a joint fault. A console fails the attempt, so the episode runs again ([#1190](https://github.com/Positronic-Robotics/positronic/pull/1190))
+- The Franka ready call runs the TD2 self-test when it is due within `SELF_TEST_LEAD_SEC` ([#1189](https://github.com/Positronic-Robotics/positronic/pull/1189))
+- A Franka recovery runs the Desk step when Desk holds a recoverable error after libfranka returns `CLEARED`. Only a recover call reboots the control box. A ready call answers with the reason ([#1169](https://github.com/Positronic-Robotics/positronic/pull/1169)) ([#1195](https://github.com/Positronic-Robotics/positronic/pull/1195))
+- The lock holds `positronic-franka` 0.12.1, which keeps the playing plan when a new joint target equals its target ([#1179](https://github.com/Positronic-Robotics/positronic/pull/1179))
+- A recover call reboots a ZED 2 or ZED 2i camera through the SDK and opens it again ([#1193](https://github.com/Positronic-Robotics/positronic/pull/1193))
+- The ZED driver holds a camera error when its images stay near-black for 5 s ([#1192](https://github.com/Positronic-Robotics/positronic/pull/1192))
+- A Robotiq move that finds the fingers bound shut holds a GRIPPER `DeviceFault`. A ready or recover call activates the gripper again ([#1197](https://github.com/Positronic-Robotics/positronic/pull/1197))
+- `Compensation.coulomb_friction_fade_rad_s` fades the YAM Coulomb friction at low joint speed, and the yambox station uses it, so the arms do not rattle at rest ([#1165](https://github.com/Positronic-Robotics/positronic/pull/1165)) ([#1170](https://github.com/Positronic-Robotics/positronic/pull/1170))
+- The default instruction of `.real.yam.bimanual` is the bottles task, 'put the plastic bottles in the bin' ([#1191](https://github.com/Positronic-Robotics/positronic/pull/1191))
+
+### Evals
+- `eval_vocabulary.episode.EndedBy` holds the values of `eval.ended_by`: `operator`, `policy` and the new `station`. The sim labelers give no label to a trial that the station ended ([#1177](https://github.com/Positronic-Robotics/positronic/pull/1177))
+- The MolmoSpaces eval records the task's reward and its numeric metrics at each step, under `task_metrics` ([#1184](https://github.com/Positronic-Robotics/positronic/pull/1184))
+- RoboLab solves pose commands with a port of the FR3 driver's bounded IK ([#1175](https://github.com/Positronic-Robotics/positronic/pull/1175))
+- A RoboLab clone whose arm state is not finite ends its own episode as a failure, with `robolab.fault`. The other clones run on ([#1172](https://github.com/Positronic-Robotics/positronic/pull/1172))
+
+### Teleoperation
+- The tracker counts the moves of the hand in the axes of the controller, so the way the teleoperator faces does not count. A station sets its own axes with `controller_axes`, and `--controller_axes=None` keeps the axes of the headset ([#1204](https://github.com/Positronic-Robotics/positronic/pull/1204))
+- `positronic teleop --cameras` names the cameras of the station. The headset page lists them before Enter AR, a tap shows one in the headset, and Y on the left controller cycles the video panel ([#1198](https://github.com/Positronic-Robotics/positronic/pull/1198))
+- The headset page opens its video socket again when no frame arrives for 3 s ([#1174](https://github.com/Positronic-Robotics/positronic/pull/1174))
+- The scripted headset holds each press until the page shows it ([#1181](https://github.com/Positronic-Robotics/positronic/pull/1181))
+
+### Datasets
+- The dataset viewer package is `positronic.dataset_viewer`, and its command is `positronic-dataset-viewer` in place of `positronic-server`. The viewer cache directory stays at its old default ([#1208](https://github.com/Positronic-Robotics/positronic/pull/1208))
+- A `LocalDatasetWriter` opens the video encoders of a new episode before its first frame, at the frame sizes of the last episode ([#1186](https://github.com/Positronic-Robotics/positronic/pull/1186))
+- Episode bounds, the static export, the replay recording and the viewer clock skip a signal with no rows ([#1180](https://github.com/Positronic-Robotics/positronic/pull/1180))
+
+### Replay
+- The viewer takes an optional `summary_column`, and its page header counts each value of that column with its share of the episodes ([#1201](https://github.com/Positronic-Robotics/positronic/pull/1201))
+- `<positronic-replay>` keeps one rerun viewer across episodes ([#1178](https://github.com/Positronic-Robotics/positronic/pull/1178))
+- The closed replay screen is inert, so Tab and a screen reader skip its controls ([#1168](https://github.com/Positronic-Robotics/positronic/pull/1168))
+
+### Development
+- CI enforces the duplicate-code checks of `utilities/code_smells.toml`, and the code holds no current findings ([#1187](https://github.com/Positronic-Robotics/positronic/pull/1187))
+- Each `check-rules` checker prompt starts with a fixed marker line ([#1202](https://github.com/Positronic-Robotics/positronic/pull/1202))
+- The next-session teleop test drives the second session until it makes two moves, so a slow runner does not fail it ([#1166](https://github.com/Positronic-Robotics/positronic/pull/1166))
+
 ## [0.4.4] - 2026-11-05
 
 This release publishes `positronic-platform-client` 0.47.10, and `positronic` requires that version. `positronic eval run` with no `--eval` runs the eval that the leaderboards tagged `competition.phail.ai` rank, and the competition examples read the `leaderboards` routes. A plan names the simulator it runs in as its rig shape, and a remote endpoint can take a bearer token from a file. A World stops and raises when one of its background processes fails. The serving images no longer trust the leaked eMudhra intermediate CAs. The YAM driver takes the end-effector mass and the Coulomb friction, and `Task.instruction` is plain text that each simulator lists before the reset.

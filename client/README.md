@@ -72,6 +72,39 @@ first loses the key the platform minted. Pass `timeout=client.register_timeout()
 deadline for the WorkOS check, and covers the longest check the platform runs. Without `timeout`,
 `register` sends one request and waits 90 s.
 
+## Platform terms
+
+The platform can refuse a call from an account that has not accepted its terms. The refusal is
+`403 forbidden`, and its message names the version, the page of the terms, and the command that
+accepts them. A person reads the terms and accepts them once. A new version of the terms can need a
+new acceptance.
+
+`PlatformClient.program_terms(Program.platform)` reads the current version and the page, with no key.
+`program_entry(Program.platform)` reads the version that the account accepted last. `accept_platform_terms(version)`
+records the acceptance. The version is a check, and the platform refuses one that is not current. The
+models live in `platform_client.terms`.
+
+From the command line, `positronic account terms` prints the terms and the acceptance on record, and
+`positronic account accept-terms` accepts the version that you read. `positronic account register`
+prints the terms after it registers, and `--accept_terms` accepts them with the key that it mints.
+A version such as `1.3` reads as a number on the command line, so quote it with inner quotes.
+
+```bash
+uv run positronic account terms
+uv run positronic account accept-terms --version='"<version>"'
+uv run positronic account register --alias=<display name> --accept_terms='"<version>"'
+```
+
+## Coupons
+
+`PlatformClient.redeem_coupon(code)` redeems a code and answers the organization and the credit units it got. From the
+command line, `positronic account redeem` prints the credits that it added. `--json` prints the answer as JSON. Quote a
+code of digits with inner quotes.
+
+```bash
+uv run positronic account redeem --code=<code>
+```
+
 ## Credit accounts
 
 `PlatformClient.billing_account(org)` reads the member's billing role, credit balance, tariff, and configured purchase packages.
@@ -90,6 +123,8 @@ The `packaged` mode uses the organization's configured invoice terms. The `pay_a
 `PlatformClient.create_purchase` takes a `BillingPurchaseCreateRequest` with an organization, package id, and transaction key.
 Reuse the same key to read the same owned purchase after a lost response. A new purchase requires the billing spender role.
 The configured package fixes its credit units, currency, and amount in currency minor units.
+A personal organization can buy any whole number of credits N between the smallest and the largest purchase: the package id is `credits-N`.
+The account response of such an organization lists one example package, `credits-20`.
 `currency` is the lowercase ISO 4217 code used to verify the Stripe price and payment.
 For example, `amount_minor=17` means 17 yen for `jpy`, or 0.17 dollars for `usd`.
 The currency does not change the package's credit units.
@@ -105,6 +140,7 @@ An organization member can read purchase history. A reviewed or credited purchas
 ```bash
 positronic account credits account --org=acme
 positronic account credits buy --org=acme --package-id=<configured-package> --transaction-key=<stable-key>
+positronic account credits buy --org=acme --package-id=credits-50 --transaction-key=<stable-key>
 positronic account credits get-purchase --id=<purchase-id>
 positronic account credits list-purchases --org=acme
 positronic account credits list-purchases --org=acme --limit=50 --after='"last-purchase-id"'
@@ -128,8 +164,14 @@ episodes each endpoint takes on each task. A plan either states its own `tasks` 
 the catalogue expands into them; both arrive at the same set. The plan states the count once. A task may override it for that task, and an endpoint may
 override it for that endpoint, so a 10 + 10 + 2 round is one plan. The scene fields sit on the
 plan and on a task: `tote_placement`, `camera_vantage`, `external_cameras`, `clutter`, `scene_seed`
-and `start_pose`. An endpoint states only its count. `episodes_total` is a checksum a caller may state.
-`max_cap_per_episode_sec` is the upper bound on every task's cap.
+and `start_pose`. An endpoint states its count, its `cap_per_episode_sec` and its `policy_preset`, and
+no other field of the cascade. `episodes_total` is a checksum a caller may state.
+`max_cap_per_episode_sec` is the upper bound on every cap a plan states, an endpoint's cap included.
+
+An endpoint's cap and preset take the same order as its count: the entry on the task, then the plan
+endpoint that a bare label names, then the task, then the plan. So one task can run several policies,
+each with its own episode window, in one random episode order. A task or the plan still states a cap and
+a preset.
 
 `request_type` is required and states the rules a plan runs under. `private_eval` runs for the org
 it names, and the caller must be a member of that org. The org's approvals decide the evals, the
@@ -137,9 +179,9 @@ tasks and the endpoint kinds it may use. `nebius_competition` names one eval and
 endpoint, and counts against the daily quota. `--org` states a `private_eval` on the command line.
 
 `rig_shape` names the embodiment a plan that states its tasks runs on: `franka`, a single-arm Franka,
-`yam`, a bimanual YAM, `molmospaces`, the MolmoSpaces simulator, or `robolab`, the RoboLab simulator.
-The client refuses every other name, and the refusal lists these four. A plan that names none runs
-on a `franka`. The platform picks the rig of that shape. A plan that names an eval runs on the
+`yam`, a bimanual YAM, `molmospaces`, the MolmoSpaces simulator, `robolab`, the RoboLab simulator,
+or `abc`, the ABC simulator. The client refuses every other name, and the refusal lists these five.
+A plan that names none runs on a `franka`. The platform picks the rig of that shape. A plan that names an eval runs on the
 embodiment the eval pins, and it is refused when it names a `rig_shape` other than `franka`. The
 platform runs every task of a plan on the rig its `rig_shape` names. Each task in `catalog.tasks` lists the shapes it runs on in
 `embodiments`. A plan that states its tasks is refused when its `rig_shape` is not one of a task's
@@ -148,7 +190,7 @@ states `rig_shape: yam`.
 
 ```yaml
 request_type: {type: private_eval, org: acme}   # or {type: nebius_competition}
-rig_shape: franka                        # franka | yam | molmospaces | robolab
+rig_shape: franka                        # franka | yam | molmospaces | robolab | abc
 tasks:
   - eight-spoons-into-grey-tote          # a bare id takes the plan's endpoints and counts
   - task_id: marker-in-mug               # a mapping overrides for that task alone
@@ -163,6 +205,7 @@ endpoints:
     kind: served
     spec: dreamzero
     wire: grpc
+    cap_per_episode_sec: 240              # an endpoint may state its own window and preset
 episodes_per_endpoint: 10
 episodes_total: 22
 cap_per_episode_sec: 180
@@ -218,6 +261,11 @@ the published slice of 24192 MiB. A need that no slice of the run's GPU holds is
 and so is a need above the published slice where the plan's eval keeps that slice. Only an entry
 that names its `image` states it.
 
+An `image` endpoint may state `query`, the session params the platform puts on each session URL of
+the image, for example `horizon_sec=0.5`. It holds the grammar of an address `query` (the table
+below), and it may not be empty. A `remote` endpoint writes its params in `address.query`, and a
+`served` endpoint states none. Only an entry that names its `image` states it.
+
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
 
@@ -250,7 +298,9 @@ under. Read it with the org's own credential for that bucket: `submissions.artif
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
-vantage, the clutter objects and the episode order. A level states a value, else the task's
+vantage, the clutter objects and the episode order. An endpoint that states its own cap or preset
+carries it, and an episode on an endpoint that states none runs with the task's
+(`ResolvedTask.cap_of`, `ResolvedTask.preset_of`). A level states a value, else the task's
 catalogue entry gives it, else the platform draws it. The platform makes each draw once per plan, so every run of
 the plan lays out that scene and that table, and runs the episodes in that order.
 `submissions.get` carries the same `resolved`. A rig plan whose task resolves no
@@ -542,11 +592,20 @@ the submitter holds no credential for the bucket. `artifacts` is absent on a run
 `diagnostics` on a run whose record was not written, and `policy_log` on a run whose container
 printed nothing.
 
+`evals` lists what the view shows for each eval of the submission, as an `EvalView`: the `eval`, its
+`status`, `scores`, `artifacts`, `episodes` and `runs`. A submission of one eval has one entry. A
+submission of an eval made of several evals has one entry per part, in the order of its parts. The wire
+carries these fields only in `evals`. `scores`, `artifacts`, `episodes` and `runs` on the view are Python
+properties that read the first entry, and a dump of the view does not hold them. A platform that sends no
+`evals` gives one entry, built from those fields.
+
 `submissions.artifacts` lists what a finished run wrote, one page at a time. It also lists a failed
 run that carries `scores`. Each entry names its `key` under the submission's own prefix, its `size`,
 and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree, so one
 attempt's episodes are `attempts/<n>/episodes/` and `result.json`'s `attempt_location` names the
-attempt that scored. Pass `after` with the `next` of the page before it to read the rest. The route
+attempt that scored. Pass `after` with the `next` of the page before it to read the rest. Pass `eval`
+to list the records of one eval of a submission of several; without it, the page lists the first. The route
+refuses an `eval` that the submission does not run. A platform that sends no `evals` ignores `eval`. The route
 refuses every other run: a run still going has a part-written prefix, and a run that failed with no
 `scores` reads its records off `submissions.get`. It refuses a rig plan, whose episodes are in the
 org's own bucket (§Eval plans).

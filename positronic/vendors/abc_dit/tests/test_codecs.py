@@ -85,6 +85,28 @@ def test_an_empty_prompt_prefix_sends_the_trained_prompt_without_the_sim_prefix(
     assert codec.encode(_obs(**{keys.TASK: 'hang mug on mug rack'}))[abc_dit.PROMPT] == 'hang the mug on the mug rack'
 
 
+@pytest.mark.parametrize(
+    ('task', 'prompt'),
+    [
+        ('put the plastic bottles in the bin', 'put the plastic bottles in the bin'),
+        ('sweep away paper scraps from the table', 'sweep away the paper scraps from the table'),
+        ('turn mug right side up', 'turn the mug right side up'),
+        ('load plates into tabletop dish rack', 'load the plates into the dish rack'),
+    ],
+)
+def test_the_real_prompts_send_the_wording_of_abcs_real_teleoperation_data(task, prompt):
+    codec = codecs.multitask_200k.override(prompts=codecs.ABC_130K_PROMPTS, prompt_prefix='').instantiate()
+
+    assert codec.encode(_obs(**{keys.TASK: task}))[abc_dit.PROMPT] == prompt
+
+
+def test_the_real_prompts_refuse_the_task_that_abcs_real_data_does_not_hold():
+    codec = codecs.multitask_200k.override(prompts=codecs.ABC_130K_PROMPTS, prompt_prefix='').instantiate()
+
+    with pytest.raises(ValueError, match='no prompt for the task'):
+        codec.encode(_obs(**{keys.TASK: 'hang mug on mug rack'}))
+
+
 def _framed_view(box: codecs.CropBox, height: int = 600, width: int = 960) -> np.ndarray:
     """A black frame with a white rectangle that fills `box`."""
     view = np.zeros((height, width, 3), dtype=np.uint8)
@@ -143,6 +165,7 @@ def test_the_codec_metadata_names_its_crop_boxes_and_prompt_prefix():
 
     assert meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == pytest.approx([4 / 15, 0.32, 5 / 6, 1.0])
     assert meta[codecs.PROMPT_PREFIX_META] == ''
+    assert meta[codecs.PROMPTS_META][TASK] == 'throw plastic bottles in bin'
 
 
 def test_a_crop_box_keeps_only_the_part_of_the_view_inside_it():

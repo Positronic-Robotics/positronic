@@ -22,13 +22,13 @@ from typing import Any, ClassVar, Self, TypeVar
 import httpx
 from packaging.version import InvalidVersion, Version
 from platform_client import routes
-from platform_client.billing import BillingAccount, PurchaseListResponse, PurchaseView
+from platform_client.billing import BillingAccount, CouponRedemption, PurchaseListResponse, PurchaseView
 from platform_client.boards import BoardRef
 from platform_client.catalog import EvalListResponse, TaskListResponse
 from platform_client.errors import PlatformError
 from platform_client.eval_plan import REVEAL_SECRETS, EvalPlan
 from platform_client.identity_providers import longest_register_timeout
-from platform_client.ids import ApiKey, LeaderboardVersionId, OrgSlug, PurchaseId, SubmissionId
+from platform_client.ids import ApiKey, CouponCode, LeaderboardVersionId, OrgSlug, PurchaseId, SubmissionId
 from platform_client.leaderboards import (
     LeaderboardChartsResponse,
     LeaderboardEpisodesResponse,
@@ -48,6 +48,7 @@ from platform_client.requests import (
     BillingPurchaseGetQuery,
     BillingPurchaseListQuery,
     CancelRequest,
+    CouponRedeemRequest,
     LeaderboardChartsQuery,
     LeaderboardListQuery,
     LeaderboardPartQuery,
@@ -71,6 +72,16 @@ from platform_client.responses import (
     SubmissionListResponse,
     SubmissionView,
 )
+from platform_client.terms import (
+    AcceptTermsRequest,
+    Program,
+    ProgramEntry,
+    ProgramEntryResponse,
+    ProgramQuery,
+    Terms,
+    TermsResponse,
+)
+from positronic_evals.evals import EvalRef
 from pydantic import BaseModel, TypeAdapter
 
 M = TypeVar('M', bound=BaseModel)
@@ -224,6 +235,19 @@ class PlatformClient:
     def me(self) -> MeResponse:
         return self._get(routes.USERS_ME, MeResponse)
 
+    def program_terms(self, program: Program) -> Terms | None:
+        """The current terms of `program`, or None where it has none. It sends no key."""
+        return self._get(routes.TERMS_GET, TermsResponse, query=ProgramQuery(program=program), auth=Auth.NONE).terms
+
+    def program_entry(self, program: Program) -> ProgramEntry | None:
+        """The caller's entry in `program`, which holds the terms version it accepted last."""
+        return self._get(routes.PROGRAMS_ENTRY, ProgramEntryResponse, query=ProgramQuery(program=program)).entry
+
+    def accept_platform_terms(self, version: str) -> ProgramEntry:
+        """Record that the person accepted the platform terms of `version`. A repeat keeps the time of the first
+        acceptance."""
+        return self._post(routes.PLATFORM_ACCEPT_TERMS, AcceptTermsRequest(terms_version=version), ProgramEntry)
+
     def billing_account(self, org: OrgSlug) -> BillingAccount:
         return self._get(routes.BILLING_ACCOUNT, BillingAccount, query=BillingOrgQuery(org=org))
 
@@ -239,6 +263,11 @@ class PlatformClient:
         """Read one history page. Pass its `next` as `after` until `next` is None."""
         query = BillingPurchaseListQuery(org=org, after=after, limit=limit)
         return self._get(routes.BILLING_PURCHASES_LIST, PurchaseListResponse, query=query)
+
+    def redeem_coupon(self, code: CouponCode) -> CouponRedemption:
+        """Add the credits of a coupon to the caller's personal organization. The platform refuses a code that is
+        unknown, used, expired or revoked."""
+        return self._post(routes.BILLING_COUPONS_REDEEM, CouponRedeemRequest(code=code), CouponRedemption)
 
     def create_submission(self, plan: EvalPlan) -> SubmissionCreateResponse:
         """Run one plan. A plan that states its own tasks needs a customer grant: a key without one
@@ -269,6 +298,7 @@ class PlatformClient:
         self,
         submission_id: SubmissionId,
         *,
+        eval: EvalRef | None = None,
         prefix: str | None = None,
         after: str | None = None,
         limit: int | None = None,
@@ -277,9 +307,11 @@ class PlatformClient:
 
         `prefix` keeps the page to one directory under the submission, and a page's `next` is the
         `after` of the page behind it. A failed submission that carries `scores` lists too. Any other
-        submission short of finished is refused `bad_request`.
+        submission short of finished is refused `bad_request`. `eval` picks one eval of a submission of several;
+        None lists the records of its first eval. An eval the submission does not run is refused `bad_request`. A
+        platform that sends no `evals` on a view ignores `eval`.
         """
-        query = SubmissionArtifactsQuery(id=submission_id, prefix=prefix, after=after, limit=limit)
+        query = SubmissionArtifactsQuery(id=submission_id, eval=eval, prefix=prefix, after=after, limit=limit)
         return self._get(routes.SUBMISSIONS_ARTIFACTS, ArtifactListResponse, query=query)
 
     def cancel_submission(self, request: CancelRequest) -> CancelResponse:

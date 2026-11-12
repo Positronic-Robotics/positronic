@@ -9,7 +9,15 @@ from platform_client.enums import ErrorCode
 from platform_client.errors import PlatformError
 from platform_client.ids import SubmissionId
 from platform_client.requests import CancelRequest
-from platform_client.responses import ID_FIELD, STATUS_FIELD, SubmissionListResponse, SubmissionListRow, SubmissionView
+from platform_client.responses import (
+    EVAL_FIELD,
+    EVALS_FIELD,
+    ID_FIELD,
+    STATUS_FIELD,
+    SubmissionListResponse,
+    SubmissionListRow,
+    SubmissionView,
+)
 
 from positronic.cli.account.gateway import gateway, parse_id, refusing_bad_input
 
@@ -27,7 +35,12 @@ def status(id: str, platform_url: str | None = None, json: bool = False):
         print(view.model_dump_json(indent=2))
         return
     print(f'submission {view.id} {view.status.name}')
-    for name, value in view.model_dump(mode='json', exclude=set(_HEADER_FIELDS)).items():
+    # A submission of one eval prints the fields of that eval in place of a list of one.
+    one_eval = len(view.evals) == 1
+    fields = view.model_dump(mode='json', exclude=set(_HEADER_FIELDS) | ({EVALS_FIELD} if one_eval else set()))
+    if one_eval:
+        fields |= view.evals[0].model_dump(mode='json', exclude={EVAL_FIELD, STATUS_FIELD})
+    for name, value in fields.items():
         print(f'  {name}: {value}')
 
 

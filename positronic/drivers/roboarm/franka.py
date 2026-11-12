@@ -149,6 +149,20 @@ NO_CONNECTION = 'The driver has no connection to the arm'
 FSOE_CONNECTION_ERROR = 'fsoeConnectionError'
 # The field Desk answers the seconds until its next TD2 self-test is due in.
 TIME_TO_TD2 = 'timeToTd2'
+# How the error starts that the arm's state carries while the safety controller holds the arm for one of those faults.
+# The error adds the faults after this text.
+SAFETY_CONTROLLER_STOP = "The arm's safety controller stopped it for a fault of the control box"
+
+
+class ControlBoxFault(StrEnum):
+    """A recoverable error of the control box's own fault, by the name Desk reports it under. A person's stop and a
+    policy's collision raise none of them."""
+
+    # The TD2 self-test deadline passed, and the safety controller stopped the arm.
+    TD2_TIMEOUT = 'td2Timeout'
+    FSOE_CONNECTION_ERROR = FSOE_CONNECTION_ERROR
+    # A fault of a joint.
+    GENERIC_JOINT_ERROR = 'genericJointError'
 
 
 class _SafeInputLevel(StrEnum):
@@ -432,26 +446,38 @@ class _Arm(DriverRun[command.CommandType]):
         """The error that says the driver has no connection to the arm, and why."""
         return f'{NO_CONNECTION}: {self.disconnect_cause}'
 
+    @property
+    def control_box_fault(self) -> str | None:
+        """The error that names the faults of the control box the last reading found; None where it found none."""
+        held = self.safe_inputs.recoverable_errors
+        faults = sorted(fault.value for fault in ControlBoxFault if fault in held)
+        return f'{SAFETY_CONTROLLER_STOP}: {", ".join(faults)}' if faults else None
+
     def emit_state(self) -> None:
-        """Emit ``self.state``, or an error once in its place: the emergency stop's while the stop is pressed, and
-        the missing connection's while the driver has none.
+        """Emit ``self.state``, or an error once in its place: the emergency stop's while the stop is pressed, the
+        missing connection's while the driver has none, and an ARM fault while the safety controller holds the arm for
+        a fault of the control box.
 
         Once, because a reader keeps the last value and the link queues every error it carries.
         """
-        error = EMERGENCY_STOP_PRESSED if self.stop_pressed else None if self.connected else self.no_connection
-        if error is None:
+        fault = self._fault_in_place_of_state()
+        if fault is None:
             self._emitted_error = None
             self.out.emit(self.state)
-        elif error != self._emitted_error:
+        elif str(fault) != self._emitted_error:
             # The Message types do not name the SignalError that any message can carry.
-            self.out.emit(cast(FrankaState, self._fault(error)))
-            self._emitted_error = error
+            self.out.emit(cast(FrankaState, fault))
+            self._emitted_error = str(fault)
 
-    def _fault(self, error: str) -> DeviceFault:
-        """The typed fault for ``error``, the text ``emit_state`` puts in place of the state."""
-        if error == EMERGENCY_STOP_PRESSED:
+    def _fault_in_place_of_state(self) -> DeviceFault | None:
+        """The typed fault ``emit_state`` puts in place of the state, or None where the state goes out."""
+        if self.stop_pressed:
             return DeviceFault(EMERGENCY_STOP_PRESSED, FaultKind.E_STOP)
-        return self.no_connection_fault()
+        if not self.connected:
+            return self.no_connection_fault()
+        if (stopped := self.control_box_fault) is not None:
+            return DeviceFault(stopped, FaultKind.ARM)
+        return None
 
     def no_connection_fault(self) -> DeviceFault:
         """The ARM fault that says the driver has no connection to the arm, with the reason as its cause."""
@@ -1029,6 +1055,9 @@ class Robot(pimm.ControlSystem):
             finally:
                 self._forget_connection()
             raise
+        # A Desk.prepare() before the connection acknowledges the faults Desk held; a reading older than it would put
+        # a cleared fault in place of the first states.
+        arm.safe_inputs.sample()
         arm.connect(robot)
 
     def _start(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> None:
@@ -1138,19 +1167,20 @@ class Robot(pimm.ControlSystem):
             return False
 
     def _clear_with_desk_prepare(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
-        """Run ``_prepare_and_connect`` where the driver runs the Desk session and every safe input reads clear.
-
-        A failure that only a reboot clears reboots the control box once, and ``recovery_step`` says so. The step then
-        reads the safe inputs again and runs once more.
-        """
+        """Run ``_prepare_and_connect`` where the driver runs the Desk session and every safe input reads clear."""
         if not session.managed:
             return RecoveryOutcome.NOT_CLEARED
         if not self._safe_to_prepare(arm):
             return self._held_by_the_safe_inputs(arm)
         logger.warning('The recovery did not clear the fault; preparing the arm through Desk as a run starts')
         self.recovery_step.emit(RecoveryStep.CONNECTING)
+        return self._prepare_and_connect(session, arm, brakes)
+
+    def _clear_with_desk_prepare_or_reboot(self, session: _DeskSession, arm: _Arm, brakes: _Brakes) -> RecoveryOutcome:
+        """Run ``_clear_with_desk_prepare``. A failure that only a reboot clears reboots the control box once, and
+        ``recovery_step`` says so. The step then reads the safe inputs again and runs once more."""
         try:
-            return self._prepare_and_connect(session, arm, brakes)
+            return self._clear_with_desk_prepare(session, arm, brakes)
         except Exception as exc:
             if (why := self._why_only_a_reboot_clears(session, exc)) is None:
                 raise
@@ -1163,10 +1193,7 @@ class Robot(pimm.ControlSystem):
         session.reboot()
         arm.fci_active = False
         arm.safe_inputs.renew()
-        if not self._safe_to_prepare(arm):
-            return self._held_by_the_safe_inputs(arm)
-        self.recovery_step.emit(RecoveryStep.CONNECTING)
-        return self._prepare_and_connect(session, arm, brakes)
+        return self._clear_with_desk_prepare(session, arm, brakes)
 
     def _recover(
         self, session: _DeskSession, arm: _Arm, brakes: _Brakes, asked: list[pimm.calls.Call[None, RecoveryOutcome]]
@@ -1174,8 +1201,9 @@ class Robot(pimm.ControlSystem):
         """Run the arm's error recovery once, answer every caller that asked for it on this tick, and return
         what it did.
 
-        When a caller asked and the recovery leaves the fault, ``_clear_with_desk_prepare`` runs. A throw reaches
-        the callers that asked and counts as NOT_CLEARED. One nobody asked for ends the driver's control of the arm.
+        When a caller asked and the recovery leaves the fault, ``_clear_with_desk_prepare_or_reboot`` runs. A throw
+        reaches the callers that asked and counts as NOT_CLEARED. One nobody asked for ends the driver's control of the
+        arm.
         """
         try:
             outcome = arm.recover()
@@ -1186,7 +1214,7 @@ class Robot(pimm.ControlSystem):
                 logger.warning(f'The recovery returned CLEARED, and Desk still reports {held}')
                 outcome = RecoveryOutcome.NOT_CLEARED
             if asked and outcome is RecoveryOutcome.NOT_CLEARED:
-                outcome = self._clear_with_desk_prepare(session, arm, brakes)
+                outcome = self._clear_with_desk_prepare_or_reboot(session, arm, brakes)
             if asked and outcome is RecoveryOutcome.CLEARED:
                 arm.forget_missed_target()
         # rules-allow: swallowed-error — the throw is handed to every caller that asked, or held on the state
@@ -1226,8 +1254,10 @@ class Robot(pimm.ControlSystem):
         Answer with the error where the recovery leaves it, and with the missing connection where there is none. A
         pressed emergency stop gets the release instruction, and no recovery. ``Desk.prepare()`` runs the TD2
         self-test first where it is due within ``SELF_TEST_LEAD_SEC`` and every safe input reads clear, so its deadline
-        cannot pass during the episode. Otherwise a ready call takes no Desk control and opens no brakes: the harness
-        asks again and again between episodes, with nobody at the rig.
+        cannot pass during the episode. A fault of the control box that Desk holds gets the Desk step too, but never a
+        reboot: a refusal that only a reboot clears answers the call, and a recover call reboots. Otherwise a ready
+        call takes no Desk control and opens no brakes: the harness asks again and again between episodes, with nobody
+        at the rig.
         """
         with pimm.calls.raise_to(call), raise_as_device_fault(FaultKind.ARM):
             if arm.stop_pressed:
@@ -1237,6 +1267,18 @@ class Robot(pimm.ControlSystem):
             if self._self_test_due(session) and self._safe_to_prepare(arm):
                 logger.info(f'The TD2 self-test is due within {SELF_TEST_LEAD_SEC}s; Desk runs it before the episode')
                 self._prepare_and_connect(session, arm, brakes)
+            if (held := arm.control_box_fault) is not None:
+                logger.warning(f'{held}; Desk clears it before the episode')
+                try:
+                    self._clear_with_desk_prepare(session, arm, brakes)
+                except Exception as exc:
+                    if (why := self._why_only_a_reboot_clears(session, exc)) is None:
+                        raise
+                    raise RuntimeError(
+                        f'{why}; only a control box reboot clears it, and a recover call runs one'
+                    ) from exc
+                if (still := arm.control_box_fault) is not None:
+                    raise RuntimeError(still)
             with arm.lose_control_on_failure():
                 faulted = arm.robot.state().error != 0
             if faulted and arm.recover() is RecoveryOutcome.NOT_CLEARED:

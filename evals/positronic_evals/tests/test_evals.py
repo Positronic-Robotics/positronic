@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pyarrow as pa
@@ -37,7 +38,7 @@ from positronic_evals.evals import (
 )
 from positronic_evals.labels import label
 from positronic_evals.scoring import Scores, score
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 
 def test_an_eval_name_is_a_str_carrying_its_type():
@@ -48,8 +49,13 @@ def test_an_eval_name_is_a_str_carrying_its_type():
 
 @pytest.mark.parametrize('value', ['', ' ', 'two words', 'trailing '])
 def test_a_value_that_could_never_name_an_eval_is_refused_here(value: str):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=f'^not an eval name: {re.escape(repr(value))}$'):
         EvalRef(value)
+
+
+def test_a_model_refuses_a_blank_eval_name_in_the_same_words():
+    with pytest.raises(ValidationError, match="not an eval name: ''"):
+        TypeAdapter(EvalRef).validate_python('')
 
 
 BOARD = EvalRef('molmo.franka_pick_mini')

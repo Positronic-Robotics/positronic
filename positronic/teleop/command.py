@@ -16,10 +16,12 @@ from positronic_model_server.server_wire import ServedAddress, ServedHostPort
 
 import pimm
 import positronic.cfg.webxr
+from positronic import geom
 from positronic.drivers.webxr import RIGHT, WebXR
 from positronic.offboard.server import socket_at
 from positronic.utils import check_finite_positive
 
+from .clutch import CONTROLLER_AXES
 from .protocol import DEFAULT_PORT, default_socket_path
 from .service import Phase, TeleopService
 from .window import Window, window_app
@@ -29,10 +31,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PageState:
-    """The state of the trial that the phone page shows. Its field names are the fields of the JSON object."""
+    """The state of the trial that the phone page and the headset page show. Its field names are the fields of the
+    JSON object. ``cameras``, ``live``, ``shown`` and ``chosen`` are a ``CameraState``."""
 
     phase: Phase
     control: bool
+    cameras: tuple[str, ...] = ()
+    live: tuple[str, ...] = ()
+    shown: str | None = None
+    chosen: str | None = None
+
+
+# The field of a page input that chooses the camera of the headset: a camera name, or null for the camera of the
+# session.
+HEADSET_CAMERA = 'headset_camera'
+# The field of a page input that asks for the text of the view with no camera image, so that a page that shows black
+# as clear shows only the text: true or false.
+TEXT_ONLY = 'headset_text_only'
 
 
 class _Headset(pimm.ControlSystem):
@@ -44,6 +59,9 @@ class _Headset(pimm.ControlSystem):
         self._view_period_sec = 1 / view_fps
         self.controller_positions = pimm.ControlSystemReceiver(self)
         self.buttons = pimm.ControlSystemReceiver(self)
+        # What the headset page asks for, as a JSON object
+        self.page_input = pimm.ControlSystemReceiver(self)
+        self._text_only = False
         self.view = pimm.ControlSystemEmitter(self)
         # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemEmitter(self)
@@ -55,9 +73,25 @@ class _Headset(pimm.ControlSystem):
                 buttons = self.buttons.read()
                 right = None if buttons is None else buttons.data[RIGHT]
                 self._service.take_sample(positions.data[RIGHT], right)
-            self.view.emit(self._service.view())
-            state = self._service.state()
-            self.page_state.emit(asdict(PageState(state.phase, state.control)))
+            page_input = pimm.read_updated(self.page_input)
+            if page_input is not None and HEADSET_CAMERA in page_input.data:
+                camera = page_input.data[HEADSET_CAMERA]
+                if camera is not None and not isinstance(camera, str):
+                    logger.warning('The headset page chose no camera: %r is not a camera name', camera)
+                else:
+                    try:
+                        self._service.choose_camera(camera)
+                    except ValueError as refused:
+                        logger.warning('The headset page chose no camera: %s', refused)
+            if page_input is not None and TEXT_ONLY in page_input.data:
+                self._text_only = page_input.data[TEXT_ONLY] is True
+            self.view.emit(self._service.view(camera=not self._text_only))
+            state, cameras = self._service.state(), self._service.cameras()
+            self.page_state.emit(
+                asdict(
+                    PageState(state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen)
+                )
+            )
             yield pimm.Sleep(self._view_period_sec)
 
 
@@ -170,6 +204,8 @@ def serve(
     press_threshold: float = 0.6,
     view_fps: float = 30.0,
     open_window: bool = True,
+    cameras: Sequence[str] = (),
+    controller_axes: geom.Rotation | None = CONTROLLER_AXES,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
@@ -178,6 +214,11 @@ def serve(
     ``AUTH_TOKEN_ENV``, and serves open when that is unset. A run sets the parameters of its session (``SessionParams``)
     in the query of its address.
     ``notice`` shows on this computer while a trial waits for Ready. ``--notice=None`` turns it off.
+    ``cameras`` names the cameras of the station, such as ``'["image.exterior", "image.wrist"]'``. A run whose address
+    names no cameras sends these, and the headset page offers them.
+    ``controller_axes`` turns the axes of the moves of the teleoperator by the heading of the controller, so the way the
+    teleoperator faces does not count; it puts the axes of the controller in the frame of the headset.
+    ``--controller_axes=None`` counts the moves in the axes of the headset.
     """
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
@@ -193,7 +234,14 @@ def serve(
                 served_address.port,
             )
     service = TeleopService(
-        served_address, ready_limit, silence_limit, hold_sec, press_threshold, auth_token=auth_token
+        served_address,
+        ready_limit,
+        silence_limit,
+        hold_sec,
+        press_threshold,
+        auth_token=auth_token,
+        cameras=cameras,
+        controller_axes=controller_axes,
     )
     headset = _Headset(service, view_fps)
     text = (
@@ -204,6 +252,7 @@ def serve(
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
+        world.connect(webxr.page_input, headset.page_input)
         world.connect(headset.view, webxr.frame)
         world.connect(headset.page_state, webxr.page_state)
         if ready_notice is not None:

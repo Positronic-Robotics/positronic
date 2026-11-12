@@ -10,7 +10,7 @@ from typing import NamedTuple
 from eval_vocabulary.outcome import Outcome
 from eval_vocabulary.progress import LADDER, STAGE_LABELS, highest_stage
 
-from positronic.server.positronic_server import RendererConfig
+from positronic.dataset_viewer.web_app import RendererConfig
 
 # The badge colour each verdict carries. `app.js` accepts these four names and nothing else.
 OUTCOME_VARIANT: dict[Outcome, str] = {

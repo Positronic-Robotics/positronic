@@ -291,9 +291,9 @@ def credential_from_file(username: str, password_file: Path) -> RegistryCredenti
     return RegistryCredential(username=username, password=SecretStr(password_from_file(password_file)))
 
 
-# An endpoint overrides one cascading property; every other property of `Cascade` is per task.
-_ENDPOINT_OVERRIDES = 'episodes_per_endpoint'
-_PER_TASK_ONLY = frozenset(Cascade.model_fields) - {_ENDPOINT_OVERRIDES}
+# An endpoint overrides its count, its episode window and its preset; every other property of `Cascade` is per task.
+_ENDPOINT_OVERRIDES = frozenset({'episodes_per_endpoint', 'cap_per_episode_sec', 'policy_preset'})
+_PER_TASK_ONLY = frozenset(Cascade.model_fields) - _ENDPOINT_OVERRIDES
 
 
 class _EndpointBase(Cascade):
@@ -317,6 +317,7 @@ class _EndpointBase(Cascade):
         *Cascade._OMITTED_WHEN_NONE,
         'max_concurrent_sessions',
         'min_vram_gb',
+        'query',
     )
 
     name: str = Field(min_length=1)
@@ -333,6 +334,8 @@ class _EndpointBase(Cascade):
     # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
     # holds it. None takes the published slice.
     min_vram_gb: int | None = Field(default=None, ge=1)
+    # The params the platform puts on each session URL of the image, as `address.query` does for a remote endpoint.
+    query: SessionQuery | None = Field(default=None, min_length=1)
 
     @model_validator(mode='before')
     @classmethod
@@ -437,7 +440,23 @@ class _EndpointBase(Cascade):
         return self
 
     @model_validator(mode='after')
-    def _overrides_only_the_count(self) -> Self:
+    def _a_query_opens_the_sessions_of_an_image(self) -> Self:
+        if self.query is None:
+            return self
+        if not self.names_a_locator:
+            raise ValueError(
+                f'endpoint {self.name!r} states a query and names no image: state it on the plan endpoint '
+                'this label names'
+            )
+        if self.kind is not EndpointKind.image:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} states a query, which only an image endpoint carries: '
+                'a remote endpoint writes its session params in `address.query`'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _overrides_only_its_own_settings(self) -> Self:
         # A dump carries every field, and a plan read back from its own JSON therefore sets them
         # all, so what is refused is a per-task field carrying a value rather than one a dump names.
         fields = type(self).model_fields
@@ -449,7 +468,7 @@ class _EndpointBase(Cascade):
         if stated:
             raise ValueError(
                 f'endpoint {self.name!r} states {", ".join(stated)}, which are per-task properties: '
-                f'an endpoint overrides only {_ENDPOINT_OVERRIDES}'
+                f'an endpoint overrides only {", ".join(sorted(_ENDPOINT_OVERRIDES))}'
             )
         return self
 
@@ -647,9 +666,9 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
     count per endpoint.
 
     The plan states the count once. A task may override it for that task, and an endpoint for that
-    endpoint. It either states its own tasks or names an eval the platform offers, and the catalogue
-    expands that name into the same tasks. The plan carries no client field: the gateway reads the
-    client from the key's grant.
+    endpoint; an endpoint may also state its own episode window and preset. It either states its own
+    tasks or names an eval the platform offers, and the catalogue expands that name into the same
+    tasks. The plan carries no client field: the gateway reads the client from the key's grant.
     """
 
     _OMITTED_WHEN_NONE: ClassVar[tuple[str, ...]] = (*Cascade._OMITTED_WHEN_NONE, 'sample')
@@ -792,6 +811,12 @@ class EvalPlan(Cascade, Generic[EndpointForm]):
                 raise ValueError(
                     f'task {task.task_id!r} takes {cap} s per episode, over the plan ceiling of {ceiling} s'
                 )
+        for entry in self.endpoints + [entry for task in self.tasks for entry in task.endpoints or []]:
+            cap = entry.cap_per_episode_sec
+            if cap is not None and cap > ceiling:
+                raise ValueError(
+                    f'endpoint {entry.name!r} takes {cap} s per episode, over the plan ceiling of {ceiling} s'
+                )
         return self
 
     @model_validator(mode='after')
@@ -855,6 +880,7 @@ def plan_of_image(
     credential: RegistryCredential | None = None,
     org: OrgSlug | None = None,
     sample: Sample | None = None,
+    query: SessionQuery | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
@@ -862,7 +888,7 @@ def plan_of_image(
     The catalogue expands the eval name into tasks and the count each takes, so such a plan states
     neither. `credential` opens the registry when `image` is not public. The plan is a
     `nebius_competition` run, or a private run for `org` where one is given. `sample` runs a random
-    subset of the eval's trials.
+    subset of the eval's trials. `query` holds the params the platform puts on each session URL.
     """
     return EvalPlan(
         request_type=NebiusCompetition() if org is None else PrivateEval(org=org),
@@ -874,6 +900,7 @@ def plan_of_image(
                 wire=Wire.websocket,
                 image=image,
                 image_credential=credential,
+                query=query,
             )
         ],
         alias=alias,

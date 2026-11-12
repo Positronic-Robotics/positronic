@@ -30,12 +30,8 @@ from positronic.dataset.serializers import Serializers, expand_suffixed
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME, VALUE_COLUMN
 from positronic.dataset.video import VideoSignal
-from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
-from positronic.drivers.roboarm import command
-from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.eval import keys as eval_keys
-from positronic.server import dataset_utils
-from positronic.server.dataset_utils import (
+from positronic.dataset_viewer import rerun_replay
+from positronic.dataset_viewer.rerun_replay import (
     _MAX_PLOTTED_WIDTH,
     ARM_CHARTS,
     ReplayLayout,
@@ -50,6 +46,10 @@ from positronic.server.dataset_utils import (
     _write_urdf_to_dir,
     stream_episode_rrd,
 )
+from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.roboarm import command
+from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.eval import keys as eval_keys
 
 
 def _episode(ep_dir, widths: dict[str, int], static: dict[str, Any] | None = None) -> DiskEpisode:
@@ -204,7 +204,7 @@ def test_notice_names_every_unplotted_signal_and_its_width():
 
 
 _STATES = ['floating', 'floating', 'reaching', 'contact', 'reaching', 'reaching', 'at-target']
-_STATE_LEGEND = '0 floating, 1 reaching, 2 contact, 3 at-target'
+_STATE_LEGEND = '0 floating, 1 reaching, 2 contact, 3 control, 4 at-target'
 _DELIVERED = f'{PROGRESS_CHANNEL}.delivered'
 
 
@@ -217,11 +217,41 @@ def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
 
 
 def test_a_text_signal_is_plotted_by_its_values_in_order_of_first_appearance(tmp_path):
-    signals = _collect_signal_groups(_text_episode(tmp_path / 'ep', {'progress.state': _STATES}))
+    modes = ['idle', 'idle', 'busy', 'floating', 'busy']
+    signals = _collect_signal_groups(_text_episode(tmp_path / 'ep', {'device.mode': modes}))
 
     assert signals.numerics == []
-    assert signals.plotted_texts == {'progress.state': ['floating', 'reaching', 'contact', 'at-target']}
+    assert signals.plotted_texts == {'device.mode': ['idle', 'busy', 'floating']}
     assert signals.unplotted == {}
+
+
+_LADDER = ['floating', 'reaching', 'contact', 'control', 'at-target']
+
+
+def test_a_stage_mark_of_any_channel_is_plotted_by_the_place_of_each_stage_on_the_ladder(tmp_path):
+    marks = {
+        STATE_SIGNAL: _STATES,
+        'data_annotation.state': ['contact', 'floating'],
+        'marks.model-v2.state': ['reaching'],
+    }
+    ep = _text_episode(tmp_path / 'ep', marks)
+
+    assert _collect_signal_groups(ep).plotted_texts == dict.fromkeys(marks, _LADDER)
+
+
+@pytest.mark.parametrize(
+    ('name', 'values'),
+    [
+        ('device.mode', ['control', 'floating']),
+        ('marks.model-v2.state', ['floating', 'nudged']),
+        ('state', ['contact']),
+    ],
+    ids=['no stage mark', 'a code off the ladder', 'no channel'],
+)
+def test_a_text_signal_that_is_not_a_stage_mark_of_stages_keeps_its_own_order(tmp_path, name, values):
+    ep = _text_episode(tmp_path / 'ep', {name: values})
+
+    assert _collect_signal_groups(ep).plotted_texts == {name: values}
 
 
 def test_a_text_signal_with_too_many_values_is_named_instead_of_plotted(tmp_path):
@@ -246,14 +276,14 @@ def test_a_text_signal_reaches_the_recording_as_a_plot_and_a_text_log(tmp_path):
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as dataset_writer, dataset_writer.new_episode() as writer:
         for i, state in enumerate(_STATES):
-            writer.append('progress.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append(STATE_SIGNAL, state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     rrd = tmp_path / 'ep.rrd'
     rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0)))
 
     columns = rr_recording.load_recording(str(rrd)).schema().component_columns()
     archetypes = {(column.entity_path, column.archetype) for column in columns}
-    assert ('/signals/progress.state', 'rerun.archetypes.Scalars') in archetypes
-    assert ('/text/progress.state', 'rerun.archetypes.TextLog') in archetypes
+    assert (f'/signals/{STATE_SIGNAL}', 'rerun.archetypes.Scalars') in archetypes
+    assert (f'/text/{STATE_SIGNAL}', 'rerun.archetypes.TextLog') in archetypes
 
 
 def _numeric_dataset(root: Path) -> LocalDataset:
@@ -338,7 +368,7 @@ def _spy_on_sweeps_outside_the_lock(monkeypatch) -> list[str]:
 
     def spy(name: str, call: Any) -> Any:
         def spied(*args: Any, **kwargs: Any) -> Any:
-            if not dataset_utils._RERUN_RECORDING_LIST_LOCK.locked():
+            if not rerun_replay._RERUN_RECORDING_LIST_LOCK.locked():
                 outside.append(name)
             return call(*args, **kwargs)
 
@@ -377,7 +407,7 @@ def test_a_stream_that_raises_sweeps_its_recording_under_the_lock(tmp_path, monk
         yield b''
         raise RuntimeError('a text signal failed')
 
-    monkeypatch.setattr(dataset_utils, '_log_text_signals', failing_text)
+    monkeypatch.setattr(rerun_replay, '_log_text_signals', failing_text)
     with pytest.raises(RuntimeError, match='a text signal failed'):
         b''.join(stream_episode_rrd(ds, 0))
 
@@ -391,24 +421,24 @@ def test_a_streamed_recording_carries_its_blueprint(tmp_path):
 
 
 @pytest.fixture
-def rec() -> dataset_utils.rr.RecordingStream:
-    return dataset_utils.rr.RecordingStream('test')
+def rec() -> rerun_replay.rr.RecordingStream:
+    return rerun_replay.rr.RecordingStream('test')
 
 
-def _null_drainer(rec: dataset_utils.rr.RecordingStream) -> dataset_utils._BinaryStreamDrainer:
-    return dataset_utils._BinaryStreamDrainer(rec.binary_stream(), min_bytes=1)
+def _null_drainer(rec: rerun_replay.rr.RecordingStream) -> rerun_replay._BinaryStreamDrainer:
+    return rerun_replay._BinaryStreamDrainer(rec.binary_stream(), min_bytes=1)
 
 
 @pytest.mark.parametrize('selected', [None, 'tick'])
 def test_numeric_and_pose_samples_keep_their_coordinates_after_thinning(tmp_path, monkeypatch, selected):
     sent = {}
-    send = dataset_utils.rr.send_columns
+    send = rerun_replay.rr.send_columns
 
     def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
         send(path, indexes=indexes, columns=columns, recording=recording)
 
-    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(rerun_replay.rr, 'send_columns', send_columns)
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
         writer.set_static(eval_keys.POSE_SIGNALS, ['pose'])
@@ -445,7 +475,7 @@ def test_timeline_kinds_preserve_integer_precision():
         'tick',
     ]
     values = np.array([2**53 + 1, 2**53 + 3], dtype=np.int64)
-    indexes = dataset_utils._rerun_indexes(dict.fromkeys(names, values))
+    indexes = rerun_replay._rerun_indexes(dict.fromkeys(names, values))
     for index in indexes:
         array = index.as_arrow_array()
         assert array.cast(pa.int64()).to_pylist() == values.tolist()
@@ -477,19 +507,19 @@ def test_a_text_signal_is_logged_where_its_value_changes(rec, tmp_path, monkeypa
         times = indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()
         sent[path] = (times, [value for column in columns for value in column.as_arrow_array().to_pylist()])
 
-    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
-    monkeypatch.setattr(dataset_utils.rr, 'log', lambda path, value, **kwargs: styles.__setitem__(path, value))
-    ep = _text_episode(tmp_path / 'ep', {'progress.state': _STATES})
+    monkeypatch.setattr(rerun_replay.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(rerun_replay.rr, 'log', lambda path, value, **kwargs: styles.__setitem__(path, value))
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
 
-    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
     second = 1_000_000_000
     changes = [second, 3 * second, 4 * second, 5 * second, 7 * second]
     texts = [['floating'], ['reaching'], ['contact'], ['reaching'], ['at-target']]
-    assert sent['/text/progress.state'] == (changes, texts)
-    assert sent['/signals/progress.state'] == (changes, [[0.0], [1.0], [2.0], [1.0], [3.0]])
-    names = styles['/signals/progress.state'].names.as_arrow_array().to_pylist()
-    assert names == ['0 floating, 1 reaching, 2 contact, 3 at-target']
+    assert sent[f'/text/{STATE_SIGNAL}'] == (changes, texts)
+    assert sent[f'/signals/{STATE_SIGNAL}'] == (changes, [[0.0], [1.0], [2.0], [1.0], [4.0]])
+    names = styles[f'/signals/{STATE_SIGNAL}'].names.as_arrow_array().to_pylist()
+    assert names == [_STATE_LEGEND]
 
 
 def test_a_text_log_entry_keeps_all_its_coordinates(rec, tmp_path, monkeypatch):
@@ -498,22 +528,20 @@ def test_a_text_log_entry_keeps_all_its_coordinates(rec, tmp_path, monkeypatch):
     def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
 
-    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
-    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    monkeypatch.setattr(rerun_replay.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
     machine_clock = 1_011_234_567_890_123  # nanoseconds since boot, far from the epoch
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: machine_clock}))
+        writer.append(STATE_SIGNAL, 'floating', Time(**{RECEIVED_WALL: machine_clock, RECEIVED_WORLD: 1000, 'tick': 4}))
         writer.append(
-            'progress.state', 'floating', Time(**{RECEIVED_WALL: machine_clock, RECEIVED_WORLD: 1000, 'tick': 4})
-        )
-        writer.append(
-            'progress.state', 'reaching', Time(**{RECEIVED_WALL: machine_clock + 1000, RECEIVED_WORLD: 2000, 'tick': 5})
+            STATE_SIGNAL, 'reaching', Time(**{RECEIVED_WALL: machine_clock + 1000, RECEIVED_WORLD: 2000, 'tick': 5})
         )
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
-    assert sent['/text/progress.state'] == {
+    assert sent[f'/text/{STATE_SIGNAL}'] == {
         RECEIVED_WALL: [machine_clock, machine_clock + 1000],
         RECEIVED_WORLD: [1000, 2000],
         'tick': [4, 5],
@@ -526,28 +554,28 @@ def test_disjoint_text_timelines_are_exported(rec, tmp_path, monkeypatch):
     def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
 
-    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
-    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    monkeypatch.setattr(rerun_replay.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        writer.append('progress.state', 'floating', Time(**{RECORDED_TIME: 4_000_000_000}))
+        writer.append(STATE_SIGNAL, 'floating', Time(**{RECORDED_TIME: 4_000_000_000}))
         writer.append('device.state', 'ready', Time(device=7))
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
-    assert sent['/text/progress.state'] == {RECORDED_TIME: [4_000_000_000]}
+    assert sent[f'/text/{STATE_SIGNAL}'] == {RECORDED_TIME: [4_000_000_000]}
     assert sent['/text/device.state'] == {'device': [7]}
 
 
 def _capture_indexes(monkeypatch) -> dict[str, dict[str, list[int]]]:
     sent: dict[str, dict[str, list[int]]] = {}
-    send = dataset_utils.rr.send_columns
+    send = rerun_replay.rr.send_columns
 
     def send_columns(path, indexes, columns, recording=None):
         sent[path] = {index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes}
         send(path, indexes=indexes, columns=columns, recording=recording)
 
-    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(rerun_replay.rr, 'send_columns', send_columns)
     return sent
 
 
@@ -562,7 +590,7 @@ def test_a_legacy_signal_is_on_the_timeline_the_replay_opens_on(tmp_path, monkey
             writer.append('camera', np.zeros((16, 16, 3), dtype=np.uint8), Time(**{RECORDED_TIME: ts}))
         episode_dir = writer.path
     # The layout of a file with no format version: one `timestamp` column, read on `recorded`.
-    for name, values in (('progress.state', ['floating', 'reaching']), ('progress.delivered', [0, 1])):
+    for name, values in ((STATE_SIGNAL, ['floating', 'reaching']), ('progress.delivered', [0, 1])):
         pq.write_table(
             pa.table({LEGACY_TIME_COLUMN: pa.array(times, type=pa.int64()), VALUE_COLUMN: values}),
             episode_dir / f'{name}.parquet',
@@ -571,8 +599,8 @@ def test_a_legacy_signal_is_on_the_timeline_the_replay_opens_on(tmp_path, monkey
     b''.join(stream_episode_rrd(LocalDataset(root), 0))
 
     both = {RECORDED_TIME: times, world[0]: times}
-    assert sent['/text/progress.state'] == both
-    assert sent['/signals/progress.state'] == both
+    assert sent[f'/text/{STATE_SIGNAL}'] == both
+    assert sent[f'/signals/{STATE_SIGNAL}'] == both
     assert sent['/signals/progress.delivered'] == both
     assert sent['camera'] == both
     assert sent['/signals/robot.q/0'] == dict.fromkeys(world, times)
@@ -591,12 +619,12 @@ def test_a_legacy_signal_is_copied_to_a_selected_timeline_only_on_the_world_cloc
         for i, ts in enumerate(times):
             on = {HARNESS_WORLD: ts, RECEIVED_WORLD: ts, HARNESS_WALL: ts + 5, 'tick': i}
             writer.append('robot.q', np.zeros(2), Time(**on))
-            writer.append('progress.state', ['floating', 'reaching'][i], Time(**{RECORDED_TIME: ts}))
+            writer.append(STATE_SIGNAL, ['floating', 'reaching'][i], Time(**{RECORDED_TIME: ts}))
 
     b''.join(stream_episode_rrd(LocalDataset(root), 0, timeline=selected))
 
     expected = {RECORDED_TIME: times} if copied_to is None else {RECORDED_TIME: times, copied_to: times}
-    assert sent['/text/progress.state'] == expected
+    assert sent[f'/text/{STATE_SIGNAL}'] == expected
 
 
 @pytest.mark.parametrize('world', [RECEIVED_WORLD, HARNESS_WORLD])
@@ -604,16 +632,16 @@ def test_a_signal_on_the_replay_timeline_and_recorded_keeps_its_own_coordinates(
     sent = _capture_indexes(monkeypatch)
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
-        writer.append('progress.state', 'floating', Time(**{RECORDED_TIME: 5, world: 7}))
-        writer.append('progress.state', 'reaching', Time(**{RECORDED_TIME: 6, world: 9}))
+        writer.append(STATE_SIGNAL, 'floating', Time(**{RECORDED_TIME: 5, world: 7}))
+        writer.append(STATE_SIGNAL, 'reaching', Time(**{RECORDED_TIME: 6, world: 9}))
 
     b''.join(stream_episode_rrd(LocalDataset(root), 0))
 
-    assert sent['/text/progress.state'] == {RECORDED_TIME: [5, 6], world: [7, 9]}
+    assert sent[f'/text/{STATE_SIGNAL}'] == {RECORDED_TIME: [5, 6], world: [7, 9]}
 
 
 def test_a_text_log_displays_all_timelines():
-    columns = dataset_utils._text_log_view('progress.state').properties['TextLogColumns']
+    columns = rerun_replay._text_log_view(STATE_SIGNAL).properties['TextLogColumns']
     assert isinstance(columns, rrb.TextLogColumns) and columns.timeline_columns is None
 
 
@@ -626,7 +654,7 @@ def test_a_tab_group_opens_on_its_text_signal(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
             writer.append('device.level', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
-            writer.append('device.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('device.mode', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
             writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
             writer.append('robot.dq', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     ep = DiskEpisode(tmp_path / 'ep')
@@ -643,7 +671,7 @@ def _layout(charts: dict[str, list[str] | dict[str, str]], show_unnamed_signals:
     )
 
 
-def _root(signals: dataset_utils.EpisodeSignals, ep: DiskEpisode, layout: ReplayLayout | None) -> Any:
+def _root(signals: rerun_replay.EpisodeSignals, ep: DiskEpisode, layout: ReplayLayout | None) -> Any:
     return _build_blueprint(signals, ep, layout).root_container
 
 
@@ -755,14 +783,14 @@ def test_joint_commands_and_joint_deltas_name_their_values_by_joint(tmp_path):
     ep = _episode(tmp_path / 'ep', widths, static)
     signals = _collect_signal_groups(ep)
 
-    assert {key: dataset_utils._value_names(key, signals, ep) for key in widths} == dict.fromkeys(widths, ['j1', 'j2'])
+    assert {key: rerun_replay._value_names(key, signals, ep) for key in widths} == dict.fromkeys(widths, ['j1', 'j2'])
 
 
 def test_a_joint_delta_signal_with_another_width_than_the_arm_keeps_value_indices(tmp_path):
     static = {eval_keys.JOINT_SIGNALS: [keys.JOINTS], roboarm_keys.JOINT_NAMES: ['j1', 'j2']}
     ep = _episode(tmp_path / 'ep', {keys.JOINTS: 2, keys.TARGET_JOINT_DELTAS: 3}, static)
 
-    assert dataset_utils._value_names(keys.TARGET_JOINT_DELTAS, _collect_signal_groups(ep), ep) is None
+    assert rerun_replay._value_names(keys.TARGET_JOINT_DELTAS, _collect_signal_groups(ep), ep) is None
 
 
 def test_the_arm_charts_plot_the_motion_signals_of_each_kind_of_arm_command():
@@ -814,7 +842,7 @@ def test_other_lists_its_signals_by_name_in_any_order_the_recording_holds_them(t
     signals = _collect_signal_groups(ep)
 
     for numerics in (sorted(signals.numerics), sorted(signals.numerics, reverse=True)):
-        other: Any = dataset_utils._other_cell(replace(signals, numerics=numerics), set())
+        other: Any = rerun_replay._other_cell(replace(signals, numerics=numerics), set())
         (group,) = other.contents
         assert [view.name for view in group.contents] == ['a', 'b.level', 'c.load']
         assert [view.name for view in group.contents[0].contents] == ['a.level', 'a.speed']
@@ -907,7 +935,7 @@ def test_an_arm_is_found_by_its_state_and_no_other_signal_makes_one():
     ]
     names += [f'{keys.arm_channel(keys.ROBOT_COMMAND, "mid")}{keys.POSE_SUFFIX}', keys.arm_channel(keys.GRIP, 'wrist')]
 
-    assert dataset_utils._recorded_arms(names) == [None, left, right]
+    assert rerun_replay._recorded_arms(names) == [None, left, right]
 
 
 def test_the_default_shows_the_signals_of_a_recording_with_no_arm_in_other(tmp_path):
@@ -942,6 +970,28 @@ def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_
     ]
 
 
+def test_the_progress_chart_plots_the_stage_and_count_marks_of_every_channel_and_leaves_the_rest_in_other(tmp_path):
+    channels = (PROGRESS_CHANNEL, 'data_annotation', 'marks.model-v2', 'marks.agent-v1')
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        for i, state in enumerate(_STATES):
+            at = Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)})
+            for channel in channels:
+                writer.append(f'{channel}.state', state, at)
+                writer.append(f'{channel}.delivered', float(i), at)
+                writer.append(f'{channel}.fail', 'fail', at)
+            writer.append('device.level', float(i), at)
+            writer.append('state', state, at)
+    ep = DiskEpisode(tmp_path / 'ep')
+
+    progress, other = _default_column(ep).contents
+
+    charted = sorted(f'{channel}.{mark}' for channel in channels for mark in ('state', 'delivered'))
+    assert progress.name == 'Progress'
+    assert progress.contents == [f'/signals/{mark}/**' for mark in charted]
+    (group,) = other.contents
+    assert {view.name for view in group.contents} >= {'device.level', 'state', *(f'{c}.fail' for c in channels)}
+
+
 def _control_mode(arm: str | None, entry: str) -> str:
     return f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.CONTROL_MODE_SUFFIX}.{entry}'
 
@@ -967,19 +1017,19 @@ def test_a_chart_that_names_a_control_mode_plots_it(tmp_path):
 def test_a_text_signal_holds_its_last_value_to_the_last_sample(rec, tmp_path, monkeypatch):
     sent: dict[str, list[int]] = {}
     monkeypatch.setattr(
-        dataset_utils.rr,
+        rerun_replay.rr,
         'send_columns',
         lambda path, indexes, columns, **kwargs: sent.__setitem__(
             path, indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()
         ),
     )
-    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
-    ep = _text_episode(tmp_path / 'ep', {'progress.state': ['floating', 'reaching', 'reaching']})
+    monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
+    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: ['floating', 'reaching', 'reaching']})
 
-    list(dataset_utils._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
 
-    assert sent['/text/progress.state'] == [1_000_000_000, 2_000_000_000]
-    assert sent['/signals/progress.state'] == [1_000_000_000, 2_000_000_000, 3_000_000_000]
+    assert sent[f'/text/{STATE_SIGNAL}'] == [1_000_000_000, 2_000_000_000]
+    assert sent[f'/signals/{STATE_SIGNAL}'] == [1_000_000_000, 2_000_000_000, 3_000_000_000]
 
 
 def _timestamps_ns(hz: float, seconds: float) -> np.ndarray:
@@ -1043,12 +1093,12 @@ def test_every_encoded_frame_keeps_its_own_episode_time(rec, monkeypatch):
     def send_columns(path, indexes, columns, recording=None):
         logged.append({index.timeline_name(): index.as_arrow_array().cast(pa.int64()).to_pylist() for index in indexes})
 
-    monkeypatch.setattr(dataset_utils.rr, 'send_columns', send_columns)
-    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    monkeypatch.setattr(rerun_replay.rr, 'send_columns', send_columns)
+    monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
     signal = DummySignal(list(zip(times, range(12), strict=True)), frames, timelines=(RECORDED_TIME, 'tick'))
-    dataset_utils._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=0)
+    rerun_replay._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=0)
     other = DummySignal([7], frames[:1], timelines=('device',))
-    dataset_utils._encode_frames_as_video(rec, '/other', other, _timestamp_columns(other, None), 640, max_hz=0)
+    rerun_replay._encode_frames_as_video(rec, '/other', other, _timestamp_columns(other, None), 640, max_hz=0)
 
     assert logged == [{RECORDED_TIME: [ts], 'tick': [i]} for i, ts in enumerate(times)] + [{'device': [7]}]
 
@@ -1058,16 +1108,16 @@ def test_frames_past_the_rate_cap_are_left_out_of_the_encoding(rec, monkeypatch)
     frames = [np.full((64, 64, 3), i * 20 % 256, dtype=np.uint8) for i in range(12)]
     logged: list[int] = []
     monkeypatch.setattr(
-        dataset_utils.rr,
+        rerun_replay.rr,
         'send_columns',
         lambda path, indexes, columns, **kwargs: logged.extend(
             indexes[0].as_arrow_array().cast(pa.int64()).to_pylist()
         ),
     )
-    monkeypatch.setattr(dataset_utils.rr, 'log', lambda *args, **kwargs: None)
+    monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
 
     signal = DummySignal(times, frames)
-    dataset_utils._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=30)
+    rerun_replay._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=30)
 
     kept = _decimation_indices(np.asarray(times, dtype='datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(times)
@@ -1147,19 +1197,19 @@ def _jittery_episode(root: Path) -> DiskEpisode:
     return typing.cast(DiskEpisode, LocalDataset(root)[0])
 
 
-def _logged_video(rec: dataset_utils.rr.RecordingStream, monkeypatch, ep: DiskEpisode) -> tuple[bytes, list[int]]:
+def _logged_video(rec: rerun_replay.rr.RecordingStream, monkeypatch, ep: DiskEpisode) -> tuple[bytes, list[int]]:
     """The camera's embedded mp4, and the times its frame references are sent at."""
     embedded: list[bytes] = []
-    asset_video = dataset_utils.rr.AssetVideo
+    asset_video = rerun_replay.rr.AssetVideo
 
     def keep_contents(*, contents, media_type):
         embedded.append(contents)
         return asset_video(contents=contents, media_type=media_type)
 
-    monkeypatch.setattr(dataset_utils.rr, 'AssetVideo', keep_contents)
+    monkeypatch.setattr(rerun_replay.rr, 'AssetVideo', keep_contents)
     sent = _capture_indexes(monkeypatch)
     signals = _collect_signal_groups(ep)
-    list(dataset_utils._log_video_signals(rec, ep, signals, _null_drainer(rec), 640, 30, None))
+    list(rerun_replay._log_video_signals(rec, ep, signals, _null_drainer(rec), 640, 30, None))
     return embedded[0], sent['camera'][RECEIVED_WORLD]
 
 
@@ -1184,7 +1234,7 @@ def test_a_numeric_signal_on_the_same_jittery_timeline_is_still_thinned(rec, tmp
     ep = _jittery_episode(tmp_path / 'ds')
     sent = _capture_indexes(monkeypatch)
 
-    list(dataset_utils._log_numeric_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), 30, None))
+    list(rerun_replay._log_numeric_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), 30, None))
 
     kept = _decimation_indices(_JITTERY_30HZ_NS.astype('datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(_JITTERY_30HZ_NS)
@@ -1197,7 +1247,7 @@ def test_the_replay_opens_on_a_clock_that_a_signal_with_samples_carries():
         'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECORDED_TIME,)),
     })
 
-    assert dataset_utils._opening_timeline(episode, None) == RECORDED_TIME
+    assert rerun_replay._opening_timeline(episode, None) == RECORDED_TIME
 
 
 def test_the_replay_opens_on_the_preferred_clock_where_it_has_samples():
@@ -1206,4 +1256,4 @@ def test_the_replay_opens_on_the_preferred_clock_where_it_has_samples():
         'value': DummySignal([0, 2_000_000_000], [1, 2], timelines=(RECEIVED_WORLD,)),
     })
 
-    assert dataset_utils._opening_timeline(episode, None) == RECEIVED_WORLD
+    assert rerun_replay._opening_timeline(episode, None) == RECEIVED_WORLD

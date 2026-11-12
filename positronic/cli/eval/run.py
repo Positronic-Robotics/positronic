@@ -359,6 +359,7 @@ def run(
     sample_count: int | None = None,
     sample_percent: int | None = None,
     sample_seed: int | None = None,
+    policy_query: str | None = None,
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
@@ -377,7 +378,8 @@ def run(
     run here answers the dataset it wrote. ``--registry-username`` and ``--registry-password-file``
     open a registry that serves ``--policy-image`` to no anonymous caller. ``--sample-count`` or
     ``--sample-percent`` runs a random subset of the eval's trials on the platform, and
-    ``--sample-seed`` picks the draw: the same seed draws the same trials.
+    ``--sample-seed`` picks the draw: the same seed draws the same trials. ``--policy-query`` holds the
+    params the platform puts on each session URL of ``--policy-image``, for example ``horizon_sec=0.5``.
 
     ``--fixed-inference-sec`` charges each model call that many seconds of sim time in place of the time it took.
     ``--slow-motion`` plays each predicted chunk that many times slower, with the arm targets interpolated.
@@ -408,6 +410,7 @@ def run(
         '--sample-count': sample_count,
         '--sample-percent': sample_percent,
         '--sample-seed': sample_seed,
+        '--policy-query': policy_query,
     }
     source = plan_source(eval, from_file)
 
@@ -469,6 +472,7 @@ def run(
             registry_username=registry_username,
             registry_password_file=registry_password_file,
             sample=_sample(sample_count, sample_percent, sample_seed),
+            query=policy_query,
         )
 
     if source is not None:

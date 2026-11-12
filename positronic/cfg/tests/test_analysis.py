@@ -9,10 +9,10 @@ from positronic.cfg.analysis import ckpt
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.dataset_viewer.web_app import app_state_restored, configure_tables
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
-from positronic.server.positronic_server import app_state_restored, configure_tables
 
 
 @pytest.mark.parametrize(
