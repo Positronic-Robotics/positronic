@@ -334,8 +334,7 @@ class _EndpointBase(Cascade):
     # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
     # holds it. None takes the published slice.
     min_vram_gb: int | None = Field(default=None, ge=1)
-    # The params the platform puts on each session URL of the image it runs, as `address.query` carries them for a
-    # remote endpoint. None opens each session with no params.
+    # The params the platform puts on each session URL of the image, as `address.query` does for a remote endpoint.
     query: SessionQuery | None = Field(default=None, min_length=1)
 
     @model_validator(mode='before')

@@ -192,8 +192,7 @@ class ResolvedEndpoint(BaseModel):
     provider: str | None = None
     # The checkpoint a served endpoint runs; None on a remote or image endpoint.
     spec: str | None = None
-    # The params each session URL of an image endpoint carries; None where it states none, and on a remote or served
-    # endpoint, whose params are in `address.query` or in its spec.
+    # The session params of an image endpoint; None where it states none, and on every other kind.
     query: SessionQuery | None = None
     episodes: int = Field(ge=1)
     # None where the endpoint states no value of its own: its episodes run with the task's (`ResolvedTask.cap_of`).
