@@ -427,7 +427,7 @@ def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
     arm = FakeArm(JOGGED, polls_to_reach=10**9)
     clock = MockClock()
     parking = _arm(_driver(arm, manage_desk=False), clock)
-    budget = parking._travel_s(JOGGED, PARK)
+    budget = parking._travel_s(JOGGED, PARK, None)
 
     _drive(parking.park(), clock)
 
@@ -1474,6 +1474,27 @@ def test_a_move_that_merely_ran_out_of_time_is_no_refusal(desk, caplog):
         next(travel)
 
     assert _refusals(caplog) == []
+
+
+def _move_under_a_slow_reference(mode: command.ControlModeType | None) -> Iterator[pimm.Command]:
+    """A move of 0.5 rad on joint 1 under ``mode``, by a driver whose reference moves 0.1 rad/s, never arriving."""
+    arm = FakeArm(PARK, polls_to_reach=10**9)
+    driver = _driver(arm, max_reference_speed=0.1)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    travel = _connected_arm(driver, clock, _safe_inputs(driver)).move_to(JOGGED, mode)
+    next(travel)  # the first poll: the goal is in flight
+    clock.advance(8.0)  # the 0.5 rad take 5 s at 0.1 rad/s; the dynamics factor allows the move about 6 s
+    return travel
+
+
+def test_an_impedance_move_gets_the_time_its_reference_speed_cap_needs(desk):
+    next(_move_under_a_slow_reference(IMPEDANCE))  # still in flight, not stopped short
+
+
+def test_a_move_under_no_impedance_keeps_the_time_its_dynamics_factor_allows(desk):
+    with pytest.raises(TimeoutError, match='stopped short'):
+        next(_move_under_a_slow_reference(None))
 
 
 def test_a_move_the_arm_reached_ends_the_refusal_streak(desk, caplog):

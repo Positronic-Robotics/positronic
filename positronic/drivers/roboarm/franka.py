@@ -341,6 +341,9 @@ class _Arm(DriverRun[command.CommandType]):
     _MAX_JOINT_VELOCITY = np.array([2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26])
     # On top of the travel itself: the robot's controller ramps in and out of its speed cap, and settles late
     _MOVE_GRACE_S = 5.0
+    # At least the length of the chain from joint 2, which sits on the joint 1 axis, to the 2F-85 grip point (1.141 m
+    # in the bundled model), so no joint axis is farther from the grip point.
+    _GRIP_POINT_REACH_M = 1.15
     # How long the arm must accept moves again before the count of the moves it refused is logged.
     _REFUSAL_QUIET_S = 2.0
     # How long an error the recovery does not clear holds a waiting sync move before it is refused.
@@ -595,10 +598,18 @@ class _Arm(DriverRun[command.CommandType]):
             yield pace()
         return MoveStatus.GAVE_UP
 
-    def _travel_s(self, q: np.ndarray, target: np.ndarray) -> float:
-        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows."""
-        cap = self._MAX_JOINT_VELOCITY * self._dynamics_factor
-        return self._MOVE_GRACE_S + float(np.max(np.abs(target - q) / cap))
+    def _travel_s(self, q: np.ndarray, target: np.ndarray, mode: command.ControlModeType | None) -> float:
+        """How long the arm may take to reach ``target``, from the speed its dynamics factor allows, and under an
+        ``Impedance`` mode from the reference speed caps too, where they are slower."""
+        step = np.abs(target - q)
+        travel = float(np.max(step / (self._MAX_JOINT_VELOCITY * self._dynamics_factor)))
+        if isinstance(mode, command.Impedance):
+            reference = float(np.max(step)) / self._max_reference_speed
+            if self._max_gripper_point_speed is not None:
+                # The grip point travels at most its reach times the joint path, so the point cap holds it that long.
+                reference += self._GRIP_POINT_REACH_M * float(np.sum(step)) / self._max_gripper_point_speed
+            travel = max(travel, reference)
+        return self._MOVE_GRACE_S + travel
 
     def note_refusals(self, goal: pf.Goal) -> None:
         """Log the moves the arm refuses: the first one as it happens, the rest as a count once they stop.
@@ -662,7 +673,7 @@ class _Arm(DriverRun[command.CommandType]):
             first = self.robot.state()
         self.publish(first, RobotStatus.BUSY)
 
-        deadline = self.clock.now() + self._travel_s(self.state.q, target)
+        deadline = self.clock.now() + self._travel_s(self.state.q, target, mode)
 
         def expired() -> bool:
             return self.clock.now() >= deadline
