@@ -124,6 +124,8 @@ submission.
   `droid_3cam` in the recipe's `ENTRYPOINT`.
 - BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
   at about 33 000 MiB.
+- The client plays each chunk whole. A session with the query `horizon_sec=<seconds>` plays only the
+  commands of each chunk before that time ([Session params](#session-params)).
 - `black-forest-labs/flux-3-action-droid` and `black-forest-labs/flux-3-action-base` are gated. Accept
   BFL's terms on the Hub page of each, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
   `make -C docker build-serve-flux3-action`. The build reads the token through a secret mount, and it
@@ -223,7 +225,8 @@ What the platform does with the credential:
    deadline of 1800 s from the start of the VM. A miss there is the platform's fault. Your
    server's start has its own deadline of 1800 s, from the end of the pull to the first
    answer. A 25 GB image takes about 10 minutes to pull.
-6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token. A
+6. It opens one WebSocket session per episode at `/api/v1/session`, with the bearer token and the
+   endpoint's `query`, if it states one ([Session params](#session-params)). A
    competition run plays up to 12 episodes at the same time, so up to 12 sessions are open at the same
    time. The server must answer all of them, with one state for each session. A plan outside the
    competition can state a lower count ([Session limit](#session-limit)).
@@ -417,6 +420,23 @@ endpoints:
     max_concurrent_sessions: 1
 ```
 
+### Session params
+
+An `image` endpoint may state `query`: the params the platform puts on each session URL, for example
+`horizon_sec=0.5`. One image then runs with another setting and no rebuild. A positronic server reads
+each value as a JSON literal and applies it to its pipeline config, and it refuses a param that the
+pipeline does not take. The query has no leading `?` and holds visible ASCII only: write a space as
+`%20` and `#` as `%23`. A competition run may state a query too.
+
+```yaml
+endpoints:
+  - name: policy
+    kind: image
+    wire: websocket
+    image: docker.io/<you>/<image>@sha256:<digest>
+    query: horizon_sec=0.5
+```
+
 ## Submit
 
 The commands ship with `positronic`, and a checkout of this repository carries the platform
@@ -436,6 +456,8 @@ uv run positronic eval list
 - Pin by digest. A tag is resolved at submission, so a tag can name bytes you did not test.
 - A private image adds `--registry-username` and `--registry-password-file`; see
   [A private image](#a-private-image).
+- `--policy-query=horizon_sec=0.5` states the session params of the image; see
+  [Session params](#session-params).
 - Reuse the transaction key on a retry. The same key returns the original submission; a retry
   without one spends quota again. The same key with a different request is refused as a conflict.
 - `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The
