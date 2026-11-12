@@ -579,3 +579,32 @@ def test_a_probe_ignores_a_proxy_the_environment_names(monkeypatch):
     monkeypatch.setenv('ws_proxy', f'http://{proxy_host}:{proxy_port}')
     assert _WEBSOCKET.probe(_at(host, port), None, 5.0) is None
     assert via_proxy == []
+
+
+def _connection_with_close_timeout(seconds: float | None) -> tuple[websocket.WebsocketClientConnection, MagicMock]:
+    session = MagicMock(close_timeout=seconds)
+    return websocket.WebsocketClientConnection(session), session
+
+
+def test_a_close_timeout_longer_than_the_wires_own_keeps_the_wires_bound():
+    connection, session = _connection_with_close_timeout(10.0)
+    connection.close(timeout=870.0)
+    assert session.close_timeout == 10.0
+
+
+def test_a_close_timeout_shorter_than_the_wires_own_bounds_the_close():
+    connection, session = _connection_with_close_timeout(10.0)
+    connection.close(timeout=0.5)
+    assert session.close_timeout == 0.5
+
+
+def test_a_close_with_no_timeout_keeps_the_wires_bound():
+    connection, session = _connection_with_close_timeout(10.0)
+    connection.close()
+    assert session.close_timeout == 10.0
+
+
+def test_a_close_timeout_bounds_a_close_the_wire_left_unbounded():
+    connection, session = _connection_with_close_timeout(None)
+    connection.close(timeout=0.5)
+    assert session.close_timeout == 0.5

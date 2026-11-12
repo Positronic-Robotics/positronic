@@ -195,7 +195,8 @@ class ClientConnection(abc.ABC):
     def close(self, timeout: float | None = None) -> str:
         """Close this end, and report what the wire saw, for the log.
 
-        ``timeout`` bounds the wait for the peer to answer the close, and ``None`` keeps the wire's own bound.
+        ``timeout`` shortens the wait for the peer to answer the close. It never lengthens the wire's own bound,
+        and ``None`` keeps that bound.
         The report says whether the peer answered the close, in the wire's own terms. A server that still
         holds a session strands the next session's handshake, and only the wire can see that.
         """

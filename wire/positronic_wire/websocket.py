@@ -45,7 +45,8 @@ class WebsocketClientConnection(wire.ClientConnection):
 
     def close(self, timeout: float | None = None) -> str:
         state_before_close = self._websocket.state.name
-        if timeout is not None:
+        bound = self._websocket.close_timeout
+        if timeout is not None and (bound is None or timeout < bound):
             self._websocket.close_timeout = timeout
         self._websocket.close()
         # A close that times out still reaches CLOSED locally; only the close code says the server answered.
