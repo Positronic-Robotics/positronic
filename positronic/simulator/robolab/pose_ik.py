@@ -6,9 +6,8 @@ space pulls the joints towards ``POSTURE_JOINTS``. Poses are in the ``panda_link
 backtracks until it lowers the cost: without that, the steps near the stretched-arm singularity alternate between two
 poses, and so do the joint targets of successive control steps.
 
-Three parts are not in the driver. A joint that the physics pushed past a limit gets a target at that limit. The solve
-keeps j4 at or below ``ELBOW_STRETCHED``. When a step does not bring the tool closer, the solve looks at more steps from
-it. If they stall farther than ``_STALL_ERROR`` from the position, the step puts position before rotation.
+Two parts are not in the driver. A joint that the physics pushed past a limit gets a target at that limit. The solve
+keeps j4 at or below ``ELBOW_STRETCHED``.
 
 This module must work in an isolated interpreter without Positronic installed.
 """
@@ -28,20 +27,6 @@ _LINE_SEARCH_STEPS = 20
 _ACTIVE_SET_PASSES = 64
 # The j4 of the longest shoulder-wrist distance: the a = 0.0825 offsets of joints 4 and 5 bend the stretched arm.
 ELBOW_STRETCHED = -(np.arctan(0.0825 / 0.316) + np.arctan(0.0825 / 0.384))
-# A step that leaves the tool within this distance of the position, or brings it this much closer, is kept as it is.
-_POSITION_TOLERANCE = 0.01
-# Look-ahead steps continue while each one brings the tool this much closer, for at most this many steps. Each runs
-# fewer solver iterations than a control step: in a replay of 28 RoboLab episodes, 20 iterations gave the same verdicts
-# as 60.
-_LOOKAHEAD_GAIN = 0.001
-_LOOKAHEAD_STEPS = 20
-_LOOKAHEAD_ITERATIONS = 20
-# When the look-ahead stalls farther than this from the position, the step puts position first. The stalls in a run of
-# an LLM policy ended 0.12 m to 0.63 m from the position. A stall closer than this keeps the orientation.
-_STALL_ERROR = 0.1
-_POSE_WEIGHTS = np.ones(6)
-# Position first: a metre of position weighs as much as ten radians of turn.
-_POSITION_FIRST_WEIGHTS = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
 
 # The Panda's modified Denavit-Hartenberg parameters (a, d, alpha) of joints 1 to 7, then of the flange.
 _DH = np.array([
@@ -151,7 +136,7 @@ def minimize_on_box(h: np.ndarray, g: np.ndarray, lo: np.ndarray, hi: np.ndarray
 def joint_targets(
     target: np.ndarray, q0: np.ndarray, flange_to_tool: np.ndarray, lower: np.ndarray, upper: np.ndarray
 ) -> np.ndarray:
-    """The joint targets of one control step towards the ``4 x 4`` pose ``target``.
+    """Joints that put the tool as close as the bounds allow to the ``4 x 4`` pose ``target``.
 
     ``q0`` is the measured joints, and ``lower`` and ``upper`` are the joint limits.
     """
@@ -161,45 +146,6 @@ def joint_targets(
     folded_upper = upper.copy()
     folded_upper[3] = min(upper[3], max(ELBOW_STRETCHED, q0[3] - MAX_JOINT_STEP))
 
-    def position_error(q: np.ndarray) -> float:
-        return float(np.linalg.norm(tool_kinematics(q, flange_to_tool)[0][:3, 3] - target[:3, 3]))
-
-    q = _step(target, q0, flange_to_tool, lower, folded_upper, _POSE_WEIGHTS)
-    error = position_error(q)
-    if error <= _POSITION_TOLERANCE or error < position_error(q0) - _POSITION_TOLERANCE:
-        return q
-    # The step does not bring the tool closer. Take more steps from it until they stop bringing the tool closer.
-    path = q
-    for _ in range(_LOOKAHEAD_STEPS):
-        moved = _step(target, path, flange_to_tool, lower, folded_upper, _POSE_WEIGHTS, _LOOKAHEAD_ITERATIONS)
-        gain = error - position_error(moved)
-        path, error = moved, error - gain
-        if gain < _LOOKAHEAD_GAIN:
-            break
-    else:
-        return q
-    if error <= _STALL_ERROR:
-        return q
-    # The steps stall far from the position. Bring the tool to it, and turn the tool as far as that allows. The
-    # stretched elbow can help when other joints are at their limits, but it can also pin j4. So when the folded bound
-    # holds j4, try the full bound too, and keep the better position.
-    folded = _step(target, q0, flange_to_tool, lower, folded_upper, _POSITION_FIRST_WEIGHTS)
-    if folded[3] < folded_upper[3] and q0[3] <= folded_upper[3]:
-        return folded
-    full = _step(target, q0, flange_to_tool, lower, upper, _POSITION_FIRST_WEIGHTS)
-    return min((folded, full), key=position_error)
-
-
-def _step(
-    target: np.ndarray,
-    q0: np.ndarray,
-    flange_to_tool: np.ndarray,
-    lower: np.ndarray,
-    upper: np.ndarray,
-    weights: np.ndarray,
-    iterations: int = _ITERATIONS,
-) -> np.ndarray:
-    """The joints of one step from ``q0`` towards the pose ``target``, with the pose error scaled by ``weights``."""
     jacobian0 = tool_kinematics(q0, flange_to_tool)[1]
     # Eigenvalues of J^T J ascend: the first is the null space, the second is s_min squared.
     eigenvalues, eigenvectors = np.linalg.eigh(jacobian0.T @ jacobian0)
@@ -212,20 +158,19 @@ def _step(
     w_sq = _POSTURE_WEIGHT**2
 
     # A joint past a limit gets a target at that limit or inside it.
-    lo = np.clip(q0 - MAX_JOINT_STEP, lower, upper)
-    hi = np.clip(q0 + MAX_JOINT_STEP, lower, upper)
+    lo = np.clip(q0 - MAX_JOINT_STEP, lower, folded_upper)
+    hi = np.clip(q0 + MAX_JOINT_STEP, lower, folded_upper)
 
     def cost(q: np.ndarray) -> float:
-        e = weights * pose_error(tool_kinematics(q, flange_to_tool)[0], target)
+        e = pose_error(tool_kinematics(q, flange_to_tool)[0], target)
         return float(e @ e + mu_sq * (q - q0) @ (q - q0) + w_sq * (null_direction @ (q - q0) - posture_target) ** 2)
 
     q = np.clip(q0, lo, hi)
     q_cost = cost(q)
     eye = np.eye(len(q0))
-    for _ in range(iterations):
+    for _ in range(_ITERATIONS):
         tool, jacobian = tool_kinematics(q, flange_to_tool)
-        e = weights * pose_error(tool, target)
-        jacobian = weights[:, None] * jacobian
+        e = pose_error(tool, target)
         posture_residual = null_direction @ (q - q0) - posture_target
         h = jacobian.T @ jacobian + (mu_sq + _LEVENBERG) * eye + w_sq * np.outer(null_direction, null_direction)
         g = jacobian.T @ e + mu_sq * (q - q0) + w_sq * posture_residual * null_direction

@@ -121,10 +121,6 @@ def _position_error(q: np.ndarray, target: np.ndarray) -> float:
     return float(np.linalg.norm(pose_ik.pose_error(pose_ik.tool_kinematics(q, _EEF)[0], target)[:3]))
 
 
-def _rotation_error_deg(q: np.ndarray, target: np.ndarray) -> float:
-    return float(np.degrees(np.linalg.norm(pose_ik.pose_error(pose_ik.tool_kinematics(q, _EEF)[0], target)[3:])))
-
-
 @pytest.mark.parametrize('joint', [0, 3])
 def test_a_joint_pushed_past_its_limit_gets_a_target_at_that_limit(joint):
     # SpoonInMug trial 2 at 341.6 s: j1 is 0.28 rad past its upper limit. The FruitsOrangesOnPlate trials that raised
@@ -140,18 +136,6 @@ def test_a_joint_pushed_past_its_limit_gets_a_target_at_that_limit(joint):
     assert np.abs(np.delete(q - q0, joint)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
 
 
-def test_a_position_first_step_keeps_the_folded_elbow_when_it_reaches_the_position():
-    # The LargerObjectRaisinBoxInBin start below, with a turned tool. With the full j4 bound alone, the position-first
-    # steps pin j4 at its upper limit and stay 0.12 m and 87 degrees off.
-    q0 = np.array([0.00120, 0.75619, -0.02001, -0.06980, 0.01862, 0.77877, -0.00073])
-    target = _pose([0.36, 0.0, 0.34], Rotation.from_quat([0.00572, 0.97324, 0.06916, 0.21907]).as_matrix())
-
-    trajectory = _run(target, 100, q0, _EEF)
-
-    assert _position_error(trajectory[-1], target) < 0.01
-    assert _rotation_error_deg(trajectory[-1], target) < 1.0
-
-
 def test_a_target_closer_than_the_stretched_elbow_reaches_folds_the_elbow():
     # LargerObjectRaisinBoxInBin trial 1 at 295 s: j4 at its upper limit, the tool 0.31 m from the command.
     q0 = np.array([0.00120, 0.75619, -0.02001, -0.06980, 0.01862, 0.77877, -0.00073])
@@ -161,50 +145,3 @@ def test_a_target_closer_than_the_stretched_elbow_reaches_folds_the_elbow():
 
     assert np.abs(np.diff(trajectory, axis=0)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
     assert _position_error(trajectory[-1], target) < 1e-3
-
-
-@pytest.mark.parametrize(
-    'q0, target',
-    [
-        # TakeMeasuringSpoonOut trial 1 at 220 s: j2, j3 and j5 at their limits, the tool 0.40 m from the command.
-        (
-            np.array([-0.64115, 1.76280, -2.89700, -1.62606, -2.89385, 0.05128, 0.21993]),
-            _pose([0.42, -0.40, 0.055], Rotation.from_quat([-0.94765, 0.31931, 0.0, 0.0]).as_matrix()),
-        ),
-        # OneBottleInSquarePail trial 0 at 220 s: j5, j6 and j7 at their limits, the tool 0.20 m from the command.
-        (np.array([-1.91271, -0.14115, 1.83762, -2.43315, -2.89728, 3.75250, 2.87750]), _pose([0.40, 0.003, 0.32])),
-    ],
-    ids=['rotation', 'wrist'],
-)
-def test_a_pose_out_of_reach_from_the_joints_brings_the_tool_to_the_position(q0, target):
-    trajectory = _run(target, 60, q0, _EEF)
-
-    assert np.abs(np.diff(trajectory, axis=0)).max() <= pose_ik.MAX_JOINT_STEP + 1e-9
-    assert _position_error(trajectory[-1], target) < 0.05
-    assert _rotation_error_deg(trajectory[-1], target) < 60.0
-    assert np.abs(np.diff(trajectory[-10:], axis=0)).max() < 1e-3
-
-
-@pytest.mark.parametrize(
-    'q0, target',
-    [
-        # ReorientAllMugs trial 0 at 266 s: the steps settle 9 cm from the position, with the tool turned 2 degrees off.
-        (
-            np.array([0.03500, 0.61112, 0.50942, -3.06172, -2.89745, 0.69585, 2.86389]),
-            _pose([0.39509, 0.09899, 0.18676], Rotation.from_quat([-0.56515, -0.09556, -0.81506, 0.08456]).as_matrix()),
-        ),
-        # TakeMugsOffOfShelf trial 0 at 16 s: the steps settle 2 cm from the position, with the tool on the rotation.
-        (
-            np.array([0.00002, -1.00512, -0.00004, -3.05898, -0.00008, 2.74874, 0.00006]),
-            _pose([0.36485, 0.0, 0.29747], Rotation.from_quat([-0.92388, 0.0, -0.38268, 0.0]).as_matrix()),
-        ),
-    ],
-    ids=['reorient', 'shelf'],
-)
-def test_a_stall_near_the_position_keeps_the_rotation(q0, target):
-    trajectory = _run(target, 200, q0, _EEF)
-
-    assert np.abs(np.diff(trajectory[-10:], axis=0)).max() < 1e-3
-
-    assert _position_error(trajectory[-1], target) < 0.1
-    assert _rotation_error_deg(trajectory[-1], target) < 3.0
