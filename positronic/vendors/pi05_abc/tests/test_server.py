@@ -168,3 +168,15 @@ def test_an_unknown_crop_is_refused():
 
 def test_the_default_crop_keeps_the_whole_exterior_frame():
     assert server.pipeline().codec.meta[abc_codecs.CROPS_META][keys.EXTERIOR_IMAGE] == [0.0, 0.0, 1.0, 1.0]
+
+
+def test_a_load_with_relative_paths_reaches_the_server_with_absolute_ones(tmp_path, monkeypatch):
+    _fork(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    server.pi05_abc_model(checkpoint='checkpoint', fork='fork', port=_free_port()).close()
+
+    argv = _log(tmp_path)[0]['argv']
+    assert argv[0] == str(tmp_path / 'checkpoint/inference/openpi_server.py')
+    assert argv[argv.index('--checkpoint') + 1] == str(tmp_path / 'checkpoint')
+    assert argv[argv.index('--norm-stats-path') + 1].startswith(str(tmp_path / 'checkpoint'))
