@@ -193,7 +193,7 @@ def test_a_left_out_arm_is_clamped_from_its_measured_pose_toward_its_held_target
     starts, held = two_arms()
     held = {**held, keys.LEFT_ARM: at(held_x, 0.3)}
     trajectory = Motion(**SHORT_BOUNDS).trajectory(starts, held, [{'right': at(0.01, -0.3)}])
-    assert trajectory.targets[0][keys.LEFT_ARM].x == pytest.approx(min(held_x, 0.05))
+    assert trajectory.bounded[0][keys.LEFT_ARM].x == pytest.approx(min(held_x, 0.05))
     assert trajectory.clamped is clamped
 
 

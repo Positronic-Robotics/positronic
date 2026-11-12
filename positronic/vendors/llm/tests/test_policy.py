@@ -607,17 +607,34 @@ def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays
         assert 'Rejected: The path brings hands left and right' in str(conversation.request(obs, 1))
 
 
-def test_hands_inside_the_limit_hold_still_while_a_hand_is_off_its_target_but_may_not_come_closer():
+@pytest.mark.parametrize(
+    'target,measured,path',
+    [
+        ({}, {'left': (0.0, 0.0405)}, {'right': (0.0, -0.04)}),
+        ({}, {'left': (0.0, 0.0395)}, {'left': (0.0, 0.0395), 'right': (0.0, -0.04)}),
+        ({'left': (-0.001, 0.04)}, {'left': (0.001, 0.04)}, {'left': (0.029, 0.04), 'right': (0.03, -0.04)}),
+    ],
+)
+def test_hands_inside_the_limit_can_hold_still_while_a_hand_is_off_its_target(target, measured, path):
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), lambda *_: None)
+    close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
+    assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close | target)) != [[]]
+    off = hands_at(bimanual_observation(), close | measured)
+    assert decide(conversation, off, move_arms(path)) != [[]]
+
+
+def test_hands_inside_the_limit_may_not_come_closer_than_they_are():
     metadata = {}
     conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
     close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
     assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close)) != [[]]
     off = hands_at(bimanual_observation(), {'left': (0.0, 0.0405), 'right': (0.0, -0.04)})
-    assert decide(conversation, off, move_arms({'right': (0.0, -0.04)})) != [[]]
     assert decide(conversation, off, move_arms({'right': (0.0, -0.03)})) == [[]]
     (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
-    assert '0.0700 m apart' in rejected['reason']
-    assert '(0.0800 m apart)' in rejected['reason']
+    assert rejected['reason'] == (
+        'The path brings hands left and right 0.0700 m apart. They are 0.0805 m apart, '
+        'and their previous targets are 0.0800 m apart'
+    )
 
 
 def test_a_rejected_path_leaves_the_held_targets_as_they_were():

@@ -64,7 +64,7 @@ class Trajectory(NamedTuple):
     """The clamped targets of every arm at each waypoint, the commands of each segment and gripper hold, and
     whether a clamp changed a requested target."""
 
-    targets: list[Targets]
+    bounded: list[Targets]
     parts: list[list[dict]]
     clamped: bool
 
@@ -166,3 +166,11 @@ def closest_hand_distances(
         )
         for a, b in itertools.combinations(arms, 2)
     }
+
+
+def closest_approach(start: np.ndarray, end: np.ndarray) -> float:
+    """The smallest length of a vector that moves in a straight line from ``start`` to ``end``."""
+    step = end - start
+    span = float(np.dot(step, step))
+    fraction = 0.0 if span == 0 else float(np.clip(-np.dot(start, step) / span, 0, 1))
+    return float(np.linalg.norm(start + fraction * step))

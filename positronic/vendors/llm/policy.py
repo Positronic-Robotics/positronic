@@ -9,7 +9,6 @@ gives the reply to ``respond`` until it returns a decision. ``accept`` turns tha
 import io
 import itertools
 import json
-import math
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
@@ -42,7 +41,7 @@ from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import check_finite_positive, flatten_dict
 
 from .client import Endpoint
-from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_hand_distances
+from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_approach, closest_hand_distances
 
 
 class Images(StrEnum):
@@ -206,8 +205,8 @@ class Conversation:
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
             f'A path that brings two hands closer than {self._policy.min_hand_distance} m is rejected and does not '
-            'move the arms; hands that start closer may not come closer than their measured positions or their '
-            'previous targets, whichever are closer. '
+            'move the arms. Hands that start closer than that must not come closer than they are, but they can go '
+            'back to their previous targets. '
             'This check covers the hands only, not the rest of the arms. '
             if named
             else '',
@@ -384,20 +383,18 @@ class Conversation:
         tolerance = 1e-6
         limit = self._policy.min_hand_distance
         for (a, b), gap in closest_hand_distances(parts, self._policy.arms).items():
+            measured = hands[a].pose.translation - hands[b].pose.translation
+            targeted = held[a].pose.translation - held[b].pose.translation
             # A measured hand is off its held target by the tracking error. A path that keeps the hands still
-            # moves them between the two, so the closer gap is the start.
-            start = min(
-                math.dist(hands[a].pose.translation, hands[b].pose.translation),
-                math.dist(held[a].pose.translation, held[b].pose.translation),
-            )
-            if gap >= min(limit, start) - tolerance:
+            # moves the gap of a pair along the line from the measured gap to the held one.
+            if gap >= min(limit, closest_approach(measured, targeted)) - tolerance:
                 continue
-            if start < limit:
+            if min(np.linalg.norm(measured), np.linalg.norm(targeted)) < limit:
                 return (
-                    f'The path brings hands {a} and {b} {gap:.4f} m apart, closer than their measured positions or '
-                    f'previous targets ({start:.4f} m apart)'
+                    f'The path brings hands {a} and {b} {gap:.4f} m apart. They are {np.linalg.norm(measured):.4f} m '
+                    f'apart, and their previous targets are {np.linalg.norm(targeted):.4f} m apart'
                 )
-            return f'The path brings hands {a} and {b} {gap:.4f} m apart; keep them {limit} m apart'
+            return f'The path brings hands {a} and {b} {gap:.4f} m apart. Keep them at least {limit:.4f} m apart'
         return None
 
     def accept(
