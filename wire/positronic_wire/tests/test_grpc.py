@@ -3,12 +3,11 @@
 import dataclasses
 import ipaddress
 import queue
-import select
 import socket
 import ssl
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Iterator
 from concurrent import futures
 from typing import cast
 from unittest.mock import MagicMock
@@ -356,60 +355,76 @@ def test_a_pin_of_two_families_dials_the_family_of_its_first_address(bare_server
     assert client_grpc.GrpcClientWire().probe(_pinned(port, '::1', '127.0.0.1'), None, 1.0) is wire.Refusal.SILENT
 
 
-def _pumped(backend_port: int) -> Callable[[ssl.SSLSocket], None]:
-    """A handler that copies the bytes of a TLS session to and from the plaintext port ``backend_port``."""
-
-    def pump(session: ssl.SSLSocket) -> None:
-        with socket.create_connection(('127.0.0.1', backend_port)) as backend:
-            other = {session: backend, backend: session}
-            while True:
-                # A TLS socket can hold decrypted bytes that `select` cannot see.
-                ready = [session] if session.pending() else select.select(list(other), [], [], 10.0)[0]
-                if not ready:
-                    return
-                for source in ready:
-                    data = source.recv(65536)
-                    if not data:
-                        return
-                    other[source].sendall(data)
-
-    return pump
-
-
 def _trust_only(monkeypatch, root: bytes) -> None:
     """Verify every channel this test opens against ``root``, in place of the system's own roots."""
     system_roots = grpc.ssl_channel_credentials
     monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: system_roots(root))
 
 
-def _tls_edge(server: ssl.SSLContext, backend_port: int, tls_on_loopback) -> int:
-    """A TLS edge on loopback in front of the plaintext gRPC port ``backend_port``, with HTTP/2 over ALPN."""
+def _h2_edge(tls_edge, server: ssl.SSLContext, backend_port: int) -> int:
+    """A TLS edge in front of the plaintext gRPC port ``backend_port``, with HTTP/2 over ALPN."""
     server.set_alpn_protocols(['h2'])
-    return tls_on_loopback(server, _pumped(backend_port))
+    return tls_edge(server, backend_port)
 
 
 def test_a_tls_pin_names_the_host_to_tls_and_checks_the_certificate_against_it(
-    bare_server, certified_for, tls_on_loopback, monkeypatch
+    bare_server, certified_for, tls_edge, monkeypatch
 ):
     certified = certified_for(_PINNED_HOST)
     _trust_only(monkeypatch, certified.certificate)
-    port = _tls_edge(certified.server, bare_server(), tls_on_loopback)
+    port = _h2_edge(tls_edge, certified.server, bare_server())
     _reaches_the_server(client_grpc.GrpcTlsClientWire(), _pinned(port))
     assert set(certified.names_asked) == {_PINNED_HOST}
 
 
 def test_a_tls_pin_to_an_edge_whose_certificate_names_another_host_is_refused_for_good(
-    bare_server, certified_for, tls_on_loopback, monkeypatch
+    bare_server, certified_for, tls_edge, monkeypatch
 ):
     certified = certified_for('another.test')
     _trust_only(monkeypatch, certified.certificate)
-    port = _tls_edge(certified.server, bare_server(), tls_on_loopback)
+    port = _h2_edge(tls_edge, certified.server, bare_server())
     assert client_grpc.GrpcTlsClientWire().probe(_pinned(port), None, 5.0) is wire.Refusal.FINAL
     with pytest.raises(wire.ConnectRefused) as refused:
         client_grpc.GrpcTlsClientWire().dial(_pinned(port), None, 5.0)
     assert refused.value.refusal is wire.Refusal.FINAL
     assert 'Hostname Verification Check failed' in str(refused.value)
     assert set(certified.names_asked) == {_PINNED_HOST}
+
+
+@pytest.fixture
+def proxy_in_the_environment(monkeypatch) -> Iterator[list[bytes]]:
+    """A proxy on loopback that every proxy variable names. Returns the first bytes of each connection it takes."""
+    asked: list[bytes] = []
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+
+    def refuse_each() -> None:
+        while True:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                return  # the fixture closed the listener
+            with conn:
+                asked.append(conn.recv(4096))
+
+    threading.Thread(target=refuse_each, daemon=True).start()
+    proxy = f'http://127.0.0.1:{listener.getsockname()[1]}'
+    for name in ('grpc_proxy', 'https_proxy', 'http_proxy'):
+        monkeypatch.setenv(name, proxy)
+    for name in ('no_grpc_proxy', 'no_proxy', 'NO_PROXY'):
+        monkeypatch.delenv(name, raising=False)
+    yield asked
+    listener.close()
+
+
+def test_a_pinned_channel_uses_no_proxy_from_the_environment(bare_server, proxy_in_the_environment):
+    port = bare_server()
+    unpinned = dataclasses.replace(_ADDRESS, host='127.0.0.1', port=port)
+    assert client_grpc.GrpcClientWire().probe(unpinned, None, 2.0) is not None
+    assert proxy_in_the_environment[0].startswith(b'CONNECT '), 'an unpinned channel goes through the proxy'
+    _reaches_the_server(client_grpc.GrpcClientWire(), _pinned(port))
+    assert len(proxy_in_the_environment) == 1
 
 
 def test_a_pin_nothing_answers_on_is_no_answer():

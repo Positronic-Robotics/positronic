@@ -269,10 +269,11 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         return grpc.insecure_channel(_dialled(address), options=self._options(address))
 
     def _options(self, address: wire.HostPortAddress) -> list[tuple[str, int | str]]:
-        """The channel options. A pinned channel names the host as the authority, where gRPC would name the pin."""
+        """The channel options. A pinned channel names the host as the authority, where gRPC would name the pin, and
+        uses no proxy from the environment: a proxy would connect where it chose."""
         options: list[tuple[str, int | str]] = [*_client_options()]
         if address.pinned_ips is not None:
-            options.append(('grpc.default_authority', target(address.host, address.port)))
+            options += [('grpc.default_authority', target(address.host, address.port)), ('grpc.enable_http_proxy', 0)]
         return options
 
     def dial(

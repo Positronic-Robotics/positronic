@@ -278,6 +278,24 @@ def test_a_dial_and_a_probe_on_a_pinned_host_connect_to_the_pin(roboarena_on):
         connection.close()
 
 
+def test_a_pinned_dial_uses_no_proxy_from_the_environment(roboarena_on, monkeypatch):
+    proxy = socket.socket()
+    proxy.bind(('127.0.0.1', 0))
+    proxy.listen(1)
+    monkeypatch.setenv('ws_proxy', f'http://127.0.0.1:{proxy.getsockname()[1]}')
+    monkeypatch.delenv('no_proxy', raising=False)
+    monkeypatch.delenv('NO_PROXY', raising=False)
+    connection = roboarena.RoboarenaClientWire().dial(_pinned(roboarena_on(_announcing(b'config')).port), None, 5.0)
+    try:
+        assert connection.recv(timeout=5.0) == b'config'
+    finally:
+        connection.close()
+    proxy.setblocking(False)
+    with pytest.raises(BlockingIOError):
+        proxy.accept()
+    proxy.close()
+
+
 def test_a_pin_nothing_answers_on_is_no_answer():
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))

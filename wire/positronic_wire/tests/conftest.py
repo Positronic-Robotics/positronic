@@ -1,6 +1,7 @@
 """Fixtures the wire tests share."""
 
 import datetime
+import select
 import socket
 import ssl
 import threading
@@ -54,6 +55,9 @@ def certified_for(tmp_path: Path) -> Callable[[str], Certified]:
         key_file.write_bytes(private)
         server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         server.load_cert_chain(chain, key_file)
+        # A websockets sync client stalls now and then on the TLS 1.3 session tickets this server sends after the
+        # handshake. A server that sends none keeps the tests on what they test.
+        server.num_tickets = 0
         names_asked: list[str | None] = []
         server.sni_callback = lambda _sock, server_name, _context: names_asked.append(server_name)
         return Certified(certificate, private, server, names_asked)
@@ -97,3 +101,32 @@ def tls_on_loopback() -> Iterator[Callable[[ssl.SSLContext, Callable[[ssl.SSLSoc
     yield start
     for listener in listeners:
         listener.close()
+
+
+def _pumped(backend_port: int) -> Callable[[ssl.SSLSocket], None]:
+    """A handler that copies the bytes of a TLS session to and from the plaintext port ``backend_port``."""
+
+    def pump(session: ssl.SSLSocket) -> None:
+        with socket.create_connection(('127.0.0.1', backend_port)) as backend:
+            other = {session: backend, backend: session}
+            while True:
+                # A TLS socket can hold decrypted bytes that `select` cannot see.
+                ready = [session] if session.pending() else select.select(list(other), [], [], 10.0)[0]
+                if not ready:
+                    return
+                for source in ready:
+                    data = source.recv(65536)
+                    if not data:
+                        return
+                    other[source].sendall(data)
+
+    return pump
+
+
+@pytest.fixture
+def tls_edge(tls_on_loopback) -> Callable[[ssl.SSLContext, int], int]:
+    """Serves TLS with a server context on a loopback port, in front of the plaintext loopback port ``backend_port``.
+
+    Returns the port of the edge.
+    """
+    return lambda server, backend_port: tls_on_loopback(server, _pumped(backend_port))

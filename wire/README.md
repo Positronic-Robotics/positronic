@@ -113,7 +113,7 @@ out or was reset reached the socket, so the server rather than the path was not 
 resolves to passes the ones it checked, so a later resolve cannot hand the wire another address. With a pin,
 no verb resolves `host`: each one connects to the pinned addresses in their order, and still names `host` to
 TLS, which checks the certificate against it, and in the `Host` header or the gRPC authority. A pinned
-dial opens its own socket, so it ignores a proxy the environment names. A gRPC target names one address
+call uses no proxy the environment names, on every wire: a proxy would connect where it chose. A gRPC target names one address
 family, so the gRPC members dial the pinned addresses of the family of the first one. A pin nothing
 answers on is `SILENT`, as a port nothing answers on is. An address refuses an empty pin when it is built,
 because an empty pin leaves nothing to dial. `None`, the default, resolves `host` at each call.

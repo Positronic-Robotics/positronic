@@ -667,7 +667,9 @@ def lookups(monkeypatch) -> list[str]:
     resolve = socket.getaddrinfo
 
     def recording(host, *args, **kwargs):
-        if not kwargs.get('flags', 0) & socket.AI_NUMERICHOST:
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
             resolved.append(host)
         return resolve(host, *args, **kwargs)
 
@@ -682,7 +684,7 @@ def _trust_only(monkeypatch, root: bytes) -> None:
 
 
 @contextlib.contextmanager
-def _echo_server(server_ssl: ssl.SSLContext | None = None) -> Iterator[tuple[int, list[str]]]:
+def _echo_server() -> Iterator[tuple[int, list[str]]]:
     """A websocket echo server on loopback, its port, and the ``Host`` header of each handshake."""
     hosts: list[str] = []
 
@@ -690,7 +692,7 @@ def _echo_server(server_ssl: ssl.SSLContext | None = None) -> Iterator[tuple[int
         hosts.append(connection.request.headers['Host'])
         connection.send(connection.recv())
 
-    with serve(echo, '127.0.0.1', 0, ssl=server_ssl) as server:
+    with serve(echo, '127.0.0.1', 0) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         yield server.socket.getsockname()[1], hosts
         server.shutdown()
@@ -729,48 +731,46 @@ def test_a_keepalive_and_a_probe_on_a_pinned_host_connect_to_the_pin_and_name_th
     assert lookups == []
 
 
-def test_a_tls_dial_on_a_pinned_host_checks_the_certificate_against_the_host(certified_for, monkeypatch, lookups):
+def test_a_tls_dial_on_a_pinned_host_checks_the_certificate_against_the_host(
+    certified_for, tls_edge, monkeypatch, lookups
+):
     certified = certified_for(_PINNED_HOST)
     _trust_only(monkeypatch, certified.certificate)
-    with _echo_server(certified.server) as (port, hosts):
+    with _echo_server() as (backend_port, hosts):
+        port = tls_edge(certified.server, backend_port)
         assert _echoes(websocket.WebsocketTlsClientWire(), _pinned(_PINNED_HOST, port))
         assert hosts == [f'{_PINNED_HOST}:{port}']
     assert certified.names_asked == [_PINNED_HOST]
     assert lookups == []
 
 
-def _tls(server: ssl.SSLContext, handler: Callable[[socket.socket], None]) -> Callable[[socket.socket], None]:
-    """``handler`` on the server's end of a TLS session over the connection."""
-
-    def on_tls(conn: socket.socket) -> None:
-        with server.wrap_socket(conn, server_side=True) as session:
-            handler(session)
-
-    return on_tls
-
-
-def test_a_tls_keepalive_on_a_pinned_host_checks_the_certificate_against_the_host(certified_for, monkeypatch, lookups):
+def test_a_tls_keepalive_on_a_pinned_host_checks_the_certificate_against_the_host(
+    certified_for, tls_on_loopback, monkeypatch, lookups
+):
     certified = certified_for(_PINNED_HOST)
     _trust_only(monkeypatch, certified.certificate)
     asked: list[bytes] = []
-    _host, port = _served(_tls(certified.server, _answering(b'HTTP/1.1 200 OK', asked, _ALIVE)))
+    port = tls_on_loopback(certified.server, _answering(b'HTTP/1.1 200 OK', asked, _ALIVE))
     assert websocket.WebsocketTlsClientWire().keepalive(_pinned(_PINNED_HOST, port), None, 5.0) == 60
     assert f'Host: {_PINNED_HOST}:{port}\r\n'.encode() in asked[0]
     assert certified.names_asked == [_PINNED_HOST]
     assert lookups == []
 
 
-def test_a_pin_to_a_server_whose_certificate_names_another_host_is_refused_for_good(certified_for, monkeypatch):
+def test_a_pin_to_a_server_whose_certificate_names_another_host_is_refused_for_good(
+    certified_for, tls_edge, tls_on_loopback, monkeypatch
+):
     certified = certified_for('another.test')
     _trust_only(monkeypatch, certified.certificate)
     tls = websocket.WebsocketTlsClientWire()
-    with _echo_server(certified.server) as (port, hosts):
+    with _echo_server() as (backend_port, hosts):
+        port = tls_edge(certified.server, backend_port)
         with pytest.raises(wire.ConnectRefused) as refused:
             tls.dial(_pinned(_PINNED_HOST, port), None, 5.0)
         assert refused.value.refusal is wire.Refusal.FINAL
         assert isinstance(refused.value.__cause__, ssl.SSLCertVerificationError)
         assert hosts == []
-    _host, port = _served(_tls(certified.server, _answering(b'HTTP/1.1 200 OK', [], _ALIVE)))
+    port = tls_on_loopback(certified.server, _answering(b'HTTP/1.1 200 OK', [], _ALIVE))
     with pytest.raises(wire.ConnectRefused) as refused:
         tls.keepalive(_pinned(_PINNED_HOST, port), None, 5.0)
     assert refused.value.refusal is wire.Refusal.FINAL
