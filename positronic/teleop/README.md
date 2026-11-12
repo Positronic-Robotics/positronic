@@ -128,9 +128,11 @@ Conversion for training picks its own keys from the recording.
    uv run positronic eval run \
      --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect --eval.seed=1 \
      --policy=@positronic.cfg.policy.teleop_collect \
-     --output_dir=~/datasets/stack_cubes_demos
+     --pace=True --output_dir=~/datasets/stack_cubes_demos
    ```
 
+   - `--pace=True` holds the sim to wall time. Without it, the sim runs as fast as the machine allows, so a fast sim
+     runs ahead of the hand of the person.
    - `stack_cubes_collect` is `stack_cubes` for a person: 20 trials, with 120 s for each trial. The time before
      Ready does not count. Change them with `--eval.trial_count` and `--eval.timeout`.
    - It records four cameras: `image.exterior` and `image.wrist` for training, and `image.wrist_upright` and
@@ -165,11 +167,12 @@ uv run positronic eval run \
   --eval=@positronic.cfg.eval.sim.molmo.pick_mini_collect \
   --eval.episodes='[367,468,472,486,508,521,650,663,703,787]' \
   --policy=@positronic.cfg.policy.teleop_molmo \
-  --output_dir=~/datasets/molmo_pick_demos
+  --pace=True --output_dir=~/datasets/molmo_pick_demos
 ```
 
 - No eval that the competition scores has the 10 episodes of the example, or their houses. Their physics runs
-  fast. `@positronic.cfg.ds.sim.molmo_pick_demos` holds one demonstration of each.
+  fast: without `--pace=True`, these houses run up to 1.7 times faster than wall time.
+  `@positronic.cfg.ds.sim.molmo_pick_demos` holds one demonstration of each.
 - `--eval.horizon_sec` changes the horizon of each episode. Leave out `--eval.episodes` to run all the episodes that
   the config selects.
 - `teleop_molmo` shows `image.exterior`, `image.exterior_2` and `image.wrist`. The eval puts each shoulder camera in
@@ -240,7 +243,7 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
      --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect \
      --policy=@positronic.cfg.policy.teleop_network --policy.address.host=<laptop> \
      --policy.address.query=@positronic.cfg.policy.teleop_collect_query \
-     --output_dir=~/datasets/stack_cubes_demos
+     --pace=True --output_dir=~/datasets/stack_cubes_demos
    ```
 
 - A session with no token or a wrong one gets HTTP 403.
@@ -287,6 +290,7 @@ and vary how you come to the object.
   a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up.
 - The phone page shows no video. Watch the window on the laptop.
 - MolmoSpaces runs slowly and with jerks on a Mac, and the person feels it.
+- A sim run must pace the sim with `--pace=True`. The service does not refuse a run without it.
 - A sim run must charge inference time, as `eval run` does by default. With `--charge_inference_time=False` the sim
   stops while each call runs, so a person cannot control the run. The service does not refuse such a run.
 - The service waits for Ready while it prepares the session, before the episode starts. So the wait is outside the

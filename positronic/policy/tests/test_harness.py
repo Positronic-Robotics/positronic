@@ -157,7 +157,7 @@ def observed_harness():
                 obs = yield Step({}, runtime.time_ns + 100_000_000)
 
     serializers = {name: Mock(side_effect=lambda value: value) for name in (keys.WRIST_IMAGE, POSITION)}
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         source = Passive()
         embodiment = Embodiment(
             descriptor='test',
@@ -309,7 +309,7 @@ class MemoryDataset(DatasetWriter):
 def _episode_ports(devices: tuple[str, ...] = (), observed: tuple[str, ...] = (), privileged: tuple[str, ...] = ()):
     """A harness whose loop the test drives, with a ready handler for each of ``devices``, and an observation of the
     same name for each of ``observed``."""
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         source = Passive()
         serializer = Mock(side_effect=lambda value: value)
         preparation = {name: pimm.calls.ControlSystemHandler(source) for name in (RESET, eval_keys.SCENE)}
@@ -726,7 +726,7 @@ def test_each_ask_refused_on_one_error_starts_a_new_traceback(episode_harness):
 @contextmanager
 def policy_world(policy, *, simulated=True, charged=False):
     """Drive the harness and its worker threads against a deterministic one-millisecond world clock."""
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         timer = Passive()
         embodiment = Embodiment(
             descriptor='test',
@@ -906,7 +906,7 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
             )
 
     definition = CompletePolicy()
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         motion = Motion()
         embodiment = Embodiment(
             descriptor='test',
@@ -1491,7 +1491,7 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
 
             return Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)).run(runtime, infer)
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         motion = Motion()
         embodiment = Embodiment(
             descriptor='recording-test',
@@ -1567,7 +1567,7 @@ def test_a_command_without_a_device_records_simulation_timestamps(tmp_path):
         simulated=True,
     )
     harness = Harness(embodiment)
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         wire.wire_embodiment(world, harness, embodiment)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, timer])
@@ -1898,7 +1898,7 @@ def run_robot_rollout(policy, static_meta=None, robot_meta=None, *, ticks=1, com
     sensors = sensors or {}
     if state is None:
         state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         device = Passive()
         state_out = pimm.ControlSystemEmitter(device)
         sensors_out = {name: pimm.ControlSystemEmitter(device) for name in sensors}
@@ -2130,7 +2130,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
 
 
 def test_robot_observation_serialization_and_typed_command_emission():
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         device = Passive()
         embodiment = Embodiment(
             descriptor='robot',
@@ -2182,7 +2182,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
     ],
 )
 def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose_signals):
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         device = Passive()
         state_out = pimm.ControlSystemEmitter(device)
         embodiment = Embodiment(
@@ -2222,7 +2222,7 @@ def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose
 
 def test_episode_statics_carry_the_meta_of_each_arm_keyed_by_its_joint_signal():
     left, right, silent = (f'{keys.ROBOT_STATE}.{side}{keys.JOINTS_SUFFIX}' for side in ('left', 'right', 'third'))
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         device = Passive()
         state_out = pimm.ControlSystemEmitter(device)
         arm_meta = {signal: pimm.ControlSystemEmitter(device) for signal in (left, right, silent)}

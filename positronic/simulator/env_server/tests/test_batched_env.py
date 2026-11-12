@@ -257,7 +257,7 @@ class _GripAdapter(EnvAdapter):
 
 def _drive_one_proxy(host: str, port: int, grip: float, started: threading.Barrier) -> float:
     """Run one proxy in a World of its own through a reset and a few steps; return the grip it observed."""
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         proxy = RemoteEnvControlSystem(_GripAdapter(grip), nullcontext((host, port)))
         grip_rx = world.pair(proxy.observations[_GRIP])
         scheduler = world.start([proxy])

@@ -44,7 +44,7 @@ def _answered(scheduler, answer, turns: int):
 def test_a_sync_move_travels_the_arm_to_the_joints_it_asks_for():
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -60,7 +60,7 @@ def test_a_sync_move_takes_the_arm_over_from_the_command_stream():
     """Between moves the stream owns the arm, so a move has to retarget what the stream last set."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         commands = world.pair(sim.commands)
         state = world.pair(sim.state)
@@ -79,7 +79,7 @@ def test_a_streamed_command_leaves_the_arm_alone_while_a_move_is_in_flight():
     """A setpoint applied mid-travel fights the move, and its asker is owed the arrival it was promised."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         commands = world.pair(sim.commands)
         state = world.pair(sim.state)
@@ -98,7 +98,7 @@ def test_a_move_that_ends_publishes_the_arm_before_it_answers():
     """The state stream can run slower than the physics, and its asker still reads where the arm got to."""
     sim = MujocoSim(MODEL, loaders=(), state_fps=1.0)
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -114,7 +114,7 @@ def test_a_move_that_is_already_there_publishes_before_it_answers():
     """The immediate answer owes its asker a state as much as one that travelled does."""
     sim = MujocoSim(MODEL, loaders=(), state_fps=1.0)
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -131,7 +131,7 @@ def test_a_move_naming_the_wrong_joints_leaves_the_arm_alone():
     """The vector is paired with the actuators before any is written, so a refused move retargets none."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -149,7 +149,7 @@ def test_a_move_to_joints_that_are_no_target_is_refused_rather_than_applied():
     """NaN controls step the sim to NaN, and no comparison against NaN ever reports the arm arrived."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -167,7 +167,7 @@ def test_a_move_by_a_delta_that_names_fewer_joints_is_refused():
     """NumPy broadcasts a one-element delta across every joint, so arity alone would accept it."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -185,7 +185,7 @@ def test_a_move_the_arm_never_finishes_hands_its_asker_the_timeout():
     """The joints stop at their limits, so a target beyond them is one the arm can be held short of forever."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -201,7 +201,7 @@ def test_the_arm_reads_busy_while_a_move_owns_it():
     """BUSY is what an unread command stream looks like, and a move in flight is why it goes unread."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -220,7 +220,7 @@ def test_a_move_that_gives_up_leaves_the_arm_where_it_stopped():
     sim = MujocoSim(MODEL, loaders=())
     sim._MOVE_TIMEOUT_S = 0.05  # the arm is still travelling when the move gives up
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         state = world.pair(sim.state)
         scheduler = world.start([sim])
@@ -238,7 +238,7 @@ def test_a_move_that_gives_up_leaves_the_arm_where_it_stopped():
 def test_a_move_to_a_pose_the_arm_cannot_reach_hands_its_asker_the_reason():
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         move = world.pair(sim.sync_move)
         scheduler = world.start([sim])
 
@@ -252,7 +252,7 @@ def test_a_redraw_publishes_the_scene_before_it_answers():
     """A trial opening on the redraw's answer finds the scene it drew already on the channels."""
     sim = MujocoSim(MODEL, loaders=())
 
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         draw = world.pair(sim.env_reset)
         state = world.pair(sim.state)
         meta = world.pair(sim.robot_meta)

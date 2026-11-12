@@ -12,7 +12,7 @@ from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmi
 
 @pytest.fixture
 def world():
-    with pimm.World(virtual_time=True) as w:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as w:
         yield w
 
 

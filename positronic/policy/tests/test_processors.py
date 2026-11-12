@@ -668,7 +668,7 @@ def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, m
 
 @pytest.fixture
 def execution(monkeypatch):
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
 
         def submit(function, *args, **kwargs):

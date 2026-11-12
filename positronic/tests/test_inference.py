@@ -149,7 +149,7 @@ def test_a_task_failure_is_reported_without_stopping_the_operator(monkeypatch, c
     presses = iter(['s'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
     operator = KeyboardOperator(lambda: Task(instruction='pick', timeout_sec=None), _IdlePolicy(), None)
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         handler = world.pair(operator.perform_task)
 
         def refuse():
@@ -167,7 +167,7 @@ def test_the_operator_declines_a_press_while_an_episode_runs(monkeypatch, caplog
     presses = iter(['s', 's'])
     monkeypatch.setattr(keyboard, 'key_reader', partial(nullcontext, lambda: next(presses, None)))
     operator = KeyboardOperator(lambda: task, _IdlePolicy(), None)
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         harness = world.pair(operator.perform_task)
         received = []
 
@@ -391,7 +391,7 @@ def test_an_early_verdict_is_discarded_and_a_retry_can_end_the_running_episode(r
     embodiment = make_embodiment(simulated=True)
     harness = Harness(embodiment)
     answers = []
-    with pimm.World(virtual_time=True) as world:
+    with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         caller = world.pair(harness.perform_task)
         done = world.pair(harness.done)
         wire.wire_embodiment(world, harness, embodiment)

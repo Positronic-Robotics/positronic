@@ -707,7 +707,7 @@ class _CountdownAdapter(EnvAdapter):
 @pytest.mark.timeout(60.0)
 def test_the_proxy_connects_on_a_tasks_call_before_any_reset():
     """Task listing must start the server and leave the connection usable for reset."""
-    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
         world.start([proxy])
@@ -752,7 +752,7 @@ def test_a_refused_listing_stops_the_server_it_started():
 @pytest.mark.timeout(60.0)
 def test_proxy_publishes_the_reset_frame_then_free_runs():
     """Reset must publish step zero and clear termination; active ticks advance physics without commands."""
-    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         obs_rx = world.pair(proxy.observations['value'])
         done_rx = world.pair(proxy.done)
@@ -770,7 +770,7 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
 
 @pytest.mark.timeout(60.0)
 def test_an_env_that_keeps_the_listed_instruction_publishes_no_goal():
-    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         goal_rx = world.pair(proxy.goal)
         scheduler = world.start([proxy])
@@ -804,7 +804,7 @@ class _GoalPerStepEnv(_CountdownEnv):
 @pytest.mark.timeout(60.0)
 def test_each_goal_the_env_reports_reaches_the_goal_signal():
     env = _GoalPerStepEnv()
-    with serve_env(env) as (host, port), pimm.World(virtual_time=True) as world:
+    with serve_env(env) as (host, port), pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
         proxy = RemoteEnvControlSystem(_CountdownAdapter(), nullcontext((host, port)))
         goal_rx = world.pair(proxy.goal)
         scheduler = world.start([proxy])

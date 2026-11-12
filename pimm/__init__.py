@@ -25,7 +25,7 @@ from .core import (
 )
 from .time import Time
 from .utils import RateLimiter, map, read_updated, value_updated
-from .world import BackgroundProcessError, World
+from .world import BackgroundProcessError, TimeMode, World
 
 __all__ = [
     'BackgroundProcessError',
@@ -56,6 +56,7 @@ __all__ = [
     'SignalReceiver',
     'Sleep',
     'Time',
+    'TimeMode',
     'value_updated',
     'World',
     'Yield',

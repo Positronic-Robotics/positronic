@@ -142,7 +142,7 @@ def main(
 
         replay = Replay()
 
-        with pimm.World(virtual_time=True) as world:
+        with pimm.World(time_mode=pimm.TimeMode.VIRTUAL) as world:
             # The sim carries both the arm and the gripper ports, so it fills both slots.
             ds_agent = wire.wire(world, replay, dataset_factory, cameras_mapped, sim, sim, gui)
             player_cmd = world.pair(replay.command)
