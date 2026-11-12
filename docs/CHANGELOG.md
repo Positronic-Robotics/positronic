@@ -26,7 +26,7 @@ This release publishes `positronic-platform-client` 0.47.20, and `positronic` re
 
 ### Inference
 - `--policy.cache_ttl` sets the TTL of the LLM policy's cache points to `5m` (the default) or `1h`, and the policy refuses a provider cache setting ([#1214](https://github.com/Positronic-Robotics/positronic/pull/1214))
-- An ABC-DiT session with the query `prompts=real` sends the prompt of each task in ABC's real teleoperation data, in place of the sim prompt ([#1213](https://github.com/Positronic-Robotics/positronic/pull/1213))
+- An ABC-DiT session with the query `prompts=real` sends the prompt of the task in ABC's real teleoperation data, in place of the sim prompt. The real data has four of the five tasks, so such a session refuses `hang mug on mug rack` ([#1213](https://github.com/Positronic-Robotics/positronic/pull/1213))
 - Every MolmoAct2 DROID pipeline asks the client for JPEG frames at quality 90. A call with three 640x360 cameras sent about 2 MB of raw frames before ([#1212](https://github.com/Positronic-Robotics/positronic/pull/1212))
 - `docker/Dockerfile.serve-abc-dit` builds a serving image of ABC-DiT for the yambox rig, with its checkpoint and text encoder inside, so it starts with no network ([#1206](https://github.com/Positronic-Robotics/positronic/pull/1206))
 - The Dream-1 vendor paces its chunks as `dreamlabs-client` paces them, and bounds each view to 320 pixels wide before upload. `upload_probe.py` times the frame path of one call ([#1188](https://github.com/Positronic-Robotics/positronic/pull/1188))
