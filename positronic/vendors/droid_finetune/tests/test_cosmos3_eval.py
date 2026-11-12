@@ -42,3 +42,21 @@ def test_an_override_on_the_command_line_wins_over_the_eval_defaults():
 
 def test_the_server_scores_without_compiled_kernels():
     assert cosmos3_eval.SETUP_UPDATE['use_torch_compile'] is False
+
+
+def test_the_eval_prompts_in_json_as_the_experiment_trains():
+    args = cosmos3_eval.parse_args(['--checkpoint=/ckpt', '--heldout=/tree', '--output=/out.json', '--vae-path=/vae'])
+
+    assert args.format_prompt_as_json is True
+
+
+def test_plain_text_prompts_stay_available_on_the_command_line():
+    args = cosmos3_eval.parse_args([
+        '--checkpoint=/ckpt',
+        '--heldout=/tree',
+        '--output=/out.json',
+        '--vae-path=/vae',
+        '--no-format-prompt-as-json',
+    ])
+
+    assert args.format_prompt_as_json is False

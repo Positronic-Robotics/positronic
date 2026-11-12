@@ -8,8 +8,8 @@ Usage (in the train-cosmos3 image, with the parent of this package on PYTHONPATH
 
 `--checkpoint` is a DCP checkpoint: the image's start weights, or one that a training run of
 `action_policy_droid_nano` wrote. Every window samples with the same noise seed and the same kernels, so two runs
-on one checkpoint give the same report. The server's own defaults choose the sampler and the prompt format, as when
-it serves the policy. It prints the summary of the report as one JSON line.
+on one checkpoint give the same report. The prompt is JSON, as `action_policy_droid_nano` trains, and the server's
+defaults choose the sampler. It prints the summary of the report as one JSON line.
 """
 
 import argparse
@@ -58,7 +58,7 @@ def policy_service(server_args):
     return OfflinePolicyService(server_args)
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--checkpoint', type=Path, required=True)
     parser.add_argument('--heldout', type=Path, required=True, help=f'the tree that holds {heldout.DATASET_DIR}/')
@@ -66,11 +66,18 @@ def main() -> None:
     parser.add_argument('--windows-per-episode', type=int, default=8)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--vae-path', default=os.environ.get('WAN_VAE_PATH'), help='default: $WAN_VAE_PATH')
-    parser.add_argument('--format-prompt-as-json', action=argparse.BooleanOptionalAction, default=None)
+    # The server finds no dataset config in a DCP checkpoint of this experiment and builds plain-text prompts unless
+    # it is told; the experiment's dataset sets format_prompt_as_json=True.
+    parser.add_argument('--format-prompt-as-json', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--override', action='append', default=[], help='a Hydra override of the experiment')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.vae_path is None:
         parser.error('--vae-path is required when WAN_VAE_PATH is not set')
+    return args
+
+
+def main() -> None:
+    args = parse_args()
     # The experiment's dataset reads DROID_ROOT when the config loads; it names the tree that is scored.
     os.environ['DROID_ROOT'] = str(args.heldout / heldout.DATASET_DIR)
     # Only the training image installs torch and cosmos_framework; the tests run without them.
