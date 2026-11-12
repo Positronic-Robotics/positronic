@@ -97,16 +97,20 @@ def test_a_server_that_answers_no_close_ends_the_connect_by_its_deadline(unanswe
     assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
 
 
-def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_timeout_each():
-    connection = MagicMock(**{'recv.return_value': _ANNOUNCEMENT})
+def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_timeout_each(fake_clock):
+    """The server answers the dial and announces its config each just inside one handshake timeout."""
+    almost = roboarena.HANDSHAKE_TIMEOUT_S - 1.0
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
 
-    with patch.object(client, '_wire') as client_wire:
-        client_wire.dial.return_value = connection
-        client.connect()
+    def dial(address, headers, open_timeout):
+        assert fake_clock.answer(almost, open_timeout), 'the dial timed out'
+        return fake_clock.connection((almost, _ANNOUNCEMENT))
 
-    assert client_wire.dial.call_args.args[2] == roboarena.HANDSHAKE_TIMEOUT_S
-    assert connection.recv.call_args.kwargs['timeout'] == roboarena.HANDSHAKE_TIMEOUT_S
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.side_effect = dial
+        assert client.connect() == deserialize(_ANNOUNCEMENT)
+
+    assert fake_clock.now == 2 * almost
 
 
 def test_the_client_hands_its_headers_to_every_handshake_it_opens():

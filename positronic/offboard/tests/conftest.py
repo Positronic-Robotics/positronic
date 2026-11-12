@@ -4,6 +4,7 @@ import os
 import socket
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -203,3 +204,62 @@ def unanswering_websocket_port() -> Generator[int, None, None]:
     assert not thread.is_alive(), 'the quiet peer did not stop when asked'
     for peer in held:
         peer.close()
+
+
+class FakeClock:
+    """``time`` as the client modules see it, on a clock that moves only when they sleep or a fake peer answers."""
+
+    time_ns = staticmethod(time.time_ns)
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def answer(self, after: float, timeout: float | None) -> bool:
+        """Wait for a peer that answers ``after`` seconds from now. False when ``timeout`` ends the wait first."""
+        if timeout is not None and after > timeout:
+            self.now += timeout
+            return False
+        self.now += after
+        return True
+
+    def connection(self, *answers: tuple[float, bytes | Exception]) -> wire.ClientConnection:
+        """A connection whose peer sends each of ``answers`` after its delay, counted from the previous one."""
+        return _ConnectionOnAFakeClock(self, list(answers))
+
+
+class _ConnectionOnAFakeClock(wire.ClientConnection):
+    def __init__(self, clock: FakeClock, answers: list[tuple[float, bytes | Exception]]):
+        self._clock = clock
+        self._answers = answers
+
+    def send(self, message: bytes) -> None:
+        pass
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        after, answer = self._answers[0]
+        if not self._clock.answer(after, timeout):
+            assert timeout is not None
+            self._answers[0] = (after - timeout, answer)
+            raise TimeoutError('no message within the timeout')
+        self._answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def close(self, timeout: float | None = None) -> str:
+        return 'closed'
+
+
+@pytest.fixture
+def fake_clock(monkeypatch) -> FakeClock:
+    """A ``FakeClock`` that both client modules read in place of ``time``."""
+    clock = FakeClock()
+    monkeypatch.setattr('positronic.offboard.client.time', clock)
+    monkeypatch.setattr('positronic.offboard.roboarena.time', clock)
+    return clock
