@@ -20,7 +20,7 @@ from positronic.policy.processors import ChunkedSchedule, EndOnField, Trajectory
 from positronic.vendors.llm import server
 from positronic.vendors.llm.client import ANTHROPIC_API_KEYS_ENV, Endpoint
 from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import Images, LLMPolicy, Tool
+from positronic.vendors.llm.policy import ONE_ARM, Images, LLMPolicy, Tool
 from positronic.vendors.llm.server import LLMModel, deployment, serve
 from positronic.vendors.llm.tests.test_policy import (
     complete,
@@ -390,12 +390,23 @@ def test_a_served_session_sends_the_model_what_a_local_run_sends(model, make_mod
     assert [comparable(messages) for messages in requests] == local
 
 
-def test_the_model_states_the_policy_meta_and_the_frames_of_its_poses(model, make_model):
-    meta = make_model().meta()
+@pytest.mark.parametrize(
+    'arms,poses',
+    [
+        (ONE_ARM, [keys.EE_POSE, keys.TARGET_EE_POSE]),
+        (
+            keys.BIMANUAL_ARMS,
+            [f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS]
+            + [f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS],
+        ),
+    ],
+)
+def test_the_model_states_the_policy_meta_and_the_frames_of_its_poses(model, make_model, arms, poses):
+    meta = make_model(arms=arms).meta()
     assert meta[policy_keys.TYPE] == policy_keys.LLM_TYPE
     assert meta[policy_keys.MODEL] == 'test'
-    frames = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])
-    assert frames == dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE))
+    assert meta['arms'] == list(arms)
+    assert parse_ee_frames(meta[roboarm_keys.EE_FRAMES]) == dict.fromkeys(poses, EEFrame(site=GRIPPER_SITE))
 
 
 def test_the_client_stack_ends_on_the_end_field_and_plays_at_the_motion_rate():
