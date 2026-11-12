@@ -414,24 +414,42 @@ def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket
 TELEOPERATOR_GETS_READY_SEC = 300.0
 
 
+class _FakeTime:
+    """The ``time`` module as one module sees it, on a clock that moves only when that module sleeps or waits.
+
+    It replaces the module's ``time`` name, not the attributes of ``time``: a thread that an earlier test left
+    running and that sleeps would otherwise move this clock too."""
+
+    time_ns = staticmethod(time.time_ns)
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class _ReadyWaitOnAFakeClock(wire.ClientConnection):
     """The opening of a teleop session on the fake clock ``clock``: a waiting status at each interval of the model
     server, and Ready at ``ready_at``. A wait that ends before the next message advances the clock and times out."""
 
-    def __init__(self, clock: list[float], ready_at: float):
+    def __init__(self, clock: _FakeTime, ready_at: float):
         self._clock = clock
         self._ready_at = ready_at
-        self._next_waiting = clock[0]
+        self._next_waiting = clock.now
 
     def send(self, message: bytes) -> None:
         raise AssertionError('the opening sends nothing before Ready')
 
     def recv(self, timeout: float | None = None) -> bytes:
         arrives = min(self._next_waiting, self._ready_at)
-        if timeout is not None and arrives - self._clock[0] > timeout:
-            self._clock[0] += timeout
+        if timeout is not None and arrives - self._clock.now > timeout:
+            self._clock.now += timeout
             raise TimeoutError('no message within the timeout')
-        self._clock[0] = max(self._clock[0], arrives)
+        self._clock.now = max(self._clock.now, arrives)
         if arrives == self._ready_at:
             return serialise({
                 STATUS: ServerStatus.READY,
@@ -448,21 +466,17 @@ class _ReadyWaitOnAFakeClock(wire.ClientConnection):
 
 def test_the_default_deadlines_of_a_teleop_policy_outlast_a_five_minute_wait_for_ready():
     """A session of ``cfg.policy.teleop`` with its default deadlines opens when Ready comes after five minutes."""
-    clock = [0.0]
+    clock = _FakeTime()
     ready_at = TELEOPERATOR_GETS_READY_SEC + ModelServer.WAITING_INTERVAL_SEC
     policy = positronic.cfg.policy.teleop.instantiate()
     client = policy._client
     with (
         patch.object(client._wire, 'dial', return_value=_ReadyWaitOnAFakeClock(clock, ready_at)),
-        patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
-        patch(
-            'positronic.offboard.client.time.sleep',
-            side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
-        ),
+        patch('positronic.offboard.client.time', clock),
     ):
         session = client.new_session()
     assert session.session_id == 'teleop'
-    assert clock[0] == ready_at
+    assert clock.now == ready_at
 
 
 def test_a_silent_headset_reads_as_not_tracked_and_turns_control_off(service, socket_path, runtime):
