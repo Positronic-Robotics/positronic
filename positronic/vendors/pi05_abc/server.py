@@ -48,6 +48,8 @@ class AuthorServer(OpenpiSubprocess):
     READY_TIMEOUT_S = WARMUP_DEADLINE_S
 
     def __init__(self, checkpoint: Path, fork: Path, config_name: str, infer_timeout: float, ws_port: int):
+        # The child runs in the fork's openpi directory, where a relative path names another file.
+        checkpoint, fork = checkpoint.resolve(), fork.resolve()
         super().__init__(
             checkpoint_dir=str(checkpoint),
             config_name=config_name,
