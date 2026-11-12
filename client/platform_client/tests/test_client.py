@@ -616,6 +616,13 @@ def test_list_artifacts_sends_only_the_narrowing_the_caller_named():
     assert dict(gateway.request().url.params) == {'id': '1f', 'prefix': 'episodes/', 'limit': '2'}
 
 
+def test_list_artifacts_names_the_eval_whose_records_it_lists():
+    gateway = Gateway(200, {'artifacts': [], 'next': None})
+    make_client(gateway).list_artifacts(SubmissionId(0x1F), eval=EvalRef('example.part_b'))
+
+    assert dict(gateway.request().url.params) == {'id': '1f', 'eval': 'example.part_b'}
+
+
 def test_a_redirect_is_a_failure_rather_than_a_body_to_parse():
     # httpx follows no redirect by default, so a 3xx arrives here with a body that is not an envelope.
     gateway = Gateway(302, {'error': {'code': 'not_found', 'message': 'moved'}})

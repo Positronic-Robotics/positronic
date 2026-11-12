@@ -22,6 +22,7 @@ from platform_client.ids import (
 )
 from platform_client.leaderboards import LeaderboardRef, LeaderboardTag, LeaderboardTaskId
 from platform_client.model_config import INPUT_MODEL_CONFIG
+from positronic_evals.evals import EvalRef
 from pydantic import AfterValidator, BaseModel, Field
 
 TEAM_NAME_MAX_CHARACTERS = 64
@@ -75,12 +76,14 @@ class SubmissionArtifactsQuery(BaseModel):
 
     `prefix` keeps the page to the keys under it, and is read relative to the submission's own
     prefix: `episodes/` lists the episodes alone. `after` is the key the page before it ended on.
-    A `limit` above the gateway's cap is clamped to it.
+    A `limit` above the gateway's cap is clamped to it. `eval` names the eval of the submission whose records
+    to list; None lists those of its first eval. A platform that sends no `evals` on a view ignores it.
     """
 
     model_config = INPUT_MODEL_CONFIG
 
     id: SubmissionId
+    eval: EvalRef | None = None
     prefix: str | None = None
     after: str | None = None
     limit: int | None = Field(default=None, gt=0)

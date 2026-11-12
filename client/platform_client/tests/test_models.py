@@ -67,6 +67,8 @@ from platform_client.requests import (
     SubmissionListQuery,
 )
 from platform_client.responses import (
+    EVAL_FIELD,
+    EVALS_FIELD,
     ID_FIELD,
     QUOTA_SUBMISSIONS_CONCURRENT,
     QUOTA_SUBMISSIONS_DAY,
@@ -85,6 +87,7 @@ from platform_client.responses import (
     EndpointOutcome,
     EpisodeCounts,
     ErroredSubmissionView,
+    EvalView,
     FinishedSubmissionView,
     MeResponse,
     PendingSubmissionView,
@@ -297,28 +300,49 @@ MODELS: list[BaseModel] = [
         id=SUB,
         reason_code=ReasonCode.policy_oom,
         reason='policy ran out of memory',
-        artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL),
+        evals=[
+            EvalView(
+                status=SubmissionStatus.errored, artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL)
+            )
+        ],
     ),
     ErroredSubmissionView(
         id=SUB,
         reason_code=ReasonCode.policy_inference_crash,
-        artifacts=ArtifactRefs(result=RESULT_URL),
-        scores=SCORES,
-        episodes=EpisodeCounts(total=12, done=6, outstanding=6),
+        evals=[
+            EvalView(
+                status=SubmissionStatus.errored,
+                artifacts=ArtifactRefs(result=RESULT_URL),
+                scores=SCORES,
+                episodes=EpisodeCounts(total=12, done=6, outstanding=6),
+            )
+        ],
     ),
-    FinishedSubmissionView(id=SUB, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')),
     FinishedSubmissionView(
         id=SUB,
-        artifacts=ArtifactRefs(result='s3://b/episodes/'),
+        evals=[
+            EvalView(
+                status=SubmissionStatus.finished, scores=SCORES, artifacts=ArtifactRefs(result='s3://b/result.json')
+            )
+        ],
+    ),
+    FinishedSubmissionView(
+        id=SUB,
         replay=ReplayLink(url='https://viewer.example/v/token/', expires_at=AT),
         report=ReportLink(url=REPORT_URL, expires_at=AT),
         outcome=PlanOutcome(endpoints=[EndpointOutcome(endpoint='a', kept=9, judged=4, succeeded=3)]),
-        runs=[
-            RunSummary(
-                run_tag='blind_20260904-160621',
-                started_at=AT,
-                ended_at=AT,
-                episodes=EpisodeCounts(total=10, done=9, outstanding=1),
+        evals=[
+            EvalView(
+                status=SubmissionStatus.finished,
+                artifacts=ArtifactRefs(result='s3://b/episodes/'),
+                runs=[
+                    RunSummary(
+                        run_tag='blind_20260904-160621',
+                        started_at=AT,
+                        ended_at=AT,
+                        episodes=EpisodeCounts(total=10, done=9, outstanding=1),
+                    )
+                ],
             )
         ],
     ),
@@ -373,8 +397,16 @@ MODELS: list[BaseModel] = [
     SubmissionListQuery(),
     BlockedSubmissionView(
         id=SUB,
-        episodes=EpisodeCounts(total=24, done=3, outstanding=21),
-        runs=[RunSummary(run_tag='blind_20260904-160621', started_at=AT), RunSummary(run_tag='blind_20260904-170000')],
+        evals=[
+            EvalView(
+                status=SubmissionStatus.blocked,
+                episodes=EpisodeCounts(total=24, done=3, outstanding=21),
+                runs=[
+                    RunSummary(run_tag='blind_20260904-160621', started_at=AT),
+                    RunSummary(run_tag='blind_20260904-170000'),
+                ],
+            )
+        ],
         reason='the rig is not ready',
     ),
 ]
@@ -605,7 +637,11 @@ def test_a_board_row_has_a_rank_exactly_when_it_is_not_a_baseline():
 
 
 def test_a_finished_run_replay_carries_no_data_object():
-    view = FinishedSubmissionView(id=SUB, artifacts=ArtifactRefs(result=RESULT_URL), replay=ReplayLink(url=REPLAY_URL))
+    view = FinishedSubmissionView(
+        id=SUB,
+        evals=[EvalView(status=SubmissionStatus.finished, artifacts=ArtifactRefs(result=RESULT_URL))],
+        replay=ReplayLink(url=REPLAY_URL),
+    )
     assert view.model_dump(mode='json')['replay'] == {'url': REPLAY_URL, 'expires_at': None}
 
 
@@ -670,8 +706,10 @@ def test_the_status_slug_selects_the_view_variant(payload: dict, expected: type[
 )
 def test_the_published_field_names_are_ones_every_variant_declares(variant: type[BaseModel]):
     # `positronic eval status` prints these two on its header line and excludes them from the body
-    # by these names, so a name that outlived its field would print it twice.
-    assert {ID_FIELD, STATUS_FIELD} <= set(variant.model_fields)
+    # by these names, so a name that outlived its field would print it twice. It prints the one entry
+    # of `evals` in place of the list, by the names of the list and of the entry's eval.
+    assert {ID_FIELD, STATUS_FIELD, EVALS_FIELD} <= set(variant.model_fields)
+    assert {EVAL_FIELD, STATUS_FIELD} <= set(EvalView.model_fields)
 
 
 def test_a_view_refuses_a_status_that_is_not_its_own_tag():
@@ -718,7 +756,7 @@ def test_a_failed_run_that_wrote_no_record_carries_no_link():
     # A plan the lab rig never ran wrote nothing to link to. Absence is None.
     view = ErroredSubmissionView(id=SUB, reason='the rig is not ready')
     assert view.artifacts is None
-    assert 'artifacts' in view.model_dump(mode='json')
+    assert 'artifacts' in view.model_dump(mode='json')['evals'][0]
 
 
 def test_a_failed_run_carries_the_score_of_the_episodes_that_closed():
@@ -746,7 +784,9 @@ def test_a_failed_run_whose_diagnostics_were_not_written_still_links_its_result(
     # The two records are written apart, and the second write may be refused, so the pair is not
     # all-or-nothing.
     view = ErroredSubmissionView(
-        id=SUB, reason_code=ReasonCode.internal_error, artifacts=ArtifactRefs(result=RESULT_URL)
+        id=SUB,
+        reason_code=ReasonCode.internal_error,
+        evals=[EvalView(status=SubmissionStatus.errored, artifacts=ArtifactRefs(result=RESULT_URL))],
     )
     assert view.artifacts is not None
     assert view.artifacts.diagnostics is None
@@ -773,7 +813,12 @@ def test_a_failed_run_links_its_record_and_its_log_together():
     view = ErroredSubmissionView(
         id=SUB,
         reason_code=ReasonCode.policy_setup_crash,
-        artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL, policy_log=POLICY_LOG_URL),
+        evals=[
+            EvalView(
+                status=SubmissionStatus.errored,
+                artifacts=ArtifactRefs(result=RESULT_URL, diagnostics=DIAGNOSTICS_URL, policy_log=POLICY_LOG_URL),
+            )
+        ],
     )
     assert view.artifacts is not None
     assert view.artifacts.diagnostics == DIAGNOSTICS_URL
@@ -1348,3 +1393,76 @@ def test_billing_modes_require_the_matching_hold_state():
 def test_a_credit_balance_refuses_reserved_credits_above_posted_credits():
     with pytest.raises(ValidationError, match='exceed'):
         CreditBalance(posted_units=10, reserved_units=11)
+
+
+_PART_A, _PART_B = EvalRef('example.part_a'), EvalRef('example.part_b')
+_FINISHED_TWO_EVALS = {
+    'status': 'finished',
+    'id': SUB.to_str(),
+    'evals': [
+        {
+            'eval': _PART_A,
+            'status': 'finished',
+            'scores': {'primary': 0.6},
+            'artifacts': {'result': RESULT_URL},
+            'episodes': {'total': 3, 'done': 3},
+        },
+        {'eval': _PART_B, 'status': 'errored', 'episodes': {'total': 2, 'done': 1, 'outstanding': 1}},
+    ],
+}
+
+
+def test_the_single_accessors_of_a_view_of_several_evals_read_its_first_eval():
+    view = SUBMISSION_VIEWS.validate_python(_FINISHED_TWO_EVALS)
+    assert isinstance(view, FinishedSubmissionView)
+    assert [entry.eval for entry in view.evals] == [_PART_A, _PART_B]
+    assert view.scores == Scores(primary=0.6) and view.episodes == EpisodeCounts(total=3, done=3)
+    assert view.artifacts.result == RESULT_URL
+
+
+def test_a_dump_states_the_list_and_no_single_field():
+    dumped = SUBMISSION_VIEWS.dump_python(SUBMISSION_VIEWS.validate_python(_FINISHED_TWO_EVALS), mode='json')
+    assert len(dumped['evals']) == 2
+    assert {'scores', 'artifacts', 'episodes', 'runs'}.isdisjoint(dumped)
+
+
+def test_a_payload_with_the_list_ignores_single_fields_that_disagree_with_it():
+    view = SUBMISSION_VIEWS.validate_python({**_FINISHED_TWO_EVALS, 'scores': {'primary': 0.9}})
+    assert view.evals[0].scores == Scores(primary=0.6)
+    assert isinstance(view, FinishedSubmissionView) and view.scores == Scores(primary=0.6)
+
+
+def test_a_copy_with_a_new_list_reads_the_new_first_eval():
+    view = FinishedSubmissionView.model_validate(_FINISHED_TWO_EVALS)
+    first = EvalView(status=SubmissionStatus.finished, scores=SCORES, artifacts=ArtifactRefs(result=RESULT_URL))
+    copy = view.model_copy()
+    copy.evals = [first]
+    assert copy.scores == SCORES
+
+
+def test_a_single_accessor_refuses_assignment():
+    view = FinishedSubmissionView.model_validate(_FINISHED_TWO_EVALS)
+    with pytest.raises(AttributeError):
+        view.scores = SCORES  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_a_view_refuses_a_list_of_evals_that_is_not_a_list():
+    with pytest.raises(ValidationError):
+        SUBMISSION_VIEWS.validate_python({**_FINISHED_TWO_EVALS, 'evals': 'not a list'})
+
+
+def test_a_view_from_a_platform_that_sends_no_list_reads_as_one_eval():
+    view = SUBMISSION_VIEWS.validate_python({
+        'status': 'errored',
+        'id': SUB.to_str(),
+        'scores': {'primary': 0.2},
+        'episodes': {'total': 4, 'done': 2},
+    })
+    assert isinstance(view, ErroredSubmissionView)
+    assert len(view.evals) == 1 and view.evals[0].eval is None and view.scores == Scores(primary=0.2)
+
+
+def test_a_finished_view_whose_first_eval_names_no_artifacts_is_refused():
+    payload = {'status': 'finished', 'id': SUB.to_str(), 'evals': [{'eval': _PART_A, 'status': 'finished'}]}
+    with pytest.raises(ValidationError, match='artifacts'):
+        SUBMISSION_VIEWS.validate_python(payload)
