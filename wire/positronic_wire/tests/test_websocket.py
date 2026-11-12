@@ -1,7 +1,9 @@
 """The client side of the websocket wire."""
 
+import contextlib
 import dataclasses
 import errno
+import ipaddress
 import json
 import socket
 import ssl
@@ -257,6 +259,12 @@ def test_a_socket_address_refuses_a_relative_path():
     """`--policy.address.uds=policy.sock` names a different socket to each caller, so the address refuses it."""
     with pytest.raises(ValueError, match='relative socket path'):
         wire.UnixSocketAddress(Path('policy.sock'), wire.SESSION_PATH, '')
+
+
+def test_an_address_refuses_a_pin_of_no_ip_address():
+    """A pin of no address would leave the wire nothing to dial, and the wire never resolves a pinned host."""
+    with pytest.raises(ValueError, match='names no IP address'):
+        wire.HostPortAddress('policy.test', 443, wire.SESSION_PATH, '', pinned_ips=())
 
 
 # ─── keepalive and probe against a server on loopback ────────────────────────
@@ -634,3 +642,158 @@ def test_a_close_with_no_timeout_keeps_the_wires_bound():
 
 def test_a_close_timeout_bounds_a_close_the_wire_left_unbounded():
     assert _seconds_to_close(None, timeout=_SHORT_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S
+
+
+# ─── a host pinned to the IP addresses to dial ───────────────────────────────
+
+# A name no resolver answers: a dial that reaches a server under it dialled the pin, and resolved nothing.
+_PINNED_HOST = 'policy.test'
+_LOOPBACK = ipaddress.ip_address('127.0.0.1')
+
+
+def _pinned(host: str, port: int, *ips: wire.IPAddress) -> wire.HostPortAddress:
+    return wire.HostPortAddress(host, port, wire.SESSION_PATH, '', pinned_ips=ips or (_LOOPBACK,))
+
+
+@pytest.fixture
+def lookups(monkeypatch) -> list[str]:
+    """The host names this test resolves. A numeric host is not a lookup, and passes through."""
+    resolved: list[str] = []
+    resolve = socket.getaddrinfo
+
+    def recording(host, *args, **kwargs):
+        if not kwargs.get('flags', 0) & socket.AI_NUMERICHOST:
+            resolved.append(host)
+        return resolve(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, 'getaddrinfo', recording)
+    return resolved
+
+
+def _trust_only(monkeypatch, root: bytes) -> None:
+    """Verify every TLS connection this test opens against ``root``, in place of the system's own roots."""
+    system_context = ssl.create_default_context
+    monkeypatch.setattr(ssl, 'create_default_context', lambda *_args, **_kwargs: system_context(cadata=root.decode()))
+
+
+@contextlib.contextmanager
+def _echo_server(server_ssl: ssl.SSLContext | None = None) -> Iterator[tuple[int, list[str]]]:
+    """A websocket echo server on loopback, its port, and the ``Host`` header of each handshake."""
+    hosts: list[str] = []
+
+    def echo(connection):
+        hosts.append(connection.request.headers['Host'])
+        connection.send(connection.recv())
+
+    with serve(echo, '127.0.0.1', 0, ssl=server_ssl) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        yield server.socket.getsockname()[1], hosts
+        server.shutdown()
+
+
+def _echoes(client_wire: wire.ClientWire[wire.HostPortAddress], address: wire.HostPortAddress) -> bool:
+    connection = client_wire.dial(address, None, 5.0)
+    try:
+        connection.send(b'frame')
+        return connection.recv(timeout=5.0) == b'frame'
+    finally:
+        connection.close()
+
+
+def test_a_dial_on_a_pinned_host_connects_to_the_pin_and_names_the_host(lookups):
+    with _echo_server() as (port, hosts):
+        assert _echoes(_WEBSOCKET, _pinned(_PINNED_HOST, port))
+        assert hosts == [f'{_PINNED_HOST}:{port}']
+    assert lookups == []
+
+
+def test_a_dial_tries_each_pinned_address_in_turn(lookups):
+    """Nothing listens on the IPv6 loopback at the server's port, or the host has no IPv6, and the next pin answers."""
+    with _echo_server() as (port, _hosts):
+        assert _echoes(_WEBSOCKET, _pinned(_PINNED_HOST, port, ipaddress.ip_address('::1'), _LOOPBACK))
+    assert lookups == []
+
+
+def test_a_keepalive_and_a_probe_on_a_pinned_host_connect_to_the_pin_and_name_the_host(lookups):
+    asked: list[bytes] = []
+    _host, port = _served(_answering(b'HTTP/1.1 200 OK', asked, _ALIVE), _answering(b'HTTP/1.1 403 Forbidden', asked))
+    assert _WEBSOCKET.keepalive(_pinned(_PINNED_HOST, port), None, 5.0) == 60
+    assert _WEBSOCKET.probe(_pinned(_PINNED_HOST, port), None, 5.0) is None
+    assert len(asked) == 2
+    assert all(f'Host: {_PINNED_HOST}:{port}\r\n'.encode() in request for request in asked)
+    assert lookups == []
+
+
+def test_a_tls_dial_on_a_pinned_host_checks_the_certificate_against_the_host(certified_for, monkeypatch, lookups):
+    certified = certified_for(_PINNED_HOST)
+    _trust_only(monkeypatch, certified.certificate)
+    with _echo_server(certified.server) as (port, hosts):
+        assert _echoes(websocket.WebsocketTlsClientWire(), _pinned(_PINNED_HOST, port))
+        assert hosts == [f'{_PINNED_HOST}:{port}']
+    assert certified.names_asked == [_PINNED_HOST]
+    assert lookups == []
+
+
+def _tls(server: ssl.SSLContext, handler: Callable[[socket.socket], None]) -> Callable[[socket.socket], None]:
+    """``handler`` on the server's end of a TLS session over the connection."""
+
+    def on_tls(conn: socket.socket) -> None:
+        with server.wrap_socket(conn, server_side=True) as session:
+            handler(session)
+
+    return on_tls
+
+
+def test_a_tls_keepalive_on_a_pinned_host_checks_the_certificate_against_the_host(certified_for, monkeypatch, lookups):
+    certified = certified_for(_PINNED_HOST)
+    _trust_only(monkeypatch, certified.certificate)
+    asked: list[bytes] = []
+    _host, port = _served(_tls(certified.server, _answering(b'HTTP/1.1 200 OK', asked, _ALIVE)))
+    assert websocket.WebsocketTlsClientWire().keepalive(_pinned(_PINNED_HOST, port), None, 5.0) == 60
+    assert f'Host: {_PINNED_HOST}:{port}\r\n'.encode() in asked[0]
+    assert certified.names_asked == [_PINNED_HOST]
+    assert lookups == []
+
+
+def test_a_pin_to_a_server_whose_certificate_names_another_host_is_refused_for_good(certified_for, monkeypatch):
+    certified = certified_for('another.test')
+    _trust_only(monkeypatch, certified.certificate)
+    tls = websocket.WebsocketTlsClientWire()
+    with _echo_server(certified.server) as (port, hosts):
+        with pytest.raises(wire.ConnectRefused) as refused:
+            tls.dial(_pinned(_PINNED_HOST, port), None, 5.0)
+        assert refused.value.refusal is wire.Refusal.FINAL
+        assert isinstance(refused.value.__cause__, ssl.SSLCertVerificationError)
+        assert hosts == []
+    _host, port = _served(_tls(certified.server, _answering(b'HTTP/1.1 200 OK', [], _ALIVE)))
+    with pytest.raises(wire.ConnectRefused) as refused:
+        tls.keepalive(_pinned(_PINNED_HOST, port), None, 5.0)
+    assert refused.value.refusal is wire.Refusal.FINAL
+    assert isinstance(refused.value.__cause__, ssl.SSLCertVerificationError)
+
+
+@pytest.mark.parametrize('client_wire', [websocket.WebsocketClientWire(), websocket.WebsocketTlsClientWire()])
+def test_a_pin_nothing_answers_on_is_no_answer_and_resolves_nothing(client_wire, lookups):
+    address = _pinned(_PINNED_HOST, _unbound()[1])
+    with pytest.raises(wire.ConnectRefused) as refused:
+        client_wire.dial(address, None, 2.0)
+    assert refused.value.refusal is wire.Refusal.SILENT
+    assert client_wire.probe(address, None, 2.0) is wire.Refusal.SILENT
+    with pytest.raises(wire.ConnectRefused) as refused:
+        client_wire.keepalive(address, None, 2.0)
+    assert refused.value.refusal is wire.Refusal.SILENT
+    assert lookups == []
+
+
+def test_a_dial_with_no_pin_goes_through_a_proxy_the_environment_names_and_a_pinned_one_does_not(monkeypatch):
+    via_proxy: list[bytes] = []
+    proxy_host, proxy_port = _served(_answering(b'HTTP/1.1 502 Bad Gateway', via_proxy))
+    monkeypatch.setenv('ws_proxy', f'http://{proxy_host}:{proxy_port}')
+    monkeypatch.delenv('no_proxy', raising=False)
+    monkeypatch.delenv('NO_PROXY', raising=False)
+    with _echo_server() as (port, _hosts):
+        with pytest.raises(wire.ConnectRefused):
+            _WEBSOCKET.dial(wire.HostPortAddress(_PINNED_HOST, port, wire.SESSION_PATH, ''), None, 5.0)
+        assert via_proxy[0].startswith(f'CONNECT {_PINNED_HOST}:{port} '.encode())
+        assert _echoes(_WEBSOCKET, _pinned(_PINNED_HOST, port))
+    assert len(via_proxy) == 1

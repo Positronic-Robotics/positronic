@@ -1,5 +1,6 @@
 """The client side of the roboarena wire."""
 
+import ipaddress
 import socket
 import ssl
 import threading
@@ -257,3 +258,37 @@ def test_a_server_that_announces_itself_answers_the_probe(roboarena_on):
 def test_a_server_that_announces_a_failure_in_text_raises_it(roboarena_on):
     with pytest.raises(roboarena.TextAnswer, match='the policy failed to load'):
         roboarena.RoboarenaClientWire().probe(roboarena_on(_announcing('the policy failed to load')), None, 5.0)
+
+
+# ─── a host pinned to the IP addresses to dial ───────────────────────────────
+
+
+def _pinned(port: int) -> roboarena.RoboarenaAddress:
+    """A name no resolver answers, pinned to loopback: a call that reaches a server under it dialled the pin."""
+    return roboarena.RoboarenaAddress('policy.test', port, pinned_ips=(ipaddress.ip_address('127.0.0.1'),))
+
+
+def test_a_dial_and_a_probe_on_a_pinned_host_connect_to_the_pin(roboarena_on):
+    pinned = _pinned(roboarena_on(_announcing(b'config')).port)
+    assert roboarena.RoboarenaClientWire().probe(pinned, None, 5.0) is None
+    connection = roboarena.RoboarenaClientWire().dial(pinned, None, 5.0)
+    try:
+        assert connection.recv(timeout=5.0) == b'config'
+    finally:
+        connection.close()
+
+
+def test_a_pin_nothing_answers_on_is_no_answer():
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    pinned = _pinned(listener.getsockname()[1])
+    listener.close()
+    assert roboarena.RoboarenaClientWire().probe(pinned, None, 1.0) is wire.Refusal.SILENT
+    with pytest.raises(wire.ConnectRefused) as refused:
+        roboarena.RoboarenaClientWire().dial(pinned, None, 1.0)
+    assert refused.value.refusal is wire.Refusal.SILENT
+
+
+def test_the_address_refuses_a_pin_of_no_ip_address():
+    with pytest.raises(ValueError, match='names no IP address'):
+        roboarena.RoboarenaAddress('policy.test', 8000, pinned_ips=())

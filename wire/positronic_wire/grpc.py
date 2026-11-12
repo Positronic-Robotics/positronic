@@ -196,6 +196,18 @@ def target(host: str, port: int) -> str:
     return f'{wire.bracket_ipv6(host)}:{port}'
 
 
+def _dialled(address: wire.HostPortAddress) -> str:
+    """The target a channel to ``address`` dials: the host, or the pinned addresses in gRPC's address syntax.
+
+    A gRPC target names one address family, so a pin of two families dials those of its first address.
+    """
+    if address.pinned_ips is None:
+        return target(address.host, address.port)
+    family = address.pinned_ips[0].version
+    pinned = (target(str(ip), address.port) for ip in address.pinned_ips if ip.version == family)
+    return f'ipv{family}:{",".join(pinned)}'
+
+
 def _probe_share(open_timeout: float) -> float:
     """The share of one connect attempt the refusal probe gets; the readiness wait gets the rest.
 
@@ -253,24 +265,31 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         query = f'?{address.query}' if address.query else ''
         return f'{target(address.host, address.port)}{address.path}{query}'
 
-    def channel(self, target: str) -> grpc.Channel:
-        return grpc.insecure_channel(target, options=_client_options())
+    def channel(self, address: wire.HostPortAddress) -> grpc.Channel:
+        return grpc.insecure_channel(_dialled(address), options=self._options(address))
+
+    def _options(self, address: wire.HostPortAddress) -> list[tuple[str, int | str]]:
+        """The channel options. A pinned channel names the host as the authority, where gRPC would name the pin."""
+        options: list[tuple[str, int | str]] = [*_client_options()]
+        if address.pinned_ips is not None:
+            options.append(('grpc.default_authority', target(address.host, address.port)))
+        return options
 
     def dial(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> GrpcClientConnection:
         """A client's end of one session on ``address``. Raises ``wire.ConnectRefused`` when it does not open."""
-        dialled = target(address.host, address.port)
-        channel = _ready_channel(self.channel(dialled), dialled, open_timeout)
+        dialled = _dialled(address)
+        channel = _ready_channel(self.channel(address), dialled, open_timeout)
         metadata = _metadata(headers) + ((SESSION_PATH_HEADER, address.path), (SESSION_QUERY_HEADER, address.query))
         return GrpcClientConnection(channel, dialled, metadata)
 
     def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int | None:
         """Call ``KEEPALIVE_METHOD_PATH`` on its own channel. ``timeout`` bounds the whole call: the channel takes what
         it needs, and the call takes the rest."""
-        dialled = target(address.host, address.port)
+        dialled = _dialled(address)
         deadline = time.monotonic() + timeout
-        channel = _ready_channel(self.channel(dialled), dialled, timeout)
+        channel = _ready_channel(self.channel(address), dialled, timeout)
         try:
             unary = channel.unary_unary(KEEPALIVE_METHOD_PATH, request_serializer=None, response_deserializer=None)
             answer = unary(b'', metadata=_metadata(headers), timeout=max(0.0, deadline - time.monotonic()))
@@ -286,7 +305,7 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         """One call on ``PROBE_PATH``, carrying ``headers``: a server that is up answers it ``UNIMPLEMENTED``."""
-        channel = self.channel(target(address.host, address.port))
+        channel = self.channel(address)
         try:
             answered = _connect_refusal(channel, _metadata(headers), open_timeout)
         finally:
@@ -302,6 +321,14 @@ class GrpcTlsClientWire(GrpcClientWire):
     NAME = 'grpc_tls'
     DEFAULT_PORT = 443
 
-    def channel(self, target: str) -> grpc.Channel:
+    def channel(self, address: wire.HostPortAddress) -> grpc.Channel:
         # No roots named: the channel verifies the edge against the system's own roots.
-        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=_client_options())
+        return grpc.secure_channel(_dialled(address), grpc.ssl_channel_credentials(), options=self._options(address))
+
+    def _options(self, address: wire.HostPortAddress) -> list[tuple[str, int | str]]:
+        """The channel options. A pinned channel sends the host as the TLS server name and verifies the edge against
+        it, where gRPC would use the pin."""
+        options = super()._options(address)
+        if address.pinned_ips is not None:
+            options.append(('grpc.ssl_target_name_override', address.host))
+        return options

@@ -239,14 +239,27 @@ def _addresses(host: str, port: int, deadline: float) -> list[tuple[Any, ...]]:
     return addresses
 
 
-def connected_socket(host: str, port: int, timeout: float) -> socket.socket:
+def _pinned_addresses(pinned_ips: tuple[wire.IPAddress, ...], port: int) -> list[tuple[Any, ...]]:
+    """The socket addresses of ``pinned_ips`` on ``port``, in their order. A numeric host asks no resolver."""
+    return [
+        found
+        for ip in pinned_ips
+        for found in socket.getaddrinfo(str(ip), port, type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST)
+    ]
+
+
+def connected_socket(
+    host: str, port: int, timeout: float, pinned_ips: tuple[wire.IPAddress, ...] | None = None
+) -> socket.socket:
     """A TCP socket connected to ``host:port``. ``timeout`` covers the name lookup and every address it tries.
 
+    ``pinned_ips`` are the addresses to try in place of the ones ``host`` resolves to; nothing resolves ``host`` then.
     FOOTGUN: ``socket.create_connection`` arms its timeout once per address, and gives the lookup none.
     """
     deadline = time.monotonic() + timeout
     failure = OSError(f'{host} resolves to no address')
-    for family, kind, proto, _name, address in _addresses(host, port, deadline):
+    found = _addresses(host, port, deadline) if pinned_ips is None else _pinned_addresses(pinned_ips, port)
+    for family, kind, proto, _name, address in found:
         sock = socket.socket(family, kind, proto)
         try:
             sock.settimeout(_seconds_until(deadline))
@@ -274,11 +287,15 @@ class _HTTPConnectionOn(HTTPConnection):
         self.sock = self._open_socket(_seconds_until(self._deadline))
 
 
-def tls_socket(host: str, port: int, timeout: float) -> socket.socket:
-    """A TLS socket to the edge on ``host:port``. ``timeout`` covers the name lookup, the connect and the TLS
-    handshake."""
+def tls_socket(
+    host: str, port: int, timeout: float, pinned_ips: tuple[wire.IPAddress, ...] | None = None
+) -> socket.socket:
+    """A TLS socket to the edge on ``host:port``, or on one of ``pinned_ips``, verified against ``host``.
+
+    ``timeout`` covers the name lookup, the connect and the TLS handshake.
+    """
     deadline = time.monotonic() + timeout
-    sock = connected_socket(host, port, timeout)
+    sock = connected_socket(host, port, timeout, pinned_ips=pinned_ips)
     try:
         sock.settimeout(_seconds_until(deadline))
         # No context named: the socket verifies the edge against the system's own roots.
@@ -290,9 +307,8 @@ def tls_socket(host: str, port: int, timeout: float) -> socket.socket:
 
 def https_connection(address: wire.HostPortAddress, default_port: int, deadline: float) -> HTTPConnection:
     """An unopened HTTPS connection to the edge on ``address``, which opens its socket before ``deadline``."""
-    return _HTTPConnectionOn(
-        wire.netloc(address, default_port), partial(tls_socket, address.host, address.port), deadline
-    )
+    open_socket = partial(tls_socket, address.host, address.port, pinned_ips=address.pinned_ips)
+    return _HTTPConnectionOn(wire.netloc(address, default_port), open_socket, deadline)
 
 
 def post_within(
@@ -349,10 +365,16 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
         return self.handshake_url(address)
 
     def _connect(self, address: wire.HostPortAddress, **settings) -> Connection:
+        if address.pinned_ips is not None and settings.get('sock') is None:
+            # websockets resolves the URL's host itself, so a pinned dial hands it a socket on the pin. The URL still
+            # names the host, which TLS verifies and the handshake sends in its Host header.
+            deadline = time.monotonic() + settings['open_timeout']
+            settings['sock'] = self._open_socket(address, settings['open_timeout'])
+            settings['open_timeout'] = max(0.0, deadline - time.monotonic())
         return connect(self.handshake_url(address), **settings)
 
     def _open_socket(self, address: wire.HostPortAddress, timeout: float) -> socket.socket:
-        return connected_socket(address.host, address.port, timeout)
+        return connected_socket(address.host, address.port, timeout, pinned_ips=address.pinned_ips)
 
     def _api_connection(self, address: wire.HostPortAddress, deadline: float) -> HTTPConnection:
         return _HTTPConnectionOn(wire.netloc(address, self.DEFAULT_PORT), partial(self._open_socket, address), deadline)

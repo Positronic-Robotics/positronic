@@ -10,6 +10,7 @@ import abc
 import dataclasses
 from collections.abc import Iterator, Mapping
 from enum import Enum
+from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 from typing import ClassVar, Generic, Self, TypeVar
 
@@ -24,6 +25,15 @@ ALIVE_SECONDS = 'alive_seconds'
 def bracket_ipv6(host: str) -> str:
     """``host`` in the brackets an IPv6 literal needs before a port. Every other host is unchanged."""
     return f'[{host}]' if ':' in host else host
+
+
+IPAddress = IPv4Address | IPv6Address
+
+
+def refuse_an_empty_pin(pinned_ips: tuple[IPAddress, ...] | None) -> None:
+    """Raises ``ValueError`` on a pin of no address: a wire dials none of it, and resolves no host in its place."""
+    if pinned_ips is not None and not pinned_ips:
+        raise ValueError('the pin names no IP address; pin at least one, or pass None to resolve the host')
 
 
 class SessionAddress(abc.ABC):
@@ -44,12 +54,21 @@ class SessionAddress(abc.ABC):
 
 @dataclasses.dataclass(frozen=True)
 class HostPortAddress(SessionAddress):
-    """A session on a server reached over the network. ``host`` is raw: each wire spells it itself."""
+    """A session on a server reached over the network. ``host`` is raw: each wire spells it itself.
+
+    ``pinned_ips`` pins the host to the IP addresses a wire dials for it, in the order the wire tries them. With a
+    pin, nothing resolves the host: the wire connects to a pinned address, and still names the host to TLS, which
+    checks the certificate against it, and in the ``Host`` header. ``None`` resolves the host at each dial.
+    """
 
     host: str
     port: int
     path: str
     query: str
+    pinned_ips: tuple[IPAddress, ...] | None = dataclasses.field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        refuse_an_empty_pin(self.pinned_ips)
 
     def at_root(self) -> 'Self':
         return dataclasses.replace(self, path='', query='')

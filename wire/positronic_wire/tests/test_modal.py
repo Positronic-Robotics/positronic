@@ -1,7 +1,9 @@
 """The client side of a Modal Server with sticky sessions."""
 
 import atexit
+import dataclasses
 import http.client
+import ipaddress
 import json
 import pickle
 import socket
@@ -27,6 +29,8 @@ class FakeEdge:
     def __init__(self) -> None:
         self.starts: list[Mapping[str, str]] = []
         self.ended: list[str] = []
+        # The edge each session call went to.
+        self.roots: list[wire.HostPortAddress] = []
         self.refuse: list[int] = []
         # A start blocks until this is set, as a start on a cold app waits for a container.
         self.container_free = threading.Event()
@@ -39,6 +43,7 @@ class FakeEdge:
     def post(
         self, root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float
     ) -> tuple[int, bytes]:
+        self.roots.append(root)
         if path == modal.TERMINATE_PATH:
             self.terminate_free.wait()
             self.ended.append(headers[modal.SESSION_TOKEN_HEADER])
@@ -547,6 +552,15 @@ def test_each_server_holds_its_own_sessions(modal_wire, edge, inner):
 
     assert inner.dialled == ['token-2']
     assert edge.starts[1]['host'] == other.host
+
+
+def test_a_pinned_address_starts_and_ends_its_sessions_on_its_pin(modal_wire, edge, inner):
+    pinned = dataclasses.replace(_ADDRESS, pinned_ips=(ipaddress.ip_address('203.0.113.7'),))
+    modal_wire.dial(pinned, _CREDENTIALS, 5.0).close()
+    modal_wire.end_all()
+
+    assert [root.pinned_ips for root in edge.roots] == [pinned.pinned_ips] * 2
+    assert edge.ended == ['token-1']
 
 
 def test_a_pickled_wire_holds_no_sessions(modal_wire, edge):

@@ -17,10 +17,15 @@ class RoboarenaAddress(wire.SessionAddress):
 
     host: str
     port: int
+    # The IP addresses to dial for ``host``, as ``wire.HostPortAddress`` pins them.
+    pinned_ips: tuple[wire.IPAddress, ...] | None = dataclasses.field(default=None, kw_only=True)
     # Bare assignments, so neither is a field: the protocol routes on a key inside each frame, and the
     # server closes any path but the root with `1008 Unsupported WebSocket path`.
     path = ''
     query = ''
+
+    def __post_init__(self) -> None:
+        wire.refuse_an_empty_pin(self.pinned_ips)
 
     def at_root(self) -> Self:
         return self
@@ -95,7 +100,15 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
 
         The server announces its configuration as the first frame, and ``dial`` leaves it unread.
         """
-        return self._open(address, headers, open_timeout)
+        if address.pinned_ips is None:
+            return self._open(address, headers, open_timeout)
+        # websockets resolves the URL's host itself, so a pinned dial hands it a socket on the pin.
+        deadline = time.monotonic() + open_timeout
+        try:
+            sock = connected_socket(address.host, address.port, open_timeout, pinned_ips=address.pinned_ips)
+        except OSError as e:
+            raise wire.ConnectRefused(refusal_of(e), f'{e} (connecting to {self.session_url(address)})') from e
+        return self._open(address, headers, max(0.0, deadline - time.monotonic()), sock=sock)
 
     def probe(
         self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
@@ -106,7 +119,7 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
         """
         deadline = time.monotonic() + open_timeout
         try:
-            sock = connected_socket(address.host, address.port, open_timeout)
+            sock = connected_socket(address.host, address.port, open_timeout, pinned_ips=address.pinned_ips)
             # The probe has nothing to finish, so it does not wait for the server's close.
             connection = self._open(address, headers, max(0.0, deadline - time.monotonic()), sock=sock, close_timeout=0)
         except OSError as e:

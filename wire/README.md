@@ -9,7 +9,7 @@ install `grpcio` and `websockets` independently.
 > covered by a backwards-compatibility guarantee. Pin the exact version you tested against.
 
 ```bash
-uv add "positronic-wire[websocket,grpc]==0.12.2"
+uv add "positronic-wire[websocket,grpc]==0.12.4"
 uv add "positronic-wire[websocket,grpc] @ git+https://github.com/Positronic-Robotics/positronic@<tag or commit>#subdirectory=wire"
 ```
 
@@ -38,10 +38,10 @@ client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `retry_pauses()`, the pauses before each retry of a refused call, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, `ProbeUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
-| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, `connected_socket(host, port, timeout)`, a TCP connect whose timeout covers the name lookup and every address, `tls_socket(host, port, timeout)`, the same connect with a verified TLS handshake, `https_connection(address, default_port, deadline)`, an HTTPS connection that opens on `tls_socket`, and `post_within(connection, path, headers, deadline, max_body_bytes)`, a `POST` whose deadline covers every read |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query, *, pinned_ips=None)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, `IPAddress`, the type of one pinned IP address, `refuse_an_empty_pin(pinned_ips)`, which an address with a pin runs when it is built, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `retry_pauses()`, the pauses before each retry of a refused call, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, `ProbeUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, `connected_socket(host, port, timeout, pinned_ips=None)`, a TCP connect whose timeout covers the name lookup and every address, `tls_socket(host, port, timeout, pinned_ips=None)`, the same connect with a TLS handshake verified against `host`, `https_connection(address, default_port, deadline)`, an HTTPS connection that opens on `tls_socket`, and `post_within(connection, path, headers, deadline, max_body_bytes)`, a `POST` whose deadline covers every read |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
-| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
+| `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress(host, port, *, pinned_ips=None)`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.modal` | `ModalClientWire` and `ModalClientConnection`, a websocket session over TLS on a Modal Server with sticky sessions, and the facts of the Modal session API it calls: `START_PATH`, `TERMINATE_PATH`, `SESSION_HEADER`, `IDLE_TIMEOUT_HEADER`, `IDEMPOTENCY_KEY_HEADER`, `TIMESTAMP_HEADER`, `SESSION_TOKEN_HEADER`, `START_ANSWER_TOKEN`, `IDLE_TIMEOUT`, `START_REQUEST_TIMEOUT`, `START_DEADLINE`, `TERMINATE_TIMEOUT`, `MAX_ANSWER_BYTES` |
 | `positronic_wire.registry` | `CLIENT_WIRES`, every installed member by its `NAME`, and `client_wire(name)` |
 
@@ -93,9 +93,9 @@ installed transport surface as errors.
 
 **Each wire declares the address it dials, and takes no other.** `ClientWire.ADDRESS` names that
 type, and every verb above takes it. `websocket`, `websocket_tls`, `modal_websocket_tls`, `grpc` and `grpc_tls` take a
-`HostPortAddress` — `host`, `port`, `path` (`SESSION_PATH`), `query`, as written.
-`websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. `roboarena` takes a
-`RoboarenaAddress` — `host` and `port`. A record that names an endpoint carries the wire's name and
+`HostPortAddress` — `host`, `port`, `path` (`SESSION_PATH`), `query`, as written, and the optional
+`pinned_ips`. `websocket_unix` takes a `UnixSocketAddress` — `uds`, `path`, `query`. `roboarena` takes a
+`RoboarenaAddress` — `host`, `port` and the optional `pinned_ips`. A record that names an endpoint carries the wire's name and
 that wire's fields, never a URL, and no address carries a field a wire ignores.
 
 `uds` is an absolute path to a Unix socket a server on the same machine bound, dialled instead of
@@ -108,6 +108,15 @@ from a socket a server is restarting on is `SILENT` too. A path holding somethin
 socket, and a refused permission, are `FINAL`, because no retry reaches them. A handshake that timed
 out or was reset reached the socket, so the server rather than the path was not ready, and it reads
 `SILENT` as it does on a port.
+
+`pinned_ips` pins `host` to the IP addresses to dial for it. A caller that checked the addresses a name
+resolves to passes the ones it checked, so a later resolve cannot hand the wire another address. With a pin,
+no verb resolves `host`: each one connects to the pinned addresses in their order, and still names `host` to
+TLS, which checks the certificate against it, and in the `Host` header or the gRPC authority. A pinned
+dial opens its own socket, so it ignores a proxy the environment names. A gRPC target names one address
+family, so the gRPC members dial the pinned addresses of the family of the first one. A pin nothing
+answers on is `SILENT`, as a port nothing answers on is. An address refuses an empty pin when it is built,
+because an empty pin leaves nothing to dial. `None`, the default, resolves `host` at each call.
 
 `roboarena` is a partner's own protocol: msgpack frames on a websocket at the bare root of a port the
 partner publishes. The server closes any other path, and it routes on a key inside each frame, so the

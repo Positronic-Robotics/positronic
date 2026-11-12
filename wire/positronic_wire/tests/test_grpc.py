@@ -1,9 +1,12 @@
-"""The client side of the gRPC wire, driven without a server."""
+"""The client side of the gRPC wire."""
 
 import dataclasses
+import ipaddress
 import queue
+import socket
 import threading
 import time
+from concurrent import futures
 from typing import cast
 from unittest.mock import MagicMock
 
@@ -286,3 +289,135 @@ def test_a_send_after_a_failed_send_raises_at_once():
     with pytest.raises(wire.PeerDisconnected):
         conn.send(b'again')
     assert time.monotonic() - refused < 1.0, 'the second send waited instead of raising'
+
+
+# ─── a host pinned to the IP addresses to dial ───────────────────────────────
+
+# A name no resolver answers: a call that reaches a server under it dialled the pin.
+_PINNED_HOST = 'policy.test'
+
+
+def _pinned(port: int, *ips: str) -> wire.HostPortAddress:
+    pinned_ips = tuple(ipaddress.ip_address(ip) for ip in ips or ('127.0.0.1',))
+    return wire.HostPortAddress(_PINNED_HOST, port, wire.SESSION_PATH, '', pinned_ips=pinned_ips)
+
+
+def _opened_channel(client_wire: client_grpc.GrpcClientWire, address: wire.HostPortAddress, monkeypatch):
+    """The target and the options of the channel a probe of ``address`` opens."""
+    opened = []
+    monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: 'roots')
+
+    def opening(target: str, *_roots: str, options: list) -> MagicMock:
+        opened.append((target, options))
+        return MagicMock()
+
+    monkeypatch.setattr(grpc, 'insecure_channel', opening)
+    monkeypatch.setattr(grpc, 'secure_channel', opening)
+    _probing(monkeypatch, None)
+    client_wire.probe(address, None, 1.0)
+    [(target, options)] = opened
+    return target, dict(options)
+
+
+def test_a_pinned_host_dials_its_pin_and_names_the_host_as_the_authority(monkeypatch):
+    target, options = _opened_channel(client_grpc.GrpcClientWire(), _pinned(9000, '10.0.0.2', '10.0.0.3'), monkeypatch)
+    assert target == 'ipv4:10.0.0.2:9000,10.0.0.3:9000'
+    assert options['grpc.default_authority'] == f'{_PINNED_HOST}:9000'
+    assert 'grpc.ssl_target_name_override' not in options
+
+
+def test_an_ipv6_pin_dials_in_brackets(monkeypatch):
+    target, _options = _opened_channel(client_grpc.GrpcClientWire(), _pinned(9000, '2001:db8::1'), monkeypatch)
+    assert target == 'ipv6:[2001:db8::1]:9000'
+
+
+def test_a_pin_of_two_families_dials_the_family_of_its_first_address(monkeypatch):
+    """A gRPC target names one address family."""
+    address = _pinned(9000, '2001:db8::1', '10.0.0.2', '2001:db8::2')
+    target, _options = _opened_channel(client_grpc.GrpcClientWire(), address, monkeypatch)
+    assert target == 'ipv6:[2001:db8::1]:9000,[2001:db8::2]:9000'
+
+
+def test_the_tls_member_checks_the_certificate_of_a_pinned_host_against_the_host(monkeypatch):
+    target, options = _opened_channel(client_grpc.GrpcTlsClientWire(), _pinned(443, '10.0.0.2'), monkeypatch)
+    assert target == 'ipv4:10.0.0.2:443'
+    assert options['grpc.ssl_target_name_override'] == _PINNED_HOST
+    assert options['grpc.default_authority'] == f'{_PINNED_HOST}:443'
+
+
+@pytest.mark.parametrize('client_wire', [client_grpc.GrpcClientWire(), client_grpc.GrpcTlsClientWire()])
+def test_an_unpinned_host_leaves_the_name_and_the_authority_to_grpc(client_wire, monkeypatch):
+    target, options = _opened_channel(client_wire, _ADDRESS, monkeypatch)
+    assert target == 'gpu-host:9000'
+    assert 'grpc.default_authority' not in options
+    assert 'grpc.ssl_target_name_override' not in options
+
+
+@pytest.fixture
+def bare_server():
+    """Starts a gRPC server on loopback with no method, so every call it reads it answers ``UNIMPLEMENTED``."""
+    servers: list[grpc.Server] = []
+
+    def start(credentials: grpc.ServerCredentials | None = None) -> int:
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+        if credentials is None:
+            port = server.add_insecure_port('127.0.0.1:0')
+        else:
+            port = server.add_secure_port('127.0.0.1:0', credentials)
+        server.start()
+        servers.append(server)
+        return port
+
+    yield start
+    for server in servers:
+        server.stop(grace=None)
+
+
+def _reaches_the_server(client_wire: client_grpc.GrpcClientWire, address: wire.HostPortAddress) -> None:
+    """Every call on ``address`` reaches a server: an ``UNIMPLEMENTED`` answer is the server's own."""
+    assert client_wire.probe(address, None, 5.0) is None
+    with pytest.raises(wire.KeepaliveUnsupported):
+        client_wire.keepalive(address, None, 5.0)
+    client_wire.dial(address, None, 5.0).close()
+
+
+def test_a_pinned_host_reaches_the_server_on_its_pin(bare_server):
+    _reaches_the_server(client_grpc.GrpcClientWire(), _pinned(bare_server()))
+
+
+def _trust_only(monkeypatch, root: bytes) -> None:
+    """Verify every channel this test opens against ``root``, in place of the system's own roots."""
+    system_roots = grpc.ssl_channel_credentials
+    monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: system_roots(root))
+
+
+def test_a_tls_pin_checks_the_certificate_against_the_host(bare_server, certified_for, monkeypatch):
+    certified = certified_for(_PINNED_HOST)
+    _trust_only(monkeypatch, certified.certificate)
+    port = bare_server(grpc.ssl_server_credentials([(certified.key, certified.certificate)]))
+    _reaches_the_server(client_grpc.GrpcTlsClientWire(), _pinned(port))
+
+
+def test_a_tls_pin_to_a_server_whose_certificate_names_another_host_is_refused_for_good(
+    bare_server, certified_for, monkeypatch
+):
+    certified = certified_for('another.test')
+    _trust_only(monkeypatch, certified.certificate)
+    port = bare_server(grpc.ssl_server_credentials([(certified.key, certified.certificate)]))
+    assert client_grpc.GrpcTlsClientWire().probe(_pinned(port), None, 5.0) is wire.Refusal.FINAL
+    with pytest.raises(wire.ConnectRefused) as refused:
+        client_grpc.GrpcTlsClientWire().dial(_pinned(port), None, 5.0)
+    assert refused.value.refusal is wire.Refusal.FINAL
+    assert 'Hostname Verification Check failed' in str(refused.value)
+
+
+def test_a_pin_nothing_answers_on_is_no_answer():
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    port = listener.getsockname()[1]
+    listener.close()
+    address = _pinned(port)
+    assert client_grpc.GrpcClientWire().probe(address, None, 1.0) is wire.Refusal.SILENT
+    with pytest.raises(wire.ConnectRefused) as refused:
+        client_grpc.GrpcClientWire().dial(address, None, 1.0)
+    assert refused.value.refusal is wire.Refusal.SILENT
