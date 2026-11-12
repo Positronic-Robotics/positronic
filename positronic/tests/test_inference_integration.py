@@ -22,17 +22,10 @@ from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import _prepare_spec
-from positronic.drivers.roboarm.models import (
-    EE_LINK,
-    FLANGE_LINK,
-    GRIPPER_SITE,
-    EEFrame,
-    bundled_panda_model,
-    parse_ee_frames,
-)
+from positronic.drivers.roboarm.models import EE_LINK, FLANGE_LINK, GRIPPER_SITE, bundled_panda_model, parse_ee_frames
 from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Eval, Observation, Task
 from positronic.eval import keys as eval_keys
-from positronic.policy.tests.test_harness import FramedPolicy, RemoteStubPolicy, StubPolicy
+from positronic.policy.tests.test_harness import RIG_FRAMES, FramedPolicy, RemoteStubPolicy, StubPolicy
 from positronic.simulator.env_server import telemetry as env_telemetry
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION, MujocoSim
 from positronic.simulator.mujoco.transforms import AddBox, SetBodyPosition
@@ -77,8 +70,8 @@ def test_sim_emits_commands_and_records_dataset(tmp_path, monkeypatch):  # noqa:
 
     monkeypatch.setattr('positronic.simulator.mujoco.sim.mj.Renderer', FakeRenderer)
 
-    # The policy states the site the sim reports its poses at, so its observation carries the pose.
-    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    # The policy states the site the sim reports its poses at, so it reads the pose and commands the arm in poses.
+    policy = FramedPolicy(RIG_FRAMES)
 
     camera_dict = {keys.WRIST_IMAGE: 'handcam_left_ph'}
 

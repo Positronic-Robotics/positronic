@@ -72,6 +72,10 @@ class StubPolicy(Policy):
             )
 
 
+# The frame of each pose signal that ``ROBOT_STATIC_META`` states: the pose a policy reads and the pose it commands.
+RIG_FRAMES = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE)}
+
+
 class FramedPolicy(StubPolicy):
     """A ``StubPolicy`` that states ``frames`` as its ``EE_FRAMES``."""
 
@@ -168,7 +172,7 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), frozenset(), True, runtime, policy_run, None)
+        step = partial(harness._step, Task('test', None), frozenset(), frozenset(), runtime, policy_run, None)
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -1949,17 +1953,112 @@ def test_a_policy_that_states_no_frames_fails_at_its_first_pose_command(command)
 
 
 @pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
-def test_a_policy_that_states_its_frames_sends_a_pose_command(command):
-    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, command=command)
+def test_a_policy_that_states_the_frame_of_the_commanded_pose_sends_a_pose_command(command):
+    policy = FramedPolicy(RIG_FRAMES, command=command)
     commands = []
     assert run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED] is True
     assert commands == [command]
 
 
+@pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
+def test_a_policy_that_states_only_the_frame_of_the_pose_it_reads_fails_at_its_first_pose_command(command):
+    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, command=command)
+    commands = []
+    with pytest.raises(PolicyCommandError, match=keys.ROBOT_COMMAND):
+        run_robot_rollout(policy, commands=commands).result()
+    assert len(policy.observations) == 1
+    assert commands == []
+
+
+class ArmPolicy(FramedPolicy):
+    """A ``FramedPolicy`` whose step sends its command on ``channel`` only."""
+
+    def __init__(self, frames, channel):
+        super().__init__(frames)
+        self.channel = channel
+
+    def run(self, runtime) -> PolicyRun:
+        obs = yield
+        while True:
+            self.observations.append(obs)
+            obs = yield Step({self.channel: self.command}, runtime.time_ns + 100_000_000)
+
+
+def arm_frames(side):
+    """The frame of each pose signal of the arm ``side``, at the rig site."""
+    poses = (f'{keys.ROBOT_STATE}.{side}{keys.EE_POSE_SUFFIX}', f'{keys.ROBOT_COMMAND}.{side}{keys.POSE_SUFFIX}')
+    return dict.fromkeys(poses, EEFrame(site=GRIPPER_SITE))
+
+
+def run_bimanual_rollout(policy, commands):
+    """Run one episode of ``policy`` on a rig with a left and a right arm. Append each command an arm gets to
+    ``commands[<its command channel>]``."""
+    sides = keys.BIMANUAL_ARMS
+    frames = arm_frames(sides[0]) | arm_frames(sides[1])
+    with pimm.World(virtual_time=True) as world:
+        device = Passive()
+        states = {f'{keys.ROBOT_STATE}.{side}': pimm.ControlSystemEmitter(device) for side in sides}
+        embodiment = Embodiment(
+            descriptor='robot',
+            observations={name: Observation(out, Serializers.robot_state) for name, out in states.items()},
+            commands={
+                f'{keys.ROBOT_COMMAND}.{side}': Command(pimm.FakeReceiver(device), Serializers.robot_command)
+                for side in sides
+            },
+            prepare_handlers={},
+            static_meta={
+                eval_keys.JOINT_SIGNALS: [f'{name}{keys.JOINTS_SUFFIX}' for name in states],
+                eval_keys.POSE_SIGNALS: list(frames),
+                **ee_frames_entry(frames),
+            },
+            meta_source=None,
+            simulated=True,
+        )
+        harness = Harness(embodiment)
+        wire.wire_embodiment(world, harness, embodiment)
+        received = {channel: Trace(world.clock) for channel in embodiment.commands}
+        for channel, trace in received.items():
+            harness.commands[channel]._bind(trace, clock=world.clock)
+        caller = world.pair(harness.perform_task)
+        done = world.pair(harness.done)
+        loop = world.start([harness, device])
+        try:
+            for out in states.values():
+                out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
+            answer = caller(Rollout(Task('move', None), policy, None))
+            next(loop)
+            done.emit({eval_keys.SUCCESS: True})
+            while not answer.done():
+                next(loop)
+            for channel, trace in received.items():
+                commands[channel] = [command for _, command in trace.values]
+            return answer
+        finally:
+            world.request_stop()
+            list(loop)
+
+
+def test_a_pose_command_on_an_arm_whose_pose_the_policy_does_not_state_fails_the_episode():
+    left, right = keys.BIMANUAL_ARMS
+    policy = ArmPolicy(arm_frames(left), f'{keys.ROBOT_COMMAND}.{right}')
+    commands = {}
+    with pytest.raises(PolicyCommandError, match=f'{keys.ROBOT_COMMAND}.{right}'):
+        run_bimanual_rollout(policy, commands).result()
+    assert commands == {f'{keys.ROBOT_COMMAND}.{left}': [], f'{keys.ROBOT_COMMAND}.{right}': []}
+
+
+def test_a_pose_command_on_the_arm_whose_pose_the_policy_states_reaches_that_arm():
+    left, right = keys.BIMANUAL_ARMS
+    policy = ArmPolicy(arm_frames(left), f'{keys.ROBOT_COMMAND}.{left}')
+    commands = {}
+    assert run_bimanual_rollout(policy, commands).result()[eval_keys.TERMINATED] is True
+    assert commands == {f'{keys.ROBOT_COMMAND}.{left}': [policy.command], f'{keys.ROBOT_COMMAND}.{right}': []}
+
+
 def test_a_policy_that_states_frames_sees_no_other_signal_the_rig_states_as_a_pose_whatever_its_name():
     framed = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
     static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
-    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    policy = FramedPolicy(RIG_FRAMES)
     assert run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
     assert keys.JOINTS not in policy.observations[0]
     assert keys.EE_POSE in policy.observations[0]
@@ -1991,7 +2090,7 @@ def test_a_step_that_names_only_channels_the_embodiment_takes_reaches_the_rig():
 
 
 def test_a_policy_that_states_the_rig_site_sees_the_pose():
-    policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    policy = FramedPolicy(RIG_FRAMES)
     commands = []
     assert run_robot_rollout(policy, commands=commands).result()[eval_keys.TERMINATED] is True
     np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
@@ -2014,7 +2113,7 @@ class RecordingFramesPolicy(StubPolicy):
 def test_a_run_that_records_the_rig_site_as_it_starts_sees_only_the_poses_it_states():
     framed = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.TARGET_EE_POSE, keys.JOINTS)}
     static_meta = {**ROBOT_STATIC_META, **ee_frames_entry(framed)}
-    policy = RecordingFramesPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+    policy = RecordingFramesPolicy(RIG_FRAMES)
     assert run_robot_rollout(policy, static_meta).result()[eval_keys.TERMINATED] is True
     assert keys.JOINTS not in policy.observations[0]
     np.testing.assert_allclose(policy.observations[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
@@ -2114,11 +2213,11 @@ def test_robot_observation_serialization_and_typed_command_emission():
         harness.commands[keys.TARGET_GRIP]._bind(Trace(world.clock), clock=world.clock)
         state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         emitter.emit(state)
-        policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+        policy = FramedPolicy(RIG_FRAMES)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), frozenset(), False, runtime, run, None)
+            harness._step(Task('move', None), frozenset(), frozenset(RIG_FRAMES), runtime, run, None)
         finally:
             runtime.close()
             run.close()
@@ -2167,7 +2266,7 @@ def test_episode_statics_keep_only_written_viewer_signals(command, expected_pose
         loop = world.start([harness, device])
         try:
             state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
-            policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}, command=command)
+            policy = FramedPolicy(RIG_FRAMES, command=command)
             answer = caller(Rollout(Task('move', None), policy, dataset))
             next(loop)
             done.emit({eval_keys.SUCCESS: True})
@@ -2211,7 +2310,7 @@ def test_episode_statics_carry_the_meta_of_each_arm_keyed_by_its_joint_signal():
             state_out.emit(make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
             arm_meta[left].emit({roboarm_keys.GRAVITY_COMP_FACTOR: [1.0, 1.1, 1.4]})
             arm_meta[right].emit({roboarm_keys.GRAVITY_COMP_FACTOR: [1.0, 1.2, 1.3]})
-            policy = FramedPolicy({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+            policy = FramedPolicy(RIG_FRAMES)
             answer = caller(Rollout(Task('move', None), policy, dataset))
             next(loop)
             done.emit({eval_keys.SUCCESS: True})

@@ -330,22 +330,25 @@ class Harness(pimm.ControlSystem):
         return frozen_view(inputs)
 
     @staticmethod
-    def _refuse_pose_commands(commands: Commands) -> None:
-        """Raise when ``commands`` holds a pose command, which a policy that states no frames may not send."""
-        posed = sorted(
-            name for name, command in commands.items() if isinstance(command, CartesianPosition | CartesianDelta)
+    def _refuse_unstated_pose_commands(commands: Commands, stated_poses: frozenset[str]) -> None:
+        """Raise when ``commands`` holds a pose command on a channel whose pose signal is not in ``stated_poses``."""
+        unstated = sorted(
+            name
+            for name, command in commands.items()
+            if isinstance(command, CartesianPosition | CartesianDelta)
+            and f'{name}{keys.POSE_SUFFIX}' not in stated_poses
         )
-        if posed:
+        if unstated:
             raise PolicyCommandError(
-                f'The policy states no {EE_FRAMES}, so it speaks joints only, and it sends a pose command on {posed}. '
-                'State the frame of each pose that the policy reads or commands.'
+                f'The policy sends a pose command on {unstated}, and states no {EE_FRAMES} entry for the pose of that '
+                'channel. State the frame of each pose that the policy reads or commands.'
             )
 
     def _step(
         self,
         task: Task,
         withheld_poses: frozenset[str],
-        joint_only: bool,
+        stated_poses: frozenset[str],
         runtime: Executor,
         policy_run: PolicyRun,
         due_ns: int | None,
@@ -354,7 +357,7 @@ class Harness(pimm.ControlSystem):
         ``_PolicyEnded`` when the policy run returns, and ``None`` without an observation.
 
         ``due_ns`` is the wake-up time the previous step returned, or ``None`` for the first step. The step span
-        records the step's durations. A ``joint_only`` policy that sends a pose command fails the step.
+        records the step's durations. A pose command on a channel whose pose is not in ``stated_poses`` fails the step.
         """
         step_ms: dict[str, float] = {}
         with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span:
@@ -382,8 +385,7 @@ class Harness(pimm.ControlSystem):
                     raise PolicyCommandError(
                         f'The step names {unknown}, and the embodiment takes only {sorted(self._embodiment.commands)}'
                     )
-                if joint_only:
-                    self._refuse_pose_commands(step.commands)
+                self._refuse_unstated_pose_commands(step.commands, stated_poses)
                 emit_started_ns = time.perf_counter_ns()
                 self._telemetry.step()
                 messages = {name: self.commands[name].emit(value) for name, value in step.commands.items()}
@@ -463,7 +465,7 @@ class Harness(pimm.ControlSystem):
         should_stop: pimm.SignalReceiver,
         task: Task,
         withheld_poses: frozenset[str],
-        joint_only: bool,
+        stated_poses: frozenset[str],
         runtime: Executor,
         policy_run: PolicyRun,
         deadline_ns: int | None,
@@ -476,7 +478,7 @@ class Harness(pimm.ControlSystem):
         while not should_stop.value and payload is None:
             sampled_ns = runtime.time_ns
             if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
-                stepped = self._step(task, withheld_poses, joint_only, runtime, policy_run, resume_at_ns)
+                stepped = self._step(task, withheld_poses, stated_poses, runtime, policy_run, resume_at_ns)
                 if isinstance(stepped, _PolicyEnded):
                     ended = stepped
                 else:
@@ -520,11 +522,11 @@ class Harness(pimm.ControlSystem):
             raise ValueError(f'Only one component of the policy may state the {EE_FRAMES} of {sorted(both)}')
         return stated | recorded
 
-    def _withheld_poses(self, declared: dict[str, EEFrame]) -> frozenset[str]:
-        """The rig's pose signals that a policy that states ``declared`` does not observe.
+    def _stated_poses(self, declared: dict[str, EEFrame]) -> frozenset[str]:
+        """The rig's pose signals whose frame ``declared`` states. A policy observes and commands only these poses.
 
-        A policy observes only the poses it states. Raise when the policy states another site than the rig, or states
-        frames on a rig that states none, such as an arm with no model.
+        Raise when the policy states another site than the rig, or states frames on a rig that states none, such as an
+        arm with no model.
         """
         rig = ee_frames(self._statics())
         if declared and not rig:
@@ -542,9 +544,12 @@ class Harness(pimm.ControlSystem):
                 'The policy declares poses at a site the rig does not report them at, as {signal: (declared, rig)}: '
                 f'{mismatched}'
             )
+        return frozenset(declared.keys() & rig.keys())
+
+    def _pose_signals(self) -> frozenset[str]:
+        """Every pose signal of the rig."""
         # The embodiment lists every pose its serializers write; an arm with no model states none of them.
-        poses = set(self._embodiment.static_meta.get(eval_keys.POSE_SIGNALS, ())) | rig.keys()
-        return frozenset(poses - (declared.keys() & rig.keys()))
+        return frozenset(self._embodiment.static_meta.get(eval_keys.POSE_SIGNALS, ())).union(ee_frames(self._statics()))
 
     def _run_episode(
         self, clock: pimm.Clock, should_stop: pimm.SignalReceiver, rollout: Rollout
@@ -563,15 +568,15 @@ class Harness(pimm.ControlSystem):
         policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
-            frames = self._policy_frames(rollout.policy, runtime)
-            withheld_poses = self._withheld_poses(frames)
+            stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
+            withheld_poses = self._pose_signals() - stated_poses
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
             try:
                 with self._recording(rollout.writer):
                     payload = yield from self._rollout(
-                        should_stop, task, withheld_poses, not frames, runtime, policy_run, deadline_ns
+                        should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns
                     )
                     if self._writer is not None:
                         static = only_keep_written_signals(
