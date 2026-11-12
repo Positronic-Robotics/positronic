@@ -1,12 +1,15 @@
 """What a roboarena policy sends a server, and what it makes of the answer."""
 
 import threading
+import time
+from socket import create_server
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 from positronic_model_server.serialization import serialize
 from positronic_wire.roboarena import RoboarenaAddress
+from positronic_wire.wire import ConnectRefused
 
 from positronic import keys as rig
 from positronic.drivers.roboarm import RobotStatus
@@ -37,6 +40,10 @@ REQUIRED = {
 }
 
 ADDRESS = RoboarenaAddress('a-server-host', 8000)
+
+# A connect deadline far inside the client's own handshake wait, and what a wall-clock test grants past it.
+CONNECT_DEADLINE_S = 0.5
+DEADLINE_SLACK_S = 2.0
 
 # The episode clock's reading when a test starts: a machine up for about fourteen days, in `time.monotonic()`
 # seconds. The harness schedules against that clock.
@@ -349,15 +356,15 @@ class TestTheWire:
         assert dial.call_args.kwargs['additional_headers'] == headers
 
     def test_each_episode_s_connect_ends_by_the_policy_s_connect_deadline(self):
-        policy = roboarena_policy.RoboarenaPolicy(ADDRESS, connect_deadline=5.0)
+        """The server listens and never accepts, so only the policy's deadline ends the handshake."""
+        with create_server(('localhost', 0)) as listener:
+            address = RoboarenaAddress('localhost', listener.getsockname()[1])
+            policy = roboarena_policy.RoboarenaPolicy(address, connect_deadline=CONNECT_DEADLINE_S)
+            started = time.monotonic()
+            with pytest.raises(ConnectRefused):
+                Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
 
-        with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
-            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
-            run = runtime.start(policy)
-            runtime.close()
-            run.close()
-
-        assert dial.call_args.kwargs['open_timeout'] <= 5.0
+        assert time.monotonic() - started < CONNECT_DEADLINE_S + DEADLINE_SLACK_S
 
     def test_each_episode_builds_its_stack_from_the_config_its_own_connection_announced(self, monkeypatch):
         """A server restarted between two episodes may announce another resolution."""
