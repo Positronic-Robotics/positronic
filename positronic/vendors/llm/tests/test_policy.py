@@ -579,26 +579,50 @@ def test_a_path_with_an_unknown_arm_is_rejected():
     assert "Unknown arms ['middle']" in rejected['reason']
 
 
+def hands_at(obs, positions: dict[str, tuple[float, float]]):
+    for arm, (x, y) in positions.items():
+        obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'][:2] = [x, y]
+    return obs
+
+
 @pytest.mark.parametrize(
-    'gap,path,accepted',
+    'start,path,accepted',
     [
-        (0.6, {'left': (0.0, 0.05), 'right': (0.0, -0.03)}, False),
-        (0.08, {'left': (0.0, 0.3), 'right': (0.0, -0.3)}, True),
-        (0.08, {'left': (0.0, 0.03), 'right': (0.0, -0.03)}, False),
+        ({'left': (0.0, 0.3), 'right': (0.0, -0.3)}, {'left': (0.0, 0.05), 'right': (0.0, -0.03)}, False),
+        ({'left': (0.0, 0.3), 'right': (0.0, -0.3)}, {'left': (0.0, 0.15), 'right': (0.0, -0.15)}, True),
+        ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.3), 'right': (0.0, -0.3)}, True),
+        ({'left': (0.054, 0.042), 'right': (0.094, -0.042)}, {'left': (0.004, 0.042), 'right': (0.044, -0.042)}, True),
+        ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.03), 'right': (0.0, -0.03)}, False),
     ],
 )
-def test_a_path_that_brings_the_hands_closer_than_the_limit_or_than_they_are_plays_nothing(gap, path, accepted):
+def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays_nothing(start, path, accepted):
     metadata = {}
     conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
-    obs = bimanual_observation()
-    for arm, y in zip(keys.BIMANUAL_ARMS, (gap / 2, -gap / 2), strict=True):
-        obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'][1] = y
+    obs = hands_at(bimanual_observation(), start)
     parts = decide(conversation, obs, move_arms(path))
     rejected = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
-    assert (parts != [[]], not rejected) == (accepted, accepted)
+    assert (parts != [[]]) is accepted
+    assert (not rejected) is accepted
     if not accepted:
-        assert 'two hands' in rejected[0]['reason']
-        assert 'Rejected: The path brings two hands' in str(conversation.request(obs, 1))
+        assert 'Rejected: The path brings hands left and right' in str(conversation.request(obs, 1))
+
+
+def test_each_pair_of_hands_keeps_its_own_distance():
+    metadata = {}
+    policy = LLMPolicy(Endpoint('test'), Motion(), arms=('a', 'b', 'c'), camera_keys=(keys.EXTERIOR_IMAGE,))
+    conversation = Conversation(policy, metadata.__setitem__)
+    obs = {
+        **{
+            f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}': np.array([0, y, 0.1, 1, 0, 0, 0])
+            for arm, y in (('a', 0.01), ('b', -0.01), ('c', 0.3))
+        },
+        **{keys.arm_channel(keys.GRIP, arm): 0.0 for arm in 'abc'},
+        keys.TASK: 'Pass the cube.',
+        keys.EXTERIOR_IMAGE: np.zeros((10, 20, 3), dtype=np.uint8),
+    }
+    assert decide(conversation, obs, move_arms({'c': (0.0, 0.04)})) == [[]]
+    (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert 'hands a and c' in rejected['reason']
 
 
 def test_named_arms_get_the_arm_path_and_their_names_and_one_arm_keeps_its_own(model):

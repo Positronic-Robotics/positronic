@@ -139,15 +139,19 @@ class Motion:
         return bounded, parts
 
 
-def closest_hand_distance(parts: list[list[dict]], arms: tuple[str | None, ...]) -> float:
-    """The smallest distance between two hands over the commands of ``parts``, infinite for one arm."""
-    channels = [keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in arms]
-    return min(
-        (
-            math.dist(command[a].pose.translation, command[b].pose.translation)
-            for part in parts
-            for command in part
-            for a, b in itertools.combinations(channels, 2)
-        ),
-        default=math.inf,
-    )
+def closest_hand_distances(
+    parts: list[list[dict]], arms: tuple[str | None, ...]
+) -> dict[tuple[str | None, str | None], float]:
+    """The smallest distance between the hands of each pair of ``arms`` over the commands of ``parts``."""
+    channels = {arm: keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in arms}
+    return {
+        (a, b): min(
+            (
+                math.dist(command[channels[a]].pose.translation, command[channels[b]].pose.translation)
+                for part in parts
+                for command in part
+            ),
+            default=math.inf,
+        )
+        for a, b in itertools.combinations(arms, 2)
+    }

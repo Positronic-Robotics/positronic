@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
-from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath, Waypoint, closest_hand_distance
+from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath, Waypoint, closest_hand_distances
 
 # The cases below are written around these bounds, not around the defaults.
 SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'linear_speed': 0.05}
@@ -191,10 +191,10 @@ def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_clamped_target():
 def test_the_closest_hands_are_measured_along_the_path_and_one_arm_has_no_partner():
     motion = Motion(**SHORT_BOUNDS)
     _, crossing = motion.trajectory(*two_arms(right_x=0.04, y=0.05), [{'left': at(0.04, 0.05), 'right': at(0, -0.05)}])
-    assert closest_hand_distance(crossing, keys.BIMANUAL_ARMS) == pytest.approx(0.1)
+    assert closest_hand_distances(crossing, keys.BIMANUAL_ARMS) == {keys.BIMANUAL_ARMS: pytest.approx(0.1)}
     start = geom.Transform3D([0, 0, 0])
     _, alone = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01)}])
-    assert closest_hand_distance(alone, keys.ONE_ARM) == math.inf
+    assert closest_hand_distances(alone, keys.ONE_ARM) == {}
 
 
 def test_a_gripper_hold_is_a_part_of_its_own():
