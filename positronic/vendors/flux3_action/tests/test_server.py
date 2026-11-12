@@ -5,19 +5,22 @@ import os
 import socket
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 import pytest
+from positronic_model_server import keys as offboard_keys
 from positronic_model_server import server_wire, websocket_wire
 from positronic_model_server.protocol import AUTH_HEADER, bearer
+from positronic_model_server.spec import ARGS, SEQ
 from positronic_wire import websocket, wire
 from positronic_wire.roboarena import TextAnswer
 
 from positronic import keys
 from positronic.offboard import roboarena
-from positronic.offboard.client import InferenceClient
+from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
 from positronic.vendors.flux3_action import server
 from positronic.vendors.flux3_action.tests import bfl_stand_in
@@ -56,8 +59,13 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _infer_in_a_session(policy_server: PolicyServer, obs: dict[str, Any]) -> list[dict[str, Any]]:
-    """The commands one session gets for `obs`, from `policy_server` behind the run's token."""
+Read = TypeVar('Read')
+
+
+def _in_sessions(
+    policy_server: PolicyServer, queries: list[str], read: Callable[[InferenceSession], Read]
+) -> list[Read]:
+    """What `read` gets from one session per query, each opened on `policy_server` behind the run's token."""
     wires = [websocket_wire.WebsocketWire(server_wire.ServedHostPort('127.0.0.1', 0))]
     ready = threading.Event()
     thread = threading.Thread(target=policy_server.serve, args=(wires, ready.set), daemon=True)
@@ -66,18 +74,27 @@ def _infer_in_a_session(policy_server: PolicyServer, obs: dict[str, Any]) -> lis
         assert ready.wait(timeout=30)
         served = wires[0].served_address
         assert isinstance(served, server_wire.ServedHostPort)
-        address = wire.HostPortAddress('127.0.0.1', served.port, wire.SESSION_PATH, '')
-        client = InferenceClient(websocket.WebsocketClientWire(), address, headers={AUTH_HEADER: bearer(TOKEN)})
-        client.keepalive()
-        session = client.new_session()
-        try:
-            return session.infer(obs)
-        finally:
-            session.close()
+        read_back = []
+        for query in queries:
+            address = wire.HostPortAddress('127.0.0.1', served.port, wire.SESSION_PATH, query)
+            client = InferenceClient(websocket.WebsocketClientWire(), address, headers={AUTH_HEADER: bearer(TOKEN)})
+            client.keepalive()
+            session = client.new_session()
+            try:
+                read_back.append(read(session))
+            finally:
+                session.close()
+        return read_back
     finally:
         policy_server.shutdown()
         thread.join(timeout=30)
         assert not thread.is_alive()
+
+
+def _infer_in_a_session(policy_server: PolicyServer, obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """The commands one session gets for `obs`, from `policy_server` behind the run's token."""
+    [actions] = _in_sessions(policy_server, [''], lambda session: session.infer(obs))
+    return actions
 
 
 def test_a_session_reaches_bfls_server_in_its_fields_and_gets_the_whole_chunk(tmp_path):
@@ -125,6 +142,21 @@ def test_a_session_reaches_bfls_server_in_its_fields_and_gets_the_whole_chunk(tm
         '--subfolder': SUBFOLDER,
     }
     assert not _alive(started['pid']), 'the server left the backend running after it stopped'
+
+
+def test_a_session_query_sets_the_horizon_the_client_plays_each_chunk_to(tmp_path):
+    model = server.flux3_action_model.override(
+        checkpoint=REPOSITORY, flux_python=_flux_python(tmp_path, bfl_stand_in.Mode.SERVE), backend_port=_free_port()
+    )
+
+    default, tuned = _in_sessions(
+        PolicyServer(model, server.pipeline, auth_token=TOKEN),
+        ['', 'horizon_sec=0.5'],
+        lambda session: session.metadata[offboard_keys.LOCAL_STACK][SEQ][1][ARGS]['merge'],
+    )
+
+    assert default['horizon_sec'] is None
+    assert tuned['horizon_sec'] == 0.5
 
 
 def test_a_local_policy_directory_reaches_the_backend_with_no_revision_and_no_subfolder(tmp_path):
