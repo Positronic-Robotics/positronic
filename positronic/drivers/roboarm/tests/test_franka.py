@@ -1492,9 +1492,10 @@ def test_an_impedance_move_gets_the_time_its_reference_speed_cap_needs(desk):
     next(_move_under_a_slow_reference(IMPEDANCE))  # still in flight, not stopped short
 
 
-def test_a_move_under_no_impedance_keeps_the_time_its_dynamics_factor_allows(desk):
+@pytest.mark.parametrize('mode', [None, command.PositionControl()], ids=['no mode', 'position control'])
+def test_a_move_under_no_impedance_keeps_the_time_its_dynamics_factor_allows(desk, mode):
     with pytest.raises(TimeoutError, match='stopped short'):
-        next(_move_under_a_slow_reference(None))
+        next(_move_under_a_slow_reference(mode))
 
 
 def test_a_move_the_arm_reached_ends_the_refusal_streak(desk, caplog):
