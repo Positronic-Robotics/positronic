@@ -3,9 +3,12 @@
 import dataclasses
 import ipaddress
 import queue
+import select
 import socket
+import ssl
 import threading
 import time
+from collections.abc import Callable
 from concurrent import futures
 from typing import cast
 from unittest.mock import MagicMock
@@ -302,68 +305,20 @@ def _pinned(port: int, *ips: str) -> wire.HostPortAddress:
     return wire.HostPortAddress(_PINNED_HOST, port, wire.SESSION_PATH, '', pinned_ips=pinned_ips)
 
 
-def _opened_channel(client_wire: client_grpc.GrpcClientWire, address: wire.HostPortAddress, monkeypatch):
-    """The target and the options of the channel a probe of ``address`` opens."""
-    opened = []
-    monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: 'roots')
-
-    def opening(target: str, *_roots: str, options: list) -> MagicMock:
-        opened.append((target, options))
-        return MagicMock()
-
-    monkeypatch.setattr(grpc, 'insecure_channel', opening)
-    monkeypatch.setattr(grpc, 'secure_channel', opening)
-    _probing(monkeypatch, None)
-    client_wire.probe(address, None, 1.0)
-    [(target, options)] = opened
-    return target, dict(options)
-
-
-def test_a_pinned_host_dials_its_pin_and_names_the_host_as_the_authority(monkeypatch):
-    target, options = _opened_channel(client_grpc.GrpcClientWire(), _pinned(9000, '10.0.0.2', '10.0.0.3'), monkeypatch)
-    assert target == 'ipv4:10.0.0.2:9000,10.0.0.3:9000'
-    assert options['grpc.default_authority'] == f'{_PINNED_HOST}:9000'
-    assert 'grpc.ssl_target_name_override' not in options
-
-
-def test_an_ipv6_pin_dials_in_brackets(monkeypatch):
-    target, _options = _opened_channel(client_grpc.GrpcClientWire(), _pinned(9000, '2001:db8::1'), monkeypatch)
-    assert target == 'ipv6:[2001:db8::1]:9000'
-
-
-def test_a_pin_of_two_families_dials_the_family_of_its_first_address(monkeypatch):
-    """A gRPC target names one address family."""
-    address = _pinned(9000, '2001:db8::1', '10.0.0.2', '2001:db8::2')
-    target, _options = _opened_channel(client_grpc.GrpcClientWire(), address, monkeypatch)
-    assert target == 'ipv6:[2001:db8::1]:9000,[2001:db8::2]:9000'
-
-
-def test_the_tls_member_checks_the_certificate_of_a_pinned_host_against_the_host(monkeypatch):
-    target, options = _opened_channel(client_grpc.GrpcTlsClientWire(), _pinned(443, '10.0.0.2'), monkeypatch)
-    assert target == 'ipv4:10.0.0.2:443'
-    assert options['grpc.ssl_target_name_override'] == _PINNED_HOST
-    assert options['grpc.default_authority'] == f'{_PINNED_HOST}:443'
-
-
-@pytest.mark.parametrize('client_wire', [client_grpc.GrpcClientWire(), client_grpc.GrpcTlsClientWire()])
-def test_an_unpinned_host_leaves_the_name_and_the_authority_to_grpc(client_wire, monkeypatch):
-    target, options = _opened_channel(client_wire, _ADDRESS, monkeypatch)
-    assert target == 'gpu-host:9000'
-    assert 'grpc.default_authority' not in options
-    assert 'grpc.ssl_target_name_override' not in options
-
-
 @pytest.fixture
 def bare_server():
-    """Starts a gRPC server on loopback with no method, so every call it reads it answers ``UNIMPLEMENTED``."""
+    """Starts a gRPC server on a loopback address with no method, so it answers every call ``UNIMPLEMENTED``.
+
+    Returns the port. Raises ``pytest.skip`` where the host has no such address.
+    """
     servers: list[grpc.Server] = []
 
-    def start(credentials: grpc.ServerCredentials | None = None) -> int:
+    def start(host: str = '127.0.0.1') -> int:
         server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
-        if credentials is None:
-            port = server.add_insecure_port('127.0.0.1:0')
-        else:
-            port = server.add_secure_port('127.0.0.1:0', credentials)
+        try:
+            port = server.add_insecure_port(client_grpc.target(host, 0))
+        except RuntimeError:
+            pytest.skip(f'this host cannot bind {host}')
         server.start()
         servers.append(server)
         return port
@@ -385,30 +340,76 @@ def test_a_pinned_host_reaches_the_server_on_its_pin(bare_server):
     _reaches_the_server(client_grpc.GrpcClientWire(), _pinned(bare_server()))
 
 
+def test_a_pin_tries_its_addresses_in_turn(bare_server):
+    """Nothing serves the port on the first pinned address, and the next one answers."""
+    _reaches_the_server(client_grpc.GrpcClientWire(), _pinned(bare_server(), '127.0.0.2', '127.0.0.1'))
+
+
+def test_an_ipv6_pin_reaches_the_server_on_its_pin(bare_server):
+    _reaches_the_server(client_grpc.GrpcClientWire(), _pinned(bare_server('::1'), '::1'))
+
+
+def test_a_pin_of_two_families_dials_the_family_of_its_first_address(bare_server):
+    """A gRPC target names one address family. The server listens on the IPv4 loopback alone."""
+    port = bare_server()
+    _reaches_the_server(client_grpc.GrpcClientWire(), _pinned(port, '127.0.0.1', '::1'))
+    assert client_grpc.GrpcClientWire().probe(_pinned(port, '::1', '127.0.0.1'), None, 1.0) is wire.Refusal.SILENT
+
+
+def _pumped(backend_port: int) -> Callable[[ssl.SSLSocket], None]:
+    """A handler that copies the bytes of a TLS session to and from the plaintext port ``backend_port``."""
+
+    def pump(session: ssl.SSLSocket) -> None:
+        with socket.create_connection(('127.0.0.1', backend_port)) as backend:
+            other = {session: backend, backend: session}
+            while True:
+                # A TLS socket can hold decrypted bytes that `select` cannot see.
+                ready = [session] if session.pending() else select.select(list(other), [], [], 10.0)[0]
+                if not ready:
+                    return
+                for source in ready:
+                    data = source.recv(65536)
+                    if not data:
+                        return
+                    other[source].sendall(data)
+
+    return pump
+
+
 def _trust_only(monkeypatch, root: bytes) -> None:
     """Verify every channel this test opens against ``root``, in place of the system's own roots."""
     system_roots = grpc.ssl_channel_credentials
     monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: system_roots(root))
 
 
-def test_a_tls_pin_checks_the_certificate_against_the_host(bare_server, certified_for, monkeypatch):
+def _tls_edge(server: ssl.SSLContext, backend_port: int, tls_on_loopback) -> int:
+    """A TLS edge on loopback in front of the plaintext gRPC port ``backend_port``, with HTTP/2 over ALPN."""
+    server.set_alpn_protocols(['h2'])
+    return tls_on_loopback(server, _pumped(backend_port))
+
+
+def test_a_tls_pin_names_the_host_to_tls_and_checks_the_certificate_against_it(
+    bare_server, certified_for, tls_on_loopback, monkeypatch
+):
     certified = certified_for(_PINNED_HOST)
     _trust_only(monkeypatch, certified.certificate)
-    port = bare_server(grpc.ssl_server_credentials([(certified.key, certified.certificate)]))
+    port = _tls_edge(certified.server, bare_server(), tls_on_loopback)
     _reaches_the_server(client_grpc.GrpcTlsClientWire(), _pinned(port))
+    assert set(certified.names_asked) == {_PINNED_HOST}
 
 
-def test_a_tls_pin_to_a_server_whose_certificate_names_another_host_is_refused_for_good(
-    bare_server, certified_for, monkeypatch
+def test_a_tls_pin_to_an_edge_whose_certificate_names_another_host_is_refused_for_good(
+    bare_server, certified_for, tls_on_loopback, monkeypatch
 ):
     certified = certified_for('another.test')
     _trust_only(monkeypatch, certified.certificate)
-    port = bare_server(grpc.ssl_server_credentials([(certified.key, certified.certificate)]))
+    port = _tls_edge(certified.server, bare_server(), tls_on_loopback)
     assert client_grpc.GrpcTlsClientWire().probe(_pinned(port), None, 5.0) is wire.Refusal.FINAL
     with pytest.raises(wire.ConnectRefused) as refused:
         client_grpc.GrpcTlsClientWire().dial(_pinned(port), None, 5.0)
     assert refused.value.refusal is wire.Refusal.FINAL
     assert 'Hostname Verification Check failed' in str(refused.value)
+    assert set(certified.names_asked) == {_PINNED_HOST}
 
 
 def test_a_pin_nothing_answers_on_is_no_answer():

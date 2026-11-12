@@ -1,7 +1,6 @@
 """The client side of a Modal Server with sticky sessions."""
 
 import atexit
-import dataclasses
 import http.client
 import ipaddress
 import json
@@ -29,8 +28,6 @@ class FakeEdge:
     def __init__(self) -> None:
         self.starts: list[Mapping[str, str]] = []
         self.ended: list[str] = []
-        # The edge each session call went to.
-        self.roots: list[wire.HostPortAddress] = []
         self.refuse: list[int] = []
         # A start blocks until this is set, as a start on a cold app waits for a container.
         self.container_free = threading.Event()
@@ -43,7 +40,6 @@ class FakeEdge:
     def post(
         self, root: wire.HostPortAddress, path: str, headers: Mapping[str, str], timeout: float
     ) -> tuple[int, bytes]:
-        self.roots.append(root)
         if path == modal.TERMINATE_PATH:
             self.terminate_free.wait()
             self.ended.append(headers[modal.SESSION_TOKEN_HEADER])
@@ -554,13 +550,43 @@ def test_each_server_holds_its_own_sessions(modal_wire, edge, inner):
     assert edge.starts[1]['host'] == other.host
 
 
-def test_a_pinned_address_starts_and_ends_its_sessions_on_its_pin(modal_wire, edge, inner):
-    pinned = dataclasses.replace(_ADDRESS, pinned_ips=(ipaddress.ip_address('203.0.113.7'),))
-    modal_wire.dial(pinned, _CREDENTIALS, 5.0).close()
-    modal_wire.end_all()
+def _answering_session_calls(asked: list[bytes]):
+    """A handler for a TLS session at the edge: it records the request, and answers a start with a token and any
+    other call with 200."""
 
-    assert [root.pinned_ips for root in edge.roots] == [pinned.pinned_ips] * 2
-    assert edge.ended == ['token-1']
+    def answer(session: ssl.SSLSocket) -> None:
+        request = b''
+        while b'\r\n\r\n' not in request and (chunk := session.recv(4096)):
+            request += chunk
+        asked.append(request)
+        body = (
+            json.dumps({modal.START_ANSWER_TOKEN: 'token-1'}).encode() if modal.START_PATH.encode() in request else b''
+        )
+        session.sendall(b'HTTP/1.1 200 OK\r\ncontent-length: %d\r\n\r\n' % len(body) + body)
+
+    return answer
+
+
+def test_a_pinned_address_starts_and_ends_its_sessions_on_its_pin(inner, certified_for, tls_on_loopback, monkeypatch):
+    certified = certified_for('app.test')
+    system_context = ssl.create_default_context
+    monkeypatch.setattr(
+        ssl, 'create_default_context', lambda *_a, **_k: system_context(cadata=certified.certificate.decode())
+    )
+    asked: list[bytes] = []
+    port = tls_on_loopback(certified.server, _answering_session_calls(asked))
+    pinned = wire.HostPortAddress(
+        'app.test', port, wire.SESSION_PATH, '', pinned_ips=(ipaddress.ip_address('127.0.0.1'),)
+    )
+    client_wire = _wire(inner)
+
+    assert client_wire.keepalive(pinned, _CREDENTIALS, 5.0) == 60
+    client_wire.end_all()
+
+    assert [request.split(b' ')[1].decode() for request in asked] == [modal.START_PATH, modal.TERMINATE_PATH]
+    assert all(f'Host: app.test:{port}\r\n'.encode() in request for request in asked)
+    assert certified.names_asked == ['app.test', 'app.test']
+    assert inner.called == ['token-1']
 
 
 def test_a_pickled_wire_holds_no_sessions(modal_wire, edge):

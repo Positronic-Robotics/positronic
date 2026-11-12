@@ -1,8 +1,10 @@
 """Fixtures the wire tests share."""
 
 import datetime
+import socket
 import ssl
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -57,3 +59,41 @@ def certified_for(tmp_path: Path) -> Callable[[str], Certified]:
         return Certified(certificate, private, server, names_asked)
 
     return make
+
+
+@pytest.fixture
+def tls_on_loopback() -> Iterator[Callable[[ssl.SSLContext, Callable[[ssl.SSLSocket], None]], int]]:
+    """Serves TLS with a server context on a loopback port, and runs a handler on each session, each on its own thread.
+
+    Returns the port. A client that refuses the certificate ends its session in the handshake, and the handler then
+    does not run.
+    """
+    listeners: list[socket.socket] = []
+
+    def start(server: ssl.SSLContext, handle: Callable[[ssl.SSLSocket], None]) -> int:
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(8)
+        listeners.append(listener)
+
+        def run(conn: socket.socket) -> None:
+            try:
+                with server.wrap_socket(conn, server_side=True) as session:
+                    handle(session)
+            except (ssl.SSLError, ConnectionError):
+                conn.close()
+
+        def accept_each() -> None:
+            while True:
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return  # the fixture closed the listener
+                threading.Thread(target=run, args=(conn,), daemon=True).start()
+
+        threading.Thread(target=accept_each, daemon=True).start()
+        return listener.getsockname()[1]
+
+    yield start
+    for listener in listeners:
+        listener.close()
