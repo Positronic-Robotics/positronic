@@ -443,6 +443,46 @@ def test_an_endpoint_without_a_memory_need_omits_it_from_its_dump(mode: str):
     assert Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': 48}).model_dump(mode=mode)['min_vram_gb'] == 48
 
 
+def test_an_image_endpoint_states_the_session_params_of_its_image():
+    entry = Endpoint.model_validate({**_IMAGE_ENTRY, 'query': 'horizon_sec=0.5'})
+    assert entry.query == 'horizon_sec=0.5'
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(_IMAGE_ENTRY).query is None
+
+
+@pytest.mark.parametrize('query', ['', '?horizon_sec=0.5', 'horizon_sec=0.5#x', 'prompt=a b'])
+def test_an_image_query_holds_the_grammar_of_an_address_query(query: str):
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate({**_IMAGE_ENTRY, 'query': query})
+
+
+def test_a_remote_or_a_served_endpoint_states_no_image_query():
+    with pytest.raises(ValidationError, match='only an image endpoint carries'):
+        Endpoint.model_validate(remote('baseline', query='horizon_sec=0.5'))
+    with pytest.raises(ValidationError, match='only an image endpoint carries'):
+        Endpoint.model_validate({**_SERVED_ENTRY, 'query': 'horizon_sec=0.5'})
+
+
+@pytest.mark.parametrize('label', [{'name': 'policy'}, {'name': 'policy', 'kind': 'image'}])
+def test_a_label_states_no_image_query_of_its_own(label: dict[str, str]):
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        Endpoint.model_validate({**label, 'query': 'horizon_sec=0.5'})
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_an_image_endpoint_without_a_query_omits_it_from_its_dump(mode: str):
+    assert 'query' not in Endpoint.model_validate(_IMAGE_ENTRY).model_dump(mode=mode)
+    stated = Endpoint.model_validate({**_IMAGE_ENTRY, 'query': 'horizon_sec=0.5'}).model_dump(mode=mode)
+    assert stated['query'] == 'horizon_sec=0.5'
+
+
+def test_a_competition_plan_of_an_image_carries_its_query():
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), query='horizon_sec=0.5')
+    assert isinstance(plan.request_type, NebiusCompetition)
+    assert [entry.query for entry in plan.endpoints] == ['horizon_sec=0.5']
+    assert plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x')).endpoints[0].query is None
+
+
 def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
     entry = Endpoint(
         name='policy', kind=EndpointKind.image, wire=Wire.websocket, image=PolicyImage('org/policy@sha256:abc')

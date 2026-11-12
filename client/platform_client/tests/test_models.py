@@ -1175,6 +1175,17 @@ def test_an_episode_runs_with_the_window_and_preset_its_endpoint_states():
     assert (task.cap_of('pi05'), task.preset_of('pi05')) == (480, 'long')
 
 
+def test_a_resolved_image_endpoint_carries_its_session_params():
+    image = ResolvedEndpoint(
+        name='policy', kind=EndpointKind.image, wire=Wire.websocket, episodes=1, query='horizon_sec=0.5'
+    )
+    assert ResolvedEndpoint.model_validate(image.model_dump(mode='json')).query == 'horizon_sec=0.5'
+    # An answer from a platform that names no query on an endpoint.
+    unstated = image.model_dump(mode='json')
+    del unstated['query']
+    assert ResolvedEndpoint.model_validate(unstated).query is None
+
+
 def test_an_endpoint_that_states_no_window_or_preset_runs_with_the_task_s():
     assert (RESOLVED_TASK.cap_of('baseline'), RESOLVED_TASK.preset_of('baseline')) == (90, 'example_candidate')
 
