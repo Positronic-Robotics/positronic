@@ -18,14 +18,7 @@ import rerun.blueprint as rrb
 import rerun.recording as rr_recording
 import rerun_bindings
 from eval_vocabulary.episode import LEGACY_TIME_COLUMN
-from eval_vocabulary.progress import (
-    ANNOTATION_CHANNEL,
-    AUTOLABEL_CHANNEL,
-    DELIVERED_MARK,
-    PROGRESS_CHANNEL,
-    STATE_MARK,
-    STATE_SIGNAL,
-)
+from eval_vocabulary.progress import PROGRESS_CHANNEL, STATE_SIGNAL
 from rerun.urdf import UrdfTree
 
 from pimm.time import EMITTED_WALL, EMITTED_WORLD, RECEIVED_WALL, RECEIVED_WORLD
@@ -212,10 +205,7 @@ def test_notice_names_every_unplotted_signal_and_its_width():
 
 _STATES = ['floating', 'floating', 'reaching', 'contact', 'reaching', 'reaching', 'at-target']
 _STATE_LEGEND = '0 floating, 1 reaching, 2 contact, 3 control, 4 at-target'
-_DELIVERED = f'{PROGRESS_CHANNEL}.{DELIVERED_MARK}'
-_ANNOTATION_STATE = f'{ANNOTATION_CHANNEL}.{STATE_MARK}'
-# A kind of mark that the Progress chart does not plot.
-_EVENT_MARK = 'fail'
+_DELIVERED = f'{PROGRESS_CHANNEL}.delivered'
 
 
 def _text_episode(ep_dir, texts: dict[str, list[Any]]) -> DiskEpisode:
@@ -235,25 +225,33 @@ def test_a_text_signal_is_plotted_by_its_values_in_order_of_first_appearance(tmp
     assert signals.unplotted == {}
 
 
-def test_a_stage_signal_is_plotted_by_the_place_of_each_stage_on_the_ladder(tmp_path):
-    ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES, _ANNOTATION_STATE: ['contact', 'floating']})
-
-    ladder = ['floating', 'reaching', 'contact', 'control', 'at-target']
-    assert _collect_signal_groups(ep).plotted_texts == {STATE_SIGNAL: ladder, _ANNOTATION_STATE: ladder}
+_LADDER = ['floating', 'reaching', 'contact', 'control', 'at-target']
 
 
-def test_a_state_mark_with_a_code_off_the_ladder_keeps_its_own_order(tmp_path):
-    ep = _text_episode(tmp_path / 'ep', {f'{AUTOLABEL_CHANNEL}.model-v2.{STATE_MARK}': ['floating', 'nudged']})
-
-    assert _collect_signal_groups(ep).plotted_texts == {
-        f'{AUTOLABEL_CHANNEL}.model-v2.{STATE_MARK}': ['floating', 'nudged']
+def test_a_stage_mark_of_any_channel_is_plotted_by_the_place_of_each_stage_on_the_ladder(tmp_path):
+    marks = {
+        STATE_SIGNAL: _STATES,
+        'data_annotation.state': ['contact', 'floating'],
+        'marks.model-v2.state': ['reaching'],
     }
+    ep = _text_episode(tmp_path / 'ep', marks)
+
+    assert _collect_signal_groups(ep).plotted_texts == dict.fromkeys(marks, _LADDER)
 
 
-def test_a_text_signal_that_is_no_state_mark_keeps_its_own_order_when_its_values_are_stages(tmp_path):
-    ep = _text_episode(tmp_path / 'ep', {'device.mode': ['control', 'floating']})
+@pytest.mark.parametrize(
+    ('name', 'values'),
+    [
+        ('device.mode', ['control', 'floating']),
+        ('marks.model-v2.state', ['floating', 'nudged']),
+        ('state', ['contact']),
+    ],
+    ids=['no stage mark', 'a code off the ladder', 'no channel'],
+)
+def test_a_text_signal_that_is_not_a_stage_mark_of_stages_keeps_its_own_order(tmp_path, name, values):
+    ep = _text_episode(tmp_path / 'ep', {name: values})
 
-    assert _collect_signal_groups(ep).plotted_texts == {'device.mode': ['control', 'floating']}
+    assert _collect_signal_groups(ep).plotted_texts == {name: values}
 
 
 def test_a_text_signal_with_too_many_values_is_named_instead_of_plotted(tmp_path):
@@ -592,7 +590,7 @@ def test_a_legacy_signal_is_on_the_timeline_the_replay_opens_on(tmp_path, monkey
             writer.append('camera', np.zeros((16, 16, 3), dtype=np.uint8), Time(**{RECORDED_TIME: ts}))
         episode_dir = writer.path
     # The layout of a file with no format version: one `timestamp` column, read on `recorded`.
-    for name, values in ((STATE_SIGNAL, ['floating', 'reaching']), (_DELIVERED, [0, 1])):
+    for name, values in ((STATE_SIGNAL, ['floating', 'reaching']), ('progress.delivered', [0, 1])):
         pq.write_table(
             pa.table({LEGACY_TIME_COLUMN: pa.array(times, type=pa.int64()), VALUE_COLUMN: values}),
             episode_dir / f'{name}.parquet',
@@ -603,7 +601,7 @@ def test_a_legacy_signal_is_on_the_timeline_the_replay_opens_on(tmp_path, monkey
     both = {RECORDED_TIME: times, world[0]: times}
     assert sent[f'/text/{STATE_SIGNAL}'] == both
     assert sent[f'/signals/{STATE_SIGNAL}'] == both
-    assert sent[f'/signals/{_DELIVERED}'] == both
+    assert sent['/signals/progress.delivered'] == both
     assert sent['camera'] == both
     assert sent['/signals/robot.q/0'] == dict.fromkeys(world, times)
 
@@ -656,7 +654,7 @@ def test_a_tab_group_opens_on_its_text_signal(tmp_path):
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
             writer.append('device.level', float(i), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
-            writer.append('device.state', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
+            writer.append('device.mode', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
             writer.append('robot.q', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
             writer.append('robot.dq', np.zeros(2), Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
     ep = DiskEpisode(tmp_path / 'ep')
@@ -828,7 +826,7 @@ def test_a_chart_plots_the_signals_the_episode_records_and_a_chart_with_none_is_
 
 
 def test_the_signals_no_chart_plots_follow_the_charts_in_one_group(tmp_path):
-    widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, _DELIVERED: 1, f'{PROGRESS_CHANNEL}.placed': 1, 'device.level': 1}
+    widths = {keys.GRIP: 1, keys.TARGET_GRIP: 1, _DELIVERED: 1, 'progress.placed': 1, 'device.level': 1}
     ep = _episode(tmp_path / 'ep', widths)
 
     grip, other = _bottom_row(ep, _layout(_GRIP))
@@ -972,39 +970,26 @@ def test_the_default_charts_the_progress_marks_and_keeps_only_their_text_log_in_
     ]
 
 
-def test_the_progress_chart_plots_the_stage_and_count_of_the_operator_the_labeler_and_each_ai_labeler(tmp_path):
-    sources = (PROGRESS_CHANNEL, ANNOTATION_CHANNEL, f'{AUTOLABEL_CHANNEL}.model-v2', f'{AUTOLABEL_CHANNEL}.agent-v1')
-    marks = {source: [f'{source}.{kind}' for kind in (STATE_MARK, DELIVERED_MARK, _EVENT_MARK)] for source in sources}
+def test_the_progress_chart_plots_the_stage_and_count_marks_of_every_channel_and_leaves_the_rest_in_other(tmp_path):
+    channels = (PROGRESS_CHANNEL, 'data_annotation', 'marks.model-v2', 'marks.agent-v1')
     with DiskEpisodeWriter(tmp_path / 'ep') as writer:
         for i, state in enumerate(_STATES):
             at = Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)})
-            for state_mark, delivered_mark, fail_mark in marks.values():
-                writer.append(state_mark, state, at)
-                writer.append(delivered_mark, float(i), at)
-                writer.append(fail_mark, _EVENT_MARK, at)
+            for channel in channels:
+                writer.append(f'{channel}.state', state, at)
+                writer.append(f'{channel}.delivered', float(i), at)
+                writer.append(f'{channel}.fail', 'fail', at)
             writer.append('device.level', float(i), at)
+            writer.append('state', state, at)
     ep = DiskEpisode(tmp_path / 'ep')
 
     progress, other = _default_column(ep).contents
 
-    charted = sorted(mark for state_mark, delivered_mark, _ in marks.values() for mark in (state_mark, delivered_mark))
+    charted = sorted(f'{channel}.{mark}' for channel in channels for mark in ('state', 'delivered'))
     assert progress.name == 'Progress'
     assert progress.contents == [f'/signals/{mark}/**' for mark in charted]
     (group,) = other.contents
-    fails = sorted(fail_mark for *_, fail_mark in marks.values())
-    assert {view.name for view in group.contents} >= {'device.level', *fails}
-
-
-def test_the_progress_chart_leaves_out_an_autolabel_signal_that_names_no_source(tmp_path):
-    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        for i, state in enumerate(_STATES):
-            writer.append(f'{AUTOLABEL_CHANNEL}.{STATE_MARK}', state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
-            writer.append(STATE_SIGNAL, state, Time(**{RECORDED_TIME: 1_000_000_000 * (i + 1)}))
-    ep = DiskEpisode(tmp_path / 'ep')
-
-    progress, _ = _default_column(ep).contents
-
-    assert progress.contents == [f'/signals/{STATE_SIGNAL}/**']
+    assert {view.name for view in group.contents} >= {'device.level', 'state', *(f'{c}.fail' for c in channels)}
 
 
 def _control_mode(arm: str | None, entry: str) -> str:
