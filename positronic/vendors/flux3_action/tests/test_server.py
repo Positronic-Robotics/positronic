@@ -11,17 +11,19 @@ from typing import Any, TypeVar
 
 import numpy as np
 import pytest
-from positronic_model_server import keys as offboard_keys
 from positronic_model_server import server_wire, websocket_wire
 from positronic_model_server.protocol import AUTH_HEADER, bearer
-from positronic_model_server.spec import ARGS, SEQ
 from positronic_wire import websocket, wire
 from positronic_wire.roboarena import TextAnswer
 
+import pimm
 from positronic import keys
 from positronic.offboard import roboarena
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer
+from positronic.policy.base import Processor
+from positronic.policy.executor import Executor
+from positronic.policy.remote import declared_stack
 from positronic.vendors.flux3_action import server
 from positronic.vendors.flux3_action.tests import bfl_stand_in
 
@@ -144,6 +146,30 @@ def test_a_session_reaches_bfls_server_in_its_fields_and_gets_the_whole_chunk(tm
     assert not _alive(started['pid']), 'the server left the backend running after it stopped'
 
 
+def _commands_played_from_one_chunk(stack: Processor, chunk_length: int) -> int:
+    """The commands `stack` plays from one chunk of `chunk_length` commands before it asks for the next chunk."""
+    calls = 0
+
+    def infer(obs):
+        nonlocal calls
+        calls += 1
+        return [{keys.TARGET_GRIP: float(index)} for index in range(chunk_length)]
+
+    with pimm.World(virtual_time=True) as world:
+        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        run = runtime.start(stack, infer)
+        played = 0
+        try:
+            while calls < 2:
+                step = run.send({})
+                played += calls == 1 and bool(step.commands)
+                world.clock.advance_to_ns(step.resume_at_ns)
+        finally:
+            run.close()
+            runtime.close()
+    return played
+
+
 def test_a_session_query_sets_the_horizon_the_client_plays_each_chunk_to(tmp_path):
     model = server.flux3_action_model.override(
         checkpoint=REPOSITORY, flux_python=_flux_python(tmp_path, bfl_stand_in.Mode.SERVE), backend_port=_free_port()
@@ -152,11 +178,12 @@ def test_a_session_query_sets_the_horizon_the_client_plays_each_chunk_to(tmp_pat
     default, tuned = _in_sessions(
         PolicyServer(model, server.pipeline, auth_token=TOKEN),
         ['', 'horizon_sec=0.5'],
-        lambda session: session.metadata[offboard_keys.LOCAL_STACK][SEQ][1][ARGS]['merge'],
+        lambda session: declared_stack(session.metadata, session.protocol_version),
     )
 
-    assert default['horizon_sec'] is None
-    assert tuned['horizon_sec'] == 0.5
+    assert _commands_played_from_one_chunk(default, 32) == 32
+    # At 15 Hz the commands due before 0.5 s are the first 8.
+    assert _commands_played_from_one_chunk(tuned, 32) == 8
 
 
 def test_a_local_policy_directory_reaches_the_backend_with_no_revision_and_no_subfolder(tmp_path):
