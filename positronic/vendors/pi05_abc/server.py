@@ -7,6 +7,7 @@ Usage
   python -m positronic.vendors.pi05_abc.server bottles_16k --model.checkpoint=<checkpoint dir> --model.fork=<fork>
 """
 
+import socket
 from pathlib import Path
 
 import configuronic as cfn
@@ -58,6 +59,13 @@ class AuthorServer(OpenpiSubprocess):
             ws_port=ws_port,
         )
         self._python = fork / FORK_PYTHON
+
+    def start(self):
+        # Refuse a port another server holds: the readiness probe would reach that server, not this checkpoint.
+        with socket.socket() as port_check:
+            port_check.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            port_check.bind(('127.0.0.1', self.ws_port))
+        super().start()
 
     def _build_command(self) -> list[str]:
         checkpoint = Path(self.checkpoint_dir)

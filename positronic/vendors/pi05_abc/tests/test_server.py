@@ -124,27 +124,19 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
     )
     assert {name: round(view['mean']) for name, view in images.items()} == {'top': 40, 'left': 120, 'right': 200}
     assert started['cwd'] == str(fork / 'third_party/policy/openpi')
-    assert started['argv'] == [
-        str(checkpoint / 'inference/openpi_server.py'),
-        '--host',
-        '127.0.0.1',
-        '--port',
-        str(port),
-        '--config',
-        'pi05_abc130k',
-        '--checkpoint',
-        str(checkpoint),
-        '--norm-stats-path',
-        str(checkpoint / 'assets/put_the_plastic_bottles_in_the_bin/norm_stats.json'),
-        '--prompt',
-        'put the plastic bottles in the bin',
-        '--image-key-map',
-        'top=image,left=left_wrist,right=right_wrist',
-        '--flatten-prefix',
-        'observation/',
-        '--state-key',
-        'observation/state',
-    ]
+    script, *flags = started['argv']
+    assert script == str(checkpoint / 'inference/openpi_server.py')
+    assert dict(zip(flags[::2], flags[1::2], strict=True)) == {
+        '--host': '127.0.0.1',
+        '--port': str(port),
+        '--config': 'pi05_abc130k',
+        '--checkpoint': str(checkpoint),
+        '--norm-stats-path': str(checkpoint / 'assets/put_the_plastic_bottles_in_the_bin/norm_stats.json'),
+        '--prompt': 'put the plastic bottles in the bin',
+        '--image-key-map': 'top=image,left=left_wrist,right=right_wrist',
+        '--flatten-prefix': 'observation/',
+        '--state-key': 'observation/state',
+    }
     assert not _alive(started['pid']), 'the server left the backend running after it stopped'
 
 
@@ -180,3 +172,13 @@ def test_a_load_with_relative_paths_reaches_the_server_with_absolute_ones(tmp_pa
     assert argv[0] == str(tmp_path / 'checkpoint/inference/openpi_server.py')
     assert argv[argv.index('--checkpoint') + 1] == str(tmp_path / 'checkpoint')
     assert argv[argv.index('--norm-stats-path') + 1].startswith(str(tmp_path / 'checkpoint'))
+
+
+def test_a_port_another_server_listens_on_fails_the_load_before_the_backend_starts(tmp_path):
+    fork = _fork(tmp_path)
+    with socket.create_server(('127.0.0.1', 0)) as occupant:
+        with pytest.raises(OSError, match='Address already in use'):
+            server.pi05_abc_model(
+                checkpoint=str(tmp_path / 'checkpoint'), fork=str(fork), port=occupant.getsockname()[1]
+            )
+    assert not (tmp_path / LOG).exists()
