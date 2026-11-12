@@ -1,0 +1,129 @@
+# syntax=docker/dockerfile:1.7
+# A policy image the platform can run: a pi0.5 checkpoint fine-tuned on ABC's real YAM data for the bottles task,
+# served over positronic's session protocol on port 8000 with no arguments and no network.
+# positronic/vendors/pi05_abc/README.md says what it serves and states its licence situation.
+#
+# Usage (from the repository root)
+#   make -C docker build-serve-pi05-abc                                     # <registry>/pi05-abc-yam:local
+#   make -C docker push-serve-pi05-abc                                      # to the private Nebius registry
+#   docker run --rm --network none --gpus all <registry>/pi05-abc-yam:local # the offline pre-flight
+#
+# The layers go from the least often changed to the most: the fork's environment, positronic's dependencies,
+# source, weights, start settings. The source and the weights come in through `COPY --link`, and only the start
+# settings come after them, so a source change builds one new layer and pulls no cached layer.
+#
+# The image holds two Python environments. positronic's server answers on port 8000. It starts the author's openpi
+# server in the fork's environment, on 127.0.0.1:8001 inside the container, and sends it each observation. The
+# inference files of the checkpoint are 12.4 GB; the image leaves out its 30 GB of training state.
+
+# The author's fork at the commit that the checkpoint card names, and the Hub revision of the checkpoint.
+ARG FORK_REPO=https://github.com/ninghaolu/yam-abc-reproduce.git
+ARG FORK_REV=fa9c447e89beb978c44d9e06806ec161f61bba31
+ARG CHECKPOINT_REPO=MikhailBird/pi05-abc-130k-task-finetune
+ARG CHECKPOINT_REV=2e7ac0d02158cbe7b64926831d6f6748ef5fd45c
+ARG CHECKPOINT=pi05-abc-130k-task-finetune-16000
+ARG TOKENIZER_URL=https://storage.eu-north1.nebius.cloud/positronic-public/assets/paligemma_tokenizer.model
+
+# The weights stage does not build on the base, so a new base reuses the downloaded weights. Its own base is pinned
+# by digest: a moved tag would download the weights again and push them as a new layer.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS weights
+ARG CHECKPOINT_REPO CHECKPOINT_REV CHECKPOINT TOKENIZER_URL
+# The sha256 of each large params file, as the Hub records it, and of the server snapshot, as checkpoint_info.json
+# records it.
+COPY <<EOF /checksums
+f3c32f29ecb0cf4aa40a6371ad658b0b5945753bc36307ef91083fcf054ad662  params/ocdbt.process_0/d/0fe9187d4ad43272c64a39f227ff723b
+9b0996cdf01bd736e5d36369e0abf7598d97bed123fabd2f547fd1657a4386b6  params/ocdbt.process_0/d/1c5fc69b77a3e1926f71b3ad80ee10a1
+12ca299ba61baa6c2fed9c4286456a217ac878730fe16b401afec0a914b597ce  params/ocdbt.process_0/d/98a12c624a7074760ecd97cfc153fef0
+dab60db03989fdbb83383fbe30a276b9030c136bccd87d625f639d550d32786c  params/ocdbt.process_0/d/9f93a91ed737484c56f7922060002032
+ebbf85aeca9c8965a0d36040a7a2de4242caa9441dab08463e9f47207bdf20e8  params/ocdbt.process_0/d/c9990728fd0f02fff2b2fe4c87e4ee9e
+24e8420bc5dfb8ca7f63fab97b86c33f6f48aefc20a6ccad0007e65a145d4896  params/ocdbt.process_0/d/e19918607622ea5ba033b4f4c22f1dc9
+b396010f9b6a3e50610a47cd0f1c6112517be3fab969faa0ef606e34aa18035e  inference/openpi_server.py
+EOF
+RUN pip install --no-cache-dir huggingface_hub==0.34.4 \
+ && python -c "import sys; from huggingface_hub import snapshot_download; snapshot_download(sys.argv[1], \
+      revision=sys.argv[2], local_dir=sys.argv[3], max_workers=4, \
+      allow_patterns=['params/*', 'assets/*', 'inference/*', '_CHECKPOINT_METADATA', 'checkpoint_info.json', 'README.md'])" \
+      "$CHECKPOINT_REPO" "$CHECKPOINT_REV" "/opt/pi05-abc/$CHECKPOINT" \
+ && rm -rf "/opt/pi05-abc/$CHECKPOINT/.cache" \
+ && cd "/opt/pi05-abc/$CHECKPOINT" && sha256sum -c /checksums
+# openpi reads the PaliGemma tokenizer from its cache under OPENPI_DATA_HOME, and fetches it only when it is absent.
+RUN mkdir -p /opt/pi05-abc/openpi-data/big_vision \
+ && python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+      "$TOKENIZER_URL" /opt/pi05-abc/openpi-data/big_vision/paligemma_tokenizer.model
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm
+ARG FORK_REPO FORK_REV
+
+# positronic's environment installs the GUI build of OpenCV, which loads libGL when it is imported.
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONUNBUFFERED=1 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600
+
+# The fork's environment, as its checkpoint card installs it: the `deploy` extra and the `openpi` group, from the
+# fork's lock. The base dependency i2rt is a submodule whose URL needs an SSH key, so the clone takes it over HTTPS.
+WORKDIR /opt/yam-abc-reproduce
+RUN git clone "$FORK_REPO" . \
+ && git checkout "$FORK_REV" \
+ && git -c url."https://github.com/".insteadOf=git@github.com: submodule update --init --recursive \
+ && uv sync --frozen --no-dev --extra deploy --group openpi \
+ && uv cache clean
+
+ENV PYTHONPATH=/positronic:/positronic/client:/positronic/wire:/positronic/model_server:/positronic/vocabulary:/positronic/evals \
+    UV_PROJECT_ENVIRONMENT=/positronic/.venv \
+    VIRTUAL_ENV=/positronic/.venv
+
+# positronic's server runs in an environment of its own, beside the fork's. The dependencies install from the lock
+# alone, so a source change does not reinstall them.
+WORKDIR /positronic
+COPY pyproject.toml uv.lock ./
+COPY client/pyproject.toml client/
+COPY wire/pyproject.toml wire/
+COPY model_server/pyproject.toml model_server/
+COPY vocabulary/pyproject.toml vocabulary/
+COPY evals/pyproject.toml evals/
+RUN uv sync --locked --python 3.12 --extra openpi --no-dev --no-install-workspace && uv cache clean
+
+# The workspace installs from its manifests and package stubs, which records each package's metadata.
+# The source then lands with no step after it: the packages import from PYTHONPATH.
+COPY README.md LICENSE ./
+COPY client/README.md client/
+COPY wire/README.md wire/
+COPY model_server/README.md model_server/
+COPY vocabulary/README.md vocabulary/
+COPY evals/README.md evals/
+COPY positronic/__init__.py positronic/
+COPY pimm/__init__.py pimm/
+COPY client/platform_client/py.typed client/platform_client/
+COPY wire/positronic_wire/py.typed wire/positronic_wire/
+COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
+COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
+COPY evals/positronic_evals/py.typed evals/positronic_evals/
+RUN uv sync --locked --python 3.12 --extra openpi --no-dev && uv cache clean
+
+COPY --link . /positronic
+
+COPY --link --from=weights /opt/pi05-abc /opt/pi05-abc
+
+# A fetch the build did not make fails at once on the denied network.
+ENV UV_OFFLINE=1 \
+    UV_NO_SYNC=1 \
+    HF_HUB_OFFLINE=1 \
+    OPENPI_DATA_HOME=/opt/pi05-abc/openpi-data
+
+ARG CHECKPOINT
+ENV PI05_ABC_CHECKPOINT=/opt/pi05-abc/${CHECKPOINT}
+
+EXPOSE 8000
+
+# `exec` makes the server pid 1, so it receives the stop signal. The server starts the fork's interpreter itself.
+ENTRYPOINT ["/bin/sh", "-c", \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.pi05_abc.server bottles_16k \
+   --model.checkpoint=\"$PI05_ABC_CHECKPOINT\" --model.fork=/opt/yam-abc-reproduce \"$@\"", "--"]
+
+LABEL org.opencontainers.image.title="pi05-abc" \
+    org.opencontainers.image.description="pi0.5 fine-tuned on ABC-130k real data for 'put the plastic bottles in the bin' (step 16000), with the author's openpi server, served over positronic's session protocol." \
+    org.opencontainers.image.licenses="NOASSERTION" \
+    org.opencontainers.image.source="https://github.com/Positronic-Robotics/positronic"

@@ -59,6 +59,7 @@ help:
 	@echo "  make build-serve-<name>  Build a serving image: $(SERVE_IMAGES)"
 	@echo "  make build-serve-galaxea  Build the private Galaxea serving image (needs HF_TOKEN)"
 	@echo "  make build-serve-abc-dit  Build the private ABC-DiT serving image for yambox"
+	@echo "  make build-serve-pi05-abc  Build the private pi0.5 ABC bottles serving image for yambox"
 	@echo "  make build-openpi-base  Build positro/openpi-base from the openpi fork at OPENPI_REF"
 	@echo "  make build-molmospaces  Build the public MolmoSpaces eval image"
 	@echo "  make build           Build training, openpi and groot images"
@@ -180,6 +181,12 @@ push-serve-galaxea: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(GALAXEA_REPO)),neb
 ABC_DIT_REPO ?= $(NEBIUS_REGISTRY)/abc-dit-yam
 $(eval $(call SERVE_IMAGE,abc-dit,$(ABC_DIT_REPO)))
 push-serve-abc-dit: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(ABC_DIT_REPO)),nebius-login)
+
+# The pi0.5 bottles checkpoint fine-tuned on ABC's real data goes to the private registry, built and pushed by hand.
+# Its card states no licence. It is not in SERVE_IMAGES.
+PI05_ABC_REPO ?= $(NEBIUS_REGISTRY)/pi05-abc-yam
+$(eval $(call SERVE_IMAGE,pi05-abc,$(PI05_ABC_REPO)))
+push-serve-pi05-abc: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(PI05_ABC_REPO)),nebius-login)
 
 build: build-training build-openpi build-groot build-dreamzero build-robolab
 

@@ -73,6 +73,9 @@ class DeadlineWebsocketClientPolicy(WebsocketClientPolicy):
 class OpenpiSubprocess:
     """Manages the OpenPI serve_policy.py subprocess."""
 
+    # How long the subprocess may take to load the checkpoint and accept connections.
+    READY_TIMEOUT_S = 300.0
+
     def __init__(
         self,
         checkpoint_dir: str,
@@ -132,7 +135,10 @@ class OpenpiSubprocess:
         assert self.process is not None
         process = self.process
         wait_for_subprocess_ready(
-            self._is_ready, lambda: (process.poll() is not None, process.returncode), 'OpenPI subprocess'
+            self._is_ready,
+            lambda: (process.poll() is not None, process.returncode),
+            'OpenPI subprocess',
+            max_wait=self.READY_TIMEOUT_S,
         )
 
     @property
