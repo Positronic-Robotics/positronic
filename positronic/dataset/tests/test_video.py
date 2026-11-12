@@ -48,6 +48,20 @@ def create_frame(value=0, shape=(100, 100, 3)):
     return np.full(shape, value, dtype=np.uint8)
 
 
+def written_video(video_path: Path, frames_index_path: Path):
+    """The frames index, the stream settings, the packet timing and the decoded frames of a written video.
+
+    libx264 can write other bytes for the same frames, and those bytes decode to the same frames.
+    """
+    with av.open(str(video_path)) as container:
+        (stream,) = container.streams.video
+        settings = (stream.codec_context.name, stream.width, stream.height, stream.format.name, stream.average_rate)
+        packets = [(p.pts, p.dts, p.is_keyframe) for p in container.demux(stream) if p.size]
+    signal = VideoSignal(video_path, frames_index_path)
+    decoded = [signal[i][0].tobytes() for i in range(len(signal))]
+    return frames_index_path.read_bytes(), settings, packets, decoded
+
+
 def create_video_signal(video_paths, frames_with_timestamps):
     """Helper to create a video signal with given frames and timestamps."""
     with VideoSignalWriter(video_paths['video'], video_paths['frames']) as writer:
@@ -329,7 +343,7 @@ class TestLibavEncoder:
         assert not video_paths['video'].exists()
         assert not video_paths['frames'].exists()
 
-    def test_an_encoder_opened_before_the_first_frame_writes_the_same_files(self, tmp_path):
+    def test_an_encoder_opened_before_the_first_frame_writes_the_same_video(self, tmp_path):
         frames = [create_frame(i * 6, (64, 96, 3)) for i in range(40)]
         outputs = []
         for name, frame_size in (('lazy', None), ('early', FrameSize(64, 96))):
@@ -340,7 +354,7 @@ class TestLibavEncoder:
             with w:
                 for i, frame in enumerate(frames):
                     w.append(frame, Time(**{RECORDED_TIME: 1000 * (i + 1)}))
-            outputs.append(tuple(p.read_bytes() for p in paths))
+            outputs.append(written_video(*paths))
 
         assert outputs[0] == outputs[1]
 
