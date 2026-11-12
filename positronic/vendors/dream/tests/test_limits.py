@@ -36,7 +36,7 @@ def test_a_fast_chunk_moves_the_hand_at_the_speed_limit():
     out, report = limiter.limit(rows, POSE, AFTER_RAMP_S)
 
     steps = _hand_steps(limiter, POSE, out)
-    assert steps.max() == pytest.approx(0.6 / FPS, rel=0.05)
+    assert steps.max() == pytest.approx(0.3 / FPS, rel=0.05)
     assert report.ee_speed == 5
     # Each row moves the arm towards the target, and none goes past it.
     assert np.all(np.diff(out[:, 0]) > 0) and out[-1, 0] < 0.8
