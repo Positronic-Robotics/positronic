@@ -2,17 +2,18 @@
 
 ## [0.4.5] - 2026-11-11
 
-This release publishes `positronic-platform-client` 0.47.19, and `positronic` requires that version. `positronic account` gains `redeem`, `terms` and `accept-terms`. An endpoint of a plan can state its own episode cap, policy preset and session limit. The Franka, ZED and Robotiq drivers report device faults that a console can act on, and the YAM driver can fade its Coulomb friction at rest. The MolmoAct2 pipelines send JPEG frames, and the viewer header counts the outcomes of the episodes.
+This release publishes `positronic-platform-client` 0.47.20, and `positronic` requires that version. `positronic account` gains `redeem`, `terms` and `accept-terms`. An endpoint of a plan can state its own episode cap, policy preset and session limit, and a plan can name the `abc` simulator. The `positronic-server` command is now `positronic-dataset-viewer`. The Franka, ZED and Robotiq drivers report device faults that a console can act on, and the YAM driver can fade its Coulomb friction at rest. The MolmoAct2 pipelines send JPEG frames, and the viewer header counts the outcomes of the episodes.
 
 | Distribution | Version |
 |---|---|
-| `positronic-platform-client` | 0.47.19 |
+| `positronic-platform-client` | 0.47.20 |
 | `positronic-evals` | 0.2.8 |
 | `positronic-eval-vocabulary` | 0.7.3 |
 | `positronic-model-server` | 0.3.6 |
 | `positronic-wire` | 0.12.2 |
 
 ### Platform client
+- A plan can name `abc`, the ABC simulator, as its rig shape. A plan with an unknown shape is refused, and the refusal lists the five shapes ([#1219](https://github.com/Positronic-Robotics/positronic/pull/1219))
 - `positronic account redeem --code=<code>` and `PlatformClient.redeem_coupon` add the credits of a coupon to the caller's organization. `--json` prints the answer as JSON. A one-use coupon code may be a command argument, because the same command spends it ([#1207](https://github.com/Positronic-Robotics/positronic/pull/1207))
 - `positronic account terms` prints the current platform terms and the acceptance on record. `positronic account accept-terms --version=<v>` accepts a version, and `positronic account register --accept_terms=<v>` accepts it with the key that it mints. `platform_client.terms` holds the models ([#1200](https://github.com/Positronic-Robotics/positronic/pull/1200))
 - An endpoint of a plan can state `cap_per_episode_sec` and `policy_preset`, as it states `episodes_per_endpoint`. So one task node runs several policies, each with its own episode window, in one random episode order. `max_cap_per_episode_sec` bounds the cap of each endpoint ([#1199](https://github.com/Positronic-Robotics/positronic/pull/1199))
@@ -24,6 +25,8 @@ This release publishes `positronic-platform-client` 0.47.19, and `positronic` re
 - The competition guide says why a policy server asks for JPEG frames, and how a server that writes its own handshake or speaks protocol v3 asks for them ([#1212](https://github.com/Positronic-Robotics/positronic/pull/1212))
 
 ### Inference
+- `--policy.cache_ttl` sets the TTL of the LLM policy's cache points to `5m` (the default) or `1h`, and the policy refuses a provider cache setting ([#1214](https://github.com/Positronic-Robotics/positronic/pull/1214))
+- An ABC-DiT session with the query `prompts=real` sends the prompt of the task in ABC's real teleoperation data, in place of the sim prompt. The real data has four of the five tasks, so such a session refuses `hang mug on mug rack` ([#1213](https://github.com/Positronic-Robotics/positronic/pull/1213))
 - Every MolmoAct2 DROID pipeline asks the client for JPEG frames at quality 90. A call with three 640x360 cameras sent about 2 MB of raw frames before ([#1212](https://github.com/Positronic-Robotics/positronic/pull/1212))
 - `docker/Dockerfile.serve-abc-dit` builds a serving image of ABC-DiT for the yambox rig, with its checkpoint and text encoder inside, so it starts with no network ([#1206](https://github.com/Positronic-Robotics/positronic/pull/1206))
 - The Dream-1 vendor paces its chunks as `dreamlabs-client` paces them, and bounds each view to 320 pixels wide before upload. `upload_probe.py` times the frame path of one call ([#1188](https://github.com/Positronic-Robotics/positronic/pull/1188))
@@ -46,11 +49,13 @@ This release publishes `positronic-platform-client` 0.47.19, and `positronic` re
 - A RoboLab clone whose arm state is not finite ends its own episode as a failure, with `robolab.fault`. The other clones run on ([#1172](https://github.com/Positronic-Robotics/positronic/pull/1172))
 
 ### Teleoperation
+- The tracker counts the moves of the hand in the axes of the controller, so the way the teleoperator faces does not count. A station sets its own axes with `controller_axes`, and `--controller_axes=None` keeps the axes of the headset ([#1204](https://github.com/Positronic-Robotics/positronic/pull/1204))
 - `positronic teleop --cameras` names the cameras of the station. The headset page lists them before Enter AR, a tap shows one in the headset, and Y on the left controller cycles the video panel ([#1198](https://github.com/Positronic-Robotics/positronic/pull/1198))
 - The headset page opens its video socket again when no frame arrives for 3 s ([#1174](https://github.com/Positronic-Robotics/positronic/pull/1174))
 - The scripted headset holds each press until the page shows it ([#1181](https://github.com/Positronic-Robotics/positronic/pull/1181))
 
 ### Datasets
+- The dataset viewer package is `positronic.dataset_viewer`, and its command is `positronic-dataset-viewer` in place of `positronic-server`. The viewer cache directory stays at its old default ([#1208](https://github.com/Positronic-Robotics/positronic/pull/1208))
 - A `LocalDatasetWriter` opens the video encoders of a new episode before its first frame, at the frame sizes of the last episode ([#1186](https://github.com/Positronic-Robotics/positronic/pull/1186))
 - Episode bounds, the static export, the replay recording and the viewer clock skip a signal with no rows ([#1180](https://github.com/Positronic-Robotics/positronic/pull/1180))
 
