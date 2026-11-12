@@ -195,7 +195,7 @@ class RobolabEnv(EnvProtocol):
         self._shown_chains: list[Any] = [None] * num_envs  # each slot's chain machine at the last frame
         self._episode = 0  # the number of the current episode, counted by resets
         self._episode_task = ''  # the task of the current episode
-        self._past_limit_steps = [0] * num_envs  # per slot, the steps of this episode with a joint far past a limit
+        self._far_past_limit_solves = [0] * num_envs  # per slot, this episode's IK solves with a joint far past a limit
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
@@ -343,19 +343,20 @@ class RobolabEnv(EnvProtocol):
         joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
         return ~torch.isfinite(joints).all(dim=1)
 
-    def _report_past_limit_steps(self) -> None:
-        """Print each slot's count of this episode's steps past a limit, then zero the counts."""
-        for slot, steps in enumerate(self._past_limit_steps):
-            if steps:
+    def _report_far_past_limit_solves(self) -> None:
+        """Print each slot's count of this episode's IK solves with a joint far past a limit, then zero the counts."""
+        for slot, solves in enumerate(self._far_past_limit_solves):
+            if solves:
                 print(
-                    f'{self._episode_task} episode {self._episode} slot {slot}: {steps} steps past a limit',
+                    f'{self._episode_task} episode {self._episode} slot {slot}: {solves} IK solves with a joint '
+                    f'more than {pose_ik.MAX_JOINT_STEP} rad past a limit',
                     file=sys.stderr,
                 )
-        self._past_limit_steps = [0] * self._num_envs
+        self._far_past_limit_solves = [0] * self._num_envs
 
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
-        self._report_past_limit_steps()
+        self._report_far_past_limit_solves()
         self._episode += 1
         self._episode_task = token[keys.TOKEN_TASK]
         key = (token[keys.TOKEN_TASK], token[keys.TOKEN_INSTRUCTION_TYPE], token.get(keys.TOKEN_EPISODE_LENGTH_S))
@@ -518,11 +519,11 @@ class RobolabEnv(EnvProtocol):
             past = np.maximum(np.maximum(lower - joint_pos[slot], joint_pos[slot] - upper), 0.0)
             if past.max() > pose_ik.MAX_JOINT_STEP:
                 # The solve clamps such a joint to its limit. Print it, so that a physics fault stays visible.
-                self._past_limit_steps[slot] += 1
-                if self._past_limit_steps[slot] == 1:
+                self._far_past_limit_solves[slot] += 1
+                if self._far_past_limit_solves[slot] == 1:
                     print(
                         f'{self._episode_task} episode {self._episode} slot {slot}: joints '
-                        f'{np.round(past, 3).tolist()} rad past their limits; the count of such steps follows at the '
+                        f'{np.round(past, 3).tolist()} rad past their limits; the count of such solves follows at the '
                         'episode end',
                         file=sys.stderr,
                     )
@@ -646,7 +647,7 @@ class RobolabEnv(EnvProtocol):
         ]
 
     def close(self) -> None:
-        self._report_past_limit_steps()
+        self._report_far_past_limit_solves()
         if self._env is not None:
             self._env.close()
             self._env = None
