@@ -19,8 +19,8 @@ in the Hub repository. The [server](server.py) starts that snapshot on `127.0.0.
 norm stats from `assets/put_the_plastic_bottles_in_the_bin/norm_stats.json`. The snapshot loads the checkpoint and
 compiles the model before it listens. The server then sends one warm-up request, and then each encoded observation.
 
-The codec is the ABC-DiT codec of [`abc_dit`](../abc_dit/README.md), with the prompt of ABC's real data and no sim
-prefix:
+The [codec](codecs.py) follows the ABC-DiT codec of [`abc_dit`](../abc_dit/README.md), with the prompt of ABC's
+real data. It holds its own copy, because no vendor imports another:
 
 | Direction | Conversion |
 | --- | --- |
@@ -39,7 +39,7 @@ gives the boxes and the reason for each. For example:
 
     ws://<host>:<port>/api/v1/session?crop=yambox
 
-The session metadata names the crop boxes and the prompt under the `abc_dit.*` keys of the codec.
+The session metadata names the crop boxes under `pi05_abc.crops`.
 
 ## Setup
 
@@ -65,7 +65,7 @@ openpi reads the PaliGemma tokenizer from `$OPENPI_DATA_HOME/big_vision/paligemm
 when it is absent. Serve the checkpoint on a CUDA GPU:
 
 ```bash
-uv run --locked --extra openpi python -m positronic.vendors.pi05_abc.server bottles_16k \
+uv run --locked python -m positronic.vendors.pi05_abc.server bottles_16k \
     --model.checkpoint=<dir>/pi05-abc-130k-task-finetune-16000 --model.fork=<yam-abc-reproduce>
 ```
 

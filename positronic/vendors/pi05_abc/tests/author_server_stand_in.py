@@ -1,4 +1,4 @@
-"""A stand-in for the fork's interpreter running the author's openpi server. It answers as openpi's server answers.
+"""A stand-in for the fork's interpreter running the author's openpi server. It answers in openpi's msgpack frames.
 
 It writes its arguments, its working directory, its pid and a summary of every request to a log, one JSON object
 per line.
@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from openpi_client import msgpack_numpy
+from positronic_model_server.serialization import deserialize, serialize
 from websockets.sync.server import ServerConnection, serve
 
 # The chunk that answers every request: 50 actions of 14 values, per arm 6 joints then the gripper width.
@@ -41,11 +41,10 @@ def main() -> None:
             log.write(json.dumps(entry) + '\n')
 
     def handle(connection: ServerConnection) -> None:
-        packer = msgpack_numpy.Packer()
-        connection.send(packer.pack({}))
+        connection.send(serialize({}))
         for message in connection:
-            record({'request': _summary(msgpack_numpy.unpackb(message))})
-            connection.send(packer.pack({'actions': CHUNK}))
+            record({'request': _summary(deserialize(message))})
+            connection.send(serialize({'actions': CHUNK}))
 
     record({'argv': argv, 'cwd': os.getcwd(), 'pid': os.getpid()})
     port = int(argv[argv.index('--port') + 1])

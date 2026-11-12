@@ -84,7 +84,7 @@ COPY wire/pyproject.toml wire/
 COPY model_server/pyproject.toml model_server/
 COPY vocabulary/pyproject.toml vocabulary/
 COPY evals/pyproject.toml evals/
-RUN uv sync --locked --python 3.12 --extra openpi --no-dev --no-install-workspace && uv cache clean
+RUN uv sync --locked --python 3.12 --no-dev --no-install-workspace && uv cache clean
 
 # The workspace installs from its manifests and package stubs, which records each package's metadata.
 # The source then lands with no step after it: the packages import from PYTHONPATH.
@@ -101,7 +101,7 @@ COPY wire/positronic_wire/py.typed wire/positronic_wire/
 COPY model_server/positronic_model_server/py.typed model_server/positronic_model_server/
 COPY vocabulary/eval_vocabulary/py.typed vocabulary/eval_vocabulary/
 COPY evals/positronic_evals/py.typed evals/positronic_evals/
-RUN uv sync --locked --python 3.12 --extra openpi --no-dev && uv cache clean
+RUN uv sync --locked --python 3.12 --no-dev && uv cache clean
 
 COPY --link . /positronic
 
