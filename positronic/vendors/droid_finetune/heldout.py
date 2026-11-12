@@ -148,7 +148,10 @@ def read_rows(episode: Episode) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError(
             f'{episode.data_file}: episode {episode.index} has {table.num_rows} of {episode.n_frames} rows'
         )
-    joints, grip, action_joints, action_grip = (np.stack(table[c].to_numpy(zero_copy_only=False)) for c in columns)
+    # A converter writes the gripper either as a scalar or as a one-element list per frame.
+    joints, grip, action_joints, action_grip = (
+        np.stack(table[c].to_numpy(zero_copy_only=False)).reshape(table.num_rows, -1) for c in columns
+    )
     return np.concatenate([joints, grip], axis=1), np.concatenate([action_joints, action_grip], axis=1)
 
 

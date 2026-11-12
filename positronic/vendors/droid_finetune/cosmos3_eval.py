@@ -24,6 +24,18 @@ from .report import build_report, write_report
 EXPERIMENT = 'action_policy_droid_nano'
 
 
+class OfflinePolicyService(RobolabPolicyService):
+    """The policy server on the regular weights, without its guardrails.
+
+    The guardrails download gated weights and filter no action. The image's start checkpoint holds no EMA weights,
+    so every checkpoint is scored on its regular weights, with the experiment's EMA off.
+    """
+
+    def _build_setup_args(self, args: RobolabServerArgs):
+        update = {'guardrails': False, 'use_ema_weights': False}
+        return super()._build_setup_args(args).model_copy(update=update)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--checkpoint', type=Path, required=True)
@@ -40,12 +52,16 @@ def main() -> None:
     # The experiment's dataset reads DROID_ROOT when the config loads; it names the tree that is scored.
     os.environ['DROID_ROOT'] = str(args.heldout / heldout.DATASET_DIR)
 
-    service = RobolabPolicyService(
+    service = OfflinePolicyService(
         RobolabServerArgs(
             checkpoint_path=str(args.checkpoint),
             allow_dcp_checkpoint=True,
             experiment=EXPERIMENT,
-            experiment_overrides=[f'model.config.tokenizer.vae_path={args.vae_path}', *args.override],
+            experiment_overrides=[
+                f'model.config.tokenizer.vae_path={args.vae_path}',
+                'model.config.ema.enabled=False',
+                *args.override,
+            ],
             seed=args.seed,
             deterministic_seed=True,
             format_prompt_as_json=args.format_prompt_as_json,

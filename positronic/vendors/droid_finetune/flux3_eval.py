@@ -25,6 +25,7 @@ from . import heldout
 from .report import Report, ScoredWindow, build_report, write_report
 
 FLUX_ACTION = [sys.executable, '-m', 'flux_action.cli']
+FLUX_ACTION_EAGER = [sys.executable, '-m', 'droid_finetune.flux3_eager']
 # The settings that a DROID package saves for its sampler.
 SAMPLING_SETTINGS = ('sampler', 'num_inference_steps', 'sampler_shift', 'guidance_scale', 'guidance_scale_action')
 # The frame size of training and serving. `flux-action evaluate` defaults to 256x256.
@@ -69,7 +70,7 @@ def evaluate_command(
     package: Path, source_root: Path, index_dir: Path, settings: list[str], per_episode: int, seed: int, output: Path
 ) -> list[str]:
     return [
-        *FLUX_ACTION,
+        *FLUX_ACTION_EAGER,
         'evaluate',
         f'--checkpoint={package}',
         f'--source-root={source_root}',
@@ -103,6 +104,34 @@ def policy_package(checkpoint: Path, exports: Path, profile: str) -> Path:
     return package
 
 
+def offline_package(package: Path, packages: Path, base: Path) -> Path:
+    """`package` with its video VAE and text encoder read from `base`, a local copy of the base model.
+
+    A released package names them by Hugging Face id, and the base repository is gated. The copy links the weights,
+    rewrites the config, and records the new config hash in its manifest, which `from_pretrained` checks.
+    """
+    config_name = 'config.native.json' if (package / 'config.native.json').is_file() else 'config.json'
+    config = json.loads((package / config_name).read_text())
+    local = {'video_vae_id': str(base / 'video_vae.safetensors'), 'text_encoder_id': str(base / 'text_encoder')}
+    if all(config.get(key) == value for key, value in local.items()):
+        return package
+    copy = packages / f'{package.name}-{path_key(package)}'
+    if copy.is_dir():
+        return copy
+    partial = copy.with_name(copy.name + '.partial')
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir(parents=True)
+    for item in package.iterdir():
+        if item.name not in (config_name, 'manifest.json'):
+            (partial / item.name).symlink_to(item.resolve())
+    (partial / config_name).write_text(json.dumps({**config, **local}, indent=1) + '\n')
+    manifest = json.loads((package / 'manifest.json').read_text())
+    manifest['sha256'][config_name] = hashlib.sha256((partial / config_name).read_bytes()).hexdigest()
+    (partial / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n')
+    partial.rename(copy)
+    return copy
+
+
 def report_from_flux(
     flux_report: dict, *, checkpoint: Path, heldout_tree: Path, seed: int, per_episode: int, seconds: float
 ) -> Report:
@@ -129,6 +158,7 @@ def main() -> None:
     parser.add_argument('--profile', default='ema_0p10', help='model, ema_0p10 or ema_0p05')
     parser.add_argument('--windows-per-episode', type=int, default=8)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--base', type=Path, default=Path('/opt/flux3/base'), help='a local copy of the base model')
     args = parser.parse_args()
 
     started = time.perf_counter()
@@ -137,6 +167,7 @@ def main() -> None:
     if not (index_dir / 'manifest.json').is_file():
         subprocess.run(index_command(source_root, index_dir), check=True)
     package = policy_package(args.checkpoint, args.work_dir / 'exports', args.profile)
+    package = offline_package(package, args.work_dir / 'offline', args.base)
     flux_output = args.work_dir / 'flux_reports' / args.output.name
     settings = sampling_settings(args.settings_from, args.seed)
     subprocess.run(

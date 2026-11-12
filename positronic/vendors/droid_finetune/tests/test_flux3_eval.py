@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -106,3 +107,27 @@ def test_the_report_carries_the_raw_action_error_of_flux_action_evaluate():
     assert report.summary.action_mse == pytest.approx(0.2)
     assert [(w.episode_index, w.start, w.action_mse) for w in report.windows] == [(0, 0, 0.1), (1, 4, 0.3)]
     assert report.summary.framework == 'flux3' and report.summary.episodes == 2
+
+
+def test_an_offline_package_reads_the_local_base_model_and_passes_its_manifest_check(tmp_path):
+    hub = {'video_vae_id': 'org/base:video_vae.safetensors@rev', 'text_encoder_id': 'org/base:text_encoder@rev'}
+    package = _package(tmp_path / 'droid', {**ROOT_SETTINGS, **hub}, name='config.native.json')
+    (package / 'manifest.json').write_text(json.dumps({'sha256': {'config.native.json': 'old'}}))
+    base = tmp_path / 'base'
+
+    copy = flux3_eval.offline_package(package, tmp_path / 'offline', base)
+
+    config = json.loads((copy / 'config.native.json').read_text())
+    assert config['video_vae_id'] == str(base / 'video_vae.safetensors')
+    assert config['text_encoder_id'] == str(base / 'text_encoder')
+    digest = json.loads((copy / 'manifest.json').read_text())['sha256']['config.native.json']
+    assert digest == hashlib.sha256((copy / 'config.native.json').read_bytes()).hexdigest()
+    assert (copy / flux3_eval.PACKAGE_WEIGHTS).resolve() == (package / flux3_eval.PACKAGE_WEIGHTS).resolve()
+
+
+def test_a_package_that_already_reads_the_local_base_model_is_scored_as_it_is(tmp_path):
+    base = tmp_path / 'base'
+    local = {'video_vae_id': str(base / 'video_vae.safetensors'), 'text_encoder_id': str(base / 'text_encoder')}
+    package = _package(tmp_path / 'step-50', {**ROOT_SETTINGS, **local})
+
+    assert flux3_eval.offline_package(package, tmp_path / 'offline', base) == package

@@ -141,3 +141,17 @@ def test_score_windows_refuses_actions_of_the_wrong_length(tree):
 
     with pytest.raises(ValueError, match='shape'):
         heldout.score_windows(windows, lambda observation: np.zeros((heldout.CHUNK - 1, 8)))
+
+
+def test_read_rows_takes_a_gripper_stored_as_one_scalar_per_frame(tree):
+    data = tree / heldout.DATASET_DIR / heldout.SUCCESS_DIR / DATA_PATH.format(chunk_index=0, file_index=0)
+    table = pq.read_table(data)
+    for column in (heldout.GRIPPER_POSITION, heldout.ACTION_GRIPPER_POSITION):
+        scalars = pa.array([value[0] for value in table[column].to_pylist()], pa.float32())
+        table = table.set_column(table.schema.get_field_index(column), column, scalars)
+    pq.write_table(table, data)
+    episode = heldout.read_episodes(tree)[0]
+
+    state, action = heldout.read_rows(episode)
+
+    assert state.shape == action.shape == (episode.n_frames, 8)
