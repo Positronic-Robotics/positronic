@@ -9,6 +9,7 @@ gives the reply to ``respond`` until it returns a decision. ``accept`` turns tha
 import io
 import itertools
 import json
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
@@ -41,10 +42,7 @@ from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import check_finite_positive, flatten_dict
 
 from .client import Endpoint
-from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_hands
-
-# The arms of a one-arm embodiment: its channels carry no arm name.
-ONE_ARM: tuple[str | None, ...] = (None,)
+from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_hand_distance
 
 
 class Images(StrEnum):
@@ -181,7 +179,7 @@ class Conversation:
 
     def _initial(self) -> ModelRequest:
         arms = self._policy.arms
-        named = arms != ONE_ARM
+        named = arms != keys.ONE_ARM
         prompt = ''.join([
             f'Control the robot arms {", ".join(map(str, arms))} through exactly one tool call per response. '
             if named
@@ -207,7 +205,8 @@ class Conversation:
             'A note should briefly describe what you see and why you chose the motion. '
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
-            f'A path that brings two hands closer than {self._policy.min_hand_distance} m is rejected. '
+            f'A path that brings two hands closer than {self._policy.min_hand_distance} m, or closer than they are, '
+            'is rejected and does not move the arms. '
             'This check covers the hands only, not the rest of the arms. '
             if named
             else '',
@@ -255,35 +254,19 @@ class Conversation:
             raise ValueError('Choose available cameras not already revealed in this observation')
         return cameras
 
-    def _plan(
-        self, hands: Mapping[str | None, _Hand], path: MovePath | MoveArmsPath
-    ) -> tuple[list[Targets], list[Targets], list[list[dict]]]:
-        """The requested targets of every arm, the clamped targets and the commands of ``path`` from ``hands``."""
-        steps: list[Targets] = [{None: w} for w in path.waypoints] if isinstance(path, MovePath) else path.waypoints
-        held = {arm: self._targets.get(arm, Waypoint.at(hand.pose, hand.grip)) for arm, hand in hands.items()}
-        grips = {arm: target.gripper for arm, target in held.items()}
-        requested = []
-        for step in steps:
-            if unknown := step.keys() - hands.keys():
-                raise ValueError(f'Unknown arms {sorted(map(str, unknown))}; the arms are {list(hands)}')
-            held = held | step
-            requested.append(held)
-        bounded, parts = self._policy.motion.trajectory({arm: h.pose for arm, h in hands.items()}, grips, requested)
-        return requested, bounded, parts
-
-    def _tool(self, call: ToolCallPart) -> MovePath | MoveArmsPath | Finish | None:
+    def _tool(self, call: ToolCallPart) -> list[Targets] | Finish | None:
         tool = Tool(call.tool_name)
         data = self._policy.schemas[tool].model_validate_json(call.args_as_json_str())
         match data:
             case MovePath() | MoveArmsPath():
                 if len(data.waypoints) > self._policy.motion.max_waypoints:
                     raise ValueError(f'A path has at most {self._policy.motion.max_waypoints} waypoints')
-                assert self._obs is not None
-                _, _, parts = self._plan(self._obs.hands, data)
-                minimum = self._policy.min_hand_distance
-                if (gap := closest_hands(parts, self._policy.arms)) < minimum:
-                    raise ValueError(f'The path brings two hands {gap:.3f} m apart; keep them {minimum} m apart')
-                return data
+                path = [{None: w} for w in data.waypoints] if isinstance(data, MovePath) else data.waypoints
+                if unknown := {arm for waypoint in path for arm in waypoint} - set(self._policy.arms):
+                    raise ValueError(
+                        f'Unknown arms {sorted(map(str, unknown))}; the arms are {list(self._policy.arms)}'
+                    )
+                return path
             case Finish():
                 return data
             case RevealFrames():
@@ -304,7 +287,7 @@ class Conversation:
             ModelRequest(parts if parts else [UserPromptPart(f'Rejected: {error}. Make one tool call.')])
         )
 
-    def respond(self, response: ModelResponse) -> tuple[ToolCallPart, MovePath | MoveArmsPath | Finish] | None:
+    def respond(self, response: ModelResponse) -> tuple[ToolCallPart, list[Targets] | Finish] | None:
         """The decision in ``response``, or ``None`` when the model must be asked again about the same observation."""
         self._record({
             'event': 'response',
@@ -393,10 +376,10 @@ class Conversation:
         return messages
 
     def accept(
-        self, call: ToolCallPart, data: MovePath | MoveArmsPath | Finish, obs: Mapping[str, Any], time_ns: int
+        self, call: ToolCallPart, data: list[Targets] | Finish, obs: Mapping[str, Any], time_ns: int
     ) -> list[list[dict]] | PolicyEnd:
         """The commands of each segment and gripper hold of a path from the pose in ``obs``, or the ``PolicyEnd`` of
-        a finish."""
+        a finish. A path that brings two hands too close plays as one empty part."""
         self._obs = None
         if isinstance(data, Finish):
             self._messages.append(
@@ -411,17 +394,41 @@ class Conversation:
             self._set_metadata(policy_keys.STOP_REASON, call.tool_name)
             self._set_metadata(policy_keys.HINDSIGHT, data.hindsight)
             return PolicyEnd.COMPLETE
-        requested, bounded, parts = self._plan({arm: _Hand.read(obs, arm) for arm in self._policy.arms}, data)
+        hands = {arm: _Hand.read(obs, arm) for arm in self._policy.arms}
+        held = {arm: self._targets.get(arm, Waypoint.at(hand.pose, hand.grip)) for arm, hand in hands.items()}
+        bounded, parts = self._policy.motion.trajectory({arm: hand.pose for arm, hand in hands.items()}, held, data)
+        if (error := self._hand_distance_error(hands, parts)) is not None:
+            self._messages.append(
+                ModelRequest([ToolReturnPart(call.tool_name, f'Rejected: {error}', tool_call_id=call.tool_call_id)])
+            )
+            self._record({'event': 'rejected', 'call': self._calls, 'time_ns': time_ns, 'reason': error})
+            return [[]]
         self._targets = dict(bounded[-1])
         result = {
             'waypoints': [self._dump(targets) for targets in bounded],
-            'clamped': bounded != requested,
+            'clamped': any(
+                targets[arm] != waypoint[arm]
+                for targets, waypoint in zip(bounded, data, strict=True)
+                for arm in waypoint
+            ),
             'duration_s': (sum(map(len, parts)) + 1) / self._policy.motion.fps,
             'feedback': 'Path scheduled. Check the next measured observation for actual arrival.',
         }
         self._messages.append(ModelRequest([ToolReturnPart(call.tool_name, result, tool_call_id=call.tool_call_id)]))
         self._record({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
         return parts
+
+    def _hand_distance_error(self, hands: Mapping[str | None, _Hand], parts: list[list[dict]]) -> str | None:
+        """Why ``parts`` brings two hands too close, or ``None``. Hands that start closer may keep their distance."""
+        if len(hands) < 2:
+            return None
+        start = min(
+            math.dist(a.pose.translation, b.pose.translation) for a, b in itertools.combinations(hands.values(), 2)
+        )
+        minimum = min(self._policy.min_hand_distance, start)
+        if (gap := closest_hand_distance(parts, self._policy.arms)) < minimum:
+            return f'The path brings two hands {gap:.3f} m apart; keep them {minimum:.3f} m apart'
+        return None
 
     @staticmethod
     def _dump(targets: Targets) -> dict[str, Any]:
@@ -436,8 +443,7 @@ CacheTTL = Literal['5m', '1h']
 class LLMPolicy(Policy):
     """An API-backed Cartesian policy for one arm or for named arms, with independent episode conversations.
 
-    ``arms`` is ``ONE_ARM`` or the names of the arms. A path that brings two hands closer than ``min_hand_distance``
-    metres is rejected.
+    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` is in metres.
     """
 
     def __init__(
@@ -446,7 +452,7 @@ class LLMPolicy(Policy):
         motion: Motion,
         *,
         images: Images = Images.ALWAYS,
-        arms: tuple[str | None, ...] = ONE_ARM,
+        arms: tuple[str | None, ...] = keys.ONE_ARM,
         min_hand_distance: float = 0.1,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         image_size: int = 640,
@@ -455,8 +461,9 @@ class LLMPolicy(Policy):
         max_invalid: int = 3,
         cache_ttl: CacheTTL = '5m',
     ):
-        if arms != ONE_ARM and (not arms or len(set(arms)) != len(arms) or not all(arms)):
-            raise ValueError('arms must be ONE_ARM or distinct non-empty names')
+        names = all(isinstance(arm, str) and arm and '.' not in arm for arm in arms)
+        if arms != keys.ONE_ARM and (not arms or len(set(arms)) != len(arms) or not names):
+            raise ValueError('arms must be ONE_ARM or distinct non-empty names without a dot')
         check_finite_positive(min_hand_distance, 'min_hand_distance')
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
@@ -476,7 +483,7 @@ class LLMPolicy(Policy):
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
         self.arms, self.min_hand_distance = arms, min_hand_distance
         self.schemas: dict[Tool, type[BaseModel]] = {
-            Tool.MOVE_PATH: MovePath if arms == ONE_ARM else MoveArmsPath,
+            Tool.MOVE_PATH: MovePath if arms == keys.ONE_ARM else MoveArmsPath,
             Tool.REVEAL_FRAMES: RevealFrames,
             Tool.DONE: Finish,
         }
@@ -559,7 +566,7 @@ class LLMPolicy(Policy):
     settings={},
     motion=cfn.Config(Motion),
     images=Images.ALWAYS.value,
-    arms=ONE_ARM,
+    arms=keys.ONE_ARM,
     min_hand_distance=0.1,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     image_size=640,

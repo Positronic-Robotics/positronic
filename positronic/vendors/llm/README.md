@@ -91,6 +91,7 @@ Defaults are experimental bounds for supervised testing:
 | `timeout` | 120 seconds per model invocation, including retries |
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
+| `arms` / `min_hand_distance` | `ONE_ARM` (one arm with no name) / 0.1 m |
 | `image_size` | 640 pixels on the longest edge; aspect ratio preserved |
 | `image_horizon` | Frames of the most recent 3 observations |
 | `images` | `always` |
@@ -103,7 +104,7 @@ A path plays its waypoints in order, with no observation between them. Translati
 
 `--policy=@positronic.vendors.llm.policy.llm_bimanual` drives the `left` and `right` arms of a bimanual embodiment, such as the YAM, with its top camera and the camera on each wrist. `--policy.arms` sets other arm names. The policy reads `robot_state.{arm}.ee_pose` and `grip.{arm}`, and commands `robot_command.{arm}` and `target_grip.{arm}`. All arms use one frame. The observation holds the hand state of each arm under `arms`.
 
-A waypoint of `move_path` maps arm names to hand targets. An arm that a waypoint leaves out holds its previous target, or its measured pose before its first target. All arms reach a waypoint together: a segment lasts as long as the slower arm needs. A gripper change of one arm holds every hand still. The policy rejects a path with an unknown arm name, and a path that brings two hands closer than `min_hand_distance` (0.1 m). This check covers the commanded hand positions only, not the links of the arms.
+A waypoint of `move_path` maps arm names to hand targets. An arm that a waypoint leaves out holds its previous target, or its measured pose before its first target. All arms reach a waypoint together: a segment lasts as long as the slower arm needs. A gripper change of one arm holds every hand still. The model gets a correction for a path with an unknown arm name. A path that brings two hands closer than `min_hand_distance`, or closer than they are at its start, does not play: the tool result rejects it and the next decision starts. This check covers the commanded hand positions only, not the links of the arms.
 
 ## Recordings and lifecycle
 
@@ -142,7 +143,7 @@ The episode records the model configuration under `inference.policy.server`, and
 
 ## Supervised hardware
 
-After validating the task in simulation, use the same policy with `positronic-inference real` and the DROID embodiment. Set the task instruction and output directory explicitly. The keyboard operator controls episode start/stop; the hardware's independent emergency stop remains available. This policy supports the single-arm hand-pose contract, without camera calibration or a workspace/collision model.
+After validating the task in simulation, use the same policy with `positronic-inference real` and the DROID embodiment. Set the task instruction and output directory explicitly. The keyboard operator controls episode start/stop; the hardware's independent emergency stop remains available. This policy supports the hand-pose contract of one arm or of named arms, without camera calibration or a workspace/collision model.
 
 ## Tests
 

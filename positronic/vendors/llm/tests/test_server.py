@@ -20,7 +20,7 @@ from positronic.policy.processors import ChunkedSchedule, EndOnField, Trajectory
 from positronic.vendors.llm import server
 from positronic.vendors.llm.client import ANTHROPIC_API_KEYS_ENV, Endpoint
 from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import ONE_ARM, Images, LLMPolicy, Tool
+from positronic.vendors.llm.policy import Images, LLMPolicy, Tool
 from positronic.vendors.llm.server import LLMModel, deployment, serve
 from positronic.vendors.llm.tests.test_policy import (
     complete,
@@ -393,7 +393,7 @@ def test_a_served_session_sends_the_model_what_a_local_run_sends(model, make_mod
 @pytest.mark.parametrize(
     'arms,poses',
     [
-        (ONE_ARM, [keys.EE_POSE, keys.TARGET_EE_POSE]),
+        (keys.ONE_ARM, [keys.EE_POSE, keys.TARGET_EE_POSE]),
         (
             keys.BIMANUAL_ARMS,
             [f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS]

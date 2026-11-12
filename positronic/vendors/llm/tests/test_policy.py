@@ -32,7 +32,7 @@ from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath
-from positronic.vendors.llm.policy import ONE_ARM, Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
+from positronic.vendors.llm.policy import Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
 
 
 def observation(x=0.0):
@@ -549,7 +549,8 @@ def decide(conversation: Conversation, obs, response):
 
 
 def right_hand(parts) -> list[np.ndarray]:
-    return [command[f'{keys.ROBOT_COMMAND}.right'].pose.translation for part in parts for command in part]
+    channel = keys.arm_channel(keys.ROBOT_COMMAND, keys.RIGHT_ARM)
+    return [command[channel].pose.translation for part in parts for command in part]
 
 
 def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_target_or_else_its_measured_pose():
@@ -569,20 +570,35 @@ def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_target_or_else_its
     assert [(w['left']['x'], w['right']['x']) for w in accepted['waypoints']] == [(0.08, 0.02)]
 
 
-@pytest.mark.parametrize(
-    'path,reason',
-    [
-        ({'left': (0.0, 0.3), 'middle': (0.0, 0.0)}, "Unknown arms ['middle']"),
-        ({'left': (0.0, 0.05), 'right': (0.0, -0.03)}, 'two hands 0.080 m apart'),
-    ],
-)
-def test_a_path_with_an_unknown_arm_or_hands_too_close_is_rejected(path, reason):
+def test_a_path_with_an_unknown_arm_is_rejected():
     metadata = {}
     conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
     conversation.request(bimanual_observation(), 0)
-    assert conversation.respond(move_arms(path)) is None
+    assert conversation.respond(move_arms({'left': (0.0, 0.3), 'middle': (0.0, 0.0)})) is None
     (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
-    assert reason in rejected['reason']
+    assert "Unknown arms ['middle']" in rejected['reason']
+
+
+@pytest.mark.parametrize(
+    'gap,path,accepted',
+    [
+        (0.6, {'left': (0.0, 0.05), 'right': (0.0, -0.03)}, False),
+        (0.08, {'left': (0.0, 0.3), 'right': (0.0, -0.3)}, True),
+        (0.08, {'left': (0.0, 0.03), 'right': (0.0, -0.03)}, False),
+    ],
+)
+def test_a_path_that_brings_the_hands_closer_than_the_limit_or_than_they_are_plays_nothing(gap, path, accepted):
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    obs = bimanual_observation()
+    for arm, y in zip(keys.BIMANUAL_ARMS, (gap / 2, -gap / 2), strict=True):
+        obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'][1] = y
+    parts = decide(conversation, obs, move_arms(path))
+    rejected = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert (parts != [[]], not rejected) == (accepted, accepted)
+    if not accepted:
+        assert 'two hands' in rejected[0]['reason']
+        assert 'Rejected: The path brings two hands' in str(conversation.request(obs, 1))
 
 
 def test_named_arms_get_the_arm_path_and_their_names_and_one_arm_keeps_its_own(model):
@@ -595,19 +611,26 @@ def test_named_arms_get_the_arm_path_and_their_names_and_one_arm_keeps_its_own(m
     schemas = {tool.name: tool.parameters_json_schema for tool in named_tools}
     assert schemas[Tool.MOVE_PATH.value] == MoveArmsPath.model_json_schema()
     assert {t.name: t.parameters_json_schema for t in one_tools}[Tool.MOVE_PATH.value] == MovePath.model_json_schema()
-    assert 'Control the robot arms left, right through' in str(named[0])
-    assert 'closer than 0.1 m' in str(named[0])
-    assert 'Control one robot arm through' in str(one[0])
-    assert 'hands' not in str(one[0]).replace('hand ', '')
+    for fact in (*keys.BIMANUAL_ARMS, '0.1 m'):
+        assert fact in str(named[0])
+        assert fact not in str(one[0])
 
 
 @pytest.mark.parametrize(
-    'change', [{'arms': ()}, {'arms': ('left', 'left')}, {'arms': (None, 'left')}, {'arms': ('',)}]
+    'change',
+    [
+        {'arms': ()},
+        {'arms': ('left', 'left')},
+        {'arms': (None, 'left')},
+        {'arms': ('',)},
+        {'arms': ('a.b',)},
+        {'arms': (1,)},
+    ],
 )
 def test_arms_are_one_arm_or_distinct_names(change):
     with pytest.raises(ValueError, match='arms'):
         LLMPolicy(Endpoint('test'), Motion(), **change)
-    assert LLMPolicy(Endpoint('test'), Motion()).arms == ONE_ARM
+    assert LLMPolicy(Endpoint('test'), Motion()).arms == keys.ONE_ARM
 
 
 def test_the_hand_distance_must_be_finite_and_positive():
