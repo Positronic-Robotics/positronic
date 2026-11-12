@@ -232,8 +232,8 @@ _STATE_MARK = STATE_SIGNAL.rpartition('.')[2]
 _PROGRESS_MARKS = (_STATE_MARK, 'delivered')
 
 
-def _mark_of(name: str) -> str | None:
-    """The last part of a `<channel>.<mark>` or `<channel>.<source>.<mark>` signal name, or None with no channel."""
+def _last_part(name: str) -> str | None:
+    """The part of a dotted signal name after its last dot, or None for a name with no dot."""
     channel, _, mark = name.rpartition('.')
     return mark if channel else None
 
@@ -261,7 +261,7 @@ def _collect_signal_groups(ep: Episode) -> EpisodeSignals:
         first = sig[0][0]
         if isinstance(first, str):
             values = list(dict.fromkeys(str(value) for value in sig.values()))
-            on_ladder = _mark_of(name) == _STATE_MARK and set(values) <= set(_STAGE_CODES)
+            on_ladder = _last_part(name) == _STATE_MARK and set(values) <= set(_STAGE_CODES)
             signals.texts[name] = list(_STAGE_CODES) if on_ladder else values
             continue
         if flatten_numeric(first) is None:
@@ -575,7 +575,7 @@ _DEFAULT_SPLIT_SHARES = (3, 1)
 def _default_root(signals: EpisodeSignals, ep: Episode) -> rrb.Horizontal:
     charts_by_arm = {arm: _arm_charts(arm) for arm in _recorded_arms(signals.numerics)}
     names = sorted([*signals.numerics, *signals.texts])
-    progress: Charts = {'Progress': [name for name in names if _mark_of(name) in _PROGRESS_MARKS]}
+    progress: Charts = {'Progress': [name for name in names if _last_part(name) in _PROGRESS_MARKS]}
     column = [*_arm_cells(charts_by_arm, signals, ep), *((cell, 1) for cell in _chart_cells(progress, signals, ep))]
     placed = {signal for charts in [*charts_by_arm.values(), progress] for signal in _charted(charts, signals)}
     other = _other_cell(signals, placed)
