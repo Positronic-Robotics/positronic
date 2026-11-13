@@ -392,7 +392,9 @@ class Conversation:
         errors = {
             arm: np.linalg.norm(hand.pose.translation - held[arm].pose.translation) for arm, hand in hands.items()
         }
-        for (a, b), gap in closest_hand_distances(parts, self._policy.arms).items():
+        for (a, b), gap in closest_hand_distances(
+            {arm: hand.pose for arm, hand in hands.items()}, parts, self._policy.arms
+        ).items():
             measured = hands[a].pose.translation - hands[b].pose.translation
             targeted = held[a].pose.translation - held[b].pose.translation
             nearer = min(np.linalg.norm(measured), np.linalg.norm(targeted))

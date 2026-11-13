@@ -206,11 +206,23 @@ def test_a_left_out_arm_is_clamped_from_its_measured_pose_toward_its_held_target
 
 def test_the_closest_hands_are_measured_along_the_path_and_one_arm_has_no_partner():
     motion = Motion(**SHORT_BOUNDS)
-    crossing = motion.trajectory(*two_arms(right_x=0.04, y=0.05), [{'left': at(0.04, 0.05), 'right': at(0, -0.05)}])
-    assert closest_hand_distances(crossing.parts, keys.BIMANUAL_ARMS) == {keys.BIMANUAL_ARMS: pytest.approx(0.1)}
+    starts, held = two_arms(right_x=0.04, y=0.05)
+    crossing = motion.trajectory(starts, held, [{'left': at(0.04, 0.05), 'right': at(0, -0.05)}])
+    assert closest_hand_distances(starts, crossing.parts, keys.BIMANUAL_ARMS) == {
+        keys.BIMANUAL_ARMS: pytest.approx(0.1)
+    }
     start = geom.Transform3D([0, 0, 0])
     alone = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01)}]).parts
-    assert closest_hand_distances(alone, keys.ONE_ARM) == {}
+    assert closest_hand_distances({None: start}, alone, keys.ONE_ARM) == {}
+
+
+def test_the_closest_hands_are_measured_between_the_commands_and_from_the_measured_hands():
+    starts = {keys.LEFT_ARM: geom.Transform3D([-0.003, 0.05, 0]), keys.RIGHT_ARM: geom.Transform3D([0.003, -0.0499, 0])}
+    held = {arm: Waypoint.at(pose, 0) for arm, pose in starts.items()}
+    swing = Motion(**SHORT_BOUNDS).trajectory(starts, held, [{'left': at(0.003, 0.05), 'right': at(-0.003, -0.0499)}])
+    assert closest_hand_distances(starts, swing.parts, keys.BIMANUAL_ARMS) == {
+        keys.BIMANUAL_ARMS: pytest.approx(0.0999, abs=1e-9)
+    }
 
 
 @pytest.mark.parametrize(

@@ -148,27 +148,26 @@ class Motion:
         return Trajectory(bounded, parts, clamped)
 
 
-def closest_hand_distances(
-    parts: list[list[dict]], arms: tuple[str | None, ...]
-) -> dict[tuple[str | None, str | None], float]:
-    """The smallest distance between the hands of each pair of ``arms`` over the commands of ``parts``."""
-    channels = {arm: keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in arms}
-    return {
-        (a, b): min(
-            (
-                math.dist(command[channels[a]].pose.translation, command[channels[b]].pose.translation)
-                for part in parts
-                for command in part
-            ),
-            default=math.inf,
-        )
-        for a, b in itertools.combinations(arms, 2)
-    }
-
-
 def closest_approach(start: np.ndarray, end: np.ndarray) -> float:
     """The smallest length of a vector that moves in a straight line from ``start`` to ``end``."""
     step = end - start
     span = float(np.dot(step, step))
     fraction = 0.0 if span == 0 else float(np.clip(-np.dot(start, step) / span, 0, 1))
     return float(np.linalg.norm(start + fraction * step))
+
+
+def closest_hand_distances(
+    starts: Mapping[str | None, geom.Transform3D], parts: list[list[dict]], arms: tuple[str | None, ...]
+) -> dict[tuple[str | None, str | None], float]:
+    """The smallest distance between the hands of each pair of ``arms`` as they move in straight lines from
+    ``starts`` through the commands of ``parts``."""
+    channels = {arm: keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in arms}
+    positions = [{arm: starts[arm].translation for arm in arms}] + [
+        {arm: command[channels[arm]].pose.translation for arm in arms} for part in parts for command in part
+    ]
+    return {
+        (a, b): min(
+            (closest_approach(p[a] - p[b], q[a] - q[b]) for p, q in itertools.pairwise(positions)), default=math.inf
+        )
+        for a, b in itertools.combinations(arms, 2)
+    }
