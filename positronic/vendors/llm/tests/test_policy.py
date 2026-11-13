@@ -32,7 +32,7 @@ from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath
-from positronic.vendors.llm.policy import Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
+from positronic.vendors.llm.policy import ELAPSED_S, Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
 
 
 def observation(x=0.0):
@@ -190,6 +190,85 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     assert [e['cameras'] for e in events if e['event'] == 'request'] == [[], [keys.WRIST_IMAGE], [keys.WRIST_IMAGE]]
     assert len([e for e in events if e['event'] == 'observation']) == 1
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [2]
+
+
+def prompt(requests) -> str:
+    """The system prompt of the first request."""
+    return requests[0][0][0].parts[0].content
+
+
+@pytest.mark.parametrize('images', list(Images))
+def test_the_prompt_names_reveal_frames_only_when_frames_are_revealed_on_demand(model, images):
+    requests, replies = model
+    replies.append(finish())
+    with execution(LLMPolicy(Endpoint('test'), Motion(), images=images)) as (run, runtime, clock):
+        complete(run, runtime, clock, observation())
+    assert (Tool.REVEAL_FRAMES.value in prompt(requests)) == (images is Images.ON_DEMAND)
+
+
+def test_each_observation_reports_the_time_since_the_first_observation(model):
+    requests, replies = model
+    replies.extend([move(), finish()])
+    with execution(LLMPolicy(Endpoint('test'), Motion())) as (run, runtime, clock):
+        for time_ns in (5_000_000_000, 7_500_000_000):
+            clock.advance_to_ns(max(clock.now_ns(), time_ns))
+            complete(run, runtime, clock, observation())
+        events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
+    assert [e[ELAPSED_S] for e in events if e['event'] == 'observation'] == [0.0, 2.5]
+    assert ELAPSED_S in prompt(requests)
+    assert '"elapsed_s": 2.5' in str(requests[-1][0])
+
+
+WRIST_MOUNT = {
+    'camera': keys.WRIST_IMAGE,
+    'position_m': (-0.074, 0.031, -0.126),
+    'view': (0.313, 0.008, 0.95),
+    'image_up': (-0.95, -0.016, 0.313),
+}
+
+
+def test_a_camera_mount_is_stated_with_its_hand_position_and_directions(model):
+    requests, replies = model
+    replies.extend([finish(), finish(), finish()])
+    left = {**WRIST_MOUNT, 'camera': keys.WRIST_LEFT_IMAGE, 'arm': keys.LEFT_ARM}
+    for policy, obs in [
+        (llm(model='test', camera_mounts=[WRIST_MOUNT]), observation()),
+        (llm_bimanual(model='test', camera_mounts=[left]), bimanual_observation()),
+        (llm(model='test'), observation()),
+    ]:
+        with execution(policy) as (run, runtime, clock):
+            complete(run, runtime, clock, obs)
+    one, named, bare = (str(messages[0]) for messages, _ in requests)
+    position = 'its lens is at [-0.074, 0.031, -0.126] m, it looks along [0.313, 0.008, 0.95], and the top of its '
+    assert f'Camera {keys.WRIST_IMAGE} is fixed to the hand. In the hand frame {position}' in one
+    assert f'Camera {keys.WRIST_LEFT_IMAGE} is fixed to hand {keys.LEFT_ARM}. In the hand frame {position}' in named
+    assert 'lens' not in bare
+    assert all('grip point between the fingers' in text for text in (one, named, bare))
+    assert llm(model='test', camera_mounts=[WRIST_MOUNT]).meta()['camera_mounts'] == [
+        {
+            'camera': keys.WRIST_IMAGE,
+            'arm': None,
+            'position_m': [-0.074, 0.031, -0.126],
+            'view': [0.313, 0.008, 0.95],
+            'image_up': [-0.95, -0.016, 0.313],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    'change, match',
+    [
+        ({'camera_mounts': (WRIST_MOUNT, WRIST_MOUNT)}, 'distinct cameras'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'camera': 'image.side'},)}, 'distinct cameras'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'arm': keys.LEFT_ARM},)}, 'arms'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'view': (0, 0, 2)},)}, 'unit'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'image_up': (0.313, 0.008, 0.95)},)}, 'perpendicular'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'position_m': (np.inf, 0, 0)},)}, 'finite'),
+    ],
+)
+def test_camera_mounts_are_checked(change, match):
+    with pytest.raises(ValueError, match=match):
+        llm(model='test', **change)
 
 
 def without_cache_points(messages):
