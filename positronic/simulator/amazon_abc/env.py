@@ -72,7 +72,12 @@ class AbcEnv(EnvProtocol):
         return [{mapping.TASK_NAME: s.name, protocol.TASK_INSTRUCTION: s.prompt} for s in specs]
 
     def _build(self, token: dict[str, Any]) -> None:
-        key = (token[mapping.TOKEN_TASK], token[mapping.TOKEN_CAMERA_HEIGHT], token[mapping.TOKEN_CAMERA_WIDTH])
+        key = (
+            token[mapping.TOKEN_TASK],
+            token[mapping.TOKEN_CAMERA_HEIGHT],
+            token[mapping.TOKEN_CAMERA_WIDTH],
+            token[mapping.TOKEN_EPISODE_STEPS],
+        )
         if key == self._key:
             return
         self.close()
@@ -86,7 +91,7 @@ class AbcEnv(EnvProtocol):
                     render_cameras=True,
                     camera_height=token[mapping.TOKEN_CAMERA_HEIGHT],
                     camera_width=token[mapping.TOKEN_CAMERA_WIDTH],
-                    max_episode_steps=mapping.ABC_EVAL_STEPS,
+                    max_episode_steps=token[mapping.TOKEN_EPISODE_STEPS],
                 )
                 break
             except RuntimeError as error:
