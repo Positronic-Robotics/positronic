@@ -33,6 +33,7 @@ from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath
 from positronic.vendors.llm.policy import Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
+from positronic.vendors.llm.reach import Box
 
 
 def observation(x=0.0):
@@ -791,3 +792,112 @@ def test_the_hand_distance_and_the_tracking_error_are_checked(change):
     with pytest.raises(ValueError, match=next(iter(change))):
         LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, **change)
     assert LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, max_tracking_error=0).max_tracking_error == 0
+
+
+def move_arms_at(*waypoints: dict[str, tuple[float, float, float]], gripper=0):
+    path = [
+        {
+            arm: {'x': x, 'y': y, 'z': z, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': gripper}
+            for arm, (x, y, z) in w.items()
+        }
+        for w in waypoints
+    ]
+    return ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': path, 'note': 'Reach.'}, tool_call_id='m')])
+
+
+def rejection(metadata) -> str | None:
+    rejected = [e['reason'] for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    return rejected[-1] if rejected else None
+
+
+@pytest.mark.parametrize(
+    'floor,z,accepted', [(0.05, 0.06, True), (0.05, 0.04, False), (0.2, 0.1, True), (0.2, 0.09, False)]
+)
+def test_a_path_that_takes_a_hand_below_the_floor_or_lower_than_it_is_plays_nothing(floor, z, accepted):
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, min_hand_height=floor), metadata.__setitem__)
+    path = move_arms_at({'right': (0.0, -0.3, 0.15)}, {'right': (0.0, -0.3, z)})
+    parts = decide(conversation, bimanual_observation(), path)
+    assert (parts != [[]]) is accepted
+    assert (rejection(metadata) is None) is accepted
+    if not accepted:
+        assert rejection(metadata) == f'Hand right goes below z {min(floor, 0.1):.4f} m on the way to waypoint 2'
+
+
+def test_a_path_that_takes_a_hand_into_a_keep_out_box_that_does_not_hold_it_plays_nothing():
+    metadata = {}
+    box = [[-0.1, -0.5, 0.0], [0.05, -0.2, 0.5]]
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, keep_out=[box]), metadata.__setitem__)
+    outside = hands_at(bimanual_observation(), {'right': (0.1, -0.3)})
+    assert decide(conversation, outside, move_arms_at({'right': (0.2, -0.3, 0.1)})) != [[]]
+    assert decide(conversation, bimanual_observation(), move_arms_at({'right': (0.03, -0.3, 0.1)})) != [[]]
+    assert decide(conversation, outside, move_arms_at({'right': (0.0, -0.3, 0.1)})) == [[]]
+    assert rejection(metadata) == (
+        'Hand right goes into the box from [-0.1, -0.5, 0.0] to [0.05, -0.2, 0.5] m on the way to waypoint 1'
+    )
+
+
+class ScriptedReach:
+    """A reach that refuses the first pose of ``arm`` at or above ``height``, and records the joints it starts from."""
+
+    def __init__(self, arm: str, height: float):
+        self.arms = frozenset(keys.BIMANUAL_ARMS)
+        self.arm, self.height = arm, height
+        self.joints: dict[str | None, np.ndarray] = {}
+
+    def refusal(self, arm, joints, poses):
+        self.joints[arm] = joints
+        for index, pose in enumerate(poses):
+            if arm == self.arm and pose.translation[2] >= self.height:
+                return index, 'joint 4 is at its lower limit (-1.69 rad)'
+        return None
+
+    def meta(self):
+        return {'type': 'scripted'}
+
+
+def with_joints(obs):
+    for index, arm in enumerate(keys.BIMANUAL_ARMS):
+        obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'] = np.full(6, float(index))
+    return obs
+
+
+def test_a_path_that_a_hand_cannot_follow_plays_nothing_and_names_the_waypoint_after_a_gripper_hold():
+    metadata = {}
+    reach = ScriptedReach('right', 0.25)
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, reach=reach), metadata.__setitem__)
+    path = move_arms_at({'right': (0.0, -0.3, 0.15)}, {'right': (0.0, -0.3, 0.3)}, gripper=1)
+    assert decide(conversation, with_joints(bimanual_observation()), path) == [[]]
+    assert rejection(metadata) == 'Hand right cannot reach waypoint 2: joint 4 is at its lower limit (-1.69 rad)'
+    np.testing.assert_array_equal(reach.joints['left'], np.zeros(6))
+    np.testing.assert_array_equal(reach.joints['right'], np.ones(6))
+
+
+def test_the_floor_the_keep_out_boxes_and_the_reach_are_stated_only_when_set():
+    def prompt(**settings) -> str:
+        metadata = {}
+        Conversation(llm_bimanual(model='test', image_size=8, **settings), metadata.__setitem__).request(
+            with_joints(bimanual_observation()), 0
+        )
+        return metadata[policy_keys.TRANSCRIPT][0]['prompt']
+
+    plain = prompt()
+    assert 'below z' not in plain and 'into the box' not in plain and 'joint ranges' not in plain
+    stated = prompt(min_hand_height=0.05, keep_out=[[[0, 0, 0], [1, 1, 1]]], reach=ScriptedReach('right', 1.0))
+    assert 'A path that takes a hand below z 0.05 m is rejected' in stated
+    assert 'A path that takes a hand into the box from [0.0, 0.0, 0.0] to [1.0, 1.0, 1.0] m is rejected' in stated
+    assert 'cannot follow inside the joint ranges of its arm is rejected' in stated
+
+
+@pytest.mark.parametrize(
+    'settings,match',
+    [
+        ({'min_hand_height': float('nan')}, 'min_hand_height must be finite'),
+        ({'keep_out': (Box((0.0, 0.0, 0.0), (1.0, 0.0, 1.0)),)}, 'low below high'),
+        ({'keep_out': (Box((0.0, 0.0), (1.0, 1.0)),)}, 'xyz corners'),
+        ({'reach': ScriptedReach('right', 1.0), 'arms': ('left', 'middle')}, 'reach must cover the arms'),
+    ],
+)
+def test_the_floor_the_keep_out_boxes_and_the_reach_are_checked(settings, match):
+    with pytest.raises(ValueError, match=match):
+        LLMPolicy(Endpoint('test'), Motion(), **{'arms': keys.BIMANUAL_ARMS, **settings})
