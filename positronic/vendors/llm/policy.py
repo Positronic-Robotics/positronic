@@ -38,7 +38,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
-from positronic.utils import check_finite_positive, flatten_dict
+from positronic.utils import check_finite_nonnegative, check_finite_positive, flatten_dict
 
 from .client import Endpoint
 from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_approach, closest_hand_distances
@@ -381,17 +381,20 @@ class Conversation:
         """Why ``parts`` brings a pair of hands too close, or ``None``."""
         # Interpolated samples of a parallel move can come out a few ulp closer than the hands start.
         tolerance = 1e-6
-        # A measured hand is off its held target by the tracking error. A path that keeps the hands still moves the
-        # gap of a pair along the line from the measured gap to the held one, which passes closer than both ends
-        # by about error**2 / (8 * gap). A hand that does not follow its target makes that error large, so the
-        # line may come closer than its ends by `hand_slack` at most.
-        slack = self._policy.hand_slack
+        # A measured hand is off its held target by its tracking error. A path that keeps the hands still moves the
+        # gap of a pair along the line from the measured gap to the held one. That line can pass closer than both.
+        # The pair may follow it only while each of its hands is within `max_tracking_error` of its held target.
         limit = self._policy.min_hand_distance
+        tracks = {
+            arm: np.linalg.norm(hand.pose.translation - held[arm].pose.translation) <= self._policy.max_tracking_error
+            for arm, hand in hands.items()
+        }
         for (a, b), gap in closest_hand_distances(parts, self._policy.arms).items():
             measured = hands[a].pose.translation - hands[b].pose.translation
             targeted = held[a].pose.translation - held[b].pose.translation
             nearer = min(np.linalg.norm(measured), np.linalg.norm(targeted))
-            if gap >= min(limit, max(closest_approach(measured, targeted), nearer - slack)) - tolerance:
+            floor = closest_approach(measured, targeted) if tracks[a] and tracks[b] else nearer
+            if gap >= min(limit, floor) - tolerance:
                 continue
             if nearer < limit:
                 return (
@@ -455,7 +458,8 @@ CacheTTL = Literal['5m', '1h']
 class LLMPolicy(Policy):
     """An API-backed Cartesian policy for one arm or for named arms, with independent episode conversations.
 
-    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` and ``hand_slack`` are in metres.
+    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` and ``max_tracking_error`` are in
+    metres.
     """
 
     def __init__(
@@ -466,7 +470,7 @@ class LLMPolicy(Policy):
         images: Images = Images.ALWAYS,
         arms: tuple[str | None, ...] = keys.ONE_ARM,
         min_hand_distance: float = 0.1,
-        hand_slack: float = 1e-4,
+        max_tracking_error: float = 0.005,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         image_size: int = 640,
         image_horizon: int = 3,
@@ -478,7 +482,9 @@ class LLMPolicy(Policy):
         if arms != keys.ONE_ARM and (not arms or len(set(arms)) != len(arms) or not valid_names):
             raise ValueError('arms must be ONE_ARM or distinct non-empty names without a dot')
         check_finite_positive(min_hand_distance, 'min_hand_distance')
-        check_finite_positive(hand_slack, 'hand_slack')
+        check_finite_nonnegative(max_tracking_error, 'max_tracking_error')
+        if max_tracking_error >= min_hand_distance:
+            raise ValueError('max_tracking_error must be less than min_hand_distance')
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
@@ -495,7 +501,7 @@ class LLMPolicy(Policy):
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
-        self.arms, self.min_hand_distance, self.hand_slack = arms, min_hand_distance, hand_slack
+        self.arms, self.min_hand_distance, self.max_tracking_error = arms, min_hand_distance, max_tracking_error
         self.schemas: dict[Tool, type[BaseModel]] = {
             Tool.MOVE_PATH: MovePath if arms == keys.ONE_ARM else MoveArmsPath,
             Tool.REVEAL_FRAMES: RevealFrames,
@@ -524,7 +530,7 @@ class LLMPolicy(Policy):
             'motion': asdict(self.motion),
             'arms': list(self.arms),
             'min_hand_distance': self.min_hand_distance,
-            'hand_slack': self.hand_slack,
+            'max_tracking_error': self.max_tracking_error,
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
             'timeout': self.endpoint.timeout,
@@ -583,7 +589,7 @@ class LLMPolicy(Policy):
     images=Images.ALWAYS.value,
     arms=keys.ONE_ARM,
     min_hand_distance=0.1,
-    hand_slack=1e-4,
+    max_tracking_error=0.005,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     image_size=640,
     image_horizon=3,
@@ -600,7 +606,7 @@ def llm(
     images: str,
     arms: tuple[str | None, ...],
     min_hand_distance: float,
-    hand_slack: float,
+    max_tracking_error: float,
     camera_keys: tuple[str, ...],
     image_size: int,
     image_horizon: int,
@@ -616,7 +622,7 @@ def llm(
         images=Images(images),
         arms=tuple(arms),
         min_hand_distance=min_hand_distance,
-        hand_slack=hand_slack,
+        max_tracking_error=max_tracking_error,
         camera_keys=tuple(camera_keys),
         image_size=image_size,
         image_horizon=image_horizon,

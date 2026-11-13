@@ -224,7 +224,7 @@ def test_the_closest_hands_are_measured_along_the_path_and_one_arm_has_no_partne
         ((-0.003, 0.08), (0.003, 0.08), 0.08),
     ],
 )
-def test_the_closest_approach_is_the_shortest_vector_on_the_line_from_start_to_end(start, end, expected):
+def test_the_closest_approach_is_the_shortest_length_on_the_line_from_start_to_end(start, end, expected):
     assert closest_approach(np.array(start), np.array(end)) == pytest.approx(expected)
 
 

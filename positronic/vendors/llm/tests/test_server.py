@@ -418,6 +418,7 @@ def test_the_model_states_the_policy_meta_and_the_frames_of_its_poses(model, mak
     assert meta[policy_keys.TYPE] == policy_keys.LLM_TYPE
     assert meta[policy_keys.MODEL] == 'test'
     assert meta['arms'] == list(arms)
+    assert (meta['min_hand_distance'], meta['max_tracking_error']) == (0.1, 0.005)
     assert parse_ee_frames(meta[roboarm_keys.EE_FRAMES]) == dict.fromkeys(poses, EEFrame(site=GRIPPER_SITE))
 
 
