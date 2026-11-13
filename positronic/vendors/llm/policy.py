@@ -381,15 +381,19 @@ class Conversation:
         """Why ``parts`` brings a pair of hands too close, or ``None``."""
         # Interpolated samples of a parallel move can come out a few ulp closer than the hands start.
         tolerance = 1e-6
+        # A measured hand is off its held target by the tracking error. A path that keeps the hands still moves the
+        # gap of a pair along the line from the measured gap to the held one, which passes closer than both ends
+        # by about error**2 / (8 * gap). A hand that does not follow its target makes that error large, so the
+        # line may come closer than its ends by `dip` at most.
+        dip = 1e-4
         limit = self._policy.min_hand_distance
         for (a, b), gap in closest_hand_distances(parts, self._policy.arms).items():
             measured = hands[a].pose.translation - hands[b].pose.translation
             targeted = held[a].pose.translation - held[b].pose.translation
-            # A measured hand is off its held target by the tracking error. A path that keeps the hands still
-            # moves the gap of a pair along the line from the measured gap to the held one.
-            if gap >= min(limit, closest_approach(measured, targeted)) - tolerance:
+            nearer = min(np.linalg.norm(measured), np.linalg.norm(targeted))
+            if gap >= min(limit, max(closest_approach(measured, targeted), nearer - dip)) - tolerance:
                 continue
-            if min(np.linalg.norm(measured), np.linalg.norm(targeted)) < limit:
+            if nearer < limit:
                 return (
                     f'The path brings hands {a} and {b} {gap:.4f} m apart. They are {np.linalg.norm(measured):.4f} m '
                     f'apart, and their previous targets are {np.linalg.norm(targeted):.4f} m apart'

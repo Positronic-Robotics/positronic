@@ -6,7 +6,14 @@ from pydantic import ValidationError
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
-from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath, Waypoint, closest_hand_distances
+from positronic.vendors.llm.motion import (
+    Motion,
+    MoveArmsPath,
+    MovePath,
+    Waypoint,
+    closest_approach,
+    closest_hand_distances,
+)
 
 # The cases below are written around these bounds, not around the defaults.
 SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'linear_speed': 0.05}
@@ -204,6 +211,21 @@ def test_the_closest_hands_are_measured_along_the_path_and_one_arm_has_no_partne
     start = geom.Transform3D([0, 0, 0])
     alone = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01)}]).parts
     assert closest_hand_distances(alone, keys.ONE_ARM) == {}
+
+
+@pytest.mark.parametrize(
+    'start,end,expected',
+    [
+        ((0.0, 0.1), (0.0, 0.1), 0.1),
+        ((0.0, 0.1), (0.0, 0.3), 0.1),
+        ((0.0, 0.3), (0.0, 0.1), 0.1),
+        ((0.0, 0.1), (0.0, -0.3), 0.0),
+        ((0.1, 0.0), (0.0, 0.1), math.sqrt(0.005)),
+        ((-0.003, 0.08), (0.003, 0.08), 0.08),
+    ],
+)
+def test_the_closest_approach_is_the_shortest_vector_on_the_line_from_start_to_end(start, end, expected):
+    assert closest_approach(np.array(start), np.array(end)) == pytest.approx(expected)
 
 
 def test_a_gripper_hold_is_a_part_of_its_own():

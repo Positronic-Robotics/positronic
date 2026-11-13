@@ -593,6 +593,7 @@ def hands_at(obs, positions: dict[str, tuple[float, float]]):
         ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.3), 'right': (0.0, -0.3)}, True),
         ({'left': (0.054, 0.042), 'right': (0.094, -0.042)}, {'left': (0.004, 0.042), 'right': (0.044, -0.042)}, True),
         ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.03), 'right': (0.0, -0.03)}, False),
+        ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.04), 'right': (0.0, -0.039995)}, False),
     ],
 )
 def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays_nothing(start, path, accepted):
@@ -612,10 +613,10 @@ def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays
     [
         ({}, {'left': (0.0, 0.0405)}, {'right': (0.0, -0.04)}),
         ({}, {'left': (0.0, 0.0395)}, {'left': (0.0, 0.0395), 'right': (0.0, -0.04)}),
-        ({'left': (-0.001, 0.04)}, {'left': (0.001, 0.04)}, {'left': (0.029, 0.04), 'right': (0.03, -0.04)}),
+        ({'left': (-0.003, 0.04)}, {'left': (0.003, 0.04)}, {'left': (0.027, 0.04), 'right': (0.03, -0.04)}),
     ],
 )
-def test_hands_inside_the_limit_can_hold_still_while_a_hand_is_off_its_target(target, measured, path):
+def test_hands_inside_the_limit_can_keep_their_gap_while_a_hand_is_off_its_target(target, measured, path):
     conversation = Conversation(llm_bimanual(model='test', image_size=8), lambda *_: None)
     close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
     assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close | target)) != [[]]
@@ -623,18 +624,39 @@ def test_hands_inside_the_limit_can_hold_still_while_a_hand_is_off_its_target(ta
     assert decide(conversation, off, move_arms(path)) != [[]]
 
 
-def test_hands_inside_the_limit_may_not_come_closer_than_they_are():
+@pytest.mark.parametrize(
+    'y,measured,path,reason',
+    [
+        (
+            0.04,
+            {'left': (0.0, 0.0405)},
+            {'right': (0.0, -0.03)},
+            '0.0700 m apart. They are 0.0805 m apart, and their previous targets are 0.0800 m apart',
+        ),
+        (
+            0.04,
+            {'left': (0.0, 0.07)},
+            {'right': (0.0, -0.03)},
+            '0.0700 m apart. They are 0.1100 m apart, and their previous targets are 0.0800 m apart',
+        ),
+        (
+            0.06,
+            {'left': (0.0, 0.02)},
+            {'right': (0.0, 0.0)},
+            '0.0600 m apart. They are 0.0800 m apart, and their previous targets are 0.1200 m apart',
+        ),
+        (0.05, {'left': (0.1, -0.05)}, {'left': (0.0995, -0.05)}, '0.0995 m apart. Keep them at least 0.1000 m apart'),
+    ],
+)
+def test_hands_off_their_targets_may_not_come_closer_than_the_limit_or_both_of_their_gaps(y, measured, path, reason):
     metadata = {}
     conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
-    close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
-    assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close)) != [[]]
-    off = hands_at(bimanual_observation(), {'left': (0.0, 0.0405), 'right': (0.0, -0.04)})
-    assert decide(conversation, off, move_arms({'right': (0.0, -0.03)})) == [[]]
+    targets = {'left': (0.0, y), 'right': (0.0, -y)}
+    assert decide(conversation, hands_at(bimanual_observation(), targets), move_arms(targets)) != [[]]
+    off = hands_at(bimanual_observation(), targets | measured)
+    assert decide(conversation, off, move_arms(path)) == [[]]
     (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
-    assert rejected['reason'] == (
-        'The path brings hands left and right 0.0700 m apart. They are 0.0805 m apart, '
-        'and their previous targets are 0.0800 m apart'
-    )
+    assert rejected['reason'] == f'The path brings hands left and right {reason}'
 
 
 def test_a_rejected_path_leaves_the_held_targets_as_they_were():
