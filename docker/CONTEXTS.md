@@ -39,7 +39,7 @@ See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
 `multitask_200k_yambox_wide_top_rtc` command. See [the vendor README](../positronic/vendors/abc_dit/README.md#docker-image).
 
 `Dockerfile.serve-pi05-abc` builds the private `pi05-abc-yam` image in the same form, and it starts the
-`bottles_16k` command. See [the vendor README](../positronic/vendors/pi05_abc/README.md#docker-image).
+`bottles_16k` command by default, or the command of its `COMMAND` build argument. See [the vendor README](../positronic/vendors/pi05_abc/README.md#docker-image).
 
 ## References
 
