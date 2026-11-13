@@ -51,6 +51,7 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
         abc_keys.CAMERA_HEIGHT: 168,
         abc_keys.CAMERA_WIDTH: 224,
         abc_keys.CAMERA_VIEW: mapping.CameraView.D405.value,
+        abc_keys.EPISODE_STEPS: 50,
         eval_keys.SEED: 7,
     })
     assert token == {
@@ -59,6 +60,7 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
         mapping.TOKEN_CAMERA_HEIGHT: 168,
         mapping.TOKEN_CAMERA_WIDTH: 224,
         mapping.TOKEN_CAMERA_VIEW: mapping.CameraView.D405.value,
+        mapping.TOKEN_EPISODE_STEPS: 50,
     }
 
 
@@ -78,6 +80,26 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
     assert [t.instruction for t in trials] == ['put the plastic bottles in the bin'] * 2 + [
         'turn the mug right side up'
     ] * 2
+
+
+def test_the_default_timeout_runs_a_trial_for_the_steps_of_abcs_own_eval(asked):
+    (trial, *_) = abc_cfg.put_bottles.instantiate().tasks()
+
+    # 236 chunks of 15 actions, as ABC's sim eval runs; a maintenance task succeeds only when ABC truncates there.
+    assert trial.prepare_args[eval_keys.SCENE][abc_keys.EPISODE_STEPS] == 3540
+
+
+def test_a_longer_timeout_runs_a_trial_for_more_steps_that_end_before_it(asked):
+    (trial, *_) = abc_cfg.put_bottles.override(timeout=480).instantiate().tasks()
+
+    steps = trial.prepare_args[eval_keys.SCENE][abc_keys.EPISODE_STEPS]
+    assert steps == 14116
+    assert (steps + 1) * mapping.ABC_CONTROL_DT <= 480 < (steps + 2) * mapping.ABC_CONTROL_DT
+
+
+def test_the_config_refuses_a_timeout_with_no_action_before_it():
+    with pytest.raises(ValueError, match='leaves no ABC action'):
+        abc_cfg.put_bottles.override(timeout=0.05).instantiate()
 
 
 def test_the_config_refuses_an_unknown_camera_view():
@@ -145,18 +167,34 @@ def test_the_eval_records_abcs_reward_under_the_signal_that_the_abc_labeler_read
     assert ABC_REWARD_SIGNAL in recorded
 
 
-@pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG])
-def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(monkeypatch, name: EvalRef):
+PUBLIC_ABC_EVALS = [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG]
+
+
+@pytest.fixture
+def listed_as_named(monkeypatch):
+    """ABC lists each task that a spec names, with no ABC process."""
+
     def tasks(self, spec: dict[str, Any]) -> list[EnvTask]:
         return [EnvTask(task, {eval_keys.TASK: task}) for task in spec[mapping.SELECT_TASKS]]
 
     monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
+
+
+@pytest.mark.parametrize('name', PUBLIC_ABC_EVALS)
+def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(listed_as_named, name: EvalRef):
     definition = public_eval(name)
 
     trials = abc_cfg.all_tasks.override(**definition.args).instantiate().tasks()
 
     pinned = [(task.name, trial) for task in definition.tasks for trial in task.trials]
     assert [(t.meta[eval_keys.TASK], {eval_keys.SEED: t.meta[eval_keys.SEED]}) for t in trials] == pinned
+
+
+@pytest.mark.parametrize('name', PUBLIC_ABC_EVALS)
+def test_a_public_abc_eval_runs_each_trial_for_the_steps_of_abcs_own_eval(listed_as_named, name: EvalRef):
+    trials = abc_cfg.all_tasks.override(**public_eval(name).args).instantiate().tasks()
+
+    assert {t.prepare_args[eval_keys.SCENE][abc_keys.EPISODE_STEPS] for t in trials} == {mapping.ABC_EVAL_STEPS}
 
 
 def test_the_terminal_carries_the_envs_own_verdict():

@@ -427,7 +427,7 @@ def test_park_gives_up_when_the_arm_does_not_arrive_in_time():
     arm = FakeArm(JOGGED, polls_to_reach=10**9)
     clock = MockClock()
     parking = _arm(_driver(arm, manage_desk=False), clock)
-    budget = parking._travel_s(JOGGED, PARK)
+    budget = parking._travel_s(JOGGED, PARK, None)
 
     _drive(parking.park(), clock)
 
@@ -1476,6 +1476,28 @@ def test_a_move_that_merely_ran_out_of_time_is_no_refusal(desk, caplog):
     assert _refusals(caplog) == []
 
 
+def _move_under_a_slow_reference(mode: command.ControlModeType | None) -> Iterator[pimm.Command]:
+    """A move of 0.5 rad on joint 1 under ``mode``, by a driver whose reference moves 0.1 rad/s, never arriving."""
+    arm = FakeArm(PARK, polls_to_reach=10**9)
+    driver = _driver(arm, max_reference_speed=0.1)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    travel = _connected_arm(driver, clock, _safe_inputs(driver)).move_to(JOGGED, mode)
+    next(travel)  # the first poll: the goal is in flight
+    clock.advance(8.0)  # the 0.5 rad take 5 s at 0.1 rad/s; the dynamics factor allows the move about 6 s
+    return travel
+
+
+def test_an_impedance_move_gets_the_time_its_reference_speed_cap_needs(desk):
+    next(_move_under_a_slow_reference(IMPEDANCE))  # still in flight, not stopped short
+
+
+@pytest.mark.parametrize('mode', [None, command.PositionControl()], ids=['no mode', 'position control'])
+def test_a_move_under_no_impedance_keeps_the_time_its_dynamics_factor_allows(desk, mode):
+    with pytest.raises(TimeoutError, match='stopped short'):
+        next(_move_under_a_slow_reference(mode))
+
+
 def test_a_move_the_arm_reached_ends_the_refusal_streak(desk, caplog):
     """The count says the refusals ran in a row, so a goal the arm reached has to end it."""
     driver = _driver(FakeArm(PARK))
@@ -1549,10 +1571,10 @@ TURNED_IMPEDANCE = command.Impedance(
 )
 
 
-def _streamed_mode(mode: command.Impedance) -> Any:
+def _streamed_mode(mode: command.Impedance, **driver_kwargs) -> Any:
     """The pf mode the arm runs once a streamed joint command under ``mode`` lands."""
     arm = FakeArm(PARK)
-    driver = _driver(arm)
+    driver = _driver(arm, **driver_kwargs)
     feed = ManualCommandReceiver()
     driver.commands._bind(feed)
     loop = driver.run(StopFlag(), MockClock())
@@ -1577,6 +1599,19 @@ def test_an_impedance_frame_reaches_the_arm_as_its_stiffness_point_on_the_flange
     """``Impedance.frame`` is measured from ``gripper``, and the arm takes the point in flange axes."""
     mode = _streamed_mode(dataclasses.replace(IMPEDANCE, frame=frame))
     np.testing.assert_allclose(mode.stiffness_point, point, atol=1e-12)
+
+
+def test_an_impedance_mode_caps_the_reference_at_1_rad_s_per_joint_and_0_7_m_s_at_the_gripper(desk):
+    mode = _streamed_mode(IMPEDANCE)
+    assert mode.max_reference_speed == [1.0] * 7
+    assert mode.max_tool_point_speed == 0.7
+    np.testing.assert_allclose(mode.tool_point, FLANGE_TO_GRIPPER.translation, atol=1e-12)
+
+
+def test_the_reference_speed_caps_come_from_the_driver_configuration(desk):
+    mode = _streamed_mode(IMPEDANCE, max_reference_speed=1.3, max_gripper_point_speed=None)
+    assert mode.max_reference_speed == [1.3] * 7
+    assert mode.max_tool_point_speed is None
 
 
 def test_a_streamed_impedance_at_a_turned_frame_leaves_the_arm_alone(desk):

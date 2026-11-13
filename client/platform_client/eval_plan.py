@@ -317,6 +317,7 @@ class _EndpointBase(Cascade):
         *Cascade._OMITTED_WHEN_NONE,
         'max_concurrent_sessions',
         'min_vram_gb',
+        'query',
     )
 
     name: str = Field(min_length=1)
@@ -333,6 +334,8 @@ class _EndpointBase(Cascade):
     # The least GPU memory an image needs, in GB of 10**9 bytes. The platform gives the run a GPU slice that
     # holds it. None takes the published slice.
     min_vram_gb: int | None = Field(default=None, ge=1)
+    # The params the platform puts on each session URL of the image, as `address.query` does for a remote endpoint.
+    query: SessionQuery | None = Field(default=None, min_length=1)
 
     @model_validator(mode='before')
     @classmethod
@@ -433,6 +436,22 @@ class _EndpointBase(Cascade):
             raise ValueError(
                 f'{slug_of(self.kind)} endpoint {self.name!r} states min_vram_gb, which only an image endpoint '
                 'carries: the platform sizes the GPU of the image it runs'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_query_opens_the_sessions_of_an_image(self) -> Self:
+        if self.query is None:
+            return self
+        if not self.names_a_locator:
+            raise ValueError(
+                f'endpoint {self.name!r} states a query and names no image: state it on the plan endpoint '
+                'this label names'
+            )
+        if self.kind is not EndpointKind.image:
+            raise ValueError(
+                f'{slug_of(self.kind)} endpoint {self.name!r} states a query, which only an image endpoint carries: '
+                'a remote endpoint writes its session params in `address.query`'
             )
         return self
 
@@ -861,6 +880,7 @@ def plan_of_image(
     credential: RegistryCredential | None = None,
     org: OrgSlug | None = None,
     sample: Sample | None = None,
+    query: SessionQuery | None = None,
 ) -> EvalPlan:
     """The plan a policy image runs as: one image endpoint, and the eval naming the tasks.
 
@@ -868,7 +888,7 @@ def plan_of_image(
     The catalogue expands the eval name into tasks and the count each takes, so such a plan states
     neither. `credential` opens the registry when `image` is not public. The plan is a
     `nebius_competition` run, or a private run for `org` where one is given. `sample` runs a random
-    subset of the eval's trials.
+    subset of the eval's trials. `query` holds the params the platform puts on each session URL.
     """
     return EvalPlan(
         request_type=NebiusCompetition() if org is None else PrivateEval(org=org),
@@ -880,6 +900,7 @@ def plan_of_image(
                 wire=Wire.websocket,
                 image=image,
                 image_credential=credential,
+                query=query,
             )
         ],
         alias=alias,

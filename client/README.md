@@ -261,6 +261,11 @@ the published slice of 24192 MiB. A need that no slice of the run's GPU holds is
 and so is a need above the published slice where the plan's eval keeps that slice. Only an entry
 that names its `image` states it.
 
+An `image` endpoint may state `query`, the session params the platform puts on each session URL of
+the image, for example `horizon_sec=0.5`. It holds the grammar of an address `query` (the table
+below), and it may not be empty. A `remote` endpoint writes its params in `address.query`, and a
+`served` endpoint states none. Only an entry that names its `image` states it.
+
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
 

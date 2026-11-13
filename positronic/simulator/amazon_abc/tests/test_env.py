@@ -26,6 +26,7 @@ _TOKEN = {
     mapping.TOKEN_CAMERA_HEIGHT: 4,
     mapping.TOKEN_CAMERA_WIDTH: 6,
     mapping.TOKEN_CAMERA_VIEW: mapping.CameraView.ZED_X.value,
+    mapping.TOKEN_EPISODE_STEPS: 3540,
 }
 
 
@@ -319,11 +320,17 @@ def test_a_build_that_keeps_failing_raises_after_a_bounded_number_of_tries(env, 
     assert scene.builds < 100
 
 
-def test_abc_truncates_a_trial_at_the_horizon_of_its_own_eval(env, scene):
-    env.reset(_TOKEN)
+def test_abc_truncates_a_trial_at_the_steps_the_token_names(env, scene):
+    env.reset({**_TOKEN, mapping.TOKEN_EPISODE_STEPS: 50})
 
-    # 236 chunks of 15 actions, as ABC's sim eval runs; a maintenance task succeeds only when ABC truncates there.
-    assert scene.max_episode_steps == 3540
+    assert scene.max_episode_steps == 50
+
+
+def test_a_token_with_other_episode_steps_builds_the_env_again(env, scene):
+    env.reset(_TOKEN)
+    env.reset({**_TOKEN, mapping.TOKEN_EPISODE_STEPS: 50})
+
+    assert (scene.builds, scene.max_episode_steps) == (2, 50)
 
 
 @pytest.mark.parametrize(('truncated', 'done'), [(False, False), (True, True)], ids=['running', 'at_the_horizon'])

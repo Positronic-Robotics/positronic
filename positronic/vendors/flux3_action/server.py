@@ -123,12 +123,16 @@ def flux3_action_model(
 
 
 @cfn.config(codec=codecs.droid)
-def pipeline(codec: Codec) -> PolicyDeployment:
-    """The client plays each chunk whole, as BFL's DROID settings do, and `codec` runs on this server."""
+def pipeline(codec: Codec, horizon_sec: float | None = None) -> PolicyDeployment:
+    """The client plays each chunk whole, as BFL's DROID settings do, and `codec` runs on this server.
+
+    A session that states `horizon_sec`, for example with the query `horizon_sec=0.5`, plays only the commands
+    of each chunk before that time.
+    """
     return PolicyDeployment(
         Sequential(
             TrajectoryPlayer(replan_on_error=True),
-            ChunkedSchedule(codecs.FPS),
+            ChunkedSchedule(codecs.FPS, horizon_sec),
             TransformImages(*codecs.VIEW_SIZE, mode=ResizeMode.BOUND),
         ),
         codec,
