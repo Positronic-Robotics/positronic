@@ -133,19 +133,17 @@ class Motion:
         ``held`` is the target of each arm of ``starts`` before the path. An arm that a waypoint of ``path`` leaves
         out holds its previous clamped target. All arms reach a waypoint together.
         """
-        grips = {arm: target.gripper for arm, target in held.items()}
         bounded, parts, clamped = [], [], False
         for waypoint in path:
             requested = {arm: waypoint.get(arm, held[arm]) for arm in starts}
             targets = {arm: self._clamp(start, requested[arm]) for arm, start in starts.items()}
             clamped = clamped or targets != requested
             parts.append(self._segment(starts, targets))
-            if any(target.gripper != grips[arm] for arm, target in targets.items()):
+            if any(target.gripper != held[arm].gripper for arm, target in targets.items()):
                 hold = self._commands({arm: target.pose for arm, target in targets.items()}, targets)
                 parts.append([hold] * math.ceil(self.grip_hold * self.fps))
             bounded.append(targets)
             starts = {arm: target.pose for arm, target in targets.items()}
-            grips = {arm: target.gripper for arm, target in targets.items()}
             held = targets
         return Trajectory(bounded, parts, clamped)
 

@@ -384,14 +384,14 @@ class Conversation:
         # A measured hand is off its held target by the tracking error. A path that keeps the hands still moves the
         # gap of a pair along the line from the measured gap to the held one, which passes closer than both ends
         # by about error**2 / (8 * gap). A hand that does not follow its target makes that error large, so the
-        # line may come closer than its ends by `dip` at most.
-        dip = 1e-4
+        # line may come closer than its ends by `hand_slack` at most.
+        slack = self._policy.hand_slack
         limit = self._policy.min_hand_distance
         for (a, b), gap in closest_hand_distances(parts, self._policy.arms).items():
             measured = hands[a].pose.translation - hands[b].pose.translation
             targeted = held[a].pose.translation - held[b].pose.translation
             nearer = min(np.linalg.norm(measured), np.linalg.norm(targeted))
-            if gap >= min(limit, max(closest_approach(measured, targeted), nearer - dip)) - tolerance:
+            if gap >= min(limit, max(closest_approach(measured, targeted), nearer - slack)) - tolerance:
                 continue
             if nearer < limit:
                 return (
@@ -455,7 +455,7 @@ CacheTTL = Literal['5m', '1h']
 class LLMPolicy(Policy):
     """An API-backed Cartesian policy for one arm or for named arms, with independent episode conversations.
 
-    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` is in metres.
+    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` and ``hand_slack`` are in metres.
     """
 
     def __init__(
@@ -466,6 +466,7 @@ class LLMPolicy(Policy):
         images: Images = Images.ALWAYS,
         arms: tuple[str | None, ...] = keys.ONE_ARM,
         min_hand_distance: float = 0.1,
+        hand_slack: float = 1e-4,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         image_size: int = 640,
         image_horizon: int = 3,
@@ -477,6 +478,7 @@ class LLMPolicy(Policy):
         if arms != keys.ONE_ARM and (not arms or len(set(arms)) != len(arms) or not valid_names):
             raise ValueError('arms must be ONE_ARM or distinct non-empty names without a dot')
         check_finite_positive(min_hand_distance, 'min_hand_distance')
+        check_finite_positive(hand_slack, 'hand_slack')
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
@@ -493,7 +495,7 @@ class LLMPolicy(Policy):
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
-        self.arms, self.min_hand_distance = arms, min_hand_distance
+        self.arms, self.min_hand_distance, self.hand_slack = arms, min_hand_distance, hand_slack
         self.schemas: dict[Tool, type[BaseModel]] = {
             Tool.MOVE_PATH: MovePath if arms == keys.ONE_ARM else MoveArmsPath,
             Tool.REVEAL_FRAMES: RevealFrames,
@@ -522,6 +524,7 @@ class LLMPolicy(Policy):
             'motion': asdict(self.motion),
             'arms': list(self.arms),
             'min_hand_distance': self.min_hand_distance,
+            'hand_slack': self.hand_slack,
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
             'timeout': self.endpoint.timeout,
@@ -580,6 +583,7 @@ class LLMPolicy(Policy):
     images=Images.ALWAYS.value,
     arms=keys.ONE_ARM,
     min_hand_distance=0.1,
+    hand_slack=1e-4,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     image_size=640,
     image_horizon=3,
@@ -596,6 +600,7 @@ def llm(
     images: str,
     arms: tuple[str | None, ...],
     min_hand_distance: float,
+    hand_slack: float,
     camera_keys: tuple[str, ...],
     image_size: int,
     image_horizon: int,
@@ -611,6 +616,7 @@ def llm(
         images=Images(images),
         arms=tuple(arms),
         min_hand_distance=min_hand_distance,
+        hand_slack=hand_slack,
         camera_keys=tuple(camera_keys),
         image_size=image_size,
         image_horizon=image_horizon,

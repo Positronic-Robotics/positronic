@@ -91,7 +91,7 @@ Defaults are experimental bounds for supervised testing:
 | `timeout` | 120 seconds per model invocation, including retries |
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
-| `arms` / `min_hand_distance` | `ONE_ARM` (one arm with no name) / 0.1 m |
+| `arms` / `min_hand_distance` / `hand_slack` | `ONE_ARM` (one arm with no name) / 0.1 m / 0.0001 m |
 | `image_size` | 640 pixels on the longest edge; aspect ratio preserved |
 | `image_horizon` | Frames of the most recent 3 observations |
 | `images` | `always` |
@@ -104,7 +104,7 @@ A path plays its waypoints in order, with no observation between them. Translati
 
 `--policy=@positronic.vendors.llm.policy.llm_bimanual` drives the `left` and `right` arms of a bimanual embodiment, such as the YAM, with its top camera and the camera on each wrist. `--policy.arms` sets other arm names. The policy reads `robot_state.{arm}.ee_pose` and `grip.{arm}`, and commands `robot_command.{arm}` and `target_grip.{arm}`. All arms use one frame. The observation holds the hand state of each arm under `arms`.
 
-A waypoint of `move_path` maps arm names to hand targets. An arm that a waypoint leaves out holds its previous target, or its measured pose before its first target. All arms reach a waypoint together: a segment lasts as long as the slower arm needs. A gripper change of one arm holds every hand still. The model gets a correction for a path with an unknown arm name. A path that brings a pair of hands closer than `min_hand_distance` does not play: the tool result rejects it and the next decision starts. Hands that start closer than that must not come closer than they are, but they can go back to their previous targets. This rejection does not count toward `max_invalid`; `max_calls` bounds it. This check covers the commanded hand positions only, not the links of the arms.
+A waypoint of `move_path` maps arm names to hand targets. An arm that a waypoint leaves out holds its previous target, or its measured pose before its first target. All arms reach a waypoint together: a segment lasts as long as the slower arm needs. A gripper change of one arm holds every hand still. The model gets a correction for a path with an unknown arm name. A path that brings a pair of hands closer than `min_hand_distance` does not play: the tool result rejects it and the next decision starts. Hands that start closer than that must not come closer than they are, but they can go back to their previous targets. On the way back, a hand that is off its target can bring the pair up to `hand_slack` closer than both distances. This rejection does not count toward `max_invalid`; `max_calls` bounds it. This check covers the commanded hand positions only, not the links of the arms.
 
 ## Recordings and lifecycle
 

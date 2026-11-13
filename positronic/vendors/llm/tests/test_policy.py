@@ -722,6 +722,7 @@ def test_arms_are_one_arm_or_distinct_names(change):
     assert LLMPolicy(Endpoint('test'), Motion()).arms == keys.ONE_ARM
 
 
-def test_the_hand_distance_must_be_finite_and_positive():
-    with pytest.raises(ValueError, match='min_hand_distance'):
-        LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, min_hand_distance=0)
+@pytest.mark.parametrize('name', ['min_hand_distance', 'hand_slack'])
+def test_the_hand_distances_must_be_finite_and_positive(name):
+    with pytest.raises(ValueError, match=name):
+        LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, **{name: 0})
