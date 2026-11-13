@@ -3,6 +3,7 @@
 import contextlib
 import ctypes
 import functools
+import gc
 import heapq
 import importlib
 import logging
@@ -827,6 +828,27 @@ class World:
         self._foreground_cleanup.append(scheduler.close)
         return scheduler
 
+    _schedulers_running_in_process = 0
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _heap_out_of_collections() -> Iterator[None]:
+        """Keep the objects that exist when the first scheduler starts out of each collection until the last one ends.
+
+        A full collection stops every loop of the process while it scans. An import heap of about 140,000 objects
+        takes about 100 ms to scan on an ARM robot computer.
+        """
+        if World._schedulers_running_in_process == 0:
+            gc.collect()
+            gc.freeze()
+        World._schedulers_running_in_process += 1
+        try:
+            yield
+        finally:
+            World._schedulers_running_in_process -= 1
+            if World._schedulers_running_in_process == 0:
+                gc.unfreeze()
+
     def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         with contextlib.ExitStack() as scope:
 
@@ -844,6 +866,7 @@ class World:
                     raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
             self._foreground_cleanup.append(scope.close)
+            scope.enter_context(self._heap_out_of_collections())
             scope.callback(close_loops)
             scheduler = self._schedule(iters)
             scope.callback(scheduler.close)

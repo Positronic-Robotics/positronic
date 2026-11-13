@@ -1,3 +1,4 @@
+import gc
 import logging
 import multiprocessing as mp
 import os
@@ -245,6 +246,30 @@ class StopWatcher(ControlSystem):
                 self._seen.value = 1
                 return
             yield Sleep(0.01)
+
+
+class HeapCounter(ControlSystem):
+    """Records how many objects a full collection would scan, at the start and at the end of its loop."""
+
+    def __init__(self, counts: list[int]):
+        self._counts = counts
+
+    def run(self, should_stop, clock):
+        self._counts.append(len(gc.get_objects()))
+        yield Sleep(0.01)
+        self._counts.append(len(gc.get_objects()))
+
+
+def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
+    """Every loop of the process stops while a full collection scans, so the scan must stay short."""
+    import_heap = [[i] for i in range(50_000)]
+    counts: list[int] = []
+
+    with World() as world:
+        world.run([HeapCounter(counts)])
+
+    assert max(counts) < len(import_heap) / 10
+    assert gc.get_freeze_count() == 0, 'the collector gets the heap back after the run'
 
 
 class DummySMValue(SMCompliant):
