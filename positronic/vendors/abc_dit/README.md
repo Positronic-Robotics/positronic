@@ -20,6 +20,9 @@ example `load_the_plates_into_the_dish_rack`. The release holds no real data of 
 refuses that instruction. The release also holds `throw_the_plastic_bottles_in_the_bin`, a separate task. ABC's sim has no success evaluator for
 `hang_mug_on_mug_rack`, so that task scores no successes.
 
+With `prompts=real`, the codec also accepts tasks that only ABC's real data holds, such as
+`build the wood block tower`. The instruction of such a task is its prompt, so the codec sends it as it is.
+
 ## Licences
 
 The ABC code and the DiT checkpoints are under the Apache License 2.0. The checkpoints embed a vision backbone derived

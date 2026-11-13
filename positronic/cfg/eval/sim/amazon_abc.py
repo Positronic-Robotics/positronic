@@ -1,7 +1,7 @@
 import configuronic as cfn
 from eval_vocabulary.episode import ABC_TASK_EVAL_SIGNAL
 
-from positronic.cfg.eval import build_tasks, spec
+from positronic.cfg.eval import build_tasks, require_finite_positive, spec
 from positronic.drivers.roboarm.models import bundled_yam_model
 from positronic.eval import Eval, Task
 from positronic.simulator.amazon_abc import keys as abc_keys
@@ -16,8 +16,7 @@ from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote
     camera_height=260,
     camera_width=416,
     camera_view=mapping.CameraView.ZED_X,
-    # ABC's actions are 34 ms apart. One more period lets the last action's verdict arrive before the deadline.
-    timeout=(mapping.ABC_EVAL_STEPS + 1) * 0.034,
+    timeout=(mapping.ABC_EVAL_STEPS + 1) * mapping.ABC_CONTROL_DT,
     seed=None,
     task=None,
     trial_count=1,
@@ -26,12 +25,17 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     """An ABC eval on the bimanual i2rt YAM.
 
     ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
-    ``camera_view`` is a ``mapping.CameraView`` or its value.
+    ``camera_view`` is a ``mapping.CameraView`` or its value. ABC truncates each trial one or two actions before
+    ``timeout``, so the verdict of its last action arrives by then. The default timeout gives the horizon of ABC's own
+    eval, and ``timeout=None`` gives that horizon with no deadline. A run with another timeout is not comparable with
+    ABC's own scores.
 
     A task's instruction is the prompt ABC lists for it. A seeded reset draws the prompt of some tasks, and some
     tasks move the prompt during an episode: the env publishes each such prompt as a new goal.
     """
+    require_finite_positive('timeout', timeout)
     view = mapping.CameraView(camera_view)
+    episode_steps = mapping.ABC_EVAL_STEPS if timeout is None else mapping.episode_steps(timeout)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(mapping.task_names(task)))
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()
@@ -50,6 +54,7 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
                     abc_keys.CAMERA_HEIGHT: camera_height,
                     abc_keys.CAMERA_WIDTH: camera_width,
                     abc_keys.CAMERA_VIEW: view.value,
+                    abc_keys.EPISODE_STEPS: episode_steps,
                 },
             )
             for listed in proxy.tasks(spec(**{mapping.SELECT_TASKS: task}))

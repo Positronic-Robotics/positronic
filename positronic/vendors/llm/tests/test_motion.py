@@ -6,15 +6,36 @@ from pydantic import ValidationError
 from scipy.spatial.transform import Rotation
 
 from positronic import geom, keys
-from positronic.vendors.llm.motion import Motion, MovePath, Waypoint
+from positronic.vendors.llm.motion import (
+    Motion,
+    MoveArmsPath,
+    MovePath,
+    Waypoint,
+    closest_approach,
+    closest_hand_distances,
+)
 
 # The cases below are written around these bounds, not around the defaults.
 SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'linear_speed': 0.05}
 
 
 def played(motion: Motion, start: geom.Transform3D, grip: float, path: list[Waypoint]):
-    bounded, parts = motion.trajectory(start, grip, path)
-    return bounded, [command for part in parts for command in part]
+    held = {None: Waypoint.at(start, grip)}
+    bounded, parts, _ = motion.trajectory({None: start}, held, [{None: waypoint} for waypoint in path])
+    return [targets[None] for targets in bounded], [command for part in parts for command in part]
+
+
+def at(x: float, y: float = 0.0, gripper: float = 0.0) -> Waypoint:
+    return Waypoint(x=x, y=y, z=0, roll=0, pitch=0, yaw=0, gripper=gripper)
+
+
+def arm_command(command: dict, arm: str) -> np.ndarray:
+    return command[keys.arm_channel(keys.ROBOT_COMMAND, arm)].pose.translation
+
+
+def two_arms(left_x: float = 0.0, right_x: float = 0.0, y: float = 0.3):
+    starts = {keys.LEFT_ARM: geom.Transform3D([left_x, y, 0]), keys.RIGHT_ARM: geom.Transform3D([right_x, -y, 0])}
+    return starts, {arm: Waypoint.at(pose, 0) for arm, pose in starts.items()}
 
 
 @pytest.mark.parametrize('quaternion_sign', [1, -1])
@@ -136,15 +157,94 @@ def test_invalid_tool_numbers_cannot_reach_motion(change):
         Waypoint(**(values | change))
 
 
-def test_a_path_needs_a_waypoint():
+@pytest.mark.parametrize('waypoints', [[], [{}]])
+def test_a_path_needs_a_waypoint_and_an_arm_waypoint_needs_an_arm(waypoints):
     with pytest.raises(ValidationError):
-        MovePath(waypoints=[], note='approach')
+        MovePath(waypoints=waypoints, note='approach')
+    with pytest.raises(ValidationError):
+        MoveArmsPath(waypoints=waypoints, note='approach')
+
+
+def test_arms_reach_each_waypoint_together_at_the_pace_of_the_slower_arm():
+    motion = Motion(**SHORT_BOUNDS)
+    parts = motion.trajectory(*two_arms(), [{'left': at(0.04, 0.3), 'right': at(0.01, -0.3)}]).parts
+    (segment,) = parts
+    assert len(segment) == round(0.04 / motion.linear_speed * motion.fps)
+    left = [arm_command(command, keys.LEFT_ARM) for command in segment]
+    right = [arm_command(command, keys.RIGHT_ARM) for command in segment]
+    np.testing.assert_allclose(left[len(segment) // 2 - 1], [0.02, 0.3, 0])
+    np.testing.assert_allclose(right[len(segment) // 2 - 1], [0.005, -0.3, 0])
+    np.testing.assert_allclose([left[-1], right[-1]], [[0.04, 0.3, 0], [0.01, -0.3, 0]])
+    assert {command[keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM)] for command in segment} == {0}
+
+
+def test_a_gripper_change_of_one_arm_holds_every_hand_still():
+    motion = Motion(**SHORT_BOUNDS)
+    _, hold = motion.trajectory(*two_arms(), [{'right': at(0.01, -0.3, gripper=1)}]).parts
+    assert len(hold) == math.ceil(motion.grip_hold * motion.fps)
+    np.testing.assert_allclose(arm_command(hold[0], keys.LEFT_ARM), [0, 0.3, 0])
+    np.testing.assert_allclose(arm_command(hold[-1], keys.RIGHT_ARM), [0.01, -0.3, 0])
+    grips = [hold[0][keys.arm_channel(keys.TARGET_GRIP, arm)] for arm in keys.BIMANUAL_ARMS]
+    assert grips == [0, 1]
+
+
+def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_clamped_target():
+    motion = Motion(**SHORT_BOUNDS)
+    bounded, parts, _ = motion.trajectory(*two_arms(), [{'left': at(1.0, 0.3)}, {'right': at(0.01, -0.3)}])
+    assert [targets[keys.LEFT_ARM].x for targets in bounded] == pytest.approx([0.05, 0.05])
+    np.testing.assert_allclose(arm_command(parts[-1][-1], keys.LEFT_ARM), [0.05, 0.3, 0])
+
+
+@pytest.mark.parametrize('held_x,clamped', [(1.0, True), (0.04, False)])
+def test_a_left_out_arm_is_clamped_from_its_measured_pose_toward_its_held_target(held_x, clamped):
+    starts, held = two_arms()
+    held = {**held, keys.LEFT_ARM: at(held_x, 0.3)}
+    trajectory = Motion(**SHORT_BOUNDS).trajectory(starts, held, [{'right': at(0.01, -0.3)}])
+    assert trajectory.bounded[0][keys.LEFT_ARM].x == pytest.approx(min(held_x, 0.05))
+    assert trajectory.clamped is clamped
+
+
+def test_the_closest_hands_are_measured_along_the_path_and_one_arm_has_no_partner():
+    motion = Motion(**SHORT_BOUNDS)
+    starts, held = two_arms(right_x=0.04, y=0.05)
+    crossing = motion.trajectory(starts, held, [{'left': at(0.04, 0.05), 'right': at(0, -0.05)}])
+    assert closest_hand_distances(starts, crossing.parts, keys.BIMANUAL_ARMS) == {
+        keys.BIMANUAL_ARMS: pytest.approx(0.1)
+    }
+    start = geom.Transform3D([0, 0, 0])
+    alone = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01)}]).parts
+    assert closest_hand_distances({None: start}, alone, keys.ONE_ARM) == {}
+
+
+def test_the_closest_hands_are_measured_between_the_commands_and_from_the_measured_hands():
+    starts = {keys.LEFT_ARM: geom.Transform3D([-0.003, 0.05, 0]), keys.RIGHT_ARM: geom.Transform3D([0.003, -0.0499, 0])}
+    held = {arm: Waypoint.at(pose, 0) for arm, pose in starts.items()}
+    swing = Motion(**SHORT_BOUNDS).trajectory(starts, held, [{'left': at(0.003, 0.05), 'right': at(-0.003, -0.0499)}])
+    assert closest_hand_distances(starts, swing.parts, keys.BIMANUAL_ARMS) == {
+        keys.BIMANUAL_ARMS: pytest.approx(0.0999, abs=1e-9)
+    }
+
+
+@pytest.mark.parametrize(
+    'start,end,expected',
+    [
+        ((0.0, 0.1), (0.0, 0.1), 0.1),
+        ((0.0, 0.1), (0.0, 0.3), 0.1),
+        ((0.0, 0.3), (0.0, 0.1), 0.1),
+        ((0.0, 0.1), (0.0, -0.3), 0.0),
+        ((0.1, 0.0), (0.0, 0.1), math.sqrt(0.005)),
+        ((-0.003, 0.08), (0.003, 0.08), 0.08),
+    ],
+)
+def test_the_closest_approach_is_the_shortest_length_on_the_line_from_start_to_end(start, end, expected):
+    assert closest_approach(np.array(start), np.array(end)) == pytest.approx(expected)
 
 
 def test_a_gripper_hold_is_a_part_of_its_own():
     motion = Motion(**SHORT_BOUNDS)
-    path = [Waypoint(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=g) for g in (0, 1)]
-    _, parts = motion.trajectory(geom.Transform3D([0, 0, 0]), 0, path)
+    path = [{None: Waypoint(x=0.01, y=0, z=0, roll=0, pitch=0, yaw=0, gripper=g)} for g in (0, 1)]
+    start = geom.Transform3D([0, 0, 0])
+    parts = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, path).parts
     assert [len(part) for part in parts] == [5, 1, math.ceil(motion.grip_hold * motion.fps)]
     assert {command[keys.TARGET_GRIP] for command in parts[-1]} == {1}
 
