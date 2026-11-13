@@ -97,6 +97,25 @@ def test_a_longer_timeout_runs_a_trial_for_more_steps_that_end_before_it(asked):
     assert (steps + 1) * mapping.ABC_CONTROL_DT <= 480 < (steps + 2) * mapping.ABC_CONTROL_DT
 
 
+@pytest.mark.parametrize('periods', [121, 237])
+def test_a_timeout_of_whole_periods_whose_quotient_falls_below_the_whole_ends_one_action_before_it(periods):
+    # periods * ABC_CONTROL_DT / ABC_CONTROL_DT is just below periods in floating point for these counts.
+    assert mapping.episode_steps(periods * mapping.ABC_CONTROL_DT) == periods - 1
+
+
+def test_no_timeout_runs_a_trial_for_the_steps_of_abcs_own_eval_with_no_deadline(asked):
+    (trial, *_) = abc_cfg.put_bottles.override(timeout=None).instantiate().tasks()
+
+    assert trial.prepare_args[eval_keys.SCENE][abc_keys.EPISODE_STEPS] == mapping.ABC_EVAL_STEPS
+    assert trial.timeout_sec is None
+
+
+@pytest.mark.parametrize('timeout', [0, -1, float('inf'), float('nan')])
+def test_the_config_refuses_a_timeout_that_is_not_finite_and_positive(timeout):
+    with pytest.raises(ValueError, match='--eval.timeout must be finite and positive'):
+        abc_cfg.put_bottles.override(timeout=timeout).instantiate()
+
+
 def test_the_config_refuses_a_timeout_with_no_action_before_it():
     with pytest.raises(ValueError, match='leaves no ABC action'):
         abc_cfg.put_bottles.override(timeout=0.05).instantiate()
