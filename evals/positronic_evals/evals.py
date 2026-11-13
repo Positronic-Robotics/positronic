@@ -128,13 +128,13 @@ ABC_MULTITASK_TASKS = (
 # ABC's own sim eval draws world `i` of a task from seed `20260511 + i`, so trial `i` here runs the same scene.
 ABC_FIRST_SEED = 20260511
 ABC_TRIALS_PER_TASK = 20
-# The render size and the camera view change what a policy sees, and the timeout sets the step at which ABC judges a
-# trial, so a definition pins them rather than take a config default.
+# The render size and the camera view change what a policy sees, so a definition pins them rather than take a
+# config default.
 ABC_CAMERA_HEIGHT, ABC_CAMERA_WIDTH = 260, 416
 # The value of `positronic.simulator.amazon_abc.mapping.CameraView.ZED_X`: a fit to the ZED-X stations of ABC-130k.
 ABC_CAMERA_VIEW = 'zed_x'
-# The default of the ABC config, `(mapping.ABC_EVAL_STEPS + 1) * mapping.ABC_CONTROL_DT` in
-# `positronic.simulator.amazon_abc`: ABC's own sim eval horizon of 3540 steps, and one period for the last verdict.
+# ABC's own sim eval horizon of 3540 periods of 34 ms, and one period more for the last verdict. The timeout can
+# change where a trial ends, so a definition pins it.
 ABC_TIMEOUT_S = 120.394
 ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
 # The `main` commit that added the camera view to the ABC config.
