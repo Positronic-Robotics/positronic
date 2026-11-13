@@ -49,7 +49,7 @@ class Images(StrEnum):
     ON_DEMAND = 'on_demand'
 
 
-# The key of the episode time since the first observation, in the state the model reads.
+# The key of the time since the first observation, in the state the model reads.
 ELAPSED_S = 'elapsed_s'
 
 
@@ -233,8 +233,8 @@ class Conversation:
             if named
             else '',
             'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
-            'The hand frame is the same frame as the measured hand pose. The axes of a hand start at its measured '
-            'position and turn with its measured rotation. Hand z points along the approach direction. '
+            'The axes of a hand start at its measured position and turn with its measured rotation. '
+            'Hand z points along the approach direction. '
             'Gripper 0 is open and 1 is closed. '
             'A path plays its waypoints in order before the next observation; '
             'actual arrival must be checked from the measured state. '
@@ -525,7 +525,7 @@ class LLMPolicy(Policy):
     """An API-backed Cartesian policy for one arm or for named arms, with independent episode conversations.
 
     ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` and ``max_tracking_error`` are in
-    metres. ``camera_mounts`` states the cameras fixed to a hand in the prompt.
+    metres. ``camera_mounts`` states the cameras attached to a hand in the prompt.
     """
 
     def __init__(
