@@ -205,9 +205,10 @@ class Conversation:
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
             f'A path that brings two hands closer than {self._policy.min_hand_distance} m is rejected and does not '
-            'move the arms. Hands that start closer than that must not come closer than they are or than their '
-            f'previous targets. While each hand is within {self._policy.max_tracking_error} m of its previous target, '
-            'the hands can go back to their previous targets. '
+            'move the arms. When the hands or their previous targets are closer than that, the hands must not come '
+            'closer than the smaller of the two distances. '
+            f'While each hand is within {self._policy.max_tracking_error} m of its previous target, the hands can also '
+            'go back to their previous targets. '
             'This check covers the hands only, not the rest of the arms. '
             if named
             else '',
@@ -382,12 +383,11 @@ class Conversation:
         """Why ``parts`` brings a pair of hands too close, or ``None``."""
         # Interpolated samples of a parallel move can come out a few ulp closer than the hands start.
         tolerance = 1e-6
-        # A measured hand is off its held target by its tracking error. A path that keeps the hands still moves the
-        # offset between two hands along the line from its measured value to its held value. That line can pass
-        # closer than both ends. While each hand of a pair is within `max_tracking_error` of its held target, the
-        # bound is the closest point of that line; otherwise it is the nearer end. For a nearer end n above the
-        # error E, the closest point is at most n - sqrt(n**2 - E**2) below n. The check that `max_tracking_error`
-        # is below the limit refuses only values that make no sense; it does not bound pairs closer than E.
+        # A path that holds the targets moves the offset of two hands in a straight line from its measured value to
+        # its held value. That line can pass closer than both ends. While each hand of a pair is within
+        # `max_tracking_error` of its held target, the pair can come as close as that line, else as the nearer end.
+        # For a nearer end n above the error E, every offset on the line is at least sqrt(n**2 - E**2) long. For
+        # n <= E, one can be 0.
         limit = self._policy.min_hand_distance
         errors = {
             arm: np.linalg.norm(hand.pose.translation - held[arm].pose.translation) for arm, hand in hands.items()
@@ -409,7 +409,10 @@ class Conversation:
             else:
                 reason += f'Keep them at least {limit:.4f} m apart'
             if gap >= min(limit, closest) - tolerance:
-                reason += ''.join(f'. Hand {arm} is {errors[arm]:.4f} m off its previous target' for arm in off)
+                reason += ''.join(
+                    f'. Hand {arm} is more than {self._policy.max_tracking_error} m off its previous target'
+                    for arm in off
+                )
             return reason
         return None
 

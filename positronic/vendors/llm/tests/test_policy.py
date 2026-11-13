@@ -622,7 +622,7 @@ def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays
         ),
     ],
 )
-def test_hands_inside_the_limit_can_keep_their_gap_while_a_hand_is_off_its_target(y, target, measured, path):
+def test_hands_inside_the_limit_can_keep_their_gap_while_a_hand_trails_its_target(y, target, measured, path):
     conversation = Conversation(llm_bimanual(model='test', image_size=8), lambda *_: None)
     close = {'left': (0.0, y), 'right': (0.0, -y)}
     assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close | target)) != [[]]
@@ -633,13 +633,24 @@ def test_hands_inside_the_limit_can_keep_their_gap_while_a_hand_is_off_its_targe
 @pytest.mark.parametrize('arm,x', [('left', -0.003), ('right', 0.003)])
 @pytest.mark.parametrize('max_tracking_error,accepted', [(0.0061, True), (0.0059, False)])
 def test_hands_come_closer_than_both_of_their_gaps_only_within_the_tracking_error(arm, x, max_tracking_error, accepted):
+    metadata = {}
     policy = llm_bimanual(model='test', image_size=8, max_tracking_error=max_tracking_error)
-    conversation = Conversation(policy, lambda *_: None)
+    conversation = Conversation(policy, metadata.__setitem__)
     close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
     y = close[arm][1]
     assert decide(conversation, hands_at(bimanual_observation(), close), move_arms({arm: (x, y)})) != [[]]
     off = hands_at(bimanual_observation(), close | {arm: (-x, y)})
     assert (decide(conversation, off, move_arms({'left': (0.027, 0.04), 'right': (0.03, -0.04)})) != [[]]) is accepted
+    assert f'within {max_tracking_error} m of its previous target' in str(conversation.request(off, 2))
+    reasons = [e['reason'] for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert reasons == (
+        []
+        if accepted
+        else [
+            'The path brings hands left and right 0.0800 m apart. They are 0.0801 m apart, and their previous '
+            f'targets are 0.0801 m apart. Hand {arm} is more than {max_tracking_error} m off its previous target'
+        ]
+    )
 
 
 @pytest.mark.parametrize(
@@ -667,7 +678,7 @@ def test_hands_come_closer_than_both_of_their_gaps_only_within_the_tracking_erro
             0.05,
             {'left': (0.1, -0.05)},
             {'left': (0.0995, -0.05)},
-            '0.0995 m apart. Keep them at least 0.1000 m apart. Hand left is 0.1414 m off its previous target',
+            '0.0995 m apart. Keep them at least 0.1000 m apart. Hand left is more than 0.005 m off its previous target',
         ),
     ],
 )
@@ -713,6 +724,27 @@ def test_each_pair_of_hands_keeps_its_own_distance():
     assert 'hands a and c' in rejected['reason']
 
 
+def test_an_arm_off_its_target_keeps_the_relief_of_a_pair_it_is_not_in():
+    policy = LLMPolicy(Endpoint('test'), Motion(), arms=('a', 'b', 'c'), camera_keys=(keys.EXTERIOR_IMAGE,))
+    conversation = Conversation(policy, lambda *_: None)
+
+    def obs(positions):
+        return {
+            **{
+                f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}': np.array([x, y, 0.1, 1, 0, 0, 0])
+                for arm, (x, y) in positions.items()
+            },
+            **{keys.arm_channel(keys.GRIP, arm): 0.0 for arm in 'abc'},
+            keys.TASK: 'Pass the cube.',
+            keys.EXTERIOR_IMAGE: np.zeros((10, 20, 3), dtype=np.uint8),
+        }
+
+    start = {'a': (0.0, 0.01), 'b': (0.0, -0.01), 'c': (0.0, 0.3)}
+    assert decide(conversation, obs(start), move_arms({'a': (-0.002, 0.01), 'b': (0.002, -0.01)})) != [[]]
+    off = obs({'a': (0.002, 0.01), 'b': (-0.002, -0.01), 'c': (0.05, 0.3)})
+    assert decide(conversation, off, move_arms({'a': (0.028, 0.01), 'b': (0.032, -0.01)})) != [[]]
+
+
 def test_named_arms_get_the_arm_path_and_their_names_and_one_arm_keeps_its_own(model):
     requests, replies = model
     replies.extend([finish(), finish()])
@@ -723,7 +755,7 @@ def test_named_arms_get_the_arm_path_and_their_names_and_one_arm_keeps_its_own(m
     schemas = {tool.name: tool.parameters_json_schema for tool in named_tools}
     assert schemas[Tool.MOVE_PATH.value] == MoveArmsPath.model_json_schema()
     assert {t.name: t.parameters_json_schema for t in one_tools}[Tool.MOVE_PATH.value] == MovePath.model_json_schema()
-    for fact in (*keys.BIMANUAL_ARMS, '0.1 m'):
+    for fact in (*keys.BIMANUAL_ARMS, '0.1 m', '0.005 m'):
         assert fact in str(named[0])
         assert fact not in str(one[0])
 
@@ -755,7 +787,7 @@ def test_arms_are_one_arm_or_distinct_names(change):
         {'max_tracking_error': 0.1},
     ],
 )
-def test_the_hand_distance_is_finite_and_positive_and_the_tracking_error_is_finite_and_below_it(change):
+def test_the_hand_distance_and_the_tracking_error_are_checked(change):
     with pytest.raises(ValueError, match=next(iter(change))):
         LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, **change)
     assert LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, max_tracking_error=0).max_tracking_error == 0
