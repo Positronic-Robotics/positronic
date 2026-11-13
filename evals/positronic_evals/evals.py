@@ -133,6 +133,9 @@ ABC_TRIALS_PER_TASK = 20
 ABC_CAMERA_HEIGHT, ABC_CAMERA_WIDTH = 260, 416
 # The value of `positronic.simulator.amazon_abc.mapping.CameraView.ZED_X`: a fit to the ZED-X stations of ABC-130k.
 ABC_CAMERA_VIEW = 'zed_x'
+# ABC's own sim eval horizon of 3540 periods of 34 ms, and one period more for the last verdict. The timeout can
+# change where a trial ends, so a definition pins it.
+ABC_TIMEOUT_S = 120.394
 ABC_SCORING = Scoring(labelers=(ABC_LABELER,), primary=MeanEpisodeScore(per_task=True))
 # The `main` commit that added the camera view to the ABC config.
 ABC_POSITRONIC_REVISION = 'b2499cbe5565dc3cbd9cd8fcbdf29f588a6aaa88'
@@ -151,6 +154,7 @@ def _abc(tasks: tuple[str, ...], time_limit_s: int) -> EvalDefinition:
             'camera_height': ABC_CAMERA_HEIGHT,
             'camera_width': ABC_CAMERA_WIDTH,
             'camera_view': ABC_CAMERA_VIEW,
+            'timeout': ABC_TIMEOUT_S,
         },
         tasks=[EvalTask(name=task, trials=[{SEED: seed} for seed in seeds]) for task in tasks],
         time_limit_s=time_limit_s,
