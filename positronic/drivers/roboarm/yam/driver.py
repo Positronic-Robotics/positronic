@@ -1,6 +1,6 @@
 """Driver for the real i2rt YAM arm: one CAN chain with six joints and the gripper.
 
-The driver solves FK/IK against the vendored MJCF (``assets/i2rt_yam/yam.xml``) at ``GRIPPER_SITE``.
+The driver solves FK/IK with ``kinematics.YamKinematics`` on the vendored MJCF at ``GRIPPER_SITE``.
 The chain reads the gripper as 0=closed/1=open, the inverse of positronic's grip.
 
 Check on the rig after bring-up: the CAN interface (``ip link set can0 up type can bitrate 1000000``), motor
