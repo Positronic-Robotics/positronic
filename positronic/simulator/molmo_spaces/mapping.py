@@ -17,6 +17,14 @@ MOLMO_GRASP_SITE = 'gripper/grasp_site'
 
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 ASSETS_BENCHMARKS_DIR = 'benchmarks'
+# Scene sets that MolmoSpaces does not package. MolmoSpaces installs every scene under its own `scenes` directory
+# from an archive, so a scene set there fails to load.
+ASSETS_USER_SCENES_DIR = 'user_scenes'
+
+# The scene dataset of an episode whose scene set is under `ASSETS_USER_SCENES_DIR`.
+MOLMO_USER_SCENE_DATASET = 'user'
+# MolmoSpaces maps each user scene to this one variant.
+MOLMO_USER_SCENE_VARIANT = 'base'
 
 MOLMO_BENCHMARK_MANIFEST = 'benchmark.json'  # JSON list of episode specs.
 
@@ -70,6 +78,20 @@ def discover_benchmarks(assets_dir: Path) -> list[BenchmarkPath]:
                 ancestors[here / name] = above | {real}
         dirnames[:] = descend
     return sorted(found)
+
+
+def user_scene_xml_paths(assets_dir: Path, scene_set: str, split: str) -> list[Path]:
+    """The ceiling scene of each house in ``user_scenes/<scene_set>-<split>``, at the list index of its house index.
+
+    The list stops at the first house index with no ``<split>_<index>_ceiling.xml``.
+    """
+    scenes = assets_dir / ASSETS_USER_SCENES_DIR / f'{scene_set}-{split}'
+    paths = []
+    while (path := scenes / f'{split}_{len(paths)}_ceiling.xml').is_file():
+        paths.append(path)
+    if not paths:
+        raise ValueError(f'{scenes} holds no {split}_0_ceiling.xml')
+    return paths
 
 
 def select_benchmarks(found: list[BenchmarkPath], spec: dict[str, Any]) -> list[BenchmarkPath]:
