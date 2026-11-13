@@ -7,19 +7,19 @@ from contextlib import contextmanager
 import pytest
 
 from positronic.simulator.env_server.launcher import free_port
-from positronic.simulator.env_server.server import EnvProtocol, EnvServer
+from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
 from positronic.simulator.env_server.tests.mujoco_env import CAMERAS, make_mujoco_env
 
 
 @contextmanager
-def serve_env(env: EnvProtocol) -> Iterator[tuple[str, int]]:
+def serve_env(env: EnvProtocol, join_deadline: float = DEFAULT_JOIN_DEADLINE) -> Iterator[tuple[str, int]]:
     """Serve one ``EnvProtocol`` on a localhost port in a background thread.
 
     A thread (not a subprocess) shares this process, so a test's ``mj.Renderer`` monkeypatch reaches
     the server's render path.
     """
     host, port = 'localhost', free_port()
-    server = EnvServer(env, host, port)
+    server = EnvServer(env, host, port, join_deadline=join_deadline)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 

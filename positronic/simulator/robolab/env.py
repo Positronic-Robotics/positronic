@@ -53,7 +53,7 @@ import pose_ik
 import protocol  # pyright: ignore[reportMissingImports]
 import torch
 from isaaclab.app import AppLauncher
-from server import EnvProtocol, EnvServer
+from server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
 
 
 class _NoopTelemetry:
@@ -93,6 +93,12 @@ parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
 parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
 parser.add_argument('--num-envs', type=int, default=1, help='scene clones this server steps at once')
+parser.add_argument(
+    '--join-deadline',
+    type=float,
+    default=DEFAULT_JOIN_DEADLINE,
+    help='seconds the first reset of a batch waits for the clones whose clients have not asked for it',
+)
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
@@ -659,7 +665,7 @@ def main() -> None:
     # Under --timing the parent forwards the telemetry dir + run id via the environment; the server then
     # writes its own ``env.spans.jsonl`` sidecar. Inert otherwise.
     with telemetry.bind_from_env():
-        EnvServer(RobolabEnv(args.num_envs), args.host, args.port).serve_forever()
+        EnvServer(RobolabEnv(args.num_envs), args.host, args.port, join_deadline=args.join_deadline).serve_forever()
     simulation_app.close()
 
 

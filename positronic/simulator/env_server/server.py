@@ -18,14 +18,20 @@ An env serves a fixed number of slots, ``num_slots``: independent episodes that 
 envs serve one. Each client that connects takes the next free slot and drives only that slot, so N clients can run N
 different policies in one env:
 
-* A reset answers when every slot has asked for one or has left. All slots reset together, with one token.
+* The slots that reset together are a batch. All of them reset with one token, and the env resets every slot.
+* A batch's first reset waits for every slot, but not longer than ``join_deadline`` seconds after the first slot
+  asks. A slot that has not asked by then sits out the batch, and the env gets no action for it.
+* A later reset of a batch answers when every slot of the batch has asked for one or has left.
 * A step answers when every slot in an episode has sent its action. The env gets no action for the other slots.
   A slot that reports ``done`` stops holding the others back; a client may still step it until its next reset.
-* A slot leaves when its client closes or disconnects. It stays empty, and the server ends when all have left.
+* A slot leaves when its client closes or disconnects, and a new client can then take it. A slot outside the batch
+  that asks for a reset waits until every slot of the batch has left, and then joins the next batch.
+* The server serves batch after batch until ``shutdown``.
 """
 
 import queue
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
@@ -38,6 +44,9 @@ if __package__:
     from . import protocol
 else:
     import protocol
+
+# How long the first reset of a batch waits for the slots that have not asked for it, in seconds.
+DEFAULT_JOIN_DEADLINE = 600.0
 
 
 class EnvProtocol(ABC):
@@ -83,12 +92,12 @@ class EnvProtocol(ABC):
 
 
 class _Phase(Enum):
-    VACANT = 'vacant'  # no client has taken the slot
+    VACANT = 'vacant'  # no client holds the slot
     IDLE = 'idle'  # a client, and no episode yet
-    WAITING = 'waiting'  # asked for a reset
+    WAITING = 'waiting'  # in the batch, and asked for its next reset
+    JOINING = 'joining'  # outside the batch, and asked to join the next one
     RUNNING = 'running'  # in an episode
     ENDED = 'ended'  # its episode reported ``done``
-    LEFT = 'left'
 
 
 @dataclass
@@ -117,13 +126,15 @@ class EnvServer:
     """Serve one client per slot of ``env``; ``shutdown`` releases the owned environment.
 
     The env runs on the thread that calls ``serve_forever``: macOS GLFW requires environment calls on the main
-    thread. ``serve_forever`` ends when every slot has had a client and all of them have left, or on shutdown.
+    thread. ``serve_forever`` returns on shutdown.
     """
 
-    def __init__(self, env: EnvProtocol, host: str, port: int):
+    def __init__(self, env: EnvProtocol, host: str, port: int, *, join_deadline: float = DEFAULT_JOIN_DEADLINE):
         self._env = env
         self._host = host
         self._port = port
+        self._join_deadline = join_deadline
+        self._join_started: float | None = None  # when the first slot asked for the reset that starts a batch
         self._slots = [_Slot() for _ in range(env.num_slots)]
         self._requests: queue.Queue[_Request | _Disconnect] = queue.Queue()
         self._lock = threading.Lock()  # guards slot claims and ``_stopped``
@@ -160,32 +171,36 @@ class EnvServer:
         if slot is None:
             self._refuse(connection)
             return
+        closed = False  # a close frees the slot itself
         try:
             for raw in connection:
                 msg = protocol.decode(raw)
-                connection.send(protocol.encode(self._submit(_Request(slot, msg, queue.Queue(maxsize=1)))))
-                if msg.get(protocol.CMD) == protocol.Command.CLOSE.value:
+                answer = self._submit(_Request(slot, msg, queue.Queue(maxsize=1)))
+                closed = msg.get(protocol.CMD) == protocol.Command.CLOSE.value
+                connection.send(protocol.encode(answer))
+                if closed:
                     return
         finally:
             with self._lock:
-                if not self._stopped:
+                if not self._stopped and not closed:
                     self._requests.put(_Disconnect(slot))
 
     def _take(self, request: _Request | _Disconnect) -> None:
         """Answer ``request`` now, or park it on its slot until the batch can run."""
         slot = self._slots[request.slot]
         if isinstance(request, _Disconnect):
-            slot.phase = _Phase.LEFT
+            slot.phase = _Phase.VACANT
             return
         try:
             match protocol.Command(request.msg[protocol.CMD]):
                 case protocol.Command.CLOSE:
-                    slot.phase = _Phase.LEFT
+                    slot.phase = _Phase.VACANT
                     request.reply.put({protocol.OK: True})
                 case protocol.Command.TASKS:
                     request.reply.put({protocol.TASKS: self._env.tasks(request.msg[protocol.SPEC])})
                 case protocol.Command.RESET:  # from a running slot too: its client gave up on the episode
-                    slot.phase, slot.pending = _Phase.WAITING, request
+                    in_episode = slot.phase in (_Phase.RUNNING, _Phase.ENDED)
+                    slot.phase, slot.pending = (_Phase.WAITING if in_episode else _Phase.JOINING), request
                 case protocol.Command.STEP:
                     if slot.phase not in (_Phase.RUNNING, _Phase.ENDED) or slot.pending is not None:
                         raise RuntimeError(f'slot {request.slot} stepped while {slot.phase.value}')
@@ -193,16 +208,18 @@ class EnvServer:
         except Exception as e:
             request.reply.put(_error(e))
 
-    def _take_pending(self, phase: _Phase) -> dict[int, _Request]:
-        """The parked request of every slot in ``phase``, by slot index, cleared from its slot."""
+    def _take_pending(self, indices: list[int]) -> dict[int, _Request]:
+        """The parked request of each slot in ``indices``, by slot index, cleared from its slot."""
         taken = {}
-        for index, slot in enumerate(self._slots):
-            if slot.phase is phase and slot.pending is not None:
+        for index in indices:
+            slot = self._slots[index]
+            if slot.pending is not None:
                 taken[index], slot.pending = slot.pending, None
         return taken
 
-    def _reset(self) -> None:
-        requests = self._take_pending(_Phase.WAITING)
+    def _reset(self, indices: list[int]) -> None:
+        """Reset the env for the slots ``indices``, which then are the batch."""
+        requests = self._take_pending(indices)
         for index in requests:
             self._slots[index].phase = _Phase.IDLE
         try:
@@ -221,8 +238,8 @@ class EnvServer:
             self._slots[index].phase = _Phase.RUNNING
             request.reply.put(protocol.slot_frame(answer, index))
 
-    def _step(self) -> None:
-        requests = self._take_pending(_Phase.RUNNING)
+    def _step(self, indices: list[int]) -> None:
+        requests = self._take_pending(indices)
         try:
             answer = self._env.step({index: request.msg[protocol.ACTION] for index, request in requests.items()})
         except Exception as e:
@@ -236,16 +253,26 @@ class EnvServer:
             request.reply.put(frame)
 
     def _advance(self) -> None:
-        """Run the batch reset or the batch step, if every slot it waits for is ready."""
-        phases = {slot.phase for slot in self._slots}
-        if _Phase.RUNNING in phases:
-            if all(slot.pending is not None for slot in self._slots if slot.phase is _Phase.RUNNING):
-                self._step()
-        elif phases <= {_Phase.WAITING, _Phase.LEFT} and _Phase.WAITING in phases:
-            self._reset()
-
-    def _all_left(self) -> bool:
-        return all(slot.phase is _Phase.LEFT for slot in self._slots)
+        """Run the batch step or the batch reset, or start a batch, if every slot it waits for is ready."""
+        in_batch = (_Phase.WAITING, _Phase.RUNNING, _Phase.ENDED)
+        batch = [index for index, slot in enumerate(self._slots) if slot.phase in in_batch]
+        if batch:
+            running = [index for index in batch if self._slots[index].phase is _Phase.RUNNING]
+            if running:
+                if all(self._slots[index].pending is not None for index in running):
+                    self._step(running)
+            elif all(self._slots[index].phase is _Phase.WAITING for index in batch):
+                self._reset(batch)
+            return
+        joining = [index for index, slot in enumerate(self._slots) if slot.phase is _Phase.JOINING]
+        if not joining:
+            self._join_started = None
+            return
+        if self._join_started is None:
+            self._join_started = time.monotonic()
+        if len(joining) == len(self._slots) or time.monotonic() - self._join_started >= self._join_deadline:
+            self._join_started = None
+            self._reset(joining)
 
     def _stop(self) -> None:
         """Fail every request still open, so no client thread waits on an answer that never comes."""
@@ -273,12 +300,13 @@ class EnvServer:
             accept = threading.Thread(target=server.serve_forever, daemon=True)
             accept.start()
             try:
-                while not self._shutdown and not self._all_left():
-                    try:
+                while not self._shutdown:
+                    try:  # wake with no request too, to check the join deadline and ``shutdown``
                         request = self._requests.get(timeout=0.5)
                     except queue.Empty:
-                        continue
-                    self._take(request)
+                        request = None
+                    if request is not None:
+                        self._take(request)
                     self._advance()
             finally:
                 self._stop()

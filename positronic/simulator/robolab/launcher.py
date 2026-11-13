@@ -19,6 +19,7 @@ from pathlib import Path
 from positronic.drivers.roboarm.models import bundled_franka_model
 from positronic.simulator.env_server.launcher import ensure_pinned_checkout, serve_subprocess, setup_lock, terminate
 from positronic.simulator.env_server.protocol import encode
+from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE
 from positronic.simulator.robolab import keys
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
@@ -58,7 +59,9 @@ def _ensure_robolab_src() -> Path:
     return src
 
 
-def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Popen:
+def _spawn(
+    host: str, port: int, cameras: str, num_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
+) -> subprocess.Popen:
     # Only the setup is one at a time: a concurrent checkout would reset the patched pyproject.toml from under
     # ``uv sync``. The per-eval ``env.py`` runs outside the lock, so evals still fan out.
     with setup_lock(_ROBOLAB_SRC.parent):
@@ -88,6 +91,8 @@ def _spawn(host: str, port: int, cameras: str, num_envs: int) -> subprocess.Pope
         cameras,
         '--num-envs',
         str(num_envs),
+        '--join-deadline',
+        str(join_deadline),
         '--headless',
     ]
     # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
@@ -124,13 +129,21 @@ def serve_robolab(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Serve RoboLab to several evals, one scene clone each.')
+    parser = argparse.ArgumentParser(
+        description='Serve RoboLab to several evals, one scene clone each, batch after batch until it is stopped.'
+    )
     parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
     parser.add_argument('--num-envs', type=int, required=True, help='scene clones, one per eval that connects')
+    parser.add_argument(
+        '--join-deadline',
+        type=float,
+        default=DEFAULT_JOIN_DEADLINE,
+        help='seconds the first reset of a batch waits for the clones whose evals have not asked for it',
+    )
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
     args = parser.parse_args()
-    proc = _spawn(args.host, args.port, args.cameras, args.num_envs)
+    proc = _spawn(args.host, args.port, args.cameras, args.num_envs, args.join_deadline)
     try:
         sys.exit(proc.wait())
     finally:
