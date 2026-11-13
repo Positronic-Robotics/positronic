@@ -186,18 +186,34 @@ def test_the_eval_records_abcs_reward_under_the_signal_that_the_abc_labeler_read
     assert ABC_REWARD_SIGNAL in recorded
 
 
-@pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG])
-def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(monkeypatch, name: EvalRef):
+PUBLIC_ABC_EVALS = [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG]
+
+
+@pytest.fixture
+def listed_as_named(monkeypatch):
+    """ABC lists each task that a spec names, with no ABC process."""
+
     def tasks(self, spec: dict[str, Any]) -> list[EnvTask]:
         return [EnvTask(task, {eval_keys.TASK: task}) for task in spec[mapping.SELECT_TASKS]]
 
     monkeypatch.setattr(RemoteEnvControlSystem, 'tasks', tasks)
+
+
+@pytest.mark.parametrize('name', PUBLIC_ABC_EVALS)
+def test_a_public_abc_eval_pins_the_trials_that_its_arguments_run(listed_as_named, name: EvalRef):
     definition = public_eval(name)
 
     trials = abc_cfg.all_tasks.override(**definition.args).instantiate().tasks()
 
     pinned = [(task.name, trial) for task in definition.tasks for trial in task.trials]
     assert [(t.meta[eval_keys.TASK], {eval_keys.SEED: t.meta[eval_keys.SEED]}) for t in trials] == pinned
+
+
+@pytest.mark.parametrize('name', PUBLIC_ABC_EVALS)
+def test_a_public_abc_eval_runs_each_trial_for_the_steps_of_abcs_own_eval(listed_as_named, name: EvalRef):
+    trials = abc_cfg.all_tasks.override(**public_eval(name).args).instantiate().tasks()
+
+    assert {t.prepare_args[eval_keys.SCENE][abc_keys.EPISODE_STEPS] for t in trials} == {mapping.ABC_EVAL_STEPS}
 
 
 def test_the_terminal_carries_the_envs_own_verdict():
