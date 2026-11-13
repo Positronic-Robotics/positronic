@@ -107,6 +107,25 @@ def test_discovery_raises_when_the_asset_directory_holds_no_benchmarks_root(tmp_
         mapping.discover_benchmarks(tmp_path)
 
 
+def test_a_user_scene_set_lists_its_ceiling_scenes_by_house_index_up_to_the_first_gap(tmp_path: Path):
+    scenes = tmp_path / mapping.ASSETS_USER_SCENES_DIR / 'procthor-gen-val'
+    scenes.mkdir(parents=True)
+    for name in ('val_1_ceiling.xml', 'val_0_ceiling.xml', 'val_0.xml', 'val_3_ceiling.xml', 'train_2_ceiling.xml'):
+        (scenes / name).write_text('<mujoco/>')
+    assert mapping.user_scene_xml_paths(tmp_path, 'procthor-gen', 'val') == [
+        str(scenes / 'val_0_ceiling.xml'),
+        str(scenes / 'val_1_ceiling.xml'),
+    ]
+
+
+def test_a_user_scene_set_with_no_first_house_is_refused(tmp_path: Path):
+    scenes = tmp_path / mapping.ASSETS_USER_SCENES_DIR / 'procthor-gen-val'
+    scenes.mkdir(parents=True)
+    (scenes / 'val_1_ceiling.xml').write_text('<mujoco/>')
+    with pytest.raises(ValueError, match='holds no val_0_ceiling.xml'):
+        mapping.user_scene_xml_paths(tmp_path, 'procthor-gen', 'val')
+
+
 def test_selection_pins_any_dimension_by_a_name_or_a_list_and_leaves_the_rest_open():
     pick_v1 = mapping.BenchmarkPath('v1', 'procthor-10k', 'Pick', 'pick_20251231')
     pick_v2 = mapping.BenchmarkPath('v2', 'procthor-10k', 'Pick', 'pick_20251231')
