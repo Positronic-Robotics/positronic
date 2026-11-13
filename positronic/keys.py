@@ -59,6 +59,8 @@ def arm_channel(channel: str, arm: str | None) -> str:
     return channel if arm is None else f'{channel}.{arm}'
 
 
+# The arms of a one-arm embodiment: its channels carry no arm name.
+ONE_ARM: tuple[str | None, ...] = (None,)
 # The arms of a two-arm embodiment, left first.
 LEFT_ARM, RIGHT_ARM = 'left', 'right'
 BIMANUAL_ARMS = (LEFT_ARM, RIGHT_ARM)
