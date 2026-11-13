@@ -181,9 +181,8 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg = _DroidEvalConfig()
         if episode.scene_dataset == mapping.MOLMO_USER_SCENE_DATASET:
             sampling = cfg.task_sampler_config
-            sampling.scene_xml_paths = mapping.user_scene_xml_paths(
-                self._assets_dir, bench.scene_dataset, episode.data_split
-            )
+            scenes = mapping.user_scene_xml_paths(self._assets_dir, bench.scene_dataset, episode.data_split)
+            sampling.scene_xml_paths = [str(path) for path in scenes]
             sampling.house_variant = mapping.MOLMO_USER_SCENE_VARIANT
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.

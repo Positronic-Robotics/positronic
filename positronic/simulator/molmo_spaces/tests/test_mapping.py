@@ -113,8 +113,8 @@ def test_a_user_scene_set_lists_its_ceiling_scenes_by_house_index_up_to_the_firs
     for name in ('val_1_ceiling.xml', 'val_0_ceiling.xml', 'val_0.xml', 'val_3_ceiling.xml', 'train_2_ceiling.xml'):
         (scenes / name).write_text('<mujoco/>')
     assert mapping.user_scene_xml_paths(tmp_path, 'procthor-gen', 'val') == [
-        str(scenes / 'val_0_ceiling.xml'),
-        str(scenes / 'val_1_ceiling.xml'),
+        scenes / 'val_0_ceiling.xml',
+        scenes / 'val_1_ceiling.xml',
     ]
 
 

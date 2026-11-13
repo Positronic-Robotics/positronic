@@ -80,7 +80,7 @@ def discover_benchmarks(assets_dir: Path) -> list[BenchmarkPath]:
     return sorted(found)
 
 
-def user_scene_xml_paths(assets_dir: Path, scene_set: str, split: str) -> list[str]:
+def user_scene_xml_paths(assets_dir: Path, scene_set: str, split: str) -> list[Path]:
     """The ceiling scene of each house in ``user_scenes/<scene_set>-<split>``, at the list index of its house index.
 
     The list stops at the first house index with no ``<split>_<index>_ceiling.xml``.
@@ -88,7 +88,7 @@ def user_scene_xml_paths(assets_dir: Path, scene_set: str, split: str) -> list[s
     scenes = assets_dir / ASSETS_USER_SCENES_DIR / f'{scene_set}-{split}'
     paths = []
     while (path := scenes / f'{split}_{len(paths)}_ceiling.xml').is_file():
-        paths.append(str(path))
+        paths.append(path)
     if not paths:
         raise ValueError(f'{scenes} holds no {split}_0_ceiling.xml')
     return paths
