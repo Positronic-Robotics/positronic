@@ -609,28 +609,36 @@ def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays
 
 
 @pytest.mark.parametrize(
-    'target,measured,path',
+    'y,target,measured,path',
     [
-        ({}, {'left': (0.0, 0.0405)}, {'right': (0.0, -0.04)}),
-        ({}, {'left': (0.0, 0.0395)}, {'left': (0.0, 0.0395), 'right': (0.0, -0.04)}),
-        ({'left': (-0.002, 0.04)}, {'left': (0.002, 0.04)}, {'left': (0.028, 0.04), 'right': (0.03, -0.04)}),
+        (0.04, {}, {'left': (0.0, 0.0405)}, {'right': (0.0, -0.04)}),
+        (0.04, {}, {'left': (0.0, 0.0395)}, {'left': (0.0, 0.0395), 'right': (0.0, -0.04)}),
+        (0.04, {'left': (-0.002, 0.04)}, {'left': (0.002, 0.04)}, {'left': (0.028, 0.04), 'right': (0.03, -0.04)}),
+        (
+            0.01,
+            {'left': (-0.002, 0.01), 'right': (0.002, -0.01)},
+            {'left': (0.002, 0.01), 'right': (-0.002, -0.01)},
+            {'left': (0.028, 0.01), 'right': (0.032, -0.01)},
+        ),
     ],
 )
-def test_hands_inside_the_limit_can_keep_their_gap_while_a_hand_is_off_its_target(target, measured, path):
+def test_hands_inside_the_limit_can_keep_their_gap_while_a_hand_is_off_its_target(y, target, measured, path):
     conversation = Conversation(llm_bimanual(model='test', image_size=8), lambda *_: None)
-    close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
+    close = {'left': (0.0, y), 'right': (0.0, -y)}
     assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close | target)) != [[]]
     off = hands_at(bimanual_observation(), close | measured)
     assert decide(conversation, off, move_arms(path)) != [[]]
 
 
+@pytest.mark.parametrize('arm,x', [('left', -0.003), ('right', 0.003)])
 @pytest.mark.parametrize('max_tracking_error,accepted', [(0.0061, True), (0.0059, False)])
-def test_hands_come_closer_than_both_of_their_gaps_only_within_the_tracking_error(max_tracking_error, accepted):
+def test_hands_come_closer_than_both_of_their_gaps_only_within_the_tracking_error(arm, x, max_tracking_error, accepted):
     policy = llm_bimanual(model='test', image_size=8, max_tracking_error=max_tracking_error)
     conversation = Conversation(policy, lambda *_: None)
     close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
-    assert decide(conversation, hands_at(bimanual_observation(), close), move_arms({'left': (-0.003, 0.04)})) != [[]]
-    off = hands_at(bimanual_observation(), close | {'left': (0.003, 0.04)})
+    y = close[arm][1]
+    assert decide(conversation, hands_at(bimanual_observation(), close), move_arms({arm: (x, y)})) != [[]]
+    off = hands_at(bimanual_observation(), close | {arm: (-x, y)})
     assert (decide(conversation, off, move_arms({'left': (0.027, 0.04), 'right': (0.03, -0.04)})) != [[]]) is accepted
 
 
@@ -655,7 +663,12 @@ def test_hands_come_closer_than_both_of_their_gaps_only_within_the_tracking_erro
             {'right': (0.0, 0.0)},
             '0.0600 m apart. They are 0.0800 m apart, and their previous targets are 0.1200 m apart',
         ),
-        (0.05, {'left': (0.1, -0.05)}, {'left': (0.0995, -0.05)}, '0.0995 m apart. Keep them at least 0.1000 m apart'),
+        (
+            0.05,
+            {'left': (0.1, -0.05)},
+            {'left': (0.0995, -0.05)},
+            '0.0995 m apart. Keep them at least 0.1000 m apart. Hand left is 0.1414 m off its previous target',
+        ),
     ],
 )
 def test_hands_off_their_targets_may_not_come_closer_than_the_limit_or_both_of_their_gaps(y, measured, path, reason):
@@ -736,12 +749,13 @@ def test_arms_are_one_arm_or_distinct_names(change):
     'change',
     [
         {'min_hand_distance': 0},
+        {'min_hand_distance': np.inf},
         {'max_tracking_error': -0.001},
         {'max_tracking_error': np.inf},
         {'max_tracking_error': 0.1},
     ],
 )
-def test_the_hand_distance_is_positive_and_the_tracking_error_is_below_it(change):
+def test_the_hand_distance_is_finite_and_positive_and_the_tracking_error_is_finite_and_below_it(change):
     with pytest.raises(ValueError, match=next(iter(change))):
         LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, **change)
     assert LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, max_tracking_error=0).max_tracking_error == 0

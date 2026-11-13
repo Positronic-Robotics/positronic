@@ -205,8 +205,9 @@ class Conversation:
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
             f'A path that brings two hands closer than {self._policy.min_hand_distance} m is rejected and does not '
-            'move the arms. Hands that start closer than that must not come closer than they are, but they can go '
-            'back to their previous targets. '
+            'move the arms. Hands that start closer than that must not come closer than they are or than their '
+            f'previous targets. While each hand is within {self._policy.max_tracking_error} m of its previous target, '
+            'the hands can go back to their previous targets. '
             'This check covers the hands only, not the rest of the arms. '
             if named
             else '',
@@ -382,26 +383,34 @@ class Conversation:
         # Interpolated samples of a parallel move can come out a few ulp closer than the hands start.
         tolerance = 1e-6
         # A measured hand is off its held target by its tracking error. A path that keeps the hands still moves the
-        # gap of a pair along the line from the measured gap to the held one. That line can pass closer than both.
-        # The pair may follow it only while each of its hands is within `max_tracking_error` of its held target.
+        # offset between two hands along the line from its measured value to its held value. That line can pass
+        # closer than both ends. While each hand of a pair is within `max_tracking_error` of its held target, the
+        # bound is the closest point of that line; otherwise it is the nearer end. For a nearer end n above the
+        # error E, the closest point is at most n - sqrt(n**2 - E**2) below n. The check that `max_tracking_error`
+        # is below the limit refuses only values that make no sense; it does not bound pairs closer than E.
         limit = self._policy.min_hand_distance
-        tracks = {
-            arm: np.linalg.norm(hand.pose.translation - held[arm].pose.translation) <= self._policy.max_tracking_error
-            for arm, hand in hands.items()
+        errors = {
+            arm: np.linalg.norm(hand.pose.translation - held[arm].pose.translation) for arm, hand in hands.items()
         }
         for (a, b), gap in closest_hand_distances(parts, self._policy.arms).items():
             measured = hands[a].pose.translation - hands[b].pose.translation
             targeted = held[a].pose.translation - held[b].pose.translation
             nearer = min(np.linalg.norm(measured), np.linalg.norm(targeted))
-            floor = closest_approach(measured, targeted) if tracks[a] and tracks[b] else nearer
-            if gap >= min(limit, floor) - tolerance:
+            off = [arm for arm in (a, b) if errors[arm] > self._policy.max_tracking_error]
+            closest = closest_approach(measured, targeted)
+            if gap >= min(limit, nearer if off else closest) - tolerance:
                 continue
+            reason = f'The path brings hands {a} and {b} {gap:.4f} m apart. '
             if nearer < limit:
-                return (
-                    f'The path brings hands {a} and {b} {gap:.4f} m apart. They are {np.linalg.norm(measured):.4f} m '
-                    f'apart, and their previous targets are {np.linalg.norm(targeted):.4f} m apart'
+                reason += (
+                    f'They are {np.linalg.norm(measured):.4f} m apart, and their previous targets are '
+                    f'{np.linalg.norm(targeted):.4f} m apart'
                 )
-            return f'The path brings hands {a} and {b} {gap:.4f} m apart. Keep them at least {limit:.4f} m apart'
+            else:
+                reason += f'Keep them at least {limit:.4f} m apart'
+            if gap >= min(limit, closest) - tolerance:
+                reason += ''.join(f'. Hand {arm} is {errors[arm]:.4f} m off its previous target' for arm in off)
+            return reason
         return None
 
     def accept(
