@@ -26,7 +26,7 @@ from platform_client.enums import (
     SubmissionStatus,
     Wire,
 )
-from platform_client.eval_plan import Clutter, EndpointAddress
+from platform_client.eval_plan import Clutter, EndpointAddress, SessionQuery
 from platform_client.ids import ApiKey, OrgSlug, SubmissionId, UserId
 from platform_client.tasks import TaskRef
 from positronic_evals.evals import EvalRef
@@ -192,6 +192,8 @@ class ResolvedEndpoint(BaseModel):
     provider: str | None = None
     # The checkpoint a served endpoint runs; None on a remote or image endpoint.
     spec: str | None = None
+    # The session params of an image endpoint; None where it states none, and on every other kind.
+    query: SessionQuery | None = None
     episodes: int = Field(ge=1)
     # None where the endpoint states no value of its own: its episodes run with the task's (`ResolvedTask.cap_of`).
     cap_per_episode_sec: int | None = Field(default=None, ge=1)
