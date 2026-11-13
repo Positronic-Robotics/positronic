@@ -25,7 +25,7 @@ def test_the_yambox_crop_sends_each_cropped_view_without_pad():
         frame[round(box.top * 600) : round(box.bottom * 600), round(box.left * 960) : round(box.right * 960)] = 255
         views[key] = frame
 
-    request = codecs.BottlesObservationCodec(crops=codecs.YAMBOX_CROPS).encode(_obs(views))
+    request = codecs.AbcObservationCodec(codecs.BOTTLES_PROMPTS, crops=codecs.YAMBOX_CROPS).encode(_obs(views))
 
     images = request[pi05_abc.IMAGES]
     assert {role: view.shape for role, view in images.items()} == dict.fromkeys(
@@ -36,4 +36,4 @@ def test_the_yambox_crop_sends_each_cropped_view_without_pad():
 
 def test_a_crop_box_for_an_unknown_camera_is_refused():
     with pytest.raises(ValueError, match='name no camera'):
-        codecs.BottlesObservationCodec(crops={'image.side': codecs.FULL_FRAME})
+        codecs.AbcObservationCodec(codecs.BOTTLES_PROMPTS, crops={'image.side': codecs.FULL_FRAME})

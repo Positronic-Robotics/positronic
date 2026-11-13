@@ -1,12 +1,17 @@
 # syntax=docker/dockerfile:1.7
-# A policy image the platform can run: a pi0.5 checkpoint fine-tuned on ABC's real YAM data for the bottles task,
-# served over positronic's session protocol on port 8000 with no arguments and no network.
+# A policy image the platform can run: a pi0.5 checkpoint fine-tuned on ABC's real YAM data, served over positronic's
+# session protocol on port 8000 with no arguments and no network.
 # positronic/vendors/pi05_abc/README.md says what it serves and states its licence situation.
 #
 # Usage (from the repository root)
 #   make -C docker build-serve-pi05-abc                                     # <registry>/pi05-abc-yam:local
 #   make -C docker push-serve-pi05-abc                                      # to the private Nebius registry
 #   docker run --rm --network none --gpus all <registry>/pi05-abc-yam:local # the offline pre-flight
+#
+# The default image serves the bottles checkpoint from the Hub (command bottles_16k). A local checkpoint directory
+# goes in as the build context `checkpoint`, with its params, assets and _CHECKPOINT_METADATA:
+#   docker build -f docker/Dockerfile.serve-pi05-abc --build-arg WEIGHTS=local --build-arg COMMAND=abc4_30k \
+#       --build-arg CHECKPOINT=<name> --build-context checkpoint=<checkpoint dir> -t <tag> .
 #
 # The layers go from the least often changed to the most: the fork's environment, positronic's dependencies,
 # source, weights, start settings. The source and the weights come in through `COPY --link`, and only the start
@@ -16,18 +21,29 @@
 # server in the fork's environment, on 127.0.0.1:8001 inside the container, and sends it each observation. The
 # inference files of the checkpoint are 12.4 GB; the image leaves out its 30 GB of training state.
 
-# The author's fork at the commit that the checkpoint card names, and the Hub revision of the checkpoint.
+# The author's fork. Its server reads a norm stats file from this commit on. Its openpi sources and its lock are the same
+# as at fa9c447e, the commit that the bottles checkpoint card names.
 ARG FORK_REPO=https://github.com/ninghaolu/yam-abc-reproduce.git
-ARG FORK_REV=fa9c447e89beb978c44d9e06806ec161f61bba31
+ARG FORK_REV=e0aedd27ed97a60b8b79cb813d6372dece292b6d
+# The weights stage (hub or local), the server command, and the Hub revision of the bottles checkpoint.
+ARG WEIGHTS=hub
+ARG COMMAND=bottles_16k
 ARG CHECKPOINT_REPO=MikhailBird/pi05-abc-130k-task-finetune
 ARG CHECKPOINT_REV=2e7ac0d02158cbe7b64926831d6f6748ef5fd45c
 ARG CHECKPOINT=pi05-abc-130k-task-finetune-16000
 ARG TOKENIZER_URL=https://storage.eu-north1.nebius.cloud/positronic-public/assets/paligemma_tokenizer.model
 
-# The weights stage does not build on the base, so a new base reuses the downloaded weights. Its own base is pinned
-# by digest: a moved tag would download the weights again and push them as a new layer.
-FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS weights
-ARG CHECKPOINT_REPO CHECKPOINT_REV CHECKPOINT TOKENIZER_URL
+# The weights stages do not build on the base, so a new base reuses the weights. Their own base is pinned by digest: a
+# moved tag would download the weights again and push them as a new layer.
+# openpi reads the PaliGemma tokenizer from its cache under OPENPI_DATA_HOME, and fetches it only when it is absent.
+FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS tokenizer
+ARG TOKENIZER_URL
+RUN mkdir -p /opt/pi05-abc/openpi-data/big_vision \
+ && python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+      "$TOKENIZER_URL" /opt/pi05-abc/openpi-data/big_vision/paligemma_tokenizer.model
+
+FROM tokenizer AS weights-hub
+ARG CHECKPOINT_REPO CHECKPOINT_REV CHECKPOINT
 # The sha256 of each large params file, as the Hub records it, and of the server snapshot, as checkpoint_info.json
 # records it.
 COPY <<EOF /checksums
@@ -46,10 +62,12 @@ RUN pip install --no-cache-dir huggingface_hub==0.34.4 \
       "$CHECKPOINT_REPO" "$CHECKPOINT_REV" "/opt/pi05-abc/$CHECKPOINT" \
  && rm -rf "/opt/pi05-abc/$CHECKPOINT/.cache" \
  && cd "/opt/pi05-abc/$CHECKPOINT" && sha256sum -c /checksums
-# openpi reads the PaliGemma tokenizer from its cache under OPENPI_DATA_HOME, and fetches it only when it is absent.
-RUN mkdir -p /opt/pi05-abc/openpi-data/big_vision \
- && python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
-      "$TOKENIZER_URL" /opt/pi05-abc/openpi-data/big_vision/paligemma_tokenizer.model
+
+FROM tokenizer AS weights-local
+ARG CHECKPOINT
+COPY --from=checkpoint . /opt/pi05-abc/${CHECKPOINT}
+
+FROM weights-${WEIGHTS} AS weights
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm
 ARG FORK_REPO FORK_REV
@@ -113,17 +131,18 @@ ENV UV_OFFLINE=1 \
     HF_HUB_OFFLINE=1 \
     OPENPI_DATA_HOME=/opt/pi05-abc/openpi-data
 
-ARG CHECKPOINT
-ENV PI05_ABC_CHECKPOINT=/opt/pi05-abc/${CHECKPOINT}
+ARG CHECKPOINT COMMAND
+ENV PI05_ABC_CHECKPOINT=/opt/pi05-abc/${CHECKPOINT} \
+    PI05_ABC_COMMAND=${COMMAND}
 
 EXPOSE 8000
 
 # `exec` makes the server pid 1, so it receives the stop signal. The server starts the fork's interpreter itself.
 ENTRYPOINT ["/bin/sh", "-c", \
-  "exec /positronic/.venv/bin/python -m positronic.vendors.pi05_abc.server bottles_16k \
+  "exec /positronic/.venv/bin/python -m positronic.vendors.pi05_abc.server \"$PI05_ABC_COMMAND\" \
    --model.checkpoint=\"$PI05_ABC_CHECKPOINT\" --model.fork=/opt/yam-abc-reproduce \"$@\"", "--"]
 
 LABEL org.opencontainers.image.title="pi05-abc" \
-    org.opencontainers.image.description="pi0.5 fine-tuned on ABC-130k real data for 'put the plastic bottles in the bin' (step 16000), with the author's openpi server, served over positronic's session protocol." \
+    org.opencontainers.image.description="pi0.5 fine-tuned on ABC-130k real data, with the author's openpi server, served over positronic's session protocol." \
     org.opencontainers.image.licenses="NOASSERTION" \
     org.opencontainers.image.source="https://github.com/Positronic-Robotics/positronic"
