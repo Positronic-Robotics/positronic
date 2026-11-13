@@ -8,7 +8,7 @@ code is the fork [yam-abc-reproduce](https://github.com/ninghaolu/yam-abc-reprod
 | Command | Checkpoint | Tasks | Norm stats in the checkpoint |
 | --- | --- | --- | --- |
 | `bottles_16k` | [MikhailBird/pi05-abc-130k-task-finetune](https://huggingface.co/MikhailBird/pi05-abc-130k-task-finetune), step 16000 | put the plastic bottles in the bin | `assets/put_the_plastic_bottles_in_the_bin/norm_stats.json` |
-| `abc4_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of four tasks, step 29999 (a local directory) | the four tasks below | `assets/abc4_yam/norm_stats.json` |
+| `abc4_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of four tasks, step 29999 (a local directory) | put the plastic bottles in the bin, sweep away the paper scraps from the table, turn the mug right side up, load the plates into the dish rack | `assets/abc4_yam/norm_stats.json` |
 
 ## Licences
 
@@ -32,21 +32,12 @@ real data. It holds its own copy, because no vendor imports another:
 | Views | `image.exterior`, `image.wrist_left`, `image.wrist_right` → the snapshot's `top`, `left`, `right`, resized with pad to 224x168, channels first. openpi pads each view to 224x224 |
 | State | Per arm, 6 joints then the gripper, left arm first: 14 values |
 | Gripper state | Positronic `0=open, 1=closed` → the checkpoint's `1=open, 0=closed`, using `1 - grip` |
-| Prompt | The prompt of the task instruction, from the table below. The codec refuses any other task instruction |
+| Prompt | The prompt of the task instruction. The codec refuses any other task instruction |
 | Action | 50 absolute actions of 14 values → one `JointPosition` and one grip target per arm, with `1 - width` for the grip |
 
-The prompt is the task folder name of the ABC-130k release, with underscores as spaces, as the training's
-`prompt_from_task` reads it. The codec takes the task instruction that ABC's sim reports:
-
-| Task instruction | Prompt | `bottles_16k` | `abc4_30k` |
-| --- | --- | --- | --- |
-| `put the plastic bottles in the bin` | `put the plastic bottles in the bin` | yes | yes |
-| `sweep away paper scraps from the table` | `sweep away the paper scraps from the table` | no | yes |
-| `turn mug right side up` | `turn the mug right side up` | no | yes |
-| `load plates into tabletop dish rack` | `load the plates into the dish rack` | no | yes |
-
-The views of the release are 224x224 frames that hold the 640x480 camera view at 224x168, with black rows above and
-below. The codec sends 224x168, and openpi pads it to the same 224x224 frame.
+The codec takes the task instruction that ABC's sim reports, and sends the prompt that the checkpoint trained under:
+the task folder name of the ABC-130k release, with underscores as spaces. The session metadata names the prompt of
+each instruction under `pi05_abc.prompts`.
 
 The client plays the first 15 actions of each chunk at 30 Hz, and then asks for the next chunk, as the author's
 evaluation does. The gripper outputs can go outside 0 to 1.
