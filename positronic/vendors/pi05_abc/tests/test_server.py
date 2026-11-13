@@ -148,10 +148,6 @@ def test_a_task_other_than_the_bottles_is_refused():
         codec.encode(_obs('sweep away paper scraps from the table'))
 
 
-def _abc4_command():
-    return server.COMMANDS['abc4_30k'].kwargs
-
-
 # rules-allow: hardcoded-keys — the task instructions of ABC's sim and the task strings of ABC's real data, pinned apart
 # from the package constants so a typo in a constant fails here.
 ABC4_INSTRUCTION_PROMPTS = [
@@ -164,12 +160,12 @@ ABC4_INSTRUCTION_PROMPTS = [
 
 @pytest.mark.parametrize(('instruction', 'prompt'), ABC4_INSTRUCTION_PROMPTS)
 def test_the_four_task_command_sends_the_real_data_prompt_of_each_task(instruction, prompt):
-    codec = _abc4_command()['pipeline'].instantiate().codec
+    codec = server.abc4_pipeline().codec
     assert codec.encode(_obs(instruction))[pi05_abc.PROMPT] == prompt
 
 
 def test_the_four_task_command_refuses_a_task_it_did_not_train_on():
-    codec = _abc4_command()['pipeline'].instantiate().codec
+    codec = server.abc4_pipeline().codec
     assert codec.meta[codecs.PROMPTS_META] == dict(ABC4_INSTRUCTION_PROMPTS)
     with pytest.raises(ValueError, match='has no prompt for the task'):
         codec.encode(_obs('hang mug on mug rack'))
@@ -177,11 +173,7 @@ def test_the_four_task_command_refuses_a_task_it_did_not_train_on():
 
 def test_the_four_task_command_loads_its_own_norm_stats(tmp_path):
     fork = _fork(tmp_path)
-    model = _abc4_command()['model'].override(
-        checkpoint=str(tmp_path / 'checkpoint'), fork=str(fork), port=_free_port()
-    )
-
-    model.instantiate().close()
+    server.abc4_model(checkpoint=str(tmp_path / 'checkpoint'), fork=str(fork), port=_free_port()).close()
 
     argv = _log(tmp_path)[0]['argv']
     assert argv[argv.index('--norm-stats-path') + 1] == str(tmp_path / 'checkpoint/assets/abc4_yam/norm_stats.json')

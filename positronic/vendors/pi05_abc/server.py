@@ -36,8 +36,8 @@ from positronic.vendors import pi05_abc
 from positronic.vendors.pi05_abc import codecs
 
 # The norm stats of each checkpoint, in its checkpoint directory.
-BOTTLES_NORM_STATS = 'assets/put_the_plastic_bottles_in_the_bin/norm_stats.json'
-ABC4_NORM_STATS = 'assets/abc4_yam/norm_stats.json'
+BOTTLES_NORM_STATS = Path('assets/put_the_plastic_bottles_in_the_bin/norm_stats.json')
+ABC4_NORM_STATS = Path('assets/abc4_yam/norm_stats.json')
 # The fork's interpreter, the author's server, and the openpi sources where the author runs the server.
 FORK_PYTHON = Path('.venv/bin/python')
 FORK_SERVER = Path('yam_abc_reproduce/deploy/servers/openpi_server.py')
@@ -76,15 +76,15 @@ class Pi05AbcModel(Model):
             self._backend.wait()
 
 
-def _warm_observation(prompt: str) -> dict[str, Any]:
-    """Black views, a zero state and `prompt`, in the fields of the author's server."""
+def _warm_observation() -> dict[str, Any]:
+    """Black views and a zero state, in the fields of the author's server."""
     width, height = codecs.VIEW_SIZE
     view = np.zeros((3, height, width), dtype=np.uint8)
     cameras = (pi05_abc.TOP_CAMERA, pi05_abc.LEFT_CAMERA, pi05_abc.RIGHT_CAMERA)
     return {
         pi05_abc.STATE: np.zeros(codecs.BIMANUAL_SIZE, dtype=np.float32),
         pi05_abc.IMAGES: dict.fromkeys(cameras, view),
-        pi05_abc.PROMPT: prompt,
+        pi05_abc.PROMPT: codecs.TASK,
     }
 
 
@@ -93,12 +93,12 @@ def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
     return code is not None, code
 
 
-@cfn.config(config_name='pi05_abc130k', port=8001, norm_stats=BOTTLES_NORM_STATS, prompt=codecs.TASK)
-def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm_stats: str, prompt: str) -> Model:
-    """The checkpoint directory `checkpoint`, served by the author's server in the fork checkout `fork`.
+@cfn.config(config_name='pi05_abc130k', port=8001, norm_stats=BOTTLES_NORM_STATS)
+def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm_stats: Path) -> Model:
+    """The checkpoint directory `checkpoint`, served by the author's server in the fork checkout `fork`, with the norm
+    stats file `norm_stats` of the checkpoint directory.
 
-    `norm_stats` is the norm stats file in the checkpoint directory. `prompt` is the server's default prompt and the
-    prompt of the warm-up request. The author's server loads the checkpoint and compiles the model before it listens.
+    The author's server loads the checkpoint and compiles the model before it listens.
     """
     # The child runs in the fork's openpi directory, where a relative path names another file.
     checkpoint_dir, fork_dir = Path(checkpoint).resolve(), Path(fork).resolve()
@@ -117,7 +117,7 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm
         '--norm-stats-path',
         checkpoint_dir / norm_stats,
         '--prompt',
-        prompt,
+        codecs.TASK,
         '--image-key-map',
         IMAGE_KEY_MAP,
         '--flatten-prefix',
@@ -148,7 +148,7 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm
             max_wait=WARMUP_DEADLINE_S,
         )
         # The author's server swallows a failed warm-up of its own, so this one proves that the policy answers.
-        warmup(model, _warm_observation(prompt))
+        warmup(model, _warm_observation())
     except Exception:
         model.close()
         raise
@@ -176,12 +176,13 @@ def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
     )
 
 
+# The checkpoint fine-tuned on the real data of four ABC tasks, and the prompt of each task.
+abc4_model = pi05_abc_model.override(norm_stats=ABC4_NORM_STATS)
+abc4_pipeline = pipeline.override(prompts=codecs.ABC4_PROMPTS)
+
 COMMANDS = {
     'bottles_16k': serve.override(model=pi05_abc_model, pipeline=pipeline),
-    'abc4_30k': serve.override(
-        model=pi05_abc_model.override(norm_stats=ABC4_NORM_STATS),
-        pipeline=pipeline.override(prompts=codecs.ABC4_PROMPTS),
-    ),
+    'abc4_30k': serve.override(model=abc4_model, pipeline=abc4_pipeline),
 }
 
 
