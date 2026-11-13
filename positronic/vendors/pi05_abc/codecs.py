@@ -1,5 +1,5 @@
-"""The server-side codec of the pi0.5 ABC bottles checkpoint. It encodes a bimanual YAM observation as a request to
-the author's server, and decodes its 14-D actions as one joint command and one grip target per arm."""
+"""The server-side codec of the pi0.5 ABC checkpoints. It encodes a bimanual YAM observation as a request to the
+author's server, and decodes its 14-D actions as one joint command and one grip target per arm."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -22,10 +22,21 @@ VIEW_SIZE = (224, 168)
 # Per arm, the state and each action hold the joints of a YAM arm and then the gripper width.
 YAM_JOINTS = 6
 BIMANUAL_SIZE = (YAM_JOINTS + 1) * len(keys.BIMANUAL_ARMS)
-# The one task of the checkpoint, and the prompt it trained under: the task folder name of the ABC-130k release.
+# The task of the bottles checkpoint, and the prompt it trained under: the task folder name of the ABC-130k release.
 TASK = 'put the plastic bottles in the bin'
-# The session metadata field that names the crop box of each view, in fractions of the frame.
+BOTTLES_PROMPTS = {TASK: TASK}
+# The prompt of each task in ABC's real data, keyed by the task instruction that ABC's sim reports. The prompt is the
+# task folder name of the ABC-130k release, with underscores as spaces.
+ABC4_PROMPTS = {
+    'put the plastic bottles in the bin': 'put the plastic bottles in the bin',
+    'sweep away paper scraps from the table': 'sweep away the paper scraps from the table',
+    'turn mug right side up': 'turn the mug right side up',
+    'load plates into tabletop dish rack': 'load the plates into the dish rack',
+}
+# The session metadata fields that name the crop box of each view, in fractions of the frame, and the prompt of each
+# task instruction.
 CROPS_META = 'pi05_abc.crops'
+PROMPTS_META = 'pi05_abc.prompts'
 
 
 @dataclass(frozen=True)
@@ -51,12 +62,13 @@ class CropBox:
 FULL_FRAME = CropBox(0.0, 0.0, 1.0, 1.0)
 
 
-class BottlesObservationCodec(Codec):
+class AbcObservationCodec(Codec):
     """Encodes a bimanual YAM observation as a request to the author's server.
 
     Each view is cropped to its box in ``crops``, keyed by the observation's image key, and then goes as a
     channels-first ``uint8`` RGB image under its camera role. A view with no box goes whole. The state is 14-D: per
-    arm, 6 joints then the grip, left arm first. A task other than ``TASK`` is refused.
+    arm, 6 joints then the grip, left arm first. ``prompts`` maps a task instruction to the prompt that the
+    checkpoint trained under, and an instruction it does not hold is refused.
     """
 
     CAMERAS = {
@@ -65,7 +77,8 @@ class BottlesObservationCodec(Codec):
         pi05_abc.RIGHT_CAMERA: keys.WRIST_RIGHT_IMAGE,
     }
 
-    def __init__(self, crops: dict[str, CropBox] | None = None):
+    def __init__(self, prompts: dict[str, str], crops: dict[str, CropBox] | None = None):
+        self._prompts = dict(prompts)
         self._crops = dict(crops or {})
         if unknown := set(self._crops) - set(self.CAMERAS.values()):
             raise ValueError(f'Crop boxes name no camera of this codec: {sorted(unknown)}')
@@ -80,20 +93,23 @@ class BottlesObservationCodec(Codec):
 
     def encode(self, inputs: dict[str, Any]) -> dict[str, Any]:
         task = inputs.get(keys.TASK, '')
-        if task != TASK:
-            raise ValueError(f'The checkpoint knows only the task {TASK!r}, not {task!r}')
+        if task not in self._prompts:
+            raise ValueError(f'The checkpoint has no prompt for the task {task!r}; it knows {sorted(self._prompts)}')
         return {
             pi05_abc.STATE: bimanual_joints_state(inputs),
             pi05_abc.IMAGES: {
                 role: self._channels_first_view(inputs[key], key, self._crops.get(key, FULL_FRAME))
                 for role, key in self.CAMERAS.items()
             },
-            pi05_abc.PROMPT: TASK,
+            pi05_abc.PROMPT: self._prompts[task],
         }
 
     @property
     def meta(self) -> dict[str, Any]:
-        return {CROPS_META: {key: [box.left, box.top, box.right, box.bottom] for key, box in self._crops.items()}}
+        return {
+            CROPS_META: {key: [box.left, box.top, box.right, box.bottom] for key, box in self._crops.items()},
+            PROMPTS_META: dict(self._prompts),
+        }
 
 
 # The yambox ZED views (960x600, focal length 367 px) cut to 4:3 with the field of view of ABC's D405 views.
@@ -119,9 +135,9 @@ class Crop(StrEnum):
 CROPS = {Crop.NONE: {}, Crop.YAMBOX: YAMBOX_CROPS, Crop.YAMBOX_WIDE_TOP: YAMBOX_WIDE_TOP_CROPS}
 
 
-@cfn.config(crops=None)
-def bottles(crops: dict[str, CropBox] | None):
-    """The codec of the checkpoint, with each arm's grip in the gripper width (1 = open) that it speaks."""
-    obs = BottlesObservationCodec(crops=crops)
+@cfn.config(prompts=BOTTLES_PROMPTS, crops=None)
+def abc(prompts: dict[str, str], crops: dict[str, CropBox] | None):
+    """The codec of a checkpoint, with each arm's grip in the gripper width (1 = open) that it speaks."""
+    obs = AbcObservationCodec(prompts=prompts, crops=crops)
     pair = codecs.compose(obs=obs, action=BimanualJointsAction(num_joints=YAM_JOINTS), training_fps=FPS)
     return FlipGrip(arms=keys.BIMANUAL_ARMS) | pair

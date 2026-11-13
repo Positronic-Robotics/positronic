@@ -1,10 +1,14 @@
-"""Serve a pi0.5 checkpoint fine-tuned on ABC's real data for the bottles task over positronic's session protocol.
+"""Serve a pi0.5 checkpoint fine-tuned on ABC's real data over positronic's session protocol.
 
 The policy runs in the openpi environment of the author's fork, as the author's own openpi server, on this machine.
 A session picks the crop of its views in the query of its URL, for example `?crop=yambox`.
 
+Commands
+  bottles_16k  The bottles checkpoint: one task, its own norm stats.
+  abc4_30k     A checkpoint fine-tuned on the real data of four ABC tasks, with the prompt of each task.
+
 Usage
-  python -m positronic.vendors.pi05_abc.server bottles_16k --model.checkpoint=<checkpoint dir> --model.fork=<fork>
+  python -m positronic.vendors.pi05_abc.server <command> --model.checkpoint=<checkpoint dir> --model.fork=<fork>
 """
 
 import os
@@ -31,11 +35,12 @@ from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.vendors import pi05_abc
 from positronic.vendors.pi05_abc import codecs
 
-# The checkpoint directory as the Hub repository lays it out: the author's server snapshot and the task's norm stats.
-SERVER_SCRIPT = Path('inference/openpi_server.py')
-NORM_STATS = Path('assets/put_the_plastic_bottles_in_the_bin/norm_stats.json')
-# The fork's interpreter, and its openpi sources, where the author runs the server.
+# The norm stats of each checkpoint, in its checkpoint directory.
+BOTTLES_NORM_STATS = Path('assets/put_the_plastic_bottles_in_the_bin/norm_stats.json')
+ABC4_NORM_STATS = Path('assets/abc4_yam/norm_stats.json')
+# The fork's interpreter, the author's server, and the openpi sources where the author runs the server.
 FORK_PYTHON = Path('.venv/bin/python')
+FORK_SERVER = Path('yam_abc_reproduce/deploy/servers/openpi_server.py')
 FORK_OPENPI = Path('third_party/policy/openpi')
 # The fork's `YamInputs` reads `observation/image`, `observation/left_wrist`, `observation/right_wrist` and
 # `observation/state`; the server snapshot renames the camera roles to these keys.
@@ -88,9 +93,10 @@ def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
     return code is not None, code
 
 
-@cfn.config(config_name='pi05_abc130k', port=8001)
-def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int) -> Model:
-    """The checkpoint directory `checkpoint`, served by its own server snapshot in the fork checkout `fork`.
+@cfn.config(config_name='pi05_abc130k', port=8001, norm_stats=BOTTLES_NORM_STATS)
+def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm_stats: Path) -> Model:
+    """The checkpoint directory `checkpoint`, served by the author's server in the fork checkout `fork`, with the norm
+    stats file `norm_stats` of the checkpoint directory.
 
     The author's server loads the checkpoint and compiles the model before it listens.
     """
@@ -99,7 +105,7 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int) -> M
     # rules-allow: hardcoded-keys — the flags of the author's server as it parses them.
     command = [
         fork_dir / FORK_PYTHON,
-        checkpoint_dir / SERVER_SCRIPT,
+        fork_dir / FORK_SERVER,
         '--host',
         '127.0.0.1',
         '--port',
@@ -109,7 +115,7 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int) -> M
         '--checkpoint',
         checkpoint_dir,
         '--norm-stats-path',
-        checkpoint_dir / NORM_STATS,
+        checkpoint_dir / norm_stats,
         '--prompt',
         codecs.TASK,
         '--image-key-map',
@@ -149,11 +155,11 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int) -> M
     return model
 
 
-@cfn.config(crop=codecs.Crop.YAMBOX_WIDE_TOP.value)
-def pipeline(crop: str) -> PolicyDeployment:
-    """The views cropped by the set `crop` of `codecs.CROPS`, which a session sets in its URL query. The client plays
-    the first actions of each chunk at 30 Hz, and shrinks each view to fit the view size, or twice that size for a
-    cropped view."""
+@cfn.config(crop=codecs.Crop.YAMBOX_WIDE_TOP.value, prompts=codecs.BOTTLES_PROMPTS)
+def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
+    """The views cropped by the set `crop` of `codecs.CROPS`, which a session sets in its URL query, and the prompt of
+    each task instruction in `prompts`. The client plays the first actions of each chunk at 30 Hz, and shrinks each
+    view to fit the view size, or twice that size for a cropped view."""
     try:
         crop_set = codecs.Crop(crop)
     except ValueError:
@@ -166,11 +172,18 @@ def pipeline(crop: str) -> PolicyDeployment:
     )
     return PolicyDeployment(
         Sequential(schedule, TransformImages(*upload_size, mode=ResizeMode.BOUND)),
-        codecs.bottles.override(crops=crops).instantiate(),
+        codecs.abc.override(prompts=prompts, crops=crops).instantiate(),
     )
 
 
-COMMANDS = {'bottles_16k': serve.override(model=pi05_abc_model, pipeline=pipeline)}
+# The checkpoint fine-tuned on the real data of four ABC tasks, and the prompt of each task.
+abc4_model = pi05_abc_model.override(norm_stats=ABC4_NORM_STATS)
+abc4_pipeline = pipeline.override(prompts=codecs.ABC4_PROMPTS)
+
+COMMANDS = {
+    'bottles_16k': serve.override(model=pi05_abc_model, pipeline=pipeline),
+    'abc4_30k': serve.override(model=abc4_model, pipeline=abc4_pipeline),
+}
 
 
 if __name__ == '__main__':

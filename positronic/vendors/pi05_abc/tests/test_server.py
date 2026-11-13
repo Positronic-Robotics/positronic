@@ -18,6 +18,7 @@ from positronic import keys
 from positronic.offboard import roboarena
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
+from positronic.vendors import pi05_abc
 from positronic.vendors.pi05_abc import codecs, server
 from positronic.vendors.pi05_abc.tests import author_server_stand_in
 
@@ -126,7 +127,7 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
     assert {name: round(view['mean']) for name, view in images.items()} == {'top': 40, 'left': 120, 'right': 200}
     assert started['cwd'] == str(fork / 'third_party/policy/openpi')
     script, *flags = started['argv']
-    assert script == str(checkpoint / 'inference/openpi_server.py')
+    assert script == str(fork / 'yam_abc_reproduce/deploy/servers/openpi_server.py')
     assert dict(zip(flags[::2], flags[1::2], strict=True)) == {
         '--host': '127.0.0.1',
         '--port': str(port),
@@ -143,8 +144,39 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
 
 def test_a_task_other_than_the_bottles_is_refused():
     codec = server.pipeline().codec
-    with pytest.raises(ValueError, match='knows only the task'):
-        codec.encode(_obs('sweep away the paper scraps from the table'))
+    with pytest.raises(ValueError, match='has no prompt for the task'):
+        codec.encode(_obs('sweep away paper scraps from the table'))
+
+
+# rules-allow: hardcoded-keys — the task instructions of ABC's sim and the task strings of ABC's real data, pinned apart
+# from the package constants so a typo in a constant fails here.
+ABC4_INSTRUCTION_PROMPTS = [
+    ('put the plastic bottles in the bin', 'put the plastic bottles in the bin'),
+    ('sweep away paper scraps from the table', 'sweep away the paper scraps from the table'),
+    ('turn mug right side up', 'turn the mug right side up'),
+    ('load plates into tabletop dish rack', 'load the plates into the dish rack'),
+]
+
+
+@pytest.mark.parametrize(('instruction', 'prompt'), ABC4_INSTRUCTION_PROMPTS)
+def test_the_four_task_command_sends_the_real_data_prompt_of_each_task(instruction, prompt):
+    codec = server.abc4_pipeline().codec
+    assert codec.encode(_obs(instruction))[pi05_abc.PROMPT] == prompt
+
+
+def test_the_four_task_command_refuses_a_task_it_did_not_train_on():
+    codec = server.abc4_pipeline().codec
+    assert codec.meta[codecs.PROMPTS_META] == dict(ABC4_INSTRUCTION_PROMPTS)
+    with pytest.raises(ValueError, match='has no prompt for the task'):
+        codec.encode(_obs('hang mug on mug rack'))
+
+
+def test_the_four_task_command_loads_its_own_norm_stats(tmp_path):
+    fork = _fork(tmp_path)
+    server.abc4_model(checkpoint=str(tmp_path / 'checkpoint'), fork=str(fork), port=_free_port()).close()
+
+    argv = _log(tmp_path)[0]['argv']
+    assert argv[argv.index('--norm-stats-path') + 1] == str(tmp_path / 'checkpoint/assets/abc4_yam/norm_stats.json')
 
 
 @pytest.mark.parametrize('crop', list(codecs.Crop))
@@ -170,7 +202,7 @@ def test_a_load_with_relative_paths_reaches_the_server_with_absolute_ones(tmp_pa
     server.pi05_abc_model(checkpoint='checkpoint', fork='fork', port=_free_port()).close()
 
     argv = _log(tmp_path)[0]['argv']
-    assert argv[0] == str(tmp_path / 'checkpoint/inference/openpi_server.py')
+    assert argv[0] == str(tmp_path / 'fork/yam_abc_reproduce/deploy/servers/openpi_server.py')
     assert argv[argv.index('--checkpoint') + 1] == str(tmp_path / 'checkpoint')
     assert argv[argv.index('--norm-stats-path') + 1].startswith(str(tmp_path / 'checkpoint'))
 
