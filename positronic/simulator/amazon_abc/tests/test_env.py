@@ -243,6 +243,13 @@ def test_the_zed_x_view_turns_each_wrist_camera_from_abcs_pose_and_keeps_it_on_i
         assert fovy == wrist.fovy_deg
 
 
+def test_a_reset_refuses_a_scene_whose_control_period_is_not_the_one_the_eval_converts_its_timeout_at(env, scene):
+    scene._control_decimation = _DECIMATION + 1
+
+    with pytest.raises(RuntimeError, match='steps every 0.036'):
+        env.reset(_TOKEN)
+
+
 def test_a_reset_refuses_an_unknown_camera_view(env):
     with pytest.raises(ValueError, match='is not a valid CameraView'):
         env.reset({**_TOKEN, mapping.TOKEN_CAMERA_VIEW: 'brunello'})
