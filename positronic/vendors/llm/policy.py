@@ -71,7 +71,7 @@ Vector3 = tuple[Finite, Finite, Finite]
 
 
 class CameraMount(BaseModel):
-    """A camera fixed to the hand of ``arm``, in that hand's frame: the lens position in metres, the unit view
+    """A camera attached to the hand of ``arm``, in the axes of that hand: the lens position in metres, the unit view
     direction and the unit direction of the image top."""
 
     model_config = ConfigDict(extra='forbid', frozen=True)
@@ -84,16 +84,19 @@ class CameraMount(BaseModel):
     @model_validator(mode='after')
     def _directions(self) -> 'CameraMount':
         view, up = np.asarray(self.view), np.asarray(self.image_up)
-        # A direction written to three decimals is a unit vector only to about 1e-3.
-        if not np.allclose([np.linalg.norm(view), np.linalg.norm(up)], 1, atol=1e-2) or abs(view @ up) > 1e-2:
-            raise ValueError(f'The view and image top of camera {self.camera} must be perpendicular unit vectors')
+        # A direction written with a few decimals is a unit vector and perpendicular only approximately.
+        if not np.allclose([np.linalg.norm(view), np.linalg.norm(up)], 1, atol=1e-2):
+            raise ValueError(f'The view and image top of camera {self.camera} must be unit vectors')
+        if abs(view @ up) > 1e-2:
+            raise ValueError(f'The view and image top of camera {self.camera} must be perpendicular')
         return self
 
     def fact(self) -> str:
         hand = 'the hand' if self.arm is None else f'hand {self.arm}'
         return (
-            f'Camera {self.camera} is fixed to {hand}. In the hand frame its lens is at {list(self.position_m)} m, '
-            f'it looks along {list(self.view)}, and the top of its image points along {list(self.image_up)}. '
+            f'Camera {self.camera} is attached to {hand}. In the axes of {hand}, its lens is at '
+            f'{list(self.position_m)} m, it looks along {list(self.view)}, and the top of its image points along '
+            f'{list(self.image_up)}. '
         )
 
 
@@ -230,8 +233,8 @@ class Conversation:
             if named
             else '',
             'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
-            'The hand frame is the same frame as the measured hand pose. The measured hand position is the grip point '
-            'between the fingers, and the hand z axis points along the approach direction. '
+            'The hand frame is the same frame as the measured hand pose. The axes of a hand start at its measured '
+            'position and turn with its measured rotation. Hand z points along the approach direction. '
             'Gripper 0 is open and 1 is closed. '
             'A path plays its waypoints in order before the next observation; '
             'actual arrival must be checked from the measured state. '
@@ -247,7 +250,7 @@ class Conversation:
             if self._policy.images is Images.ON_DEMAND
             else '',
             *(mount.fact() for mount in self._policy.camera_mounts),
-            f'{ELAPSED_S} in each observation is the episode time in seconds since the first observation. '
+            f'{ELAPSED_S} in each observation is the time in seconds since the first observation. '
             'A note should briefly describe what you see and why you chose the motion. '
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
@@ -556,8 +559,10 @@ class LLMPolicy(Policy):
         mounted = [mount.camera for mount in camera_mounts]
         if len(set(mounted)) != len(mounted) or set(mounted) - set(camera_keys):
             raise ValueError('camera_mounts must name distinct cameras of camera_keys')
-        if unknown := {mount.arm for mount in camera_mounts} - set(arms):
-            raise ValueError(f'camera_mounts name arms {sorted(map(str, unknown))}; the arms are {list(arms)}')
+        for mount in camera_mounts:
+            if mount.arm not in arms:
+                expected = 'no arm' if arms == keys.ONE_ARM else f'one of the arms {list(arms)}'
+                raise ValueError(f'The camera mount of {mount.camera} must name {expected}')
         if cache_ttl not in get_args(CacheTTL):
             raise ValueError(f'cache_ttl must be one of {get_args(CacheTTL)}')
         # A provider cache setting adds cache points with their own TTL, and Anthropic refuses a shorter TTL before

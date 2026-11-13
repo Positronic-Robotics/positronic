@@ -240,10 +240,12 @@ def test_a_camera_mount_is_stated_with_its_hand_position_and_directions(model):
             complete(run, runtime, clock, obs)
     one, named, bare = (str(messages[0]) for messages, _ in requests)
     position = 'its lens is at [-0.074, 0.031, -0.126] m, it looks along [0.313, 0.008, 0.95], and the top of its '
-    assert f'Camera {keys.WRIST_IMAGE} is fixed to the hand. In the hand frame {position}' in one
-    assert f'Camera {keys.WRIST_LEFT_IMAGE} is fixed to hand {keys.LEFT_ARM}. In the hand frame {position}' in named
+    assert f'Camera {keys.WRIST_IMAGE} is attached to the hand. In the axes of the hand, {position}' in one
+    left_hand = f'hand {keys.LEFT_ARM}'
+    assert f'Camera {keys.WRIST_LEFT_IMAGE} is attached to {left_hand}. In the axes of {left_hand}, {position}' in named
     assert 'lens' not in bare
-    assert all('grip point between the fingers' in text for text in (one, named, bare))
+    assert all('The axes of a hand start at its measured position' in text for text in (one, named, bare))
+    assert not any('grip point' in text for text in (one, named, bare))
     assert llm(model='test', camera_mounts=[WRIST_MOUNT]).meta()['camera_mounts'] == [
         {
             'camera': keys.WRIST_IMAGE,
@@ -260,8 +262,8 @@ def test_a_camera_mount_is_stated_with_its_hand_position_and_directions(model):
     [
         ({'camera_mounts': (WRIST_MOUNT, WRIST_MOUNT)}, 'distinct cameras'),
         ({'camera_mounts': ({**WRIST_MOUNT, 'camera': 'image.side'},)}, 'distinct cameras'),
-        ({'camera_mounts': ({**WRIST_MOUNT, 'arm': keys.LEFT_ARM},)}, 'arms'),
-        ({'camera_mounts': ({**WRIST_MOUNT, 'view': (0, 0, 2)},)}, 'unit'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'arm': keys.LEFT_ARM},)}, 'must name no arm'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'view': (0, 0, 2), 'image_up': (1, 0, 0)},)}, 'unit'),
         ({'camera_mounts': ({**WRIST_MOUNT, 'image_up': (0.313, 0.008, 0.95)},)}, 'perpendicular'),
         ({'camera_mounts': ({**WRIST_MOUNT, 'position_m': (np.inf, 0, 0)},)}, 'finite'),
     ],
@@ -269,6 +271,11 @@ def test_a_camera_mount_is_stated_with_its_hand_position_and_directions(model):
 def test_camera_mounts_are_checked(change, match):
     with pytest.raises(ValueError, match=match):
         llm(model='test', **change)
+
+
+def test_a_camera_mount_of_named_arms_must_name_one_of_them():
+    with pytest.raises(ValueError, match=r"must name one of the arms \['left', 'right'\]"):
+        llm_bimanual(model='test', camera_mounts=[{**WRIST_MOUNT, 'camera': keys.WRIST_LEFT_IMAGE}])
 
 
 def without_cache_points(messages):
