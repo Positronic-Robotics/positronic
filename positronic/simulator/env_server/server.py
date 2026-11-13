@@ -20,7 +20,7 @@ different policies in one env:
 
 * The slots that reset together are a batch. All of them reset with one token, and the env resets every slot.
 * A batch's first reset waits for every slot, but not longer than ``join_deadline`` seconds after the first slot
-  asks. A slot that has not asked by then sits out the batch, and the env gets no action for it.
+  asks while no batch runs. A slot that has not asked by then sits out the batch, and the env gets no action for it.
 * A later reset of a batch answers when every slot of the batch has asked for one or has left.
 * A step answers when every slot in an episode has sent its action. The env gets no action for the other slots.
   A slot that reports ``done`` stops holding the others back; a client may still step it until its next reset.
@@ -274,6 +274,11 @@ class EnvServer:
             self._join_started = None
             self._reset(joining)
 
+    def _seconds_to_next_check(self) -> float:
+        if self._join_started is None:
+            return 0.5
+        return max(0.0, min(0.5, self._join_started + self._join_deadline - time.monotonic()))
+
     def _stop(self) -> None:
         """Fail every request still open, so no client thread waits on an answer that never comes."""
         with self._lock:
@@ -302,7 +307,7 @@ class EnvServer:
             try:
                 while not self._shutdown:
                     try:  # wake with no request too, to check the join deadline and ``shutdown``
-                        request = self._requests.get(timeout=0.5)
+                        request = self._requests.get(timeout=self._seconds_to_next_check())
                     except queue.Empty:
                         request = None
                     if request is not None:

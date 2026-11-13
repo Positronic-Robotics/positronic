@@ -257,6 +257,36 @@ def test_a_batch_waits_the_join_deadline_only_for_its_first_reset():
 
 
 @pytest.mark.timeout(60.0)
+def test_a_batch_resets_at_its_join_deadline_when_no_request_comes():
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, count=1, join_deadline=0.05) as (conn,):
+        started = time.monotonic()
+        conn.reset(None)
+        assert time.monotonic() - started < 0.3, 'the reset ran long after the join deadline'
+
+
+@pytest.mark.timeout(60.0)
+def test_the_join_deadline_counts_from_when_the_previous_batch_left():
+    """A slot that waited through a running batch does not start the next batch alone."""
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env, join_deadline=0.5) as (host, port), ThreadPoolExecutor(1) as pool:
+        first = _connect(host, port)
+        first.reset('first batch')
+        late = _connect(host, port)
+        joining = pool.submit(late.reset, 'second batch')
+        time.sleep(0.8)
+        first.close()
+        newcomer = _connect(host, port)
+        newcomer.reset('second batch')
+        joining.result(timeout=10.0)
+        _together(lambda: late.step(_action(0.0)), lambda: newcomer.step(_action(0.0)))
+        late.close()
+        newcomer.close()
+    assert env.resets == ['first batch', 'second batch']
+    assert env.stepped == [{0, 1}]
+
+
+@pytest.mark.timeout(60.0)
 def test_a_slot_that_sat_out_a_batch_joins_the_next_one():
     """A late client waits while the batch runs, also through its later resets, and resets once the batch leaves."""
     env = _ClonedScene(ends_at=[9, 9])
