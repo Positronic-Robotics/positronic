@@ -284,7 +284,9 @@ JSON, and an `--eval` value is a name. Two or more endpoints make one blind samp
 told no policy, and each episode records which one served it. `eval status` and `eval list` read it back by
 the submission id every run carries. The platform records the plan, the rollouts coordinator runs
 it on a rig of the shape it names, and a `blocked` run waits on what its `reason` names. A plan that states its own
-tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
+tasks runs under a personal organization or under an org with a customer grant. Under any other org it is
+refused `forbidden`, and so is `catalog.tasks`. A personal organization names the tasks that
+`catalog.tasks` lists to it, dials only a `remote` endpoint, and pays from its prepaid credits.
 Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
 `queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
 image runs the platform executes itself. `users.me` names the grant's client in `client`.
@@ -391,7 +393,7 @@ endpoints:
 names, and `catalog.tasks` the tasks a plan may compose, each with the `embodiments` it runs on, for
 example `["franka", "yam"]` or `["yam"]`. Every registered user sees the evals a submission can name.
 A customer grant adds the rig's evals and tasks, filtered to the entries offered to the grant's
-client.
+client. A personal organization gets the rig tasks that name no client.
 
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
