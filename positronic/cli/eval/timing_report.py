@@ -5,14 +5,16 @@ process's nested spans (the pass, each episode, and its reset / env-step / mater
 phases) and its machine-load stats stream, plus the env server's own spans file (its step decomposed into
 physics / render). A virtual-clock rollout cannot recover these wall costs from its own timestamps, so the
 report is an offline reduce over the raw spans and samples: the per-phase wall split, the env-step split, the
-inference-latency distribution, the real-time factor (recorded virtual duration over span wall) and the sim
-box's GPU load. The policy endpoint (a different box) folds in from an optional ``nvidia-smi dmon`` log.
+inference-latency distribution, the real-time factor (recorded virtual duration over span wall), the latency
+percentiles of each part of a step and of a policy call, and the sim box's GPU load. The policy endpoint (a
+different box) folds in from an optional ``nvidia-smi dmon`` log.
 """
 
 import json
 import logging
+from bisect import bisect_right
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
@@ -22,6 +24,7 @@ from typing import NamedTuple
 import configuronic as cfn
 import numpy as np
 import pos3
+from positronic_model_server import protocol
 
 from positronic.cli.account.gateway import CommandFailed, Fault
 from positronic.telemetry import (
@@ -41,22 +44,33 @@ from positronic.telemetry import (
     read_stats,
 )
 from positronic.telemetry_keys import (
+    ATTR_CODEC,
     ATTR_EPISODE_PARTIAL,
     ATTR_EPISODE_VIRTUAL_S,
     ATTR_PASS_FAILED,
+    ATTR_SERVED_PREFIX,
     ATTR_WAYPOINTS_DROPPED,
     ATTR_WAYPOINTS_EMITTED,
     ATTR_WAYPOINTS_LATE_MAX_MS,
     ATTR_WAYPOINTS_LATE_SUM_MS,
     ATTR_WAYPOINTS_SCHEDULED,
+    ATTR_WIRE_DOWNLINK_MS,
+    ATTR_WIRE_NETWORK_MS,
+    ATTR_WIRE_UPLINK_MS,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
     SPAN_EVAL_PASS,
+    SPAN_HARNESS_STEP,
     SPAN_MATERIALIZE,
+    SPAN_POLICY_ENCODE,
     SPAN_POLICY_INFER,
+    SPAN_POLICY_PREPARE,
+    SPAN_POLICY_SUBMIT,
     SPAN_RECORD_IO,
     SPAN_RESET,
+    SPAN_WIRE_RECV,
+    SPAN_WIRE_SEND,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +82,27 @@ _BYTES_PER_GB = 1024**3
 _DMON_UTIL = 'sm'
 _DMON_FB = 'fb'
 _DMON_DEVICE = 'gpu'
+
+# Spans whose own duration is a latency segment.
+_TIMED_SPANS = frozenset({
+    SPAN_HARNESS_STEP,
+    SPAN_POLICY_SUBMIT,
+    SPAN_POLICY_PREPARE,
+    SPAN_POLICY_INFER,
+    SPAN_WIRE_SEND,
+    SPAN_WIRE_RECV,
+    SPAN_RECORD_IO,
+    SPAN_RESET,
+})
+_SERVED_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SERVED}'
+_SERVED_INSTANTS = frozenset(
+    f'{ATTR_SERVED_PREFIX}{key}' for key in (protocol.TIMING_RECEIVED_NS, protocol.TIMING_SENT_NS)
+)
+_WIRE_SPLIT = (ATTR_WIRE_UPLINK_MS, ATTR_WIRE_DOWNLINK_MS, ATTR_WIRE_NETWORK_MS)
+# The latency segments that combine spans. Each label spells how it is made.
+_CALL_ENCODE = f'{SPAN_POLICY_ENCODE} per call'
+_CALL_NETWORK = f'{SPAN_WIRE_SEND} + {SPAN_WIRE_RECV} - {_SERVED_MS}'
+_CALL_CODEC = f'{SPAN_POLICY_INFER} - {SPAN_WIRE_SEND} - {SPAN_WIRE_RECV}'
 
 
 @dataclass
@@ -181,6 +216,21 @@ class WaypointReport:
 
 
 @dataclass
+class SegmentLatency:
+    """The percentiles of one segment's duration over the steps or calls that carry it inside the report's episodes.
+
+    ``episodes`` counts the episodes that those values come from.
+    """
+
+    segment: str
+    count: int
+    episodes: int
+    p50_ms: float
+    p90_ms: float
+    p99_ms: float
+
+
+@dataclass
 class PassReport:
     """Pass-level wall-clock roll-up reduced from the recorded telemetry spans and stats.
 
@@ -199,6 +249,7 @@ class PassReport:
     wall_split: WallSplit
     env_step_split: EnvStepSplit | None
     waypoints: WaypointReport | None
+    latency: list[SegmentLatency]
     gpu: GpuReport
 
 
@@ -465,18 +516,20 @@ def _episode_waypoints(episode: SpanRec) -> _EpisodeWaypoints | None:
     )
 
 
+def _descendants(span: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[SpanRec]:
+    pending = list(children.get(span.span_id, []))
+    while pending:
+        child = pending.pop()
+        yield child
+        pending.extend(children.get(child.span_id, []))
+
+
 def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _EpisodeTiming:
     kids = children.get(episode.span_id, [])
     reset_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RESET)
     env_step_s = sum(_dur_s(k) for k in kids if k.name == SPAN_ENV_STEP)
     record_io_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RECORD_IO)
-    infer_ms = []
-    pending = list(kids)
-    while pending:
-        child = pending.pop()
-        if child.name == SPAN_POLICY_INFER:
-            infer_ms.append(_dur_s(child) * 1000.0)
-        pending.extend(children.get(child.span_id, []))
+    infer_ms = [_dur_s(s) * 1000.0 for s in _descendants(episode, children) if s.name == SPAN_POLICY_INFER]
     materialize_s = sum(
         _dur_s(child)
         for k in kids
@@ -582,6 +635,86 @@ def _waypoint_report(timings: list[_EpisodeTiming]) -> WaypointReport | None:
     )
 
 
+def _covered_ms(spans: Iterable[SpanRec]) -> float:
+    """The wall in milliseconds during which at least one of ``spans`` is open."""
+    covered_ns = 0
+    open_until = None
+    for span in sorted(spans, key=lambda s: s.start_ns):
+        if open_until is None or span.start_ns > open_until:
+            covered_ns += span.end_ns - span.start_ns
+            open_until = span.end_ns
+        elif span.end_ns > open_until:
+            covered_ns += span.end_ns - open_until
+            open_until = span.end_ns
+    return covered_ns / 1e6
+
+
+def _segments(span: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tuple[str, float]]:
+    """Each latency segment that ``span`` gives, with its duration in milliseconds."""
+    if span.name in _TIMED_SPANS:
+        yield span.name, _dur_s(span) * 1000.0
+    if span.name == SPAN_POLICY_ENCODE:
+        yield f'{SPAN_POLICY_ENCODE}[{span.attrs.get(ATTR_CODEC, "")}]', _dur_s(span) * 1000.0
+    elif span.name == SPAN_HARNESS_STEP:
+        yield from ((key, float(value)) for key, value in span.attrs.items())
+    elif span.name == SPAN_POLICY_SUBMIT:
+        encodes = [s for s in _descendants(span, children) if s.name == SPAN_POLICY_ENCODE]
+        if encodes:
+            yield _CALL_ENCODE, _covered_ms(encodes)
+    elif span.name == SPAN_POLICY_INFER:
+        yield from _infer_segments(span, children)
+
+
+def _infer_segments(infer: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tuple[str, float]]:
+    for key, value in infer.attrs.items():
+        if (key.startswith(ATTR_SERVED_PREFIX) and key not in _SERVED_INSTANTS) or key in _WIRE_SPLIT:
+            yield key, float(value)
+    wire_ms = {k.name: _dur_s(k) * 1000.0 for k in children.get(infer.span_id, [])}
+    if SPAN_WIRE_SEND in wire_ms and SPAN_WIRE_RECV in wire_ms:
+        on_wire_ms = wire_ms[SPAN_WIRE_SEND] + wire_ms[SPAN_WIRE_RECV]
+        yield _CALL_CODEC, _dur_s(infer) * 1000.0 - on_wire_ms
+        if _SERVED_MS in infer.attrs:
+            yield _CALL_NETWORK, on_wire_ms - float(infer.attrs[_SERVED_MS])
+
+
+def _episode_finder(episodes: list[SpanRec]) -> Callable[[SpanRec], str | None]:
+    """A function that names the episode of the same run that a span starts in, or ``None`` outside every one."""
+    by_run: dict[str, list[SpanRec]] = defaultdict(list)
+    for episode in sorted(episodes, key=lambda e: e.start_ns):
+        by_run[episode.run_id].append(episode)
+    starts = {run: [e.start_ns for e in group] for run, group in by_run.items()}
+
+    def find(span: SpanRec) -> str | None:
+        group = by_run.get(span.run_id, [])
+        index = bisect_right(starts.get(span.run_id, []), span.start_ns) - 1
+        if index >= 0 and span.start_ns <= group[index].end_ns:
+            return group[index].span_id
+        return None
+
+    return find
+
+
+def _latency(spans: list[SpanRec], children: dict[str, list[SpanRec]], episodes: list[SpanRec]) -> list[SegmentLatency]:
+    """The percentiles of each latency segment over the spans that start inside one of ``episodes``."""
+    episode_of = _episode_finder(episodes)
+    values: dict[str, list[float]] = defaultdict(list)
+    sources: dict[str, set[str]] = defaultdict(set)
+    for span in spans:
+        episode = episode_of(span)
+        if episode is None:
+            continue
+        for segment, ms in _segments(span, children):
+            values[segment].append(ms)
+            sources[segment].add(episode)
+    rows = []
+    for segment in sorted(values):
+        p50, p90, p99 = np.percentile(values[segment], [50, 90, 99])
+        rows.append(
+            SegmentLatency(segment, len(values[segment]), len(sources[segment]), float(p50), float(p90), float(p99))
+        )
+    return rows
+
+
 def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummary | None) -> PassReport:
     children: dict[str, list[SpanRec]] = defaultdict(list)
     for span in spans:
@@ -664,6 +797,7 @@ def _build_report(spans: list[SpanRec], stats: list[dict], policy_gpu: GpuSummar
         wall_split=wall_split,
         env_step_split=_env_step_split(spans, episodes, env_step_sum, materialize_sum),
         waypoints=_waypoint_report(timings),
+        latency=_latency(spans, children, episodes),
         gpu=GpuReport(sim=_gpu_summary_from_stats(stats, list(windows.values())), policy=policy_gpu),
     )
 
@@ -675,6 +809,21 @@ def _share_row(name: str, fraction: float) -> str:
     up in one column across the wall and env-step splits.
     """
     return f'  {name:<16} {fraction * 100:>6.1f}%'
+
+
+def _latency_table(rows: list[SegmentLatency]) -> list[str]:
+    if not rows:
+        return []
+    width = max(len('segment'), *(len(row.segment) for row in rows))
+    lines = [
+        'latency inside the episodes (ms):',
+        f'  {"segment":<{width}} {"count":>8} {"episodes":>8} {"p50":>9} {"p90":>9} {"p99":>9}',
+    ]
+    lines += [
+        f'  {r.segment:<{width}} {r.count:>8} {r.episodes:>8} {r.p50_ms:>9.2f} {r.p90_ms:>9.2f} {r.p99_ms:>9.2f}'
+        for r in rows
+    ]
+    return lines
 
 
 def _render(report: PassReport) -> str:
@@ -727,6 +876,7 @@ def _render(report: PassReport) -> str:
             f'waypoint drops:      {drops}',
             f'waypoint late mean:  {late}',
         ]
+    lines += _latency_table(report.latency)
     for f in fields(GpuReport):
         summary = getattr(report.gpu, f.name)
         if summary is not None:

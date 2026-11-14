@@ -168,6 +168,18 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
 - the **env-step split** — physics / render / server-other (the env server's own decomposition), plus the wire
   and materialisation shares of the client step; absent for a native sim, which reports no server decomposition;
 - **inference latency** — call count and p50 / p95;
+- the **latency table** — the count, the episode count and the p50 / p90 / p99 of each latency segment, over the
+  spans that start inside an episode of the same run. A segment is the duration of a `harness.step`,
+  `policy.submit`, `policy.prepare`, `policy.infer`, `wire.send`, `wire.recv`, `record.io` or `reset` span, or
+  one millisecond value that a `harness.step` or `policy.infer` span carries (`step.*`, `served.*` durations,
+  `wire.*_ms`). `policy.encode[<codec>]` is one encode of one codec. Three segments combine spans:
+  - `policy.encode per call`: the wall during which at least one encode of one `policy.submit` call runs;
+  - `wire.send + wire.recv - served.served_ms`: the round trip less the server's own time. It holds the transfer
+    of the request and the answer, and the serialise and send of the answer. It holds no clock offset;
+  - `policy.infer - wire.send - wire.recv`: the serialise of the request and the decode of the answer.
+
+  The table reads any spans files, also the files of an attended run on a real robot. A file that holds only the
+  calls and the episodes gives the call segments and no step segments;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
   stream. The two peaks are box-wide totals, so they need samples that saw every device and read unavailable
