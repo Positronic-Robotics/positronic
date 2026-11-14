@@ -51,14 +51,15 @@ class Policy:
         return self._policy.config
 
     def predict(self, observation: dict, committed_actions: np.ndarray | None, *, seed: int) -> np.ndarray:
+        device = self._policy.device
         state = robolab.observation_state(observation, self.config.action_dim)
-        batch = {OBS_STATE: torch.from_numpy(state)[None], keys.TASK: [observation[keys.PROMPT]]}
+        batch = {OBS_STATE: torch.from_numpy(state)[None].to(device), keys.TASK: [observation[keys.PROMPT]]}
         for name, source in zip(self.config.camera_order, keys.CAMERAS, strict=True):
             image = np.asarray(observation[source])
             if image.dtype != np.uint8 or image.shape != (keys.VIEW_SIZE[1], keys.VIEW_SIZE[0], 3):
                 raise ValueError(f'{source} must be a uint8 RGB image of shape (360, 640, 3)')
-            batch[name] = torch.from_numpy(np.require(image, requirements=['C', 'W'])).permute(2, 0, 1)[None]
-        committed = None if committed_actions is None else torch.from_numpy(committed_actions)[None]
+            batch[name] = torch.from_numpy(np.require(image, requirements=['C', 'W'])).permute(2, 0, 1)[None].to(device)
+        committed = None if committed_actions is None else torch.from_numpy(committed_actions)[None].to(device)
         self.config.inference_seed = seed
         actions = self._policy.predict_action_chunk(batch, committed_actions=committed)
         result = actions[0].detach().cpu().numpy().astype(np.float32)
