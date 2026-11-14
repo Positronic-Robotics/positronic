@@ -221,7 +221,7 @@ def test_a_single_timeline_cached_rrd_is_not_reused(rrd_cache):
 
 def test_a_cached_rrd_with_raw_clock_axes_is_not_reused(rrd_cache):
     current = rrd_cache(30.0, 640)
-    old = current.parent / current.name.replace('v5-', 'v4-', 1)
+    old = current.parent / ('v4-' + current.name.split('-', 1)[1])
     old.write_bytes(b'recording with raw clock axes')
     assert current != old
     assert not current.exists()
