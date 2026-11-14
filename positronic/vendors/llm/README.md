@@ -92,6 +92,7 @@ Defaults are experimental bounds for supervised testing:
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
 | `arms` / `min_hand_distance` / `max_tracking_error` | `ONE_ARM` (one arm with no name) / 0.1 m / 0.005 m |
+| `min_hand_height` / `keep_out` / `reach` | none / none / none |
 | `image_size` | 640 pixels on the longest edge; aspect ratio preserved |
 | `image_horizon` | Frames of the most recent 3 observations |
 | `images` | `always` |
@@ -105,6 +106,16 @@ A path plays its waypoints in order, with no observation between them. Translati
 `--policy=@positronic.vendors.llm.policy.llm_bimanual` drives the `left` and `right` arms of a bimanual embodiment, such as the YAM, with its top camera and the camera on each wrist. `--policy.arms` sets other arm names. The policy reads `robot_state.{arm}.ee_pose` and `grip.{arm}`, and commands `robot_command.{arm}` and `target_grip.{arm}`. All arms use one frame. The observation holds the hand state of each arm under `arms`.
 
 A waypoint of `move_path` maps arm names to hand targets. An arm that a waypoint leaves out holds its previous target, or its measured pose before its first target. All arms reach a waypoint together: a segment lasts as long as the slower arm needs. A gripper change of one arm holds every hand still. The model gets a correction for a path with an unknown arm name. A path that brings a pair of hands closer than `min_hand_distance` does not play: the tool result rejects it and the next decision starts. When the hands or their previous targets are closer than that, the hands must not come closer than the smaller of the two distances. While each hand of the pair is within `max_tracking_error` of its previous target, the hands can come closer. They can then come as close as the shortest offset on the straight line from their measured offset to their previous offset. So a path that keeps the previous targets plays. This rejection does not count toward `max_invalid`; `max_calls` bounds it. This check covers the commanded hand positions only, not the links of the arms.
+
+### Floor, keep-out boxes and reach
+
+These checks run on every commanded hand position of a path, before the path plays. A path that fails one does not play: the tool result rejects it and names the hand and the waypoint, counting from 1. As with the hand distance, the rejection does not count toward `max_invalid`. The prompt states each check that is set.
+
+- `--policy.min_hand_height=0.33` rejects a path that takes a hand below that height. A hand that is below it must not go lower.
+- `--policy.keep_out='[[[0.0, -0.6, 0.0], [0.4, 0.6, 0.5]]]'` lists boxes by their low and high corners, in metres. A path that takes a hand into a box is rejected. A hand that is in a box can move.
+- `--policy.reach=@positronic.vendors.llm.reach.yam_reach` runs the IK of the YAM driver (`positronic.drivers.roboarm.yam.kinematics`) on each hand position, from the measured joints `robot_state.{arm}.q`. The arm base is where the measured hand and joints put it: the station reports the hand at its base pose times the FK of its joints. A position that the IK cannot reach inside the joint ranges is rejected. The rejection names the joint at its limit, or says that the pose is beyond the arm. A position where a joint turns more than `reach.max_joint_step` (0.5 rad) from the position before it is also rejected: the driver would swing the arm to another posture.
+
+While a hand is within `max_tracking_error` of its previous target, the floor and the boxes also treat that target as where the hand is. The reach treats each position on the way from the hand to that target the same. So a path that holds the target plays. When the IK cannot reach a position where the hand already is, the driver keeps its last target, so the reach accepts that position until the hand moves. A joint that sags a little past its range causes this. After the hand moves, a position that the IK cannot reach is rejected: the arm would stop short of it. A hold that the IK can only meet in another posture is rejected, as any other step past `reach.max_joint_step`. The joint ranges belong to the station, which does not send them to the policy. So the check uses the joint ranges of the YAM MJCF. These are the ranges that the driver uses with the limits that i2rt reports. The check covers the hand only, not the links of the arms.
 
 ## Recordings and lifecycle
 

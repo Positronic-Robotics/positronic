@@ -21,7 +21,7 @@ SHORT_BOUNDS = {'max_translation': 0.05, 'max_rotation': math.radians(20), 'line
 
 def played(motion: Motion, start: geom.Transform3D, grip: float, path: list[Waypoint]):
     held = {None: Waypoint.at(start, grip)}
-    bounded, parts, _ = motion.trajectory({None: start}, held, [{None: waypoint} for waypoint in path])
+    bounded, parts, _, _ = motion.trajectory({None: start}, held, [{None: waypoint} for waypoint in path])
     return [targets[None] for targets in bounded], [command for part in parts for command in part]
 
 
@@ -188,9 +188,14 @@ def test_a_gripper_change_of_one_arm_holds_every_hand_still():
     assert grips == [0, 1]
 
 
+def test_each_part_names_the_waypoint_that_it_moves_to_or_holds_at():
+    path = [{'right': at(0.01, -0.3)}, {'right': at(0.02, -0.3, gripper=1)}, {'left': at(0.01, 0.3)}]
+    assert Motion(**SHORT_BOUNDS).trajectory(*two_arms(), path).part_waypoints == [0, 1, 1, 2]
+
+
 def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_clamped_target():
     motion = Motion(**SHORT_BOUNDS)
-    bounded, parts, _ = motion.trajectory(*two_arms(), [{'left': at(1.0, 0.3)}, {'right': at(0.01, -0.3)}])
+    bounded, parts, _, _ = motion.trajectory(*two_arms(), [{'left': at(1.0, 0.3)}, {'right': at(0.01, -0.3)}])
     assert [targets[keys.LEFT_ARM].x for targets in bounded] == pytest.approx([0.05, 0.05])
     np.testing.assert_allclose(arm_command(parts[-1][-1], keys.LEFT_ARM), [0.05, 0.3, 0])
 

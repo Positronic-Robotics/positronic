@@ -9,7 +9,7 @@ gives the reply to ``respond`` until it returns a decision. ``accept`` turns tha
 import io
 import itertools
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import Annotated, Any, Literal, get_args
@@ -42,6 +42,7 @@ from positronic.utils import check_finite_nonnegative, check_finite_positive, fl
 
 from .client import Endpoint
 from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_approach, closest_hand_distances
+from .reach import Box, Reach
 
 
 class Images(StrEnum):
@@ -211,6 +212,20 @@ class Conversation:
             'go back to their previous targets. '
             'This check covers the hands only, not the rest of the arms. '
             if named
+            else '',
+            f'A path that takes a hand below z {self._policy.min_hand_height} m is rejected and does not move. A hand '
+            'that is below it must not go lower. '
+            if self._policy.min_hand_height is not None
+            else '',
+            *(
+                f'A path that takes a hand into the box from {list(box.low)} to {list(box.high)} m is rejected and '
+                'does not move. A hand that is in the box can move. '
+                for box in self._policy.keep_out
+            ),
+            'A path that a hand cannot follow with its arm is rejected and does not move. The rejection names the '
+            'waypoint, counting from 1, and the reason: the pose is beyond the arm, a joint reaches its limit, or a '
+            'joint would turn too far at once. '
+            if self._policy.reach is not None
             else '',
             f'Motion limits: {json.dumps(asdict(self._policy.motion))}. '
             f'API call budget, including corrections and pictures: {self._policy.max_calls}.',
@@ -418,11 +433,68 @@ class Conversation:
             return reason
         return None
 
+    def _hand_path_error(
+        self,
+        obs: Mapping[str, Any],
+        hands: Mapping[str | None, _Hand],
+        held: Targets,
+        parts: list[list[dict]],
+        part_waypoints: list[int],
+    ) -> str | None:
+        """Why a hand cannot follow its commands in ``parts``, or ``None``."""
+        for arm in self._policy.arms:
+            channel = keys.arm_channel(keys.ROBOT_COMMAND, arm)
+            samples = [
+                (index, command[channel].pose)
+                for part, index in zip(parts, part_waypoints, strict=True)
+                for command in part
+            ]
+            if (error := self._arm_path_error(obs, arm, hands[arm], held[arm], samples)) is not None:
+                return error
+        return None
+
+    def _arm_path_error(
+        self,
+        obs: Mapping[str, Any],
+        arm: str | None,
+        hand: _Hand,
+        held: Waypoint,
+        samples: list[tuple[int, geom.Transform3D]],
+    ) -> str | None:
+        """Why the hand of ``arm`` cannot follow ``samples`` of (waypoint index, pose), or ``None``."""
+        policy = self._policy
+        name = 'The hand' if arm is None else f'Hand {arm}'
+        # A hand within max_tracking_error of its held target is at that target too.
+        near = np.linalg.norm(hand.pose.translation - held.pose.translation) <= policy.max_tracking_error
+        starts = [hand.pose, held.pose] if near else [hand.pose]
+        floor = None
+        if policy.min_hand_height is not None:
+            floor = min(policy.min_hand_height, *(start.translation[2] for start in starts))
+        boxes = [box for box in policy.keep_out if not any(box.holds(start.translation) for start in starts)]
+        for index, pose in samples:
+            position = pose.translation
+            if floor is not None and position[2] < floor:
+                return f'{name} goes below z {floor:.4f} m on the way to waypoint {index + 1}'
+            if (box := next((box for box in boxes if box.holds(position)), None)) is not None:
+                return (
+                    f'{name} goes into the box from {list(box.low)} to {list(box.high)} m on the way to '
+                    f'waypoint {index + 1}'
+                )
+        if policy.reach is None:
+            return None
+        joints = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'], float)
+        refusal = policy.reach.refusal(joints, hand.pose, held.pose if near else None, [pose for _, pose in samples])
+        if refusal is None:
+            return None
+        sample, reason = refusal
+        return f'{name} cannot reach waypoint {samples[sample][0] + 1}: {reason}'
+
     def accept(
         self, call: ToolCallPart, data: list[Targets] | Finish, obs: Mapping[str, Any], time_ns: int
     ) -> list[list[dict]] | PolicyEnd:
         """The commands of each segment and gripper hold of a path from the pose in ``obs``, or the ``PolicyEnd`` of
-        a finish. A path that brings two hands too close plays as one empty part."""
+        a finish. A path that a check rejects plays as one empty part: two hands too close, a hand below the floor
+        or in a keep-out box, or a hand that its arm cannot take along the path."""
         self._obs = None
         if isinstance(data, Finish):
             self._messages.append(
@@ -439,10 +511,13 @@ class Conversation:
             return PolicyEnd.COMPLETE
         hands = {arm: _Hand.read(obs, arm) for arm in self._policy.arms}
         held = {arm: self._targets.get(arm, Waypoint.at(hand.pose, hand.grip)) for arm, hand in hands.items()}
-        bounded, parts, clamped = self._policy.motion.trajectory(
+        bounded, parts, part_waypoints, clamped = self._policy.motion.trajectory(
             {arm: hand.pose for arm, hand in hands.items()}, held, data
         )
-        if (error := self._hand_distance_error(hands, held, parts)) is not None:
+        error = self._hand_distance_error(hands, held, parts)
+        if error is None:
+            error = self._hand_path_error(obs, hands, held, parts, part_waypoints)
+        if error is not None:
             self._messages.append(
                 ModelRequest([ToolReturnPart(call.tool_name, f'Rejected: {error}', tool_call_id=call.tool_call_id)])
             )
@@ -472,8 +547,9 @@ CacheTTL = Literal['5m', '1h']
 class LLMPolicy(Policy):
     """An API-backed Cartesian policy for one arm or for named arms, with independent episode conversations.
 
-    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` and ``max_tracking_error`` are in
-    metres.
+    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance``, ``max_tracking_error`` and
+    ``min_hand_height`` are in metres. A path is rejected when a hand goes below ``min_hand_height``, into a box of
+    ``keep_out``, or where ``reach`` refuses it.
     """
 
     def __init__(
@@ -485,6 +561,9 @@ class LLMPolicy(Policy):
         arms: tuple[str | None, ...] = keys.ONE_ARM,
         min_hand_distance: float = 0.1,
         max_tracking_error: float = 0.005,
+        min_hand_height: float | None = None,
+        keep_out: tuple[Box, ...] = (),
+        reach: Reach | None = None,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         image_size: int = 640,
         image_horizon: int = 3,
@@ -499,6 +578,12 @@ class LLMPolicy(Policy):
         check_finite_nonnegative(max_tracking_error, 'max_tracking_error')
         if max_tracking_error >= min_hand_distance:
             raise ValueError('max_tracking_error must be less than min_hand_distance')
+        if min_hand_height is not None and not np.isfinite(min_hand_height):
+            raise ValueError('min_hand_height must be finite')
+        for box in keep_out:
+            corners = np.array([box.low, box.high], dtype=float)
+            if corners.shape != (2, 3) or not np.all(np.isfinite(corners)) or not np.all(corners[0] < corners[1]):
+                raise ValueError(f'A keep-out box must have finite xyz corners with low below high: {box}')
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
@@ -516,6 +601,7 @@ class LLMPolicy(Policy):
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
         self.arms, self.min_hand_distance, self.max_tracking_error = arms, min_hand_distance, max_tracking_error
+        self.min_hand_height, self.keep_out, self.reach = min_hand_height, keep_out, reach
         self.schemas: dict[Tool, type[BaseModel]] = {
             Tool.MOVE_PATH: MovePath if arms == keys.ONE_ARM else MoveArmsPath,
             Tool.REVEAL_FRAMES: RevealFrames,
@@ -545,6 +631,9 @@ class LLMPolicy(Policy):
             'arms': list(self.arms),
             'min_hand_distance': self.min_hand_distance,
             'max_tracking_error': self.max_tracking_error,
+            'min_hand_height': self.min_hand_height,
+            'keep_out': [[list(box.low), list(box.high)] for box in self.keep_out],
+            'reach': None if self.reach is None else self.reach.meta(),
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
             'timeout': self.endpoint.timeout,
@@ -604,6 +693,9 @@ class LLMPolicy(Policy):
     arms=keys.ONE_ARM,
     min_hand_distance=0.1,
     max_tracking_error=0.005,
+    min_hand_height=None,
+    keep_out=(),
+    reach=None,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     image_size=640,
     image_horizon=3,
@@ -621,6 +713,9 @@ def llm(
     arms: tuple[str | None, ...],
     min_hand_distance: float,
     max_tracking_error: float,
+    min_hand_height: float | None,
+    keep_out: Sequence[tuple[Sequence[float], Sequence[float]]],
+    reach: Reach | None,
     camera_keys: tuple[str, ...],
     image_size: int,
     image_horizon: int,
@@ -629,7 +724,7 @@ def llm(
     cache_breakpoints: bool,
     cache_ttl: CacheTTL,
 ) -> LLMPolicy:
-    """The LLM policy over a direct model API."""
+    """The LLM policy over a direct model API. ``keep_out`` lists boxes as their low and high corners."""
     return LLMPolicy(
         Endpoint(model, timeout=timeout, settings=settings, cache_breakpoints=cache_breakpoints),
         motion,
@@ -637,6 +732,9 @@ def llm(
         arms=tuple(arms),
         min_hand_distance=min_hand_distance,
         max_tracking_error=max_tracking_error,
+        min_hand_height=min_hand_height,
+        keep_out=tuple(Box(tuple(map(float, low)), tuple(map(float, high))) for low, high in keep_out),
+        reach=reach,
         camera_keys=tuple(camera_keys),
         image_size=image_size,
         image_horizon=image_horizon,

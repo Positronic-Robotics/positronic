@@ -1,4 +1,5 @@
 import dataclasses
+import importlib
 import logging
 import math
 import subprocess
@@ -31,10 +32,13 @@ from positronic.drivers.roboarm.models import (
     YAM_JOINT_NAMES,
     bundled_yam_model,
 )
+from positronic.drivers.roboarm.tests.conftest import I2RT_INSTALLED
 from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
+from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
+from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, IK_ROT_TOL, YamKinematics, within_ik_tolerance
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
@@ -561,7 +565,7 @@ def _earlier_world_poses(embodiment, earlier_z):
 
 @pytest.mark.parametrize('embodiment, earlier_z', EARLIER_MOUNT_Z, ids=['default', 'yambox'])
 def test_each_bimanual_yam_reports_the_ee_pose_that_the_earlier_model_reported(embodiment, earlier_z):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for mount, q, earlier in _earlier_world_poses(embodiment, earlier_z):
         reported = mount * kinematics.fk(q)
         assert np.linalg.norm(reported.translation - earlier.translation) < SAME_POSE_M
@@ -572,7 +576,7 @@ def test_each_bimanual_yam_reports_the_ee_pose_that_the_earlier_model_reported(e
 def test_each_bimanual_yam_solves_an_earlier_pose_to_the_joints_that_the_earlier_model_reached_it_at(
     embodiment, earlier_z
 ):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for mount, q, earlier in _earlier_world_poses(embodiment, earlier_z):
         start = np.clip(q + 0.05, kinematics.lower, kinematics.upper)
         solved = kinematics.ik(mount.inv * earlier, start, kinematics.lower, kinematics.upper)
@@ -592,7 +596,7 @@ def test_the_yam_legacy_frame_is_the_grasp_site_of_the_earlier_model():
 
 
 def test_at_its_base_in_the_earlier_base_the_bundled_yam_model_reports_the_earlier_poses():
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for q, translation, quat in EARLIER_MODEL_POSES:
         reported = YAM_BASE_IN_EARLIER_BASE * kinematics.fk(np.array(q))
         assert np.linalg.norm(reported.translation - np.array(translation)) < SAME_POSE_M
@@ -608,7 +612,7 @@ def test_the_single_arm_yam_reports_and_records_the_ee_pose_that_the_earlier_mod
     embodiment = embodiment_cfg.yam.instantiate()
     (robot,) = [system for system in embodiment.control_systems if isinstance(system, yam.Robot)]
     recorded = geom.Transform3D(np.array(embodiment.static_meta[eval_keys.MOUNTS][keys.JOINTS]))
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for q, translation, quat in EARLIER_MODEL_POSES:
         for mount in (robot.base_pose, recorded):
             reported = mount * kinematics.fk(np.array(q))
@@ -840,11 +844,23 @@ def test_the_joint_range_is_the_range_of_the_i2rt_arm_model():
     rig.loop.close()
 
 
+@pytest.mark.skipif(not I2RT_INSTALLED, reason='needs the arm models of the real i2rt package (the yam extra)')
+def test_the_vendored_model_has_the_joint_ranges_of_the_i2rt_arm_model():
+    get_robot = importlib.import_module('i2rt.robots.get_robot')
+    utils = importlib.import_module('i2rt.robots.utils')
+    # i2rt reads the arm's joints from the arm model and the last wrist joint from the gripper model.
+    xmls = (utils.ArmType.YAM.get_xml_path(), utils.GripperType.LINEAR_4310.get_xml_path())
+    ranges = get_robot._load_joint_limits_from_xml(*xmls)[:6]
+    kinematics = YamKinematics()
+    np.testing.assert_array_equal(ranges, np.column_stack([kinematics.lower, kinematics.upper]))
+    np.testing.assert_array_equal(ranges, I2RT_YAM_RANGES)
+
+
 def test_a_cartesian_target_that_needs_joint_4_below_minus_half_pi_reaches_the_chain(rig):
     rig.raise_arm()
     wrist_down = RAISED.copy()
     wrist_down[3] = -1.62  # past -pi/2, inside the -1.69297 of the i2rt arm model
-    rig.commands.push(command.CartesianPosition(yam._Kinematics().fk(wrist_down)))
+    rig.commands.push(command.CartesianPosition(YamKinematics().fk(wrist_down)))
     rig.tick(0.9)
     np.testing.assert_allclose(_asked(rig)[-1], wrist_down, atol=1e-6)
 
@@ -896,7 +912,7 @@ def test_the_park_holds_its_correction_past_the_joint_range(rig):
     sent = len(rig.vendor.targets)
     rig.tick(0.5)
     held = _asked(rig)[sent:]
-    assert np.all(held[:, 2] < yam._Kinematics().lower[2])
+    assert np.all(held[:, 2] < YamKinematics().lower[2])
     assert all(np.array_equal(asked, held[0]) for asked in held)
 
 
@@ -907,7 +923,7 @@ def _solver_answers(monkeypatch, posture: np.ndarray, *, success: bool) -> None:
         data.qpos[[model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES]] = posture
         return data.qpos, 0.0, success
 
-    monkeypatch.setattr(yam, 'qpos_from_site_pose', solve)
+    monkeypatch.setattr(yam_kinematics, 'qpos_from_site_pose', solve)
 
 
 # Reaching forward and down. At this joint-3 angle, links 2 and 3 are on one line (MJCF joint-4 offset 0.245, 0.06).
@@ -922,27 +938,45 @@ def past_full_stretch(kinematics, distance_m: float) -> geom.Transform3D:
 
 
 def test_ik_takes_an_answer_the_solver_reports_as_failed_when_it_is_inside_the_tolerance(monkeypatch):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     _solver_answers(monkeypatch, STRETCHED, success=False)
-    target = past_full_stretch(kinematics, yam._IK_POS_TOL / 2)
+    target = past_full_stretch(kinematics, IK_POS_TOL / 2)
     np.testing.assert_array_equal(kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper), STRETCHED)
 
 
 def test_ik_accepts_a_target_past_full_stretch_inside_the_tolerance_from_every_nearly_equal_start():
-    kinematics = yam._Kinematics()
-    target = past_full_stretch(kinematics, 0.8 * yam._IK_POS_TOL)
+    kinematics = YamKinematics()
+    target = past_full_stretch(kinematics, 0.8 * IK_POS_TOL)
     for k in range(20):
         assert kinematics.ik(target, STRETCHED + k * 1e-12, kinematics.lower, kinematics.upper) is not None
 
 
 def test_ik_refuses_a_target_farther_past_full_stretch_than_the_tolerance():
-    kinematics = yam._Kinematics()
-    target = past_full_stretch(kinematics, 5 * yam._IK_POS_TOL)
+    kinematics = YamKinematics()
+    target = past_full_stretch(kinematics, 5 * IK_POS_TOL)
     assert kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper) is None
 
 
+@pytest.mark.parametrize(
+    'offset_m,turn_rad,within',
+    [
+        (0.9 * IK_POS_TOL, 0.0, True),
+        (1.1 * IK_POS_TOL, 0.0, False),
+        (0.0, 0.9 * IK_ROT_TOL, True),
+        (0.0, 1.1 * IK_ROT_TOL, False),
+    ],
+)
+def test_a_pose_meets_its_target_only_within_the_ik_tolerance(offset_m, turn_rad, within):
+    target = geom.Transform3D(np.array([0.3, 0.0, 0.2]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+    reached = geom.Transform3D(
+        target.translation + [0.0, offset_m, 0.0],
+        target.rotation * geom.Rotation.from_rotvec(np.array([turn_rad, 0.0, 0.0])),
+    )
+    assert within_ik_tolerance(reached, target) is within
+
+
 def test_ik_clamps_a_joint_just_below_its_range_to_its_lower_limit(monkeypatch):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     asked = RAISED.copy()
     asked[3] = kinematics.lower[3] - 0.002
     _solver_answers(monkeypatch, asked, success=True)
@@ -952,7 +986,7 @@ def test_ik_clamps_a_joint_just_below_its_range_to_its_lower_limit(monkeypatch):
 
 
 def test_ik_wraps_a_joint_a_full_turn_below_its_range_back_into_it(monkeypatch):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     inside = RAISED.copy()
     inside[0] = 2.98  # a full turn below is past joint 1's lower limit, and the turn fits its range
     a_turn_below = inside.copy()
@@ -1043,7 +1077,7 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
 def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it(monkeypatch):
     vendor = FakeYam()
     driver = yam.Robot(connect=lambda channel, sim, compensation: vendor)
-    fk = yam._Kinematics.fk
+    fk = YamKinematics.fk
     armed = []
 
     def fk_once_failing(kinematics, q):
@@ -1052,7 +1086,7 @@ def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it(monkeypa
             raise ValueError('forward kinematics failed')
         return fk(kinematics, q)
 
-    monkeypatch.setattr(yam._Kinematics, 'fk', fk_once_failing)
+    monkeypatch.setattr(YamKinematics, 'fk', fk_once_failing)
     with pytest.raises(ValueError, match='forward kinematics failed'):
         with pimm.World(virtual_time=True) as world:
             loop = world.start(driver)
@@ -2360,8 +2394,8 @@ def test_the_yam_package_hands_out_the_driver():
     assert yam_package.Robot is yam.Robot
 
 
-@pytest.mark.parametrize('module', ['settle', 'compensation'])
-def test_the_settings_of_the_configs_import_without_the_driver(module):
+@pytest.mark.parametrize('module', ['kinematics', 'settle', 'compensation'])
+def test_the_modules_beside_the_driver_import_without_it(module):
     loaded = subprocess.run(
         [sys.executable, '-c', f'import sys, positronic.drivers.roboarm.yam.{module}; print(sorted(sys.modules))'],
         capture_output=True,
