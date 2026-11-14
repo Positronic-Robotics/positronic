@@ -103,3 +103,14 @@ def test_incompatible_checkpoint_fails_before_gpu_preparation(monkeypatch, confi
     with pytest.raises(ValueError):
         native.Policy('checkpoint', 'revision', 'variant', rtc=True)
     prepare.assert_not_called()
+
+
+@pytest.mark.parametrize('offload', [False, True])
+def test_text_encoder_offload_reaches_native_preparation(monkeypatch, offload):
+    native = import_module('..native', __package__)
+    loaded = Mock(config=SimpleNamespace(camera_layout='droid', inference_profile='default', action_dim=8))
+    monkeypatch.setattr(native.FluxActionPolicy, 'from_pretrained', Mock(return_value=loaded))
+    prepare = Mock(return_value=loaded)
+    monkeypatch.setattr(native.robolab, 'prepare_serving_policy', prepare)
+    native.Policy('checkpoint', None, None, device='cpu', compile_dit=False, offload_text_encoder=offload)
+    assert prepare.call_args.kwargs['offload_text_encoder'] is offload

@@ -164,10 +164,19 @@ def load_model(
     rtc: dict[str, float] | None,
     device: str = 'cuda',
     compile_dit: bool = True,
+    offload_text_encoder: bool = False,
 ) -> Flux3Model:
     from .native import Policy  # noqa: PLC0415
 
-    policy = Policy(checkpoint, revision, subfolder, device=device, compile_dit=compile_dit, rtc=rtc is not None)
+    policy = Policy(
+        checkpoint,
+        revision,
+        subfolder,
+        device=device,
+        compile_dit=compile_dit,
+        offload_text_encoder=offload_text_encoder,
+        rtc=rtc is not None,
+    )
     try:
         model = Flux3Model(
             policy,
@@ -195,6 +204,7 @@ def load_model(
     rtc=None,
     device='cuda',
     compile_dit=True,
+    offload_text_encoder=False,
     host='0.0.0.0',
     port=8000,
 )
@@ -206,6 +216,7 @@ def serve(
     rtc: dict[str, float] | None,
     device: str,
     compile_dit: bool,
+    offload_text_encoder: bool,
     host: str,
     port: int,
 ):
@@ -219,6 +230,7 @@ def serve(
             rtc=rtc,
             device=device,
             compile_dit=compile_dit,
+            offload_text_encoder=offload_text_encoder,
         ),
         auth_token=os.environ.get(keys.AUTH_TOKEN_ENV),
     )

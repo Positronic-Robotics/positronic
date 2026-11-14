@@ -248,10 +248,16 @@ def test_load_warms_selected_inference_paths_and_preserves_checkpoint_metadata(m
 
     monkeypatch.setitem(sys.modules, server.__package__ + '.native', SimpleNamespace(Policy=load))
     served = server.load_model(
-        'checkpoint', 'revision', 'variant', image_mappings=recipe.droid_cameras(), rtc=rtc if use_rtc else None
+        'checkpoint',
+        'revision',
+        'variant',
+        image_mappings=recipe.droid_cameras(),
+        rtc=rtc if use_rtc else None,
+        offload_text_encoder=True,
     )
     assert constructor_args[0][0] == ('checkpoint', 'revision', 'variant')
     assert constructor_args[0][1]['rtc'] is use_rtc
+    assert constructor_args[0][1]['offload_text_encoder'] is True
     assert served.metadata['checkpoint_id'] == 'checkpoint'
     assert served.metadata['revision'] == 'revision'
     assert served.metadata['subfolder'] == 'variant'

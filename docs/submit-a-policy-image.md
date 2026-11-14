@@ -121,6 +121,8 @@ submission.
 - The default command is `droid`: wrist plus `image.exterior` in both exterior slots. Run the image
   with `droid_3cam` to use `image.exterior_2` as the second exterior view.
 - Ordinary sessions play each chunk whole. `horizon_sec=<seconds>` limits playback before replanning.
+- `--offload_text_encoder=True` keeps the text encoder on CPU between prompt-cache misses,
+  reducing GPU memory use on cards such as the 32 GB RTX 5090.
 - `droid_rtc` and `droid_3cam_rtc` use the client's remaining plan and recent round-trip durations
   to supply native `committed_actions`. They require a BF16 DROID checkpoint trained with
   `rtc_max_prefix > 0`; the bundled guidance-distilled checkpoint is not asserted to support RTC.
