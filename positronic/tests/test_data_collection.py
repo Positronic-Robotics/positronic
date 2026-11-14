@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import cast
 
+import av
 import httpx
 import numpy as np
 import psutil
@@ -465,6 +466,12 @@ def test_a_video_bitrate_that_is_not_a_positive_integer_is_refused(bitrate):
         WebXR(port=free_port(), video_bitrate=bitrate)
 
 
+@pytest.mark.parametrize('fps', [0, -1, 30.0])
+def test_a_video_rate_that_is_not_a_positive_integer_is_refused(fps):
+    with pytest.raises(ValueError, match='video_fps must be a positive integer'):
+        WebXR(port=free_port(), video_fps=fps)
+
+
 def test_the_page_state_is_empty_until_something_sends_one(world):
     served = WebXR(port=free_port(), frontend=Frontend.IPHONE_TELEOP, use_https=False)
     emitter, receiver = world.local_pipe()
@@ -516,8 +523,8 @@ def test_the_phone_page_for_data_collection_keeps_its_own_mode():
         assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
-def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binary(world):
-    served = WebXR(port=free_port(), use_https=False)
+def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binary_at_the_video_rate(world):
+    served = WebXR(port=free_port(), use_https=False, video_fps=15)
     emitter, receiver = world.local_pipe()
     served.frame._bind(receiver)
     with _served_webxr(webxr=served) as base, ws_client.connect(base.replace('http', 'ws') + '/video') as video:
@@ -528,6 +535,10 @@ def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binar
         delta = video.recv(timeout=5)
     assert (config.width, config.height) == (64, 48) and config.codec.startswith('avc1.')
     assert isinstance(key, bytes) and isinstance(delta, bytes), 'each frame is a binary access unit'
+    decoder = av.CodecContext.create('h264', 'r')
+    for unit in (key, delta):
+        decoder.decode(av.Packet(unit))
+    assert decoder.framerate == 15
 
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):

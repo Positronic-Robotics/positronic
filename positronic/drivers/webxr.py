@@ -27,8 +27,6 @@ LEFT, RIGHT = 'left', 'right'
 
 # The routes of the page state and of the controller stream.
 STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
-# The frame rate that the video encoder spreads its bit rate over. A key frame comes once in this many frames.
-VIDEO_FPS = 30
 
 # The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
@@ -177,6 +175,8 @@ class WebXR(pimm.ControlSystem):
     - session_mode: the WebXR session that the page requests, a ``SessionMode``.
     - use_https: enable HTTPS; set False for iPhone dev.
     - video_bitrate: the target bit rate of the video stream, in bits per second.
+    - video_fps: the frame rate of the frames that ``frame`` receives. The video stream sends a key frame once each
+      second.
     """
 
     def __init__(
@@ -189,8 +189,10 @@ class WebXR(pimm.ControlSystem):
         use_https: bool = True,
         sensitivity: float = 1.0,
         video_bitrate: int = 4_000_000,
+        video_fps: int = 30,
     ):
         utils.check_positive_int(video_bitrate, 'video_bitrate')
+        utils.check_positive_int(video_fps, 'video_fps')
         if session_mode is SessionMode.VR and frontend is not Frontend.HEADSET:
             raise ValueError(f'session_mode VR needs the headset frontend, got {frontend!r}')
         self.port = port
@@ -210,6 +212,7 @@ class WebXR(pimm.ControlSystem):
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
         self.video_bitrate = video_bitrate
+        self.video_fps = video_fps
 
     def _next_frame(self, last_sent_time: pimm.Time | None) -> pimm.Message | None:
         """The frame the video stream sends next. ``None`` while no new frame arrived or the camera is lost."""
@@ -287,7 +290,7 @@ class WebXR(pimm.ControlSystem):
             # receive, a closed socket stays unseen until the next frame goes out.
             closed = asyncio.ensure_future(websocket.receive())
             try:
-                encoder = AnnexBEncoder(VIDEO_FPS, VIDEO_FPS, self.video_bitrate)
+                encoder = AnnexBEncoder(self.video_fps, self.video_fps, self.video_bitrate)
                 fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_time = None
                 while not should_stop.value and not closed.done():

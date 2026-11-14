@@ -113,8 +113,9 @@ Conversion for training picks its own keys from the recording.
   names the camera and the use of Y.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480. A camera with another aspect gets black bars.
-- `positronic teleop` sends the headset video as H.264 at 4 Mbit/s. `--webxr.video_bitrate=<bits per second>` changes
-  it. Lower it if the video stutters on a slow Wi-Fi. The headset browser decodes the video with WebCodecs.
+- `positronic teleop` sends the headset video as H.264 at 30 frames per second and 4 Mbit/s.
+  `--webxr.video_fps=<frames per second>` and `--webxr.video_bitrate=<bits per second>` change them. Lower the bit rate
+  if the video stutters on a slow Wi-Fi. The headset browser decodes the video with WebCodecs.
 
 ## Collect demonstrations in MuJoCo
 
@@ -197,8 +198,8 @@ Ready, turns control on, and moves the hand on a circle of 5 cm for 20 s. Then i
 4. After the run, read the report: `positronic eval timing-report --run_dir=<the output_dir of the run>`.
 
 `--rate_hz`, `--trial_sec`, `--radius` and `--circle_sec` change the samples and the motion. When the service runs
-with `--view_fps`, give the scripted headset the same `--view_fps`. The scripted headset holds each button until the
-page shows the effect of the press. Then it releases the button for at least `--min_hold_sec` (0.2 s): raise it on a
+with `--webxr.video_fps`, give the scripted headset the same `--view_fps`. The scripted headset holds each button until
+the page shows the effect of the press. Then it releases the button for at least `--min_hold_sec` (0.2 s): raise it on a
 loaded machine. A press of Ready that the page does not show within 1 s is released and pressed again. Use `http` in `--page` for a phone config of the service. The scripted headset does not check the
 self-signed certificate of the page.
 

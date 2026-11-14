@@ -201,7 +201,6 @@ def serve(
     silence_limit: float = 0.5,
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
-    view_fps: float = 30.0,
     open_window: bool = True,
     cameras: Sequence[str] = (),
     controller_axes: geom.Rotation | None = CONTROLLER_AXES,
@@ -242,7 +241,7 @@ def serve(
         cameras=cameras,
         controller_axes=controller_axes,
     )
-    headset = _Headset(service, view_fps)
+    headset = _Headset(service, webxr.video_fps)
     text = (
         f'A teleoperation trial waits for Ready. Within {ready_limit:g} s, press B on the Quest, '
         'or tap Ready on the phone page.'
