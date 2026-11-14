@@ -222,8 +222,9 @@ class Conversation:
                 'does not move. A hand that is in the box can move. '
                 for box in self._policy.keep_out
             ),
-            'A path that a hand cannot follow inside the joint ranges of its arm is rejected and does not move. The '
-            'rejection names the waypoint, counting from 1, and the joint at its limit. '
+            'A path that a hand cannot follow with its arm is rejected and does not move. The rejection names the '
+            'waypoint, counting from 1, and the reason: the pose is beyond the arm, a joint reaches its limit, or a '
+            'joint would turn too far at once. '
             if self._policy.reach is not None
             else '',
             f'Motion limits: {json.dumps(asdict(self._policy.motion))}. '
@@ -436,46 +437,67 @@ class Conversation:
         self,
         obs: Mapping[str, Any],
         hands: Mapping[str | None, _Hand],
+        held: Targets,
         parts: list[list[dict]],
         part_waypoints: list[int],
     ) -> str | None:
-        """Why a hand cannot follow its commands in ``parts``, or ``None``: it goes below the floor or lower than it
-        is, into a keep-out box that does not hold it, or where its arm cannot take it."""
-        policy = self._policy
-        for arm in policy.arms:
-            hand = 'The hand' if arm is None else f'Hand {arm}'
-            start = hands[arm].pose.translation
-            floor = None if policy.min_hand_height is None else min(policy.min_hand_height, start[2])
-            boxes = [box for box in policy.keep_out if not box.holds(start)]
+        """Why a hand cannot follow its commands in ``parts``, or ``None``."""
+        for arm in self._policy.arms:
             channel = keys.arm_channel(keys.ROBOT_COMMAND, arm)
             samples = [
                 (index, command[channel].pose)
                 for part, index in zip(parts, part_waypoints, strict=True)
                 for command in part
             ]
-            for index, pose in samples:
-                position = pose.translation
-                if floor is not None and position[2] < floor:
-                    return f'{hand} goes below z {floor:.4f} m on the way to waypoint {index + 1}'
-                for box in boxes:
-                    if box.holds(position):
-                        return (
-                            f'{hand} goes into the box from {list(box.low)} to {list(box.high)} m on the way to '
-                            f'waypoint {index + 1}'
-                        )
-            if policy.reach is not None:
-                joints = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'], float)
-                poses = [pose for _, pose in samples]
-                if (refusal := policy.reach.refusal(arm, joints, poses)) is not None:
-                    sample, reason = refusal
-                    return f'{hand} cannot reach waypoint {samples[sample][0] + 1}: {reason}'
+            if (error := self._arm_path_error(obs, arm, hands[arm], held[arm], samples)) is not None:
+                return error
         return None
+
+    def _arm_path_error(
+        self,
+        obs: Mapping[str, Any],
+        arm: str | None,
+        hand: _Hand,
+        held: Waypoint,
+        samples: list[tuple[int, geom.Transform3D]],
+    ) -> str | None:
+        """Why the hand of ``arm`` cannot follow ``samples`` of (waypoint index, pose): it goes below the floor or
+        lower than it starts, into a keep-out box that does not hold its start, or where its arm cannot take it.
+
+        While the hand is within ``max_tracking_error`` of its held target, that target is a start too."""
+        policy = self._policy
+        name = 'The hand' if arm is None else f'Hand {arm}'
+        starts = [hand.pose.translation]
+        if np.linalg.norm(hand.pose.translation - held.pose.translation) <= policy.max_tracking_error:
+            starts.append(held.pose.translation)
+        floor = None
+        if policy.min_hand_height is not None:
+            floor = min(policy.min_hand_height, *(start[2] for start in starts))
+        boxes = [box for box in policy.keep_out if not any(box.holds(start) for start in starts)]
+        for index, pose in samples:
+            position = pose.translation
+            if floor is not None and position[2] < floor:
+                return f'{name} goes below z {floor:.4f} m on the way to waypoint {index + 1}'
+            if (box := next((box for box in boxes if box.holds(position)), None)) is not None:
+                return (
+                    f'{name} goes into the box from {list(box.low)} to {list(box.high)} m on the way to '
+                    f'waypoint {index + 1}'
+                )
+        if policy.reach is None:
+            return None
+        joints = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'], float)
+        refusal = policy.reach.refusal(joints, hand.pose, [pose for _, pose in samples])
+        if refusal is None:
+            return None
+        sample, reason = refusal
+        return f'{name} cannot reach waypoint {samples[sample][0] + 1}: {reason}'
 
     def accept(
         self, call: ToolCallPart, data: list[Targets] | Finish, obs: Mapping[str, Any], time_ns: int
     ) -> list[list[dict]] | PolicyEnd:
         """The commands of each segment and gripper hold of a path from the pose in ``obs``, or the ``PolicyEnd`` of
-        a finish. A path that brings two hands too close plays as one empty part."""
+        a finish. A path that a check rejects plays as one empty part: two hands too close, a hand below the floor
+        or in a keep-out box, or a hand that its arm cannot take along the path."""
         self._obs = None
         if isinstance(data, Finish):
             self._messages.append(
@@ -497,7 +519,7 @@ class Conversation:
         )
         error = self._hand_distance_error(hands, held, parts)
         if error is None:
-            error = self._hand_path_error(obs, hands, parts, part_waypoints)
+            error = self._hand_path_error(obs, hands, held, parts, part_waypoints)
         if error is not None:
             self._messages.append(
                 ModelRequest([ToolReturnPart(call.tool_name, f'Rejected: {error}', tool_call_id=call.tool_call_id)])
@@ -565,8 +587,6 @@ class LLMPolicy(Policy):
             corners = np.array([box.low, box.high], dtype=float)
             if corners.shape != (2, 3) or not np.all(np.isfinite(corners)) or not np.all(corners[0] < corners[1]):
                 raise ValueError(f'A keep-out box must have finite xyz corners with low below high: {box}')
-        if reach is not None and not set(arms) <= reach.arms:
-            raise ValueError(f'reach must cover the arms {list(arms)}')
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):

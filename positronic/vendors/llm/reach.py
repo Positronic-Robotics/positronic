@@ -1,6 +1,6 @@
 """Checks that a hand can follow its part of a path before the path plays."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, NamedTuple, Protocol
 
 import configuronic as cfn
@@ -22,49 +22,42 @@ class Box(NamedTuple):
 
 
 class Reach(Protocol):
-    """The arms whose hands it checks, and why a hand cannot follow its poses."""
+    """Why a hand cannot follow its poses."""
 
-    arms: frozenset[str | None]
-
-    def refusal(self, arm: str | None, joints: np.ndarray, poses: Sequence[geom.Transform3D]) -> tuple[int, str] | None:
-        """The index of the first pose of ``poses`` that the hand of ``arm`` cannot follow in order from ``joints``,
-        and why; or ``None``."""
+    def refusal(
+        self, joints: np.ndarray, hand: geom.Transform3D, poses: Sequence[geom.Transform3D]
+    ) -> tuple[int, str] | None:
+        """The index of the first pose of ``poses`` that a hand at ``hand`` with its arm at ``joints`` cannot follow
+        in order, and why; or ``None``."""
         ...
 
     def meta(self) -> dict[str, Any]: ...
 
 
 class YamReach:
-    """The IK of the YAM driver on the hand poses of each arm, with the base of each arm at ``mounts[arm]``.
+    """The IK of the YAM driver on the hand poses of an arm.
 
-    A pose is out of reach when the driver's IK cannot meet it inside the joint ranges. A pose is also refused when a
-    joint turns more than ``max_joint_step`` (rad) from the pose before it: the driver would then swing the arm to
-    another posture.
+    The arm base is where the measured hand and joints put it, since the station reports the hand at its base pose
+    times the FK of its joints. A pose is out of reach when the driver's IK cannot meet it inside the joint ranges. A
+    pose is also refused when a joint turns more than ``max_joint_step`` (rad) from the pose before it: the driver
+    would then swing the arm to another posture.
     """
 
-    # TODO: the station owns the mounts (static meta) and the joint ranges (its chain reports them). They reach no
-    # policy, so the box config repeats the mounts and the check uses the MJCF ranges, which equal the ranges of a
-    # chain on i2rt's own limits. Read both from the station at the next pin roll of the platform.
-    def __init__(self, mounts: Mapping[str | None, Sequence[float]], max_joint_step: float = 0.5):
+    # TODO: the station owns the joint ranges (its chain reports them), and they reach no policy. The check uses the
+    # MJCF ranges, which equal the ranges of a chain on i2rt's own limits. Read them from the station at the next pin
+    # roll of the platform.
+    def __init__(self, max_joint_step: float = 0.5):
         check_finite_positive(max_joint_step, 'max_joint_step')
-        for arm, mount in mounts.items():
-            if len(mount) != 3 or not np.all(np.isfinite(mount)):
-                raise ValueError(f'The mount of arm {arm} must be a finite xyz position')
-        self.arms = frozenset(mounts)
-        self._bases = {arm: geom.Transform3D(np.asarray(mount, dtype=float)) for arm, mount in mounts.items()}
         self._max_joint_step = max_joint_step
         self._kinematics = YamKinematics()
 
     def meta(self) -> dict[str, Any]:
-        mounts = {str(arm): base.translation.tolist() for arm, base in self._bases.items()}
-        return {'type': 'yam', 'mounts': mounts, 'max_joint_step': self._max_joint_step}
+        return {'type': 'yam', 'max_joint_step': self._max_joint_step}
 
-    def _limit_refusal(self, target: geom.Transform3D, joints: np.ndarray) -> str:
-        kinematics = self._kinematics
-        free = kinematics.ik(target, joints, np.full(len(joints), -np.inf), np.full(len(joints), np.inf))
+    def _limit_refusal(self, target: geom.Transform3D, joints: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> str:
+        free = self._kinematics.ik(target, joints, np.full(len(joints), -np.inf), np.full(len(joints), np.inf))
         if free is None:
             return 'the pose is beyond the arm. Reach it with a nearer position'
-        lower, upper = kinematics.lower, kinematics.upper
         # A joint a full turn away is the same pose, so each joint counts at the turn nearest to its range.
         turns = free[:, None] + np.array([-2 * np.pi, 0.0, 2 * np.pi])
         excess = np.maximum(lower[:, None] - turns, turns - upper[:, None])
@@ -78,14 +71,18 @@ class YamReach:
             'Reach it with another orientation or a nearer position'
         )
 
-    def refusal(self, arm: str | None, joints: np.ndarray, poses: Sequence[geom.Transform3D]) -> tuple[int, str] | None:
-        base = self._bases[arm].inv
+    def refusal(
+        self, joints: np.ndarray, hand: geom.Transform3D, poses: Sequence[geom.Transform3D]
+    ) -> tuple[int, str] | None:
         kinematics = self._kinematics
+        base = (hand * kinematics.fk(joints).inv).inv
+        # A joint that sags a little past its range may stay there: the driver holds the arm where it is.
+        lower, upper = np.minimum(kinematics.lower, joints), np.maximum(kinematics.upper, joints)
         for index, pose in enumerate(poses):
             target = base * pose
-            solution = kinematics.ik(target, joints, kinematics.lower, kinematics.upper)
+            solution = kinematics.ik(target, joints, lower, upper)
             if solution is None:
-                return index, self._limit_refusal(target, joints)
+                return index, self._limit_refusal(target, joints, lower, upper)
             step = np.abs(solution - joints)
             joint = int(np.argmax(step))
             if step[joint] > self._max_joint_step:

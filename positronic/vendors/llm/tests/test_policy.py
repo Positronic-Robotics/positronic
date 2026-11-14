@@ -838,17 +838,17 @@ def test_a_path_that_takes_a_hand_into_a_keep_out_box_that_does_not_hold_it_play
 
 
 class ScriptedReach:
-    """A reach that refuses the first pose of ``arm`` at or above ``height``, and records the joints it starts from."""
+    """A reach that refuses the first pose at or above ``height`` of the hand on the right (y < 0), and records the
+    joints of each hand it checks, in the order of the arms."""
 
-    def __init__(self, arm: str, height: float):
-        self.arms = frozenset(keys.BIMANUAL_ARMS)
-        self.arm, self.height = arm, height
-        self.joints: dict[str | None, np.ndarray] = {}
+    def __init__(self, height: float):
+        self.height = height
+        self.joints: list[np.ndarray] = []
 
-    def refusal(self, arm, joints, poses):
-        self.joints[arm] = joints
+    def refusal(self, joints, hand, poses):
+        self.joints.append(joints)
         for index, pose in enumerate(poses):
-            if arm == self.arm and pose.translation[2] >= self.height:
+            if hand.translation[1] < 0 and pose.translation[2] >= self.height:
                 return index, 'joint 4 is at its lower limit (-1.69 rad)'
         return None
 
@@ -864,13 +864,37 @@ def with_joints(obs):
 
 def test_a_path_that_a_hand_cannot_follow_plays_nothing_and_names_the_waypoint_after_a_gripper_hold():
     metadata = {}
-    reach = ScriptedReach('right', 0.25)
+    reach = ScriptedReach(0.25)
     conversation = Conversation(llm_bimanual(model='test', image_size=8, reach=reach), metadata.__setitem__)
     path = move_arms_at({'right': (0.0, -0.3, 0.15)}, {'right': (0.0, -0.3, 0.3)}, gripper=1)
     assert decide(conversation, with_joints(bimanual_observation()), path) == [[]]
     assert rejection(metadata) == 'Hand right cannot reach waypoint 2: joint 4 is at its lower limit (-1.69 rad)'
-    np.testing.assert_array_equal(reach.joints['left'], np.zeros(6))
-    np.testing.assert_array_equal(reach.joints['right'], np.ones(6))
+    np.testing.assert_array_equal(reach.joints[0], np.zeros(6))
+    np.testing.assert_array_equal(reach.joints[1], np.ones(6))
+
+
+def right_at(obs, x: float, z: float):
+    obs[f'{keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM)}{keys.EE_POSE_SUFFIX}'][[0, 2]] = [x, z]
+    return obs
+
+
+@pytest.mark.parametrize('measured_z,accepted', [(0.104, True), (0.106, False)])
+def test_a_hand_within_the_tracking_error_of_its_target_can_hold_it_below_the_floor(measured_z, accepted):
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, min_hand_height=0.2), metadata.__setitem__)
+    assert decide(conversation, bimanual_observation(), move_arms_at({'right': (0.0, -0.3, 0.1)})) != [[]]
+    sagged = right_at(bimanual_observation(), 0.0, measured_z)
+    assert (decide(conversation, sagged, move_arms_at({'left': (0.0, 0.3, 0.15)})) != [[]]) is accepted
+
+
+@pytest.mark.parametrize('measured_x,accepted', [(0.052, True), (0.054, False)])
+def test_a_hand_within_the_tracking_error_of_its_target_can_hold_it_in_a_keep_out_box(measured_x, accepted):
+    metadata = {}
+    box = [[-0.1, -0.5, 0.0], [0.05, -0.2, 0.5]]
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, keep_out=[box]), metadata.__setitem__)
+    assert decide(conversation, bimanual_observation(), move_arms_at({'right': (0.048, -0.3, 0.1)})) != [[]]
+    outside = right_at(bimanual_observation(), measured_x, 0.1)
+    assert (decide(conversation, outside, move_arms_at({'left': (0.0, 0.3, 0.15)})) != [[]]) is accepted
 
 
 def test_the_floor_the_keep_out_boxes_and_the_reach_are_stated_only_when_set():
@@ -883,10 +907,10 @@ def test_the_floor_the_keep_out_boxes_and_the_reach_are_stated_only_when_set():
 
     plain = prompt()
     assert 'below z' not in plain and 'into the box' not in plain and 'joint ranges' not in plain
-    stated = prompt(min_hand_height=0.05, keep_out=[[[0, 0, 0], [1, 1, 1]]], reach=ScriptedReach('right', 1.0))
+    stated = prompt(min_hand_height=0.05, keep_out=[[[0, 0, 0], [1, 1, 1]]], reach=ScriptedReach(1.0))
     assert 'A path that takes a hand below z 0.05 m is rejected' in stated
     assert 'A path that takes a hand into the box from [0.0, 0.0, 0.0] to [1.0, 1.0, 1.0] m is rejected' in stated
-    assert 'cannot follow inside the joint ranges of its arm is rejected' in stated
+    assert 'A path that a hand cannot follow with its arm is rejected' in stated
 
 
 @pytest.mark.parametrize(
@@ -895,7 +919,6 @@ def test_the_floor_the_keep_out_boxes_and_the_reach_are_stated_only_when_set():
         ({'min_hand_height': float('nan')}, 'min_hand_height must be finite'),
         ({'keep_out': (Box((0.0, 0.0, 0.0), (1.0, 0.0, 1.0)),)}, 'low below high'),
         ({'keep_out': (Box((0.0, 0.0), (1.0, 1.0)),)}, 'xyz corners'),
-        ({'reach': ScriptedReach('right', 1.0), 'arms': ('left', 'middle')}, 'reach must cover the arms'),
     ],
 )
 def test_the_floor_the_keep_out_boxes_and_the_reach_are_checked(settings, match):

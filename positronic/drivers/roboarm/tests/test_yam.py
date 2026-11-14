@@ -842,6 +842,17 @@ def test_the_joint_range_is_the_range_of_the_i2rt_arm_model():
     rig.loop.close()
 
 
+def test_the_vendored_model_has_the_joint_ranges_of_the_i2rt_arm_model():
+    get_robot = pytest.importorskip('i2rt.robots.get_robot')
+    utils = pytest.importorskip('i2rt.robots.utils')
+    # i2rt reads the arm's joints from the arm model and the last wrist joint from the gripper model.
+    xmls = (utils.ArmType.YAM.get_xml_path(), utils.GripperType.LINEAR_4310.get_xml_path())
+    ranges = get_robot._load_joint_limits_from_xml(*xmls)[:6]
+    kinematics = YamKinematics()
+    np.testing.assert_array_equal(ranges, np.column_stack([kinematics.lower, kinematics.upper]))
+    np.testing.assert_array_equal(ranges, I2RT_YAM_RANGES)
+
+
 def test_a_cartesian_target_that_needs_joint_4_below_minus_half_pi_reaches_the_chain(rig):
     rig.raise_arm()
     wrist_down = RAISED.copy()

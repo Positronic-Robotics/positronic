@@ -188,6 +188,11 @@ def test_a_gripper_change_of_one_arm_holds_every_hand_still():
     assert grips == [0, 1]
 
 
+def test_each_part_names_the_waypoint_that_it_moves_to_or_holds_at():
+    path = [{'right': at(0.01, -0.3)}, {'right': at(0.02, -0.3, gripper=1)}, {'left': at(0.01, 0.3)}]
+    assert Motion(**SHORT_BOUNDS).trajectory(*two_arms(), path).part_waypoints == [0, 1, 1, 2]
+
+
 def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_clamped_target():
     motion = Motion(**SHORT_BOUNDS)
     bounded, parts, _, _ = motion.trajectory(*two_arms(), [{'left': at(1.0, 0.3)}, {'right': at(0.01, -0.3)}])
