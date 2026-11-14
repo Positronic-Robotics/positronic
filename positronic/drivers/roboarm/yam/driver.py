@@ -1,6 +1,6 @@
 """Driver for the real i2rt YAM arm: one CAN chain with six joints and the gripper.
 
-The driver solves FK/IK against the vendored MJCF (``assets/i2rt_yam/yam.xml``) at ``GRIPPER_SITE``.
+The driver solves FK/IK with ``kinematics.YamKinematics`` on the vendored MJCF at ``GRIPPER_SITE``.
 The chain reads the gripper as 0=closed/1=open, the inverse of positronic's grip.
 
 Check on the rig after bring-up: the CAN interface (``ip link set can0 up type can bitrate 1000000``), motor
@@ -17,7 +17,6 @@ from collections.abc import Callable, Generator, Iterator
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
-import mujoco as mj
 import numpy as np
 
 import pimm
@@ -26,21 +25,17 @@ from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.gripper import aperture
 from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
-from positronic.utils import check_finite_positive, package_assets_path
+from positronic.utils import check_finite_positive
 
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
-from ..ik import qpos_from_site_pose
-from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model
+from ..models import YAM_JOINT_NAMES, bundled_yam_model
 from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
+from .kinematics import YamKinematics
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
 logger = logging.getLogger(__name__)
 
-# The driver solves FK/IK itself, so its joint order and control frame must match the YAM sim's.
-# TODO(#517): centralise driver kinematics so driver and sim share one module.
-_IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
-_IK_ROT_TOL = 1e-2  # radians
 # Joints 2 and 3 rest on their lower mechanical stops at zero.
 _PARK_JOINTS = np.zeros(6)
 # The menagerie "home" keyframe, folded up and back.
@@ -193,76 +188,6 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[YamState.STATUS_OFFSET] = status.value
 
 
-class _Kinematics:
-    """FK/IK on the vendored YAM MJCF at ``GRIPPER_SITE``, in the arm-base frame.
-
-    ``mujoco`` exports every symbol below from a compiled extension, so a type checker cannot see them.
-    """
-
-    def __init__(self):
-        model_path = package_assets_path(YAM_MJCF_PATH)
-        self._model = mj.MjModel.from_xml_path(model_path)
-        self._data = mj.MjData(self._model)
-        site = mj.mjtObj.mjOBJ_SITE
-        self._site_id = mj.mj_name2id(self._model, site, GRIPPER_SITE)
-        self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
-        self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
-        ranges = np.array([self._model.joint(name).range for name in YAM_JOINT_NAMES])
-        self._lower, self._upper = ranges[:, 0], ranges[:, 1]
-
-    @property
-    def lower(self) -> np.ndarray:
-        return self._lower.copy()
-
-    @property
-    def upper(self) -> np.ndarray:
-        return self._upper.copy()
-
-    def fk(self, q: np.ndarray) -> geom.Transform3D:
-        self._data.qpos[self._qpos_ids] = q
-        mj.mj_kinematics(self._model, self._data)
-        quat = np.empty(4)
-        mj.mju_mat2Quat(quat, self._data.site_xmat[self._site_id].copy())
-        return geom.Transform3D(self._data.site_xpos[self._site_id].copy(), geom.Rotation.from_quat(quat))
-
-    @staticmethod
-    def _reach_postures(x: float, y: float) -> list[np.ndarray]:
-        """IK warm starts toward arm-base point (x, y): joint 1 at the target's azimuth, the elbow folded at two
-        heights. The 6-DoF wrist gives LM no null space, so a seed near the goal makes limit-clamped IK reliable."""
-        az = np.arctan2(y, x)
-        return [np.array([az, 1.8, 2.2, 0.0, -0.9, 0.0]), np.array([az, 1.2, 1.2, 0.0, 0.6, 0.0])]
-
-    def ik(
-        self, target: geom.Transform3D, current_q: np.ndarray, lower: np.ndarray, upper: np.ndarray
-    ) -> np.ndarray | None:
-        """Multi-start LM IK: the live posture first, then the reach postures toward the target's azimuth.
-        Each start's best answer is wrapped and clamped into ``[lower, upper]``, then FK-verified before acceptance."""
-        for start in (current_q, *self._reach_postures(*target.translation[:2])):
-            self._data.qpos[:] = 0.0
-            self._data.qpos[self._qpos_ids] = start
-            # The FK check below accepts or refuses the answer: the solver reports success only below an error of 1e-14.
-            qpos, _, _ = qpos_from_site_pose(
-                self._model,
-                self._data,
-                self._site_id,
-                self._dof_ids,
-                target.translation,
-                target.rotation.as_quat,
-                rot_weight=0.5,
-            )
-            q = qpos[self._qpos_ids].copy()
-            # A revolute joint at q ± 2π is the same pose; wrap out-of-range entries back in when they fit.
-            q = np.where((q > upper) & (q - 2 * np.pi >= lower), q - 2 * np.pi, q)
-            q = np.where((q < lower) & (q + 2 * np.pi <= upper), q + 2 * np.pi, q)
-            q = np.clip(q, lower, upper)
-            reached = self.fk(q)
-            rot_err = (reached.rotation.inv * target.rotation).angle
-            rot_err = min(rot_err, 2 * np.pi - rot_err)
-            if np.linalg.norm(reached.translation - target.translation) < _IK_POS_TOL and rot_err < _IK_ROT_TOL:
-                return q
-        return None
-
-
 class _Arm(DriverRun[command.CommandType]):
     """Control and report one YAM arm and its gripper for a driver run."""
 
@@ -283,7 +208,7 @@ class _Arm(DriverRun[command.CommandType]):
         clock: pimm.Clock,
         park_tuning: SettleTuning,
         move_tuning: SettleTuning,
-        kinematics: _Kinematics,
+        kinematics: YamKinematics,
         state: YamState,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
@@ -806,7 +731,7 @@ class Robot(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         # Built before the chain opens, so nothing can raise between enabling the motors and the protected region.
-        kinematics, state = _Kinematics(), YamState()
+        kinematics, state = YamKinematics(), YamState()
         meta = bundled_yam_model()
         asked: list[pimm.calls.Call[None, None]] = []
         while not should_stop.value:
@@ -817,7 +742,7 @@ class Robot(pimm.ControlSystem):
 
     def _drive_chain(
         self,
-        kinematics: _Kinematics,
+        kinematics: YamKinematics,
         state: YamState,
         meta: dict[str, Any],
         asked: list[pimm.calls.Call[None, None]],
@@ -1101,7 +1026,7 @@ if __name__ == '__main__':
             pump(0.1)  # the opening move ramps the arm to the start pose over a few seconds
         assert state.value.status == RobotStatus.AVAILABLE, state.value.status
 
-        kin = _Kinematics()
+        kin = YamKinematics()
 
         if fake is not None:
             # State round-trip: the chain at its start pose comes back through the driver's FK.
