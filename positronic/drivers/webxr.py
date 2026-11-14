@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -13,14 +12,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 import numpy as np
-import turbojpeg
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from positronic_model_server.serialization import check_int_range
 
 import pimm
 from positronic import geom, utils
+from positronic.gui.video_stream import AnnexBEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +27,8 @@ LEFT, RIGHT = 'left', 'right'
 
 # The routes of the page state and of the controller stream.
 STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
+# The frame rate that the video encoder spreads its bit rate over. A key frame comes once in this many frames.
+VIDEO_FPS = 30
 
 # The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
@@ -115,13 +115,6 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
     return tmp_key, tmp_cert
 
 
-def encode_frame(encoder: turbojpeg.TurboJPEG, image: np.ndarray, quality: int) -> str:
-    """An RGB ``image`` as base64 JPEG, as the video stream sends it."""
-    buffer = encoder.encode(image, quality=quality, pixel_format=turbojpeg.TJPF_RGB)
-    assert isinstance(buffer, bytes), 'TurboJPEG returns the JPEG bytes when it is given no destination'
-    return base64.b64encode(buffer).decode('utf-8')
-
-
 # The query that shows the phone page with the labels of ``positronic teleop``.
 PHONE_TELEOP_QUERY = 'mode=teleop'
 
@@ -156,7 +149,7 @@ class WebXR(pimm.ControlSystem):
     """WebXR server for a headset or an iPhone AR controller.
 
     Serves a single frontend at a time and streams controller/pose data back
-    to the application over WebSocket, with an optional JPEG video stream.
+    to the application over WebSocket, with an optional H.264 video stream.
 
     Important for iPhone
     - Use a WebXR-capable browser (XR Browser recommended).
@@ -172,7 +165,8 @@ class WebXR(pimm.ControlSystem):
     - `/input`           -> POST a JSON object from the page, such as a choice of the teleoperator; ``page_input``
                             emits it
     - `/ws`              -> JSON controller stream from client to server
-    - `/video`           -> optional base64 JPEG frames (server to client)
+    - `/video`           -> optional H.264 video (server to client): a JSON ``DecoderConfig`` text message before
+                            each key frame, and each frame as a binary Annex B access unit
     - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`, `/session-mode.js`
     - Headset-only: `/video-player.js`
 
@@ -182,7 +176,7 @@ class WebXR(pimm.ControlSystem):
     - frontend: the page to serve, a ``Frontend``.
     - session_mode: the WebXR session that the page requests, a ``SessionMode``.
     - use_https: enable HTTPS; set False for iPhone dev.
-    - jpeg_quality: the JPEG quality of the video stream.
+    - video_bitrate: the target bit rate of the video stream, in bits per second.
     """
 
     def __init__(
@@ -194,9 +188,9 @@ class WebXR(pimm.ControlSystem):
         session_mode: SessionMode = SessionMode.AR,
         use_https: bool = True,
         sensitivity: float = 1.0,
-        jpeg_quality: int = 50,
+        video_bitrate: int = 4_000_000,
     ):
-        check_int_range(jpeg_quality, 0, 100, 'jpeg_quality')
+        utils.check_positive_int(video_bitrate, 'video_bitrate')
         if session_mode is SessionMode.VR and frontend is not Frontend.HEADSET:
             raise ValueError(f'session_mode VR needs the headset frontend, got {frontend!r}')
         self.port = port
@@ -215,7 +209,7 @@ class WebXR(pimm.ControlSystem):
         self.controller_positions = pimm.ControlSystemEmitter(self)
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
-        self.jpeg_quality = jpeg_quality
+        self.video_bitrate = video_bitrate
 
     def _next_frame(self, last_sent_time: pimm.Time | None) -> pimm.Message | None:
         """The frame the video stream sends next. ``None`` while no new frame arrived or the camera is lost."""
@@ -283,7 +277,7 @@ class WebXR(pimm.ControlSystem):
                 return FileResponse(utils.package_assets_path('assets/webxr/video-player.js'))
 
     def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
-        """``/video``: each new frame as base64 JPEG."""
+        """``/video``: each new frame as H.264. Each socket has its own encoder, so its stream starts at a key frame."""
 
         @app.websocket('/video')
         async def video_stream(websocket: WebSocket):
@@ -293,8 +287,7 @@ class WebXR(pimm.ControlSystem):
             # receive, a closed socket stays unseen until the next frame goes out.
             closed = asyncio.ensure_future(websocket.receive())
             try:
-                # The video needs libturbojpeg, and the page does not. So the encoder loads only here.
-                jpeg_encoder = turbojpeg.TurboJPEG()
+                encoder = AnnexBEncoder(VIDEO_FPS, VIDEO_FPS, self.video_bitrate)
                 fps = pimm.utils.RateCounter('Video Stream')
                 last_sent_time = None
                 while not should_stop.value and not closed.done():
@@ -304,8 +297,10 @@ class WebXR(pimm.ControlSystem):
                     if msg is None:
                         continue
                     last_sent_time = msg.time
-                    base64_frame = encode_frame(jpeg_encoder, msg.data, self.jpeg_quality)
-                    await websocket.send_text(base64_frame)
+                    for unit in encoder.encode(msg.data):
+                        if unit.config is not None:
+                            await websocket.send_text(unit.config.model_dump_json())
+                        await websocket.send_bytes(unit.data)
                     fps.tick()
             except Exception as e:
                 logger.error(f'Video WebSocket error: {e}')

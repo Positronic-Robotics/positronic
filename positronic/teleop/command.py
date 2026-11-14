@@ -186,8 +186,7 @@ network = cfn.Config(ServedHostPort, host='0.0.0.0', port=DEFAULT_PORT)
 
 
 @cfn.config(
-    # At the WebXR default quality of 50, the headset text and small objects are not clear
-    webxr=positronic.cfg.webxr.oculus.override(jpeg_quality=90),
+    webxr=positronic.cfg.webxr.oculus,
     served_address=socket_at.override(uds=str(default_socket_path())),
     ready_limit=120.0,
     window_port=5006,

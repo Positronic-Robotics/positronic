@@ -1,8 +1,6 @@
 import asyncio
-import base64
 import collections
 import contextlib
-import io
 import json
 import logging
 import socket
@@ -14,11 +12,10 @@ from typing import cast
 
 import httpx
 import numpy as np
-import PIL.Image
 import psutil
 import pytest
-import turbojpeg
 from fastapi import FastAPI
+from websockets.sync import client as ws_client
 
 import pimm
 from positronic import data_collection, keys, utils, wire
@@ -32,6 +29,7 @@ from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriter
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.webxr import Frontend, SessionMode, WebXR
 from positronic.geom import Rotation, Transform3D
+from positronic.gui.video_stream import DecoderConfig
 from positronic.simulator.mujoco.sim import MujocoSim
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 from positronic.tests.testing_inference import free_port
@@ -387,9 +385,7 @@ def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = N
         list(run)
 
 
-def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send(monkeypatch):
-    # No frame goes out, so the stream never uses its encoder and the test needs no libturbojpeg.
-    monkeypatch.setattr(turbojpeg, 'TurboJPEG', object)
+def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send():
     app = FastAPI()
     WebXR(port=free_port())._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
     incoming = iter([{'type': 'websocket.connect'}, {'type': 'websocket.disconnect', 'code': 1000}])
@@ -463,10 +459,10 @@ def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
     assert utils.interface_ipv4_addresses() == [('en0', '10.0.0.5'), ('utun3', '100.64.0.2')]
 
 
-@pytest.mark.parametrize('quality', [-1, 101, 50.0])
-def test_a_jpeg_quality_that_is_not_an_integer_from_0_to_100_is_refused(quality):
-    with pytest.raises(ValueError, match='jpeg_quality must be an integer between 0 and 100'):
-        WebXR(port=free_port(), jpeg_quality=quality)
+@pytest.mark.parametrize('bitrate', [0, -1, 4e6])
+def test_a_video_bitrate_that_is_not_a_positive_integer_is_refused(bitrate):
+    with pytest.raises(ValueError, match='video_bitrate must be a positive integer'):
+        WebXR(port=free_port(), video_bitrate=bitrate)
 
 
 def test_the_page_state_is_empty_until_something_sends_one(world):
@@ -520,17 +516,18 @@ def test_the_phone_page_for_data_collection_keeps_its_own_mode():
         assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
-def test_the_headset_video_keeps_the_colors_of_an_rgb_frame():
-    try:
-        encoder = turbojpeg.TurboJPEG()
-    except RuntimeError as missing:
-        pytest.skip(f'no libturbojpeg on this host: {missing}')
-    red = np.zeros((16, 16, 3), dtype=np.uint8)
-    red[..., 0] = 255
-    decoded = np.asarray(
-        PIL.Image.open(io.BytesIO(base64.b64decode(webxr.encode_frame(encoder, red, 50)))).convert('RGB')
-    )
-    np.testing.assert_allclose(decoded.mean(axis=(0, 1)), [255, 0, 0], atol=8)
+def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binary(world):
+    served = WebXR(port=free_port(), use_https=False)
+    emitter, receiver = world.local_pipe()
+    served.frame._bind(receiver)
+    with _served_webxr(webxr=served) as base, ws_client.connect(base.replace('http', 'ws') + '/video') as video:
+        emitter.emit(np.zeros((48, 64, 3), np.uint8))
+        config = DecoderConfig.model_validate_json(video.recv(timeout=5))
+        key = video.recv(timeout=5)
+        emitter.emit(np.full((48, 64, 3), 9, np.uint8))
+        delta = video.recv(timeout=5)
+    assert (config.width, config.height) == (64, 48) and config.codec.startswith('avc1.')
+    assert isinstance(key, bytes) and isinstance(delta, bytes), 'each frame is a binary access unit'
 
 
 def test_data_collection_with_mujoco_robot_gripper(tmp_path):

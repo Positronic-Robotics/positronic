@@ -15,6 +15,8 @@ export class WebXRVideoPlayer {
         this.videoPlane = null;
         this.videoGroup = null;
         this.ws = null;
+        this.decoder = null;
+        this.canvas = null;
         this.lastFrameAt = 0;
         this.watchdog = null;
         this.scene = null;
@@ -26,8 +28,9 @@ export class WebXRVideoPlayer {
         this.scene = scene;
         this.camera = camera;
 
-        // Create video texture and material
-        this.videoTexture = new THREE.Texture();
+        // The decoder draws each frame on this canvas, and the plane shows the canvas
+        this.canvas = document.createElement('canvas');
+        this.videoTexture = new THREE.CanvasTexture(this.canvas);
         this.videoMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 map: { value: this.videoTexture },
@@ -91,18 +94,13 @@ export class WebXRVideoPlayer {
         const wsUrl = `${protocol}//${window.location.host}/video`;
 
         this.ws = new WebSocket(wsUrl);
+        this.ws.binaryType = 'arraybuffer';
         this.lastFrameAt = performance.now();
+        const stream = this.openStream();
 
-        this.ws.onmessage = async (event) => {
+        this.ws.onmessage = (event) => {
             this.lastFrameAt = performance.now();
-            try {
-                // Create an image from the base64 data
-                const img = new Image();
-                img.onload = () => this.showFrame(img);
-                img.src = 'data:image/jpeg;base64,' + event.data;
-            } catch (error) {
-                console.error("Error processing video frame:", error);
-            }
+            stream(event.data);
         };
 
         this.ws.onopen = () => {
@@ -118,10 +116,52 @@ export class WebXRVideoPlayer {
         };
     }
 
-    showFrame(img) {
-        this.videoTexture.image = img;
+    // A new H.264 decoder for one socket. Returns the handler of its messages: a JSON decoder configuration as text
+    // before each key frame, and each frame as a binary Annex B access unit. A decoder error closes the socket, and
+    // the watchdog opens a new one, whose stream starts at a key frame
+    openStream() {
+        if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
+        const ws = this.ws;
+        const decoder = new VideoDecoder({
+            output: (frame) => this.showFrame(frame),
+            error: (error) => {
+                console.error("Video decoder error:", error);
+                ws.close();
+            },
+        });
+        this.decoder = decoder;
+        let config = null;
+        let keyNext = false;
+        let timestamp = 0;
+        return (data) => {
+            if (decoder.state === 'closed') return;
+            if (typeof data === 'string') {
+                const next = JSON.parse(data);
+                if (!config || next.codec !== config.codec || next.width !== config.width || next.height !== config.height) {
+                    decoder.configure({
+                        codec: next.codec, codedWidth: next.width, codedHeight: next.height, optimizeForLatency: true,
+                    });
+                    config = next;
+                }
+                keyNext = true;
+                return;
+            }
+            if (!config) return;
+            decoder.decode(new EncodedVideoChunk({ type: keyNext ? 'key' : 'delta', timestamp: timestamp++, data }));
+            keyNext = false;
+        };
+    }
+
+    showFrame(frame) {
+        if (this.canvas.width !== frame.displayWidth || this.canvas.height !== frame.displayHeight) {
+            this.canvas.width = frame.displayWidth;
+            this.canvas.height = frame.displayHeight;
+            this.videoTexture.dispose();
+        }
+        this.canvas.getContext('2d').drawImage(frame, 0, 0);
+        frame.close();
         this.videoTexture.needsUpdate = true;
-        this.videoPlane.scale.x = PANEL_HEIGHT_M * img.width / img.height;
+        this.videoPlane.scale.x = PANEL_HEIGHT_M * this.canvas.width / this.canvas.height;
     }
 
     replaceLostSocket() {
@@ -184,6 +224,9 @@ export class WebXRVideoPlayer {
         clearInterval(this.watchdog);
         if (this.ws) {
             this.ws.close();
+        }
+        if (this.decoder && this.decoder.state !== 'closed') {
+            this.decoder.close();
         }
         if (this.videoTexture) {
             this.videoTexture.dispose();

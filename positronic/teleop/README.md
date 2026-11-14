@@ -113,8 +113,8 @@ Conversion for training picks its own keys from the recording.
   names the camera and the use of Y.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480. A camera with another aspect gets black bars.
-- `positronic teleop` sends the headset video at JPEG quality 90. `--webxr.jpeg_quality=<0..100>` changes it. Lower
-  it if the video stutters on a slow Wi-Fi.
+- `positronic teleop` sends the headset video as H.264 at 4 Mbit/s. `--webxr.video_bitrate=<bits per second>` changes
+  it. Lower it if the video stutters on a slow Wi-Fi. The headset browser decodes the video with WebCodecs.
 
 ## Collect demonstrations in MuJoCo
 
