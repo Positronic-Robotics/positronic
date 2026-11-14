@@ -116,16 +116,19 @@ address.
 every weight the server loads. It serves the session protocol, and the platform runs the published image as a
 submission.
 
-- The image holds two Python environments. positronic's server answers on port 8000. It starts BFL's
-  own server in BFL's environment, on port 9000 inside the container, and sends it each observation.
-- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
-  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
-  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
-  `droid_3cam` in the recipe's `ENTRYPOINT`.
-- BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
-  at about 33 000 MiB.
-- The client plays each chunk whole. A session with the query `horizon_sec=<seconds>` plays only the
-  commands of each chunk before that time ([Session params](#session-params)).
+- The thin server runs in BFL's Python environment on port 8000 and calls the model directly.
+  Model loading and warm-up finish before the listener binds.
+- The default command is `droid`: wrist plus `image.exterior` in both exterior slots. Run the image
+  with `droid_3cam` to use `image.exterior_2` as the second exterior view.
+- Ordinary sessions play each chunk whole. `horizon_sec=<seconds>` limits playback before replanning.
+- `droid_rtc` and `droid_3cam_rtc` use the client's remaining plan and recent round-trip durations
+  to supply native `committed_actions`. They require a BF16 DROID checkpoint trained with
+  `rtc_max_prefix > 0`; the bundled guidance-distilled checkpoint is not asserted to support RTC.
+  Select a compatible package with `--checkpoint`, `--revision` and `--subfolder`.
+  `--rtc.call_after_sec` sets the replan interval; `--rtc.max_delay_sec` bounds the supported delay
+  and must fit the checkpoint's prefix capacity. A measured delay beyond that bound fails explicitly.
+  RTC sessions require `horizon_sec=None` and return the full chunk; the client schedules it from
+  the observation time, skipping commands whose times have passed.
 - `black-forest-labs/flux-3-action-droid` and `black-forest-labs/flux-3-action-base` are gated. Accept
   BFL's terms on the Hub page of each, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
   `make -C docker build-serve-flux3-action`. The build reads the token through a secret mount, and it
