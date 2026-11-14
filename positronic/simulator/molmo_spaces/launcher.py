@@ -4,6 +4,7 @@
 CPU rendering on Linux requires OSMesa or software EGL.
 """
 
+import functools
 import os
 import subprocess
 from contextlib import AbstractContextManager
@@ -20,7 +21,7 @@ from positronic.simulator.env_server.launcher import (
     setup_lock,
     uv_pip_install,
 )
-from positronic.simulator.molmo_spaces import mapping
+from positronic.simulator.molmo_spaces import env_hook, mapping
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -57,15 +58,20 @@ def molmo_subprocess_env() -> dict[str, str]:
     return mujoco_server_env([_ENV_SERVER_DIR, _MAPPING_DIR])
 
 
-def _spawn(host: str, port: int) -> subprocess.Popen:
+def _spawn(hook: Path | None, host: str, port: int) -> subprocess.Popen:
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     python = ensure_molmo_venv()
     command = [str(python), str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
     command += ['--right-view-blocked', str(RIGHT_VIEW_BLOCKED_PATH)]
+    if hook is not None:
+        command += [env_hook.HOOK_FLAG, str(hook)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
-def serve_molmo_spaces(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """Run a MolmoSpaces server for the context's lifetime and yield its address."""
-    return serve_subprocess(_spawn, host)
+def serve_molmo_spaces(host: str = 'localhost', hook: Path | None = None) -> AbstractContextManager[tuple[str, int]]:
+    """Run a MolmoSpaces server for the context's lifetime and yield its address.
+
+    ``hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that changes each episode.
+    """
+    return serve_subprocess(functools.partial(_spawn, hook), host)

@@ -37,12 +37,23 @@ from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
 import arm_action  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
+import env_hook  # noqa: E402 -- positronic-free, on PYTHONPATH
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import mujoco_state  # noqa: E402 -- positronic-free, on PYTHONPATH
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
+
+
+def _hook_path(argv: list[str]) -> Path | None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(env_hook.HOOK_FLAG, type=Path)
+    return parser.parse_known_args(argv)[0].hook
+
+
+# A hook file runs before MolmoSpaces loads, because MolmoSpaces fetches its asset packs as it loads.
+_HOOK = env_hook.load(_hook_path(sys.argv[1:]))
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401  # pyright: ignore[reportMissingImports]
@@ -98,8 +109,14 @@ class _JointGraspSampler(JsonEvalTaskSampler):
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark environment with one active episode."""
 
-    def __init__(self, assets_dir: Path, right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]]) -> None:
+    def __init__(
+        self,
+        assets_dir: Path,
+        right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
+        hook: env_hook.EnvHook | None = None,
+    ) -> None:
         self._assets_dir = assets_dir
+        self._hook = hook if hook is not None else env_hook.EnvHook()
         self._found = mapping.discover_benchmarks(assets_dir)
         self._right_view_blocked = right_view_blocked
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}
@@ -184,6 +201,7 @@ class MolmoSpacesEnv(EnvProtocol):
             scenes = mapping.user_scene_xml_paths(self._assets_dir, bench.scene_dataset, episode.data_split)
             sampling.scene_xml_paths = [str(path) for path in scenes]
             sampling.house_variant = mapping.MOLMO_USER_SCENE_VARIANT
+        self._hook.eval_config(cfg, episode)
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.
         cfg.task_horizon = determine_task_horizon(
@@ -192,6 +210,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
+        self._hook.task_sampled(self._task)
         if not with_object_image_points:
             # The sensor draws its points from the global NumPy generator, so without it an episode draws other values.
             self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
@@ -323,7 +342,7 @@ class MolmoSpacesEnv(EnvProtocol):
             protocol.OBS_EEF_POS: eef_pos.astype(np.float32),
             protocol.OBS_EEF_QUAT: eef_quat.astype(np.float32),
             protocol.OBS_GRIP: np.float32(
-                mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
+                self._hook.grip(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
             mapping.OBS_SIM_STATE: mujoco_state.integration_state(scene.model, scene),
             mapping.OBS_TASK_METRICS: metrics,
@@ -345,11 +364,12 @@ def main() -> None:
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--right-view-blocked', type=Path, required=True)
+    parser.add_argument(env_hook.HOOK_FLAG, type=Path, help='a hook file that defines HOOK, an env_hook.EnvHook')
     args = parser.parse_args()
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(args.right_view_blocked))
+    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(args.right_view_blocked), _HOOK)
     EnvServer(env, args.host, args.port).serve_forever()
 
 

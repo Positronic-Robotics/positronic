@@ -1,9 +1,12 @@
 import logging
 import random
+from contextlib import AbstractContextManager, nullcontext
+from pathlib import Path
 
 import configuronic as cfn
 from eval_vocabulary.episode import MOLMO_TASK_METRICS_SIGNAL
 
+from positronic import keys
 from positronic.cfg.eval import number_trials, require_finite_positive, spec
 from positronic.eval import Eval, Task
 from positronic.eval import keys as eval_keys
@@ -24,6 +27,30 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     return mapping.BenchmarkPath.parse(bench), int(index)
 
 
+def _env_server(env_hook: str | None, env_server: str | None) -> AbstractContextManager[tuple[str, int]]:
+    """The running env server at ``env_server``, or one that the eval launches with ``env_hook``."""
+    if env_server is None:
+        return serve_molmo_spaces(hook=None if env_hook is None else Path(env_hook).expanduser().resolve())
+    if env_hook is not None:
+        raise ValueError(
+            '--eval.env_hook applies to a server that the eval launches, so --eval.env_server must be unset'
+        )
+    host, port = env_server.rsplit(':', 1)
+    return nullcontext((host, int(port)))
+
+
+def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str] | None) -> dict[str, tuple[str, ...]]:
+    """The camera aliases of each image key: the shoulder of each exterior side, then ``episode_cameras``."""
+    cameras = camera_dict(exterior_sides)
+    for key, camera in (episode_cameras or {}).items():
+        if len(exterior_sides) > 1 and key in (keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2):
+            raise ValueError(
+                f'--eval.episode_cameras replaces {key}, whose camera the seed draws; set with_right_shoulder=False'
+            )
+        cameras[key] = (camera,)
+    return cameras
+
+
 @cfn.config(
     suite=None,
     scene_dataset=None,
@@ -37,6 +64,9 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     horizon_sec=None,
     with_right_shoulder=True,
     with_object_image_points=True,
+    episode_cameras=None,
+    env_hook=None,
+    env_server=None,
 )
 def benchmarks(
     suite: str | list[str] | None,
@@ -51,6 +81,9 @@ def benchmarks(
     horizon_sec: float | None,
     with_right_shoulder: bool,
     with_object_image_points: bool,
+    episode_cameras: dict[str, str] | None,
+    env_hook: str | None,
+    env_server: str | None,
 ) -> Eval:
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
 
@@ -71,6 +104,16 @@ def benchmarks(
     ``with_object_image_points=False`` drops the object image points sensor of MolmoSpaces, which renders a segmentation
     mask for each camera at each step. No observation reads it, but it draws from the global NumPy generator, so a
     scored eval keeps it.
+
+    ``episode_cameras`` maps an image key to an episode camera that the env serves under it, in place of the
+    default camera, for example ``{'image.exterior_2': 'exo_camera_2'}``. An exterior key needs
+    ``with_right_shoulder=False``.
+
+    ``env_hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that the server applies to each episode:
+    for example a robot model, a task class or a camera model of its own.
+
+    ``env_server`` is the ``host:port`` of a MolmoSpaces env server that already runs. Without it, the eval launches
+    a server of its own. ``env_hook`` applies only to a server that the eval launches.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
@@ -85,10 +128,11 @@ def benchmarks(
         bound = [name for name, value in zip(names, values, strict=True) if value is not None]
         if bound:
             raise ValueError(f'--eval.episode_paths names its benchmarks, so --eval.{bound[0]} must be unset')
+    serve = _env_server(env_hook, env_server)
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]
-    cameras = camera_dict(exterior_sides)
+    cameras = _cameras(exterior_sides, episode_cameras)
     adapter = MolmoAdapter(cameras, with_object_image_points=with_object_image_points)
-    proxy = RemoteEnvControlSystem(adapter, serve_molmo_spaces())
+    proxy = RemoteEnvControlSystem(adapter, serve)
     embodiment = remote_embodiment(
         proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=adapter.robot_model
     )
