@@ -10,7 +10,9 @@ Run on a box with the asset packs (a GPU-less one uses mesa software EGL)::
         uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_replay.py --no-cov
 """
 
+import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 import mujoco as mj
@@ -137,14 +139,31 @@ def test_a_hooked_server_reports_the_grip_of_its_hook(tmp_path):
         '        return 0.25\n\n'
         'HOOK = FixedGrip()\n'
     )
+    spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: [1], mapping.WITH_RIGHT_SHOULDER: False}
     token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: False}
     with launcher.serve_molmo_spaces(hook=hook) as (host, port):
         conn = EnvConnection(host, port)
         try:
+            [listed] = conn.tasks(spec)
             obs = conn.reset(token)[protocol.FRAME_OBS]
         finally:
             conn.close()
     assert obs[protocol.OBS_GRIP] == np.float32(0.25)
+    assert listed[mapping.TASK_ENV_HOOK] == f'site_hook.py@sha256:{hashlib.sha256(hook.read_bytes()).hexdigest()}'
+
+
+def test_a_script_that_imports_the_server_answers_help_with_its_own_flags():
+    _skip_unless_present(_HARD_BENCHMARK)
+    validate = Path(__file__).with_name('validate.py')
+    result = subprocess.run(
+        [str(launcher.ensure_molmo_venv()), str(validate), '-h'],
+        env=launcher.molmo_subprocess_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert '--benchmark' in result.stdout
+    assert '--right-view-blocked' not in result.stdout
 
 
 def test_a_hook_sees_the_right_shoulder_camera_when_the_server_lists_and_when_it_builds(tmp_path):

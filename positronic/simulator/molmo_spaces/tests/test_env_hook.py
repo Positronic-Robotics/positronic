@@ -13,8 +13,9 @@ from positronic.simulator.molmo_spaces.launcher import molmo_subprocess_env
 
 
 def test_no_hook_file_gives_the_default_hook_which_reads_the_grip_as_molmospaces_does():
-    hook = env_hook.load(None)
+    hook, record = env_hook.load(None)
     assert type(hook) is env_hook.EnvHook
+    assert record is None
     qpos = np.array([0.4, 0.4], dtype=np.float32)
     assert hook.grip(qpos) == mapping.normalize_grip_qpos(qpos)
 
@@ -27,7 +28,7 @@ from pathlib import Path
 sys.modules['positronic'] = None
 import env_hook
 
-hook = env_hook.load(Path(sys.argv[1]))
+hook = env_hook.load(Path(sys.argv[1])).hook
 print(type(hook).__name__, hook.grip([0.0]))
 """
 
@@ -110,7 +111,10 @@ def test_a_hook_file_with_the_expected_digest_loads(hook_path):
     hook_path.write_text(_GRIP_HOOK)
     digest = hashlib.sha256(hook_path.read_bytes()).hexdigest()
 
-    assert env_hook.load(hook_path, digest).grip([0.0]) == 0.5
+    hook, record = env_hook.load(hook_path, digest)
+
+    assert hook.grip([0.0]) == 0.5
+    assert record == f'{hook_path.name}@sha256:{digest}'
 
 
 def test_a_hook_file_that_changed_after_its_digest_was_recorded_is_refused(hook_path):

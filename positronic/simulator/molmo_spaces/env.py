@@ -46,14 +46,15 @@ import numpy as np  # noqa: E402
 import protocol  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
 
-_parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.', allow_abbrev=False)
+_DESCRIPTION = 'Serve MolmoSpaces over the env-server protocol.'
+# validate.py and parity_native.py import this module with flags and a -h of their own, so main checks the flags.
+_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
 _parser.add_argument('--host', default='localhost')
 _parser.add_argument('--port', type=int)
 _parser.add_argument('--right-view-blocked', type=Path)
 _parser.add_argument('--hook', dest='hook', type=Path, help='a hook file that defines HOOK, an env_hook.EnvHook')
 _parser.add_argument('--hook-sha256', dest='hook_sha256', help='the SHA-256 digest that the hook file must have')
-# validate.py and parity_native.py import this module with flags of their own, so main checks the required flags.
-_args, _unknown = _parser.parse_known_args()
+_args, _ = _parser.parse_known_args()
 # A hook file runs before MolmoSpaces loads, because MolmoSpaces fetches its asset packs as it loads.
 _HOOK = env_hook.load(_args.hook, _args.hook_sha256)
 
@@ -119,10 +120,10 @@ class MolmoSpacesEnv(EnvProtocol):
         self,
         assets_dir: Path,
         right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
-        hook: env_hook.EnvHook | None = None,
+        hook: env_hook.LoadedHook | None = None,
     ) -> None:
         self._assets_dir = assets_dir
-        self._hook = hook if hook is not None else env_hook.EnvHook()
+        self._hook, self._hook_record = hook if hook is not None else env_hook.load(None)
         self._found = mapping.discover_benchmarks(assets_dir)
         self._right_view_blocked = right_view_blocked
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}
@@ -265,6 +266,7 @@ class MolmoSpacesEnv(EnvProtocol):
                     protocol.TASK_INSTRUCTION: episodes[i].language.task_description,
                     mapping.TASK_HORIZON_SEC: horizons[dt_ms],
                     mapping.TASK_HORIZON_OVERRIDE_SEC: override_sec,
+                    mapping.TASK_ENV_HOOK: self._hook_record,
                 })
         return records
 
@@ -375,15 +377,15 @@ class MolmoSpacesEnv(EnvProtocol):
 
 
 def main() -> None:
-    if _unknown:
-        _parser.error(f'unrecognized arguments: {" ".join(_unknown)}')
-    if _args.port is None or _args.right_view_blocked is None:
-        _parser.error('--port and --right-view-blocked are required')
+    parser = argparse.ArgumentParser(description=_DESCRIPTION, parents=[_parser], allow_abbrev=False)
+    args = parser.parse_args()
+    if args.port is None or args.right_view_blocked is None:
+        parser.error('--port and --right-view-blocked are required')
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         _parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(_args.right_view_blocked), _HOOK)
-    EnvServer(env, _args.host, _args.port).serve_forever()
+    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(args.right_view_blocked), _HOOK)
+    EnvServer(env, args.host, args.port).serve_forever()
 
 
 if __name__ == '__main__':

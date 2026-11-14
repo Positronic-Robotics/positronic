@@ -11,7 +11,7 @@ import hashlib
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 if __package__:
     from positronic.simulator.molmo_spaces import mapping
@@ -50,20 +50,26 @@ class EnvHook:
         return mapping.normalize_grip_qpos(gripper_qpos)
 
 
-def load(path: Path | None, sha256: str | None = None) -> EnvHook:
+class LoadedHook(NamedTuple):
+    hook: EnvHook
+    record: str | None  # The ``mapping.TASK_ENV_HOOK`` value of the hook: None for the default hook.
+
+
+def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
     """The ``HOOK`` of the file at ``path``, or the default hook when ``path`` is None.
 
     With ``sha256``, the file must have that digest, and the server runs the bytes it checked.
     """
     if path is None:
-        return EnvHook()
+        return LoadedHook(EnvHook(), None)
     spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
         raise ValueError(f'{path} is not a Python file')
     if spec.name in sys.modules:
         raise ValueError(f'{path} has the name of the loaded module {spec.name}; rename the hook file')
     source = path.read_bytes()
-    if sha256 is not None and hashlib.sha256(source).hexdigest() != sha256:
+    digest = hashlib.sha256(source).hexdigest()
+    if sha256 is not None and digest != sha256:
         raise ValueError(f'{path} changed after the eval recorded its digest {sha256}')
     module = importlib.util.module_from_spec(spec)
     # A dataclass finds the globals of its module in sys.modules.
@@ -72,4 +78,4 @@ def load(path: Path | None, sha256: str | None = None) -> EnvHook:
     hook = getattr(module, HOOK_NAME, None)
     if not isinstance(hook, EnvHook):
         raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')
-    return hook
+    return LoadedHook(hook, f'{path.name}@sha256:{digest}')

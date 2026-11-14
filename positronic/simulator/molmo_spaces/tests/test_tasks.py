@@ -293,8 +293,9 @@ class _MolmoObservationEnv(EnvProtocol):
     CONTROL_DT = 0.1
     HORIZON_STEPS = 5
 
-    def __init__(self, done_after: int | None):
+    def __init__(self, done_after: int | None, hook_record: str | None = None):
         self._done_after = done_after
+        self._hook_record = hook_record
         self.selections = []
         self.tokens = []
         self.actions = []
@@ -317,6 +318,7 @@ class _MolmoObservationEnv(EnvProtocol):
                 mapping.TASK_NAME: self.INSTRUCTION,
                 protocol.TASK_INSTRUCTION: self.INSTRUCTION,
                 mapping.TASK_HORIZON_SEC: self.HORIZON_STEPS * self.CONTROL_DT,
+                mapping.TASK_ENV_HOOK: self._hook_record,
             }
         ]
 
@@ -422,8 +424,10 @@ def _no_launch(hook=None, hook_sha256=None):
 
 
 @pytest.mark.timeout(60.0)
-def test_an_eval_with_an_env_server_dials_it_and_launches_none(monkeypatch, tmp_path):
-    env = _MolmoObservationEnv(done_after=2)
+def test_an_eval_with_an_env_server_dials_it_launches_none_and_records_the_hook_that_the_server_runs(
+    monkeypatch, tmp_path
+):
+    env = _MolmoObservationEnv(done_after=2, hook_record='site_hook.py@sha256:ab12')
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', _no_launch)
     with serve_env(env) as (host, port), pos3.mirror():
@@ -432,7 +436,7 @@ def test_an_eval_with_an_env_server_dials_it_and_launches_none(monkeypatch, tmp_
 
     assert len(env.tokens) == 1
     assert len(env.actions) == 2
-    assert molmo_keys.ENV_HOOK not in LocalDataset(tmp_path)[0].static
+    assert LocalDataset(tmp_path)[0].static[molmo_keys.ENV_HOOK] == 'site_hook.py@sha256:ab12'
 
 
 @pytest.mark.parametrize('env_server', ['localhost', 'localhost:port', ':8765'])
@@ -497,7 +501,7 @@ def test_an_env_hook_beside_an_env_server_is_refused():
         benchmarks.override(env_hook='hook.py', env_server='localhost:1').instantiate()
 
 
-def test_the_launched_server_gets_the_env_hook_with_the_digest_that_each_trial_records(asked, monkeypatch, tmp_path):
+def test_the_launched_server_gets_the_env_hook_with_its_digest(asked, monkeypatch, tmp_path):
     hook = tmp_path / 'hook.py'
     hook.write_text('HOOK = None\n')
     launches = []
@@ -508,12 +512,6 @@ def test_the_launched_server_gets_the_env_hook_with_the_digest_that_each_trial_r
 
     monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', launch)
 
-    trials = benchmarks.override(env_hook=str(hook)).instantiate().tasks()
+    benchmarks.override(env_hook=str(hook)).instantiate().tasks()
 
-    digest = hashlib.sha256(hook.read_bytes()).hexdigest()
-    assert launches == [(hook, digest)]
-    assert [trial.meta[molmo_keys.ENV_HOOK] for trial in trials] == [f'hook.py@sha256:{digest}'] * 2
-
-
-def test_a_run_without_an_env_hook_records_none(asked):
-    assert [trial.meta[molmo_keys.ENV_HOOK] for trial in benchmarks.instantiate().tasks()] == [None, None]
+    assert launches == [(hook, hashlib.sha256(hook.read_bytes()).hexdigest())]

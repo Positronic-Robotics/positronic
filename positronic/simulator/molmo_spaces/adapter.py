@@ -58,6 +58,7 @@ class MolmoAdapter(WireCommandAdapter):
                 eval_keys.TASK: record[mapping.TASK_NAME],
                 molmo_keys.EPISODE_INDEX: record[mapping.TOKEN_EPISODE_INDEX],
                 molmo_keys.TASK_HORIZON: record[mapping.TASK_HORIZON_SEC],
+                molmo_keys.ENV_HOOK: record[mapping.TASK_ENV_HOOK],
                 **(
                     {molmo_keys.TASK_HORIZON_OVERRIDE: record[mapping.TASK_HORIZON_OVERRIDE_SEC]}
                     if record.get(mapping.TASK_HORIZON_OVERRIDE_SEC) is not None

@@ -156,6 +156,7 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
         mapping.TASK_NAME: 'put the banana in the bowl',
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TASK_HORIZON_SEC: 30.0,
+        mapping.TASK_ENV_HOOK: 'site_hook.py@sha256:ab12',
     }
     assert adapter.task_params([record]) == [
         {
@@ -163,6 +164,7 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
             eval_keys.TASK: 'put the banana in the bowl',
             molmo_keys.EPISODE_INDEX: 3,
             molmo_keys.TASK_HORIZON: 30.0,
+            molmo_keys.ENV_HOOK: 'site_hook.py@sha256:ab12',
         }
     ]
     assert adapter.reset_token(adapter.task_params([record])[0])[mapping.TOKEN_EPISODE_INDEX] == 3
@@ -176,6 +178,7 @@ def test_a_horizon_override_rides_from_the_record_to_the_reset_token():
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TASK_HORIZON_SEC: 120.0,
         mapping.TASK_HORIZON_OVERRIDE_SEC: 120.0,
+        mapping.TASK_ENV_HOOK: None,
     }
     [params] = adapter.task_params([record])
     assert params[molmo_keys.TASK_HORIZON] == params[molmo_keys.TASK_HORIZON_OVERRIDE] == 120.0
@@ -190,6 +193,7 @@ def test_no_horizon_override_keeps_the_record_and_the_token_free_of_one():
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TASK_HORIZON_SEC: 30.0,
         mapping.TASK_HORIZON_OVERRIDE_SEC: None,
+        mapping.TASK_ENV_HOOK: None,
     }
     [params] = adapter.task_params([record])
     assert molmo_keys.TASK_HORIZON_OVERRIDE not in params
