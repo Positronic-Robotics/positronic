@@ -9,6 +9,7 @@ code is the fork [yam-abc-reproduce](https://github.com/ninghaolu/yam-abc-reprod
 | --- | --- | --- | --- |
 | `bottles_16k` | [MikhailBird/pi05-abc-130k-task-finetune](https://huggingface.co/MikhailBird/pi05-abc-130k-task-finetune), step 16000 | put the plastic bottles in the bin | `assets/put_the_plastic_bottles_in_the_bin/norm_stats.json` |
 | `abc4_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of four tasks, step 29999 (a local directory) | put the plastic bottles in the bin, sweep away the paper scraps from the table, turn the mug right side up, load the plates into the dish rack | `assets/abc4_yam/norm_stats.json` |
+| `abc11_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of eleven tasks, step 29999 (a local directory) | the four tasks of `abc4_30k`, unload the plates from the dish rack, load the cups into the dish rack, put the screwdriver in the bin, place and organize the fake fruits in the fruit bowl, build the wood block tower, place the snacks into the paper bag, take the snacks out of the paper bag | `assets/abc11_yam/norm_stats.json` |
 
 ## Licences
 
@@ -79,8 +80,8 @@ uv run --locked python -m positronic.vendors.pi05_abc.server bottles_16k \
     --model.checkpoint=<dir>/pi05-abc-130k-task-finetune-16000 --model.fork=<yam-abc-reproduce>
 ```
 
-`abc4_30k` needs these files of its checkpoint directory: `params/`, `assets/abc4_yam/norm_stats.json` and
-`_CHECKPOINT_METADATA`. The training state is not necessary.
+`abc4_30k` and `abc11_30k` need these files of their checkpoint directory: `params/`, the norm stats of the table
+above and `_CHECKPOINT_METADATA`. The training state is not necessary.
 
 ## Docker image
 
@@ -88,7 +89,7 @@ uv run --locked python -m positronic.vendors.pi05_abc.server bottles_16k \
 platform runs as a `kind: image` endpoint: the fork's environment, the checkpoint's inference files and the PaliGemma
 tokenizer inside, offline, serving on `:8000`. `make -C docker push-serve-pi05-abc` builds it and pushes it to the
 private Nebius registry, as `pi05-abc-yam`. The default build serves `bottles_16k` from the Hub. A build with
-`--build-arg WEIGHTS=local --build-arg COMMAND=abc4_30k --build-arg CHECKPOINT=<name>` takes a local checkpoint
+`--build-arg WEIGHTS=local --build-arg COMMAND=<command> --build-arg CHECKPOINT=<name>` takes a local checkpoint
 directory as the build context `checkpoint` (`--build-context checkpoint=<dir>`); the Dockerfile header gives the
 command. The session query sets another crop, and arguments after the image name
 override the command's flags, for example `docker run … <image> --pipeline.crop=yambox`.

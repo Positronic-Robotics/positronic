@@ -5,6 +5,7 @@ import os
 import socket
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -157,27 +158,66 @@ ABC4_INSTRUCTION_PROMPTS = [
     ('turn mug right side up', 'turn the mug right side up'),
     ('load plates into tabletop dish rack', 'load the plates into the dish rack'),
 ]
+# rules-allow: hardcoded-keys — pinned apart from the package constants, as above.
+ABC11_INSTRUCTION_PROMPTS = [
+    *ABC4_INSTRUCTION_PROMPTS,
+    ('unload the plates from the dish rack', 'unload the plates from the dish rack'),
+    ('load the cups into the dish rack', 'load the cups into the dish rack'),
+    ('put the screwdriver in the bin', 'put the screwdriver in the bin'),
+    ('place and organize the fake fruits in the fruit bowl', 'place and organize the fake fruits in the fruit bowl'),
+    ('build the wood block tower', 'build the wood block tower'),
+    ('place the snacks into the paper bag', 'place the snacks into the paper bag'),
+    ('take the snacks out of the paper bag', 'take the snacks out of the paper bag'),
+]
 
 
-@pytest.mark.parametrize(('instruction', 'prompt'), ABC4_INSTRUCTION_PROMPTS)
-def test_the_four_task_command_sends_the_real_data_prompt_of_each_task(instruction, prompt):
-    codec = server.abc4_pipeline().codec
+@dataclass(frozen=True)
+class MultiTaskCommand:
+    """A serve command of a checkpoint trained on several tasks, and what it must send and load."""
+
+    pipeline: Any
+    model: Any
+    prompts: list[tuple[str, str]]
+    norm_stats: str
+
+
+MULTI_TASK_COMMANDS = {
+    'abc4_30k': MultiTaskCommand(
+        server.abc4_pipeline, server.abc4_model, ABC4_INSTRUCTION_PROMPTS, 'assets/abc4_yam/norm_stats.json'
+    ),
+    'abc11_30k': MultiTaskCommand(
+        server.abc11_pipeline, server.abc11_model, ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam/norm_stats.json'
+    ),
+}
+COMMAND_PROMPTS = [
+    (name, instruction, prompt)
+    for name, command in MULTI_TASK_COMMANDS.items()
+    for instruction, prompt in command.prompts
+]
+
+
+@pytest.mark.parametrize(('name', 'instruction', 'prompt'), COMMAND_PROMPTS)
+def test_a_multi_task_command_sends_the_real_data_prompt_of_each_task(name, instruction, prompt):
+    codec = MULTI_TASK_COMMANDS[name].pipeline().codec
     assert codec.encode(_obs(instruction))[pi05_abc.PROMPT] == prompt
 
 
-def test_the_four_task_command_refuses_a_task_it_did_not_train_on():
-    codec = server.abc4_pipeline().codec
-    assert codec.meta[codecs.PROMPTS_META] == dict(ABC4_INSTRUCTION_PROMPTS)
+@pytest.mark.parametrize('name', list(MULTI_TASK_COMMANDS))
+def test_a_multi_task_command_refuses_a_task_it_did_not_train_on(name):
+    command = MULTI_TASK_COMMANDS[name]
+    codec = command.pipeline().codec
+    assert codec.meta[codecs.PROMPTS_META] == dict(command.prompts)
     with pytest.raises(ValueError, match='has no prompt for the task'):
         codec.encode(_obs('hang mug on mug rack'))
 
 
-def test_the_four_task_command_loads_its_own_norm_stats(tmp_path):
-    fork = _fork(tmp_path)
-    server.abc4_model(checkpoint=str(tmp_path / 'checkpoint'), fork=str(fork), port=_free_port()).close()
+@pytest.mark.parametrize('name', list(MULTI_TASK_COMMANDS))
+def test_a_multi_task_command_loads_its_own_norm_stats(name, tmp_path):
+    command = MULTI_TASK_COMMANDS[name]
+    command.model(checkpoint=str(tmp_path / 'checkpoint'), fork=str(_fork(tmp_path)), port=_free_port()).close()
 
     argv = _log(tmp_path)[0][author_server_stand_in.ARGV]
-    assert argv[argv.index('--norm-stats-path') + 1] == str(tmp_path / 'checkpoint/assets/abc4_yam/norm_stats.json')
+    assert argv[argv.index('--norm-stats-path') + 1] == str(tmp_path / 'checkpoint' / command.norm_stats)
 
 
 @pytest.mark.parametrize('crop', list(codecs.Crop))

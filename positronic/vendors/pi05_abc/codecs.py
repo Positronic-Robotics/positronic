@@ -27,11 +27,27 @@ TASK = 'put the plastic bottles in the bin'
 BOTTLES_PROMPTS = {TASK: TASK}
 # The prompt of each task in ABC's real data, keyed by the task instruction that ABC's sim reports. The prompt is the
 # task folder name of the ABC-130k release, with underscores as spaces.
-ABC4_PROMPTS = {
+ABC11_PROMPTS = {
     'put the plastic bottles in the bin': 'put the plastic bottles in the bin',
     'sweep away paper scraps from the table': 'sweep away the paper scraps from the table',
     'turn mug right side up': 'turn the mug right side up',
     'load plates into tabletop dish rack': 'load the plates into the dish rack',
+    'unload the plates from the dish rack': 'unload the plates from the dish rack',
+    'load the cups into the dish rack': 'load the cups into the dish rack',
+    'put the screwdriver in the bin': 'put the screwdriver in the bin',
+    'place and organize the fake fruits in the fruit bowl': 'place and organize the fake fruits in the fruit bowl',
+    'build the wood block tower': 'build the wood block tower',
+    'place the snacks into the paper bag': 'place the snacks into the paper bag',
+    'take the snacks out of the paper bag': 'take the snacks out of the paper bag',
+}
+ABC4_PROMPTS = {
+    instruction: ABC11_PROMPTS[instruction]
+    for instruction in (
+        'put the plastic bottles in the bin',
+        'sweep away paper scraps from the table',
+        'turn mug right side up',
+        'load plates into tabletop dish rack',
+    )
 }
 # The session metadata fields that name the crop box of each view, in fractions of the frame, and the prompt of each
 # task instruction.

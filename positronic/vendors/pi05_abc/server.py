@@ -6,6 +6,7 @@ A session picks the crop of its views in the query of its URL, for example `?cro
 Commands
   bottles_16k  The bottles checkpoint: one task, its own norm stats.
   abc4_30k     A checkpoint fine-tuned on the real data of four ABC tasks, with the prompt of each task.
+  abc11_30k    A checkpoint fine-tuned on the real data of eleven ABC tasks, with the prompt of each task.
 
 Usage
   python -m positronic.vendors.pi05_abc.server <command> --model.checkpoint=<checkpoint dir> --model.fork=<fork>
@@ -38,6 +39,7 @@ from positronic.vendors.pi05_abc import codecs
 # The norm stats of each checkpoint, in its checkpoint directory.
 BOTTLES_NORM_STATS = Path('assets/put_the_plastic_bottles_in_the_bin/norm_stats.json')
 ABC4_NORM_STATS = Path('assets/abc4_yam/norm_stats.json')
+ABC11_NORM_STATS = Path('assets/abc11_yam/norm_stats.json')
 # The fork's interpreter, the author's server, and the openpi sources where the author runs the server.
 FORK_PYTHON = Path('.venv/bin/python')
 FORK_SERVER = Path('yam_abc_reproduce/deploy/servers/openpi_server.py')
@@ -179,10 +181,14 @@ def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
 # The checkpoint fine-tuned on the real data of four ABC tasks, and the prompt of each task.
 abc4_model = pi05_abc_model.override(norm_stats=ABC4_NORM_STATS)
 abc4_pipeline = pipeline.override(prompts=codecs.ABC4_PROMPTS)
+# The checkpoint fine-tuned on the real data of eleven ABC tasks, and the prompt of each task.
+abc11_model = pi05_abc_model.override(norm_stats=ABC11_NORM_STATS)
+abc11_pipeline = pipeline.override(prompts=codecs.ABC11_PROMPTS)
 
 COMMANDS = {
     'bottles_16k': serve.override(model=pi05_abc_model, pipeline=pipeline),
     'abc4_30k': serve.override(model=abc4_model, pipeline=abc4_pipeline),
+    'abc11_30k': serve.override(model=abc11_model, pipeline=abc11_pipeline),
 }
 
 
