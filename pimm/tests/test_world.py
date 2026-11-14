@@ -11,6 +11,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Generator, Iterator
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import nullcontext
 from functools import partial
 from multiprocessing.context import SpawnProcess
@@ -261,8 +262,13 @@ class HeapCounter(ControlSystem):
         self._counts.append(len(gc.get_objects()))
 
 
-def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
-    """Every loop of the process stops while a full collection scans, so the scan must stay short."""
+def _in_a_fresh_process(check: Callable[[], None]) -> None:
+    """Run ``check`` in a new process: the collector state belongs to the process, and other tests leave theirs."""
+    with ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context('spawn')) as pool:
+        pool.submit(check).result(timeout=60)
+
+
+def _check_a_world_keeps_its_heap_out_of_collections_while_it_runs() -> None:
     import_heap = [[i] for i in range(50_000)]
     counts: list[int] = []
 
@@ -273,21 +279,27 @@ def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
     assert len(gc.get_objects()) > len(import_heap), 'a full collection scans the heap again after the run'
 
 
-def test_a_world_keeps_a_freeze_that_its_process_made():
-    """A process can freeze its heap for its own reasons, for example before a fork."""
+def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
+    """Every loop of the process stops while a full collection scans, so the scan must stay short."""
+    _in_a_fresh_process(_check_a_world_keeps_its_heap_out_of_collections_while_it_runs)
+
+
+def _check_a_world_keeps_a_freeze_that_its_process_made() -> None:
     process_heap = [[i] for i in range(50_000)]
     gc.freeze()
-    try:
-        with World() as world:
-            world.run([HeapCounter([])])
 
-        assert len(gc.get_objects()) < len(process_heap) / 10
-    finally:
-        gc.unfreeze()
+    with World() as world:
+        world.run([HeapCounter([])])
+
+    assert len(gc.get_objects()) < len(process_heap) / 10
 
 
-def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections(monkeypatch):
-    """Worlds in two threads share the process's collector, so the end of one must not undo the start of the other."""
+def test_a_world_keeps_a_freeze_that_its_process_made():
+    """A process can freeze its heap for its own reasons, for example before a fork."""
+    _in_a_fresh_process(_check_a_world_keeps_a_freeze_that_its_process_made)
+
+
+def _check_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections() -> None:
     import_heap = [[i] for i in range(50_000)]
     unfreeze = gc.unfreeze
     first_world_unfreezes = threading.Event()
@@ -297,7 +309,7 @@ def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_coll
         time.sleep(0.2)
         unfreeze()
 
-    monkeypatch.setattr(gc, 'unfreeze', slow_unfreeze)
+    gc.unfreeze = slow_unfreeze
 
     def first_world():
         with World() as world:
@@ -312,6 +324,11 @@ def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_coll
     first.join(5.0)
 
     assert counts[-1] < len(import_heap) / 10
+
+
+def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections():
+    """Worlds in two threads share the process's collector, so the end of one must not undo the start of the other."""
+    _in_a_fresh_process(_check_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections)
 
 
 def test_a_world_starts_its_loops_without_a_full_collection(monkeypatch):
