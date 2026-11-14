@@ -1,3 +1,4 @@
+import gc
 import logging
 import multiprocessing as mp
 import os
@@ -10,6 +11,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Generator, Iterator
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import nullcontext
 from functools import partial
 from multiprocessing.context import SpawnProcess
@@ -245,6 +247,99 @@ class StopWatcher(ControlSystem):
                 self._seen.value = 1
                 return
             yield Sleep(0.01)
+
+
+class HeapCounter(ControlSystem):
+    """Records how many objects a full collection would scan, at the start and at the end of its loop."""
+
+    def __init__(self, counts: list[int], loop_s: float = 0.01):
+        self._counts = counts
+        self._loop_s = loop_s
+
+    def run(self, should_stop, clock):
+        self._counts.append(len(gc.get_objects()))
+        yield Sleep(self._loop_s)
+        self._counts.append(len(gc.get_objects()))
+
+
+def _in_a_fresh_process(check: Callable[[], None]) -> None:
+    """Run ``check`` in a new process: the collector state belongs to the process, and other tests leave theirs."""
+    with ProcessPoolExecutor(max_workers=1, mp_context=mp.get_context('spawn')) as pool:
+        pool.submit(check).result(timeout=60)
+
+
+def _check_a_world_keeps_its_heap_out_of_collections_while_it_runs() -> None:
+    import_heap = [[i] for i in range(50_000)]
+    counts: list[int] = []
+
+    with World() as world:
+        world.run([HeapCounter(counts)])
+
+    assert max(counts) < len(import_heap) / 10
+    assert len(gc.get_objects()) > len(import_heap), 'a full collection scans the heap again after the run'
+
+
+def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
+    """Every loop of the process stops while a full collection scans, so the scan must stay short."""
+    _in_a_fresh_process(_check_a_world_keeps_its_heap_out_of_collections_while_it_runs)
+
+
+def _check_a_world_returns_the_heap_to_collections_when_objects_were_frozen_before_it() -> None:
+    gc.freeze()
+    import_heap = [[i] for i in range(50_000)]
+
+    with World() as world:
+        world.run([HeapCounter([])])
+
+    assert len(gc.get_objects()) > len(import_heap), 'the heap stays out of collections after the run'
+
+
+def test_a_world_returns_the_heap_to_collections_when_objects_were_frozen_before_it():
+    """CPython 3.12 freezes objects at interpreter startup, before any World starts."""
+    _in_a_fresh_process(_check_a_world_returns_the_heap_to_collections_when_objects_were_frozen_before_it)
+
+
+def _check_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections() -> None:
+    import_heap = [[i] for i in range(50_000)]
+    unfreeze = gc.unfreeze
+    first_world_unfreezes = threading.Event()
+
+    def slow_unfreeze():
+        first_world_unfreezes.set()
+        time.sleep(0.2)
+        unfreeze()
+
+    gc.unfreeze = slow_unfreeze
+
+    def first_world():
+        with World() as world:
+            world.run([HeapCounter([])])
+
+    first = threading.Thread(target=first_world)
+    first.start()
+    assert first_world_unfreezes.wait(5.0)
+    counts: list[int] = []
+    with World() as world:
+        world.run([HeapCounter(counts, loop_s=0.4)])
+    first.join(5.0)
+
+    assert counts[-1] < len(import_heap) / 10
+
+
+def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections():
+    """Worlds in two threads share the process's collector, so the end of one must not undo the start of the other."""
+    _in_a_fresh_process(_check_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections)
+
+
+def test_a_world_starts_its_loops_without_a_full_collection(monkeypatch):
+    """A full collection stops the process while it scans, so the first loop step must not wait for one."""
+    collections = Mock()
+    monkeypatch.setattr(gc, 'collect', collections)
+
+    with World() as world:
+        world.run([HeapCounter([])])
+
+    collections.assert_not_called()
 
 
 class DummySMValue(SMCompliant):
