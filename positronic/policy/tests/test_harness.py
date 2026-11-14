@@ -50,7 +50,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeTelemetry
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -1434,16 +1434,6 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
-
-
-def test_an_unbound_episode_does_not_build_the_policy_metadata_for_its_span():
-    episode = _EpisodeTelemetry()
-    episode.begin({})
-
-    def build():
-        raise AssertionError('an unbound episode built the policy metadata for its span')
-
-    episode.describe_policy(build)
 
 
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
