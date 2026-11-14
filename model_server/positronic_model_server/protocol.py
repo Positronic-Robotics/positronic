@@ -32,16 +32,24 @@ class ProtocolVersion(IntEnum):
 
 
 # What the server spent on one inference, beside the ``RESULT`` it answers with: durations in
-# milliseconds on the server's own clock. A server that sends none leaves the round trip undivided.
+# milliseconds and two instants in Unix nanoseconds, on the server's own clock. A server that sends none leaves the
+# round trip undivided.
 TIMING = 'timing'
 
-# The phases ``TIMING`` reports. `SERVED` brackets the others: it opens on the observation
+# The phases ``TIMING`` reports. `SERVED` brackets the others except `ENCODE`: it opens on the observation
 # arriving and closes before the answer is encoded.
 TIMING_SERVED = 'served_ms'
 TIMING_DECODE = 'decode_ms'
 TIMING_INFER = 'infer_ms'
 # Time the observation waited for the inference slot, inside `SERVED`.
 TIMING_QUEUED = 'queued_ms'
+# Time to encode the images of the answer, after `SERVED`.
+TIMING_ENCODE = 'encode_ms'
+# Two instants in Unix nanoseconds on the server's clock: the server read the whole request, and the answer starts to
+# serialise, after the encode of its images.
+# A client subtracts its own clock from them, so each one-way time it gets holds the offset between the two clocks.
+TIMING_RECEIVED_NS = 'received_ns'
+TIMING_SENT_NS = 'sent_ns'
 
 
 def timing_key(name: str) -> str:

@@ -88,7 +88,7 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
-| `policy.infer` | a processor span | — | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
 
@@ -130,6 +130,30 @@ runtime. On a real rig it is the monotonic clock of the host. In a simulation it
 simulated time and does not include the wall time of the simulator. The age uses the frames of the step that
 submits the call. A processor that sends an older sample, such as `Periodic` on an answer wake-up, makes the real
 age larger. An observation with no camera gives no value.
+
+### Reading the network time of a call
+
+A server answers each call with a `timing` block. Its durations are in milliseconds on the server's clock, and
+`policy.infer` copies each one as `served.<name>`. `served_ms` runs from the arrival of the whole request to the
+end of the call. `encode_ms` is the encode of the answer's images. Two instants are in Unix nanoseconds on the
+server's clock: `received_ns`, when the server read the whole request, and `sent_ns`, when the answer starts to
+serialise. The encode of the answer's images comes before `sent_ns`.
+
+With the two instants, the client puts three values on `policy.infer`:
+
+- `wire.uplink_ms`: from the start of the send to `received_ns`. It includes the server's read of the request.
+- `wire.downlink_ms`: from `sent_ns` to the receipt of the answer. It includes the serialise and the send of the
+  answer.
+- `wire.network_ms`: the sum of the two.
+
+Each one-way value subtracts a client time from a server time, so it holds the offset between the two clocks. A
+clock that runs 20 ms ahead on the server adds 20 ms to the uplink and removes 20 ms from the downlink. Neither the
+sum nor `served.sent_ns - served.received_ns`, the server's time from its read to its send, holds an offset. A
+server that sends no instants gives no `wire.*` values, and its `served.*` values stay as they are.
+
+A server reads a request only after it answers the request before it. So a call that the client sends while another
+call is in flight waits on the server before `received_ns`, and its one-way values would count that wait as network
+time. Such a call gives no `wire.*` values.
 
 ### Stats schema (`*.stats.jsonl`)
 
