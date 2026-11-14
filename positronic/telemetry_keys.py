@@ -39,8 +39,8 @@ ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
 ATTR_PASS_FAILED = 'pass.failed'
 
-# What the server reported spending, stamped on `policy.infer` under this prefix — `served.infer_ms`
-# and its siblings, straight from the answer's own `timing` block.
+# What the server reported, stamped on `policy.infer` under this prefix — `served.infer_ms`, its sibling
+# durations and the instants `served.received_ns` and `served.sent_ns`, straight from the answer's own `timing` block.
 ATTR_SERVED_PREFIX = 'served.'
 
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.

@@ -1023,6 +1023,41 @@ def test_the_one_way_times_hold_the_clock_offset_and_their_sum_does_not(monkeypa
     assert session.wire_timing[DOWNLINK_MS] == 5 - server_offset_ms
 
 
+def test_a_call_sent_behind_another_gives_no_one_way_times():
+    stamped = legacy_protocol.serialise({
+        protocol.RESULT: [],
+        protocol.TIMING: {protocol.TIMING_RECEIVED_NS: time.time_ns(), protocol.TIMING_SENT_NS: time.time_ns()},
+    })
+    # The handshake and a first call settle the session; then one call waits in its receive until a second one sends.
+    replies = [_ready('s', max_in_flight=2), stamped]
+    first_waits, second_sent = threading.Event(), threading.Event()
+
+    def recv(timeout=None):
+        if replies:
+            return replies.pop(0)
+        if not second_sent.is_set():
+            first_waits.set()
+            assert second_sent.wait(timeout=5)
+        return stamped
+
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = recv
+    session = InferenceSession(conn)
+    session.infer({})
+    conn.send.side_effect = lambda _: first_waits.is_set() and second_sent.set()
+
+    def one_way_times() -> set[str]:
+        session.infer({})
+        return {UPLINK_MS, DOWNLINK_MS} & set(session.wire_timing)
+
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(one_way_times)
+        assert first_waits.wait(timeout=5)
+        second = pool.submit(one_way_times)
+        assert first.result(timeout=5) == {UPLINK_MS, DOWNLINK_MS}
+        assert second.result(timeout=5) == set()
+
+
 def test_a_server_that_stamps_no_receipt_gives_no_one_way_times():
     session = InferenceSession(
         _connection(
