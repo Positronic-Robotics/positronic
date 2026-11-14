@@ -2,6 +2,7 @@ import contextvars
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -509,6 +510,45 @@ def test_stats_sample_logs_a_child_it_may_not_read(tmp_path, monkeypatch, caplog
     assert _UnreadableProc.pid not in sampler._proc_cache
     assert str(_UnreadableProc.pid) in caplog.records[0].getMessage()
     sampler._nvml.shutdown()
+
+
+@contextmanager
+def _sleeping_child():
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        yield child
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_stats_sample_lists_each_process_under_the_callers_name(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    with _sleeping_child() as child:
+        sampler = telemetry.StatsSampler(
+            tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', process_names=lambda: {child.pid: 'Camera.run'}
+        )
+        sample = sampler._sample()
+        sampler._nvml.shutdown()
+
+    procs = {proc[telemetry.PROC_PID]: proc for proc in sample[telemetry.STAT_PROCS]}
+    assert procs[child.pid][telemetry.PROC_NAME] == 'Camera.run'
+    assert procs[child.pid][telemetry.PROC_RSS_B] > 0
+    assert procs[os.getpid()][telemetry.PROC_NAME] == psutil.Process().name()
+    assert sample[telemetry.STAT_RSS_PROC_B] == sum(proc[telemetry.PROC_RSS_B] for proc in procs.values())
+    assert sample[telemetry.STAT_CPU_PROC_PCT] == sum(proc[telemetry.PROC_CPU_PCT] for proc in procs.values())
+
+
+def test_stats_sample_names_a_process_by_the_os_without_a_mapping(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    with _sleeping_child() as child:
+        os_name = psutil.Process(child.pid).name()
+        sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+        sample = sampler._sample()
+        sampler._nvml.shutdown()
+
+    procs = {proc[telemetry.PROC_PID]: proc for proc in sample[telemetry.STAT_PROCS]}
+    assert procs[child.pid][telemetry.PROC_NAME] == os_name
 
 
 def test_stats_sample_without_gpu(tmp_path, monkeypatch):
