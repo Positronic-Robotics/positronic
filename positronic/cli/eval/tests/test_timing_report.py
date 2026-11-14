@@ -1102,3 +1102,26 @@ def test_a_report_with_no_timed_span_shows_no_latency_table(tmp_path):
 
     assert report.latency == []
     assert not any(line.startswith('latency') for line in _render(report).splitlines())
+
+
+def test_a_retried_call_counts_every_attempt_on_the_wire(tmp_path):
+    ms = 0.001
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'),
+            _span(SPAN_POLICY_INFER, 1, 1 + 100 * ms, 'infer', 'ep0', {_SERVED_MS: 20.0}, run_id='rig-run'),
+            # The first attempt loses its peer after the request is sent; the second attempt gets the answer.
+            _span(SPAN_WIRE_SEND, 1 + 5 * ms, 1 + 10 * ms, 'send-1', 'infer', run_id='rig-run'),
+            _span(SPAN_WIRE_RECV, 1 + 10 * ms, 1 + 30 * ms, 'recv-1', 'infer', run_id='rig-run'),
+            _span(SPAN_WIRE_SEND, 1 + 40 * ms, 1 + 45 * ms, 'send-2', 'infer', run_id='rig-run'),
+            _span(SPAN_WIRE_RECV, 1 + 45 * ms, 1 + 95 * ms, 'recv-2', 'infer', run_id='rig-run'),
+        ],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    rows = {row.segment: row for row in report.latency}
+    assert rows['policy.infer - wire.send - wire.recv'].p50_ms == pytest.approx(20.0)
+    assert rows['wire.send + wire.recv - served.served_ms'].p50_ms == pytest.approx(60.0)

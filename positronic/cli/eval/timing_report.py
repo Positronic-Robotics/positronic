@@ -670,7 +670,10 @@ def _infer_segments(infer: SpanRec, children: dict[str, list[SpanRec]]) -> Itera
     for key, value in infer.attrs.items():
         if (key.startswith(ATTR_SERVED_PREFIX) and key not in _SERVED_INSTANTS) or key in _WIRE_SPLIT:
             yield key, float(value)
-    wire_ms = {k.name: _dur_s(k) * 1000.0 for k in children.get(infer.span_id, [])}
+    # A call that reconnects sends again, so each attempt adds its own wire spans.
+    wire_ms: dict[str, float] = defaultdict(float)
+    for child in children.get(infer.span_id, []):
+        wire_ms[child.name] += _dur_s(child) * 1000.0
     if SPAN_WIRE_SEND in wire_ms and SPAN_WIRE_RECV in wire_ms:
         on_wire_ms = wire_ms[SPAN_WIRE_SEND] + wire_ms[SPAN_WIRE_RECV]
         yield _CALL_CODEC, _dur_s(infer) * 1000.0 - on_wire_ms
