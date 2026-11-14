@@ -5,10 +5,11 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
 from packaging.requirements import Requirement
 from packaging.version import Version
 
-from positronic.simulator.molmo_spaces import env_hook, launcher
+from positronic.simulator.molmo_spaces import launcher
 
 _MAIN_LOCK = Path(__file__).resolve().parents[4] / 'uv.lock'
 
@@ -81,5 +82,27 @@ def test_a_server_launched_with_a_hook_gets_the_hook_file(tmp_path, monkeypatch)
     without = _served_command(None, tmp_path, monkeypatch)
     with_hook = _served_command(tmp_path / 'hook.py', tmp_path, monkeypatch)
 
-    assert env_hook.HOOK_FLAG not in without
-    assert with_hook[with_hook.index(env_hook.HOOK_FLAG) + 1] == str(tmp_path / 'hook.py')
+    assert '--hook' not in without
+    assert with_hook[with_hook.index('--hook') + 1] == str(tmp_path / 'hook.py')
+
+
+class _Exited:
+    def wait(self) -> int:
+        return 0
+
+
+def test_the_launcher_command_runs_a_server_on_its_port_with_its_hook_until_the_server_exits(tmp_path, monkeypatch):
+    commands: list[list[str]] = []
+    monkeypatch.setenv(launcher.mapping.ASSETS_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(launcher, 'ensure_molmo_venv', lambda: Path(sys.executable))
+    monkeypatch.setattr(launcher.subprocess, 'Popen', lambda command, env: commands.append(command) or _Exited())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, 'argv', ['launcher', '--port', '8765', '--hook', 'hook.py'])
+
+    with pytest.raises(SystemExit) as exited:
+        launcher.main()
+
+    assert exited.value.code == 0
+    (command,) = commands
+    assert command[command.index('--port') + 1] == '8765'
+    assert command[command.index('--hook') + 1] == str((tmp_path / 'hook.py').resolve())

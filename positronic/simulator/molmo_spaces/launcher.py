@@ -4,6 +4,7 @@
 CPU rendering on Linux requires OSMesa or software EGL.
 """
 
+import argparse
 import functools
 import os
 import subprocess
@@ -21,7 +22,7 @@ from positronic.simulator.env_server.launcher import (
     setup_lock,
     uv_pip_install,
 )
-from positronic.simulator.molmo_spaces import env_hook, mapping
+from positronic.simulator.molmo_spaces import mapping
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -65,7 +66,7 @@ def _spawn(hook: Path | None, host: str, port: int) -> subprocess.Popen:
     command = [str(python), str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
     command += ['--right-view-blocked', str(RIGHT_VIEW_BLOCKED_PATH)]
     if hook is not None:
-        command += [env_hook.HOOK_FLAG, str(hook)]
+        command += ['--hook', str(hook)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
@@ -75,3 +76,18 @@ def serve_molmo_spaces(host: str = 'localhost', hook: Path | None = None) -> Abs
     ``hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that changes each episode.
     """
     return serve_subprocess(functools.partial(_spawn, hook), host)
+
+
+def main() -> None:
+    """Run a MolmoSpaces server that an eval dials with ``--eval.env_server``, until that eval run ends."""
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument('--host', default='localhost')
+    parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--hook', dest='hook', type=Path, help='a hook file that defines HOOK, an env_hook.EnvHook')
+    args = parser.parse_args()
+    hook = None if args.hook is None else args.hook.expanduser().resolve()
+    raise SystemExit(_spawn(hook, args.host, args.port).wait())
+
+
+if __name__ == '__main__':
+    main()

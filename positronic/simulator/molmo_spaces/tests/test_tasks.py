@@ -1,5 +1,6 @@
 """MolmoSpaces trial construction and evaluation through the policy harness."""
 
+import hashlib
 import logging
 from contextlib import nullcontext
 from typing import Any
@@ -431,30 +432,64 @@ def test_an_eval_with_an_env_server_dials_it_and_launches_none(monkeypatch, tmp_
 
     assert len(env.tokens) == 1
     assert len(env.actions) == 2
+    assert molmo_keys.ENV_HOOK not in LocalDataset(tmp_path)[0].static
+
+
+@pytest.mark.parametrize('env_server', ['localhost', 'localhost:port', ':8765'])
+def test_an_env_server_without_a_host_and_a_port_is_refused(env_server):
+    with pytest.raises(ValueError, match='--eval.env_server is host:port'):
+        benchmarks.override(env_server=env_server).instantiate()
+
+
+# An episode camera that the policy sees in place of the default camera of its image key.
+_EPISODE_CAMERA = 'exo_camera_2'
 
 
 @pytest.mark.timeout(60.0)
-def test_an_episode_camera_serves_that_camera_under_its_image_key(monkeypatch, tmp_path):
+def test_an_episode_camera_serves_that_camera_under_its_image_key_and_the_trial_records_it(monkeypatch, tmp_path):
     env = _MolmoObservationEnv(done_after=2)
+    env.observation[_EPISODE_CAMERA] = np.full_like(env.observation[mapping.RIGHT_SHOULDER_CAMERA], 7)
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    episode_cameras = {keys.EXTERIOR_IMAGE_2: _EPISODE_CAMERA}
     with serve_env(env) as address, pos3.mirror():
         monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook=None: nullcontext(address))
         ev = benchmarks.override(
-            **env.BENCHMARK._asdict(),
-            episodes=3,
-            with_right_shoulder=False,
-            episode_cameras={keys.EXTERIOR_IMAGE_2: mapping.RIGHT_SHOULDER_CAMERA},
+            **env.BENCHMARK._asdict(), episodes=3, with_right_shoulder=False, episode_cameras=episode_cameras
         ).instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
     last_obs = policy.observations[-1]
-    np.testing.assert_array_equal(last_obs[keys.EXTERIOR_IMAGE_2], env.observation[mapping.RIGHT_SHOULDER_CAMERA])
+    np.testing.assert_array_equal(last_obs[keys.EXTERIOR_IMAGE_2], env.observation[_EPISODE_CAMERA])
     np.testing.assert_array_equal(last_obs[keys.EXTERIOR_IMAGE], env.observation[mapping.LEFT_SHOULDER_CAMERAS[-1]])
+    assert [token[mapping.WITH_RIGHT_SHOULDER] for token in env.tokens] == [False]
+    static = LocalDataset(tmp_path)[0].static
+    assert static[molmo_keys.EPISODE_CAMERAS] == episode_cameras
+    assert static[molmo_keys.EXTERIOR_SIDES] == [ShoulderSide.LEFT.value]
+    assert static[molmo_keys.ENV_HOOK] is None
+
+
+def test_an_episode_camera_in_place_of_the_first_exterior_records_no_exterior_sides(asked):
+    episode_cameras = {keys.EXTERIOR_IMAGE: _EPISODE_CAMERA}
+    ev = benchmarks.override(with_right_shoulder=False, episode_cameras=episode_cameras).instantiate()
+    for trial in ev.tasks():
+        assert molmo_keys.EXTERIOR_SIDES not in trial.meta
+        assert trial.meta[molmo_keys.EPISODE_CAMERAS] == episode_cameras
 
 
 def test_an_episode_camera_for_a_drawn_exterior_is_refused():
     with pytest.raises(ValueError, match='set with_right_shoulder=False'):
-        benchmarks.override(episode_cameras={keys.EXTERIOR_IMAGE_2: 'exo_camera_2'}).instantiate()
+        benchmarks.override(episode_cameras={keys.EXTERIOR_IMAGE_2: _EPISODE_CAMERA}).instantiate()
+
+
+@pytest.mark.parametrize('camera', [mapping.RIGHT_SHOULDER_CAMERA, *mapping.LEFT_SHOULDER_CAMERAS])
+def test_an_episode_camera_that_is_a_shoulder_camera_is_refused(camera):
+    with pytest.raises(ValueError, match='shoulder camera'):
+        benchmarks.override(with_right_shoulder=False, episode_cameras={keys.EXTERIOR_IMAGE_2: camera}).instantiate()
+
+
+def test_an_episode_camera_for_a_key_other_than_the_wrist_and_the_exteriors_is_refused():
+    with pytest.raises(ValueError, match='not one of'):
+        benchmarks.override(episode_cameras={'image.top': _EPISODE_CAMERA}).instantiate()
 
 
 def test_an_env_hook_beside_an_env_server_is_refused():
@@ -462,8 +497,20 @@ def test_an_env_hook_beside_an_env_server_is_refused():
         benchmarks.override(env_hook='hook.py', env_server='localhost:1').instantiate()
 
 
-def test_the_env_hook_reaches_the_launched_server(monkeypatch, tmp_path):
+def test_the_env_hook_reaches_the_launched_server_and_each_trial_records_its_name_and_digest(
+    asked, monkeypatch, tmp_path
+):
+    hook = tmp_path / 'hook.py'
+    hook.write_text('HOOK = None\n')
     hooks = []
     monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook=None: hooks.append(hook) or nullcontext())
-    benchmarks.override(env_hook=str(tmp_path / 'hook.py')).instantiate()
-    assert hooks == [tmp_path / 'hook.py']
+
+    trials = benchmarks.override(env_hook=str(hook)).instantiate().tasks()
+
+    assert hooks == [hook]
+    digest = hashlib.sha256(hook.read_bytes()).hexdigest()
+    assert [trial.meta[molmo_keys.ENV_HOOK] for trial in trials] == [f'hook.py@sha256:{digest}'] * 2
+
+
+def test_a_run_without_an_env_hook_records_none(asked):
+    assert [trial.meta[molmo_keys.ENV_HOOK] for trial in benchmarks.instantiate().tasks()] == [None, None]

@@ -127,6 +127,26 @@ def test_an_episode_without_the_right_shoulder_serves_the_left_shoulder_alone():
     assert any(name in obs for name in mapping.LEFT_SHOULDER_CAMERAS) and mapping.RIGHT_SHOULDER_CAMERA not in obs
 
 
+def test_a_hooked_server_reports_the_grip_of_its_hook(tmp_path):
+    _skip_unless_present(_HARD_BENCHMARK)
+    hook = tmp_path / 'site_hook.py'
+    hook.write_text(
+        'from env_hook import EnvHook\n\n'
+        'class FixedGrip(EnvHook):\n'
+        '    def grip(self, gripper_qpos):\n'
+        '        return 0.25\n\n'
+        'HOOK = FixedGrip()\n'
+    )
+    token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: False}
+    with launcher.serve_molmo_spaces(hook=hook) as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            obs = conn.reset(token)[protocol.FRAME_OBS]
+        finally:
+            conn.close()
+    assert obs[protocol.OBS_GRIP] == np.float32(0.25)
+
+
 def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
     _skip_unless_present(_HARD_BENCHMARK)
     blocked = sorted(mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)[_HARD_BENCHMARK])
@@ -143,7 +163,7 @@ def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
 
 
 # The model the MolmoSpaces eval records beside every episode.
-_RECORDED_MODEL = MolmoAdapter(camera_dict([ShoulderSide.LEFT])).robot_model
+_RECORDED_MODEL = MolmoAdapter(camera_dict([ShoulderSide.LEFT]), with_right_shoulder=False).robot_model
 # The MolmoSpaces FR3 and the recorded FR3 differ slightly: their grasp sites are less than 1 mm and 0.1 degrees apart.
 _FK_POS_ATOL = 1e-3  # metres
 _FK_ROT_ATOL = 5e-3  # radians
@@ -165,7 +185,7 @@ def _recorded_model_fk(q: np.ndarray) -> geom.Transform3D:
 
 
 def _adapter() -> MolmoAdapter:
-    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]))
+    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]), with_right_shoulder=False)
 
 
 def _reported_ee_pose(obs: dict) -> geom.Transform3D:

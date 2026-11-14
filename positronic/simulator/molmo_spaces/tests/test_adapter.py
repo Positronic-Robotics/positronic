@@ -30,7 +30,7 @@ def _payload() -> dict:
 
 
 def _adapter(exterior_sides=_LEFT_FIRST) -> MolmoAdapter:
-    return MolmoAdapter(camera_dict(exterior_sides))
+    return MolmoAdapter(camera_dict(exterior_sides), with_right_shoulder=ShoulderSide.RIGHT in exterior_sides)
 
 
 def test_observations_assemble_robot_state():
@@ -215,15 +215,19 @@ def test_reset_token_carries_benchmark_episode_and_seed():
     }
 
 
-def test_reset_token_asks_for_the_right_shoulder_only_when_the_adapter_declares_it():
+@pytest.mark.parametrize('exterior_sides', [[ShoulderSide.LEFT], list(ShoulderSide)])
+@pytest.mark.parametrize('with_right_shoulder', [False, True])
+def test_reset_token_asks_for_the_right_shoulder_as_the_adapter_is_told_whatever_its_cameras(
+    exterior_sides, with_right_shoulder
+):
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
-    assert _adapter([ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False
-    assert _adapter([ShoulderSide.RIGHT, ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is True
+    adapter = MolmoAdapter(camera_dict(exterior_sides), with_right_shoulder=with_right_shoulder)
+    assert adapter.reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is with_right_shoulder
 
 
 def test_reset_token_drops_the_object_image_points_only_when_the_adapter_asks():
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
-    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_object_image_points=False)
+    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_right_shoulder=True, with_object_image_points=False)
     assert dropped.reset_token(params)[mapping.WITH_OBJECT_IMAGE_POINTS] is False
 
 
