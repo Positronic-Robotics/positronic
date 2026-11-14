@@ -68,6 +68,7 @@ from positronic.teleop import service as service_module
 from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import (
+    OTHERS_WIDTH,
     Button,
     ButtonMap,
     CameraState,
@@ -843,8 +844,63 @@ def test_the_headset_shows_the_first_camera_or_the_one_that_the_session_names(so
         encoded = {name: encode_jpeg(image) for name, image in images.items()}
         connection.frame({**FRAME_REQUEST, **encoded})
         shown = keys.WRIST_IMAGE if headset_camera is None else headset_camera
-        assert service.view().shape == images[shown].shape
+        assert _main_level(service.view()) == images[shown][0, 0, 0]
         assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+        connection.close()
+
+
+def _main_level(view: np.ndarray) -> int:
+    """The value at the centre of the part of ``view`` that shows the main camera."""
+    width, height = VIEW_SIZE
+    return int(view[height // 2, width // 2, 0])
+
+
+def _column_levels(view: np.ndarray, count: int) -> list[int]:
+    """The value at the centre of each of the ``count`` cells of the column of the other cameras."""
+    width, height = VIEW_SIZE
+    cell = height // count
+    return [int(view[row * cell + cell // 2, width + OTHERS_WIDTH // 2, 0]) for row in range(count)]
+
+
+def test_the_headset_shows_the_other_cameras_in_a_column_beside_the_main_camera(socket_path, connect):
+    levels = {keys.EXTERIOR_IMAGE: 200, keys.WRIST_IMAGE: 50, keys.EXTERIOR_IMAGE_2: 120}
+    query = session_query(cameras=list(levels))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        images = {name: encode_jpeg(np.full((48, 64, 3), level, np.uint8)) for name, level in levels.items()}
+        frame = {**FRAME_REQUEST, **images}
+        connection.frame(frame)
+        connection.frame(frame)
+        width, height = VIEW_SIZE
+        view = service.view()
+        assert view.shape == (height, width + OTHERS_WIDTH, 3)
+        assert _main_level(view) == 200
+        assert _column_levels(view, 2) == [50, 120]
+        service.choose_camera(keys.WRIST_IMAGE)
+        assert _main_level(service.view()) == 50
+        assert _column_levels(service.view(), 2) == [200, 120]
+        assert _column_levels(service.view(camera=False), 2) == [0, 0], 'a clear panel shows the text alone'
+        connection.close()
+
+
+def test_the_headset_view_keeps_its_size_from_the_wait_for_a_trial_to_the_trial(socket_path, connect):
+    """So the panel in the headset does not change its size when a trial starts."""
+    station = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=station) as service:
+        idle = service.view()
+        connection = _readied_connection(service, socket_path, connect)
+        image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+        connection.frame({**FRAME_REQUEST, **dict.fromkeys(station, image)})
+        assert service.view().shape == idle.shape
+        connection.close()
+
+
+def test_a_session_of_one_camera_shows_that_camera_with_no_column(socket_path, connect):
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: encode_jpeg(np.zeros((48, 64, 3), np.uint8))})
+        assert service.view().shape == (48, 64, 3)
         connection.close()
 
 
@@ -888,10 +944,10 @@ def test_the_camera_that_the_teleoperator_chose_goes_before_the_one_of_the_sessi
         connection.frame(frame)
         connection.frame(frame)
         service.choose_camera(keys.EXTERIOR_IMAGE)
-        assert service.view().shape == images[keys.EXTERIOR_IMAGE].shape
+        assert _main_level(service.view()) == 200
         assert service.cameras().shown == keys.EXTERIOR_IMAGE
         service.choose_camera(None)
-        assert service.view().shape == images[keys.WRIST_IMAGE].shape
+        assert _main_level(service.view()) == 50
         service.choose_camera(keys.EXTERIOR_IMAGE)
         connection.close()
         _until_cleared(service)

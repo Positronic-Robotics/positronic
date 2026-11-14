@@ -3,7 +3,7 @@
 ``positronic teleop`` runs it beside a run whose policy dials its socket. It is a model server: the preparation of a
 session waits for Ready, and each frame request gets the next target of the teleoperator. Each session declares stock
 components only in its client stack. The service keeps the trial state and the clutch, so the input of the
-teleoperator stays in this process. The headset page shows the camera image of the run and the state of the trial.
+teleoperator stays in this process. The headset page shows the camera images of the run and the state of the trial.
 The teleoperator uses the buttons of the right controller.
 """
 
@@ -27,6 +27,7 @@ from positronic_model_server.server_wire import ServedAddress
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 
 from positronic import geom, keys
+from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
@@ -180,6 +181,8 @@ class TrialState:
 
 # The use of Y on the left controller, at the bottom of the view
 Y_HINT = 'Y: next camera. Hold Y: panel'
+# The width of the column of the view that shows the other cameras of the session, half the width of the main camera
+OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
 
 @dataclass(frozen=True)
@@ -398,38 +401,72 @@ class TeleopService:
             self._changed.notify_all()
 
     @staticmethod
-    def _view(image: np.ndarray | None, lines: Sequence[str], footer: Sequence[str] = ()) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom."""
+    def _text(view: np.ndarray, origin: tuple[int, int], line: str, scale: float) -> None:
+        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
+
+    @classmethod
+    def _view(
+        cls,
+        image: np.ndarray | None,
+        lines: Sequence[str],
+        footer: Sequence[str] = (),
+        others: Sequence[tuple[str, np.ndarray | None]] = (),
+    ) -> np.ndarray:
+        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom.
+
+        With ``others``, the view has a column on its right with one named cell for each of them, and ``image`` fits
+        the left part of the view size.
+        """
         width, height = VIEW_SIZE
-        blank = (height, width, 3)
-        # A copy: the text goes on the view, not on the image that the service holds.
-        view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
-        placed = [((10, 26 + 30 * row), line, 0.75) for row, line in enumerate(lines)]
-        placed += [((10, height - 10 - 22 * row), line, 0.55) for row, line in enumerate(reversed(footer))]
-        for origin, line, scale in placed:
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
+        if others:
+            view = np.zeros((height, width + OTHERS_WIDTH, 3), dtype=np.uint8)
+            if image is not None:
+                view[:, :width] = transform_frame(image, width, height, mode=ResizeMode.PAD, resample=Resample.AREA)
+            cell_height = height // len(others)
+            for row, (name, other) in enumerate(others):
+                top = row * cell_height
+                if other is not None:
+                    cell = transform_frame(
+                        other, OTHERS_WIDTH, cell_height, mode=ResizeMode.PAD, resample=Resample.AREA
+                    )
+                    view[top : top + cell_height, width:] = cell
+                cls._text(view, (width + 6, top + 18), name.removeprefix(keys.IMAGE_PREFIX), 0.5)
+        elif image is None:
+            view = np.zeros((height, width, 3), dtype=np.uint8)
+        else:
+            # A copy: the text goes on the view, not on the image that the service holds.
+            view = np.array(image, dtype=np.uint8, order='C')
+        bottom = view.shape[0]
+        for row, line in enumerate(lines):
+            cls._text(view, (10, 26 + 30 * row), line, 0.75)
+        for row, line in enumerate(reversed(footer)):
+            cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
 
     def view(self, camera: bool = True) -> np.ndarray:
         """The image for the headset: the camera image of the run, or black with no ``camera``, with the state of the
-        trial."""
+        trial. With more than one camera, a column on the right shows the other cameras."""
         with self._changed:
             state = self.state()
             shown = self._shown_camera()
             image = self._headset_image() if camera else None
+            names = self.cameras().names
+            main = shown if shown in names else next(iter(names), None)
+            running = state.phase is Phase.RUNNING and camera
+            others = [(name, self._images.get(name) if running else None) for name in names if name != main]
         footer = [Y_HINT]
         match state.phase:
             case Phase.IDLE:
-                return self._view(None, ['Waiting for a trial'], footer)
+                return self._view(None, ['Waiting for a trial'], footer, others)
             case Phase.READY_WAIT:
-                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'], footer)
+                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'], footer, others)
             case Phase.ENDED:
-                return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer)
+                return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
         control = 'Control on (A: off)' if state.control else 'Control off (A: on)'
-        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer)
+        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer, others)
 
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
