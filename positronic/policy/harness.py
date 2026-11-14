@@ -70,6 +70,13 @@ class _EpisodeTelemetry:
         self._span = telemetry.start_span(telemetry_keys.SPAN_EPISODE, **attrs)
         telemetry.push_anchor(self._span)
 
+    def describe_policy(self, policy_meta: dict[str, Any]) -> None:
+        """Copy the scalar fields of the policy's recorded metadata onto the open episode span."""
+        if self._span is None:
+            return
+        scalars = {k: v for k, v in policy_meta.items() if isinstance(v, (bool, int, float, str))}
+        telemetry.set_attrs(self._span, **scalars)
+
     def start_rollout(self, virtual_now: float) -> None:
         """Exclude preparation from the rollout's virtual duration."""
         self._virtual_start = virtual_now
@@ -291,12 +298,16 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
-        policy_meta = deepcopy(flatten_dict(rollout.policy.meta())) | flatten_dict(runtime.metadata_snapshot())
-        for k, v in policy_meta.items():
-            meta[f'{policy_keys.POLICY_META}.{k}'] = v
+        meta.update(self._policy_meta(rollout, runtime))
         meta.update(task.meta)
         meta[keys.TASK] = self._instruction(task)
         return meta
+
+    @staticmethod
+    def _policy_meta(rollout: Rollout, runtime: Executor) -> dict[str, Any]:
+        """The policy's own metadata and what it set on the runtime, under the names the recording uses."""
+        policy_meta = deepcopy(flatten_dict(rollout.policy.meta())) | flatten_dict(runtime.metadata_snapshot())
+        return {f'{policy_keys.POLICY_META}.{k}': v for k, v in policy_meta.items()}
 
     def _instruction(self, task: Task) -> str:
         """The text the policy gets: the newest goal that this episode read, or the task's instruction before any."""
@@ -603,6 +614,9 @@ class Harness(pimm.ControlSystem):
                 logging.info('Closing the policy')
                 policy_run.close()
                 logging.info('Policy closed')
+            # After the cleanup, so a failure here leaves no resource open. A remote policy sets its server's
+            # metadata on the runtime when its session opens, so the start of the episode is too early.
+            self._telemetry.describe_policy(self._policy_meta(rollout, runtime))
 
         self._telemetry.end(clock.now())
         if payload is not None:
