@@ -1378,7 +1378,7 @@ class SetsServerMetaOnFirstStep(Hold):
 
     def run(self, runtime):
         yield
-        runtime.set_metadata('server', {'type': 'stub', 'stack': [{'name': 'x'}]})
+        runtime.set_metadata(policy_keys.SERVER, {policy_keys.TYPE: 'stub', 'stack': [{'name': 'x'}]})
         while True:
             yield Step({}, runtime.time_ns + 100_000_000)
 
@@ -1411,9 +1411,9 @@ def test_the_episode_span_names_the_policy_under_its_recorded_keys(episode_harne
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
-    assert episode.attrs[f'{policy_keys.POLICY_META}.server.type'] == 'stub'
+    assert episode.attrs[f'{policy_keys.SERVER_META}.{policy_keys.TYPE}'] == 'stub'
     # A list field stays on the recording only: the span keeps the scalar fields.
-    assert f'{policy_keys.POLICY_META}.server.stack' not in episode.attrs
+    assert f'{policy_keys.SERVER_META}.stack' not in episode.attrs
 
 
 def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness, tmp_path):
