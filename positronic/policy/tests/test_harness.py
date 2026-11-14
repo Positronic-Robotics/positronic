@@ -3,7 +3,7 @@
 import threading
 import time
 import traceback
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import replace
 from enum import Enum
 from functools import partial
@@ -50,7 +50,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _EpisodeTelemetry
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -1436,33 +1436,14 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
-class CountsMetaReads(Hold):
-    def __init__(self):
-        super().__init__()
-        self.meta_reads = 0
+def test_an_unbound_episode_does_not_build_the_policy_metadata_for_its_span():
+    episode = _EpisodeTelemetry()
+    episode.begin({})
 
-    def meta(self):
-        self.meta_reads += 1
-        return super().meta()
+    def build():
+        raise AssertionError('an unbound episode built the policy metadata for its span')
 
-
-@pytest.mark.parametrize(('bound', 'reads'), [(False, 2), (True, 4)])
-def test_the_episode_span_reads_the_policy_metadata_only_when_telemetry_is_bound(
-    episode_harness, tmp_path, bound, reads
-):
-    h = episode_harness
-    policy = CountsMetaReads()
-    with ExitStack() as stack:
-        if bound:
-            stack.enter_context(telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-meta-reads'))
-        h.observation.emit(1)
-        h.caller(Rollout(Task('move', None), policy, h.dataset))
-        next(h.loop)
-        h.done.emit({eval_keys.SUCCESS: True})
-        next(h.loop)
-        h.world.request_stop()
-        list(h.loop)
-    assert policy.meta_reads == reads
+    episode.describe_policy(build)
 
 
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
