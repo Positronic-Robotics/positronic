@@ -272,6 +272,17 @@ def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
     assert gc.get_freeze_count() == 0, 'the collector gets the heap back after the run'
 
 
+def test_a_world_starts_its_loops_without_a_full_collection(monkeypatch):
+    """A full collection stops the process while it scans, so the first loop step must not wait for one."""
+    collections = Mock()
+    monkeypatch.setattr(gc, 'collect', collections)
+
+    with World() as world:
+        world.run([HeapCounter([])])
+
+    collections.assert_not_called()
+
+
 class DummySMValue(SMCompliant):
     """Simple SMCompliant payload used to test adaptive transports."""
 

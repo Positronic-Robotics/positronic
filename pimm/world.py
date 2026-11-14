@@ -839,7 +839,7 @@ class World:
         takes about 100 ms to scan on an ARM robot computer.
         """
         if World._schedulers_running_in_process == 0:
-            gc.collect()
+            # No collection first: it would stop the process for as long as the passes this freeze avoids.
             gc.freeze()
         World._schedulers_running_in_process += 1
         try:
