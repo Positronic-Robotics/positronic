@@ -1,3 +1,4 @@
+import gc
 import logging
 import math
 import time
@@ -92,6 +93,57 @@ class _EpisodeTelemetry:
         telemetry.force_flush()
 
 
+class _GcMeter:
+    """Sum this process's garbage-collection time around each harness step.
+
+    A collection in any thread stops the harness thread too. The wait window runs from the end of one step to the
+    start of the next, so its total explains part of ``step.late_ms``. The callback does two clock reads and integer
+    sums, and records no span, because young-generation collections run often.
+    """
+
+    def __init__(self) -> None:
+        self._collection_started_ns = 0
+        self._ns = 0
+        self._wait_ns = 0
+        self._generation = -1
+
+    def __call__(self, phase: str, info: dict[str, int]) -> None:
+        if phase == 'start':
+            self._collection_started_ns = time.perf_counter_ns()
+        else:
+            self._ns += time.perf_counter_ns() - self._collection_started_ns
+            self._generation = max(self._generation, info['generation'])
+
+    @contextmanager
+    def counting(self) -> Iterator[None]:
+        gc.callbacks.append(self)
+        try:
+            yield
+        finally:
+            gc.callbacks.remove(self)
+
+    def start_wait(self) -> None:
+        """Drop what the meter counted, and open a wait window."""
+        self._ns = self._wait_ns = 0
+        self._generation = -1
+
+    def start_step(self) -> None:
+        """Close the wait window, and count the step from here."""
+        self._wait_ns, self._ns = self._ns, 0
+
+    def end_step(self) -> dict[str, float | int]:
+        """Return the step's collection values, empty without a collection, and open the next wait window."""
+        attrs: dict[str, float | int] = {}
+        if self._generation >= 0:
+            attrs = {
+                telemetry_keys.ATTR_STEP_GC_WAIT_MS: self._wait_ns / 1e6,
+                telemetry_keys.ATTR_STEP_GC_MS: self._ns / 1e6,
+                telemetry_keys.ATTR_STEP_GC_GENERATION: self._generation,
+            }
+        self.start_wait()
+        return attrs
+
+
 @dataclass(frozen=True)
 class _PolicyEnded:
     """What a policy run returned, and the episode time at which it returned."""
@@ -144,6 +196,7 @@ class Harness(pimm.ControlSystem):
         self._goal: str | None = None
         self._clock: pimm.Clock | None = None
         self._telemetry = _EpisodeTelemetry()
+        self._gc = _GcMeter()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
 
@@ -406,10 +459,11 @@ class Harness(pimm.ControlSystem):
         ``_PolicyEnded`` when the policy run returns, and ``None`` without an observation.
 
         ``due_ns`` is the wake-up time the previous step returned, or ``None`` for the first step. The step span
-        records the step's durations.
+        records the step's durations, and the garbage-collection time before and inside the step.
         """
         step_ms: dict[str, float] = {}
         with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span:
+            self._gc.start_step()
             try:
                 if due_ns is not None and runtime.time_ns >= due_ns:
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
@@ -442,7 +496,7 @@ class Harness(pimm.ControlSystem):
                     for name, message in messages.items():
                         self._convert_and_record(name, message, self._embodiment.commands[name].serializer)
             finally:
-                telemetry.set_attrs(span, **step_ms)
+                telemetry.set_attrs(span, **step_ms, **self._gc.end_step())
         period_sec = (step.resume_at_ns - started_at_ns) / 1e9
         period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
         return started_at_ns + round(period_sec * 1e9)
@@ -522,6 +576,7 @@ class Harness(pimm.ControlSystem):
         ended = None
         sample_at_ns = runtime.time_ns
         completed = ()
+        self._gc.start_wait()
         while not should_stop.value and payload is None:
             sampled_ns = runtime.time_ns
             if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
@@ -620,7 +675,9 @@ class Harness(pimm.ControlSystem):
             # A command without a device receiver still needs the world's emission timestamps.
             emitter._clock = clock
         # Episode spans must end before leaving the scope that closes the telemetry provider.
-        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
+        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS), ExitStack() as gc_scope:
+            if telemetry.enabled():
+                gc_scope.enter_context(self._gc.counting())
             while not should_stop.value:
                 call = next(self.perform_task.incoming(), None)
                 manual = pimm.value_updated(self.manual_command)

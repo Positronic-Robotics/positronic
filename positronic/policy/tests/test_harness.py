@@ -1,5 +1,6 @@
 """Timing contracts for processor execution and simulated chunk playback."""
 
+import gc
 import threading
 import time
 import traceback
@@ -1409,6 +1410,84 @@ def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harne
     assert convert_key in first.attrs and convert_key not in second.attrs
     policy_spans = [s for s in spans if s.name == telemetry.component_name(EveryTenMs())]
     assert {s.parent_id for s in policy_spans} == {first.span_id, second.span_id}
+
+
+@pytest.fixture
+def explicit_gc_only():
+    """Stop automatic collections, so that only the test's own ``gc.collect`` calls run."""
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
+def test_step_spans_carry_the_collections_before_and_inside_the_step(episode_harness, tmp_path, explicit_gc_only):
+    h = episode_harness
+
+    class CollectOnThirdCall(Policy):
+        def run(self, runtime):
+            yield
+            calls = 0
+            while True:
+                calls += 1
+                if calls == 3:
+                    gc.collect(1)
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-step-gc'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), CollectOnThirdCall(), None))
+        next(h.loop)
+        gc.collect()
+        h.world.clock.advance_to_ns(10_000_000)
+        next(h.loop)
+        h.world.clock.advance_to_ns(20_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    first, second, third = sorted(
+        (s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns
+    )[:3]
+    gc_keys = (
+        telemetry_keys.ATTR_STEP_GC_WAIT_MS,
+        telemetry_keys.ATTR_STEP_GC_MS,
+        telemetry_keys.ATTR_STEP_GC_GENERATION,
+    )
+    assert not any(key in first.attrs for key in gc_keys)
+    assert second.attrs[telemetry_keys.ATTR_STEP_GC_WAIT_MS] > 0
+    assert second.attrs[telemetry_keys.ATTR_STEP_GC_MS] == 0
+    assert second.attrs[telemetry_keys.ATTR_STEP_GC_GENERATION] == 2
+    assert third.attrs[telemetry_keys.ATTR_STEP_GC_WAIT_MS] == 0
+    assert third.attrs[telemetry_keys.ATTR_STEP_GC_MS] > 0
+    assert third.attrs[telemetry_keys.ATTR_STEP_GC_GENERATION] == 1
+
+
+def test_the_harness_counts_collections_only_while_telemetry_records(episode_harness, tmp_path):
+    h = episode_harness
+    callbacks = list(gc.callbacks)
+    h.observation.emit(1)
+    h.caller(Rollout(Task('move', None), Hold(), None))
+    next(h.loop)
+    assert gc.callbacks == callbacks
+    h.world.request_stop()
+    list(h.loop)
+
+
+def test_the_harness_stops_counting_collections_when_it_stops(episode_harness, tmp_path):
+    h = episode_harness
+    callbacks = list(gc.callbacks)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-gc-callback'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), Hold(), None))
+        next(h.loop)
+        assert len(gc.callbacks) == len(callbacks) + 1
+        h.world.request_stop()
+        list(h.loop)
+    assert gc.callbacks == callbacks
 
 
 def test_the_step_that_the_policy_ends_records_the_policy_duration(episode_harness, tmp_path):
