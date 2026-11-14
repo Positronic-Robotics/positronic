@@ -331,6 +331,28 @@ def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_coll
     _in_a_fresh_process(_check_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections)
 
 
+class HeapReporter(ControlSystem):
+    """Holds 50,000 objects, and writes how many objects a full collection in its process would scan."""
+
+    def __init__(self, scanned):
+        self._scanned = scanned
+        self._heap = [[i] for i in range(50_000)]
+
+    def run(self, should_stop, clock):
+        self._scanned.value = len(gc.get_objects())
+        yield Sleep(0.01)
+
+
+def test_a_full_collection_in_a_background_process_skips_the_heap_made_before_its_loop():
+    """A full collection stops the loop of a background process too, so the scan there must stay short."""
+    scanned = mp.get_context('spawn').Value('q', -1)
+
+    with World() as world:
+        world.run(StopWatcher(mp.Value('i', 0)), HeapReporter(scanned))
+
+    assert 0 <= scanned.value < 5_000
+
+
 def test_a_world_starts_its_loops_without_a_full_collection(monkeypatch):
     """A full collection stops the process while it scans, so the first loop step must not wait for one."""
     collections = Mock()
