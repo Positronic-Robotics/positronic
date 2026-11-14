@@ -30,7 +30,7 @@ def _payload() -> dict:
 
 
 def _adapter(exterior_sides=_LEFT_FIRST) -> MolmoAdapter:
-    return MolmoAdapter(camera_dict(exterior_sides))
+    return MolmoAdapter(camera_dict(exterior_sides), with_right_shoulder=ShoulderSide.RIGHT in exterior_sides)
 
 
 def test_observations_assemble_robot_state():
@@ -156,6 +156,7 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
         mapping.TASK_NAME: 'put the banana in the bowl',
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TASK_HORIZON_SEC: 30.0,
+        mapping.TASK_ENV_HOOK: 'site_hook.py@sha256:ab12',
     }
     assert adapter.task_params([record]) == [
         {
@@ -163,6 +164,7 @@ def test_task_params_name_an_episode_the_way_the_reset_token_reads_it():
             eval_keys.TASK: 'put the banana in the bowl',
             molmo_keys.EPISODE_INDEX: 3,
             molmo_keys.TASK_HORIZON: 30.0,
+            molmo_keys.ENV_HOOK: 'site_hook.py@sha256:ab12',
         }
     ]
     assert adapter.reset_token(adapter.task_params([record])[0])[mapping.TOKEN_EPISODE_INDEX] == 3
@@ -176,6 +178,7 @@ def test_a_horizon_override_rides_from_the_record_to_the_reset_token():
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TASK_HORIZON_SEC: 120.0,
         mapping.TASK_HORIZON_OVERRIDE_SEC: 120.0,
+        mapping.TASK_ENV_HOOK: None,
     }
     [params] = adapter.task_params([record])
     assert params[molmo_keys.TASK_HORIZON] == params[molmo_keys.TASK_HORIZON_OVERRIDE] == 120.0
@@ -190,6 +193,7 @@ def test_no_horizon_override_keeps_the_record_and_the_token_free_of_one():
         mapping.TOKEN_EPISODE_INDEX: 3,
         mapping.TASK_HORIZON_SEC: 30.0,
         mapping.TASK_HORIZON_OVERRIDE_SEC: None,
+        mapping.TASK_ENV_HOOK: None,
     }
     [params] = adapter.task_params([record])
     assert molmo_keys.TASK_HORIZON_OVERRIDE not in params
@@ -215,15 +219,19 @@ def test_reset_token_carries_benchmark_episode_and_seed():
     }
 
 
-def test_reset_token_asks_for_the_right_shoulder_only_when_the_adapter_declares_it():
+@pytest.mark.parametrize('exterior_sides', [[ShoulderSide.LEFT], list(ShoulderSide)])
+@pytest.mark.parametrize('with_right_shoulder', [False, True])
+def test_reset_token_asks_for_the_right_shoulder_as_the_adapter_is_told_whatever_its_cameras(
+    exterior_sides, with_right_shoulder
+):
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
-    assert _adapter([ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is False
-    assert _adapter([ShoulderSide.RIGHT, ShoulderSide.LEFT]).reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is True
+    adapter = MolmoAdapter(camera_dict(exterior_sides), with_right_shoulder=with_right_shoulder)
+    assert adapter.reset_token(params)[mapping.WITH_RIGHT_SHOULDER] is with_right_shoulder
 
 
 def test_reset_token_drops_the_object_image_points_only_when_the_adapter_asks():
     params = {**_BENCH_PARAMS, molmo_keys.EPISODE_INDEX: 3}
-    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_object_image_points=False)
+    dropped = MolmoAdapter(camera_dict(_LEFT_FIRST), with_right_shoulder=True, with_object_image_points=False)
     assert dropped.reset_token(params)[mapping.WITH_OBJECT_IMAGE_POINTS] is False
 
 

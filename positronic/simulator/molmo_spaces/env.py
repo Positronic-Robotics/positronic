@@ -5,6 +5,7 @@ End-effector poses describe ``gripper/grasp_site`` in the arm base frame, ``fr3_
 """
 
 import argparse
+import copy
 import functools
 import os
 import sys
@@ -37,12 +38,25 @@ from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
 import arm_action  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
+import env_hook  # noqa: E402 -- positronic-free, on PYTHONPATH
 import mapping  # noqa: E402 -- positronic-free wire mappings, on PYTHONPATH
 import mujoco  # noqa: E402
 import mujoco_state  # noqa: E402 -- positronic-free, on PYTHONPATH
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
 from server import EnvProtocol, EnvServer  # noqa: E402
+
+_DESCRIPTION = 'Serve MolmoSpaces over the env-server protocol.'
+# validate.py and parity_native.py import this module with flags and a -h of their own, so main checks the flags.
+_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+_parser.add_argument('--host', default='localhost')
+_parser.add_argument('--port', type=int)
+_parser.add_argument('--right-view-blocked', type=Path)
+_parser.add_argument('--hook', dest='hook', type=Path, help='a hook file that defines HOOK, an env_hook.EnvHook')
+_parser.add_argument('--hook-sha256', dest='hook_sha256', help='the SHA-256 digest that the hook file must have')
+_args, _ = _parser.parse_known_args()
+# A hook file runs before MolmoSpaces loads, because MolmoSpaces fetches its asset packs as it loads.
+_HOOK = env_hook.load(_args.hook, _args.hook_sha256)
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401  # pyright: ignore[reportMissingImports]
@@ -95,11 +109,21 @@ class _JointGraspSampler(JsonEvalTaskSampler):
         super().set_joint_values(env)
 
 
+# The arm joints of the robot model that the client records.
+_FR3_ARM_JOINTS = 7
+
+
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark environment with one active episode."""
 
-    def __init__(self, assets_dir: Path, right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]]) -> None:
+    def __init__(
+        self,
+        assets_dir: Path,
+        right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
+        hook: env_hook.LoadedHook | None = None,
+    ) -> None:
         self._assets_dir = assets_dir
+        self._hook, self._hook_record = hook if hook is not None else env_hook.load(None)
         self._found = mapping.discover_benchmarks(assets_dir)
         self._right_view_blocked = right_view_blocked
         self._episodes: dict[mapping.BenchmarkPath, list[Any]] = {}
@@ -120,9 +144,11 @@ class MolmoSpacesEnv(EnvProtocol):
             self._episodes[bench] = episodes
         return self._episodes[bench]
 
-    def _assert_measures_at_grasp_site(self) -> None:
-        """Require arm poses to track the benchmark's gripper grasp site."""
+    def _assert_bundled_arm(self) -> None:
+        """Require the FR3 arm joints of the recorded robot model, and arm poses at the gripper grasp site."""
         arm = self._robot_view.get_move_group(mapping.MOLMO_ARM_GROUP)
+        if len(arm.joint_pos) != _FR3_ARM_JOINTS:
+            raise ValueError(f'the arm has {len(arm.joint_pos)} joints, not the {_FR3_ARM_JOINTS} of the FR3')
         if arm.leaf_frame_type != 'site':
             raise ValueError(f'arm move group measures at a {arm.leaf_frame_type}, not the expected site')
         name = mujoco.mj_id2name(arm.mj_model, mujoco.mjtObj.mjOBJ_SITE, arm.leaf_frame_id)
@@ -163,6 +189,24 @@ class MolmoSpacesEnv(EnvProtocol):
         with_right.cameras = [*episode.cameras, right]
         return with_right
 
+    def _episode(self, bench: mapping.BenchmarkPath, episode_index: int, with_right_shoulder: bool) -> Any:
+        """The episode that the server builds: with the right shoulder camera when ``with_right_shoulder``."""
+        episode = self._episodes_of(bench)[episode_index]
+        if with_right_shoulder:
+            episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
+        return episode
+
+    def _eval_config(self, bench: mapping.BenchmarkPath, episode: Any) -> _DroidEvalConfig:
+        """The eval config of ``episode``, with the hook's changes."""
+        cfg = _DroidEvalConfig()
+        if episode.scene_dataset == mapping.MOLMO_USER_SCENE_DATASET:
+            sampling = cfg.task_sampler_config
+            scenes = mapping.user_scene_xml_paths(self._assets_dir, bench.scene_dataset, episode.data_split)
+            sampling.scene_xml_paths = [str(path) for path in scenes]
+            sampling.house_variant = mapping.MOLMO_USER_SCENE_VARIANT
+        self._hook.eval_config(cfg, copy.deepcopy(episode))
+        return cfg
+
     def _build(
         self,
         bench: mapping.BenchmarkPath,
@@ -175,15 +219,8 @@ class MolmoSpacesEnv(EnvProtocol):
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
-        episode = episodes[episode_index]
-        if with_right_shoulder:
-            episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
-        cfg = _DroidEvalConfig()
-        if episode.scene_dataset == mapping.MOLMO_USER_SCENE_DATASET:
-            sampling = cfg.task_sampler_config
-            scenes = mapping.user_scene_xml_paths(self._assets_dir, bench.scene_dataset, episode.data_split)
-            sampling.scene_xml_paths = [str(path) for path in scenes]
-            sampling.house_variant = mapping.MOLMO_USER_SCENE_VARIANT
+        episode = self._episode(bench, episode_index, with_right_shoulder)
+        cfg = self._eval_config(bench, episode)
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.
         cfg.task_horizon = determine_task_horizon(
@@ -192,11 +229,12 @@ class MolmoSpacesEnv(EnvProtocol):
         self._sampler = _JointGraspSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
+        self._hook.task_sampled(self._task)
         if not with_object_image_points:
             # The sensor draws its points from the global NumPy generator, so without it an episode draws other values.
             self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
         self._robot_view = self._task.env.current_robot.robot_view
-        self._assert_measures_at_grasp_site()
+        self._assert_bundled_arm()
         self._control_dt = cfg.policy_dt_ms / 1000.0
         self._meta = {
             # Generated task descriptions can mislabel close episodes as "Open ...".
@@ -206,32 +244,30 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """Selected episode records, with names, reset parameters and horizons in seconds."""
-        cfg = _DroidEvalConfig()
         selection = spec.get(mapping.SELECT_EPISODES)
         override_sec = spec.get(mapping.SELECT_HORIZON_SEC)
         pinned = None if selection is None else [selection] if isinstance(selection, int) else list(selection)
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
             episodes = self._episodes_of(bench)
-            blocked = (
-                self._right_view_blocked.get(bench, frozenset()) if spec[mapping.WITH_RIGHT_SHOULDER] else frozenset()
-            )
-            indices = mapping.select_episodes(bench, len(episodes), pinned, blocked)
-            horizon_steps = determine_task_horizon(
-                episodes, mapping.horizon_steps(override_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
-            )
-            horizon_sec = horizon_steps * cfg.policy_dt_ms / 1000.0
-            records += [
-                {
+            with_right_shoulder = spec[mapping.WITH_RIGHT_SHOULDER]
+            blocked = self._right_view_blocked.get(bench, frozenset()) if with_right_shoulder else frozenset()
+            # The horizon in seconds for each policy period of the benchmark's episodes.
+            horizons: dict[float, float] = {}
+            for i in mapping.select_episodes(bench, len(episodes), pinned, blocked):
+                dt_ms = self._eval_config(bench, self._episode(bench, i, with_right_shoulder)).policy_dt_ms
+                if dt_ms not in horizons:
+                    steps = determine_task_horizon(episodes, mapping.horizon_steps(override_sec, dt_ms), dt_ms)
+                    horizons[dt_ms] = steps * dt_ms / 1000.0
+                records.append({
                     **bench._asdict(),
                     mapping.TOKEN_EPISODE_INDEX: i,
                     mapping.TASK_NAME: episodes[i].language.task_description,
                     protocol.TASK_INSTRUCTION: episodes[i].language.task_description,
-                    mapping.TASK_HORIZON_SEC: horizon_sec,
+                    mapping.TASK_HORIZON_SEC: horizons[dt_ms],
                     mapping.TASK_HORIZON_OVERRIDE_SEC: override_sec,
-                }
-                for i in indices
-            ]
+                    mapping.TASK_ENV_HOOK: self._hook_record,
+                })
         return records
 
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
@@ -323,7 +359,7 @@ class MolmoSpacesEnv(EnvProtocol):
             protocol.OBS_EEF_POS: eef_pos.astype(np.float32),
             protocol.OBS_EEF_QUAT: eef_quat.astype(np.float32),
             protocol.OBS_GRIP: np.float32(
-                mapping.normalize_grip_qpos(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
+                self._hook.grip(env_obs[mapping.MOLMO_OBS_QPOS][mapping.MOLMO_GRIPPER_GROUP])
             ),
             mapping.OBS_SIM_STATE: mujoco_state.integration_state(scene.model, scene),
             mapping.OBS_TASK_METRICS: metrics,
@@ -341,15 +377,14 @@ class MolmoSpacesEnv(EnvProtocol):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Serve MolmoSpaces over the env-server protocol.')
-    parser.add_argument('--host', default='localhost')
-    parser.add_argument('--port', type=int, required=True)
-    parser.add_argument('--right-view-blocked', type=Path, required=True)
+    parser = argparse.ArgumentParser(description=_DESCRIPTION, parents=[_parser], allow_abbrev=False)
     args = parser.parse_args()
+    if args.port is None or args.right_view_blocked is None:
+        parser.error('--port and --right-view-blocked are required')
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
-        parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(args.right_view_blocked))
+        _parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
+    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(args.right_view_blocked), _HOOK)
     EnvServer(env, args.host, args.port).serve_forever()
 
 

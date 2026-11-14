@@ -21,6 +21,14 @@ def require_finite_positive(arg: str, value: float | None) -> None:
         check_finite_positive(value, f'--eval.{arg}')
 
 
+def env_server_address(env_server: str) -> tuple[str, int]:
+    """The ``(host, port)`` of an ``--eval.env_server`` given as ``host:port``."""
+    host, _, port = env_server.rpartition(':')
+    if not host or not port.isdigit():
+        raise ValueError(f'--eval.env_server is host:port, not {env_server!r}')
+    return host, int(port)
+
+
 def spec(**selection) -> dict[str, Any]:
     """The spec an env resolves: the selection arguments an eval binds, an unbound (``None``) one absent."""
     return {name: value for name, value in selection.items() if value is not None}
