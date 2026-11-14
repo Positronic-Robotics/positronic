@@ -512,9 +512,11 @@ class TeleopService:
                 and (left := deadline - time.monotonic()) > 0
             ):
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
-            ready, self._phase = self._ready, Phase.RUNNING if self._ready is ReadyAnswer.READY else Phase.IDLE
+            ready = self._ready
             if ready is ReadyAnswer.READY:
-                self._tracker = Tracker(settings.operator(), self.controller_axes)
+                self._phase, self._tracker = Phase.RUNNING, Tracker(settings.operator(), self.controller_axes)
+            else:
+                self._clear_trial()
         if ready is ReadyAnswer.READY:
             return
         if self._stopping or cancelled.is_set():

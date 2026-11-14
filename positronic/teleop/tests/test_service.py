@@ -915,6 +915,22 @@ def test_the_wait_for_ready_shows_the_cameras_of_its_session_and_not_those_of_th
         connection.close()
 
 
+def test_a_wait_for_ready_that_fails_leaves_the_cameras_of_the_station(socket_path):
+    session = protocol.SessionParams(cameras=(keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE]) as service:
+
+        def cancel_when_asked() -> None:
+            _until_phase(service, Phase.READY_WAIT)
+            service.cancel_ready_wait()
+
+        cancelling = threading.Thread(target=cancel_when_asked)
+        cancelling.start()
+        with pytest.raises(service_module.TrialNotStarted, match='cancelled the trial'):
+            service.wait_for_ready(session, threading.Event())
+        cancelling.join()
+        assert service.cameras().names == (keys.WRIST_IMAGE,)
+
+
 def test_a_session_of_one_camera_shows_that_camera_with_no_column(socket_path, connect):
     query = session_query(cameras=[keys.WRIST_IMAGE])
     with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
