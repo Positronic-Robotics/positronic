@@ -580,7 +580,7 @@ class Harness(pimm.ControlSystem):
         """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
         self._telemetry.begin(task.meta)
-        # The policy's own metadata now, so an episode that ends in its reset still names the policy.
+        # Name the policy before the reset, so that an episode that ends in its reset still names it.
         self._telemetry.describe_policy(lambda: self._recorded_policy_meta(rollout.policy.meta(), {}))
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, task.prepare_args)
@@ -613,7 +613,7 @@ class Harness(pimm.ControlSystem):
             finally:
                 self.deadline_ns.emit(None)
         finally:
-            # The runtime now holds the server's metadata. A cleanup failure must not lose it from the span.
+            # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
             self._telemetry.describe_policy(
                 lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
             )

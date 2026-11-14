@@ -5,6 +5,7 @@ import time
 import traceback
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
+from enum import Enum
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -1391,16 +1392,22 @@ class FailsOnCloseAfterServerMeta(SetsServerMetaOnFirstStep):
             raise RuntimeError('policy cleanup failed')
 
 
-@pytest.mark.parametrize('ending', ['done', 'failure', 'cleanup_failure'])
+class Ending(Enum):
+    DONE = 'done'
+    FAILURE = 'failure'
+    CLEANUP_FAILURE = 'cleanup_failure'
+
+
+@pytest.mark.parametrize('ending', list(Ending))
 def test_the_episode_span_names_the_policy_under_its_recorded_keys(episode_harness, tmp_path, ending):
     h = episode_harness
-    policy = FailsOnCloseAfterServerMeta() if ending == 'cleanup_failure' else SetsServerMetaOnFirstStep()
+    policy = FailsOnCloseAfterServerMeta() if ending is Ending.CLEANUP_FAILURE else SetsServerMetaOnFirstStep()
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-policy'):
         h.observation.emit(1)
         h.caller(Rollout(Task('move', None), policy, h.dataset))
         next(h.loop)
         h.world.clock.advance_to_ns(100_000_000)
-        if ending == 'failure':
+        if ending is Ending.FAILURE:
             h.serializer.side_effect = ValueError('failed')
             h.observation.emit(2)
         else:
@@ -1428,16 +1435,6 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
-class CountsMetaReads(Hold):
-    def __init__(self):
-        super().__init__()
-        self.meta_reads = 0
-
-    def meta(self):
-        self.meta_reads += 1
-        return super().meta()
-
-
 def _run_one_episode(h, policy):
     h.observation.emit(1)
     h.caller(Rollout(Task('move', None), policy, h.dataset))
@@ -1446,6 +1443,16 @@ def _run_one_episode(h, policy):
     next(h.loop)
     h.world.request_stop()
     list(h.loop)
+
+
+class CountsMetaReads(Hold):
+    def __init__(self):
+        super().__init__()
+        self.meta_reads = 0
+
+    def meta(self):
+        self.meta_reads += 1
+        return super().meta()
 
 
 @pytest.mark.parametrize(('bound', 'reads'), [(False, 2), (True, 4)])
