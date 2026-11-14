@@ -17,6 +17,7 @@ class Policy:
         *,
         device: str = 'cuda',
         compile_dit: bool = True,
+        offload_text_encoder: bool = False,
         rtc: bool = False,
     ):
         policy = FluxActionPolicy.from_pretrained(checkpoint, revision=revision, subfolder=subfolder, device='cpu')
@@ -37,7 +38,12 @@ class Policy:
             with torch.cuda.graph(self._first_graph):
                 torch.zeros(1, device=device)
         self._policy = robolab.prepare_serving_policy(
-            policy, device=device, dtype='bfloat16', compile_dit=compile_dit, warmup=0
+            policy,
+            device=device,
+            dtype='bfloat16',
+            compile_dit=compile_dit,
+            offload_text_encoder=offload_text_encoder,
+            warmup=0,
         )
 
     @property
