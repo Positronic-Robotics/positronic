@@ -41,6 +41,7 @@ docker/*
 !docker/install-model-server-deps.sh
 !docker/run_molmospaces_eval.sh
 !docker/fetch_abc_checkpoint.py
+!docker/train-resume
 
 # Outputs and datasets (shouldn't be in source anyway)
 outputs/
