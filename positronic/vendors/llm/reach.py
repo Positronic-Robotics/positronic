@@ -112,7 +112,6 @@ class YamReach:
                 if already_there:
                     continue
                 return index, self._limit_refusal(target, joints, lower, upper)
-            staying = already_there
             step = np.abs(solution - joints)
             joint = int(np.argmax(step))
             if step[joint] > self._max_joint_step:
@@ -120,7 +119,9 @@ class YamReach:
                     f'joint {joint + 1} would turn {step[joint]:.2f} rad at once. '
                     'Reach it with another orientation or through a nearer pose'
                 )
-            joints = solution
+            # The driver solves each sample from the measured joints, which stay put while the hand stays.
+            if not already_there:
+                staying, joints = False, solution
         return None
 
 
