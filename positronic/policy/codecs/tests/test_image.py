@@ -14,8 +14,17 @@ from positronic.cfg.codecs import image_observation
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.transforms.image import transform_frame
+from positronic.gui.video_stream import AnnexBDecoder
 from positronic.policy import spec, training
-from positronic.policy.codecs import LEROBOT_FEATURES, Codec, EncodeImages, Resample, ResizeMode, TransformImages
+from positronic.policy.codecs import (
+    LEROBOT_FEATURES,
+    Codec,
+    EncodeImages,
+    EncodeVideo,
+    Resample,
+    ResizeMode,
+    TransformImages,
+)
 from positronic.policy.keys import RTC
 
 
@@ -451,3 +460,39 @@ class TestEncodeImages:
     def test_invalid_quality_is_rejected_before_encoding(self, quality):
         with pytest.raises(ValueError, match='JPEG quality'):
             EncodeImages(quality=quality)
+
+
+class TestEncodeVideo:
+    def test_each_path_is_one_stream_that_decodes_in_order_through_the_wire(self):
+        codec = spec.from_spec(EncodeVideo([['cam'], ['nested', 0]], bitrate=2_000_000, fps=30).to_spec())
+        assert isinstance(codec, EncodeVideo)
+        decoders = {'cam': AnnexBDecoder(), 'nested': AnnexBDecoder()}
+        for level in (40, 120, 200):
+            image = np.full((48, 64, 3), level, dtype=np.uint8)
+            obs = {'cam': image, 'nested': [255 - image], 'task': 'pick cube'}
+            restored = serialization.deserialise(serialization.serialise(codec.encode(obs)))
+            assert restored['task'] == 'pick cube'
+            assert abs(decoders['cam'].decode(restored['cam']).mean() - level) < 4
+            assert abs(decoders['nested'].decode(restored['nested'][0]).mean() - (255 - level)) < 4
+            assert obs['cam'] is image
+        assert codec.decode(obs) is obs
+
+    def test_the_spec_keeps_the_paths_the_bit_rate_and_the_frame_rate(self):
+        codec = EncodeVideo([['cam']], bitrate=500_000, fps=15)
+        assert codec.to_spec()['args'] == {'paths': [['cam']], 'bitrate': 500_000, 'fps': 15}
+        assert spec.from_spec(codec.to_spec()).to_spec() == codec.to_spec()
+
+    @pytest.mark.parametrize(
+        'value',
+        [np.ones((2, 8, 12, 3), dtype=np.uint8), np.ones((8, 12, 4), dtype=np.uint8), b'image bytes'],
+        ids=['stack', 'rgba', 'bytes'],
+    )
+    def test_a_path_that_selects_no_rgb_image_is_refused(self, value):
+        with pytest.raises(ValueError, match='RGB image'):
+            EncodeVideo([['cam']], bitrate=500_000, fps=15).encode({'cam': value})
+
+    @pytest.mark.parametrize('name', ['bitrate', 'fps'])
+    @pytest.mark.parametrize('value', [0, -1, 1.5, True])
+    def test_a_bit_rate_or_frame_rate_that_is_not_a_positive_integer_is_refused(self, name, value):
+        with pytest.raises(ValueError, match=f'{name} must be a positive integer'):
+            EncodeVideo([['cam']], **{'bitrate': 500_000, 'fps': 15, name: value})

@@ -14,7 +14,7 @@ The package root exposes public names; implementations and their tests are group
 | [`action`](action.py) | Prediction decoding, training labels and command control modes |
 | [`geometry`](geometry.py) | Pose representations and end-effector frames |
 | [`gripper`](gripper.py) | Grip thresholds and conventions |
-| [`image`](image.py) | Image selection, resizing, padding and JPEG encoding |
+| [`image`](image.py) | Image selection, resizing, padding, and JPEG or H.264 encoding |
 | [`metadata`](metadata.py) | Metadata attachment and dataset feature descriptors |
 
 Codec tests live in [`tests/`](tests/). Model-specific recipes compose these operations under
@@ -142,6 +142,7 @@ that path back into model values, such as an RTC prefix.
 |-------|--------------|----------------|
 | [`TransformImages`](image.py) | Resizes RGB images and frame stacks with explicit dimensions and mode. | Limit upload size or match the model’s image preparation. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
+| [`EncodeVideo`](image.py) | Inference: encodes the image at each explicit path as one H.264 access unit, one video stream for each path. The receiver decodes each stream in order with `AnnexBDecoder`, so the stack keeps one call in flight. | Send the camera images of a run to a server that keeps a decoder for each stream, such as the teleop service. |
 
 Choose `ResizeMode.BOUND` to shrink within bounds, `PAD` to fit and pad to the exact size, or
 `STRETCH` to resize exactly, allowing distortion. Bilinear is the default interpolation;
