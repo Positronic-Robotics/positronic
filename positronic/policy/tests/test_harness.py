@@ -5,6 +5,7 @@ import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import replace
+from enum import Enum
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -1372,6 +1373,67 @@ def test_episode_spans_include_reset_and_recorder_flush(episode_harness, tmp_pat
     else:
         flush = next(s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO)
         assert flush.parent_id == episode.span_id
+
+
+class SetsServerMetaOnFirstStep(Hold):
+    """Sets runtime metadata once it runs, as a remote policy does when its session opens."""
+
+    def run(self, runtime):
+        yield
+        runtime.set_metadata(policy_keys.SERVER, {policy_keys.TYPE: 'stub', 'stack': [{'name': 'x'}]})
+        while True:
+            yield Step({}, runtime.time_ns + 100_000_000)
+
+
+class FailsOnCloseAfterServerMeta(SetsServerMetaOnFirstStep):
+    def run(self, runtime):
+        try:
+            yield from super().run(runtime)
+        finally:
+            raise RuntimeError('policy cleanup failed')
+
+
+class Ending(Enum):
+    DONE = 'done'
+    FAILURE = 'failure'
+    CLEANUP_FAILURE = 'cleanup_failure'
+
+
+@pytest.mark.parametrize('ending', list(Ending))
+def test_the_episode_span_names_the_policy_under_its_recorded_keys(episode_harness, tmp_path, ending):
+    h = episode_harness
+    policy = FailsOnCloseAfterServerMeta() if ending is Ending.CLEANUP_FAILURE else SetsServerMetaOnFirstStep()
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-policy'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), policy, h.dataset))
+        next(h.loop)
+        h.world.clock.advance_to_ns(100_000_000)
+        if ending is Ending.FAILURE:
+            h.serializer.side_effect = ValueError('failed')
+            h.observation.emit(2)
+        else:
+            h.done.emit({eval_keys.SUCCESS: True})
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
+    assert episode.attrs[f'{policy_keys.SERVER_META}.{policy_keys.TYPE}'] == 'stub'
+    # A list field stays on the recording only: the span keeps the scalar fields.
+    assert f'{policy_keys.SERVER_META}.stack' not in episode.attrs
+
+
+def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness, tmp_path):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-policy-reset'):
+        h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), Hold(), h.dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
