@@ -50,7 +50,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _GcSteps
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -181,7 +181,7 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), frozenset(), runtime, policy_run, None)
+        step = partial(harness._step, Task('test', None), frozenset(), runtime, policy_run, None, _GcSteps(harness._gc))
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -2203,7 +2203,9 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), frozenset(), runtime, run, None) == expected_ns
+        assert (
+            h.harness._step(Task('test', None), frozenset(), runtime, run, None, _GcSteps(h.harness._gc)) == expected_ns
+        )
     finally:
         runtime.close()
         run.close()
@@ -2236,7 +2238,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), frozenset(), runtime, run, None)
+            harness._step(Task('move', None), frozenset(), runtime, run, None, _GcSteps(harness._gc))
         finally:
             runtime.close()
             run.close()
