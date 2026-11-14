@@ -51,6 +51,8 @@ from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers import webxr
+from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
@@ -61,7 +63,7 @@ from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.executor import Executor
 from positronic.policy.keys import END
 from positronic.policy.processors import ChunkedSchedule, EndOnField, TrajectoryPlayer
-from positronic.policy.remote import RemotePolicy
+from positronic.policy.remote import RemotePolicy, declared_stack
 from positronic.policy.sequential import Sequential
 from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
@@ -562,6 +564,13 @@ def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_fram
     assert schedule['name'] == ChunkedSchedule.WIRE_NAME
     assert schedule['args']['latency_estimate'] >= 1 / schedule['args']['fps']
     assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][3])
+
+
+def test_the_client_stack_states_the_grip_point_as_the_frame_of_the_pose_and_the_target():
+    client_stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,)))
+    stack = declared_stack({server_keys.LOCAL_STACK: client_stack}, ProtocolVersion.V3)
+    frames = ee_frames(stack.meta())
+    assert frames[keys.EE_POSE] == frames[keys.TARGET_EE_POSE] == EEFrame(site=GRIPPER_SITE)
 
 
 class _BlankRenderer:
