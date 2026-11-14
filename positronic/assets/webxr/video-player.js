@@ -5,6 +5,8 @@
 // How the plane shows the video: as it is, with black clear so that only bright parts float over the room, or not at all
 export const PANEL_MODE = { ON_BLACK: 'on_black', CLEAR_BLACK: 'clear_black', HIDDEN: 'hidden' };
 const PANEL_CYCLE = [PANEL_MODE.ON_BLACK, PANEL_MODE.CLEAR_BLACK, PANEL_MODE.HIDDEN];
+// The height of the plane in meters, 2 m in front of the eyes. The view with the column of the other cameras is wider
+const PANEL_HEIGHT_M = 0.85;
 
 export class WebXRVideoPlayer {
     constructor() {
@@ -66,15 +68,9 @@ export class WebXRVideoPlayer {
             transparent: true,
         });
 
-        // Create plane for video (1.5 meters wide, 16:9 aspect ratio)
-        const width = 1.5;
-        const height = width * (9/16);
-        this.videoPlane = new THREE.Mesh(
-            new THREE.PlaneGeometry(width, height),
-            this.videoMaterial
-        );
-
-        // this.videoPlane.rotation.z = -Math.PI / 2;
+        // A plane of a fixed height, whose width follows the aspect of each frame (see showFrame)
+        this.videoPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.videoMaterial);
+        this.videoPlane.scale.set(PANEL_HEIGHT_M * 4 / 3, PANEL_HEIGHT_M, 1);
 
         // Create a group to hold the video plane
         this.videoGroup = new THREE.Group();
@@ -102,10 +98,7 @@ export class WebXRVideoPlayer {
             try {
                 // Create an image from the base64 data
                 const img = new Image();
-                img.onload = () => {
-                    this.videoTexture.image = img;
-                    this.videoTexture.needsUpdate = true;
-                };
+                img.onload = () => this.showFrame(img);
                 img.src = 'data:image/jpeg;base64,' + event.data;
             } catch (error) {
                 console.error("Error processing video frame:", error);
@@ -123,6 +116,12 @@ export class WebXRVideoPlayer {
         this.ws.onclose = () => {
             console.log("Video WebSocket closed");
         };
+    }
+
+    showFrame(img) {
+        this.videoTexture.image = img;
+        this.videoTexture.needsUpdate = true;
+        this.videoPlane.scale.x = PANEL_HEIGHT_M * img.width / img.height;
     }
 
     replaceLostSocket() {
