@@ -1,11 +1,18 @@
-"""Live H.264 for a browser: fragmented MP4 that Media Source Extensions can play from any fragment."""
+"""Live H.264 for a browser: fragmented MP4 for Media Source Extensions, and Annex B access units for WebCodecs."""
 
 import queue
 import threading
+from fractions import Fraction
+from typing import NamedTuple
 
 import av
 import numpy as np
+import pydantic
 from av.container import OutputContainer
+from av.video.codeccontext import VideoCodecContext
+
+# libx264 settings for live video: no lookahead, no B-frames, and a profile that every decoder plays.
+LIVE_X264_OPTIONS = {'preset': 'ultrafast', 'tune': 'zerolatency', 'profile': 'baseline'}
 
 
 def codec_string(init: bytes) -> str:
@@ -66,9 +73,7 @@ class VideoStream:
         container = av.open(
             self._buffer, mode='w', format='mp4', options={'movflags': 'frag_keyframe+empty_moov+default_base_moof'}
         )
-        stream = container.add_stream(
-            'libx264', rate=self._fps, options={'preset': 'ultrafast', 'tune': 'zerolatency', 'profile': 'baseline'}
-        )
+        stream = container.add_stream('libx264', rate=self._fps, options=LIVE_X264_OPTIONS)
         stream.width = width
         stream.height = height
         stream.pix_fmt = 'yuv420p'
@@ -143,3 +148,75 @@ class VideoStream:
             container.mux(packet)
         container.close()
         self._dispatch(self._buffer.drain())
+
+
+def sps_codec_string(access_unit: bytes) -> str:
+    """The WebCodecs codec string (``avc1.PPCCLL``) that the SPS of an Annex B access unit declares."""
+    start = 0
+    while (start := access_unit.find(b'\x00\x00\x01', start) + 3) >= 3:
+        if access_unit[start] & 0x1F == 7:
+            profile, constraints, level = access_unit[start + 1 : start + 4]
+            return f'avc1.{profile:02X}{constraints:02X}{level:02X}'
+    raise ValueError('the access unit carries no SPS')
+
+
+class DecoderConfig(pydantic.BaseModel):
+    """What a WebCodecs ``VideoDecoder`` needs before the key frame that follows it."""
+
+    codec: str
+    width: int
+    height: int
+
+
+class AccessUnit(NamedTuple):
+    """One encoded frame. A key frame carries the configuration that a decoder needs to start from it."""
+
+    data: bytes
+    config: DecoderConfig | None
+
+
+class AnnexBEncoder:
+    """Encodes RGB frames into H.264 access units in Annex B form, one access unit for each frame.
+
+    A frame of a new size starts a new stream at a key frame. An odd side gets one edge row or column.
+    """
+
+    def __init__(self, fps: int, keyframe_interval: int, bitrate: int):
+        self._fps = fps
+        self._keyframe_interval = keyframe_interval
+        self._bitrate = bitrate
+        self._codec: VideoCodecContext | None = None
+        self._pts = 0
+
+    def _open(self, height: int, width: int) -> VideoCodecContext:
+        codec = av.CodecContext.create('libx264', 'w')
+        assert isinstance(codec, VideoCodecContext), 'libx264 is a video codec'
+        codec.width = width
+        codec.height = height
+        codec.pix_fmt = 'yuv420p'
+        codec.framerate = Fraction(self._fps)
+        codec.time_base = Fraction(1, self._fps)
+        codec.gop_size = self._keyframe_interval
+        codec.bit_rate = self._bitrate
+        codec.options = LIVE_X264_OPTIONS
+        codec.open()
+        return codec
+
+    def encode(self, rgb: np.ndarray) -> list[AccessUnit]:
+        h, w = rgb.shape[:2]
+        even = np.pad(rgb, ((0, h % 2), (0, w % 2), (0, 0)), mode='edge')
+        if self._codec is None or (self._codec.height, self._codec.width) != even.shape[:2]:
+            self._codec = self._open(*even.shape[:2])
+        frame = av.VideoFrame.from_ndarray(even, format='rgb24')
+        frame.pts = self._pts
+        self._pts += 1
+        codec = self._codec
+        return [
+            AccessUnit(
+                bytes(packet),
+                DecoderConfig(codec=sps_codec_string(bytes(packet)), width=codec.width, height=codec.height)
+                if packet.is_keyframe
+                else None,
+            )
+            for packet in codec.encode(frame)
+        ]
