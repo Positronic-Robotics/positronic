@@ -219,6 +219,14 @@ def test_a_single_timeline_cached_rrd_is_not_reused(rrd_cache):
     assert not current.exists()
 
 
+def test_a_cached_rrd_with_raw_clock_axes_is_not_reused(rrd_cache):
+    current = rrd_cache(30.0, 640)
+    old = current.parent / current.name.replace('v5-', 'v4-', 1)
+    old.write_bytes(b'recording with raw clock axes')
+    assert current != old
+    assert not current.exists()
+
+
 _GRIP_LAYOUT = ReplayLayout(split_shares=(3, 1), view_shares=(1, 3), charts={'Grip': [keys.GRIP]})
 
 
