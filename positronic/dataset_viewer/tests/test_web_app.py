@@ -301,6 +301,7 @@ class _StubEpisode:
     meta = {META_PATH: '/datasets/run-7/episode_3', 'size_mb': 12.5}
     static = {keys.TASK: 'pick the cube', 'scene': b'a mesh'}
     timelines = (RECORDED_TIME,)
+    signals = {'value': DummySignal([1000, 2000], [0, 1])}
 
     def bounds(self, timelines: str) -> TimeBounds[int]:
         return TimeBounds(1000, 2000)
@@ -480,6 +481,13 @@ def test_the_episode_page_links_its_recording_and_its_downloads_at_their_routes(
     assert 'appUrl("api/episode_rrd/0")' in body
     assert '"api/episode/0/static/scene"' in body
     assert viewer.get('/api/episode/0/static/scene').content == b'a mesh'
+
+
+def test_the_episode_page_hands_the_script_the_start_of_its_seek_clock_as_a_string(viewer):
+    body = viewer.get('/episode/0').text
+
+    assert 'const seekTimeline = "recorded";' in body
+    assert 'const seekStartNs = "1000";' in body
 
 
 def test_a_download_is_named_in_the_header_and_a_name_outside_ascii_is_percent_encoded(viewer, monkeypatch):

@@ -136,10 +136,14 @@ Episode {{ episode_id }} / {{ num_episodes }} - Positronic Dataset Viewer
         viewerUrl.searchParams.set('hide_welcome_screen', '');
         const params = new URLSearchParams(window.location.search);
         const seekTimeline = {{ seek_timeline | tojson }};
+        const seekStartNs = {{ seek_start_ns | tojson }};
         if (seekTimeline !== null) {
             viewerUrl.searchParams.set('seek_timeline', seekTimeline);
-            if (params.has('ts_ns')) viewerUrl.searchParams.set('seek_ts_ns', params.get('ts_ns'));
-            else if (params.has('t')) viewerUrl.searchParams.set('seek_t', params.get('t'));
+            // `ts_ns` is a reading of the clock as recorded; the replay counts the clock from seekStartNs.
+            const tsNs = params.get('ts_ns');
+            if (tsNs !== null && /^-?\d+$/.test(tsNs)) {
+                viewerUrl.searchParams.set('seek_ts_ns', (BigInt(tsNs) - BigInt(seekStartNs)).toString());
+            } else if (params.has('t')) viewerUrl.searchParams.set('seek_t', params.get('t'));
         }
         viewerIframe.src = viewerUrl;
     });
