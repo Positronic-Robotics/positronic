@@ -31,6 +31,7 @@ from positronic.drivers.roboarm.models import (
     YAM_JOINT_NAMES,
     bundled_yam_model,
 )
+from positronic.drivers.roboarm.tests.conftest import I2RT_INSTALLED
 from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
@@ -842,6 +843,7 @@ def test_the_joint_range_is_the_range_of_the_i2rt_arm_model():
     rig.loop.close()
 
 
+@pytest.mark.skipif(not I2RT_INSTALLED, reason='needs the arm models of the real i2rt package (the yam extra)')
 def test_the_vendored_model_has_the_joint_ranges_of_the_i2rt_arm_model():
     get_robot = pytest.importorskip('i2rt.robots.get_robot')
     utils = pytest.importorskip('i2rt.robots.utils')
