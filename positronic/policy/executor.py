@@ -143,6 +143,14 @@ class ExecutionRuntime(Runtime):
     def tick(self) -> int:
         return self._runtime.tick
 
+    @property
+    def observed_ns(self) -> int | None:
+        return self._runtime.observed_ns
+
+    @observed_ns.setter
+    def observed_ns(self, value: int | None) -> None:
+        self._runtime.observed_ns = value
+
     def set_metadata(self, name: str, value: Any) -> None:
         self._runtime.set_metadata(name, value)
 
@@ -208,11 +216,19 @@ class Executor(Runtime):
         """The zero-based control-tick index, unchanged when calls occur at the same clock time."""
         return self._tick
 
+    @property
+    def observed_ns(self) -> int | None:
+        return self._observed_ns
+
+    @observed_ns.setter
+    def observed_ns(self, value: int | None) -> None:
+        self._observed_ns = value
+
     def start_tick(self, observed_ns: int | None) -> None:
         """Count a new tick if the episode clock has advanced since the previous call.
 
         ``observed_ns`` is the episode-clock time at which the tick's observation was captured, or ``None`` when
-        unknown. Each call that the tick submits stamps the age of that observation.
+        unknown. Each call that the tick submits stamps the age of the observation in ``observed_ns``.
         """
         self._observed_ns = observed_ns
         now_ns = self.time_ns

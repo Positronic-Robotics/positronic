@@ -481,6 +481,7 @@ class Periodic(Policy):
         period_ns = (1 / self._fps) * 1e9
         next_index = 0
         sample: Obs = {}
+        sample_observed_ns: int | None = None
         while True:
             now_ns = runtime.time_ns
             sampling = now_ns >= next_sample_ns
@@ -491,6 +492,7 @@ class Periodic(Policy):
                     policy_keys.SAMPLE_INDEX: index,
                     self._obs_time_key: now_ns,
                 }
+                sample_observed_ns = runtime.observed_ns
                 next_index = index + 1
                 next_sample_ns = origin_ns + round(next_index * period_ns)
             step = Step({}, next_sample_ns)
@@ -498,10 +500,14 @@ class Periodic(Policy):
                 inner_obs = sample
                 if policy_keys.REPLAN_NOW in obs:
                     inner_obs = OverlayMapping(sample, add={policy_keys.REPLAN_NOW: obs[policy_keys.REPLAN_NOW]})
+                step_observed_ns = runtime.observed_ns
+                runtime.observed_ns = sample_observed_ns
                 try:
                     result = inner.send(inner_obs)
                 except StopIteration as end:
                     return end.value
+                finally:
+                    runtime.observed_ns = step_observed_ns
                 if result is None:
                     raise TypeError('Periodic requires its inner run to yield a Step')
                 resume_at_ns = (

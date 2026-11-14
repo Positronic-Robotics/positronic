@@ -127,9 +127,10 @@ count, and a hold that the episode end cuts does not count. The hold share of a 
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of the oldest camera frame in the
 observation to the start of the call. The harness reads the two times on one clock, the clock of the policy
 runtime. On a real rig it is the monotonic clock of the host. In a simulation it is the world clock, so the age is
-simulated time and does not include the wall time of the simulator. The age uses the frames of the step that
-submits the call. A processor that sends an older sample, such as `Periodic` on an answer wake-up, makes the real
-age larger. An observation with no camera gives no value.
+simulated time and does not include the wall time of the simulator. The age uses the capture time in
+`Runtime.observed_ns` when the call is submitted. The harness sets it for each step. A processor that sends an older
+sample, such as `Periodic` on an answer wake-up, sets the capture time of that sample. An observation with no camera
+gives no value.
 
 ### Reading the network time of a call
 

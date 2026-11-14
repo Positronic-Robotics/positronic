@@ -194,6 +194,51 @@ def test_answer_wakeup_keeps_sampled_plan_without_replaying_replan_signal(period
         run.close()
 
 
+class _RecordObservedTime(Policy):
+    def __init__(self) -> None:
+        self.observed_ns: list[int | None] = []
+
+    def run(self, runtime):
+        obs = yield
+        while True:
+            self.observed_ns.append(runtime.observed_ns)
+            obs = yield Step(obs, runtime.time_ns + 100_000_000)
+
+
+def test_answer_wakeup_gives_the_inner_run_the_capture_time_of_the_reused_sample(periodic_execution):
+    runtime, now = periodic_execution
+    inner = _RecordObservedTime()
+    run = runtime.start(Sequential(Periodic(10), inner))
+    try:
+        runtime.start_tick(5)
+        run.send({POSITION: 0})
+        answer = runtime.submit(lambda: None)
+        assert runtime.wait(timeout_sec=2).status is WaitStatus.ANSWERS_READY
+        now[0] = 50_000_000
+        runtime.start_tick(40_000_000)
+        run.send({POSITION: 1})
+        assert inner.observed_ns == [5, 5]
+        assert runtime.observed_ns == 40_000_000
+        answer.result()
+    finally:
+        run.close()
+
+
+def test_sampling_tick_gives_the_inner_run_the_capture_time_of_the_new_sample(periodic_execution):
+    runtime, now = periodic_execution
+    inner = _RecordObservedTime()
+    run = runtime.start(Sequential(Periodic(10), inner))
+    try:
+        runtime.start_tick(5)
+        run.send({POSITION: 0})
+        now[0] = 100_000_000
+        runtime.start_tick(90_000_000)
+        run.send({POSITION: 1})
+        assert inner.observed_ns == [5, 90_000_000]
+    finally:
+        run.close()
+
+
 def test_overlapping_samples_preserve_data_and_deliver_trajectories_in_submission_order(periodic_execution):
     runtime, now = periodic_execution
     started, release = threading.Event(), threading.Event()
