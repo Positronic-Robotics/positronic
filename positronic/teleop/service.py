@@ -473,9 +473,9 @@ class TeleopService:
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
         for name in (self._chosen_camera, self._headset_camera):
-            if name is not None and name in self._images:
+            if name is not None and name in self._trial_cameras:
                 return name
-        return self._headset_camera if self._headset_camera is not None else next(iter(self._images), None)
+        return next(iter(self._trial_cameras), None)
 
     def _headset_image(self) -> np.ndarray | None:
         shown = self._shown_camera()

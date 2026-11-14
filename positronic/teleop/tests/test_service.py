@@ -931,6 +931,19 @@ def test_a_wait_for_ready_that_fails_leaves_the_cameras_of_the_station(socket_pa
         assert service.cameras().names == (keys.WRIST_IMAGE,)
 
 
+@pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
+def test_the_camera_that_the_teleoperator_chose_is_the_main_camera_of_the_wait_for_ready(
+    socket_path, connect, headset_camera
+):
+    station = [keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE]
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=station) as service:
+        service.choose_camera(keys.WRIST_IMAGE)
+        connection = connect(socket_path, session_query(cameras=station, headset_camera=headset_camera))
+        _until_phase(service, Phase.READY_WAIT)
+        assert service.cameras().shown == keys.WRIST_IMAGE
+        connection.close()
+
+
 def test_a_session_of_one_camera_shows_that_camera_with_no_column(socket_path, connect):
     query = session_query(cameras=[keys.WRIST_IMAGE])
     with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
