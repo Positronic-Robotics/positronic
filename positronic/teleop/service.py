@@ -453,8 +453,8 @@ class TeleopService:
             image = self._headset_image() if camera else None
             names = self.cameras().names
             main = shown if shown in names else next(iter(names), None)
-            running = state.phase is Phase.RUNNING and camera
-            others = [(name, self._images.get(name) if running else None) for name in names if name != main]
+            shows_images = state.phase is Phase.RUNNING and camera
+            others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
         footer = [Y_HINT]
         match state.phase:
             case Phase.IDLE:
