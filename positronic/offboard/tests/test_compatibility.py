@@ -85,7 +85,7 @@ def test_image_sizes_from_old_server_stacks_remain_descriptive_metadata(sizes):
 def controlled_runtime(monkeypatch):
     now = [1_000_000_000]
     calls = []
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
 
     def submit(function, obs):
         future = Future()
@@ -350,7 +350,7 @@ def test_new_client_runs_an_unversioned_server(start_server, make_mock_model, mo
     )
     address = served.ws()[1] if transport == 'websocket' else served.grpc()[1]
     now = [1_000_000_000]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
     run = runtime.start(RemotePolicy(transport, address))
     try:
         first = run.send({'image': np.array([1, 2])})

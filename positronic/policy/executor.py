@@ -15,7 +15,7 @@ from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
 from positronic.policy.base import Answer, NotAnswered, QueueFull, Runtime
-from positronic.utils import check_positive_int
+from positronic.utils import check_finite_nonnegative, check_positive_int
 
 P = ParamSpec('P')
 T = TypeVar('T')
@@ -24,9 +24,8 @@ T = TypeVar('T')
 class _UnchargedAnswer(Answer[T]):
     """A function's result, readable as soon as its worker finishes."""
 
-    def __init__(self, pool: WorkerExecutor, function: Callable[[], T], *, charge_time: bool = True) -> None:
+    def __init__(self, pool: WorkerExecutor, function: Callable[[], T]) -> None:
         self.workers = pool
-        self._charge_time = charge_time
         self._submitted_wall_ns = time.monotonic_ns()
         self._elapsed_ns = 0
         self._execution_ns = 0
@@ -41,9 +40,8 @@ class _UnchargedAnswer(Answer[T]):
             return function()
         finally:
             finished_ns = time.monotonic_ns()
-            if self._charge_time:
-                self._elapsed_ns = finished_ns - self._submitted_wall_ns
-                self._execution_ns = finished_ns - started_ns
+            self._elapsed_ns = finished_ns - self._submitted_wall_ns
+            self._execution_ns = finished_ns - started_ns
 
     def done(self) -> bool:
         return self.call.done()
@@ -111,6 +109,39 @@ class _ChargedAnswer(_UnchargedAnswer[T]):
         return max(remaining_ns / 1e9, 0.0)
 
 
+class _FixedChargeAnswer(_UnchargedAnswer[T]):
+    """A worker result visible ``charge_ns`` after submission on the episode clock.
+
+    The simulator advances freely until the charge ends, then holds while the worker runs, so a late worker
+    costs no episode time. Both durations report the charge.
+    """
+
+    def __init__(self, pool: WorkerExecutor, clock: Callable[[], int], charge_ns: int, function: Callable[[], T]):
+        self._clock = clock
+        self._submitted_ns = clock()
+        self._charge_ns = charge_ns
+        super().__init__(pool, function)
+
+    def done(self) -> bool:
+        if not self.call.done():
+            return False
+        return self.call.cancelled() or self._clock() >= self._submitted_ns + self._charge_ns
+
+    @property
+    def elapsed_sec(self) -> float:
+        self._require_duration()
+        return self._charge_ns / 1e9
+
+    @property
+    def execution_sec(self) -> float:
+        return self.elapsed_sec
+
+    def _delay_sec(self, until_ns: int) -> float:
+        if self.call.done() or until_ns < self._submitted_ns + self._charge_ns:
+            return 0.0
+        return float('inf')
+
+
 class WaitStatus(Enum):
     ANSWERS_READY = auto()
     CAN_ADVANCE = auto()
@@ -143,6 +174,9 @@ class ExecutionRuntime(Runtime):
     def tick(self) -> int:
         return self._runtime.tick
 
+    def apply_slow_motion(self) -> float:
+        return self._runtime.apply_slow_motion()
+
     def set_metadata(self, name: str, value: Any) -> None:
         self._runtime.set_metadata(name, value)
 
@@ -169,9 +203,10 @@ class Executor(Runtime):
     """Run submitted functions on worker threads and expose their answers on ``clock``.
 
     Real execution exposes completed futures immediately and never waits for simulated time. In
-    simulation, charged calls include queueing and execution time; uncharged calls hold the simulator
-    until the worker finishes. Submission and result reads belong to the control thread; submitted
-    functions must not mutate episode state.
+    simulation, ``inference_charge_sec=None`` charges each call its queueing and execution time. A number
+    charges each call that many seconds instead, zero included: the answer is visible at the first tick at
+    or after the charge ends, and the simulator holds there while the worker runs. Submission and result
+    reads belong to the control thread; submitted functions must not mutate episode state.
 
     ``max_in_flight`` bounds local calls until their results are read or cancelled calls finish.
     Each ``ExecutionRuntime`` owns an independent limit and workers; every answer participates in
@@ -179,11 +214,25 @@ class Executor(Runtime):
     """
 
     def __init__(
-        self, clock: Callable[[], int], *, simulated: bool, charge_inference_time: bool, max_in_flight: int = 16
+        self,
+        clock: Callable[[], int],
+        *,
+        simulated: bool,
+        inference_charge_sec: float | None,
+        slow_motion: float = 1.0,
+        max_in_flight: int = 16,
     ) -> None:
+        if inference_charge_sec is not None:
+            check_finite_nonnegative(inference_charge_sec, 'inference_charge_sec')
+            if not simulated:
+                raise ValueError('inference_charge_sec needs a simulated run: real execution pays each call its time')
+        if not 1 <= slow_motion < float('inf'):
+            raise ValueError(f'slow_motion must be a finite factor of at least 1, not {slow_motion}')
         self._clock = clock
         self._simulated = simulated
-        self._charge_inference_time = charge_inference_time
+        self._charge_ns = None if inference_charge_sec is None else round(inference_charge_sec * 1e9)
+        self._slow_motion = slow_motion
+        self._slow_motion_applied = False
         self._tick = -1
         self._tick_time_ns: int | None = None
         self._closed = False
@@ -201,6 +250,15 @@ class Executor(Runtime):
     @property
     def time_ns(self) -> int:
         return self._clock()
+
+    def apply_slow_motion(self) -> float:
+        self._slow_motion_applied = True
+        return self._slow_motion
+
+    @property
+    def slow_motion_applied(self) -> bool:
+        """Whether a processor of this episode called ``apply_slow_motion``."""
+        return self._slow_motion_applied
 
     @property
     def tick(self) -> int:
@@ -263,11 +321,13 @@ class Executor(Runtime):
         if telemetry.enabled():
             invoke = telemetry.traced(telemetry_keys.SPAN_POLICY_SUBMIT)(invoke)
         work = partial(context.run, invoke)
-        answer = (
-            _ChargedAnswer(workers, self._clock, work)
-            if self._simulated and self._charge_inference_time
-            else _UnchargedAnswer(workers, work, charge_time=not self._simulated)
-        )
+        answer: _UnchargedAnswer[T]
+        if not self._simulated:
+            answer = _UnchargedAnswer(workers, work)
+        elif self._charge_ns is None:
+            answer = _ChargedAnswer(workers, self._clock, work)
+        else:
+            answer = _FixedChargeAnswer(workers, self._clock, self._charge_ns, work)
         self._answers.add(answer)
         return answer
 

@@ -409,7 +409,16 @@ def test_a_run_cannot_be_both_here_and_there(platform, run_command):
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('local_only', [{'timing': True}, {'output_dir': '/tmp/x'}, {'charge_inference_time': False}])
+@pytest.mark.parametrize(
+    'local_only',
+    [
+        {'timing': True},
+        {'output_dir': '/tmp/x'},
+        {'charge_inference_time': False},
+        {'fixed_inference_sec': 0.5},
+        {'slow_motion': 2.0},
+    ],
+)
 def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_command, local_only: dict):
     # The platform owns its own trial sweep, output and telemetry, so silently dropping these would
     # hand back a run the caller believes they configured.
@@ -418,7 +427,7 @@ def test_a_platform_run_refuses_what_only_a_local_run_can_mean(platform, run_com
     assert platform.seen is None
 
 
-@pytest.mark.parametrize('already_so', [{'timing': False}, {'charge_inference_time': True}])
+@pytest.mark.parametrize('already_so', [{'timing': False}, {'charge_inference_time': True}, {'slow_motion': 1.0}])
 def test_a_platform_run_takes_a_local_switch_stated_at_what_it_already_does(platform, run_command, already_so: dict):
     # A switch reads the same whether it was left at its default or stated there, and either way asks
     # for what the platform already does, so it refuses neither.

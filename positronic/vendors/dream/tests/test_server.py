@@ -463,7 +463,7 @@ def test_the_arm_plays_each_chunk_on_time_with_no_stop_between_chunks(monkeypatc
     view = np.zeros((4, 4, 3), np.uint8)
     obs = dict.fromkeys((keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE), view)
     with pimm.World(virtual_time=True) as world:
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, inference_charge_sec=0)
 
         def submit(function, request):
             # Each row holds the time that DreamAPI plans it for: the observation, and then one row per period.

@@ -135,8 +135,9 @@ device.
 **Inference cost is a fact of the trial, owned by the harness.** The policy submits
 ordinary functions through its runtime. A simulated task can request
 `charge_inference_time=False`; otherwise answer availability includes queueing and
-execution time. The runtime exposes one clock to the policy, without revealing whether
-that clock is simulated. Scheduling processors read it when they anchor a chunk.
+execution time, or a fixed `fixed_inference_sec` that the task states. The runtime exposes one clock
+to the policy, without revealing whether that clock is simulated. Scheduling processors read it when
+they anchor a chunk.
 
 **Recordings are canonical; codecs bind the dialect late.** The dataset records every run in the
 canonical conventions (frames, key names, absolute time) — never in a model's dialect. Every

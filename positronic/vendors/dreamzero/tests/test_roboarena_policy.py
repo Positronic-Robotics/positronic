@@ -129,7 +129,7 @@ def start_stack(client, clock: Clock):
 
     Built through `local_stack` rather than here, so the test runs the stack a run executes.
     """
-    runtime = Executor(clock, simulated=True, charge_inference_time=False)
+    runtime = Executor(clock, simulated=True, inference_charge_sec=0)
     run = runtime.start(roboarena_policy.local_stack(ANNOUNCED), endpoint_over(client, ANNOUNCED))
     return runtime, run
 
@@ -335,7 +335,7 @@ class TestTheWire:
 
         with patch('positronic_wire.roboarena.connect', side_effect=sockets):
             for _ in range(2):
-                runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+                runtime = Executor(Clock(), simulated=True, inference_charge_sec=0)
                 run = runtime.start(policy)
                 runtime.close()
                 run.close()
@@ -348,7 +348,7 @@ class TestTheWire:
         policy = roboarena_policy.RoboarenaPolicy(ADDRESS, headers)
 
         with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
-            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+            runtime = Executor(Clock(), simulated=True, inference_charge_sec=0)
             run = runtime.start(policy)
             runtime.close()
             run.close()
@@ -362,7 +362,7 @@ class TestTheWire:
             policy = roboarena_policy.RoboarenaPolicy(address, connect_deadline=CONNECT_DEADLINE_S)
             started = time.monotonic()
             with pytest.raises(ConnectRefused):
-                Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
+                Executor(Clock(), simulated=True, inference_charge_sec=0).start(policy)
 
         assert time.monotonic() - started < CONNECT_DEADLINE_S + DEADLINE_SLACK_S
 
@@ -382,7 +382,7 @@ class TestTheWire:
         with patch('positronic_wire.roboarena.connect', side_effect=sockets):
             for _ in range(2):
                 with pytest.raises(StopRun):
-                    Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
+                    Executor(Clock(), simulated=True, inference_charge_sec=0).start(policy)
 
         assert [config[wire.RESOLUTION] for config in built] == [[180, 320], [144, 256]]
 

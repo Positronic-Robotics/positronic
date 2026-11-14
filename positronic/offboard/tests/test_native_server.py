@@ -267,7 +267,7 @@ def test_remote_calls_match_responses_when_encoding_reorders_observations(servin
     monkeypatch.setattr('positronic.policy.remote.declared_stack', lambda *_: stack)
     now = [0]
     with serving(ObservingModel) as (client, address):
-        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
         run = runtime.start(RemotePolicy(client.NAME, address))
         try:
             run.send({'index': 0, policy_keys.REPLAN_NOW: False})
@@ -323,7 +323,7 @@ def test_stack_failure_drains_sent_inference_before_closing_session(serving):
             return BlockingSession(stack)
 
     with serving(BlockingModel) as (client, address):
-        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=0)
         run = runtime.start(RemotePolicy(client.NAME, address))
         releaser = threading.Timer(0.05, release.set)
         try:
@@ -375,7 +375,7 @@ def test_images_use_client_selection_and_explicit_output_paths(serving, image_ar
 def test_remote_policy_derives_client_metadata_without_changing_the_server_report(serving):
     with serving(EchoModel) as (client, address):
         policy = RemotePolicy(client.NAME, address)
-        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=0)
         try:
             runtime.start(policy).close()
         finally:
@@ -405,7 +405,7 @@ def answering(answer, description):
 
 
 def first_step(client, address):
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=0)
     run = runtime.start(RemotePolicy(client.NAME, address))
     try:
         run.send({})
@@ -479,7 +479,7 @@ def test_remote_rtc_preserves_prefix_offsets_and_decodes_commands(serving, versi
 
     with serving(RTCModel) as (client, address):
         now = [1_000_000_000]
-        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
         run = runtime.start(RemotePolicy(client.NAME, address))
         try:
             run.send({})
@@ -533,7 +533,7 @@ def test_remote_rtc_decodes_two_arm_actions_and_sends_the_prefix_as_model_action
     right_grip = obs_keys.arm_channel(obs_keys.TARGET_GRIP, obs_keys.RIGHT_ARM)
     with serving(TwoArmModel) as (client, address):
         now = [1_000_000_000]
-        runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
         run = runtime.start(RemotePolicy(client.NAME, address))
         try:
             run.send({})

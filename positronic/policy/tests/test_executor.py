@@ -3,6 +3,7 @@
 import contextvars
 import threading
 from contextlib import closing
+from math import inf, nan
 from typing import cast
 
 import pytest
@@ -17,10 +18,13 @@ from positronic.policy.executor import ExecutionRuntime, Executor, WaitResult, W
 def executors():
     created = []
 
-    def make(*, simulated=True, charged=False, max_in_flight=16):
+    def make(*, simulated=True, charged=False, fixed_inference_sec=None, max_in_flight=16):
         now = [0]
         runtime = Executor(
-            lambda: now[0], simulated=simulated, charge_inference_time=charged, max_in_flight=max_in_flight
+            lambda: now[0],
+            simulated=simulated,
+            inference_charge_sec=(fixed_inference_sec if charged else 0) if simulated else None,
+            max_in_flight=max_in_flight,
         )
         created.append(runtime)
         return runtime, now
@@ -257,6 +261,61 @@ def test_charged_wait_is_bounded_by_the_time_still_owed(executors, monkeypatch):
         assert now == [10_000_000]
     finally:
         release.set()
+
+
+def test_an_early_fixed_charge_answer_shows_at_the_first_tick_after_the_charge(executors):
+    runtime, now = executors(charged=True, fixed_inference_sec=0.1)
+    answer = cast(_UnchargedAnswer[int], runtime.submit(lambda: 42))
+    assert answer.call.result(timeout=1) == 42
+    # A 15 Hz control tick: the charge ends at 100 ms, between the ticks at 66.7 ms and 133.3 ms.
+    for instant in (0, 66_666_667):
+        now[0] = instant
+        assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
+        assert not answer.done()
+    now[0] = 133_333_333
+    assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert answer.elapsed_sec == answer.execution_sec == 0.1
+    assert answer.result() == 42
+
+
+def test_a_late_fixed_charge_answer_holds_the_simulator_until_the_worker_finishes(executors, monkeypatch):
+    runtime, now = executors(charged=True, fixed_inference_sec=0.1)
+    release = threading.Event()
+    answer = cast(_UnchargedAnswer[int], runtime.submit(lambda: (release.wait(timeout=2), 42)[1]))
+    try:
+        now[0] = 66_666_667
+        assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.CAN_ADVANCE)
+        now[0] = 133_333_333
+        assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.TIMED_OUT)
+        assert runtime.wait(timeout_sec=0.01) == WaitResult(WaitStatus.TIMED_OUT)
+        assert not answer.done()
+    finally:
+        release.set()
+    assert runtime.wait(timeout_sec=1) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
+    assert now == [133_333_333]
+    assert answer.elapsed_sec == answer.execution_sec == 0.1
+    assert answer.result() == 42
+
+
+@pytest.mark.parametrize(('simulated', 'seconds'), [(True, -0.1), (True, inf), (True, nan), (False, 0.0)])
+def test_an_inference_charge_is_a_finite_time_in_a_simulation(simulated, seconds):
+    with pytest.raises(ValueError, match='inference_charge_sec'):
+        Executor(lambda: 0, simulated=simulated, inference_charge_sec=seconds)
+
+
+@pytest.mark.parametrize('factor', [0.5, 0.0, inf, nan])
+def test_slow_motion_is_a_finite_factor_of_at_least_one(factor):
+    with pytest.raises(ValueError, match='slow_motion'):
+        Executor(lambda: 0, simulated=True, inference_charge_sec=None, slow_motion=factor)
+
+
+def test_an_execution_applies_the_slow_motion_of_its_runtime():
+    runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=None, slow_motion=2.5)
+    assert not runtime.slow_motion_applied
+    with closing(ExecutionRuntime(runtime, max_in_flight=1)) as execution:
+        assert execution.apply_slow_motion() == 2.5
+    assert runtime.slow_motion_applied
+    runtime.close()
 
 
 @pytest.mark.parametrize('charged', [False, True])

@@ -34,12 +34,12 @@ class Answer(ABC, Generic[T]):
     @property
     @abstractmethod
     def elapsed_sec(self) -> float:
-        """Submission to completion, including queueing; zero in uncharged simulation."""
+        """Submission to completion, including queueing; the fixed charge in a simulation that states one."""
 
     @property
     @abstractmethod
     def execution_sec(self) -> float:
-        """Callable start to completion, excluding runtime queueing; zero in uncharged simulation."""
+        """Callable start to completion, excluding queueing; the fixed charge in a simulation that states one."""
 
     @abstractmethod
     def result(self) -> T:
@@ -102,6 +102,13 @@ class Runtime(ABC):
     def tick(self) -> int:
         """The current tick number."""
         pass
+
+    @abstractmethod
+    def apply_slow_motion(self) -> float:
+        """How many times slower to play each predicted chunk. 1 plays it as predicted.
+
+        A schedule that plays the factor calls this as it starts. An episode refuses a factor that nothing applies.
+        """
 
     @staticmethod
     def _timed_run(run: ProcessorRun[InputT, OutputT, ReturnT], name: str) -> ProcessorRun[InputT, OutputT, ReturnT]:

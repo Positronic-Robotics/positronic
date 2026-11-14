@@ -8,6 +8,7 @@ from positronic.drivers.roboarm.keys import EE_FRAMES
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.eval import keys as eval_keys
 from positronic.keys import EE_POSE, JOINTS, TARGET_EE_POSE
+from positronic.utils import check_finite_nonnegative
 
 # Embodiment-level static meta of one arm: how recorded signals map to the canonical robot fields, and the site
 # each pose signal is reported at.
@@ -108,6 +109,23 @@ class Task:
     meta: dict[str, Any] = field(default_factory=dict)
     # Charge the trial the wall time each model call takes. Only a sim states it off: a real rig pays it.
     charge_inference_time: bool = True
+    # Charge each model call this many seconds in place of the time it took. Only a charged sim states it.
+    fixed_inference_sec: float | None = None
+    # How many times slower each predicted chunk plays, interpolated so that the arm moves with no pauses.
+    slow_motion: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.slow_motion < float('inf'):
+            raise ValueError(f'slow_motion must be a finite factor of at least 1, not {self.slow_motion}')
+        if self.fixed_inference_sec is not None:
+            check_finite_nonnegative(self.fixed_inference_sec, 'fixed_inference_sec')
+            if not self.charge_inference_time:
+                raise ValueError('fixed_inference_sec needs a trial that charges inference time')
+
+    @property
+    def inference_charge_sec(self) -> float | None:
+        """Seconds a sim charges each model call; ``None`` charges the time each call takes."""
+        return self.fixed_inference_sec if self.charge_inference_time else 0.0
 
 
 # rules-allow: stale-doc — a plan is read for what is left, which needs the landed steps marked

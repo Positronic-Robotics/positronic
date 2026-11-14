@@ -826,7 +826,7 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
     obs = {'image': np.zeros((16, 16, 3), dtype=np.uint8)}
     for episode in range(2):
         now = [0]
-        runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda now=now: now[0], simulated=True, inference_charge_sec=0)
         run = runtime.start(policy)
         try:
             first = run.send(obs)
@@ -902,7 +902,7 @@ def test_periodic_jpeg_history_and_prediction_share_one_call(served, transport):
     policy = RemotePolicy(transport, address)
     for episode in range(2):
         now = [0]
-        runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda now=now: now[0], simulated=True, inference_charge_sec=0)
         run = runtime.start(policy)
         try:
             for index in range(3):
@@ -945,7 +945,7 @@ def test_a_declared_prompt_is_in_episode_meta_and_the_task_reaches_the_model_unc
     address, model, _ = served(model=DeclaredPromptModel())
     policy = RemotePolicy('websocket', address)
 
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=0)
     run = runtime.start(policy)
     try:
         run.send({keys.TASK: 'the task this episode sends'})
@@ -1263,7 +1263,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
         {'local': Sequential(codec, TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))},
     ):
         address, model, _ = served(model=EchoStateModel(), **placement)
-        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=0)
         run = runtime.start(RemotePolicy(transport, address))
         try:
             first = run.send(obs)
@@ -1301,7 +1301,7 @@ def test_pipeline_takes_frame_conversions_of_different_signals_on_each_side():
 
 @pytest.fixture
 def runtime():
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, inference_charge_sec=0)
     try:
         yield runtime
     finally:
@@ -2081,7 +2081,7 @@ def test_an_end_command_in_the_codec_ends_the_client_run_when_its_element_plays(
         }
     address, _, _ = served(model=_EndingModel(), transport=transport, **placement)
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
     run = runtime.start(RemotePolicy(transport, address))
     try:
         run.send({})

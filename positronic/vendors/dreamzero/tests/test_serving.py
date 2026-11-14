@@ -233,7 +233,7 @@ def test_periodic_recipe_plays_commands_while_history_calls_return_none(mode):
         'prediction_period_sec': 0.4,
     })
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, inference_charge_sec=0)
 
     def round_trip(obs):
         return session.infer(serialization.deserialise(serialization.serialise(obs)))

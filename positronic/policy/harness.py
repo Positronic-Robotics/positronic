@@ -289,6 +289,10 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
         meta[eval_keys.EMBODIMENT] = self._embodiment.descriptor
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
+        if task.fixed_inference_sec is not None:
+            meta[eval_keys.FIXED_INFERENCE_SEC] = task.fixed_inference_sec
+        if task.slow_motion != 1:
+            meta[eval_keys.SLOW_MOTION] = task.slow_motion
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
         policy_meta = deepcopy(flatten_dict(rollout.policy.meta())) | flatten_dict(runtime.metadata_snapshot())
@@ -562,6 +566,8 @@ class Harness(pimm.ControlSystem):
     ) -> pimm.Run[dict[str, Any] | None]:
         """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
+        if task.fixed_inference_sec is not None and not self._embodiment.simulated:
+            raise ValueError('fixed_inference_sec needs a simulated embodiment: a real one pays each call its time')
         self._telemetry.begin(task.meta)
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, task.prepare_args)
@@ -569,11 +575,18 @@ class Harness(pimm.ControlSystem):
             return None
 
         runtime = Executor(
-            clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
+            clock.now_ns,
+            simulated=self._embodiment.simulated,
+            inference_charge_sec=task.inference_charge_sec if self._embodiment.simulated else None,
+            slow_motion=task.slow_motion,
         )
         policy_run = None
         try:
             policy_run = runtime.start(rollout.policy)
+            if task.slow_motion != 1 and not runtime.slow_motion_applied:
+                raise ValueError(
+                    f'slow_motion needs a policy that plays it, and {type(rollout.policy).__name__} does not'
+                )
             withheld_poses, pose_codec = self._pose_handshake(rollout.policy, runtime)
             # Closing ``policy_run`` is enough: the codec run holds no resource of its own.
             stepped_run = policy_run if pose_codec is None else pose_codec.wrap(policy_run)
