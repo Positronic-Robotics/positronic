@@ -118,7 +118,7 @@ def test_worker_span_holds_the_observation_age_when_the_call_starts(executors, t
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'obs-age'):
         now[0] = 50_000_000
         cast(_UnchargedAnswer[None], runtime.submit(lambda: None)).call.result(timeout=5)
-        runtime.observe(20_000_000)
+        runtime.start_tick(20_000_000)
         cast(_UnchargedAnswer[None], runtime.submit(lambda: None)).call.result(timeout=5)
         runtime.close()
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
@@ -524,7 +524,7 @@ def test_execution_limits_are_independent_and_share_completions(executors):
                     with pytest.raises(QueueFull):
                         execution.submit(lambda: None)
                 now[0] = 123
-                runtime.start_tick()
+                runtime.start_tick(None)
                 assert first.time_ns == second.time_ns == runtime.time_ns == 123
                 assert first.tick == second.tick == runtime.tick
                 second.set_metadata('value', 42)

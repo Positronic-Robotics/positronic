@@ -154,7 +154,6 @@ class Harness(pimm.ControlSystem):
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
         # The emission time of each camera's frame in ``_obs_by_signal``, on the timeline of the policy runtime's clock.
         self._frame_ns_by_signal: dict[str, int] = {}
-        self._frame_timeline = EMITTED_WORLD if embodiment.simulated else EMITTED_WALL
         # The last instruction this episode recorded, so a sample goes in only when the instruction changes.
         self._recorded_instruction: str | None = None
         # The newest goal the embodiment published in this episode, which the policy gets over the task's instruction.
@@ -375,7 +374,7 @@ class Harness(pimm.ControlSystem):
                 self._frame_ns_by_signal.pop(name, None)
             elif message.updated or not isinstance(self._obs_by_signal.get(name), dict):
                 self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
-                emitted_ns = message.time.get(self._frame_timeline)
+                emitted_ns = message.time.get(EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL)
                 if name.startswith(keys.IMAGE_PREFIX) and emitted_ns is not None:
                     self._frame_ns_by_signal[name] = emitted_ns
         if self._writer is not None:
@@ -440,8 +439,7 @@ class Harness(pimm.ControlSystem):
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:
                     return None
-                runtime.observe(min(self._frame_ns_by_signal.values(), default=None))
-                runtime.start_tick()
+                runtime.start_tick(min(self._frame_ns_by_signal.values(), default=None))
                 started_at_ns = runtime.time_ns
                 try:
                     step = policy_run.send(obs)

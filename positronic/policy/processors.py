@@ -306,7 +306,6 @@ class TrajectoryPlayer(Policy):
             self._gap_max_ns = 0
             self._last_emit_ns: int | None = None
             self._round_due_ns: int | None = None
-            self._round_starts_chunk = False
             self._plan_end_ns: int | None = None
             self._chunk_pending = False
             # The plan end when a chunk arrived, kept until the first round of that chunk.
@@ -334,7 +333,6 @@ class TrajectoryPlayer(Policy):
             self._round_due_ns = point.due_ns
             if point.starts_chunk:
                 self._last_emit_ns = None
-                self._round_starts_chunk = True
 
         def count_round(self, planned: int | None, now_ns: int, queued: int) -> None:
             """Count new waypoints and the due commands emitted together at ``now_ns``."""
@@ -344,12 +342,12 @@ class TrajectoryPlayer(Policy):
                 self._scheduled += planned
             if self._round_due_ns is not None:
                 insort(self._sorted_late_ns, now_ns - self._round_due_ns)
-                if self._last_emit_ns is not None:
+                if self._last_emit_ns is None:
+                    self._end_hold(now_ns)
+                else:
                     self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
                 self._last_emit_ns = now_ns
                 self._round_due_ns = None
-                if self._round_starts_chunk:
-                    self._end_hold(now_ns)
             self._write(queued)
 
         def _end_hold(self, now_ns: int) -> None:
@@ -359,7 +357,6 @@ class TrajectoryPlayer(Policy):
                 self._hold_max_ns = max(self._hold_max_ns, hold_ns)
             self._chunk_pending = False
             self._hold_from_ns = None
-            self._round_starts_chunk = False
 
         def _write(self, queued: int) -> None:
             values: dict[str, float] = {
