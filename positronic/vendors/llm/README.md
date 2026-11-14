@@ -59,9 +59,9 @@ Provider-specific behavior follows the library defaults. The example explicitly 
 
 ## Control contract
 
-The default config runs `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a path, or end the episode. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target and remaining translation/gripper error.
+The default config runs `LLMPolicy`. Each episode runs a processor generator that yields `Step` values with commands and the next requested call time. A decision sees one frozen observation. The control thread prepares the messages and images, then submits one model invocation to the worker runtime. SDK network retries belong to that invocation. The processor consumes the reply on a later control-loop call. It can request a correction or picture, play a path, or end the episode. Picture and correction requests share the frozen observation. Once the waypoints play, the next decision receives measured state. Each observation includes the previous target, the remaining translation/gripper error, and `elapsed_s`, the time in seconds since the first observation. A local run stamps each observation on the episode clock. The server stamps it on its own wall clock, so `elapsed_s` runs ahead of the episode time in a slow simulator.
 
-Only the task instruction, measured hand pose/gripper, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
+Only the task instruction, the measured hand pose and gripper, `elapsed_s`, the configured camera mounts, and selected labelled RGB images enter the model prompt. Privileged simulator state and ground-truth success do not. Positions use the measured pose's coordinate frame, in metres. The axes of a hand start at its measured position and turn with its measured rotation, and hand z points along the approach direction. The prompt does not say where the measured position is on the gripper, because that point is not the same on every embodiment. Orientations use roll/pitch/yaw in radians, with `R = Rz(yaw) Ry(pitch) Rx(roll)`. Gripper values run from 0 (open) to 1 (closed).
 
 | Tool | Arguments / effect |
 | --- | --- |
@@ -91,12 +91,19 @@ Defaults are experimental bounds for supervised testing:
 | `timeout` | 120 seconds per model invocation, including retries |
 | `max_calls` / `max_invalid` | 100 / 3 |
 | `camera_keys` | `image.wrist`, `image.exterior` |
+| `camera_mounts` | none |
 | `arms` / `min_hand_distance` / `max_tracking_error` | `ONE_ARM` (one arm with no name) / 0.1 m / 0.005 m |
 | `image_size` | 640 pixels on the longest edge; aspect ratio preserved |
 | `image_horizon` | Frames of the most recent 3 observations |
 | `images` | `always` |
 
 Set, for example, `--policy.motion.max_translation=0.02` or `--policy.images=on_demand`. On-demand pictures reveal frames from the current frozen observation; they do not advance time or move a camera. A camera cannot be revealed twice during one decision. The history keeps the frames of the last `image_horizon` observations. When an observation leaves that window, its frames change to the text `[older camera frame omitted]`, once. Each request carries a cache point after the newest changed frame message and one at its end. A request that ends in tool results has its end point on the newest user prompt instead. Pydantic AI sends a cache point to Anthropic as `cache_control`. A cache entry stays in the cache for five minutes after its last use. With `--policy.cache_ttl=1h`, it stays for one hour. Anthropic, Bedrock, and OpenRouter with an Anthropic model use this TTL. The other providers ignore it. The policy refuses a provider cache setting, such as `anthropic_cache_tool_definitions`, in `--policy.settings`. Anthropic charges two times the base input price to write a one-hour entry, and 1.25 times for a five-minute entry. Use `1h` when calls are more than five minutes apart, as in a slow simulator. With `--policy.cache_breakpoints=True`, an `openai-responses:` model gets each cache point as `prompt_cache_breakpoint` on the block before it. Only the GPT-5.6 family and later accept it: an earlier model answers with HTTP 400, so the flag is off by default. Without the breakpoint, Azure OpenAI reads no cache after a frame changes. A configured `OpenAIResponsesModel` drops cache points, so with the flag the policy refuses it. Configure a `BreakpointResponsesModel` from `positronic.vendors.llm.responses` instead. Azure OpenAI refuses a request with more than 50 images.
+
+`--policy.camera_mounts` states in the prompt where a camera of `camera_keys` is attached to a hand. Each entry gives `camera` and `arm`; leave out `arm` for one arm. In the axes of that hand, it gives `position_m` of the lens, the unit `view` direction and the unit `image_up` direction of the image top. The mount is a fact of the robot, so a run sets it for its embodiment. The wrist camera of RoboLab's DROID robot (RoboLab 93a8e064, `robots/droid.py`) is:
+
+```bash
+'--policy.camera_mounts=[{"camera": "image.wrist", "position_m": [-0.074, 0.031, -0.126], "view": [0.313, 0.008, 0.95], "image_up": [-0.95, -0.016, 0.313]}]'
+```
 
 A path plays its waypoints in order, with no observation between them. Translation is linear and rotation follows the shortest spherical interpolation. The first segment starts from the latest measured pose, and each later segment from the previous bounded waypoint. Oversized translation and rotation are clamped independently to the per-segment limits, preserving the translation direction and shortest rotation path. A waypoint sets its gripper at the start of its segment. When the gripper changes, the hand holds still at the waypoint for `motion.grip_hold`. The processor waits one sampling period after the final command before requesting the next decision. The tool result and recorded acceptance contain the bounded waypoints, whether any was clamped, and the trajectory duration including that final period. The next observation reports the final waypoint as `previous_target` alongside the measured state; scheduling a path does not confirm arrival. Malformed tool arguments still require correction. The driver performs inverse kinematics and enforces its own joint constraints. These bounds are not collision detection or contact-force limits.
 
@@ -143,7 +150,7 @@ The episode records the model configuration under `inference.policy.server`, and
 
 ## Supervised hardware
 
-After validating the task in simulation, use the same policy with `positronic-inference real` and the DROID embodiment. Set the task instruction and output directory explicitly. The keyboard operator controls episode start/stop; the hardware's independent emergency stop remains available. This policy supports the hand-pose contract of one arm or of named arms, without camera calibration or a workspace/collision model.
+After validating the task in simulation, use the same policy with `positronic-inference real` and the DROID embodiment. Set the task instruction and output directory explicitly. The keyboard operator controls episode start/stop; the hardware's independent emergency stop remains available. This policy supports the hand-pose contract of one arm or of named arms, without a workspace/collision model. No mount of a real robot camera is measured, so a rig run gives no `camera_mounts`.
 
 ## Tests
 
