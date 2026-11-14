@@ -1,7 +1,6 @@
 """FK/IK of the i2rt YAM arm on the vendored MJCF (``assets/i2rt_yam/yam.xml``) at ``GRIPPER_SITE``.
 
-The driver solves FK/IK here, so its joint order and control frame must match the YAM sim's. Code outside the driver
-imports it to run the same IK without the robot.
+The driver solves FK/IK here, so its joint order and control frame must match the YAM sim's.
 """
 
 import mujoco as mj
@@ -13,12 +12,12 @@ from positronic.utils import package_assets_path
 from ..ik import qpos_from_site_pose
 from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH
 
-# TODO(#517): move this MJCF FK/IK beside `drivers/roboarm/kinematics.py`, in its vocabulary, so the MuJoCo sim
-# (`simulator/mujoco/sim.py`) solves IK through it too.
 IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 IK_ROT_TOL = 1e-2  # radians
 
 
+# TODO(#517): move this MJCF FK/IK beside `drivers/roboarm/kinematics.py`, in its vocabulary, so the MuJoCo sim
+# (`simulator/mujoco/sim.py`) solves IK through it too.
 class YamKinematics:
     """FK/IK on the vendored YAM MJCF at ``GRIPPER_SITE``, in the arm-base frame."""
 
