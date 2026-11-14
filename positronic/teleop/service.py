@@ -259,6 +259,8 @@ class TeleopService:
         self._images: dict[str, np.ndarray] = {}
         # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
         self._seen: dict[str, float] = {}
+        # The cameras that the session of this trial sends, from the wait for Ready on
+        self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
         self._headset_camera: str | None = None
         # The camera that the teleoperator chose on the headset page. It holds over trials, and goes before the camera
@@ -371,7 +373,7 @@ class TeleopService:
             now = time.monotonic()
             recent = tuple(name for name, seen_at in self._seen.items() if now - seen_at < self.LIVE_SEC)
             # Between trials: the cameras of the station, and the cameras of the last run that are still live
-            names = tuple(self._images) or tuple(dict.fromkeys((*self.station_cameras, *recent)))
+            names = self._trial_cameras or tuple(dict.fromkeys((*self.station_cameras, *recent)))
             live = tuple(name for name in names if name in recent)
             return CameraState(names, live, self._shown_camera(), self._chosen_camera)
 
@@ -379,8 +381,8 @@ class TeleopService:
         """Show camera ``name`` in the headset from now on, or the camera of the session for ``None``. Raise
         ``ValueError`` for a camera that neither the run nor the station has."""
         with self._changed:
-            if name is not None and name not in self._images and name not in self.station_cameras:
-                known = sorted({*self._images, *self.station_cameras})
+            if name is not None and name not in self._trial_cameras and name not in self.station_cameras:
+                known = sorted({*self._trial_cameras, *self.station_cameras})
                 raise ValueError(f'no camera {name!r}: the run and the station have {known}')
             self._chosen_camera = name
 
@@ -479,7 +481,7 @@ class TeleopService:
         shown = self._shown_camera()
         return None if shown is None else self._images.get(shown)
 
-    def resume_dropped_trial(self, headset_camera: str | None) -> ResumeOutcome:
+    def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped before its first answer, as the next session of its client.
 
         The client opens such a session again within its reconnect deadline, and the teleoperator pressed Ready already.
@@ -488,14 +490,12 @@ class TeleopService:
             self._forget_an_old_dropped_trial()
             if self._resumable_until is None:
                 return ResumeOutcome.NO_DROPPED_TRIAL
-            self._resumable_until, self._headset_camera = None, headset_camera
+            self._resumable_until, self._trial_cameras = None, settings.cameras
+            self._headset_camera = settings.headset_camera
             return ResumeOutcome.RESUMED
 
-    def wait_for_ready(
-        self, operator: geom.Transform3D | None, headset_camera: str | None, cancelled: threading.Event
-    ) -> None:
-        """Start a new trial, and wait up to the ready limit for Ready. The clutch maps the hand with ``operator``, and
-        the headset shows ``headset_camera``, or the first camera for ``None``.
+    def wait_for_ready(self, settings: SessionParams, cancelled: threading.Event) -> None:
+        """Start a new trial of a session with ``settings``, and wait up to the ready limit for Ready.
 
         Raise ``TrialNotStarted`` for Cancel or for no Ready within the ready limit, and ``PreparationCancelled`` when
         ``cancelled`` is set or the service stops.
@@ -503,7 +503,8 @@ class TeleopService:
         deadline = time.monotonic() + self.ready_limit
         with self._changed:
             self._clear_trial()
-            self._phase, self._ready, self._headset_camera = Phase.READY_WAIT, None, headset_camera
+            self._phase, self._ready = Phase.READY_WAIT, None
+            self._trial_cameras, self._headset_camera = settings.cameras, settings.headset_camera
             while (
                 self._ready is None
                 and not self._stopping
@@ -513,7 +514,7 @@ class TeleopService:
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
             ready, self._phase = self._ready, Phase.RUNNING if self._ready is ReadyAnswer.READY else Phase.IDLE
             if ready is ReadyAnswer.READY:
-                self._tracker = Tracker(operator, self.controller_axes)
+                self._tracker = Tracker(settings.operator(), self.controller_axes)
         if ready is ReadyAnswer.READY:
             return
         if self._stopping or cancelled.is_set():
@@ -586,7 +587,7 @@ class TeleopService:
     def _clear_trial(self) -> None:
         """Show no trial. Hold the lock."""
         self._phase, self._events = Phase.IDLE, []
-        self._task, self._tracker, self._images = '', None, {}
+        self._task, self._tracker, self._images, self._trial_cameras = '', None, {}, ()
         self._headset_camera, self._hold, self._frames, self._resumable_until = None, None, 0, None
         self._end = None
 
@@ -673,8 +674,8 @@ class TeleopModel(Model):
             settings = replace(settings, cameras=self._service.station_cameras)
         self._open = True
         try:
-            if self._service.resume_dropped_trial(settings.headset_camera) is ResumeOutcome.NO_DROPPED_TRIAL:
-                self._service.wait_for_ready(settings.operator(), settings.headset_camera, self.preparation_cancelled)
+            if self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
+                self._service.wait_for_ready(settings, self.preparation_cancelled)
         except BaseException:
             self._open = False
             raise

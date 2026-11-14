@@ -894,6 +894,27 @@ def test_the_headset_view_keeps_its_size_from_the_wait_for_a_trial_to_the_trial(
         connection.close()
 
 
+def test_the_wait_for_ready_shows_the_cameras_of_its_session_and_not_those_of_the_last_run(socket_path, connect):
+    image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        last = _readied_connection(service, socket_path, connect, session_query(cameras=[keys.WRIST_IMAGE]))
+        for _ in range(2):
+            last.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: image})
+        last.close()
+        _until_cleared(service)
+        cameras = [keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2]
+        connection = connect(socket_path, session_query(cameras=cameras))
+        _until_phase(service, Phase.READY_WAIT)
+        assert service.cameras().names == tuple(cameras)
+        waiting = service.view()
+        service.take_sample(HAND, _buttons(b=1.0))
+        service.take_sample(HAND, _buttons())
+        connection.wait_open()
+        connection.frame({**FRAME_REQUEST, **dict.fromkeys(cameras, image)})
+        assert service.view().shape == waiting.shape
+        connection.close()
+
+
 def test_a_session_of_one_camera_shows_that_camera_with_no_column(socket_path, connect):
     query = session_query(cameras=[keys.WRIST_IMAGE])
     with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
@@ -1153,7 +1174,7 @@ def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(soc
         trials = pool.submit(
             scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
         )
-        service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+        service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
         moves = []
         while END not in (element := service.next_frame(FRAME_REQUEST, [])):
             moves.append(element[ACTION][:3])
@@ -1171,7 +1192,7 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
         )
         ends = []
         for _ in range(2):
-            service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+            service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
             while END not in (element := service.next_frame(FRAME_REQUEST, [])):
                 pass
             ends.append(element[END])
