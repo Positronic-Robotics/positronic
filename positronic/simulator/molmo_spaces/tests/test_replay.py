@@ -147,6 +147,32 @@ def test_a_hooked_server_reports_the_grip_of_its_hook(tmp_path):
     assert obs[protocol.OBS_GRIP] == np.float32(0.25)
 
 
+def test_a_hook_sees_the_right_shoulder_camera_when_the_server_lists_and_when_it_builds(tmp_path):
+    _skip_unless_present(_HARD_BENCHMARK)
+    seen = tmp_path / 'seen.txt'
+    hook = tmp_path / 'camera_hook.py'
+    hook.write_text(
+        'from env_hook import EnvHook\n\n'
+        'class Cameras(EnvHook):\n'
+        '    def eval_config(self, cfg, episode):\n'
+        f'        with open({str(seen)!r}, "a") as f:\n'
+        '            f.write(" ".join(camera.name for camera in episode.cameras) + "\\n")\n\n'
+        'HOOK = Cameras()\n'
+    )
+    spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: [1], mapping.WITH_RIGHT_SHOULDER: True}
+    token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: True}
+    with launcher.serve_molmo_spaces(hook=hook) as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            conn.tasks(spec)
+            conn.reset(token)
+        finally:
+            conn.close()
+    listed, built = seen.read_text().splitlines()
+    assert listed == built
+    assert mapping.RIGHT_SHOULDER_CAMERA in built.split()
+
+
 def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
     _skip_unless_present(_HARD_BENCHMARK)
     blocked = sorted(mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)[_HARD_BENCHMARK])

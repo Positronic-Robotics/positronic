@@ -61,7 +61,7 @@ _POPEN = subprocess.Popen
 _LISTEN = 'import socket, sys, time; s = socket.create_server(("localhost", int(sys.argv[1]))); time.sleep(60)'
 
 
-def _served_command(hook: Path | None, tmp_path: Path, monkeypatch) -> list[str]:
+def _served_command(hook: Path | None, tmp_path: Path, monkeypatch, hook_sha256: str | None = None) -> list[str]:
     """The command that ``serve_molmo_spaces`` starts its server with."""
     commands: list[list[str]] = []
 
@@ -72,7 +72,7 @@ def _served_command(hook: Path | None, tmp_path: Path, monkeypatch) -> list[str]
     monkeypatch.setenv(launcher.mapping.ASSETS_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(launcher, 'ensure_molmo_venv', lambda: Path(sys.executable))
     monkeypatch.setattr(launcher.subprocess, 'Popen', listen)
-    with launcher.serve_molmo_spaces(hook=hook):
+    with launcher.serve_molmo_spaces(hook=hook, hook_sha256=hook_sha256):
         pass
     (command,) = commands
     return command
@@ -84,6 +84,13 @@ def test_a_server_launched_with_a_hook_gets_the_hook_file(tmp_path, monkeypatch)
 
     assert '--hook' not in without
     assert with_hook[with_hook.index('--hook') + 1] == str(tmp_path / 'hook.py')
+    assert '--hook-sha256' not in with_hook
+
+
+def test_a_server_launched_with_a_hook_digest_gets_the_digest_to_check(tmp_path, monkeypatch):
+    command = _served_command(tmp_path / 'hook.py', tmp_path, monkeypatch, hook_sha256='ab12')
+
+    assert command[command.index('--hook-sha256') + 1] == 'ab12'
 
 
 class _Exited:

@@ -43,7 +43,7 @@ def _env_server(
         return serve_molmo_spaces(), {molmo_keys.ENV_HOOK: None}
     hook = Path(env_hook).expanduser().resolve()
     digest = hashlib.sha256(hook.read_bytes()).hexdigest()
-    return serve_molmo_spaces(hook=hook), {molmo_keys.ENV_HOOK: f'{hook.name}@sha256:{digest}'}
+    return serve_molmo_spaces(hook=hook, hook_sha256=digest), {molmo_keys.ENV_HOOK: f'{hook.name}@sha256:{digest}'}
 
 
 _EPISODE_CAMERA_KEYS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2)

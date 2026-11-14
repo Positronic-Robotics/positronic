@@ -51,10 +51,11 @@ _parser.add_argument('--host', default='localhost')
 _parser.add_argument('--port', type=int)
 _parser.add_argument('--right-view-blocked', type=Path)
 _parser.add_argument('--hook', dest='hook', type=Path, help='a hook file that defines HOOK, an env_hook.EnvHook')
+_parser.add_argument('--hook-sha256', dest='hook_sha256', help='the SHA-256 digest that the hook file must have')
 # validate.py and parity_native.py import this module with flags of their own, so main checks the required flags.
 _args, _unknown = _parser.parse_known_args()
 # A hook file runs before MolmoSpaces loads, because MolmoSpaces fetches its asset packs as it loads.
-_HOOK = env_hook.load(_args.hook)
+_HOOK = env_hook.load(_args.hook, _args.hook_sha256)
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401  # pyright: ignore[reportMissingImports]
@@ -187,6 +188,13 @@ class MolmoSpacesEnv(EnvProtocol):
         with_right.cameras = [*episode.cameras, right]
         return with_right
 
+    def _episode(self, bench: mapping.BenchmarkPath, episode_index: int, with_right_shoulder: bool) -> Any:
+        """The episode that the server builds: with the right shoulder camera when ``with_right_shoulder``."""
+        episode = self._episodes_of(bench)[episode_index]
+        if with_right_shoulder:
+            episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
+        return episode
+
     def _eval_config(self, bench: mapping.BenchmarkPath, episode: Any) -> _DroidEvalConfig:
         """The eval config of ``episode``, with the hook's changes."""
         cfg = _DroidEvalConfig()
@@ -210,9 +218,7 @@ class MolmoSpacesEnv(EnvProtocol):
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
-        episode = episodes[episode_index]
-        if with_right_shoulder:
-            episode = self._with_right_shoulder_camera(episode, mapping.episode_rng(bench, episode_index))
+        episode = self._episode(bench, episode_index, with_right_shoulder)
         cfg = self._eval_config(bench, episode)
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.
@@ -243,13 +249,12 @@ class MolmoSpacesEnv(EnvProtocol):
         records = []
         for bench in mapping.select_benchmarks(self._found, spec):
             episodes = self._episodes_of(bench)
-            blocked = (
-                self._right_view_blocked.get(bench, frozenset()) if spec[mapping.WITH_RIGHT_SHOULDER] else frozenset()
-            )
+            with_right_shoulder = spec[mapping.WITH_RIGHT_SHOULDER]
+            blocked = self._right_view_blocked.get(bench, frozenset()) if with_right_shoulder else frozenset()
             # The horizon in seconds for each policy period of the benchmark's episodes.
             horizons: dict[float, float] = {}
             for i in mapping.select_episodes(bench, len(episodes), pinned, blocked):
-                dt_ms = self._eval_config(bench, episodes[i]).policy_dt_ms
+                dt_ms = self._eval_config(bench, self._episode(bench, i, with_right_shoulder)).policy_dt_ms
                 if dt_ms not in horizons:
                     steps = determine_task_horizon(episodes, mapping.horizon_steps(override_sec, dt_ms), dt_ms)
                     horizons[dt_ms] = steps * dt_ms / 1000.0

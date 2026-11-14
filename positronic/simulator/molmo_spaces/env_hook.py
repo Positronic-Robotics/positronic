@@ -7,6 +7,7 @@ class as ``from env_hook import EnvHook``. The server runs the file before it lo
 can choose the asset packs that MolmoSpaces fetches when it loads.
 """
 
+import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -49,8 +50,11 @@ class EnvHook:
         return mapping.normalize_grip_qpos(gripper_qpos)
 
 
-def load(path: Path | None) -> EnvHook:
-    """The ``HOOK`` of the file at ``path``, or the default hook when ``path`` is None."""
+def load(path: Path | None, sha256: str | None = None) -> EnvHook:
+    """The ``HOOK`` of the file at ``path``, or the default hook when ``path`` is None.
+
+    With ``sha256``, the file must have that digest, and the server runs the bytes it checked.
+    """
     if path is None:
         return EnvHook()
     spec = importlib.util.spec_from_file_location(path.stem, path)
@@ -58,10 +62,13 @@ def load(path: Path | None) -> EnvHook:
         raise ValueError(f'{path} is not a Python file')
     if spec.name in sys.modules:
         raise ValueError(f'{path} has the name of the loaded module {spec.name}; rename the hook file')
+    source = path.read_bytes()
+    if sha256 is not None and hashlib.sha256(source).hexdigest() != sha256:
+        raise ValueError(f'{path} changed after the eval recorded its digest {sha256}')
     module = importlib.util.module_from_spec(spec)
     # A dataclass finds the globals of its module in sys.modules.
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    exec(compile(source, str(path), 'exec'), module.__dict__)
     hook = getattr(module, HOOK_NAME, None)
     if not isinstance(hook, EnvHook):
         raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')

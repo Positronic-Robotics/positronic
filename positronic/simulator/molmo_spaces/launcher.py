@@ -59,7 +59,7 @@ def molmo_subprocess_env() -> dict[str, str]:
     return mujoco_server_env([_ENV_SERVER_DIR, _MAPPING_DIR])
 
 
-def _spawn(hook: Path | None, host: str, port: int) -> subprocess.Popen:
+def _spawn(hook: Path | None, hook_sha256: str | None, host: str, port: int) -> subprocess.Popen:
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     python = ensure_molmo_venv()
@@ -67,15 +67,20 @@ def _spawn(hook: Path | None, host: str, port: int) -> subprocess.Popen:
     command += ['--right-view-blocked', str(RIGHT_VIEW_BLOCKED_PATH)]
     if hook is not None:
         command += ['--hook', str(hook)]
+    if hook_sha256 is not None:
+        command += ['--hook-sha256', hook_sha256]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
-def serve_molmo_spaces(host: str = 'localhost', hook: Path | None = None) -> AbstractContextManager[tuple[str, int]]:
+def serve_molmo_spaces(
+    host: str = 'localhost', hook: Path | None = None, hook_sha256: str | None = None
+) -> AbstractContextManager[tuple[str, int]]:
     """Run a MolmoSpaces server for the context's lifetime and yield its address.
 
-    ``hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that changes each episode.
+    ``hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that changes each episode. With
+    ``hook_sha256``, the server refuses a hook file with another digest.
     """
-    return serve_subprocess(functools.partial(_spawn, hook), host)
+    return serve_subprocess(functools.partial(_spawn, hook, hook_sha256), host)
 
 
 def main() -> None:
@@ -86,7 +91,7 @@ def main() -> None:
     parser.add_argument('--hook', dest='hook', type=Path, help='a hook file that defines HOOK, an env_hook.EnvHook')
     args = parser.parse_args()
     hook = None if args.hook is None else args.hook.expanduser().resolve()
-    raise SystemExit(_spawn(hook, args.host, args.port).wait())
+    raise SystemExit(_spawn(hook, None, args.host, args.port).wait())
 
 
 if __name__ == '__main__':

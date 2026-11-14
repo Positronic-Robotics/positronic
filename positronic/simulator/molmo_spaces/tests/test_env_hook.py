@@ -1,5 +1,6 @@
 """Loading the hook file of a MolmoSpaces env server."""
 
+import hashlib
 import subprocess
 import sys
 import textwrap
@@ -94,3 +95,28 @@ def test_a_hook_file_with_the_name_of_a_loaded_module_is_refused(tmp_path):
     path.write_text('HOOK = None\n')
     with pytest.raises(ValueError, match='rename the hook file'):
         env_hook.load(path)
+
+
+_GRIP_HOOK = (
+    'from positronic.simulator.molmo_spaces.env_hook import EnvHook\n\n'
+    'class Half(EnvHook):\n'
+    '    def grip(self, gripper_qpos):\n'
+    '        return 0.5\n\n'
+    'HOOK = Half()\n'
+)
+
+
+def test_a_hook_file_with_the_expected_digest_loads(hook_path):
+    hook_path.write_text(_GRIP_HOOK)
+    digest = hashlib.sha256(hook_path.read_bytes()).hexdigest()
+
+    assert env_hook.load(hook_path, digest).grip([0.0]) == 0.5
+
+
+def test_a_hook_file_that_changed_after_its_digest_was_recorded_is_refused(hook_path):
+    hook_path.write_text(_GRIP_HOOK)
+    digest = hashlib.sha256(hook_path.read_bytes()).hexdigest()
+    hook_path.write_text(_GRIP_HOOK.replace('0.5', '0.25'))
+
+    with pytest.raises(ValueError, match='changed after the eval recorded its digest'):
+        env_hook.load(hook_path, digest)
