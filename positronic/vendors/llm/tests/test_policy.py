@@ -534,9 +534,14 @@ def bimanual_observation(left_x=0.0, right_x=0.0):
     }
 
 
-def move_arms(*waypoints: dict[str, tuple[float, float]]):
+def move_arms(*waypoints: dict[str, tuple[float, ...]], gripper=0):
+    """A path of hand positions (x, y) at z 0.1, or (x, y, z)."""
     path = [
-        {arm: {'x': x, 'y': y, 'z': 0.1, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 0} for arm, (x, y) in w.items()}
+        {
+            arm: {'x': x, 'y': y, 'z': z, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': gripper}
+            for arm, position in w.items()
+            for x, y, z in [(*position, 0.1)[:3]]
+        }
         for w in waypoints
     ]
     return ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': path, 'note': 'Reach.'}, tool_call_id='m')])
@@ -580,9 +585,10 @@ def test_a_path_with_an_unknown_arm_is_rejected():
     assert "Unknown arms ['middle']" in rejected['reason']
 
 
-def hands_at(obs, positions: dict[str, tuple[float, float]]):
-    for arm, (x, y) in positions.items():
-        obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'][:2] = [x, y]
+def hands_at(obs, positions: dict[str, tuple[float, ...]]):
+    """``obs`` with the measured hands at (x, y), or at (x, y, z)."""
+    for arm, position in positions.items():
+        obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'][: len(position)] = position
     return obs
 
 
@@ -794,17 +800,6 @@ def test_the_hand_distance_and_the_tracking_error_are_checked(change):
     assert LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, max_tracking_error=0).max_tracking_error == 0
 
 
-def move_arms_at(*waypoints: dict[str, tuple[float, float, float]], gripper=0):
-    path = [
-        {
-            arm: {'x': x, 'y': y, 'z': z, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': gripper}
-            for arm, (x, y, z) in w.items()
-        }
-        for w in waypoints
-    ]
-    return ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': path, 'note': 'Reach.'}, tool_call_id='m')])
-
-
 def rejection(metadata) -> str | None:
     rejected = [e['reason'] for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
     return rejected[-1] if rejected else None
@@ -816,7 +811,7 @@ def rejection(metadata) -> str | None:
 def test_a_path_that_takes_a_hand_below_the_floor_or_lower_than_it_is_plays_nothing(floor, z, accepted):
     metadata = {}
     conversation = Conversation(llm_bimanual(model='test', image_size=8, min_hand_height=floor), metadata.__setitem__)
-    path = move_arms_at({'right': (0.0, -0.3, 0.15)}, {'right': (0.0, -0.3, z)})
+    path = move_arms({'right': (0.0, -0.3, 0.15)}, {'right': (0.0, -0.3, z)})
     parts = decide(conversation, bimanual_observation(), path)
     assert (parts != [[]]) is accepted
     assert (rejection(metadata) is None) is accepted
@@ -829,9 +824,9 @@ def test_a_path_that_takes_a_hand_into_a_keep_out_box_that_does_not_hold_it_play
     box = [[-0.1, -0.5, 0.0], [0.05, -0.2, 0.5]]
     conversation = Conversation(llm_bimanual(model='test', image_size=8, keep_out=[box]), metadata.__setitem__)
     outside = hands_at(bimanual_observation(), {'right': (0.1, -0.3)})
-    assert decide(conversation, outside, move_arms_at({'right': (0.2, -0.3, 0.1)})) != [[]]
-    assert decide(conversation, bimanual_observation(), move_arms_at({'right': (0.03, -0.3, 0.1)})) != [[]]
-    assert decide(conversation, outside, move_arms_at({'right': (0.0, -0.3, 0.1)})) == [[]]
+    assert decide(conversation, outside, move_arms({'right': (0.2, -0.3, 0.1)})) != [[]]
+    assert decide(conversation, bimanual_observation(), move_arms({'right': (0.03, -0.3, 0.1)})) != [[]]
+    assert decide(conversation, outside, move_arms({'right': (0.0, -0.3, 0.1)})) == [[]]
     assert rejection(metadata) == (
         'Hand right goes into the box from [-0.1, -0.5, 0.0] to [0.05, -0.2, 0.5] m on the way to waypoint 1'
     )
@@ -839,14 +834,14 @@ def test_a_path_that_takes_a_hand_into_a_keep_out_box_that_does_not_hold_it_play
 
 class ScriptedReach:
     """A reach that refuses the first pose at or above ``height`` of the hand on the right (y < 0), and records the
-    joints of each hand it checks, in the order of the arms."""
+    joints that it gets for each hand, by the side of the hand."""
 
     def __init__(self, height: float):
         self.height = height
-        self.joints: list[np.ndarray] = []
+        self.joints: dict[str, np.ndarray] = {}
 
-    def refusal(self, joints, hand, poses):
-        self.joints.append(joints)
+    def refusal(self, joints, hand, starts, poses):
+        self.joints[keys.RIGHT_ARM if hand.translation[1] < 0 else keys.LEFT_ARM] = joints
         for index, pose in enumerate(poses):
             if hand.translation[1] < 0 and pose.translation[2] >= self.height:
                 return index, 'joint 4 is at its lower limit (-1.69 rad)'
@@ -866,25 +861,20 @@ def test_a_path_that_a_hand_cannot_follow_plays_nothing_and_names_the_waypoint_a
     metadata = {}
     reach = ScriptedReach(0.25)
     conversation = Conversation(llm_bimanual(model='test', image_size=8, reach=reach), metadata.__setitem__)
-    path = move_arms_at({'right': (0.0, -0.3, 0.15)}, {'right': (0.0, -0.3, 0.3)}, gripper=1)
+    path = move_arms({'right': (0.0, -0.3, 0.15)}, {'right': (0.0, -0.3, 0.3)}, gripper=1)
     assert decide(conversation, with_joints(bimanual_observation()), path) == [[]]
     assert rejection(metadata) == 'Hand right cannot reach waypoint 2: joint 4 is at its lower limit (-1.69 rad)'
-    np.testing.assert_array_equal(reach.joints[0], np.zeros(6))
-    np.testing.assert_array_equal(reach.joints[1], np.ones(6))
-
-
-def right_at(obs, x: float, z: float):
-    obs[f'{keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM)}{keys.EE_POSE_SUFFIX}'][[0, 2]] = [x, z]
-    return obs
+    np.testing.assert_array_equal(reach.joints[keys.LEFT_ARM], np.zeros(6))
+    np.testing.assert_array_equal(reach.joints[keys.RIGHT_ARM], np.ones(6))
 
 
 @pytest.mark.parametrize('measured_z,accepted', [(0.104, True), (0.106, False)])
 def test_a_hand_within_the_tracking_error_of_its_target_can_hold_it_below_the_floor(measured_z, accepted):
     metadata = {}
     conversation = Conversation(llm_bimanual(model='test', image_size=8, min_hand_height=0.2), metadata.__setitem__)
-    assert decide(conversation, bimanual_observation(), move_arms_at({'right': (0.0, -0.3, 0.1)})) != [[]]
-    sagged = right_at(bimanual_observation(), 0.0, measured_z)
-    assert (decide(conversation, sagged, move_arms_at({'left': (0.0, 0.3, 0.15)})) != [[]]) is accepted
+    assert decide(conversation, bimanual_observation(), move_arms({'right': (0.0, -0.3, 0.1)})) != [[]]
+    sagged = hands_at(bimanual_observation(), {'right': (0.0, -0.3, measured_z)})
+    assert (decide(conversation, sagged, move_arms({'left': (0.0, 0.3, 0.15)})) != [[]]) is accepted
 
 
 @pytest.mark.parametrize('measured_x,accepted', [(0.052, True), (0.054, False)])
@@ -892,9 +882,9 @@ def test_a_hand_within_the_tracking_error_of_its_target_can_hold_it_in_a_keep_ou
     metadata = {}
     box = [[-0.1, -0.5, 0.0], [0.05, -0.2, 0.5]]
     conversation = Conversation(llm_bimanual(model='test', image_size=8, keep_out=[box]), metadata.__setitem__)
-    assert decide(conversation, bimanual_observation(), move_arms_at({'right': (0.048, -0.3, 0.1)})) != [[]]
-    outside = right_at(bimanual_observation(), measured_x, 0.1)
-    assert (decide(conversation, outside, move_arms_at({'left': (0.0, 0.3, 0.15)})) != [[]]) is accepted
+    assert decide(conversation, bimanual_observation(), move_arms({'right': (0.048, -0.3, 0.1)})) != [[]]
+    outside = hands_at(bimanual_observation(), {'right': (measured_x, -0.3, 0.1)})
+    assert (decide(conversation, outside, move_arms({'left': (0.0, 0.3, 0.15)})) != [[]]) is accepted
 
 
 def test_the_floor_the_keep_out_boxes_and_the_reach_are_stated_only_when_set():
@@ -906,7 +896,7 @@ def test_the_floor_the_keep_out_boxes_and_the_reach_are_stated_only_when_set():
         return metadata[policy_keys.TRANSCRIPT][0]['prompt']
 
     plain = prompt()
-    assert 'below z' not in plain and 'into the box' not in plain and 'joint ranges' not in plain
+    assert 'below z' not in plain and 'into the box' not in plain and 'cannot follow with its arm' not in plain
     stated = prompt(min_hand_height=0.05, keep_out=[[[0, 0, 0], [1, 1, 1]]], reach=ScriptedReach(1.0))
     assert 'A path that takes a hand below z 0.05 m is rejected' in stated
     assert 'A path that takes a hand into the box from [0.0, 0.0, 0.0] to [1.0, 1.0, 1.0] m is rejected' in stated

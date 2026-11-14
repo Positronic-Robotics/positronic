@@ -7,7 +7,7 @@ import configuronic as cfn
 import numpy as np
 
 from positronic import geom
-from positronic.drivers.roboarm.yam.kinematics import YamKinematics
+from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, IK_ROT_TOL, YamKinematics
 from positronic.utils import check_finite_positive
 
 
@@ -25,22 +25,34 @@ class Reach(Protocol):
     """Why a hand cannot follow its poses."""
 
     def refusal(
-        self, joints: np.ndarray, hand: geom.Transform3D, poses: Sequence[geom.Transform3D]
+        self,
+        joints: np.ndarray,
+        hand: geom.Transform3D,
+        starts: Sequence[geom.Transform3D],
+        poses: Sequence[geom.Transform3D],
     ) -> tuple[int, str] | None:
         """The index of the first pose of ``poses`` that a hand at ``hand`` with its arm at ``joints`` cannot follow
-        in order, and why; or ``None``."""
+        in order, and why; or ``None``. ``starts`` are the poses where the hand already is."""
         ...
 
     def meta(self) -> dict[str, Any]: ...
+
+
+def _same_pose(a: geom.Transform3D, b: geom.Transform3D) -> bool:
+    """Whether ``a`` and ``b`` agree within the tolerance at which the driver's IK accepts a solution."""
+    angle = (a.rotation.inv * b.rotation).angle
+    return bool(
+        np.linalg.norm(a.translation - b.translation) < IK_POS_TOL and min(angle, 2 * np.pi - angle) < IK_ROT_TOL
+    )
 
 
 class YamReach:
     """The IK of the YAM driver on the hand poses of an arm.
 
     The arm base is where the measured hand and joints put it, since the station reports the hand at its base pose
-    times the FK of its joints. A pose is out of reach when the driver's IK cannot meet it inside the joint ranges. A
-    pose is also refused when a joint turns more than ``max_joint_step`` (rad) from the pose before it: the driver
-    would then swing the arm to another posture.
+    times the FK of its joints. A pose is out of reach when the driver's IK cannot meet it inside the joint ranges,
+    unless the hand is already there. A pose is also refused when a joint turns more than ``max_joint_step`` (rad)
+    from the pose before it: the driver would then swing the arm to another posture.
     """
 
     # TODO: the station owns the joint ranges (its chain reports them), and they reach no policy. The check uses the
@@ -72,16 +84,22 @@ class YamReach:
         )
 
     def refusal(
-        self, joints: np.ndarray, hand: geom.Transform3D, poses: Sequence[geom.Transform3D]
+        self,
+        joints: np.ndarray,
+        hand: geom.Transform3D,
+        starts: Sequence[geom.Transform3D],
+        poses: Sequence[geom.Transform3D],
     ) -> tuple[int, str] | None:
         kinematics = self._kinematics
         base = (hand * kinematics.fk(joints).inv).inv
-        # A joint that sags a little past its range may stay there: the driver holds the arm where it is.
-        lower, upper = np.minimum(kinematics.lower, joints), np.maximum(kinematics.upper, joints)
+        lower, upper = kinematics.lower, kinematics.upper
         for index, pose in enumerate(poses):
             target = base * pose
             solution = kinematics.ik(target, joints, lower, upper)
             if solution is None:
+                # The driver keeps its last target when the IK fails, so a hand that is already there stays.
+                if any(_same_pose(pose, start) for start in starts):
+                    continue
                 return index, self._limit_refusal(target, joints, lower, upper)
             step = np.abs(solution - joints)
             joint = int(np.argmax(step))

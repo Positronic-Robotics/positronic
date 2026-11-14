@@ -1,4 +1,5 @@
 import dataclasses
+import importlib
 import logging
 import math
 import subprocess
@@ -845,8 +846,8 @@ def test_the_joint_range_is_the_range_of_the_i2rt_arm_model():
 
 @pytest.mark.skipif(not I2RT_INSTALLED, reason='needs the arm models of the real i2rt package (the yam extra)')
 def test_the_vendored_model_has_the_joint_ranges_of_the_i2rt_arm_model():
-    get_robot = pytest.importorskip('i2rt.robots.get_robot')
-    utils = pytest.importorskip('i2rt.robots.utils')
+    get_robot = importlib.import_module('i2rt.robots.get_robot')
+    utils = importlib.import_module('i2rt.robots.utils')
     # i2rt reads the arm's joints from the arm model and the last wrist joint from the gripper model.
     xmls = (utils.ArmType.YAM.get_xml_path(), utils.GripperType.LINEAR_4310.get_xml_path())
     ranges = get_robot._load_joint_limits_from_xml(*xmls)[:6]

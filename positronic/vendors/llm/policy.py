@@ -461,19 +461,17 @@ class Conversation:
         held: Waypoint,
         samples: list[tuple[int, geom.Transform3D]],
     ) -> str | None:
-        """Why the hand of ``arm`` cannot follow ``samples`` of (waypoint index, pose): it goes below the floor or
-        lower than it starts, into a keep-out box that does not hold its start, or where its arm cannot take it.
-
-        While the hand is within ``max_tracking_error`` of its held target, that target is a start too."""
+        """Why the hand of ``arm`` cannot follow ``samples`` of (waypoint index, pose), or ``None``."""
         policy = self._policy
         name = 'The hand' if arm is None else f'Hand {arm}'
-        starts = [hand.pose.translation]
+        # A hand within max_tracking_error of its held target is at that target too.
+        starts = [hand.pose]
         if np.linalg.norm(hand.pose.translation - held.pose.translation) <= policy.max_tracking_error:
-            starts.append(held.pose.translation)
+            starts.append(held.pose)
         floor = None
         if policy.min_hand_height is not None:
-            floor = min(policy.min_hand_height, *(start[2] for start in starts))
-        boxes = [box for box in policy.keep_out if not any(box.holds(start) for start in starts)]
+            floor = min(policy.min_hand_height, *(start.translation[2] for start in starts))
+        boxes = [box for box in policy.keep_out if not any(box.holds(start.translation) for start in starts)]
         for index, pose in samples:
             position = pose.translation
             if floor is not None and position[2] < floor:
@@ -486,7 +484,7 @@ class Conversation:
         if policy.reach is None:
             return None
         joints = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'], float)
-        refusal = policy.reach.refusal(joints, hand.pose, [pose for _, pose in samples])
+        refusal = policy.reach.refusal(joints, hand.pose, starts, [pose for _, pose in samples])
         if refusal is None:
             return None
         sample, reason = refusal
