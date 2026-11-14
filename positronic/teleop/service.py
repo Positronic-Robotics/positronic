@@ -28,10 +28,17 @@ from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWi
 
 from positronic import geom, keys
 from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
+from positronic.gui.video_stream import AnnexBDecoder
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
-from positronic.policy.codecs import AbsolutePositionAction, EncodeImages, EndCommand, StateObservationCodec
+from positronic.policy.codecs import (
+    AbsolutePositionAction,
+    EncodeImages,
+    EncodeVideo,
+    EndCommand,
+    StateObservationCodec,
+)
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.keys import END
@@ -621,9 +628,12 @@ class TeleopSession(Session):
         self._service = service
         self._cameras = settings.cameras
         self._on_close = on_close
+        # The decoder of each camera stream, for a client that sends H.264
+        self._decoders = {} if settings.video_bitrate is None else {name: AnnexBDecoder() for name in settings.cameras}
 
     def infer(self, observation: Any) -> list[dict[str, Any]]:
-        return [self._service.next_frame(observation, self._cameras)]
+        images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
+        return [self._service.next_frame({**observation, **images}, self._cameras)]
 
     def close(self) -> None:
         self._service.end_session()
@@ -665,7 +675,11 @@ class TeleopModel(Model):
             image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
         )
         action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
-        codec = (observation & action & EndCommand()) | EncodeImages(quality=settings.jpeg_quality)
+        if settings.video_bitrate is None:
+            images = EncodeImages(quality=settings.jpeg_quality)
+        else:
+            images = EncodeVideo([[name] for name in settings.cameras], settings.video_bitrate, settings.video_fps)
+        codec = (observation & action & EndCommand()) | images
         return Sequential(EndOnField(), schedule, codec).to_spec()
 
     def prepare_session(self, params: dict[str, Any]) -> TeleopSession:

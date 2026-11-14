@@ -17,6 +17,8 @@ client stack:
 - `observation_codec` sends the task, the pose, the grip and the camera images of the robot;
 - `absolute_position_action` turns each reply into a command, and `end_command` gives the `end` of a reply to
   `end_on_field`.
+- `encode_images` sends each camera image as JPEG. With the session parameter `video_bitrate`, `encode_video` sends
+  each camera as an H.264 stream, and the service decodes it.
 
 The service keeps the state of the trial and the clutch. Its replies carry only the target pose and the grip, or the
 end. So the input of the person stays in the service. No model server gets it.
@@ -112,7 +114,9 @@ Conversion for training picks its own keys from the recording.
   service then sends the view with no camera, and the page shows black as clear), and hidden. The bottom of the view
   names the camera and the use of Y.
 - The phone page shows no video.
-- Each frame request carries the camera images at 640 x 480. A camera with another aspect gets black bars.
+- Each frame request carries the camera images at 640 x 480, as JPEG. A camera with another aspect gets black bars.
+- A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
+  changes between frames, so each frame request is smaller. Set `video_fps` to the frame rate of the cameras.
 - `positronic teleop` sends the headset video as H.264 at 30 frames per second and 4 Mbit/s.
   `--webxr.video_fps=<frames per second>` and `--webxr.video_bitrate=<bits per second>` change them. Lower the bit rate
   if the video stutters on a slow Wi-Fi. The headset browser decodes the video with WebCodecs.
@@ -215,6 +219,8 @@ one service serves runs with different parameters. A parameter that the run does
 | `cameras` | the cameras that the person sees, in that order | none |
 | `headset_camera` | the camera of `cameras` that the headset shows | the first one |
 | `jpeg_quality` | the JPEG quality of the camera images | 90 |
+| `video_bitrate` | the bit rate of the camera images as H.264, in bits per second, or `None` for JPEG | `None` |
+| `video_fps` | the frame rate that the H.264 encoder spreads `video_bitrate` over | 30 |
 
 `positronic.teleop.protocol.session_query` builds the query. In `positronic.cfg.policy`, `teleop_query` is the query
 of `teleop` and `teleop_network`, and `teleop_collect_query` and `teleop_molmo_query` are the queries of

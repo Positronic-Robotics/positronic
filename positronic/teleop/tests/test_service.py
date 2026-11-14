@@ -56,7 +56,7 @@ from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
-from positronic.policy.codecs import EndCommand
+from positronic.policy.codecs import EncodeImages, EncodeVideo, EndCommand
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.executor import Executor
 from positronic.policy.keys import END
@@ -349,10 +349,11 @@ def test_with_no_operator_position_the_hand_pose_is_the_robot_pose_and_control_i
         run.close()
 
 
-def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, runtime):
+@pytest.mark.parametrize('params', [{}, {'video_bitrate': 2_000_000}], ids=['jpeg', 'h264'])
+def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, runtime, params):
     width, height = VIEW_SIZE
     with _Headset(service) as headset:
-        run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
+        run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE], **params)
         # The view is black until the first frame request brings the image.
         _drive_until(run, lambda _: service.view()[height // 2, width // 2].any())
         view = service.view()
@@ -544,6 +545,10 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
         session_query(cameras=[protocol.TASK])
     with pytest.raises(ValueError, match='jpeg_quality must be an integer between 0 and 100'):
         session_query(jpeg_quality=90.5)
+    with pytest.raises(ValueError, match='video_bitrate must be a positive integer'):
+        session_query(video_bitrate=0)
+    with pytest.raises(ValueError, match='video_fps must be a positive integer'):
+        session_query(video_fps=2.5)
     assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
         'operator_position=null&cameras=%5B%22image.wrist%22%5D'
     )
@@ -563,6 +568,27 @@ def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_fram
     assert schedule['name'] == ChunkedSchedule.WIRE_NAME
     assert schedule['args']['latency_estimate'] >= 1 / schedule['args']['fps']
     assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][3])
+
+
+@pytest.mark.parametrize(
+    'params, encoder',
+    [
+        ({'jpeg_quality': 70}, {'name': EncodeImages.WIRE_NAME, 'args': {'quality': 70}}),
+        (
+            {'video_bitrate': 1_000_000, 'video_fps': 15},
+            {
+                'name': EncodeVideo.WIRE_NAME,
+                'args': {'paths': [[keys.WRIST_IMAGE], [keys.EXTERIOR_IMAGE]], 'bitrate': 1_000_000, 'fps': 15},
+            },
+        ),
+    ],
+    ids=['jpeg', 'h264'],
+)
+def test_the_client_stack_sends_the_camera_images_as_jpeg_or_with_a_video_bit_rate_as_h264(params, encoder):
+    cameras = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+    stack = TeleopModel.client_stack(protocol.SessionParams(cameras=cameras, **params))
+    last = stack['seq'][-1]['seq'][-1]
+    assert {'name': last['name'], 'args': last['args']} == encoder
 
 
 class _BlankRenderer:

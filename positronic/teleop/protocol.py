@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, check_int_range
 
 from positronic import geom
+from positronic.utils import check_positive_int
 
 from .clutch import OperatorPosition
 
@@ -57,13 +58,16 @@ class SessionParams:
 
     An ``operator_position`` of ``None`` is UMI mode: control is always on, and the hand pose is the robot pose.
     ``cameras`` names the cameras that the client sends. ``headset_camera`` names the one that the headset shows;
-    ``None`` is the first one.
+    ``None`` is the first one. The client sends the camera images as JPEG at ``jpeg_quality``. With a
+    ``video_bitrate`` in bits per second, it sends them as H.264 at that bit rate and ``video_fps`` in place of JPEG.
     """
 
     operator_position: OperatorPosition | None = OperatorPosition.FRONT
     cameras: tuple[str, ...] = ()
     jpeg_quality: int = DEFAULT_JPEG_QUALITY
     headset_camera: str | None = None
+    video_bitrate: int | None = None
+    video_fps: int = 30
 
     def __post_init__(self) -> None:
         if self.operator_position is not None and not isinstance(self.operator_position, OperatorPosition):
@@ -72,6 +76,9 @@ class SessionParams:
                 f'operator_position must be one of {names}, or null for UMI mode, got {self.operator_position!r}'
             )
         check_int_range(self.jpeg_quality, 0, 100, 'jpeg_quality')
+        if self.video_bitrate is not None:
+            check_positive_int(self.video_bitrate, 'video_bitrate')
+        check_positive_int(self.video_fps, 'video_fps')
         if fields := {TASK, EE_POSE, GRIP} & set(self.cameras):
             raise ValueError(f'a camera name must not be a field of a frame request, got {sorted(fields)}')
         if self.headset_camera is not None and self.headset_camera not in self.cameras:
