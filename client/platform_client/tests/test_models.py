@@ -1186,6 +1186,18 @@ def test_a_resolved_image_endpoint_carries_its_session_params():
     assert ResolvedEndpoint.model_validate(unstated).query is None
 
 
+def test_a_resolved_remote_endpoint_carries_the_policy_its_server_serves():
+    address = RoboarenaAddress(host='baseline.example', port=8000)
+    remote = ResolvedEndpoint(
+        name='baseline', kind=EndpointKind.remote, wire=Wire.roboarena, address=address, episodes=1, policy_spec='pi05'
+    )
+    assert ResolvedEndpoint.model_validate(remote.model_dump(mode='json')).policy_spec == 'pi05'
+    # An answer from a platform that names no policy spec on an endpoint.
+    unstated = remote.model_dump(mode='json')
+    del unstated['policy_spec']
+    assert ResolvedEndpoint.model_validate(unstated).policy_spec is None
+
+
 def test_an_endpoint_that_states_no_window_or_preset_runs_with_the_task_s():
     assert (RESOLVED_TASK.cap_of('baseline'), RESOLVED_TASK.preset_of('baseline')) == (90, 'example_candidate')
 

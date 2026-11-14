@@ -266,6 +266,21 @@ the image, for example `horizon_sec=0.5`. It holds the grammar of an address `qu
 below), and it may not be empty. A `remote` endpoint writes its params in `address.query`, and a
 `served` endpoint states none. Only an entry that names its `image` states it.
 
+A `remote` endpoint may state `policy_spec`: the policy its server serves, by the `spec` a `served`
+endpoint would name, for example `pi05`. It names the policy that the episodes of that endpoint run.
+The platform refuses a value that names no policy it serves. With no value, the platform does not
+know which policy the server runs. Only an entry that names its `address` states it: a label on a
+task takes the value of the plan endpoint it names. A `served` endpoint names its policy in `spec`,
+and an `image` endpoint states no `policy_spec`.
+
+```yaml
+endpoints:
+  - name: baseline
+    wire: roboarena
+    address: {host: baseline.example, port: 8000}
+    policy_spec: pi05
+```
+
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
 
