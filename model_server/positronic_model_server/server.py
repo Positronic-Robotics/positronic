@@ -147,6 +147,7 @@ class ModelServer:
         """Answer each request of the session. ``received`` is the receive of its first request."""
         while True:
             raw = await received
+            received_ns = time.time_ns()
             self._last_activity = time.monotonic()
             started = time.perf_counter_ns()
             request = serialization.deserialise(raw)
@@ -156,11 +157,13 @@ class ModelServer:
                 return
             observation = request[protocol.OBSERVATION]
             decoded = time.perf_counter_ns()
-            await conn.send(await self._infer_response(session, observation, started, decoded))
+            await conn.send(await self._infer_response(session, observation, started, decoded, received_ns))
             received = conn.receive()
 
-    async def _infer_response(self, session: Session, observation: Any, started: int, decoded: int) -> bytes:
-        timing = {protocol.TIMING_DECODE: (decoded - started) / 1e6}
+    async def _infer_response(
+        self, session: Session, observation: Any, started: int, decoded: int, received_ns: int
+    ) -> bytes:
+        timing = {protocol.TIMING_DECODE: (decoded - started) / 1e6, protocol.TIMING_RECEIVED_NS: received_ns}
 
         def infer() -> bytes:
             called = time.perf_counter_ns()
@@ -169,9 +172,12 @@ class ModelServer:
                 result = session.infer(observation)
             finally:
                 timing[protocol.TIMING_MODEL] = timing[protocol.TIMING_INFER] = (time.perf_counter_ns() - called) / 1e6
-            timing[protocol.TIMING_SERVED] = (time.perf_counter_ns() - started) / 1e6
+            served = time.perf_counter_ns()
+            timing[protocol.TIMING_SERVED] = (served - started) / 1e6
             # Pack before releasing the worker: native results can reference reusable model buffers.
             result = serialization.encode_images(result, session.output_images)
+            timing[protocol.TIMING_ENCODE] = (time.perf_counter_ns() - served) / 1e6
+            timing[protocol.TIMING_SENT_NS] = time.time_ns()
             return serialization.serialise({protocol.RESULT: result, protocol.TIMING: timing})
 
         try:

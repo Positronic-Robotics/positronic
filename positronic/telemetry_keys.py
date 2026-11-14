@@ -39,13 +39,18 @@ ATTR_EPISODE_VIRTUAL_S = 'episode.virtual_s'
 ATTR_EPISODE_PARTIAL = 'episode.partial'
 ATTR_PASS_FAILED = 'pass.failed'
 
-# What the server reported spending, stamped on `policy.infer` under this prefix — `served.infer_ms`
-# and its siblings, straight from the answer's own `timing` block.
+# What the server reported, stamped on `policy.infer` under this prefix — `served.infer_ms`, its sibling
+# durations and the instants `served.received_ns` and `served.sent_ns`, straight from the answer's own `timing` block.
 ATTR_SERVED_PREFIX = 'served.'
 
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.
 ATTR_CODEC = 'codec'
 ATTR_WIRE_BYTES = 'wire.bytes'
+# On `policy.infer`, in milliseconds: from the send to the server's receipt, from the server's send to the receipt, and
+# their sum. The first two hold the offset between the clocks of the client and the server; the sum does not.
+ATTR_WIRE_UPLINK_MS = 'wire.uplink_ms'
+ATTR_WIRE_DOWNLINK_MS = 'wire.downlink_ms'
+ATTR_WIRE_NETWORK_MS = 'wire.network_ms'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.
