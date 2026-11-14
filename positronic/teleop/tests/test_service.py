@@ -884,7 +884,6 @@ def test_the_headset_shows_the_other_cameras_in_a_column_beside_the_main_camera(
 
 
 def test_the_headset_view_keeps_its_size_from_the_wait_for_a_trial_to_the_trial(socket_path, connect):
-    """So the panel in the headset does not change its size when a trial starts."""
     station = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
     with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=station) as service:
         idle = service.view()
