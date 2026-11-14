@@ -129,6 +129,21 @@ def test_a_hand_holds_its_target_where_the_ik_fails_on_the_way_from_the_hand_to_
     assert YamReach().refusal(at, hand, None, way) is not None
 
 
+def test_a_hand_that_stays_is_solved_from_its_measured_joints():
+    # Joint 5 is 8 mrad under its lower limit. Solved from the sample before it, the fourth sample turns joint 1 half a
+    # turn. The driver solves each sample from the measured joints, which stay put, and finds no turn.
+    at = np.array([
+        -0.4963637111404844,
+        1.2793163582362699,
+        2.687874102872039,
+        -1.0370218892172387,
+        -1.5788,
+        0.18537010645597962,
+    ])
+    hand, held = hand_at(at), hand_at(np.clip(at, KINEMATICS.lower, KINEMATICS.upper))
+    assert YamReach().refusal(at, hand, held, [hand.interpolate(held, i / 5) for i in range(1, 6)]) is None
+
+
 def test_a_pose_beside_the_way_from_the_hand_to_its_target_is_refused_where_the_ik_fails():
     at, hand, held = trailing(3, -0.01)
     beside = hand.interpolate(held, 0.5)
