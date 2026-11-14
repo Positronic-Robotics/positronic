@@ -1,0 +1,69 @@
+# Shared gitleaks rules from Positronic-Robotics/secret-scanning. A repository holds a byte-for-byte copy as
+# `.gitleaks.toml`, and the reusable workflow fails when the copy differs. Edit the file in that repository,
+# then follow its README upgrade steps; a copy edited elsewhere fails the check.
+title = "shared gitleaks rules"
+
+[extend]
+useDefault = true
+
+# Credential shapes the default rules miss. Each has a canary in that repository's canary_test.py.
+# Deleting this section falls back to the default rules.
+
+# Matches a Nebius IAM token: ne1 followed by 100 or more letters, digits, dots, dashes or underscores.
+# Shape: ne1<100+ letters, digits, . - _>
+[[rules]]
+id = "nebius-iam-token"
+description = "Nebius IAM access token (ne1 prefix)"
+regex = '''\b(ne1[A-Za-z0-9][A-Za-z0-9_\-.]{99,})'''
+secretGroup = 1
+entropy = 4.0
+keywords = ["ne1"]
+
+# Matches an Anthropic OAuth token: sk-ant-oat or sk-ant-ort, two digits, a dash, then 80 or more
+# letters, digits, dashes or underscores. Shape: sk-ant-oat01-<80+ letters, digits, - _>
+[[rules]]
+id = "anthropic-oauth-token"
+description = "Anthropic OAuth access or refresh token"
+regex = '''\b(sk-ant-o[a-z]t\d{2}-[A-Za-z0-9_\-]{80,})'''
+secretGroup = 1
+keywords = ["sk-ant-oat", "sk-ant-ort"]
+
+# Matches a Tailscale key: tskey-, a lowercase kind such as auth or client, then two dash-separated
+# runs of letters and digits. Shape: tskey-<kind>-<6+ letters, digits>-<16+ letters, digits>
+[[rules]]
+id = "tailscale-key"
+description = "Tailscale auth, API, OAuth client or webhook key"
+regex = '''\b(tskey-[a-z]+-[A-Za-z0-9]{6,}-[A-Za-z0-9]{16,})'''
+secretGroup = 1
+keywords = ["tskey-"]
+
+# Matches a literal value of 16 or more characters given to a flag whose name ends in token, api key,
+# password, passwd, secret, access key or auth key. Shape: --api-key=<16+ characters> or --hf-token <16+ characters>
+[[rules]]
+id = "cli-flag-secret"
+description = "Credential passed as a command-line flag value"
+# The flag name must end in the credential word, so --token-file and --password-stdin never match.
+# A value starting with $ < { / . ~ or a quote is a variable, placeholder or path, not a literal.
+# Inside quotes the rest of the value may hold any punctuation up to a space or the closing quote,
+# except $ inside double quotes, where the shell expands it. The secret is the first group that matched.
+regex = '''(?i)--(?:[a-z0-9]+[-_])*(?:token|api[-_]?key|password|passwd|secret|secret[-_]key|access[-_]key|auth[-_]?key)(?:=|[ \t]+)(?:'([^\s'$<{/.~][^\s']{15,})|"([^\s"$<{/.~][^\s"$]{15,})|([A-Za-z0-9_\-+=!@#%^&*:,][A-Za-z0-9_\-+/=.!@#%^&*~:,]{15,}))'''
+entropy = 3.0
+keywords = ["token", "key", "password", "passwd", "secret"]
+
+# `lpass show --password <item>` names the field to read; the value after it is a vault item path.
+# The line may hold no other `--` outside that command, so a literal flag beside it is still caught.
+[[rules.allowlists]]
+regexTarget = "line"
+regexes = ['''^(?:[^-]|-[^-])*\blpass\s+show\s+(?:--?[a-z][a-z-]*(?:=\S*)?\s+)*--password\s+(?:"[^"]*"|'[^']*'|\S+)(?:[^-]|-[^-])*$''']
+
+# Values that say where a secret lives rather than hold it: `--auth-key=file:<path>`, docker
+# `--secret id=<name>,src=<path>`, and `--env-secret NAME=<secret-name>` references.
+[[rules.allowlists]]
+regexes = ['''^(?:file:|id=|env=)''', '''^[A-Z][A-Z0-9_]*=[a-z0-9]+(?:-[a-z0-9]+)*$''']
+
+# The default curl-auth-user rule flags `curl -u "$USER:"`. A value made only of shell variables, such as
+# `$USER:` or `${USER}:${PASS}`, names where the credential comes from; a literal password after a variable is
+# still caught.
+[[allowlists]]
+targetRules = ["curl-auth-user"]
+regexes = ['''^["']?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?:(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)?["']?$''']
