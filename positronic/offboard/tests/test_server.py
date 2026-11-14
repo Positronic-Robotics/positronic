@@ -26,7 +26,7 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK, Inv
 from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
 
-from positronic.offboard.client import ConnectRetries, InferenceClient, InferenceSession
+from positronic.offboard.client import DOWNLINK_MS, UPLINK_MS, ConnectRetries, InferenceClient, InferenceSession
 from positronic.offboard.protocol import deserialise, serialise
 from positronic.offboard.server import AUTH_HEADER, PolicyServer, bearer
 from positronic.offboard.server_utils import warmup
@@ -428,6 +428,23 @@ def test_codec_wrapping(codec_server):
         assert session.metadata['codec'] == 'identity'
         result = session.infer({'obs': 'data'})
         assert result == [{'action': [1, 2, 3]}]
+    finally:
+        session.close()
+
+
+def test_the_served_timing_stamps_the_receipt_and_the_send_so_the_client_splits_the_wire_time(stub_server):
+    host, port, _server, _policy = stub_server
+    session = InferenceClient(
+        client_websocket.WebsocketClientWire(), wire.HostPortAddress(host, port, wire.SESSION_PATH, '')
+    ).new_session()
+    try:
+        before_ns = time.time_ns()
+        session.infer({'image': 'test'})
+        after_ns = time.time_ns()
+        served = session.served_timing
+        assert before_ns <= served[protocol.TIMING_RECEIVED_NS] <= served[protocol.TIMING_SENT_NS] <= after_ns
+        assert session.wire_timing[UPLINK_MS] >= 0
+        assert session.wire_timing[DOWNLINK_MS] >= 0
     finally:
         session.close()
 

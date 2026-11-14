@@ -45,6 +45,10 @@ def time_left(deadline: float) -> float:
 # cost the two minus ``served_ms``, because the server's own span sits inside the second one.
 SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
+# From the start of the send to the server's receipt, and from the server's send to the receipt here. Only a server
+# that stamps its receipt and its send gives them. Each one holds the offset between the two clocks; their sum does not.
+UPLINK_MS = 'uplink_ms'
+DOWNLINK_MS = 'downlink_ms'
 
 
 class InferenceSession:
@@ -258,8 +262,14 @@ class InferenceSession:
             finally:
                 answered = time.time_ns()
                 telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
-            self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
-            return self._decode_answer(received)
+            wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
+            self.wire_timing = wire_timing
+            result = self._decode_answer(received)
+            served = self.served_timing
+            if protocol.TIMING_RECEIVED_NS in served and protocol.TIMING_SENT_NS in served:
+                wire_timing[UPLINK_MS] = (served[protocol.TIMING_RECEIVED_NS] - send_started) / 1e6
+                wire_timing[DOWNLINK_MS] = (answered - served[protocol.TIMING_SENT_NS]) / 1e6
+            return result
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be

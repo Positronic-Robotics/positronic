@@ -42,6 +42,12 @@ TIMING_DECODE = 'decode_ms'
 TIMING_INFER = 'infer_ms'
 # Time the observation waited for the inference slot, inside `SERVED`.
 TIMING_QUEUED = 'queued_ms'
+# Time to encode the images of the answer, after `SERVED`.
+TIMING_ENCODE = 'encode_ms'
+# Two instants in Unix nanoseconds on the server's clock: the whole request arrived, and the answer starts to pack.
+# A client subtracts its own clock from them, so each one-way time it gets holds the offset between the two clocks.
+TIMING_RECEIVED_NS = 'received_ns'
+TIMING_SENT_NS = 'sent_ns'
 
 
 def timing_key(name: str) -> str:

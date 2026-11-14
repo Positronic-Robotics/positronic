@@ -87,7 +87,7 @@ The span names are the contract:
 | `record.io` | `episode` | — | the recorder's serialize + append |
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
-| `policy.infer` | a processor span | — | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `policy.infer` | a processor span | `served.<phase>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
 
@@ -114,6 +114,24 @@ This prints the p10, p50 and p90 of each value over all steps that called the po
 ```
 uv run python -c "import sys,numpy as np;from positronic import telemetry as t, telemetry_keys as k;S=[s.attrs|{'step_ms':(s.end_ns-s.start_ns)/1e6} for s in t.read_spans(sys.argv[1]) if s.name==k.SPAN_HARNESS_STEP and k.ATTR_STEP_POLICY_MS in s.attrs];[print(f'{k:28s} n={len(v):5d}  p10/p50/p90 ms',*(f'{x:7.3f}' for x in np.percentile(v,[10,50,90]))) for k in sorted({k for a in S for k in a}) for v in [[a[k] for a in S if k in a]]]" <output_dir>/telemetry/harness.spans.jsonl
 ```
+
+### Reading the network time of a call
+
+A server answers each call with a `timing` block. Its durations are in milliseconds on the server's clock, and
+`policy.infer` copies each one as `served.<name>`. `served_ms` runs from the arrival of the whole request to the
+end of the call. `encode_ms` is the encode of the answer's images. Two instants are in Unix nanoseconds on the
+server's clock: `received_ns`, when the whole request arrived, and `sent_ns`, when the answer starts to pack.
+
+With the two instants, the client puts three values on `policy.infer`:
+
+- `wire.uplink_ms`: from the start of the send to `received_ns`. It includes the server's read of the request.
+- `wire.downlink_ms`: from `sent_ns` to the receipt of the answer. It includes the pack and the send of the answer.
+- `wire.network_ms`: the sum of the two.
+
+Each one-way value subtracts a client time from a server time, so it holds the offset between the two clocks. A
+clock that runs 20 ms ahead on the server adds 20 ms to the uplink and removes 20 ms from the downlink. The sum
+holds no offset, and so does `served.sent_ns - served.received_ns`, the server's time from receipt to send. A
+server that sends no instants gives no `wire.*` values, and its `served.*` values stay as they are.
 
 ### Stats schema (`*.stats.jsonl`)
 

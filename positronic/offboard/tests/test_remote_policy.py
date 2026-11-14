@@ -45,7 +45,9 @@ from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    DOWNLINK_MS,
     STATUS_UPDATE_TIMEOUT_S,
+    UPLINK_MS,
     ConnectRetries,
     InferenceClient,
     InferenceSession,
@@ -995,6 +997,49 @@ def test_wrong_session_id_closes_only_the_requesting_session(served, transport, 
     assert model.ended_sessions == [first.session_id, second.session_id]
 
 
+@pytest.mark.parametrize('server_offset_ms', [0, 100, -100])
+def test_the_one_way_times_hold_the_clock_offset_and_their_sum_does_not(monkeypatch, server_offset_ms):
+    offset_ns = server_offset_ms * 1_000_000
+    timing = {
+        protocol.TIMING_RECEIVED_NS: 1_010_000_000 + offset_ns,
+        protocol.TIMING_SENT_NS: 1_045_000_000 + offset_ns,
+    }
+    session = InferenceSession(
+        _connection(
+            legacy_protocol.serialise({
+                protocol.STATUS: protocol.ServerStatus.READY,
+                protocol.META: {},
+                protocol.SESSION_ID: 's',
+                protocol.PROTOCOL_VERSION: 2,
+            }),
+            legacy_protocol.serialise({protocol.RESULT: [], protocol.TIMING: timing}),
+        )
+    )
+    # The send starts at 1000 ms and ends at 1002 ms; the answer arrives at 1050 ms.
+    clock = iter([1_000_000_000, 1_002_000_000, 1_050_000_000])
+    monkeypatch.setattr('positronic.offboard.client.time.time_ns', clock.__next__)
+    session.infer({})
+    assert session.wire_timing[UPLINK_MS] == 10 + server_offset_ms
+    assert session.wire_timing[DOWNLINK_MS] == 5 - server_offset_ms
+
+
+def test_a_server_that_stamps_no_receipt_gives_no_one_way_times():
+    session = InferenceSession(
+        _connection(
+            legacy_protocol.serialise({
+                protocol.STATUS: protocol.ServerStatus.READY,
+                protocol.META: {},
+                protocol.SESSION_ID: 's',
+                protocol.PROTOCOL_VERSION: 2,
+            }),
+            legacy_protocol.serialise({protocol.RESULT: [], protocol.TIMING: {protocol.TIMING_SERVED: 3.0}}),
+        )
+    )
+    session.infer({})
+    assert UPLINK_MS not in session.wire_timing
+    assert DOWNLINK_MS not in session.wire_timing
+
+
 def test_fatal_server_error_closes_client_without_masking_the_error():
     conn = MagicMock(spec=wire.ClientConnection)
     conn.recv.side_effect = [
@@ -1708,6 +1753,24 @@ def test_inference_telemetry_excludes_image_preparation_and_records_failures(tmp
     prepare = spans[telemetry_keys.SPAN_POLICY_PREPARE]
     assert prepare.start_ns <= encoded_at[0] <= prepare.end_ns
     assert prepare.end_ns <= spans[telemetry_keys.SPAN_POLICY_INFER].start_ns
+
+
+@pytest.mark.parametrize('one_way', [{UPLINK_MS: 12.0, DOWNLINK_MS: 3.0}, {}], ids=['stamped', 'unstamped'])
+def test_the_inference_span_carries_the_one_way_times_and_their_sum(tmp_path, one_way):
+    session = _mock_session()
+    session.served_timing = {}
+    session.wire_timing = one_way
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-network'):
+        round_trip(session, {}, compress_images=False)
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    [infer] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_INFER]
+    network_keys = (
+        telemetry_keys.ATTR_WIRE_UPLINK_MS,
+        telemetry_keys.ATTR_WIRE_DOWNLINK_MS,
+        telemetry_keys.ATTR_WIRE_NETWORK_MS,
+    )
+    expected = (12.0, 3.0, 15.0) if one_way else (None, None, None)
+    assert tuple(infer.attrs.get(key) for key in network_keys) == expected
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])

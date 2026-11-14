@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 class _ServedTiming:
     """What one inference cost the server, in milliseconds on the server's own clock.
 
-    Every figure is a duration. ``served_ms`` opens when the observation arrives and brackets the
-    phases inside it. The answer's serialisation and send fall outside every figure: the report rides
-    in that answer.
+    Every figure is a duration, except the instants ``received_ns`` and ``sent_ns``. ``served_ms`` opens when the
+    observation arrives and brackets the phases inside it. The answer's serialisation and send fall outside every
+    figure: the report rides in that answer.
     """
 
     def __init__(self) -> None:
@@ -58,7 +58,13 @@ class _ServedTiming:
 
     def report(self) -> dict[str, float]:
         """The phases closed so far, under the span bracketing them."""
-        return {protocol.TIMING_SERVED: (time.time_ns() - self._opened) / 1e6, **self._phases}
+        now = time.time_ns()
+        return {
+            protocol.TIMING_SERVED: (now - self._opened) / 1e6,
+            **self._phases,
+            protocol.TIMING_RECEIVED_NS: self._opened,
+            protocol.TIMING_SENT_NS: now,
+        }
 
     def _record_span(self, name: str, start_ns: int, end_ns: int) -> None:
         key = protocol.timing_key(name)
