@@ -556,8 +556,12 @@ class LLMPolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         with self.endpoint.open() as client:
-            if client.api_key_fingerprint is not None:
-                runtime.set_metadata(policy_keys.API_KEY_FINGERPRINT, client.api_key_fingerprint)
+
+            def record_keys():
+                if client.api_key_fingerprints:
+                    runtime.set_metadata(policy_keys.API_KEY_FINGERPRINTS, list(client.api_key_fingerprints))
+
+            record_keys()
             conversation = Conversation(self, runtime.set_metadata)
             obs = yield
             while True:
@@ -568,6 +572,8 @@ class LLMPolicy(Policy):
                 obs = yield Step({}, runtime.time_ns)
                 while not answer.done():
                     obs = yield Step({}, runtime.time_ns)
+                # A request can switch to another pool key, so record the keys before a failure of the request raises.
+                record_keys()
                 decision = conversation.respond(answer.result())
                 if decision is None:
                     continue

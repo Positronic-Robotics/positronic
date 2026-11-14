@@ -10,6 +10,7 @@ from multiprocessing.reduction import ForkingPickler
 
 import httpx
 import pytest
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     BinaryContent,
     CachePoint,
@@ -182,13 +183,31 @@ def anthropic_reply(name: str, arguments: dict) -> dict:
     }
 
 
-def serve(monkeypatch, replies: list[dict]) -> list[httpx.Request]:
-    """Answer each HTTP request of every new client with the next reply, and collect the requests."""
+NO_CREDIT = {
+    'type': 'error',
+    'error': {
+        'type': 'invalid_request_error',
+        'message': 'Your credit balance is too low to access the Anthropic API. '
+        'Please go to Plans & Billing to upgrade or purchase credits.',
+    },
+}
+
+
+def fingerprint(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()[:8]
+
+
+def serve(monkeypatch, replies: list[dict | httpx.Response]) -> list[httpx.Request]:
+    """Answer each HTTP request of every new client with the next reply, and collect the requests.
+
+    A ``dict`` reply is the JSON body of a 200 response.
+    """
     requests = []
 
     async def respond(request):
         requests.append(request)
-        return httpx.Response(200, json=replies.pop(0))
+        reply = replies.pop(0)
+        return reply if isinstance(reply, httpx.Response) else httpx.Response(200, json=reply)
 
     initialize = httpx.AsyncClient.__init__
     monkeypatch.setattr(
@@ -328,8 +347,53 @@ def test_each_anthropic_episode_sends_a_key_from_the_pool_and_records_only_its_f
     sent = [request.headers['x-api-key'] for request in requests]
     assert sent == [pool[1], pool[0]]
     for key, meta in zip(sent, recorded, strict=True):
-        assert meta[policy_keys.API_KEY_FINGERPRINT] == hashlib.sha256(key.encode()).hexdigest()[:8]
+        assert meta[policy_keys.API_KEY_FINGERPRINTS] == [fingerprint(key)]
         assert 'test-secret' not in json.dumps(meta)
+
+
+def test_an_anthropic_call_retries_on_another_key_when_its_key_has_no_credit(monkeypatch, anthropic_pool):
+    finished = anthropic_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})
+    requests = serve(monkeypatch, [httpx.Response(400, json=NO_CREDIT), finished, finished])
+    policy = llm(model='anthropic:test-model')
+    recorded = []
+    for _ in range(2):
+        with execution(policy) as (active, rt, clock):
+            assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
+            recorded.append(rt.metadata_snapshot())
+    first, second = anthropic_pool
+    assert [request.headers['x-api-key'] for request in requests] == [first, second, second]
+    assert requests[1].content == requests[0].content
+    assert [meta[policy_keys.API_KEY_FINGERPRINTS] for meta in recorded] == [
+        [fingerprint(first), fingerprint(second)],
+        [fingerprint(second)],
+    ]
+    assert 'test-secret' not in json.dumps(recorded)
+
+
+def test_an_anthropic_episode_stops_when_no_pool_key_has_credit(monkeypatch, anthropic_pool):
+    requests = serve(monkeypatch, [httpx.Response(400, json=NO_CREDIT), httpx.Response(400, json=NO_CREDIT)])
+    with execution(llm(model='anthropic:test-model')) as (active, rt, clock):
+        with pytest.raises(RuntimeError, match='no credit') as error:
+            complete(active, rt, clock, observation())
+        assert rt.metadata_snapshot()[policy_keys.API_KEY_FINGERPRINTS] == list(map(fingerprint, anthropic_pool))
+    assert [request.headers['x-api-key'] for request in requests] == anthropic_pool
+    assert 'test-secret' not in str(error.value)
+    with pytest.raises(RuntimeError, match='no credit'):
+        with Endpoint('anthropic:test-model').open():
+            pytest.fail('The endpoint must refuse a pool with no credit before it yields a client')
+
+
+def test_an_anthropic_bad_request_without_the_credit_message_keeps_the_key(monkeypatch, anthropic_pool):
+    rejected = {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'max_tokens: too large'}}
+    finished = anthropic_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})
+    requests = serve(monkeypatch, [httpx.Response(400, json=rejected), finished])
+    policy = llm(model='anthropic:test-model')
+    with execution(policy) as (active, rt, clock):
+        with pytest.raises(ModelHTTPError, match='max_tokens'):
+            complete(active, rt, clock, observation())
+    with execution(policy) as (active, rt, clock):
+        assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
+    assert [request.headers['x-api-key'] for request in requests] == [anthropic_pool[0]] * 2
 
 
 @pytest.mark.parametrize('pool', ['', 'test-secret-first-org,', 'test-secret-first-org, ,test-secret-second-org'])
@@ -357,7 +421,7 @@ def test_anthropic_endpoint_without_a_pool_key_sends_its_own_key_and_records_no_
         monkeypatch.delenv(ANTHROPIC_API_KEYS_ENV, raising=False)
     with execution(llm(model=model)) as (active, rt, clock):
         assert complete(active, rt, clock, observation()) is PolicyEnd.COMPLETE
-        assert policy_keys.API_KEY_FINGERPRINT not in rt.metadata_snapshot()
+        assert policy_keys.API_KEY_FINGERPRINTS not in rt.metadata_snapshot()
     assert requests[0].headers['x-api-key'] == own
 
 
