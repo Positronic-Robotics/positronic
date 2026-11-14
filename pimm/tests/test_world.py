@@ -251,12 +251,13 @@ class StopWatcher(ControlSystem):
 class HeapCounter(ControlSystem):
     """Records how many objects a full collection would scan, at the start and at the end of its loop."""
 
-    def __init__(self, counts: list[int]):
+    def __init__(self, counts: list[int], loop_s: float = 0.01):
         self._counts = counts
+        self._loop_s = loop_s
 
     def run(self, should_stop, clock):
         self._counts.append(len(gc.get_objects()))
-        yield Sleep(0.01)
+        yield Sleep(self._loop_s)
         self._counts.append(len(gc.get_objects()))
 
 
@@ -269,7 +270,48 @@ def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
         world.run([HeapCounter(counts)])
 
     assert max(counts) < len(import_heap) / 10
-    assert gc.get_freeze_count() == 0, 'the collector gets the heap back after the run'
+    assert len(gc.get_objects()) > len(import_heap), 'a full collection scans the heap again after the run'
+
+
+def test_a_world_keeps_a_freeze_that_its_process_made():
+    """A process can freeze its heap for its own reasons, for example before a fork."""
+    process_heap = [[i] for i in range(50_000)]
+    gc.freeze()
+    try:
+        with World() as world:
+            world.run([HeapCounter([])])
+
+        assert len(gc.get_objects()) < len(process_heap) / 10
+    finally:
+        gc.unfreeze()
+
+
+def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections(monkeypatch):
+    """Worlds in two threads share the process's collector, so the end of one must not undo the start of the other."""
+    import_heap = [[i] for i in range(50_000)]
+    unfreeze = gc.unfreeze
+    first_world_unfreezes = threading.Event()
+
+    def slow_unfreeze():
+        first_world_unfreezes.set()
+        time.sleep(0.2)
+        unfreeze()
+
+    monkeypatch.setattr(gc, 'unfreeze', slow_unfreeze)
+
+    def first_world():
+        with World() as world:
+            world.run([HeapCounter([])])
+
+    first = threading.Thread(target=first_world)
+    first.start()
+    assert first_world_unfreezes.wait(5.0)
+    counts: list[int] = []
+    with World() as world:
+        world.run([HeapCounter(counts, loop_s=0.4)])
+    first.join(5.0)
+
+    assert counts[-1] < len(import_heap) / 10
 
 
 def test_a_world_starts_its_loops_without_a_full_collection(monkeypatch):

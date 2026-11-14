@@ -828,7 +828,10 @@ class World:
         self._foreground_cleanup.append(scheduler.close)
         return scheduler
 
+    # Worlds can run in threads of one process, and the freeze belongs to the process.
+    _heap_freeze_lock = threading.Lock()
     _schedulers_running_in_process = 0
+    _unfreeze_when_the_last_scheduler_ends = False
 
     @staticmethod
     @contextlib.contextmanager
@@ -836,18 +839,21 @@ class World:
         """Keep the objects that exist when the first scheduler starts out of each collection until the last one ends.
 
         A full collection stops every loop of the process while it scans. An import heap of about 140,000 objects
-        takes about 100 ms to scan on an ARM robot computer.
+        takes about 100 ms to scan on an ARM robot computer. A freeze that the process made itself stays in place.
         """
-        if World._schedulers_running_in_process == 0:
-            # No collection first: it would stop the process for as long as the passes this freeze avoids.
-            gc.freeze()
-        World._schedulers_running_in_process += 1
+        with World._heap_freeze_lock:
+            if World._schedulers_running_in_process == 0:
+                World._unfreeze_when_the_last_scheduler_ends = gc.get_freeze_count() == 0
+                # No collection first: it would stop the process for as long as the passes this freeze avoids.
+                gc.freeze()
+            World._schedulers_running_in_process += 1
         try:
             yield
         finally:
-            World._schedulers_running_in_process -= 1
-            if World._schedulers_running_in_process == 0:
-                gc.unfreeze()
+            with World._heap_freeze_lock:
+                World._schedulers_running_in_process -= 1
+                if World._schedulers_running_in_process == 0 and World._unfreeze_when_the_last_scheduler_ends:
+                    gc.unfreeze()
 
     def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         with contextlib.ExitStack() as scope:
