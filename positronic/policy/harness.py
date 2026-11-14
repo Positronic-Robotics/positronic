@@ -290,6 +290,12 @@ class Harness(pimm.ControlSystem):
             changes.append(ChangeEEFrame(EEFrame(site=site, offset=offset), tuple(names)))
         return reduce(or_, changes)
 
+    @staticmethod
+    def _policy_meta(policy_meta: dict[str, Any], runtime_meta: dict[str, Any]) -> dict[str, Any]:
+        """The policy's own metadata and what it set on the runtime, under the names the recording uses."""
+        merged = deepcopy(flatten_dict(policy_meta)) | flatten_dict(runtime_meta)
+        return {f'{policy_keys.POLICY_META}.{k}': v for k, v in merged.items()}
+
     def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:
         task = rollout.task
         meta = self._statics()
@@ -298,16 +304,10 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
-        meta.update(self._policy_meta(rollout, runtime))
+        meta.update(self._policy_meta(rollout.policy.meta(), runtime.metadata_snapshot()))
         meta.update(task.meta)
         meta[keys.TASK] = self._instruction(task)
         return meta
-
-    @staticmethod
-    def _policy_meta(rollout: Rollout, runtime: Executor) -> dict[str, Any]:
-        """The policy's own metadata and what it set on the runtime, under the names the recording uses."""
-        policy_meta = deepcopy(flatten_dict(rollout.policy.meta())) | flatten_dict(runtime.metadata_snapshot())
-        return {f'{policy_keys.POLICY_META}.{k}': v for k, v in policy_meta.items()}
 
     def _instruction(self, task: Task) -> str:
         """The text the policy gets: the newest goal that this episode read, or the task's instruction before any."""
@@ -574,6 +574,8 @@ class Harness(pimm.ControlSystem):
         """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
         self._telemetry.begin(task.meta)
+        # The policy's own metadata now, so an episode that ends in its reset still names the policy.
+        self._telemetry.describe_policy(self._policy_meta(rollout.policy.meta(), {}))
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, task.prepare_args)
         if should_stop.value:
@@ -605,6 +607,8 @@ class Harness(pimm.ControlSystem):
             finally:
                 self.deadline_ns.emit(None)
         finally:
+            # Before the cleanup, so a cleanup failure keeps it: the runtime now holds the server's metadata.
+            self._telemetry.describe_policy(self._policy_meta(rollout.policy.meta(), runtime.metadata_snapshot()))
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
             logging.info('Closing the policy runtime')
@@ -614,9 +618,6 @@ class Harness(pimm.ControlSystem):
                 logging.info('Closing the policy')
                 policy_run.close()
                 logging.info('Policy closed')
-            # After the cleanup, so a failure here leaves no resource open. A remote policy sets its server's
-            # metadata on the runtime when its session opens, so the start of the episode is too early.
-            self._telemetry.describe_policy(self._policy_meta(rollout, runtime))
 
         self._telemetry.end(clock.now())
         if payload is not None:

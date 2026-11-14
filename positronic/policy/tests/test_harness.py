@@ -1383,12 +1383,21 @@ class SetsServerMetaOnFirstStep(Hold):
             yield Step({}, runtime.time_ns + 100_000_000)
 
 
-@pytest.mark.parametrize('ending', ['done', 'failure'])
+class FailsOnCloseAfterServerMeta(SetsServerMetaOnFirstStep):
+    def run(self, runtime):
+        try:
+            yield from super().run(runtime)
+        finally:
+            raise RuntimeError('policy cleanup failed')
+
+
+@pytest.mark.parametrize('ending', ['done', 'failure', 'cleanup_failure'])
 def test_the_episode_span_names_the_policy_under_its_recorded_keys(episode_harness, tmp_path, ending):
     h = episode_harness
+    policy = FailsOnCloseAfterServerMeta() if ending == 'cleanup_failure' else SetsServerMetaOnFirstStep()
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-policy'):
         h.observation.emit(1)
-        h.caller(Rollout(Task('move', None), SetsServerMetaOnFirstStep(), h.dataset))
+        h.caller(Rollout(Task('move', None), policy, h.dataset))
         next(h.loop)
         h.world.clock.advance_to_ns(100_000_000)
         if ending == 'failure':
@@ -1405,6 +1414,18 @@ def test_the_episode_span_names_the_policy_under_its_recorded_keys(episode_harne
     assert episode.attrs[f'{policy_keys.POLICY_META}.server.type'] == 'stub'
     # A list field stays on the recording only: the span keeps the scalar fields.
     assert f'{policy_keys.POLICY_META}.server.stack' not in episode.attrs
+
+
+def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness, tmp_path):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-policy-reset'):
+        h.caller(Rollout(Task('move', None, prepare_args={RESET: 'home'}), Hold(), h.dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
