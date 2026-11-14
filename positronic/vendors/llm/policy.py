@@ -556,8 +556,15 @@ class LLMPolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         with self.endpoint.open() as client:
-            if client.api_key_fingerprint is not None:
-                runtime.set_metadata(policy_keys.API_KEY_FINGERPRINT, client.api_key_fingerprint)
+            recorded_keys: list[str] = []
+
+            def record_keys():
+                # A request appends a key on its worker thread. Copy each new key into the metadata before every yield.
+                if len(client.api_key_fingerprints) != len(recorded_keys):
+                    recorded_keys[:] = client.api_key_fingerprints
+                    runtime.set_metadata(policy_keys.API_KEY_FINGERPRINTS, list(recorded_keys))
+
+            record_keys()
             conversation = Conversation(self, runtime.set_metadata)
             obs = yield
             while True:
@@ -567,7 +574,9 @@ class LLMPolicy(Policy):
                 answer = runtime.submit(client.request, messages, self.tools)
                 obs = yield Step({}, runtime.time_ns)
                 while not answer.done():
+                    record_keys()
                     obs = yield Step({}, runtime.time_ns)
+                record_keys()
                 decision = conversation.respond(answer.result())
                 if decision is None:
                     continue
