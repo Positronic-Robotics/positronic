@@ -65,9 +65,8 @@ class EncodeImages(Codec):
 class EncodeVideo(Codec):
     """Inference: encode the RGB image at each path as H.264, one Annex B access unit for each image.
 
-    Each path is one video stream. It starts with a key frame and sends a key frame once each second at ``fps``. The
-    receiver decodes the access units of each stream in their order, for example with ``AnnexBDecoder``. So the stack
-    must keep one call in flight. An odd side gets one edge row or column. Decoded results pass through unchanged.
+    Each path is one video stream. It starts with a key frame and sends a key frame once each second at ``fps``.
+    Decoded results pass through unchanged.
     """
 
     WIRE_NAME = 'encode_video'
