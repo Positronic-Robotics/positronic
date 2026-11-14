@@ -1435,16 +1435,6 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
-def _run_one_episode(h, policy):
-    h.observation.emit(1)
-    h.caller(Rollout(Task('move', None), policy, h.dataset))
-    next(h.loop)
-    h.done.emit({eval_keys.SUCCESS: True})
-    next(h.loop)
-    h.world.request_stop()
-    list(h.loop)
-
-
 class CountsMetaReads(Hold):
     def __init__(self):
         super().__init__()
@@ -1459,11 +1449,18 @@ class CountsMetaReads(Hold):
 def test_the_episode_span_reads_the_policy_metadata_only_when_telemetry_is_bound(
     episode_harness, tmp_path, bound, reads
 ):
+    h = episode_harness
     policy = CountsMetaReads()
     with ExitStack() as stack:
         if bound:
             stack.enter_context(telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-meta-reads'))
-        _run_one_episode(episode_harness, policy)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), policy, h.dataset))
+        next(h.loop)
+        h.done.emit({eval_keys.SUCCESS: True})
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
     assert policy.meta_reads == reads
 
 
