@@ -556,10 +556,14 @@ class LLMPolicy(Policy):
 
     def run(self, runtime: Runtime) -> PolicyRun:
         with self.endpoint.open() as client:
+            recorded_keys: list[str] = []
 
             def record_keys():
-                if client.api_key_fingerprints:
-                    runtime.set_metadata(policy_keys.API_KEY_FINGERPRINTS, list(client.api_key_fingerprints))
+                # A request appends a key on its worker thread when it switches keys. The harness can snapshot the
+                # metadata at any step, so each step copies a new key into it on the control thread.
+                if len(client.api_key_fingerprints) != len(recorded_keys):
+                    recorded_keys[:] = client.api_key_fingerprints
+                    runtime.set_metadata(policy_keys.API_KEY_FINGERPRINTS, list(recorded_keys))
 
             record_keys()
             conversation = Conversation(self, runtime.set_metadata)
@@ -571,8 +575,8 @@ class LLMPolicy(Policy):
                 answer = runtime.submit(client.request, messages, self.tools)
                 obs = yield Step({}, runtime.time_ns)
                 while not answer.done():
+                    record_keys()
                     obs = yield Step({}, runtime.time_ns)
-                # A request can switch to another pool key, so record the keys before a failure of the request raises.
                 record_keys()
                 decision = conversation.respond(answer.result())
                 if decision is None:

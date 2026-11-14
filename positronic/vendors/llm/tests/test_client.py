@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import pickle
 import secrets
+import threading
 from contextvars import ContextVar, copy_context
 from copy import copy
 from multiprocessing.reduction import ForkingPickler
@@ -200,13 +201,15 @@ def fingerprint(key: str) -> str:
 def serve(monkeypatch, replies: list[dict | httpx.Response]) -> list[httpx.Request]:
     """Answer each HTTP request of every new client with the next reply, and collect the requests.
 
-    A ``dict`` reply is the JSON body of a 200 response.
+    A ``dict`` reply is the JSON body of a 200 response. A callable reply is awaited for the reply it returns.
     """
     requests = []
 
     async def respond(request):
         requests.append(request)
         reply = replies.pop(0)
+        if callable(reply):
+            reply = await reply()
         return reply if isinstance(reply, httpx.Response) else httpx.Response(200, json=reply)
 
     initialize = httpx.AsyncClient.__init__
@@ -368,6 +371,29 @@ def test_an_anthropic_call_retries_on_another_key_when_its_key_has_no_credit(mon
         [fingerprint(second)],
     ]
     assert 'test-secret' not in json.dumps(recorded)
+
+
+def test_an_anthropic_episode_records_a_key_switch_while_the_retry_is_still_pending(monkeypatch, anthropic_pool):
+    release = threading.Event()
+
+    async def pending_reply():
+        await asyncio.to_thread(release.wait, 5)
+        return anthropic_reply('done', {'reason': 'finished', 'hindsight': 'check the image'})
+
+    requests = serve(monkeypatch, [httpx.Response(400, json=NO_CREDIT), pending_reply])
+    with execution(llm(model='anthropic:test-model')) as (active, rt, clock):
+        try:
+            for _ in range(1000):
+                if len(requests) == 2:
+                    break
+                active.send(observation())
+                rt.wait(0.01)
+            else:
+                pytest.fail('The retry was not sent')
+            active.send(observation())
+            assert rt.metadata_snapshot()[policy_keys.API_KEY_FINGERPRINTS] == list(map(fingerprint, anthropic_pool))
+        finally:
+            release.set()
 
 
 def test_an_anthropic_episode_stops_when_no_pool_key_has_credit(monkeypatch, anthropic_pool):
