@@ -80,13 +80,14 @@ The span names are the contract:
 | Span | Parent | Attributes | Measures |
 |---|---|---|---|
 | `eval.pass` | root | `run.id`, policy name | one eval sweep (its wall is `W_pass`) |
-| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; at end `episode.steps`, `episode.virtual_s` | one rollout's wall |
+| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; at end `episode.steps`, `episode.virtual_s`, `episode.waypoints.hold_sum_ms`, `episode.waypoints.hold_max_ms` | one rollout's wall |
 | `reset` | `episode` | — | scene reset (the harness readying the rig + the producer publishing what it drew) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
 | `record.io` | `episode` | — | the recorder's serialize + append |
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
+| `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
@@ -114,6 +115,22 @@ This prints the p10, p50 and p90 of each value over all steps that called the po
 ```
 uv run python -c "import sys,numpy as np;from positronic import telemetry as t, telemetry_keys as k;S=[s.attrs|{'step_ms':(s.end_ns-s.start_ns)/1e6} for s in t.read_spans(sys.argv[1]) if s.name==k.SPAN_HARNESS_STEP and k.ATTR_STEP_POLICY_MS in s.attrs];[print(f'{k:28s} n={len(v):5d}  p10/p50/p90 ms',*(f'{x:7.3f}' for x in np.percentile(v,[10,50,90]))) for k in sorted({k for a in S for k in a}) for v in [[a[k] for a in S if k in a]]]" <output_dir>/telemetry/harness.spans.jsonl
 ```
+
+### Reading holds and observation age
+
+The `episode` span carries `episode.waypoints.hold_sum_ms` and `episode.waypoints.hold_max_ms` when a
+`TrajectoryPlayer` plays the trajectories of the policy. A hold is the time from the end of the plan to the first
+command of the next chunk. During a hold the arm keeps its last target. The wait for the first chunk does not
+count, and a hold that the episode end cuts does not count. The hold share of a rollout is
+`hold_sum_ms / 1000 / episode.virtual_s`.
+
+The `obs.age_ms` of a `policy.submit` span is the time from the emission of the oldest camera frame in the
+observation to the start of the call. The harness reads the two times on one clock, the clock of the policy
+runtime. On a real rig it is the monotonic clock of the host. In a simulation it is the world clock, so the age is
+simulated time and does not include the wall time of the simulator. The age uses the capture time in
+`Runtime.observed_ns` when the call is submitted. The harness sets it for each step. A processor that sends an older
+sample sets the capture time of that sample: `Periodic` on an answer wake-up, and a `TemporalStack` whose newest offset
+is in the past. An observation with no camera gives no value.
 
 ### Reading the network time of a call
 

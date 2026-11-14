@@ -60,8 +60,11 @@ SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'
 DROPPED = 'dropped'
-# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk.
+# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk. ``HOLD_SUM_MS`` and
+# ``HOLD_MAX_MS`` are the total and the longest time that the arm holds its last target between two chunks.
 LATE_P50_MS = 'late_p50_ms'
 LATE_P90_MS = 'late_p90_ms'
 LATE_MAX_MS = 'late_max_ms'
 GAP_MAX_MS = 'gap_max_ms'
+HOLD_SUM_MS = 'hold_sum_ms'
+HOLD_MAX_MS = 'hold_max_ms'

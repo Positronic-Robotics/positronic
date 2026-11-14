@@ -113,6 +113,22 @@ def test_worker_span_keeps_parent_after_processor_yields(executors, tmp_path):
     assert calls[0].end_ns <= child.start_ns <= child.end_ns <= worker.end_ns <= calls[1].start_ns
 
 
+def test_worker_span_holds_the_observation_age_when_the_call_starts(executors, tmp_path):
+    runtime, now = executors()
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'obs-age'):
+        now[0] = 50_000_000
+        cast(_UnchargedAnswer[None], runtime.submit(lambda: None)).call.result(timeout=5)
+        runtime.start_tick(20_000_000)
+        cast(_UnchargedAnswer[None], runtime.submit(lambda: None)).call.result(timeout=5)
+        runtime.close()
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    unknown, observed = sorted(
+        (s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT), key=lambda s: s.start_ns
+    )
+    assert telemetry_keys.ATTR_OBS_AGE_MS not in unknown.attrs
+    assert observed.attrs[telemetry_keys.ATTR_OBS_AGE_MS] == pytest.approx(30.0)
+
+
 @pytest.mark.parametrize('read_first', [False, True])
 def test_completion_is_delivered_once_independently_of_result_reads(executors, read_first):
     runtime, _ = executors()
@@ -508,7 +524,7 @@ def test_execution_limits_are_independent_and_share_completions(executors):
                     with pytest.raises(QueueFull):
                         execution.submit(lambda: None)
                 now[0] = 123
-                runtime.start_tick()
+                runtime.start_tick(None)
                 assert first.time_ns == second.time_ns == runtime.time_ns == 123
                 assert first.tick == second.tick == runtime.tick
                 second.set_metadata('value', 42)

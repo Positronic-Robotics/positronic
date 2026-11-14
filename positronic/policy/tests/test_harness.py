@@ -1411,6 +1411,55 @@ def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harne
     assert {s.parent_id for s in policy_spans} == {first.span_id, second.span_id}
 
 
+def test_the_episode_span_carries_the_holds_of_the_schedule(episode_harness, tmp_path):
+    h = episode_harness
+
+    class Held(Policy):
+        def run(self, runtime):
+            runtime.set_metadata(f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}', 250.0)
+            runtime.set_metadata(f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_MAX_MS}', 150.0)
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-holds'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), Held(), None))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    assert episode.attrs[telemetry_keys.ATTR_WAYPOINTS_HOLD_SUM_MS] == 250.0
+    assert episode.attrs[telemetry_keys.ATTR_WAYPOINTS_HOLD_MAX_MS] == 150.0
+
+
+def test_a_submitted_call_carries_the_age_of_the_oldest_camera_frame(tmp_path):
+    class SubmitOnce(Policy):
+        def run(self, runtime):
+            yield
+            runtime.submit(lambda: None)
+            while True:
+                yield Step({}, runtime.time_ns + 10_000_000)
+
+    with (
+        _episode_ports(observed=(keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)) as h,
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-obs-age'),
+    ):
+        h.device_observations[keys.EXTERIOR_IMAGE].emit(np.zeros(1))
+        h.world.clock.advance_to_ns(10_000_000)
+        h.device_observations[keys.WRIST_IMAGE].emit(np.zeros(1))
+        h.world.clock.advance_to_ns(30_000_000)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), SubmitOnce(), None))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    [submit] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT]
+    assert submit.attrs[telemetry_keys.ATTR_OBS_AGE_MS] == pytest.approx(30.0)
+
+
 def test_the_step_that_the_policy_ends_records_the_policy_duration(episode_harness, tmp_path):
     h = episode_harness
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-policy-end-step'):
