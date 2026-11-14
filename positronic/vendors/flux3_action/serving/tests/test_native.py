@@ -13,11 +13,14 @@ torch = pytest.importorskip('torch', reason='Requires the native Flux3 environme
 pytest.importorskip('flux_action', reason='Requires the native Flux3 environment')
 
 
-@pytest.fixture
-def policy():
+@pytest.fixture(params=['cpu', 'cuda'])
+def policy(request):
+    if request.param == 'cuda' and not torch.cuda.is_available():
+        pytest.skip('Requires a CUDA device')
     native = import_module('..native', __package__)
     policy = native.Policy.__new__(native.Policy)
     policy._policy = Mock()
+    policy._policy.device = torch.device(request.param)
     policy._policy.config = SimpleNamespace(
         action_dim=8, chunk_size=32, camera_order=('images.wrist', 'images.left', 'images.right')
     )
@@ -42,14 +45,17 @@ def test_native_batch_and_prefix_keep_physical_units(policy, rtc):
     result = policy.predict(obs, prefix, seed=42)
     args, kwargs = policy._policy.predict_action_chunk.call_args
     batch = args[0]
-    np.testing.assert_array_equal(batch['state'], [[0, 1, 2, 3, 4, 5, 6, 0.25]])
+    assert batch['state'].device.type == policy._policy.device.type
+    np.testing.assert_array_equal(batch['state'].cpu(), [[0, 1, 2, 3, 4, 5, 6, 0.25]])
     assert batch['task'] == ['Pick up the cup.']
     for i, name in enumerate(policy.config.camera_order):
         assert batch[name].shape == (1, 3, 360, 640)
         assert batch[name].dtype == torch.uint8
+        assert batch[name].device.type == policy._policy.device.type
         assert torch.all(batch[name] == i * 40)
     if rtc:
-        np.testing.assert_array_equal(kwargs['committed_actions'], prefix[None])
+        assert kwargs['committed_actions'].device.type == policy._policy.device.type
+        np.testing.assert_array_equal(kwargs['committed_actions'].cpu(), prefix[None])
     else:
         assert kwargs['committed_actions'] is None
     assert policy.config.inference_seed == 42
