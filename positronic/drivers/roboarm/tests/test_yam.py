@@ -38,7 +38,7 @@ from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
-from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, YamKinematics
+from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, IK_ROT_TOL, YamKinematics, within_ik_tolerance
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
@@ -955,6 +955,24 @@ def test_ik_refuses_a_target_farther_past_full_stretch_than_the_tolerance():
     kinematics = YamKinematics()
     target = past_full_stretch(kinematics, 5 * IK_POS_TOL)
     assert kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper) is None
+
+
+@pytest.mark.parametrize(
+    'offset_m,turn_rad,within',
+    [
+        (0.9 * IK_POS_TOL, 0.0, True),
+        (1.1 * IK_POS_TOL, 0.0, False),
+        (0.0, 0.9 * IK_ROT_TOL, True),
+        (0.0, 1.1 * IK_ROT_TOL, False),
+    ],
+)
+def test_a_pose_meets_its_target_only_within_the_ik_tolerance(offset_m, turn_rad, within):
+    target = geom.Transform3D(np.array([0.3, 0.0, 0.2]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+    reached = geom.Transform3D(
+        target.translation + [0.0, offset_m, 0.0],
+        target.rotation * geom.Rotation.from_rotvec(np.array([turn_rad, 0.0, 0.0])),
+    )
+    assert within_ik_tolerance(reached, target) is within
 
 
 def test_ik_clamps_a_joint_just_below_its_range_to_its_lower_limit(monkeypatch):

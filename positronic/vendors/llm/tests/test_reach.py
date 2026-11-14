@@ -17,9 +17,8 @@ def hand_at(joints: np.ndarray, mount: geom.Transform3D = MOUNT) -> geom.Transfo
 
 
 def refusal(joints: np.ndarray, poses: list[geom.Transform3D], reach: YamReach | None = None, mount=MOUNT):
-    """The refusal of ``poses`` for an arm at ``joints`` whose hand is only where it is measured."""
-    hand = hand_at(joints, mount)
-    return (reach or YamReach()).refusal(joints, hand, [hand], poses)
+    """The refusal of ``poses`` for an arm at ``joints`` whose hand holds no target near it."""
+    return (reach or YamReach()).refusal(joints, hand_at(joints, mount), None, poses)
 
 
 def lift(start: geom.Transform3D, height: float, steps: int) -> list[geom.Transform3D]:
@@ -91,10 +90,11 @@ def sagged(joint: int, past: float) -> np.ndarray:
     return joints
 
 
-@pytest.mark.parametrize('joint,past', [(3, -0.007), (3, -0.01), (4, 0.004), (1, -0.012)])
+@pytest.mark.parametrize('joint,past', [(3, -0.007), (3, -0.01), (4, 0.01), (1, -0.012)])
 def test_an_arm_a_little_past_its_range_can_hold_its_measured_pose(joint, past):
     # The driver's IK fails there and the driver keeps its last target, so the arm stays.
     at = sagged(joint, past)
+    assert KINEMATICS.ik(MOUNT.inv * hand_at(at), at, KINEMATICS.lower, KINEMATICS.upper) is None
     assert refusal(at, [hand_at(at)] * 10) is None
 
 
@@ -115,11 +115,35 @@ def test_a_hold_that_the_driver_would_turn_into_another_posture_is_refused():
     assert reason.startswith('joint 6 would turn 3.14 rad at once')
 
 
-def test_a_hand_holds_its_target_where_the_ik_fails_when_that_target_is_a_start():
-    # The hand is 3 mm from its held target, the pose its arm was last sent to.
-    at = sagged(3, -0.01)
-    hand = hand_at(at)
-    held = geom.Transform3D(hand.translation + [0.003, 0, 0], hand.rotation)
-    reach = YamReach()
-    assert reach.refusal(at, hand, [hand], [held] * 5) is not None
-    assert reach.refusal(at, hand, [hand, held], [held] * 5) is None
+def trailing(joint: int, past: float) -> tuple[np.ndarray, geom.Transform3D, geom.Transform3D]:
+    """An arm ``past`` its range at ``joint``, its hand, and the target it was sent to: the hand of the range end."""
+    at = sagged(joint, past)
+    return at, hand_at(at), hand_at(np.clip(at, KINEMATICS.lower, KINEMATICS.upper))
+
+
+def test_a_hand_holds_its_target_where_the_ik_fails_on_the_way_from_the_hand_to_that_target():
+    # The hand is 2.5 mm from its target. Motion samples the way between them for an arm that a waypoint leaves out.
+    at, hand, held = trailing(3, -0.01)
+    way = [hand.interpolate(held, i / 9) for i in range(1, 10)]
+    assert YamReach().refusal(at, hand, held, way) is None
+    assert YamReach().refusal(at, hand, None, way) is not None
+
+
+def test_a_pose_beside_the_way_from_the_hand_to_its_target_is_refused_where_the_ik_fails():
+    at, hand, held = trailing(3, -0.01)
+    beside = hand.interpolate(held, 0.5)
+    beside = geom.Transform3D(beside.translation + [0, 0.002, 0], beside.rotation)
+    assert YamReach().refusal(at, hand, held, [beside]) is not None
+
+
+def test_a_hand_that_leaves_and_comes_back_where_the_ik_fails_is_refused():
+    # Going down turns joint 4 away from its limit. Back at the start, the driver would keep the last pose it could
+    # solve, short of the start.
+    at, hand, held = trailing(3, -0.01)
+    down = geom.Transform3D(hand.translation + [0, 0, -0.02], hand.rotation)
+    away = [hand.interpolate(down, i / 5) for i in range(1, 6)]
+    back = [down.interpolate(hand, i / 5) for i in range(1, 6)]
+    assert YamReach().refusal(at, hand, held, away) is None
+    index, reason = YamReach().refusal(at, hand, held, away + back)
+    assert index == len(away + back) - 1
+    assert reason.startswith('joint 4 is at its lower limit (-1.69 rad)')

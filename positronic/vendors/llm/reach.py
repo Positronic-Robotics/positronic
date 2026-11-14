@@ -7,7 +7,7 @@ import configuronic as cfn
 import numpy as np
 
 from positronic import geom
-from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, IK_ROT_TOL, YamKinematics
+from positronic.drivers.roboarm.yam.kinematics import YamKinematics, within_ik_tolerance
 from positronic.utils import check_finite_positive
 
 
@@ -28,22 +28,15 @@ class Reach(Protocol):
         self,
         joints: np.ndarray,
         hand: geom.Transform3D,
-        starts: Sequence[geom.Transform3D],
+        held: geom.Transform3D | None,
         poses: Sequence[geom.Transform3D],
     ) -> tuple[int, str] | None:
         """The index of the first pose of ``poses`` that a hand at ``hand`` with its arm at ``joints`` cannot follow
-        in order, and why; or ``None``. ``starts`` are the poses where the hand already is."""
+        in order, and why; or ``None``. ``held`` is the target that the hand holds when the hand is within the
+        tracking error of it, else ``None``."""
         ...
 
     def meta(self) -> dict[str, Any]: ...
-
-
-def _same_pose(a: geom.Transform3D, b: geom.Transform3D) -> bool:
-    """Whether ``a`` and ``b`` agree within the tolerance at which the driver's IK accepts a solution."""
-    angle = (a.rotation.inv * b.rotation).angle
-    return bool(
-        np.linalg.norm(a.translation - b.translation) < IK_POS_TOL and min(angle, 2 * np.pi - angle) < IK_ROT_TOL
-    )
 
 
 class YamReach:
@@ -51,8 +44,8 @@ class YamReach:
 
     The arm base is where the measured hand and joints put it, since the station reports the hand at its base pose
     times the FK of its joints. A pose is out of reach when the driver's IK cannot meet it inside the joint ranges,
-    unless the hand is already there. A pose is also refused when a joint turns more than ``max_joint_step`` (rad)
-    from the pose before it: the driver would then swing the arm to another posture.
+    unless the hand is already there and has not moved yet. A pose is also refused when a joint turns more than
+    ``max_joint_step`` (rad) from the pose before it: the driver would then swing the arm to another posture.
     """
 
     # TODO: the station owns the joint ranges (its chain reports them), and they reach no policy. The check uses the
@@ -78,29 +71,48 @@ class YamReach:
         if excess[joint].min() <= 0:
             return 'the IK finds no joints inside the ranges from this posture. Reach it through a nearer pose'
         side, limit = ('lower', lower[joint]) if nearest[joint] < lower[joint] else ('upper', upper[joint])
+        # Adding 0.0 prints a limit of -1e-15 rad as 0.00, not -0.00.
         return (
-            f'joint {joint + 1} is at its {side} limit ({limit:.2f} rad). '
+            f'joint {joint + 1} is at its {side} limit ({round(limit, 2) + 0.0:.2f} rad). '
             'Reach it with another orientation or a nearer position'
         )
+
+    @staticmethod
+    def _already_there(pose: geom.Transform3D, hand: geom.Transform3D, held: geom.Transform3D | None) -> bool:
+        """Whether ``pose`` is where the hand already is: at ``hand``, or on the way from ``hand`` to ``held``."""
+        if held is None:
+            return within_ik_tolerance(pose, hand)
+        gap = held.translation - hand.translation
+        if (length := float(gap @ gap)) > 0:
+            fraction = float(np.clip((pose.translation - hand.translation) @ gap / length, 0, 1))
+        elif (turn := (hand.rotation.inv * held.rotation).angle) > 0:
+            fraction = float(np.clip((hand.rotation.inv * pose.rotation).angle / turn, 0, 1))
+        else:
+            fraction = 0.0
+        return within_ik_tolerance(pose, hand.interpolate(held, fraction))
 
     def refusal(
         self,
         joints: np.ndarray,
         hand: geom.Transform3D,
-        starts: Sequence[geom.Transform3D],
+        held: geom.Transform3D | None,
         poses: Sequence[geom.Transform3D],
     ) -> tuple[int, str] | None:
         kinematics = self._kinematics
-        base = (hand * kinematics.fk(joints).inv).inv
+        base = hand * kinematics.fk(joints).inv
         lower, upper = kinematics.lower, kinematics.upper
+        staying = True
         for index, pose in enumerate(poses):
-            target = base * pose
+            target = base.inv * pose
+            already_there = staying and self._already_there(pose, hand, held)
             solution = kinematics.ik(target, joints, lower, upper)
             if solution is None:
-                # The driver keeps its last target when the IK fails, so a hand that is already there stays.
-                if any(_same_pose(pose, start) for start in starts):
+                # The driver keeps its last target when the IK fails. Until the hand moves, that target holds the hand
+                # where it is; after, the arm would stop short.
+                if already_there:
                     continue
                 return index, self._limit_refusal(target, joints, lower, upper)
+            staying = already_there
             step = np.abs(solution - joints)
             joint = int(np.argmax(step))
             if step[joint] > self._max_joint_step:

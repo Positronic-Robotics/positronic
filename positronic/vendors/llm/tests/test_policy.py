@@ -25,15 +25,16 @@ from pydantic_ai.messages import (
 from pydantic_ai.settings import ModelSettings
 
 from pimm.world import VirtualClock
-from positronic import keys
+from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.drivers.roboarm.yam.kinematics import YamKinematics
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath
 from positronic.vendors.llm.policy import Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
-from positronic.vendors.llm.reach import Box
+from positronic.vendors.llm.reach import Box, YamReach
 
 
 def observation(x=0.0):
@@ -834,14 +835,17 @@ def test_a_path_that_takes_a_hand_into_a_keep_out_box_that_does_not_hold_it_play
 
 class ScriptedReach:
     """A reach that refuses the first pose at or above ``height`` of the hand on the right (y < 0), and records the
-    joints that it gets for each hand, by the side of the hand."""
+    joints, the hand and the held target that it gets for each hand, by the side of the hand."""
 
     def __init__(self, height: float):
         self.height = height
         self.joints: dict[str, np.ndarray] = {}
+        self.hands: dict[str, geom.Transform3D] = {}
+        self.held: dict[str, geom.Transform3D | None] = {}
 
-    def refusal(self, joints, hand, starts, poses):
-        self.joints[keys.RIGHT_ARM if hand.translation[1] < 0 else keys.LEFT_ARM] = joints
+    def refusal(self, joints, hand, held, poses):
+        side = keys.RIGHT_ARM if hand.translation[1] < 0 else keys.LEFT_ARM
+        self.joints[side], self.hands[side], self.held[side] = joints, hand, held
         for index, pose in enumerate(poses):
             if hand.translation[1] < 0 and pose.translation[2] >= self.height:
                 return index, 'joint 4 is at its lower limit (-1.69 rad)'
@@ -866,6 +870,67 @@ def test_a_path_that_a_hand_cannot_follow_plays_nothing_and_names_the_waypoint_a
     assert rejection(metadata) == 'Hand right cannot reach waypoint 2: joint 4 is at its lower limit (-1.69 rad)'
     np.testing.assert_array_equal(reach.joints[keys.LEFT_ARM], np.zeros(6))
     np.testing.assert_array_equal(reach.joints[keys.RIGHT_ARM], np.ones(6))
+
+
+@pytest.mark.parametrize('measured_x,held', [(0.017, True), (0.014, False)])
+def test_the_reach_gets_the_measured_hand_and_its_target_only_within_the_tracking_error(measured_x, held):
+    reach = ScriptedReach(1.0)
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, reach=reach), lambda *_: None)
+    assert decide(conversation, with_joints(bimanual_observation()), move_arms({'right': (0.02, -0.3)})) != [[]]
+    trailing = hands_at(with_joints(bimanual_observation()), {'right': (measured_x, -0.3)})
+    assert decide(conversation, trailing, move_arms({'left': (0.0, 0.3, 0.15)})) != [[]]
+    np.testing.assert_allclose(reach.hands[keys.RIGHT_ARM].translation, [measured_x, -0.3, 0.1])
+    target = reach.held[keys.RIGHT_ARM]
+    assert (target is not None) is held
+    if held:
+        np.testing.assert_allclose(target.translation, [0.02, -0.3, 0.1])
+
+
+YAM_KINEMATICS = YamKinematics()
+YAM_MOUNTS = {
+    keys.LEFT_ARM: geom.Transform3D(np.array([0.30, 0.305, 0.3125])),
+    keys.RIGHT_ARM: geom.Transform3D(np.array([0.30, -0.305, 0.3125])),
+}
+
+
+def yam_observation(joints: dict[str, np.ndarray]):
+    """A bimanual observation of YAM arms at ``joints``, with each hand where its joints put it."""
+    obs = bimanual_observation()
+    for arm, arm_joints in joints.items():
+        hand = YAM_MOUNTS[arm] * YAM_KINEMATICS.fk(arm_joints)
+        state = keys.arm_channel(keys.ROBOT_STATE, arm)
+        obs[f'{state}{keys.EE_POSE_SUFFIX}'] = hand.as_vector(geom.Rotation.Representation.QUAT)
+        obs[f'{state}{keys.JOINTS_SUFFIX}'] = arm_joints
+    return obs
+
+
+def move_hands(waypoint: dict[str, geom.Transform3D]):
+    """A path of one waypoint of hand poses."""
+    poses = {}
+    for arm, pose in waypoint.items():
+        (x, y, z), (roll, pitch, yaw) = map(float, pose.translation), map(float, pose.rotation.as_euler)
+        poses[arm] = {'x': x, 'y': y, 'z': z, 'roll': roll, 'pitch': pitch, 'yaw': yaw, 'gripper': 0}
+    return ModelResponse([
+        ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': [poses], 'note': 'Move.'}, tool_call_id='m')
+    ])
+
+
+@pytest.mark.parametrize('measured', [-1.700, -1.703, -1.71])
+def test_an_arm_that_trails_its_target_past_a_joint_limit_holds_it_while_the_other_arm_moves(measured):
+    # The right hand points down with joint 4 on its lower limit, then sags past it, up to 4.3 mm off its target.
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, reach=YamReach()), metadata.__setitem__)
+    side_on = np.array([0.0, 1.2, 1.0, 0.0, 0.3, 0.0])
+    on_limit = np.array([0.0, 1.9, 1.9, YAM_KINEMATICS.lower[3], 0.0, 0.0])
+    right = YAM_MOUNTS[keys.RIGHT_ARM] * YAM_KINEMATICS.fk(on_limit)
+    at_target = yam_observation({keys.LEFT_ARM: side_on, keys.RIGHT_ARM: on_limit})
+    assert decide(conversation, at_target, move_hands({keys.RIGHT_ARM: right})) != [[]]
+    sagged = on_limit.copy()
+    sagged[3] = measured
+    left = YAM_MOUNTS[keys.LEFT_ARM] * YAM_KINEMATICS.fk(side_on)
+    moved = geom.Transform3D(left.translation + [0.03, 0, 0], left.rotation)
+    trailing = yam_observation({keys.LEFT_ARM: side_on, keys.RIGHT_ARM: sagged})
+    assert decide(conversation, trailing, move_hands({keys.LEFT_ARM: moved})) != [[]], rejection(metadata)
 
 
 @pytest.mark.parametrize('measured_z,accepted', [(0.104, True), (0.106, False)])

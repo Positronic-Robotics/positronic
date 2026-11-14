@@ -465,9 +465,8 @@ class Conversation:
         policy = self._policy
         name = 'The hand' if arm is None else f'Hand {arm}'
         # A hand within max_tracking_error of its held target is at that target too.
-        starts = [hand.pose]
-        if np.linalg.norm(hand.pose.translation - held.pose.translation) <= policy.max_tracking_error:
-            starts.append(held.pose)
+        near = np.linalg.norm(hand.pose.translation - held.pose.translation) <= policy.max_tracking_error
+        starts = [hand.pose, held.pose] if near else [hand.pose]
         floor = None
         if policy.min_hand_height is not None:
             floor = min(policy.min_hand_height, *(start.translation[2] for start in starts))
@@ -484,7 +483,7 @@ class Conversation:
         if policy.reach is None:
             return None
         joints = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'], float)
-        refusal = policy.reach.refusal(joints, hand.pose, starts, [pose for _, pose in samples])
+        refusal = policy.reach.refusal(joints, hand.pose, held.pose if near else None, [pose for _, pose in samples])
         if refusal is None:
             return None
         sample, reason = refusal
