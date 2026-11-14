@@ -3,7 +3,7 @@
 ``positronic teleop`` runs it beside a run whose policy dials its socket. It is a model server: the preparation of a
 session waits for Ready, and each frame request gets the next target of the teleoperator. Each session declares stock
 components only in its client stack. The service keeps the trial state and the clutch, so the input of the
-teleoperator stays in this process. The headset page shows the camera image of the run and the state of the trial.
+teleoperator stays in this process. The headset page shows the camera images of the run and the state of the trial.
 The teleoperator uses the buttons of the right controller.
 """
 
@@ -27,6 +27,7 @@ from positronic_model_server.server_wire import ServedAddress
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 
 from positronic import geom, keys
+from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
@@ -180,6 +181,8 @@ class TrialState:
 
 # The use of Y on the left controller, at the bottom of the view
 Y_HINT = 'Y: next camera. Hold Y: panel'
+# The width of the column of the view that shows the other cameras of the session, half the width of the main camera
+OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
 
 @dataclass(frozen=True)
@@ -256,6 +259,8 @@ class TeleopService:
         self._images: dict[str, np.ndarray] = {}
         # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
         self._seen: dict[str, float] = {}
+        # The cameras that the session of this trial sends, from the wait for Ready on
+        self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
         self._headset_camera: str | None = None
         # The camera that the teleoperator chose on the headset page. It holds over trials, and goes before the camera
@@ -368,7 +373,7 @@ class TeleopService:
             now = time.monotonic()
             recent = tuple(name for name, seen_at in self._seen.items() if now - seen_at < self.LIVE_SEC)
             # Between trials: the cameras of the station, and the cameras of the last run that are still live
-            names = tuple(self._images) or tuple(dict.fromkeys((*self.station_cameras, *recent)))
+            names = self._trial_cameras or tuple(dict.fromkeys((*self.station_cameras, *recent)))
             live = tuple(name for name in names if name in recent)
             return CameraState(names, live, self._shown_camera(), self._chosen_camera)
 
@@ -376,8 +381,8 @@ class TeleopService:
         """Show camera ``name`` in the headset from now on, or the camera of the session for ``None``. Raise
         ``ValueError`` for a camera that neither the run nor the station has."""
         with self._changed:
-            if name is not None and name not in self._images and name not in self.station_cameras:
-                known = sorted({*self._images, *self.station_cameras})
+            if name is not None and name not in self._trial_cameras and name not in self.station_cameras:
+                known = sorted({*self._trial_cameras, *self.station_cameras})
                 raise ValueError(f'no camera {name!r}: the run and the station have {known}')
             self._chosen_camera = name
 
@@ -398,38 +403,72 @@ class TeleopService:
             self._changed.notify_all()
 
     @staticmethod
-    def _view(image: np.ndarray | None, lines: Sequence[str], footer: Sequence[str] = ()) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom."""
+    def _text(view: np.ndarray, origin: tuple[int, int], line: str, scale: float) -> None:
+        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
+
+    @classmethod
+    def _view(
+        cls,
+        image: np.ndarray | None,
+        lines: Sequence[str],
+        footer: Sequence[str] = (),
+        others: Sequence[tuple[str, np.ndarray | None]] = (),
+    ) -> np.ndarray:
+        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom.
+
+        With ``others``, the view has a column on its right with one named cell for each of them, and ``image`` fits
+        the left part of the view size.
+        """
         width, height = VIEW_SIZE
-        blank = (height, width, 3)
-        # A copy: the text goes on the view, not on the image that the service holds.
-        view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
-        placed = [((10, 26 + 30 * row), line, 0.75) for row, line in enumerate(lines)]
-        placed += [((10, height - 10 - 22 * row), line, 0.55) for row, line in enumerate(reversed(footer))]
-        for origin, line, scale in placed:
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
+        if others:
+            view = np.zeros((height, width + OTHERS_WIDTH, 3), dtype=np.uint8)
+            if image is not None:
+                view[:, :width] = transform_frame(image, width, height, mode=ResizeMode.PAD, resample=Resample.AREA)
+            cell_height = height // len(others)
+            for row, (name, other) in enumerate(others):
+                top = row * cell_height
+                if other is not None:
+                    cell = transform_frame(
+                        other, OTHERS_WIDTH, cell_height, mode=ResizeMode.PAD, resample=Resample.AREA
+                    )
+                    view[top : top + cell_height, width:] = cell
+                cls._text(view, (width + 6, top + 18), name.removeprefix(keys.IMAGE_PREFIX), 0.5)
+        elif image is None:
+            view = np.zeros((height, width, 3), dtype=np.uint8)
+        else:
+            # A copy: the text goes on the view, not on the image that the service holds.
+            view = np.array(image, dtype=np.uint8, order='C')
+        bottom = view.shape[0]
+        for row, line in enumerate(lines):
+            cls._text(view, (10, 26 + 30 * row), line, 0.75)
+        for row, line in enumerate(reversed(footer)):
+            cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
 
     def view(self, camera: bool = True) -> np.ndarray:
         """The image for the headset: the camera image of the run, or black with no ``camera``, with the state of the
-        trial."""
+        trial. With more than one camera, a column on the right shows the other cameras."""
         with self._changed:
             state = self.state()
             shown = self._shown_camera()
             image = self._headset_image() if camera else None
+            names = self.cameras().names
+            main = shown if shown in names else next(iter(names), None)
+            shows_images = state.phase is Phase.RUNNING and camera
+            others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
         footer = [Y_HINT]
         match state.phase:
             case Phase.IDLE:
-                return self._view(None, ['Waiting for a trial'], footer)
+                return self._view(None, ['Waiting for a trial'], footer, others)
             case Phase.READY_WAIT:
-                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'], footer)
+                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'], footer, others)
             case Phase.ENDED:
-                return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer)
+                return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
         control = 'Control on (A: off)' if state.control else 'Control off (A: on)'
-        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer)
+        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer, others)
 
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
@@ -442,7 +481,7 @@ class TeleopService:
         shown = self._shown_camera()
         return None if shown is None else self._images.get(shown)
 
-    def resume_dropped_trial(self, headset_camera: str | None) -> ResumeOutcome:
+    def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped before its first answer, as the next session of its client.
 
         The client opens such a session again within its reconnect deadline, and the teleoperator pressed Ready already.
@@ -451,14 +490,12 @@ class TeleopService:
             self._forget_an_old_dropped_trial()
             if self._resumable_until is None:
                 return ResumeOutcome.NO_DROPPED_TRIAL
-            self._resumable_until, self._headset_camera = None, headset_camera
+            self._resumable_until, self._trial_cameras = None, settings.cameras
+            self._headset_camera = settings.headset_camera
             return ResumeOutcome.RESUMED
 
-    def wait_for_ready(
-        self, operator: geom.Transform3D | None, headset_camera: str | None, cancelled: threading.Event
-    ) -> None:
-        """Start a new trial, and wait up to the ready limit for Ready. The clutch maps the hand with ``operator``, and
-        the headset shows ``headset_camera``, or the first camera for ``None``.
+    def wait_for_ready(self, settings: SessionParams, cancelled: threading.Event) -> None:
+        """Start a new trial of a session with ``settings``, and wait up to the ready limit for Ready.
 
         Raise ``TrialNotStarted`` for Cancel or for no Ready within the ready limit, and ``PreparationCancelled`` when
         ``cancelled`` is set or the service stops.
@@ -466,7 +503,8 @@ class TeleopService:
         deadline = time.monotonic() + self.ready_limit
         with self._changed:
             self._clear_trial()
-            self._phase, self._ready, self._headset_camera = Phase.READY_WAIT, None, headset_camera
+            self._phase, self._ready = Phase.READY_WAIT, None
+            self._trial_cameras, self._headset_camera = settings.cameras, settings.headset_camera
             while (
                 self._ready is None
                 and not self._stopping
@@ -476,7 +514,7 @@ class TeleopService:
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
             ready, self._phase = self._ready, Phase.RUNNING if self._ready is ReadyAnswer.READY else Phase.IDLE
             if ready is ReadyAnswer.READY:
-                self._tracker = Tracker(operator, self.controller_axes)
+                self._tracker = Tracker(settings.operator(), self.controller_axes)
         if ready is ReadyAnswer.READY:
             return
         if self._stopping or cancelled.is_set():
@@ -549,7 +587,7 @@ class TeleopService:
     def _clear_trial(self) -> None:
         """Show no trial. Hold the lock."""
         self._phase, self._events = Phase.IDLE, []
-        self._task, self._tracker, self._images = '', None, {}
+        self._task, self._tracker, self._images, self._trial_cameras = '', None, {}, ()
         self._headset_camera, self._hold, self._frames, self._resumable_until = None, None, 0, None
         self._end = None
 
@@ -636,8 +674,8 @@ class TeleopModel(Model):
             settings = replace(settings, cameras=self._service.station_cameras)
         self._open = True
         try:
-            if self._service.resume_dropped_trial(settings.headset_camera) is ResumeOutcome.NO_DROPPED_TRIAL:
-                self._service.wait_for_ready(settings.operator(), settings.headset_camera, self.preparation_cancelled)
+            if self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
+                self._service.wait_for_ready(settings, self.preparation_cancelled)
         except BaseException:
             self._open = False
             raise
