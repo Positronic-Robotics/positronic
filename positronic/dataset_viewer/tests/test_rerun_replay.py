@@ -668,30 +668,32 @@ def test_a_replay_of_a_clock_far_from_zero_opens_at_the_episode_start(tmp_path, 
     assert sent['camera'] == from_start
 
 
-def test_each_clock_counts_from_its_earliest_sample_in_the_episode_and_a_sequence_keeps_its_values(tmp_path):
+def test_each_clock_counts_from_its_earliest_sample_in_the_episode_and_a_sequence_keeps_its_values(
+    tmp_path, monkeypatch
+):
+    sent = _capture_indexes(monkeypatch)
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
-        writer.append('early', 1.0, Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS, 'tick': 7}))
-        writer.append('late', 2.0, Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS + 500, 'tick': 9}))
-    ep = typing.cast(DiskEpisode, LocalDataset(root)[0])
-    axes = rerun_replay.replay_axes(ep)
+        writer.append('early', np.zeros(1), Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS, 'tick': 7}))
+        writer.append('late', np.zeros(1), Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS + 500, 'tick': 9}))
 
-    assert axes.starts == {RECEIVED_WORLD: _BOOT_CLOCK_NS}
-    columns = _timestamp_columns(ep.signals['late'], axes)
-    assert {name: values.tolist() for name, values in columns.items()} == {RECEIVED_WORLD: [500], 'tick': [9]}
+    b''.join(stream_episode_rrd(LocalDataset(root), 0, max_hz=0))
+
+    assert sent['/signals/early'] == {RECEIVED_WORLD: [0], 'tick': [7]}
+    assert sent['/signals/late'] == {RECEIVED_WORLD: [500], 'tick': [9]}
 
 
-def test_a_recorded_signal_copied_to_the_world_clock_can_set_its_start(tmp_path):
+def test_a_recorded_signal_copied_to_the_world_clock_can_set_its_start(tmp_path, monkeypatch):
+    sent = _capture_indexes(monkeypatch)
     root = tmp_path / 'ds'
     with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
         writer.append(STATE_SIGNAL, 'floating', Time(**{RECORDED_TIME: _BOOT_CLOCK_NS}))
         writer.append('robot.q', np.zeros(2), Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS + 300}))
-    ep = typing.cast(DiskEpisode, LocalDataset(root)[0])
 
-    axes = rerun_replay.replay_axes(ep)
+    b''.join(stream_episode_rrd(LocalDataset(root), 0, max_hz=0))
 
-    assert axes.recorded_also_on == RECEIVED_WORLD
-    assert axes.starts == {RECORDED_TIME: _BOOT_CLOCK_NS, RECEIVED_WORLD: _BOOT_CLOCK_NS}
+    assert sent[f'/text/{STATE_SIGNAL}'] == {RECORDED_TIME: [0], RECEIVED_WORLD: [0]}
+    assert sent['/signals/robot.q/0'] == {RECEIVED_WORLD: [300]}
 
 
 def test_a_text_log_displays_all_timelines():
