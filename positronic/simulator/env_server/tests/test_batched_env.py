@@ -7,6 +7,7 @@ reports the grip of the last action it received, so a test can see which client'
 
 import ast
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
@@ -21,8 +22,9 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
+from positronic.simulator.env_server.launcher import free_port
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
-from positronic.simulator.env_server.server import EnvProtocol
+from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.env_server.tests.mujoco_env import make_mujoco_env
 from positronic.tests.testing_coutils import drive_scheduler
@@ -91,15 +93,22 @@ class _ClonedScene(EnvProtocol):
         pass
 
 
+def _connect(host: str, port: int) -> EnvConnection:
+    conn = EnvConnection(host, port, connect_deadline=2.0)
+    conn.tasks({})  # a request the server answers at once, so this client holds its slot
+    return conn
+
+
 @contextmanager
-def _clients(env: _ClonedScene) -> Iterator[list[EnvConnection]]:
-    """One connection per clone of ``env``, opened in slot order."""
-    with serve_env(env) as (host, port):
+def _clients(
+    env: _ClonedScene, count: int | None = None, join_deadline: float = DEFAULT_JOIN_DEADLINE
+) -> Iterator[list[EnvConnection]]:
+    """``count`` connections, one per clone of ``env`` by default, opened in slot order."""
+    with serve_env(env, join_deadline) as (host, port):
         conns = []
         try:
-            for _ in range(env.num_slots):
-                conns.append(EnvConnection(host, port))
-                conns[-1].tasks({})  # a request the server answers at once, so this client holds its slot
+            for _ in range(env.num_slots if count is None else count):
+                conns.append(_connect(host, port))
             yield conns
         finally:
             for conn in conns:
@@ -191,13 +200,140 @@ def test_a_slot_whose_client_resets_early_waits_without_an_action():
 
 
 @pytest.mark.timeout(60.0)
-def test_a_client_that_leaves_holds_nobody_back():
+def test_a_client_that_leaves_its_episode_holds_nobody_back():
     env = _ClonedScene(ends_at=[9, 9])
     with _clients(env) as (first, second):
+        _together(lambda: first.reset(None), lambda: second.reset(None))
         first.close()
-        second.reset(None)
         second.step(_action(0.0))
-    assert env.stepped == [{1}]
+        second.reset(None)
+    assert env.stepped == [{1}] and len(env.resets) == 2
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_no_client_claims_sits_out_the_reset_after_the_join_deadline():
+    """1 of 4 clients never connects; the other 3 reset when the deadline passes and run to the end."""
+    env = _ClonedScene(ends_at=[2, 2, 2, 2])
+    with _clients(env, count=3, join_deadline=0.5) as conns:
+        _together(*[lambda conn=conn: conn.reset(None) for conn in conns])
+        _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in conns])
+        last = _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in conns])
+
+    assert all(frame[protocol.FRAME_DONE] for frame in last)
+    assert env.stepped == [{0, 1, 2}, {0, 1, 2}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_that_never_asks_for_a_reset_sits_out_after_the_join_deadline():
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, join_deadline=0.5) as (first, _silent):
+        first.reset(None)
+        first.step(_action(0.0))
+    assert env.stepped == [{0}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_that_asks_inside_the_join_deadline_joins_the_reset():
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, join_deadline=10.0) as (first, second), ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(first.reset, None)
+
+        assert _held_back(pending), 'the reset ran before the deadline, without the slow slot'
+        second.reset(None)
+        pending.result(timeout=10.0)
+        _together(lambda: first.step(_action(0.0)), lambda: second.step(_action(0.0)))
+    assert env.stepped == [{0, 1}] and len(env.resets) == 1
+
+
+@pytest.mark.timeout(60.0)
+def test_a_batch_waits_the_join_deadline_only_for_its_first_reset():
+    """The slots that reset together are the batch; a later reset of the batch waits only for them."""
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, count=1, join_deadline=1.0) as (conn,):
+        conn.reset(None)
+        started = time.monotonic()
+        conn.reset(None)
+        assert time.monotonic() - started < 0.5, 'the batch waited the join deadline again for the empty slot'
+
+
+@pytest.mark.timeout(60.0)
+def test_a_batch_resets_at_its_join_deadline_when_no_request_comes():
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, count=1, join_deadline=0.05) as (conn,):
+        started = time.monotonic()
+        conn.reset(None)
+        assert time.monotonic() - started < 0.3, 'the reset ran long after the join deadline'
+
+
+@pytest.mark.timeout(60.0)
+def test_the_join_deadline_counts_from_when_the_previous_batch_left():
+    """A slot that waited through a running batch does not start the next batch alone."""
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env, join_deadline=0.5) as (host, port), ThreadPoolExecutor(1) as pool:
+        first = _connect(host, port)
+        first.reset('first batch')
+        late = _connect(host, port)
+        joining = pool.submit(late.reset, 'second batch')
+        time.sleep(0.8)
+        first.close()
+        newcomer = _connect(host, port)
+        newcomer.reset('second batch')
+        joining.result(timeout=10.0)
+        _together(lambda: late.step(_action(0.0)), lambda: newcomer.step(_action(0.0)))
+        late.close()
+        newcomer.close()
+    assert env.resets == ['first batch', 'second batch']
+    assert env.stepped == [{0, 1}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_that_sat_out_a_batch_joins_the_next_one():
+    """A late client waits while the batch runs, also through its later resets, and resets once the batch leaves."""
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env, join_deadline=0.5) as (host, port), ThreadPoolExecutor(1) as pool:
+        first = _connect(host, port)
+        first.reset('first batch')
+        late = _connect(host, port)
+        joining = pool.submit(late.reset, 'second batch')
+        first.step(_action(0.0))
+        first.reset('first batch')
+
+        assert _held_back(joining), 'the late slot joined a batch that was already running'
+        first.close()
+        frame = joining.result(timeout=10.0)
+        late.step(_action(0.0))
+        late.close()
+    assert _steps(frame) == 0.0
+    assert env.resets == ['first batch', 'first batch', 'second batch']
+    assert env.stepped == [{0}, {1}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_whose_client_left_is_taken_by_a_new_client():
+    env = _ClonedScene(ends_at=[1])
+    with serve_env(env) as (host, port):
+        for batch in ('first batch', 'second batch'):
+            conn = _connect(host, port)
+            conn.reset(batch)
+            assert conn.step(_action(0.0))[protocol.FRAME_DONE]
+            conn.close()
+    assert env.resets == ['first batch', 'second batch']
+
+
+@pytest.mark.timeout(60.0)
+def test_the_server_keeps_serving_after_every_slot_leaves():
+    host, port = 'localhost', free_port()
+    server = EnvServer(_ClonedScene(ends_at=[9, 9]), host, port)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for conn in [_connect(host, port), _connect(host, port)]:
+            conn.close()
+        thread.join(timeout=2.0)
+        assert thread.is_alive(), 'the server ended when every slot had left'
+    finally:
+        server.shutdown()
+        thread.join(timeout=2.0)
 
 
 @pytest.mark.timeout(60.0)

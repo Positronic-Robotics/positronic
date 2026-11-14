@@ -5,6 +5,7 @@ Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole I
 """
 
 import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -59,6 +60,15 @@ def test_the_clone_count_and_the_host_reach_the_env_server(spawned):
     assert _flag(spawned[0], '--num-envs') == '16'
     assert _flag(spawned[0], '--host') == '0.0.0.0'
     assert _flag(spawned[0], '--cameras') == robolab_keys.WRIST_LEFT
+
+
+def test_the_join_deadline_of_a_shared_server_reaches_the_env_server(spawned, monkeypatch):
+    argv = ['launcher', '--num-envs', '8', '--port', '9000', '--join-deadline', '45']
+    monkeypatch.setattr(sys, 'argv', argv)
+    with pytest.raises(SystemExit):
+        launcher.main()
+
+    assert _flag(spawned[0], '--join-deadline') == '45.0'
 
 
 class _OneTaskEnv(EnvProtocol):
