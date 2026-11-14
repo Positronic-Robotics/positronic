@@ -239,7 +239,7 @@ class TrajectoryPlayer(Policy):
             It includes the command held now, followed by future commands. The last emitted
             command stays in context until replaced or recovery clears it. ``None`` omits this context.
         record_stats: Record scheduled, emitted and dropped waypoint counts, command lateness,
-            and gaps between emissions in episode metadata.
+            gaps between emissions, and holds between chunks in episode metadata.
         replan_on_error: Clear the plan on an arm's ``ERROR`` status and advance the inner run
             immediately with ``replan_now=True``. Pending calls from the inner run are not cancelled.
             Further resets are suppressed until commands are emitted; ``False`` leaves playback unchanged by arm errors.
@@ -294,6 +294,9 @@ class TrajectoryPlayer(Policy):
         A round sends the commands of every due waypoint, and on each channel the last one wins. The due
         waypoints before the last one count as dropped, also when one of their channels went out. The due
         waypoints that a new chunk replaces count as dropped too.
+
+        A hold is the time from the end of the plan to the first round of the next chunk. The arm keeps its last
+        target during a hold. The wait for the first chunk and a hold that the episode end cuts do not count.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -303,11 +306,35 @@ class TrajectoryPlayer(Policy):
             self._gap_max_ns = 0
             self._last_emit_ns: int | None = None
             self._round_due_ns: int | None = None
+            self._round_starts_chunk = False
+            self._plan_end_ns: int | None = None
+            self._chunk_pending = False
+            # The plan end when a chunk arrived, kept until the first round of that chunk.
+            self._hold_from_ns: int | None = None
+            self._hold_sum_ns = 0
+            self._hold_max_ns = 0
+
+        def record_trajectory(self, trajectory: Trajectory, now_ns: int) -> None:
+            if not trajectory.commands:
+                self.cut_plan(max(trajectory.start_ns, now_ns))
+                return
+            if not self._chunk_pending:
+                self._chunk_pending = True
+                self._hold_from_ns = self._plan_end_ns
+            self._plan_end_ns = max(trajectory.end_ns, now_ns)
+
+        def cut_plan(self, cut_ns: int) -> None:
+            """End the plan at ``cut_ns`` at the latest."""
+            if self._plan_end_ns is not None:
+                self._plan_end_ns = min(self._plan_end_ns, cut_ns)
+            if self._hold_from_ns is not None:
+                self._hold_from_ns = min(self._hold_from_ns, cut_ns)
 
         def record_waypoint(self, point: 'TrajectoryPlayer._Waypoint') -> None:
             self._round_due_ns = point.due_ns
             if point.starts_chunk:
                 self._last_emit_ns = None
+                self._round_starts_chunk = True
 
         def count_round(self, planned: int | None, now_ns: int, queued: int) -> None:
             """Count new waypoints and the due commands emitted together at ``now_ns``."""
@@ -321,13 +348,26 @@ class TrajectoryPlayer(Policy):
                     self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
                 self._last_emit_ns = now_ns
                 self._round_due_ns = None
+                if self._round_starts_chunk:
+                    self._end_hold(now_ns)
             self._write(queued)
+
+        def _end_hold(self, now_ns: int) -> None:
+            if self._chunk_pending and self._hold_from_ns is not None:
+                hold_ns = max(0, now_ns - self._hold_from_ns)
+                self._hold_sum_ns += hold_ns
+                self._hold_max_ns = max(self._hold_max_ns, hold_ns)
+            self._chunk_pending = False
+            self._hold_from_ns = None
+            self._round_starts_chunk = False
 
         def _write(self, queued: int) -> None:
             values: dict[str, float] = {
                 eval_keys.SCHEDULED: self._scheduled,
                 eval_keys.EMITTED: len(self._sorted_late_ns),
                 eval_keys.DROPPED: self._scheduled - len(self._sorted_late_ns) - queued,
+                eval_keys.HOLD_SUM_MS: self._hold_sum_ns / 1e6,
+                eval_keys.HOLD_MAX_MS: self._hold_max_ns / 1e6,
             }
             if self._sorted_late_ns:
                 values[eval_keys.LATE_P50_MS] = self._percentile_of_sorted(self._sorted_late_ns, 0.5) / 1e6
@@ -375,6 +415,8 @@ class TrajectoryPlayer(Policy):
                 current_wp = None
                 inner_resume_at_ns = now_ns
                 planned, recovering = 0, True
+                if stats is not None:
+                    stats.cut_plan(now_ns)
                 obs = OverlayMapping(obs, add={policy_keys.REPLAN_NOW: True})
 
             outputs: Mapping[str, Any] = {}
@@ -389,6 +431,8 @@ class TrajectoryPlayer(Policy):
                 if step.commands:
                     update = Trajectory(**step.commands)
                     planned = self._update_plan(plan, update, now_ns)
+                    if stats is not None:
+                        stats.record_trajectory(update, now_ns)
 
             commands: dict[str, Any] = {}
             while plan and plan[0].due_ns <= now_ns:

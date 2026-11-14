@@ -755,6 +755,8 @@ def test_an_overrun_skips_all_but_the_last_due_waypoint_and_counts_the_skip(exec
         f'{prefix}.{eval_keys.LATE_P90_MS}': pytest.approx(35.0),
         f'{prefix}.{eval_keys.LATE_MAX_MS}': 50.0,
         f'{prefix}.{eval_keys.GAP_MAX_MS}': 250.0,
+        f'{prefix}.{eval_keys.HOLD_SUM_MS}': 0.0,
+        f'{prefix}.{eval_keys.HOLD_MAX_MS}': 0.0,
     }
     run.close()
 
@@ -817,6 +819,31 @@ def test_a_new_chunk_excludes_the_gap_from_the_previous_chunk(execution):
     prefix = eval_keys.SCHEDULE
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.DROPPED}'] == 1
     assert runtime.metadata_snapshot()[f'{prefix}.{eval_keys.GAP_MAX_MS}'] == 100.0
+
+
+def test_a_chunk_that_starts_after_the_plan_end_counts_the_hold_from_that_end(execution):
+    runtime, clock = execution
+    inner = Mock(
+        send=Mock(
+            side_effect=[
+                Step(_trajectory(range(3)), 450_000_000),
+                Step(_trajectory(range(3), 450_000_000), 600_000_000),
+                Step(_trajectory(range(3), 600_000_000), 1_000_000_000),
+                Step(_trajectory(range(3), 1_000_000_000), 2_000_000_000),
+            ]
+        )
+    )
+    run = runtime.start(TrajectoryPlayer(), inner)
+    try:
+        for now_ms in (0, 100, 200, 300, 450, 550, 600, 700, 800, 1000):
+            clock.advance_to_ns(now_ms * 1_000_000)
+            run.send({})
+    finally:
+        run.close()
+    # The plan ends at 300 ms and 900 ms; the chunk that arrives at 600 ms replaces a plan that ends at 750 ms.
+    metadata = runtime.metadata_snapshot()
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 250.0
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_MAX_MS}'] == 150.0
 
 
 @pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])

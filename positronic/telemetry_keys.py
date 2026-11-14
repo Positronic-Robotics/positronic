@@ -43,6 +43,9 @@ ATTR_PASS_FAILED = 'pass.failed'
 # and its siblings, straight from the answer's own `timing` block.
 ATTR_SERVED_PREFIX = 'served.'
 
+# On `policy.submit`: the age in milliseconds of the oldest camera frame in the observation when the call starts.
+ATTR_OBS_AGE_MS = 'obs.age_ms'
+
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.
 ATTR_CODEC = 'codec'
 ATTR_WIRE_BYTES = 'wire.bytes'
@@ -68,3 +71,6 @@ ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
 ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'
 ATTR_WAYPOINTS_LATE_SUM_MS = 'episode.waypoints.late_sum_ms'
 ATTR_WAYPOINTS_LATE_MAX_MS = 'episode.waypoints.late_max_ms'
+# The total and the longest time in milliseconds that the arm holds its last target between two chunks.
+ATTR_WAYPOINTS_HOLD_SUM_MS = 'episode.waypoints.hold_sum_ms'
+ATTR_WAYPOINTS_HOLD_MAX_MS = 'episode.waypoints.hold_max_ms'
