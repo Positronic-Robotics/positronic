@@ -51,12 +51,12 @@ class Rollout:
     writer: DatasetWriter | None
 
 
-def _scalars(fields: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in fields.items() if isinstance(v, (bool, int, float, str))}
-
-
 class _EpisodeTelemetry:
     """Parent reset, inference, and recorder spans to one episode; count its steps and virtual duration."""
+
+    @staticmethod
+    def _scalars(fields: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in fields.items() if isinstance(v, (bool, int, float, str))}
 
     def __init__(self) -> None:
         self._span: Span | None = None
@@ -70,7 +70,7 @@ class _EpisodeTelemetry:
         self._steps = 0
         self._virtual_start = None
         attrs: dict[str, Any] = {telemetry_keys.ATTR_EPISODE_INDEX: self._index}
-        attrs.update(_scalars(params))
+        attrs.update(self._scalars(params))
         self._span = telemetry.start_span(telemetry_keys.SPAN_EPISODE, **attrs)
         telemetry.push_anchor(self._span)
 
@@ -81,7 +81,7 @@ class _EpisodeTelemetry:
         """
         if self._span is None or not telemetry.enabled():
             return
-        telemetry.set_attrs(self._span, **_scalars(recorded_policy_meta()))
+        telemetry.set_attrs(self._span, **self._scalars(recorded_policy_meta()))
 
     def start_rollout(self, virtual_now: float) -> None:
         """Exclude preparation from the rollout's virtual duration."""
