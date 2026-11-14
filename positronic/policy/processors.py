@@ -260,11 +260,13 @@ class TrajectoryPlayer(Policy):
         """A queued waypoint; ``starts_chunk`` resets gap statistics on emission."""
 
         starts_chunk: bool
+        chunk_end_ns: int
 
     @classmethod
     def _update_plan(cls, plan: deque[_Waypoint], update: Trajectory, now_ns: int) -> int:
         incoming = [
-            cls._Waypoint(command, update.due_ns(i), starts_chunk=i == 0) for i, command in enumerate(update.commands)
+            cls._Waypoint(command, update.due_ns(i), starts_chunk=i == 0, chunk_end_ns=update.end_ns)
+            for i, command in enumerate(update.commands)
         ]
         planned = len(incoming)
         if update.start_ns <= now_ns:
@@ -273,7 +275,9 @@ class TrajectoryPlayer(Policy):
             incoming = incoming[running:]
             if incoming:
                 first = incoming[0]
-                incoming[0] = cls._Waypoint(first.commands, first.due_ns, starts_chunk=True)
+                incoming[0] = cls._Waypoint(
+                    first.commands, first.due_ns, starts_chunk=True, chunk_end_ns=first.chunk_end_ns
+                )
         while plan and plan[-1].due_ns >= update.start_ns:
             plan.pop()
         plan.extend(incoming)
@@ -306,33 +310,26 @@ class TrajectoryPlayer(Policy):
             self._gap_max_ns = 0
             self._last_emit_ns: int | None = None
             self._round_due_ns: int | None = None
-            self._plan_end_ns: int | None = None
-            self._chunk_pending = False
-            # The plan end when a chunk arrived, kept until the first round of that chunk.
-            self._hold_from_ns: int | None = None
+            # The end of the chunk that plays now, and of the chunk whose first round comes next.
+            self._played_end_ns: int | None = None
+            self._starting_chunk_end_ns: int | None = None
             self._hold_sum_ns = 0
             self._hold_max_ns = 0
 
         def record_trajectory(self, trajectory: Trajectory, now_ns: int) -> None:
             if not trajectory.commands:
                 self.cut_plan(max(trajectory.start_ns, now_ns))
-                return
-            if not self._chunk_pending:
-                self._chunk_pending = True
-                self._hold_from_ns = self._plan_end_ns
-            self._plan_end_ns = max(trajectory.end_ns, now_ns)
 
         def cut_plan(self, cut_ns: int) -> None:
             """End the plan at ``cut_ns`` at the latest."""
-            if self._plan_end_ns is not None:
-                self._plan_end_ns = min(self._plan_end_ns, cut_ns)
-            if self._hold_from_ns is not None:
-                self._hold_from_ns = min(self._hold_from_ns, cut_ns)
+            if self._played_end_ns is not None:
+                self._played_end_ns = min(self._played_end_ns, cut_ns)
 
         def record_waypoint(self, point: 'TrajectoryPlayer._Waypoint') -> None:
             self._round_due_ns = point.due_ns
             if point.starts_chunk:
                 self._last_emit_ns = None
+                self._starting_chunk_end_ns = point.chunk_end_ns
 
         def count_round(self, planned: int | None, now_ns: int, queued: int) -> None:
             """Count new waypoints and the due commands emitted together at ``now_ns``."""
@@ -351,12 +348,14 @@ class TrajectoryPlayer(Policy):
             self._write(queued)
 
         def _end_hold(self, now_ns: int) -> None:
-            if self._chunk_pending and self._hold_from_ns is not None:
-                hold_ns = max(0, now_ns - self._hold_from_ns)
+            if self._starting_chunk_end_ns is None:
+                return
+            if self._played_end_ns is not None:
+                hold_ns = max(0, now_ns - self._played_end_ns)
                 self._hold_sum_ns += hold_ns
                 self._hold_max_ns = max(self._hold_max_ns, hold_ns)
-            self._chunk_pending = False
-            self._hold_from_ns = None
+            self._played_end_ns = max(self._starting_chunk_end_ns, now_ns)
+            self._starting_chunk_end_ns = None
 
         def _write(self, queued: int) -> None:
             values: dict[str, float] = {
@@ -973,7 +972,7 @@ class _StackedObs(Mapping[str, Any]):
 
 
 class _StackBuffer:
-    """Time-ordered history of ``(timestamp, values)`` entries, capped to the sampled window.
+    """Time-ordered history of ``(timestamp, observed_ns, values)`` entries, capped to the sampled window.
 
     ``values`` is a dict of key → array; every entry holds the same keys. ``append`` copies each new
     entry but skips one byte-identical to the previous — a source slower than the control loop repeats
@@ -982,31 +981,36 @@ class _StackBuffer:
     with a stack holding, for each offset, the latest value at or before that time — carry-over, never
     the future. Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``,
     a fixed ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1
-    to ``len(offsets_sec)`` as history accumulates).
+    to ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's values.
     """
 
     def __init__(self, offsets_sec: tuple[float, ...], pad_start: bool = True):
         self._offsets_sec = offsets_sec
         self._pad_start = pad_start
-        self._entries: deque[tuple[float, dict[str, np.ndarray]]] = deque()
+        self._entries: deque[tuple[float, int | None, dict[str, np.ndarray]]] = deque()
 
     def reset(self):
         self._entries.clear()
 
-    def append(self, now: float, values: dict[str, np.ndarray]):
-        if self._entries and all(np.array_equal(self._entries[-1][1][k], v) for k, v in values.items()):
+    def append(self, now: float, observed_ns: int | None, values: dict[str, np.ndarray]):
+        if self._entries and all(np.array_equal(self._entries[-1][2][k], v) for k, v in values.items()):
             return
-        self._entries.append((now, {k: np.array(v) for k, v in values.items()}))
+        self._entries.append((now, observed_ns, {k: np.array(v) for k, v in values.items()}))
         cutoff = now + min(self._offsets_sec)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             self._entries.popleft()
 
     def sample(self, now: float, obs: Obs) -> Obs:
-        times = np.array([t for t, _ in self._entries])
+        times = np.array([t for t, _, _ in self._entries])
         targets = [now + off for off in self._offsets_sec]
         if not self._pad_start:
             targets = [t for t in targets if t >= times[0]]
-        return _StackedObs(dict(obs), [self._entries[self._at_or_before(times, t)][1] for t in targets])
+        return _StackedObs(dict(obs), [self._entries[self._at_or_before(times, t)][2] for t in targets])
+
+    def newest_observed_ns(self, now: float) -> int | None:
+        """The capture time of the newest entry that ``sample`` stacks."""
+        times = np.array([t for t, _, _ in self._entries])
+        return self._entries[self._at_or_before(times, now + max(self._offsets_sec))][1]
 
     @staticmethod
     def _at_or_before(times: np.ndarray, target: float) -> int:
@@ -1021,7 +1025,8 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
     Every sent observation records the selected channels on the runtime's clock, then passes the stacked
-    observations to ``inner`` and yields its result. A stack is built when ``inner`` first reads its key, so
+    observations to ``inner`` and yields its result. While ``inner`` runs, ``runtime.observed_ns`` is at most the
+    capture time of the newest stacked sample. A stack is built when ``inner`` first reads its key, so
     a call that reads none builds none. Offsets are ascending seconds relative to now.
     Wrap a scheduling policy to collect frames on control ticks while inference is pending.
 
@@ -1046,11 +1051,17 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
         obs = yield
         while True:
             now_sec = runtime.time_ns / 1e9
-            buffer.append(now_sec, {k: obs[k] for k in self._keys})
+            step_observed_ns = runtime.observed_ns
+            buffer.append(now_sec, step_observed_ns, {k: obs[k] for k in self._keys})
+            stacked_observed_ns = buffer.newest_observed_ns(now_sec)
+            if step_observed_ns is not None and stacked_observed_ns is not None:
+                runtime.observed_ns = min(step_observed_ns, stacked_observed_ns)
             try:
                 output = inner.send(buffer.sample(now_sec, obs))
             except StopIteration as end:
                 return end.value
+            finally:
+                runtime.observed_ns = step_observed_ns
             obs = yield output
 
     def to_spec(self) -> dict[str, Any]:

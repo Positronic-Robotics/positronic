@@ -129,8 +129,8 @@ observation to the start of the call. The harness reads the two times on one clo
 runtime. On a real rig it is the monotonic clock of the host. In a simulation it is the world clock, so the age is
 simulated time and does not include the wall time of the simulator. The age uses the capture time in
 `Runtime.observed_ns` when the call is submitted. The harness sets it for each step. A processor that sends an older
-sample, such as `Periodic` on an answer wake-up, sets the capture time of that sample. An observation with no camera
-gives no value.
+sample sets the capture time of that sample: `Periodic` on an answer wake-up, and a `TemporalStack` whose newest offset
+is in the past. An observation with no camera gives no value.
 
 ### Reading the network time of a call
 

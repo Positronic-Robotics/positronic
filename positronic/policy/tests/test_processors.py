@@ -239,6 +239,21 @@ def test_sampling_tick_gives_the_inner_run_the_capture_time_of_the_new_sample(pe
         run.close()
 
 
+def test_a_stack_of_past_samples_gives_the_inner_run_the_capture_time_of_its_newest_sample(periodic_execution):
+    runtime, now = periodic_execution
+    inner = _RecordObservedTime()
+    run = runtime.start(Sequential(TemporalStack((POSITION,), (-0.5,)), inner))
+    try:
+        for tick, time_ns in enumerate((0, 500_000_000, 1_000_000_000)):
+            now[0] = time_ns
+            runtime.start_tick(time_ns)
+            run.send({POSITION: tick})
+    finally:
+        run.close()
+    assert inner.observed_ns == [0, 0, 500_000_000]
+    assert runtime.observed_ns == 1_000_000_000
+
+
 def test_overlapping_samples_preserve_data_and_deliver_trajectories_in_submission_order(periodic_execution):
     runtime, now = periodic_execution
     started, release = threading.Event(), threading.Event()
@@ -889,6 +904,30 @@ def test_a_chunk_that_starts_after_the_plan_end_counts_the_hold_from_that_end(ex
     metadata = runtime.metadata_snapshot()
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 250.0
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_MAX_MS}'] == 150.0
+
+
+def test_a_queued_chunk_counts_the_hold_from_the_end_of_the_chunk_before_it(execution):
+    runtime, clock = execution
+    inner = Mock(
+        send=Mock(
+            side_effect=[
+                Step(_trajectory(range(3)), 100_000_000),
+                Step(_trajectory(range(3), 300_000_000), 200_000_000),
+                Step(_trajectory(range(2), 700_000_000), 2_000_000_000),
+            ]
+        )
+    )
+    run = runtime.start(TrajectoryPlayer(), inner)
+    try:
+        for now_ms in (0, 100, 200, 300, 400, 500, 700, 800):
+            clock.advance_to_ns(now_ms * 1_000_000)
+            run.send({})
+    finally:
+        run.close()
+    # Both later chunks are queued at 200 ms; the arm holds from 600 ms until the third chunk starts at 700 ms.
+    metadata = runtime.metadata_snapshot()
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 100.0
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_MAX_MS}'] == 100.0
 
 
 @pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
