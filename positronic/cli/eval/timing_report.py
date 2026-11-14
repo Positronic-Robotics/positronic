@@ -83,27 +83,6 @@ _DMON_UTIL = 'sm'
 _DMON_FB = 'fb'
 _DMON_DEVICE = 'gpu'
 
-# Spans whose own duration is a latency segment.
-_TIMED_SPANS = frozenset({
-    SPAN_HARNESS_STEP,
-    SPAN_POLICY_SUBMIT,
-    SPAN_POLICY_PREPARE,
-    SPAN_POLICY_INFER,
-    SPAN_WIRE_SEND,
-    SPAN_WIRE_RECV,
-    SPAN_RECORD_IO,
-    SPAN_RESET,
-})
-_SERVED_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SERVED}'
-_SERVED_INSTANTS = frozenset(
-    f'{ATTR_SERVED_PREFIX}{key}' for key in (protocol.TIMING_RECEIVED_NS, protocol.TIMING_SENT_NS)
-)
-_WIRE_SPLIT = (ATTR_WIRE_UPLINK_MS, ATTR_WIRE_DOWNLINK_MS, ATTR_WIRE_NETWORK_MS)
-# The latency segments that combine spans. Each label spells how it is made.
-_CALL_ENCODE = f'{SPAN_POLICY_ENCODE} per call'
-_CALL_NETWORK = f'{SPAN_WIRE_SEND} + {SPAN_WIRE_RECV} - {_SERVED_MS}'
-_CALL_CODEC = f'{SPAN_POLICY_INFER} - {SPAN_WIRE_SEND} - {SPAN_WIRE_RECV}'
-
 
 @dataclass
 class GpuSummary:
@@ -647,6 +626,28 @@ def _covered_ms(spans: Iterable[SpanRec]) -> float:
             covered_ns += span.end_ns - open_until
             open_until = span.end_ns
     return covered_ns / 1e6
+
+
+# Spans whose own duration is a latency segment.
+_TIMED_SPANS = frozenset({
+    SPAN_HARNESS_STEP,
+    SPAN_POLICY_SUBMIT,
+    SPAN_POLICY_PREPARE,
+    SPAN_POLICY_INFER,
+    SPAN_WIRE_SEND,
+    SPAN_WIRE_RECV,
+    SPAN_RECORD_IO,
+    SPAN_RESET,
+})
+_SERVED_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SERVED}'
+_SERVED_INSTANTS = frozenset(
+    f'{ATTR_SERVED_PREFIX}{key}' for key in (protocol.TIMING_RECEIVED_NS, protocol.TIMING_SENT_NS)
+)
+_WIRE_SPLIT = (ATTR_WIRE_UPLINK_MS, ATTR_WIRE_DOWNLINK_MS, ATTR_WIRE_NETWORK_MS)
+# The latency segments that combine spans. Each label spells how it is made.
+_CALL_ENCODE = f'{SPAN_POLICY_ENCODE} per call'
+_CALL_NETWORK = f'{SPAN_WIRE_SEND} + {SPAN_WIRE_RECV} - {_SERVED_MS}'
+_CALL_CODEC = f'{SPAN_POLICY_INFER} - {SPAN_WIRE_SEND} - {SPAN_WIRE_RECV}'
 
 
 def _segments(span: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tuple[str, float]]:

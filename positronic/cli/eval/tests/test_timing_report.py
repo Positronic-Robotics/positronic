@@ -4,6 +4,7 @@ import re
 import pos3
 import pyarrow as pa
 import pytest
+from positronic_model_server import protocol
 
 from positronic.cli import _internal_main
 from positronic.cli.account.gateway import CommandFailed, Fault
@@ -35,6 +36,7 @@ from positronic.telemetry import (
 from positronic.telemetry_keys import (
     ATTR_CODEC,
     ATTR_EPISODE_VIRTUAL_S,
+    ATTR_SERVED_PREFIX,
     ATTR_STEP_LATE_MS,
     ATTR_STEP_POLICY_MS,
     ATTR_WAYPOINTS_DROPPED,
@@ -981,6 +983,11 @@ def test_an_episode_carrying_no_waypoint_account_is_left_out_and_said_so(tmp_pat
     assert 'waypoints:           200 scheduled, 40 emitted, 40 dropped over 2 of 3 episodes' in _render(report)
 
 
+_SERVED_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SERVED}'
+_SERVED_RECEIVED_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_RECEIVED_NS}'
+_SERVED_SENT_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SENT_NS}'
+
+
 def _call(prefix, start_s, served_ms, run_id='rig-run'):
     """One policy call on a worker, 0.1 s long: two overlapping image encodes, a prepare and a round trip.
 
@@ -1016,7 +1023,7 @@ def _call(prefix, start_s, served_ms, run_id='rig-run'):
             start_s + 100 * ms,
             infer,
             transform,
-            {'served.served_ms': served_ms, 'served.received_ns': 1e18, 'served.sent_ns': 1e18},
+            {_SERVED_MS: served_ms, _SERVED_RECEIVED_NS: 1e18, _SERVED_SENT_NS: 1e18},
             run_id=run_id,
         ),
         _span(SPAN_WIRE_SEND, start_s + 45 * ms, start_s + 50 * ms, f'{prefix}-send', infer, run_id=run_id),
@@ -1058,8 +1065,8 @@ def test_the_latency_of_each_segment_counts_the_spans_inside_the_episodes(tmp_pa
     assert rows[SPAN_POLICY_SUBMIT].p50_ms == pytest.approx(100.0)
     assert rows[SPAN_POLICY_INFER].p50_ms == pytest.approx(60.0)
     assert rows[SPAN_WIRE_RECV].p50_ms == pytest.approx(45.0)
-    assert rows['served.served_ms'].p50_ms == pytest.approx(20.0)
-    assert rows['served.served_ms'].p99_ms == pytest.approx(29.8)
+    assert rows[_SERVED_MS].p50_ms == pytest.approx(20.0)
+    assert rows[_SERVED_MS].p99_ms == pytest.approx(29.8)
     assert f'{SPAN_POLICY_ENCODE}[Jpeg]' in rows
     assert rows[f'{SPAN_POLICY_ENCODE}[Jpeg]'].count == 4
     assert rows[f'{SPAN_POLICY_ENCODE} per call'].p50_ms == pytest.approx(30.0)  # two encodes overlap by 10 ms
@@ -1076,7 +1083,7 @@ def test_the_latency_leaves_out_the_server_instants_and_a_split_the_server_did_n
     report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
 
     segments = {row.segment for row in report.latency}
-    assert not segments & {'served.received_ns', 'served.sent_ns', ATTR_WIRE_NETWORK_MS}
+    assert not segments & {_SERVED_RECEIVED_NS, _SERVED_SENT_NS, ATTR_WIRE_NETWORK_MS}
 
 
 def test_render_shows_the_latency_table(tmp_path):
