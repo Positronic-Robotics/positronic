@@ -559,8 +559,7 @@ class LLMPolicy(Policy):
             recorded_keys: list[str] = []
 
             def record_keys():
-                # A request appends a key on its worker thread when it switches keys. The harness can snapshot the
-                # metadata at any step, so each step copies a new key into it on the control thread.
+                # A request appends a key on its worker thread. Copy each new key into the metadata before every yield.
                 if len(client.api_key_fingerprints) != len(recorded_keys):
                     recorded_keys[:] = client.api_key_fingerprints
                     runtime.set_metadata(policy_keys.API_KEY_FINGERPRINTS, list(recorded_keys))
