@@ -3,7 +3,7 @@
 import threading
 import time
 import traceback
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -1426,6 +1426,38 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
+
+
+class CountsMetaReads(Hold):
+    def __init__(self):
+        super().__init__()
+        self.meta_reads = 0
+
+    def meta(self):
+        self.meta_reads += 1
+        return super().meta()
+
+
+def _run_one_episode(h, policy):
+    h.observation.emit(1)
+    h.caller(Rollout(Task('move', None), policy, h.dataset))
+    next(h.loop)
+    h.done.emit({eval_keys.SUCCESS: True})
+    next(h.loop)
+    h.world.request_stop()
+    list(h.loop)
+
+
+@pytest.mark.parametrize(('bound', 'reads'), [(False, 2), (True, 4)])
+def test_the_episode_span_reads_the_policy_metadata_only_when_telemetry_is_bound(
+    episode_harness, tmp_path, bound, reads
+):
+    policy = CountsMetaReads()
+    with ExitStack() as stack:
+        if bound:
+            stack.enter_context(telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-meta-reads'))
+        _run_one_episode(episode_harness, policy)
+    assert policy.meta_reads == reads
 
 
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
