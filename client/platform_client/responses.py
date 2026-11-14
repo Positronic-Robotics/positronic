@@ -194,6 +194,8 @@ class ResolvedEndpoint(BaseModel):
     spec: str | None = None
     # The session params of an image endpoint; None where it states none, and on every other kind.
     query: SessionQuery | None = None
+    # The policy spec a remote endpoint's server serves; None where it states none, and on every other kind.
+    policy_spec: str | None = None
     episodes: int = Field(ge=1)
     # None where the endpoint states no value of its own: its episodes run with the task's (`ResolvedTask.cap_of`).
     cap_per_episode_sec: int | None = Field(default=None, ge=1)

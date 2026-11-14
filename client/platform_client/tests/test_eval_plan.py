@@ -483,6 +483,37 @@ def test_a_competition_plan_of_an_image_carries_its_query():
     assert plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x')).endpoints[0].query is None
 
 
+@pytest.mark.parametrize('model', [Endpoint, EndpointFile])
+def test_a_remote_endpoint_states_the_policy_its_server_serves(model: type[Endpoint] | type[EndpointFile]):
+    entry = model.model_validate(remote('baseline', policy_spec='pi05'))
+    assert entry.policy_spec == 'pi05'
+    assert model.model_validate(entry.model_dump(mode='json')) == entry
+    assert model.model_validate(BASELINE).policy_spec is None
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_a_remote_endpoint_without_a_policy_spec_omits_it_from_its_dump(mode: str):
+    assert 'policy_spec' not in Endpoint.model_validate(BASELINE).model_dump(mode=mode)
+    stated = Endpoint.model_validate(remote('baseline', policy_spec='pi05')).model_dump(mode=mode)
+    assert stated['policy_spec'] == 'pi05'
+
+
+@pytest.mark.parametrize('entry', [_SERVED_ENTRY, _IMAGE_ENTRY], ids=['served', 'image'])
+def test_a_served_or_an_image_endpoint_states_no_policy_spec(entry: dict):
+    with pytest.raises(ValidationError, match='only a remote endpoint carries'):
+        Endpoint.model_validate({**entry, 'policy_spec': 'pi05'})
+
+
+def test_a_label_states_no_policy_spec_of_its_own():
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        Endpoint.model_validate({'name': 'baseline', 'policy_spec': 'pi05'})
+
+
+def test_a_policy_spec_is_not_empty():
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate(remote('baseline', policy_spec=''))
+
+
 def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():
     entry = Endpoint(
         name='policy', kind=EndpointKind.image, wire=Wire.websocket, image=PolicyImage('org/policy@sha256:abc')
