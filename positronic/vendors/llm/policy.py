@@ -49,10 +49,6 @@ class Images(StrEnum):
     ON_DEMAND = 'on_demand'
 
 
-# The key of the time since the first observation, in the state the model reads.
-ELAPSED_S = 'elapsed_s'
-
-
 class Tool(StrEnum):
     MOVE_PATH = 'move_path'
     REVEAL_FRAMES = 'reveal_frames'
@@ -164,15 +160,9 @@ class _Observation:
             images[name] = frame
         return cls(hands, str(obs[keys.TASK]), time_ns, images)
 
-    def state(self, targets: Targets, start_ns: int) -> dict[str, Any]:
-        """The state the model reads: the hand of one arm at the top level, the hands of named arms under ``arms``.
-
-        ``start_ns`` is the time of the first observation of the episode."""
-        state = {
-            'task': self.task,
-            policy_keys.OBS_TIME_NS: self.time_ns,
-            ELAPSED_S: round((self.time_ns - start_ns) / 1e9, 3),
-        }
+    def state(self, targets: Targets) -> dict[str, Any]:
+        """The state the model reads: the hand of one arm at the top level, the hands of named arms under ``arms``."""
+        state = {'task': self.task, policy_keys.OBS_TIME_NS: self.time_ns}
         cameras = {'cameras': list(self.images)}
         if (hand := self.hands.get(None)) is not None:
             return state | hand.measured() | cameras | hand.progress(targets.get(None))
@@ -209,7 +199,6 @@ class Conversation:
         self._frames: list[list[int]] = []  # per observation, the indices of its frame messages
         self._anchor: int | None = None  # the newest frame message that holds stubs
         self._obs: _Observation | None = None
-        self._start_ns: int | None = None
         self._pictures: list[str] = []
         self._revealed: set[str] = set()
         self._failures = 0
@@ -250,7 +239,6 @@ class Conversation:
             if self._policy.images is Images.ON_DEMAND
             else '',
             *(mount.fact() for mount in self._policy.camera_mounts),
-            f'{ELAPSED_S} in each observation is the time in seconds since the first observation. '
             'A note should briefly describe what you see and why you chose the motion. '
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
@@ -276,9 +264,7 @@ class Conversation:
         self._obs = _Observation.read(raw, self._policy.arms, self._policy.camera_keys, time_ns)
         if not self._messages:
             self._messages.append(self._initial())
-            self._start_ns = time_ns
-        assert self._start_ns is not None
-        state = self._obs.state(self._targets, self._start_ns)
+        state = self._obs.state(self._targets)
         self._record({'event': 'observation', **state})
         self._messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
         self._frames.append([])

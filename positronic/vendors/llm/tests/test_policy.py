@@ -32,7 +32,7 @@ from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath
-from positronic.vendors.llm.policy import ELAPSED_S, Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
+from positronic.vendors.llm.policy import Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
 
 
 def observation(x=0.0):
@@ -204,19 +204,6 @@ def test_the_prompt_names_reveal_frames_only_when_frames_are_revealed_on_demand(
     with execution(LLMPolicy(Endpoint('test'), Motion(), images=images)) as (run, runtime, clock):
         complete(run, runtime, clock, observation())
     assert (Tool.REVEAL_FRAMES.value in prompt(requests)) == (images is Images.ON_DEMAND)
-
-
-def test_each_observation_reports_the_time_since_the_first_observation(model):
-    requests, replies = model
-    replies.extend([move(), finish()])
-    with execution(LLMPolicy(Endpoint('test'), Motion())) as (run, runtime, clock):
-        for time_ns in (5_000_000_000, 7_500_000_000):
-            clock.advance_to_ns(max(clock.now_ns(), time_ns))
-            complete(run, runtime, clock, observation())
-        events = runtime.metadata_snapshot()[policy_keys.TRANSCRIPT]
-    assert [e[ELAPSED_S] for e in events if e['event'] == 'observation'] == [0.0, 2.5]
-    assert ELAPSED_S in prompt(requests)
-    assert '"elapsed_s": 2.5' in str(requests[-1][0])
 
 
 WRIST_MOUNT = {
