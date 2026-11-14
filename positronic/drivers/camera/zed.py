@@ -116,7 +116,7 @@ class SLCamera(pimm.ControlSystem):
         self._camera: sl.Camera | sl.CameraOne | None = None
         self._error: DeviceFault | None = None
         self._frame_at: float | None = None
-        # The model that a stereo camera gave at its last open. None before its first open.
+        # The model that a stereo camera gave at its last open. None while no stereo camera has opened.
         self._model: sl.MODEL | None = None
         # The time of the first image of the current run of near-black images. None when the last image was not one.
         self._near_black_since: float | None = None
