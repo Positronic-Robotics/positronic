@@ -831,7 +831,6 @@ class World:
     # Worlds can run in threads of one process, and the freeze belongs to the process.
     _heap_freeze_lock = threading.Lock()
     _schedulers_running_in_process = 0
-    _unfreeze_when_the_last_scheduler_ends = False
 
     @staticmethod
     @contextlib.contextmanager
@@ -839,11 +838,11 @@ class World:
         """Keep the objects that exist when the first scheduler starts out of each collection until the last one ends.
 
         A full collection stops every loop of the process while it scans. An import heap of about 140,000 objects
-        takes about 100 ms to scan on an ARM robot computer. A freeze that the process made itself stays in place.
+        takes about 100 ms to scan on an ARM robot computer. The last scheduler unfreezes the whole permanent
+        generation: a freeze has no owner, and CPython 3.12 freezes objects at startup.
         """
         with World._heap_freeze_lock:
             if World._schedulers_running_in_process == 0:
-                World._unfreeze_when_the_last_scheduler_ends = gc.get_freeze_count() == 0
                 # No collection first: it would stop the process for as long as the passes this freeze avoids.
                 gc.freeze()
             World._schedulers_running_in_process += 1
@@ -852,7 +851,7 @@ class World:
         finally:
             with World._heap_freeze_lock:
                 World._schedulers_running_in_process -= 1
-                if World._schedulers_running_in_process == 0 and World._unfreeze_when_the_last_scheduler_ends:
+                if World._schedulers_running_in_process == 0:
                     gc.unfreeze()
 
     def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:

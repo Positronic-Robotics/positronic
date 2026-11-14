@@ -284,19 +284,19 @@ def test_a_full_collection_in_a_running_world_skips_the_heap_made_before_it():
     _in_a_fresh_process(_check_a_world_keeps_its_heap_out_of_collections_while_it_runs)
 
 
-def _check_a_world_keeps_a_freeze_that_its_process_made() -> None:
-    process_heap = [[i] for i in range(50_000)]
+def _check_a_world_returns_the_heap_to_collections_when_objects_were_frozen_before_it() -> None:
     gc.freeze()
+    import_heap = [[i] for i in range(50_000)]
 
     with World() as world:
         world.run([HeapCounter([])])
 
-    assert len(gc.get_objects()) < len(process_heap) / 10
+    assert len(gc.get_objects()) > len(import_heap), 'the heap stays out of collections after the run'
 
 
-def test_a_world_keeps_a_freeze_that_its_process_made():
-    """A process can freeze its heap for its own reasons, for example before a fork."""
-    _in_a_fresh_process(_check_a_world_keeps_a_freeze_that_its_process_made)
+def test_a_world_returns_the_heap_to_collections_when_objects_were_frozen_before_it():
+    """CPython 3.12 freezes objects at interpreter startup, before any World starts."""
+    _in_a_fresh_process(_check_a_world_returns_the_heap_to_collections_when_objects_were_frozen_before_it)
 
 
 def _check_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections() -> None:
