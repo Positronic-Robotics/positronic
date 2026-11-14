@@ -149,8 +149,8 @@ and `PROC_*` constants in `positronic/telemetry.py`
 
 The process readings cover this eval's whole process tree (harness + env server + Isaac children): the
 tree sums (`STAT_CPU_PROC_PCT`, `STAT_RSS_PROC_B`), and a list with one `PROC_*` entry (name, pid, CPU
-percent, RSS) per process. The name is the one the caller passes for that pid (a pimm World names each
-background process `<Class>.run`), or the OS process name otherwise. A process's CPU percent in its first
+percent, RSS) per process. The caller names a pid through `process_names` (a pimm World names each
+background process `<Class>.run`); a pid it does not name takes the OS process name. A process's CPU percent in its first
 sample covers no interval, so it is not a reading. The GPU list is empty on a box with no NVML, and shorter
 than the recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that
 count is what tells a reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot
