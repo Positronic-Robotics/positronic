@@ -47,8 +47,10 @@
   two classes become structurally identical only after their serializers are unified — merge them)
 
 # Code style
-- No imports inside functions/methods; always place imports at the top of the file
-- Exception: circular dependencies or cases with no other resolution
+- Put imports at the top of the file. Do not import inside a function or method, except in two cases
+- A large dependency that the usual paths do not need: import it inside the function that uses it, and mark the
+  import `# noqa: PLC0415`
+- A circular dependency, or a case with no other resolution
 - No `hasattr`/`getattr` hacks for type dispatch; use `isinstance` with proper base classes or protocols
 - Judge names at the call site (`ds`, `teleop` — not `dataset`, `teleoperation`) and against the roadmap
   (`mujoco_franka`, not `sim` — more sims will exist)
