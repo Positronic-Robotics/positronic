@@ -607,7 +607,7 @@ class Harness(pimm.ControlSystem):
             finally:
                 self.deadline_ns.emit(None)
         finally:
-            # Before the cleanup, so a cleanup failure keeps it: the runtime now holds the server's metadata.
+            # The runtime now holds the server's metadata. A cleanup failure must not lose it from the span.
             self._telemetry.describe_policy(self._policy_meta(rollout.policy.meta(), runtime.metadata_snapshot()))
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
