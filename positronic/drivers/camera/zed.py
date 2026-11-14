@@ -116,6 +116,8 @@ class SLCamera(pimm.ControlSystem):
         self._camera: sl.Camera | sl.CameraOne | None = None
         self._error: DeviceFault | None = None
         self._frame_at: float | None = None
+        # The model that a stereo camera gave at its last open. None while no stereo camera has opened.
+        self._model: sl.MODEL | None = None
         # The time of the first image of the current run of near-black images. None when the last image was not one.
         self._near_black_since: float | None = None
 
@@ -224,12 +226,16 @@ class SLCamera(pimm.ControlSystem):
         return error
 
     def _open_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
-        """Open a new camera and clear the error, or hold the error that the open path raises."""
+        """Open a new camera, keep its model and clear the error, or hold the error that the open path raises."""
         try:
-            self._camera = yield from self._open_camera(should_stop)
+            camera = yield from self._open_camera(should_stop)
         except CameraOpenError as e:
             self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
             return
+        self._camera = camera
+        # `sl.CameraOne` does not implement `get_camera_information`
+        if not self._mono:
+            self._model = camera.get_camera_information().camera_model
         self._error = None
         self._near_black_since = None
 
@@ -288,10 +294,14 @@ class SLCamera(pimm.ControlSystem):
         return next((device.camera_model for device in devices if device.serial_number == serial), None)
 
     def _rebootable_serial(self) -> int | None:
-        """The serial number of a ZED 2 or a ZED 2i, or of a camera the SDK does not list. None for any other camera."""
+        """The serial number of a ZED 2 or a ZED 2i, or of a camera that has not opened and that the SDK does not list.
+
+        None for any other camera.
+        """
         if self._mono or self._serial_number is None:
             return None
-        model = self._listed_model(self._serial_number)
+        # The SDK before 5.4 leaves a camera that a process holds open out of the device list.
+        model = self._model if self._model is not None else self._listed_model(self._serial_number)
         return self._serial_number if model is None or model in (sl.MODEL.ZED2, sl.MODEL.ZED2i) else None
 
     @staticmethod
