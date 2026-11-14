@@ -116,9 +116,8 @@ export class WebXRVideoPlayer {
         };
     }
 
-    // A new H.264 decoder for one socket. Returns the handler of its messages: a JSON decoder configuration as text
-    // before each key frame, and each frame as a binary Annex B access unit. A decoder error closes the socket, and
-    // the watchdog opens a new one, whose stream starts at a key frame
+    // The handler of one socket: a text message is the decoder config of the next key frame, a binary one a frame.
+    // A decoder error closes the socket, so that the watchdog opens a new one with a stream from a key frame
     openStream() {
         if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
         const ws = this.ws;
