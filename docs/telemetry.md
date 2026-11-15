@@ -72,9 +72,9 @@ forwards, and writes the same OTLP/JSON-lines shape with a stdlib-only writer. N
 On a rig, the camera, arm and gripper drivers run as background processes of the World. The World opens
 `telemetry.bind_from_env` in each of them at start, under the process's name (`ZedCamera.run`, for example), so
 each one records into its own file and none takes the harness's file. The World gives two processes of one class
-two names: the second is `ZedCamera.run.2`. `prepare_output_dir` sets the run id before the World starts, so the
-harness and every background process stamp the same run id. The recorder encodes on a thread of the harness
-process, so its spans stay in `harness.spans.jsonl`.
+two names: the second is `ZedCamera.run.2`. The World runs inside `telemetry.one_run_id`, so the harness and
+every background process stamp the same run id. The recorder encodes on a thread of the harness process, so its
+spans stay in `harness.spans.jsonl`.
 
 ### Span schema (`*.spans.jsonl`)
 

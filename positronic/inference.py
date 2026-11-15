@@ -25,7 +25,7 @@ from positronic.eval import keys as eval_keys
 from positronic.gui.web import StationConsole
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
-from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
+from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def real(
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
 
-    with scoped_env_var(ENV_TELEMETRY_DIR, ENV_RUN_ID):
+    with scoped_env_var(ENV_TELEMETRY_DIR):
         output_path = prepare_output_dir(output_dir)
         operator = KeyboardOperator(
             next_task, policy, dataset_factory(output_path) if output_path is not None else None
@@ -103,7 +103,7 @@ real_cfg = cfn.Config(
 )
 
 
-@scoped_env_var(ENV_TELEMETRY_DIR, ENV_RUN_ID)
+@scoped_env_var(ENV_TELEMETRY_DIR)
 def web(
     policy,
     embodiment: Embodiment,
@@ -126,7 +126,7 @@ def web(
     writer = dataset_factory(output_path) if output_path is not None else None
     console = StationConsole(next_task, policy, writer, host=host, port=port)
     harness = Harness(embodiment)
-    with pimm.World(process_scope=telemetry.bind_from_env) as world:
+    with telemetry.one_run_id(), pimm.World(process_scope=telemetry.bind_from_env) as world:
         wire.wire_embodiment(world, harness, embodiment, done=console.done)
         world.connect(console.perform_task, harness.perform_task)
         for name, observation in embodiment.observations.items():
