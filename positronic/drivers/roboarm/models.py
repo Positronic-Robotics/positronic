@@ -86,9 +86,9 @@ def parse_ee_frames(entry: Any) -> dict[str, EEFrame]:
     return _EE_FRAMES_SCHEMA.validate_python(entry)
 
 
-# Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
-# (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
-_2F85_MOUNT_RPY = '0 0 0.7853981634'
+# Seat the gripper on the flange as the real 2F-85 coupler sits: +90deg about the approach axis, so the pads close
+# along flange y, which is y of ``GRIPPER_SITE``.
+_2F85_MOUNT_RPY = '0 0 1.5707963268'
 
 
 class _UrdfRow(NamedTuple):
