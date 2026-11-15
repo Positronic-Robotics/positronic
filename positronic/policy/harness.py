@@ -1,7 +1,7 @@
 import logging
 import math
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -52,6 +52,10 @@ class Rollout:
 class _EpisodeTelemetry:
     """Parent reset, inference, and recorder spans to one episode; count its steps and virtual duration."""
 
+    @staticmethod
+    def _scalars(fields: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in fields.items() if isinstance(v, (bool, int, float, str))}
+
     def __init__(self) -> None:
         self._span: Span | None = None
         self._index = -1
@@ -64,9 +68,18 @@ class _EpisodeTelemetry:
         self._steps = 0
         self._virtual_start = None
         attrs: dict[str, Any] = {telemetry_keys.ATTR_EPISODE_INDEX: self._index}
-        attrs.update({k: v for k, v in params.items() if isinstance(v, (bool, int, float, str))})
+        attrs.update(self._scalars(params))
         self._span = telemetry.start_span(telemetry_keys.SPAN_EPISODE, **attrs)
         telemetry.push_anchor(self._span)
+
+    def describe_policy(self, recorded_policy_meta: Callable[[], dict[str, Any]]) -> None:
+        """Copy the scalar fields of the policy's recorded metadata onto the open episode span.
+
+        Takes a callable so that an unbound run does not build the metadata.
+        """
+        if self._span is None or not telemetry.enabled():
+            return
+        telemetry.set_attrs(self._span, **self._scalars(recorded_policy_meta()))
 
     def start_rollout(self, virtual_now: float) -> None:
         """Exclude preparation from the rollout's virtual duration."""
@@ -213,6 +226,12 @@ class Harness(pimm.ControlSystem):
                 merge_dicts(statics, {key: {joint_signal: value} for key, value in msg.data.items()})
         return statics
 
+    @staticmethod
+    def _recorded_policy_meta(own_meta: dict[str, Any], runtime_meta: dict[str, Any]) -> dict[str, Any]:
+        """The policy's own metadata and what it set on the runtime, under the names the recording uses."""
+        merged = deepcopy(flatten_dict(own_meta)) | flatten_dict(runtime_meta)
+        return {f'{policy_keys.POLICY_META}.{k}': v for k, v in merged.items()}
+
     def _build_episode_meta(self, rollout: Rollout, runtime: Executor) -> dict[str, Any]:
         task = rollout.task
         meta = self._statics()
@@ -221,9 +240,7 @@ class Harness(pimm.ControlSystem):
         meta[eval_keys.CHARGE_INFERENCE_TIME] = task.charge_inference_time or not self._embodiment.simulated
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec
-        policy_meta = deepcopy(flatten_dict(rollout.policy.meta())) | flatten_dict(runtime.metadata_snapshot())
-        for k, v in policy_meta.items():
-            meta[f'{policy_keys.POLICY_META}.{k}'] = v
+        meta.update(self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot()))
         meta.update(task.meta)
         meta[keys.TASK] = self._instruction(task)
         return meta
@@ -557,6 +574,8 @@ class Harness(pimm.ControlSystem):
         """Prepare, run, record, and return the rig. Return None when stopped without a terminal payload."""
         task = rollout.task
         self._telemetry.begin(task.meta)
+        # Name the policy before the reset, so that an episode that ends in its reset still names it.
+        self._telemetry.describe_policy(lambda: self._recorded_policy_meta(rollout.policy.meta(), {}))
         with telemetry.span(telemetry_keys.SPAN_RESET):
             yield from self._prepare(should_stop, task.prepare_args)
         if should_stop.value:
@@ -587,6 +606,10 @@ class Harness(pimm.ControlSystem):
             finally:
                 self.deadline_ns.emit(None)
         finally:
+            # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
+            self._telemetry.describe_policy(
+                lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
+            )
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
             logging.info('Closing the policy runtime')
