@@ -261,6 +261,20 @@ def test_a_stack_of_past_joint_state_keeps_the_capture_time_of_the_current_camer
     assert _record_stack_ages(periodic_execution, POSITION) == ([0, 500_000_000, 1_000_000_000], 1_000_000_000)
 
 
+def test_an_identical_camera_frame_gives_the_inner_run_its_new_capture_time(periodic_execution):
+    runtime, now = periodic_execution
+    inner = _RecordObservedTime()
+    run = runtime.start(Sequential(TemporalStack((keys.WRIST_IMAGE,), (0.0,)), inner))
+    try:
+        for time_ns in (0, 500_000_000, 1_000_000_000):
+            now[0] = time_ns
+            runtime.start_tick(time_ns)
+            run.send({keys.WRIST_IMAGE: 7})
+    finally:
+        run.close()
+    assert inner.observed_ns == [0, 500_000_000, 1_000_000_000]
+
+
 def test_overlapping_samples_preserve_data_and_deliver_trajectories_in_submission_order(periodic_execution):
     runtime, now = periodic_execution
     started, release = threading.Event(), threading.Event()
