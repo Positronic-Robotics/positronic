@@ -160,8 +160,7 @@ class _GcMeter:
 class _GcSteps:
     """Stamp each step span of one rollout with the collection time before the step and inside it.
 
-    The wait window of a step opens when the previous step ends. For the first step, it opens when the rollout starts,
-    so it covers the opening of the recording.
+    The wait window of a step opens when the previous step ends. For the first step, it opens when the rollout starts.
     """
 
     def __init__(self, meter: _GcMeter) -> None:
