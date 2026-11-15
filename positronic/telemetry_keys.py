@@ -43,8 +43,8 @@ ATTR_PASS_FAILED = 'pass.failed'
 # durations and the instants `served.received_ns` and `served.sent_ns`, straight from the answer's own `timing` block.
 ATTR_SERVED_PREFIX = 'served.'
 
-# On `policy.submit`: the age in milliseconds of the newest frame of each camera that the call sends, the oldest of
-# them, when the call starts. The history frames of a temporal stack do not count.
+# On `policy.submit`: the age in milliseconds of the newest frame of each camera that the harness reads, the oldest
+# of them, when the call starts. The history frames of a temporal stack do not count.
 ATTR_OBS_AGE_MS = 'obs.age_ms'
 
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.

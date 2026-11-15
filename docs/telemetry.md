@@ -125,7 +125,10 @@ count, and a hold that the episode end cuts does not count. The hold share of a 
 `hold_sum_ms / 1000 / episode.virtual_s`.
 
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of a camera frame to the start of the
-call. The frame is the newest frame of each camera that the call sends, and with several cameras the oldest of them.
+call. The frame is the newest frame of each camera that the harness reads, and with several cameras the oldest of
+them. A remote deployment puts each of these cameras on the wire, and the server drops the cameras that its model does
+not use. So a slow camera that the model does not use still sets the age. A camera that a local codec drops before
+inference also sets the age.
 The history frames of a `TemporalStack` do not count, because their age is set by the stack offsets. The harness reads the two times on one clock, the clock of the policy
 runtime. On a real rig it is the monotonic clock of the host. In a simulation it is the world clock, so the age is
 simulated time and does not include the wall time of the simulator. The age uses the capture time in
