@@ -308,7 +308,7 @@ class _EndpointBase(Cascade):
     * no locator at all — the entry sits on a task and names one of the plan's endpoints.
 
     Every kind that names a locator names its wire. A remote endpoint at a network address may state a
-    bearer token, which the platform presents to that endpoint alone.
+    bearer token, which the platform presents to that endpoint alone, and the `policy_spec` its server serves.
 
     `Endpoint` is the form a request carries, and `EndpointFile` the form a plan file states.
     """
@@ -318,6 +318,7 @@ class _EndpointBase(Cascade):
         'max_concurrent_sessions',
         'min_vram_gb',
         'query',
+        'policy_spec',
     )
 
     name: str = Field(min_length=1)
@@ -336,6 +337,8 @@ class _EndpointBase(Cascade):
     min_vram_gb: int | None = Field(default=None, ge=1)
     # The params the platform puts on each session URL of the image, as `address.query` does for a remote endpoint.
     query: SessionQuery | None = Field(default=None, min_length=1)
+    # The `spec` of the policy that the server at a remote endpoint's address serves, as a served endpoint names it.
+    policy_spec: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode='before')
     @classmethod
@@ -452,6 +455,14 @@ class _EndpointBase(Cascade):
             raise ValueError(
                 f'{slug_of(self.kind)} endpoint {self.name!r} states a query, which only an image endpoint carries: '
                 'a remote endpoint writes its session params in `address.query`'
+            )
+        return self
+
+    @model_validator(mode='after')
+    def _a_policy_spec_names_what_a_remote_address_serves(self) -> Self:
+        if self.policy_spec is not None:
+            self._refuse_off_a_remote_address(
+                'policy_spec', 'a served endpoint names its policy in `spec`, and an image endpoint in `image`'
             )
         return self
 

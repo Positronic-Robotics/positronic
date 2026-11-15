@@ -143,6 +143,14 @@ class ExecutionRuntime(Runtime):
     def tick(self) -> int:
         return self._runtime.tick
 
+    @property
+    def observed_ns(self) -> int | None:
+        return self._runtime.observed_ns
+
+    @observed_ns.setter
+    def observed_ns(self, value: int | None) -> None:
+        self._runtime.observed_ns = value
+
     def set_metadata(self, name: str, value: Any) -> None:
         self._runtime.set_metadata(name, value)
 
@@ -190,6 +198,7 @@ class Executor(Runtime):
         self._execution = ExecutionRuntime(self, max_in_flight=max_in_flight)
         self._answers: set[_UnchargedAnswer[Any]] = set()
         self._metadata: dict[str, Any] = {}
+        self._observed_ns: int | None = None
 
     def set_metadata(self, name: str, value: Any) -> None:
         self._metadata[name] = deepcopy(value)
@@ -207,8 +216,21 @@ class Executor(Runtime):
         """The zero-based control-tick index, unchanged when calls occur at the same clock time."""
         return self._tick
 
-    def start_tick(self) -> None:
-        """Count a new tick if the episode clock has advanced since the previous call."""
+    @property
+    def observed_ns(self) -> int | None:
+        return self._observed_ns
+
+    @observed_ns.setter
+    def observed_ns(self, value: int | None) -> None:
+        self._observed_ns = value
+
+    def start_tick(self, observed_ns: int | None) -> None:
+        """Count a new tick if the episode clock has advanced since the previous call.
+
+        ``observed_ns`` is the episode-clock time at which the tick's observation was captured, or ``None`` when
+        unknown. Each call that the tick submits stamps the age of the observation in ``observed_ns``.
+        """
+        self._observed_ns = observed_ns
         now_ns = self.time_ns
         if now_ns != self._tick_time_ns:
             self._tick += 1
@@ -261,7 +283,7 @@ class Executor(Runtime):
             return function(*args, **kwargs)
 
         if telemetry.enabled():
-            invoke = telemetry.traced(telemetry_keys.SPAN_POLICY_SUBMIT)(invoke)
+            invoke = partial(self._traced_call, invoke, self._observed_ns)
         work = partial(context.run, invoke)
         answer = (
             _ChargedAnswer(workers, self._clock, work)
@@ -270,6 +292,12 @@ class Executor(Runtime):
         )
         self._answers.add(answer)
         return answer
+
+    def _traced_call(self, call: Callable[[], T], observed_ns: int | None) -> T:
+        """Run ``call`` in a ``policy.submit`` span that holds the age of the observation when the call starts."""
+        attrs = {} if observed_ns is None else {telemetry_keys.ATTR_OBS_AGE_MS: (self._clock() - observed_ns) / 1e6}
+        with telemetry.span(telemetry_keys.SPAN_POLICY_SUBMIT, **attrs):
+            return call()
 
     def wait(self, timeout_sec: float) -> WaitResult:
         """Check for new answers, waiting at most ``timeout_sec`` real seconds. Zero only checks.
