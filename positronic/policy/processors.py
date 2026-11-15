@@ -318,8 +318,7 @@ class TrajectoryPlayer(Policy):
             self._hold_max_ns = 0
 
         def record_trajectory(self, trajectory: Trajectory, now_ns: int) -> None:
-            if not trajectory.commands:
-                self.cut_plan(max(trajectory.start_ns, now_ns))
+            self.cut_plan(max(trajectory.start_ns, now_ns))
 
         def cut_plan(self, cut_ns: int) -> None:
             """End the plan at ``cut_ns`` at the latest."""
@@ -975,15 +974,14 @@ class _StackedObs(Mapping[str, Any]):
 class _StackBuffer:
     """Time-ordered history of ``(timestamp, observed_ns, values)`` entries, capped to the sampled window.
 
-    ``values`` is a dict of key → array; every entry holds the same keys. ``append`` copies each new
-    entry but skips one byte-identical to the previous — a source slower than the control loop repeats
-    its value, and carry-over sampling reuses the stored one — and gives the previous entry the newer
-    capture time. It then drops entries before the oldest
-    sampled offset, keeping the one at or before it. ``sample`` replaces each key of an observation
-    with a stack holding, for each offset, the latest value at or before that time — carry-over, never
-    the future. Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``,
-    a fixed ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1
-    to ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's values.
+    ``values`` is a dict of key → array; every entry holds the same keys. ``append`` copies each new entry,
+    except one byte-identical to the previous, which shares the previous arrays — a source slower than the
+    control loop repeats its value, and carry-over sampling reuses the stored one. It then drops entries before
+    the oldest sampled offset, keeping the one at or before it. ``sample`` replaces each key of an observation
+    with a stack holding, for each offset, the latest value at or before that time — carry-over, never the
+    future. Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
+    ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
+    ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's values.
     """
 
     def __init__(self, offsets_sec: tuple[float, ...], pad_start: bool = True):
@@ -996,10 +994,9 @@ class _StackBuffer:
 
     def append(self, now: float, observed_ns: int | None, values: dict[str, np.ndarray]):
         if self._entries and all(np.array_equal(self._entries[-1][2][k], v) for k, v in values.items()):
-            last_time, _, last_values = self._entries[-1]
-            self._entries[-1] = (last_time, observed_ns, last_values)
-            return
-        self._entries.append((now, observed_ns, {k: np.array(v) for k, v in values.items()}))
+            self._entries.append((now, observed_ns, self._entries[-1][2]))
+        else:
+            self._entries.append((now, observed_ns, {k: np.array(v) for k, v in values.items()}))
         cutoff = now + min(self._offsets_sec)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             self._entries.popleft()
