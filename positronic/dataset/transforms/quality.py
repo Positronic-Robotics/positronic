@@ -68,8 +68,8 @@ def cmd_delay_ms(
 ) -> int | None:
     """Milliseconds by which the measured pose follows the commanded pose in one episode.
 
-    It is the shift, from 0 to ``max_delay_ms``, that gives the smallest mean distance between each measured pose
-    and the command that was in force that long before it. ``None`` when the commands travel less than
+    The shift from 0 to ``max_delay_ms`` with the smallest mean distance between each measured pose and the command
+    that was in force that long before it. ``None`` when the commands travel less than
     ``min_travel`` on every component, or when no measured pose is ``max_delay_ms`` past the first command. Of
     several shifts with the same distance, it is the shortest, so the pose period limits the resolution.
 
