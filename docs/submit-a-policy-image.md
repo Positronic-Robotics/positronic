@@ -392,7 +392,8 @@ docker/read_image_digest.sh <you>/<image>:v1
 [`docker/read_image_digest.sh`](../docker/read_image_digest.sh) prints the `docker-content-digest`
 header, which names the manifest the registry served. Pin that digest. The `config.digest` inside
 the manifest names the config blob, and the registry refuses a reference to it. The size adds the layers and the config blob, which is the count the platform makes against
-the 50 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
+the 50 GB budget. When the tag names an index, as a push from the containerd image store does, the
+digest is the index's and the size is its linux/amd64 image's, as the platform counts it. The platform sees the same `401` or `404`: the image is not public, or the name
 is wrong.
 
 The script reads a public image only. For a private image, log in with the credential you give
@@ -404,6 +405,10 @@ docker buildx imagetools inspect <registry>/<you>/<image>:v1                  # 
 docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1 \
   | jq '([.layers[].size] | add) + .config.size'                             # the compressed size
 ```
+
+When the tag names an index, the raw output lists `manifests` and no `layers`, and `jq` fails. Then
+run the size command on `<registry>/<you>/<image>@<digest>`, with the digest of the `linux/amd64`
+entry of that list.
 
 The platform sees the same `401` or `404`: the credential does not read the image, or the name is
 wrong.
