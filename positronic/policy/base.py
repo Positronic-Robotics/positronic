@@ -110,6 +110,18 @@ class Runtime(ABC):
         A schedule that plays the factor calls this as it starts. An episode refuses a factor that nothing applies.
         """
 
+    @property
+    @abstractmethod
+    def observed_ns(self) -> int | None:
+        """The capture time of the observation that the next submitted call uses, on this runtime's clock.
+
+        ``None`` when unknown. A processor that passes on an older observation sets the capture time of that one.
+        """
+
+    @observed_ns.setter
+    @abstractmethod
+    def observed_ns(self, value: int | None) -> None: ...
+
     @staticmethod
     def _timed_run(run: ProcessorRun[InputT, OutputT, ReturnT], name: str) -> ProcessorRun[InputT, OutputT, ReturnT]:
         """Time each resumption, leaving no span active while the generator is suspended."""

@@ -51,6 +51,13 @@ class Rollout:
     writer: DatasetWriter | None
 
 
+# The schedule's entries of the policy's metadata that the episode span carries, by span attribute.
+_SCHEDULE_ATTRS = {
+    telemetry_keys.ATTR_WAYPOINTS_HOLD_SUM_MS: f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}',
+    telemetry_keys.ATTR_WAYPOINTS_HOLD_MAX_MS: f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_MAX_MS}',
+}
+
+
 class _EpisodeTelemetry:
     """Parent reset, inference, and recorder spans to one episode; count its steps and virtual duration."""
 
@@ -89,6 +96,13 @@ class _EpisodeTelemetry:
 
     def step(self) -> None:
         self._steps += 1
+
+    def describe_schedule(self, policy_meta: dict[str, Any]) -> None:
+        """Copy the schedule's holds from the policy's recorded metadata onto the open episode span."""
+        if self._span is None:
+            return
+        held = {attr: policy_meta[name] for attr, name in _SCHEDULE_ATTRS.items() if name in policy_meta}
+        telemetry.set_attrs(self._span, **held)
 
     def end(self, virtual_now: float, *, partial: bool = False) -> None:
         """Export the episode, including incomplete episodes interrupted by an error or shutdown."""
@@ -151,6 +165,8 @@ class Harness(pimm.ControlSystem):
         self._recorded_signals: set[str] = set()
         self._recorded_privileged: set[str] = set()
         self._obs_by_signal: dict[str, dict[str, Any] | pimm.SignalError | None] = {}
+        # The emission time of each camera's frame in ``_obs_by_signal``, on the timeline of the policy runtime's clock.
+        self._frame_ns_by_signal: dict[str, int] = {}
         # The last instruction this episode recorded, so a sample goes in only when the instruction changes.
         self._recorded_instruction: str | None = None
         # The newest goal the embodiment published in this episode, which the policy gets over the task's instruction.
@@ -376,8 +392,12 @@ class Harness(pimm.ControlSystem):
                 ) / 1e6
             if message is None or isinstance(message.data, pimm.SignalError):
                 self._obs_by_signal[name] = message.data if message is not None else None
+                self._frame_ns_by_signal.pop(name, None)
             elif message.updated or not isinstance(self._obs_by_signal.get(name), dict):
                 self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
+                emitted_ns = message.time.get(EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL)
+                if name.startswith(keys.IMAGE_PREFIX) and emitted_ns is not None:
+                    self._frame_ns_by_signal[name] = emitted_ns
         if self._writer is not None:
             for name, receiver in self.privileged.items():
                 message = receiver.read()
@@ -440,7 +460,7 @@ class Harness(pimm.ControlSystem):
                 step_ms[telemetry_keys.ATTR_STEP_OBSERVE_MS] = (policy_started_ns - observe_started_ns) / 1e6
                 if obs is None:
                     return None
-                runtime.start_tick()
+                runtime.start_tick(min(self._frame_ns_by_signal.values(), default=None))
                 started_at_ns = runtime.time_ns
                 try:
                     step = policy_run.send(obs)
@@ -526,6 +546,7 @@ class Harness(pimm.ControlSystem):
             self._recorded_signals.clear()
             self._recorded_privileged.clear()
             self._obs_by_signal.clear()
+            self._frame_ns_by_signal.clear()
             self._recorded_instruction = None
             self._goal = None
 
@@ -630,6 +651,7 @@ class Harness(pimm.ControlSystem):
             self._telemetry.describe_policy(
                 lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
             )
+            self._telemetry.describe_schedule(runtime.metadata_snapshot())
             # Cleanup stops at the first error. Later resources may remain open; do not add nested
             # finally blocks to guarantee their closure.
             logging.info('Closing the policy runtime')
