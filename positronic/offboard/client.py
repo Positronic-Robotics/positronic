@@ -41,10 +41,15 @@ def time_left(deadline: float) -> float:
     return max(0.0, deadline - time.monotonic())
 
 
-# What ``wire_timing`` reports: the uplink, and the wait that follows it. The link and the receiver
+# What ``wire_timing`` reports: the send, and the wait that follows it. The link and the receiver
 # cost the two minus ``served_ms``, because the server's own span sits inside the second one.
 SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
+# From the start of the send to the server's read of the request, and from the server's send to the receipt here. Only
+# a server that stamps the two gives them, and only for a call sent with no other call in flight: a server reads a
+# request after it answers the one before. Each one holds the offset between the two clocks; their sum does not.
+UPLINK_MS = 'uplink_ms'
+DOWNLINK_MS = 'downlink_ms'
 
 
 class InferenceSession:
@@ -96,7 +101,7 @@ class InferenceSession:
 
     @property
     def wire_timing(self) -> Mapping[str, float]:
-        """Send and response-wait timings of this thread's latest call."""
+        """Send, response-wait and one-way timings of this thread's latest call."""
         return self._timings.wire
 
     @wire_timing.setter
@@ -239,6 +244,7 @@ class InferenceSession:
                         raise RuntimeError('The inference session is closing')
                     with self._responses:
                         self._pending.append(token)
+                        sent_alone = len(self._pending) == 1
                     self._conn.send(serialised)
             finally:
                 # A send that raises gets timed too, so the span is recorded on the way out.
@@ -258,8 +264,14 @@ class InferenceSession:
             finally:
                 answered = time.time_ns()
                 telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
-            self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
-            return self._decode_answer(received)
+            wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
+            self.wire_timing = wire_timing
+            result = self._decode_answer(received)
+            served = self.served_timing
+            if sent_alone and protocol.TIMING_RECEIVED_NS in served and protocol.TIMING_SENT_NS in served:
+                wire_timing[UPLINK_MS] = (served[protocol.TIMING_RECEIVED_NS] - send_started) / 1e6
+                wire_timing[DOWNLINK_MS] = (answered - served[protocol.TIMING_SENT_NS]) / 1e6
+            return result
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
