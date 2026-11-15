@@ -614,6 +614,31 @@ def test_bind_from_env_records_under_the_process_it_names(tmp_path, monkeypatch)
     assert _run_id(path) == 'rollout-1'
 
 
+# Module scope: a World pickles a background loop into the child that runs it.
+def _one_span_then_idle(stop_reader, clock):
+    with telemetry.span('driver.tick'):
+        pass
+    telemetry.force_flush()
+    while not stop_reader.read().data:
+        yield pimm.Sleep(0.01)
+
+
+def test_a_background_process_writes_its_own_sidecar_under_the_run_id(tmp_path, monkeypatch):
+    """A World that binds each child from the environment gives a driver its own file, apart from the harness's."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.setenv(ENV_RUN_ID, 'rollout-1')
+    path = tmp_path / telemetry.TELEMETRY_SUBDIR / f'_one_span_then_idle{telemetry.SPANS_SUFFIX}'
+    with pimm.World(process_scope=telemetry.bind_from_env) as world:
+        world.start_in_subprocess(_one_span_then_idle)
+        deadline = time.monotonic() + 30
+        while not path.exists() or not path.read_text():
+            assert time.monotonic() < deadline, 'the background process wrote no sidecar'
+            time.sleep(0.01)
+    assert _spans_by_name(path)['driver.tick'].process == '_one_span_then_idle'
+    assert _run_id(path) == 'rollout-1'
+    assert _env_sidecars(tmp_path) == [path]
+
+
 def test_bind_from_env_records_nothing_when_the_sidecar_cannot_open(tmp_path, monkeypatch, caplog):
     """Every recording run binds from the environment, so a sidecar that refuses to open must cost its
     timings and not the run. The warning names the path, so the loss is in the log rather than silent."""

@@ -63,25 +63,28 @@ def prepare_output_dir(output_dir: str | Path | None) -> Path | None:
     # The sync mirrors the whole local directory, so a sidecar written inside it uploads with the episodes.
     # Pointed anywhere else the spans stay on the box that ran, and somebody copies them off by hand.
     os.environ[ENV_TELEMETRY_DIR] = str(local_dir / telemetry.TELEMETRY_SUBDIR)
+    # Set before any World spawns its background processes, so the harness and each of them stamp one run id.
+    os.environ.setdefault(ENV_RUN_ID, uuid.uuid4().hex)
     return local_dir
 
 
 @contextmanager
-def scoped_env_var(name: str) -> Iterator[None]:
-    """Restore ``name`` on exit, so a telemetry variable a run sets does not outlive that run.
+def scoped_env_var(*names: str) -> Iterator[None]:
+    """Restore each of ``names`` on exit, so a telemetry variable a run sets does not outlive that run.
 
     FOOTGUN: a telemetry directory left set binds a harness the next run never asked to record, into the
     previous run's directory. Binding adds an exporter thread, and a World forking a background control system
     deadlocks on one, so the residue hangs the process rather than mislabelling a file.
     """
-    previous = os.environ.get(name)
+    previous = {name: os.environ.get(name) for name in names}
     try:
         yield
     finally:
-        if previous is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = previous
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 class TaskDriver(pimm.ControlSystem):
@@ -125,7 +128,7 @@ def run_world(
     ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
     harness = Harness(embodiment)
-    with pimm.World(virtual_time=embodiment.simulated) as world:
+    with pimm.World(virtual_time=embodiment.simulated, process_scope=telemetry.bind_from_env) as world:
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)
 
@@ -231,7 +234,7 @@ def main(
         # TODO: The preparation of each session falls inside the `eval.pass` span, and a one-time warm-up in the
         # first one depresses the real-time factor. Time the session preparation as its own span, outside the factor.
         policy.wait_for_server()
-    with scoped_env_var(ENV_TELEMETRY_DIR):
+    with scoped_env_var(ENV_TELEMETRY_DIR, ENV_RUN_ID):
         output_path = prepare_output_dir(output_dir)
         earlier = set() if output_path is None else _episode_paths(output_path)
         with timed_pass(output_path, timing, policy):

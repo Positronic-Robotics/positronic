@@ -14,7 +14,7 @@ import positronic.cfg.embodiment
 import positronic.cfg.eval.real.droid
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
-from positronic import keys, wire
+from positronic import keys, telemetry, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world, scoped_env_var
 from positronic.dataset.dataset import DatasetFactory, DatasetWriter
@@ -25,7 +25,7 @@ from positronic.eval import keys as eval_keys
 from positronic.gui.web import StationConsole
 from positronic.policy import Policy
 from positronic.policy.harness import Harness, Rollout
-from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
+from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def real(
     if embodiment.simulated:
         raise ValueError('the keyboard path drives hardware in real time; run a simulated embodiment as `sim`')
 
-    with scoped_env_var(ENV_TELEMETRY_DIR):
+    with scoped_env_var(ENV_TELEMETRY_DIR, ENV_RUN_ID):
         output_path = prepare_output_dir(output_dir)
         operator = KeyboardOperator(
             next_task, policy, dataset_factory(output_path) if output_path is not None else None
@@ -103,7 +103,7 @@ real_cfg = cfn.Config(
 )
 
 
-@scoped_env_var(ENV_TELEMETRY_DIR)
+@scoped_env_var(ENV_TELEMETRY_DIR, ENV_RUN_ID)
 def web(
     policy,
     embodiment: Embodiment,
@@ -126,7 +126,7 @@ def web(
     writer = dataset_factory(output_path) if output_path is not None else None
     console = StationConsole(next_task, policy, writer, host=host, port=port)
     harness = Harness(embodiment)
-    with pimm.World() as world:
+    with pimm.World(process_scope=telemetry.bind_from_env) as world:
         wire.wire_embodiment(world, harness, embodiment, done=console.done)
         world.connect(console.perform_task, harness.perform_task)
         for name, observation in embodiment.observations.items():

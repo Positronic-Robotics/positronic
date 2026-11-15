@@ -48,7 +48,7 @@ from positronic.eval import Embodiment, Eval, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
-from positronic.simulator.env_server.telemetry import ENV_TELEMETRY_DIR
+from positronic.simulator.env_server.telemetry import ENV_RUN_ID, ENV_TELEMETRY_DIR
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.tests.testing_inference import make_embodiment
 
@@ -547,6 +547,25 @@ def test_the_spans_sidecar_lands_where_the_episodes_upload_from(tmp_path, monkey
 
     assert local_dir is not None
     assert pointed_at == str(local_dir / telemetry.TELEMETRY_SUBDIR)
+
+
+def test_a_recording_run_hands_every_process_one_run_id(tmp_path, monkeypatch):
+    """The background processes of a World spawn before the harness binds, so the run id is set before both."""
+    monkeypatch.delenv(ENV_RUN_ID, raising=False)
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        with scoped_env_var(ENV_TELEMETRY_DIR, ENV_RUN_ID):
+            prepare_output_dir(tmp_path / 'episodes')
+            run_id = os.environ.get(ENV_RUN_ID)
+    assert run_id
+    assert ENV_RUN_ID not in os.environ
+
+
+def test_a_run_id_set_before_the_run_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV_RUN_ID, 'given')
+    with pos3.mirror(cache_root=str(tmp_path / 'mirror'), show_progress=False):
+        with scoped_env_var(ENV_TELEMETRY_DIR):
+            prepare_output_dir(tmp_path / 'episodes')
+    assert os.environ[ENV_RUN_ID] == 'given'
 
 
 def test_a_run_that_records_nothing_leaves_no_telemetry_directory(tmp_path, monkeypatch):
