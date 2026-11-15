@@ -40,12 +40,12 @@ read_manifest() {  # <tag or digest>: the manifest into $manifest, its headers i
 read_manifest "$tag"
 digest=$(grep -i '^docker-content-digest:' "$headers" | tr -d '\r' | awk '{print $2}')
 if jq -e '.manifests' "$manifest" > /dev/null; then
-  amd64=$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest // empty' "$manifest")
-  if [ -z "$amd64" ]; then
+  amd64_digest=$(jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest // empty' "$manifest")
+  if [ -z "$amd64_digest" ]; then
     echo "${ref} names no linux/amd64 image" >&2
     exit 1
   fi
-  read_manifest "$amd64"
+  read_manifest "$amd64_digest"
 fi
 bytes=$(jq '([.layers[].size] | add) + .config.size' "$manifest")
 echo "digest            ${digest}"
