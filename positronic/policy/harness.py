@@ -393,12 +393,12 @@ class Harness(pimm.ControlSystem):
             else:
                 emitted_ns = message.time.get(EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL)
                 is_frame = name.startswith(keys.IMAGE_PREFIX)
+                if is_frame and step_ms is not None:
+                    self._time_frame(name, message.time, emitted_ns, step_ms)
                 if message.updated or not isinstance(self._obs_by_signal.get(name), dict):
                     self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
                     if is_frame and emitted_ns is not None:
                         self._frame_ns_by_signal[name] = emitted_ns
-                if is_frame and step_ms is not None:
-                    self._time_frame(name, message.time, emitted_ns, step_ms)
         if self._writer is not None:
             for name, receiver in self.privileged.items():
                 message = receiver.read()
@@ -411,8 +411,9 @@ class Harness(pimm.ControlSystem):
     def _time_frame(self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float]) -> None:
         """Put the two parts of the age of camera frame ``name`` into ``step_ms``.
 
-        The wait from the hand-off ``emitted_ns`` to now is on the runtime clock. The driver's time from capture to
-        hand-off is on the camera's clock, and is absent when the driver stamps no capture time.
+        The wait from the hand-off ``emitted_ns`` to the read, before any conversion, is on the runtime clock. The
+        driver's time from capture to hand-off is on the camera's clock, and is absent when the driver stamps no
+        capture time.
         """
         if emitted_ns is not None and self._clock is not None:
             step_ms[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + name] = (self._clock.now_ns() - emitted_ns) / 1e6

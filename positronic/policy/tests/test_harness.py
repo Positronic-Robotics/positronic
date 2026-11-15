@@ -1558,6 +1558,30 @@ def test_a_step_span_carries_the_age_of_each_camera_frame_in_two_parts(tmp_path)
     assert driver + keys.WRIST_IMAGE not in first.attrs
 
 
+def test_the_frame_wait_ends_at_the_read_and_leaves_out_the_conversion(tmp_path):
+    with (
+        _episode_ports(observed=(keys.EXTERIOR_IMAGE,)) as h,
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-frame-wait-conversion'),
+    ):
+
+        def slow_conversion(value):
+            h.world.clock.advance_to_ns(h.world.clock.now_ns() + 7_000_000)
+            return value
+
+        observations = h.embodiment.observations
+        observations[keys.EXTERIOR_IMAGE] = replace(observations[keys.EXTERIOR_IMAGE], serializer=slow_conversion)
+        h.device_observations[keys.EXTERIOR_IMAGE].emit(np.zeros(1))
+        h.world.clock.advance_to_ns(30_000_000)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EndAfter(1), None))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    (step,) = [s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP]
+    assert step.attrs[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + keys.EXTERIOR_IMAGE] == pytest.approx(30.0)
+
+
 def test_the_step_that_the_policy_ends_records_the_policy_duration(episode_harness, tmp_path):
     h = episode_harness
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-policy-end-step'):
