@@ -89,7 +89,7 @@ def request(targets=(), *, chunk_offset=0.0, observation_offset=0.0, elapsed=())
 def test_standalone_names_match_client_contract():
     for name in ('JOINTS', 'GRIP', 'TASK', 'WRIST_IMAGE', 'EXTERIOR_IMAGE', 'EXTERIOR_IMAGE_2'):
         assert getattr(keys, name) == getattr(obs_keys, name)
-    for name in ('PLAN', 'CALL_TIMINGS', 'ELAPSED_SEC', 'ACTION_FPS'):
+    for name in ('PLAN', 'CALL_TIMINGS', 'ELAPSED_SEC', 'ACTION_FPS', 'TYPE', 'CHECKPOINT_ID'):
         assert getattr(keys, name) == getattr(policy_keys, name)
     for name in ('ACTION_PREFIX', 'PREFIX_ACTIONS', 'CHUNK_OFFSET_SEC', 'OBSERVATION_OFFSET_SEC'):
         assert getattr(keys.RTC, name) == getattr(policy_keys.RTC, name)
@@ -262,7 +262,7 @@ def test_load_warms_selected_inference_paths_and_preserves_checkpoint_metadata(m
     assert constructor_args[0][0] == ('checkpoint', 'revision', 'variant')
     assert constructor_args[0][1]['rtc'] is use_rtc
     assert constructor_args[0][1]['offload_text_encoder'] is True
-    assert served.metadata['checkpoint_id'] == 'checkpoint'
+    assert served.metadata[keys.CHECKPOINT_ID] == 'checkpoint'
     assert served.metadata['revision'] == 'revision'
     assert served.metadata['subfolder'] == 'variant'
     assert native.calls[0][1] is None

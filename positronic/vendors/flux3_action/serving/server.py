@@ -182,8 +182,8 @@ def load_model(
             image_mappings=image_mappings,
             rtc=rtc,
             metadata={
-                'type': 'flux3_action',
-                'checkpoint_id': checkpoint,
+                keys.TYPE: 'flux3_action',
+                keys.CHECKPOINT_ID: checkpoint,
                 'revision': revision,
                 'subfolder': subfolder,
             },
