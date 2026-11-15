@@ -60,7 +60,7 @@ def cmd_delay_ms(
     episode,
     cmd_signal=keys.TARGET_EE_POSE,
     state_signal=keys.EE_POSE,
-    components=_TRANSLATION,
+    components: slice = _TRANSLATION,
     max_delay_ms: int = 500,
     min_travel: float = 0.01,
     *,
@@ -73,7 +73,8 @@ def cmd_delay_ms(
     ``min_travel`` on every component, or when no measured pose is ``max_delay_ms`` past the first command. A tie
     between shifts returns the shortest, so the pose period limits the resolution.
 
-    The delay holds every stage between the points where ``timeline`` stamps a command and a pose.
+    ``timeline`` must measure nanoseconds. The delay holds every stage between the points where it stamps a command
+    and a pose.
     """
     cmd = episode.signals[cmd_signal]
     state = episode.signals[state_signal]
