@@ -239,19 +239,26 @@ def test_sampling_tick_gives_the_inner_run_the_capture_time_of_the_new_sample(pe
         run.close()
 
 
-def test_a_stack_of_past_samples_gives_the_inner_run_the_capture_time_of_its_newest_sample(periodic_execution):
+def _record_stack_ages(periodic_execution, key: str) -> tuple[list[int | None], int | None]:
     runtime, now = periodic_execution
     inner = _RecordObservedTime()
-    run = runtime.start(Sequential(TemporalStack((POSITION,), (-0.5,)), inner))
+    run = runtime.start(Sequential(TemporalStack((key,), (-0.5,)), inner))
     try:
         for tick, time_ns in enumerate((0, 500_000_000, 1_000_000_000)):
             now[0] = time_ns
             runtime.start_tick(time_ns)
-            run.send({POSITION: tick})
+            run.send({key: tick})
     finally:
         run.close()
-    assert inner.observed_ns == [0, 0, 500_000_000]
-    assert runtime.observed_ns == 1_000_000_000
+    return inner.observed_ns, runtime.observed_ns
+
+
+def test_a_stack_of_past_camera_frames_gives_the_inner_run_the_capture_time_of_its_newest_frame(periodic_execution):
+    assert _record_stack_ages(periodic_execution, keys.WRIST_IMAGE) == ([0, 0, 500_000_000], 1_000_000_000)
+
+
+def test_a_stack_of_past_joint_state_keeps_the_capture_time_of_the_current_camera_frames(periodic_execution):
+    assert _record_stack_ages(periodic_execution, POSITION) == ([0, 500_000_000, 1_000_000_000], 1_000_000_000)
 
 
 def test_overlapping_samples_preserve_data_and_deliver_trajectories_in_submission_order(periodic_execution):

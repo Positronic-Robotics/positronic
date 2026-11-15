@@ -36,6 +36,7 @@ from positronic_model_server.spec import ARGS, NAME, VERSION
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
+from positronic.keys import IMAGE_PREFIX
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
@@ -1025,9 +1026,9 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     """Replaces each named observation entry with a temporal stack of recent samples.
 
     Every sent observation records the selected channels on the runtime's clock, then passes the stacked
-    observations to ``inner`` and yields its result. While ``inner`` runs, ``runtime.observed_ns`` is at most the
-    capture time of the newest stacked sample. A stack is built when ``inner`` first reads its key, so
-    a call that reads none builds none. Offsets are ascending seconds relative to now.
+    observations to ``inner`` and yields its result. When the stack holds a camera frame, ``runtime.observed_ns``
+    is at most the capture time of the newest stacked sample while ``inner`` runs. A stack is built when ``inner``
+    first reads its key, so a call that reads none builds none. Offsets are ascending seconds relative to now.
     Wrap a scheduling policy to collect frames on control ticks while inference is pending.
 
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
@@ -1041,6 +1042,7 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
         self._keys = tuple(keys)
         self._offsets_sec = tuple(offsets_sec)
         self._pad_start = pad_start
+        self._stacks_camera_frames = any(key.startswith(IMAGE_PREFIX) for key in self._keys)
         assert pad_start or 0.0 in self._offsets_sec, (
             'pad_start=False requires 0.0 in offsets_sec: with only past offsets the first observation has no '
             'in-range targets and the stack would be empty'
@@ -1054,7 +1056,7 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
             step_observed_ns = runtime.observed_ns
             buffer.append(now_sec, step_observed_ns, {k: obs[k] for k in self._keys})
             stacked_observed_ns = buffer.newest_observed_ns(now_sec)
-            if step_observed_ns is not None and stacked_observed_ns is not None:
+            if self._stacks_camera_frames and step_observed_ns is not None and stacked_observed_ns is not None:
                 runtime.observed_ns = min(step_observed_ns, stacked_observed_ns)
             try:
                 output = inner.send(buffer.sample(now_sec, obs))
