@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.6] - 2026-11-12
+
+This release publishes `positronic-platform-client` 0.47.24, and `positronic` requires that version. A submission view lists what it shows for each of its evals, and `positronic eval status` prints that list for a submission of several evals. An `image` endpoint can state the params of its session URL. A session opening of `InferenceClient` and `RoboarenaClient` ends by the connect deadline. The Progress chart of the replay plots the stage and count marks of every channel. The Dream-1 vendor caps the hand speed at 0.3 m/s.
+
+| Distribution | Version |
+|---|---|
+| `positronic-platform-client` | 0.47.24 |
+| `positronic-evals` | 0.2.10 |
+| `positronic-eval-vocabulary` | 0.7.5 |
+| `positronic-model-server` | 0.3.7 |
+| `positronic-wire` | 0.12.3 |
+
+### Platform client
+- A submission view carries `evals`: one `EvalView` for each eval of the submission, with its eval, status, scores, artifacts, episode counts and runs. `scores`, `artifacts`, `episodes` and `runs` on the view read the first entry. `list_artifacts` takes `eval`, which picks the eval whose records it lists. `positronic eval status` prints the `evals` list for a submission of several evals ([#1228](https://github.com/Positronic-Robotics/positronic/pull/1228))
+- An `image` endpoint states `query`, the params that the platform puts on each session URL of the image, for example `horizon_sec=0.5`. `positronic eval run --policy-query=horizon_sec=0.5` states it beside `--policy-image`, and `ResolvedEndpoint.query` carries it in a resolved plan ([#1229](https://github.com/Positronic-Robotics/positronic/pull/1229))
+
+### Inference
+- A caller that passes `connect_deadline` to `InferenceClient` gets one session opening that ends by that deadline: the first dial, each status wait and each retry. `RoboarenaClient` and `RoboarenaPolicy` take `connect_deadline`, with the default `DEFAULT_CONNECT_DEADLINE_S`. `ClientConnection.close` in the wire package takes an optional `timeout` ([#1218](https://github.com/Positronic-Robotics/positronic/pull/1218))
+- The FLUX 3 Action pipeline takes `horizon_sec`. A session with the query `horizon_sec=0.5` plays the first 8 commands of each 15 Hz chunk, and a session with no query plays each chunk whole ([#1229](https://github.com/Positronic-Robotics/positronic/pull/1229))
+- An ABC-DiT session with real prompts accepts seven more task instructions of ABC's real teleoperation data. A session with sim prompts still refuses them ([#1227](https://github.com/Positronic-Robotics/positronic/pull/1227))
+- The Dream-1 chunk limiter moves each hand at most 0.3 m/s (`ChunkLimits.max_ee_speed_m_s`), in place of the 0.6 m/s of the Dream SDK station's defaults ([#1226](https://github.com/Positronic-Robotics/positronic/pull/1226))
+
+### Replay
+- The Progress chart of the default replay plots each `<channel>.state` and `<channel>.delivered` signal of any channel, nested names included. A state mark whose values are all stages plots each stage at its place on the stage ladder, so the lines of several channels line up ([#1220](https://github.com/Positronic-Robotics/positronic/pull/1220)) ([#1223](https://github.com/Positronic-Robotics/positronic/pull/1223))
+
+### Development
+- A video test compares the frames index, the stream settings, the packet timing and the decoded frames of an early-opened encoder, not the mp4 bytes, which libx264 does not repeat exactly ([#1224](https://github.com/Positronic-Robotics/positronic/pull/1224))
+
 ## [0.4.5] - 2026-11-11
 
 This release publishes `positronic-platform-client` 0.47.20, and `positronic` requires that version. `positronic account` gains `redeem`, `terms` and `accept-terms`. An endpoint of a plan can state its own episode cap, policy preset and session limit, and a plan can name the `abc` simulator. The `positronic-server` command is now `positronic-dataset-viewer`. The Franka, ZED and Robotiq drivers report device faults that a console can act on, and the YAM driver can fade its Coulomb friction at rest. The MolmoAct2 pipelines send JPEG frames, and the viewer header counts the outcomes of the episodes.

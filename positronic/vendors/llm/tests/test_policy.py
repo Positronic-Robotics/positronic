@@ -31,8 +31,8 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
-from positronic.vendors.llm.motion import Motion
-from positronic.vendors.llm.policy import Images, LLMPolicy, Tool, llm
+from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath
+from positronic.vendors.llm.policy import Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
 
 
 def observation(x=0.0):
@@ -518,3 +518,276 @@ def test_a_path_plays_every_waypoint_before_the_next_decision(model):
     assert xs[-1] == pytest.approx(0)
     assert [waypoint['x'] for waypoint in accepted['waypoints']] == [0.04, 0.0]
     assert accepted['duration_s'] == pytest.approx(0.08 / motion.linear_speed + 1 / motion.fps)
+
+
+def bimanual_observation(left_x=0.0, right_x=0.0):
+    poses = {keys.LEFT_ARM: [left_x, 0.3, 0.1, 1, 0, 0, 0], keys.RIGHT_ARM: [right_x, -0.3, 0.1, 1, 0, 0, 0]}
+    return {
+        **{f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}': np.array(p) for arm, p in poses.items()},
+        **{keys.arm_channel(keys.GRIP, arm): 0.0 for arm in keys.BIMANUAL_ARMS},
+        keys.TASK: 'Pass the cube.',
+        **{
+            name: np.zeros((10, 20, 3), dtype=np.uint8)
+            for name in (keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE)
+        },
+    }
+
+
+def move_arms(*waypoints: dict[str, tuple[float, float]]):
+    path = [
+        {arm: {'x': x, 'y': y, 'z': 0.1, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 0} for arm, (x, y) in w.items()}
+        for w in waypoints
+    ]
+    return ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': path, 'note': 'Reach.'}, tool_call_id='m')])
+
+
+def decide(conversation: Conversation, obs, response):
+    conversation.request(obs, 0)
+    decision = conversation.respond(response)
+    assert decision is not None
+    return conversation.accept(*decision, obs, 0)
+
+
+def right_hand(parts) -> list[np.ndarray]:
+    channel = keys.arm_channel(keys.ROBOT_COMMAND, keys.RIGHT_ARM)
+    return [command[channel].pose.translation for part in parts for command in part]
+
+
+def test_an_arm_that_a_waypoint_leaves_out_holds_its_previous_target_or_else_its_measured_pose():
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    parts = decide(conversation, bimanual_observation(right_x=0.01), move_arms({'left': (0.05, 0.3)}))
+    np.testing.assert_allclose(right_hand(parts), [[0.01, -0.3, 0.1]] * len(right_hand(parts)))
+    decide(conversation, bimanual_observation(left_x=0.05), move_arms({'left': (0.05, 0.3), 'right': (0.02, -0.3)}))
+    parts = decide(conversation, bimanual_observation(left_x=0.05, right_x=0.015), move_arms({'left': (0.08, 0.3)}))
+    np.testing.assert_allclose(right_hand(parts)[-1], [0.02, -0.3, 0.1])
+    observed = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'observation'][-1]
+    assert list(observed['arms']) == [keys.LEFT_ARM, keys.RIGHT_ARM]
+    assert observed['arms']['right']['position_m'] == pytest.approx([0.015, -0.3, 0.1])
+    assert observed['arms']['right']['previous_target']['x'] == pytest.approx(0.02)
+    assert observed['cameras'] == [keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE]
+    accepted = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'accepted'][-1]
+    assert [(w['left']['x'], w['right']['x']) for w in accepted['waypoints']] == [(0.08, 0.02)]
+
+
+def test_a_path_with_an_unknown_arm_is_rejected():
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    conversation.request(bimanual_observation(), 0)
+    assert conversation.respond(move_arms({'left': (0.0, 0.3), 'middle': (0.0, 0.0)})) is None
+    (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert "Unknown arms ['middle']" in rejected['reason']
+
+
+def hands_at(obs, positions: dict[str, tuple[float, float]]):
+    for arm, (x, y) in positions.items():
+        obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'][:2] = [x, y]
+    return obs
+
+
+@pytest.mark.parametrize(
+    'start,path,accepted',
+    [
+        ({'left': (0.0, 0.3), 'right': (0.0, -0.3)}, {'left': (0.0, 0.05), 'right': (0.0, -0.03)}, False),
+        ({'left': (0.0, 0.3), 'right': (0.0, -0.3)}, {'left': (0.0, 0.15), 'right': (0.0, -0.15)}, True),
+        ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.3), 'right': (0.0, -0.3)}, True),
+        ({'left': (0.054, 0.042), 'right': (0.094, -0.042)}, {'left': (0.004, 0.042), 'right': (0.044, -0.042)}, True),
+        ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.03), 'right': (0.0, -0.03)}, False),
+        ({'left': (0.0, 0.04), 'right': (0.0, -0.04)}, {'left': (0.0, 0.04), 'right': (0.0, -0.039995)}, False),
+    ],
+)
+def test_a_path_that_brings_hands_closer_than_the_limit_or_than_they_start_plays_nothing(start, path, accepted):
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    obs = hands_at(bimanual_observation(), start)
+    parts = decide(conversation, obs, move_arms(path))
+    rejected = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert (parts != [[]]) is accepted
+    assert (not rejected) is accepted
+    if not accepted:
+        assert 'Rejected: The path brings hands left and right' in str(conversation.request(obs, 1))
+
+
+@pytest.mark.parametrize(
+    'y,target,measured,path',
+    [
+        (0.04, {}, {'left': (0.0, 0.0405)}, {'right': (0.0, -0.04)}),
+        (0.04, {}, {'left': (0.0, 0.0395)}, {'left': (0.0, 0.0395), 'right': (0.0, -0.04)}),
+        (0.04, {'left': (-0.002, 0.04)}, {'left': (0.002, 0.04)}, {'left': (0.028, 0.04), 'right': (0.03, -0.04)}),
+        (
+            0.01,
+            {'left': (-0.002, 0.01), 'right': (0.002, -0.01)},
+            {'left': (0.002, 0.01), 'right': (-0.002, -0.01)},
+            {'left': (0.028, 0.01), 'right': (0.032, -0.01)},
+        ),
+    ],
+)
+def test_hands_inside_the_limit_can_keep_their_gap_while_a_hand_trails_its_target(y, target, measured, path):
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), lambda *_: None)
+    close = {'left': (0.0, y), 'right': (0.0, -y)}
+    assert decide(conversation, hands_at(bimanual_observation(), close), move_arms(close | target)) != [[]]
+    off = hands_at(bimanual_observation(), close | measured)
+    assert decide(conversation, off, move_arms(path)) != [[]]
+
+
+@pytest.mark.parametrize('arm,x', [('left', -0.003), ('right', 0.003)])
+@pytest.mark.parametrize('max_tracking_error,accepted', [(0.0061, True), (0.0059, False)])
+def test_hands_come_closer_than_both_of_their_gaps_only_within_the_tracking_error(arm, x, max_tracking_error, accepted):
+    metadata = {}
+    policy = llm_bimanual(model='test', image_size=8, max_tracking_error=max_tracking_error)
+    conversation = Conversation(policy, metadata.__setitem__)
+    close = {'left': (0.0, 0.04), 'right': (0.0, -0.04)}
+    y = close[arm][1]
+    assert decide(conversation, hands_at(bimanual_observation(), close), move_arms({arm: (x, y)})) != [[]]
+    off = hands_at(bimanual_observation(), close | {arm: (-x, y)})
+    assert (decide(conversation, off, move_arms({'left': (0.027, 0.04), 'right': (0.03, -0.04)})) != [[]]) is accepted
+    assert f'within {max_tracking_error} m of its previous target' in str(conversation.request(off, 2))
+    reasons = [e['reason'] for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert reasons == (
+        []
+        if accepted
+        else [
+            'The path brings hands left and right 0.0800 m apart. They are 0.0801 m apart, and their previous '
+            f'targets are 0.0801 m apart. Hand {arm} is more than {max_tracking_error} m off its previous target'
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    'y,measured,path,reason',
+    [
+        (
+            0.04,
+            {'left': (0.0, 0.0405)},
+            {'right': (0.0, -0.03)},
+            '0.0700 m apart. They are 0.0805 m apart, and their previous targets are 0.0800 m apart',
+        ),
+        (
+            0.04,
+            {'left': (0.0, 0.07)},
+            {'right': (0.0, -0.03)},
+            '0.0700 m apart. They are 0.1100 m apart, and their previous targets are 0.0800 m apart',
+        ),
+        (
+            0.06,
+            {'left': (0.0, 0.02)},
+            {'right': (0.0, 0.0)},
+            '0.0600 m apart. They are 0.0800 m apart, and their previous targets are 0.1200 m apart',
+        ),
+        (
+            0.05,
+            {'left': (0.1, -0.05)},
+            {'left': (0.0995, -0.05)},
+            '0.0995 m apart. Keep them at least 0.1000 m apart. Hand left is more than 0.005 m off its previous target',
+        ),
+    ],
+)
+def test_hands_off_their_targets_may_not_come_closer_than_the_limit_or_both_of_their_gaps(y, measured, path, reason):
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    targets = {'left': (0.0, y), 'right': (0.0, -y)}
+    assert decide(conversation, hands_at(bimanual_observation(), targets), move_arms(targets)) != [[]]
+    off = hands_at(bimanual_observation(), targets | measured)
+    assert decide(conversation, off, move_arms(path)) == [[]]
+    (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert rejected['reason'] == f'The path brings hands left and right {reason}'
+
+
+def test_a_rejected_path_leaves_the_held_targets_as_they_were():
+    metadata = {}
+    conversation = Conversation(llm_bimanual(model='test', image_size=8), metadata.__setitem__)
+    obs = bimanual_observation()
+    decide(conversation, obs, move_arms({'left': (0.0, 0.15), 'right': (0.0, -0.15)}))
+    assert decide(conversation, obs, move_arms({'left': (0.0, 0.05), 'right': (0.0, -0.03)})) == [[]]
+    parts = decide(conversation, obs, move_arms({'right': (0.01, -0.15)}))
+    left = keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)
+    np.testing.assert_allclose(parts[-1][-1][left].pose.translation, [0.0, 0.15, 0.1])
+    observed = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'observation'][-1]
+    assert observed['arms']['left']['previous_target']['y'] == pytest.approx(0.15)
+
+
+def test_each_pair_of_hands_keeps_its_own_distance():
+    metadata = {}
+    policy = LLMPolicy(Endpoint('test'), Motion(), arms=('a', 'b', 'c'), camera_keys=(keys.EXTERIOR_IMAGE,))
+    conversation = Conversation(policy, metadata.__setitem__)
+    obs = {
+        **{
+            f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}': np.array([0, y, 0.1, 1, 0, 0, 0])
+            for arm, y in (('a', 0.01), ('b', -0.01), ('c', 0.3))
+        },
+        **{keys.arm_channel(keys.GRIP, arm): 0.0 for arm in 'abc'},
+        keys.TASK: 'Pass the cube.',
+        keys.EXTERIOR_IMAGE: np.zeros((10, 20, 3), dtype=np.uint8),
+    }
+    assert decide(conversation, obs, move_arms({'c': (0.0, 0.04)})) == [[]]
+    (rejected,) = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'rejected']
+    assert 'hands a and c' in rejected['reason']
+
+
+def test_an_arm_off_its_target_keeps_the_relief_of_a_pair_it_is_not_in():
+    policy = LLMPolicy(Endpoint('test'), Motion(), arms=('a', 'b', 'c'), camera_keys=(keys.EXTERIOR_IMAGE,))
+    conversation = Conversation(policy, lambda *_: None)
+
+    def obs(positions):
+        return {
+            **{
+                f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}': np.array([x, y, 0.1, 1, 0, 0, 0])
+                for arm, (x, y) in positions.items()
+            },
+            **{keys.arm_channel(keys.GRIP, arm): 0.0 for arm in 'abc'},
+            keys.TASK: 'Pass the cube.',
+            keys.EXTERIOR_IMAGE: np.zeros((10, 20, 3), dtype=np.uint8),
+        }
+
+    start = {'a': (0.0, 0.01), 'b': (0.0, -0.01), 'c': (0.0, 0.3)}
+    assert decide(conversation, obs(start), move_arms({'a': (-0.002, 0.01), 'b': (0.002, -0.01)})) != [[]]
+    off = obs({'a': (0.002, 0.01), 'b': (-0.002, -0.01), 'c': (0.05, 0.3)})
+    assert decide(conversation, off, move_arms({'a': (0.028, 0.01), 'b': (0.032, -0.01)})) != [[]]
+
+
+def test_named_arms_get_the_arm_path_and_their_names_and_one_arm_keeps_its_own(model):
+    requests, replies = model
+    replies.extend([finish(), finish()])
+    for policy, obs in [(llm_bimanual(model='test'), bimanual_observation()), (llm(model='test'), observation())]:
+        with execution(policy) as (run, runtime, clock):
+            complete(run, runtime, clock, obs)
+    (named, named_tools), (one, one_tools) = requests
+    schemas = {tool.name: tool.parameters_json_schema for tool in named_tools}
+    assert schemas[Tool.MOVE_PATH.value] == MoveArmsPath.model_json_schema()
+    assert {t.name: t.parameters_json_schema for t in one_tools}[Tool.MOVE_PATH.value] == MovePath.model_json_schema()
+    for fact in (*keys.BIMANUAL_ARMS, '0.1 m', '0.005 m'):
+        assert fact in str(named[0])
+        assert fact not in str(one[0])
+
+
+@pytest.mark.parametrize(
+    'change',
+    [
+        {'arms': ()},
+        {'arms': ('left', 'left')},
+        {'arms': (None, 'left')},
+        {'arms': ('',)},
+        {'arms': ('a.b',)},
+        {'arms': (1,)},
+    ],
+)
+def test_arms_are_one_arm_or_distinct_names(change):
+    with pytest.raises(ValueError, match='arms'):
+        LLMPolicy(Endpoint('test'), Motion(), **change)
+    assert LLMPolicy(Endpoint('test'), Motion()).arms == keys.ONE_ARM
+
+
+@pytest.mark.parametrize(
+    'change',
+    [
+        {'min_hand_distance': 0},
+        {'min_hand_distance': np.inf},
+        {'max_tracking_error': -0.001},
+        {'max_tracking_error': np.inf},
+        {'max_tracking_error': 0.1},
+    ],
+)
+def test_the_hand_distance_and_the_tracking_error_are_checked(change):
+    with pytest.raises(ValueError, match=next(iter(change))):
+        LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, **change)
+    assert LLMPolicy(Endpoint('test'), Motion(), arms=keys.BIMANUAL_ARMS, max_tracking_error=0).max_tracking_error == 0

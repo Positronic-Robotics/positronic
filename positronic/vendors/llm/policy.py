@@ -38,10 +38,10 @@ from positronic import geom, keys
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame, ee_frames_entry
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
-from positronic.utils import flatten_dict
+from positronic.utils import check_finite_nonnegative, check_finite_positive, flatten_dict
 
 from .client import Endpoint
-from .motion import Motion, MovePath, Waypoint
+from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_approach, closest_hand_distances
 
 
 class Images(StrEnum):
@@ -72,52 +72,69 @@ class RevealFrames(BaseModel):
 
 
 @dataclass
-class _Observation:
+class _Hand:
     pose: geom.Transform3D
     grip: float
-    task: str
-    time_ns: int
-    images: dict[str, np.ndarray]
 
-    @staticmethod
-    def measured_pose(obs: Mapping[str, Any]) -> geom.Transform3D:
-        pose = np.asarray(obs[keys.EE_POSE], dtype=float)
+    @classmethod
+    def read(cls, obs: Mapping[str, Any], arm: str | None) -> '_Hand':
+        pose = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'], dtype=float)
         if (
             pose.shape != (7,)
             or not np.all(np.isfinite(pose))
             or not np.isclose(np.linalg.norm(pose[3:]), 1, atol=1e-3)
         ):
             raise ValueError('Measured hand pose must contain xyz and a finite unit quaternion in wxyz order')
-        return geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT)
-
-    @classmethod
-    def read(cls, obs: Mapping[str, Any], camera_keys: tuple[str, ...], time_ns: int) -> '_Observation':
-        pose = cls.measured_pose(obs)
-        grip = float(obs[keys.GRIP])
+        grip = float(obs[keys.arm_channel(keys.GRIP, arm)])
         if not np.isfinite(grip) or not 0 <= grip <= 1:
             raise ValueError('Measured gripper position must be in [0, 1]')
+        return cls(geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT), grip)
+
+    def measured(self) -> dict[str, Any]:
+        return {
+            'position_m': self.pose.translation.tolist(),
+            'roll_pitch_yaw_rad': self.pose.rotation.as_euler.tolist(),
+            'gripper': self.grip,
+        }
+
+    def progress(self, target: Waypoint | None) -> dict[str, Any]:
+        if target is None:
+            return {}
+        return {
+            'remaining_translation_m': (target.pose.translation - self.pose.translation).tolist(),
+            'remaining_gripper': target.gripper - self.grip,
+            'previous_target': target.model_dump(),
+        }
+
+
+@dataclass
+class _Observation:
+    hands: dict[str | None, _Hand]
+    task: str
+    time_ns: int
+    images: dict[str, np.ndarray]
+
+    @classmethod
+    def read(
+        cls, obs: Mapping[str, Any], arms: tuple[str | None, ...], camera_keys: tuple[str, ...], time_ns: int
+    ) -> '_Observation':
+        hands = {arm: _Hand.read(obs, arm) for arm in arms}
         images = {}
         for name in camera_keys:
             frame = np.asarray(obs[name])
             if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
                 raise ValueError(f'{name} must be an RGB uint8 image')
             images[name] = frame
-        return cls(pose, grip, str(obs[keys.TASK]), time_ns, images)
+        return cls(hands, str(obs[keys.TASK]), time_ns, images)
 
-    def state(self, target: Waypoint | None) -> dict[str, Any]:
-        state = {
-            'task': self.task,
-            policy_keys.OBS_TIME_NS: self.time_ns,
-            'position_m': self.pose.translation.tolist(),
-            'roll_pitch_yaw_rad': self.pose.rotation.as_euler.tolist(),
-            'gripper': self.grip,
-            'cameras': list(self.images),
-        }
-        if target is not None:
-            state['remaining_translation_m'] = (target.pose.translation - self.pose.translation).tolist()
-            state['remaining_gripper'] = target.gripper - self.grip
-            state['previous_target'] = target.model_dump()
-        return state
+    def state(self, targets: Targets) -> dict[str, Any]:
+        """The state the model reads: the hand of one arm at the top level, the hands of named arms under ``arms``."""
+        state = {'task': self.task, policy_keys.OBS_TIME_NS: self.time_ns}
+        cameras = {'cameras': list(self.images)}
+        if (hand := self.hands.get(None)) is not None:
+            return state | hand.measured() | cameras | hand.progress(targets.get(None))
+        arms = {arm: hand.measured() | hand.progress(targets.get(arm)) for arm, hand in self.hands.items()}
+        return state | {'arms': arms} | cameras
 
     def frames(self, cameras: list[str], image_size: int) -> ModelRequest:
         """One image prompt with the labelled frames of the selected cameras."""
@@ -132,9 +149,6 @@ class _Observation:
                 BinaryContent(data.getvalue(), media_type='image/png'),
             ])
         return ModelRequest([UserPromptPart(content)])
-
-
-_SCHEMAS: dict[Tool, type[BaseModel]] = {Tool.MOVE_PATH: MovePath, Tool.REVEAL_FRAMES: RevealFrames, Tool.DONE: Finish}
 
 
 class Conversation:
@@ -156,16 +170,24 @@ class Conversation:
         self._revealed: set[str] = set()
         self._failures = 0
         self._calls = 0
-        self._target: Waypoint | None = None
+        self._targets: dict[str | None, Waypoint] = {}
 
     def _record(self, event: dict[str, Any]) -> None:
         self._transcript.append(event)
         self._set_metadata(policy_keys.TRANSCRIPT, self._transcript)
 
     def _initial(self) -> ModelRequest:
-        prompt = (
-            'Control one robot arm through exactly one tool call per response. '
-            'Use absolute hand targets in the coordinate frame of the measured pose. '
+        arms = self._policy.arms
+        named = arms != keys.ONE_ARM
+        prompt = ''.join([
+            f'Control the robot arms {", ".join(map(str, arms))} through exactly one tool call per response. '
+            if named
+            else 'Control one robot arm through exactly one tool call per response. ',
+            'Use absolute hand targets in the coordinate frame of the measured pose. ',
+            'All hands share this frame. A waypoint maps the name of an arm to its hand target. '
+            'An arm that a waypoint leaves out holds its previous target. All arms reach a waypoint together. '
+            if named
+            else '',
             'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
             'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
             'A path plays its waypoints in order before the next observation; '
@@ -173,17 +195,26 @@ class Conversation:
             'Oversized segments are clamped from the previous clamped waypoint, and the first from the latest '
             'measured pose: translation keeps its direction and rotation follows the shortest turn, each limited '
             'independently. A waypoint sets its gripper at the start of its segment. When a waypoint changes the '
-            'gripper, the hand holds still at it for grip_hold seconds. '
+            'gripper, the hand holds still at it for grip_hold seconds. ',
+            'Every hand holds still during it. ' if named else '',
             'The tool result reports the clamped waypoints; check them before planning the next path. '
             'Put several waypoints in one path when the next motions do not depend on what you will see. '
             'Camera frames remain fixed during a decision. '
             f'{Tool.REVEAL_FRAMES.value} only reveals a frame; it does not move a camera. '
             'A note should briefly describe what you see and why you chose the motion. '
             'Use done when you believe the task is complete. It ends the episode at once. '
-            'It requires hindsight for inspection; no advice is carried into another episode. '
+            'It requires hindsight for inspection; no advice is carried into another episode. ',
+            f'A path that brings two hands closer than {self._policy.min_hand_distance} m is rejected and does not '
+            'move the arms. When the hands or their previous targets are closer than that, the hands must not come '
+            'closer than the smaller of the two distances. '
+            f'While each hand is within {self._policy.max_tracking_error} m of its previous target, the hands can also '
+            'go back to their previous targets. '
+            'This check covers the hands only, not the rest of the arms. '
+            if named
+            else '',
             f'Motion limits: {json.dumps(asdict(self._policy.motion))}. '
-            f'API call budget, including corrections and pictures: {self._policy.max_calls}.'
-        )
+            f'API call budget, including corrections and pictures: {self._policy.max_calls}.',
+        ])
         self._record({
             'event': 'instructions',
             'prompt': prompt,
@@ -192,10 +223,10 @@ class Conversation:
         return ModelRequest([SystemPromptPart(prompt)])
 
     def _observe(self, raw: Mapping[str, Any], time_ns: int) -> None:
-        self._obs = _Observation.read(raw, self._policy.camera_keys, time_ns)
+        self._obs = _Observation.read(raw, self._policy.arms, self._policy.camera_keys, time_ns)
         if not self._messages:
             self._messages.append(self._initial())
-        state = self._obs.state(self._target)
+        state = self._obs.state(self._targets)
         self._record({'event': 'observation', **state})
         self._messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
         self._frames.append([])
@@ -225,13 +256,20 @@ class Conversation:
             raise ValueError('Choose available cameras not already revealed in this observation')
         return cameras
 
-    def _tool(self, call: ToolCallPart) -> MovePath | Finish | None:
+    def _tool(self, call: ToolCallPart) -> list[Targets] | Finish | None:
         tool = Tool(call.tool_name)
-        data = _SCHEMAS[tool].model_validate_json(call.args_as_json_str())
+        data = self._policy.schemas[tool].model_validate_json(call.args_as_json_str())
         match data:
-            case MovePath() if len(data.waypoints) > self._policy.motion.max_waypoints:
-                raise ValueError(f'A path has at most {self._policy.motion.max_waypoints} waypoints')
-            case MovePath() | Finish():
+            case MovePath() | MoveArmsPath():
+                if len(data.waypoints) > self._policy.motion.max_waypoints:
+                    raise ValueError(f'A path has at most {self._policy.motion.max_waypoints} waypoints')
+                path = [{None: w} for w in data.waypoints] if isinstance(data, MovePath) else data.waypoints
+                if unknown := {arm for waypoint in path for arm in waypoint} - set(self._policy.arms):
+                    raise ValueError(
+                        f'Unknown arms {sorted(map(str, unknown))}; the arms are {list(self._policy.arms)}'
+                    )
+                return path
+            case Finish():
                 return data
             case RevealFrames():
                 if self._policy.images is not Images.ON_DEMAND:
@@ -251,7 +289,7 @@ class Conversation:
             ModelRequest(parts if parts else [UserPromptPart(f'Rejected: {error}. Make one tool call.')])
         )
 
-    def respond(self, response: ModelResponse) -> tuple[ToolCallPart, MovePath | Finish] | None:
+    def respond(self, response: ModelResponse) -> tuple[ToolCallPart, list[Targets] | Finish] | None:
         """The decision in ``response``, or ``None`` when the model must be asked again about the same observation."""
         self._record({
             'event': 'response',
@@ -339,11 +377,52 @@ class Conversation:
         messages[end] = self._with_cache_point(messages[end])
         return messages
 
+    def _hand_distance_error(
+        self, hands: Mapping[str | None, _Hand], held: Targets, parts: list[list[dict]]
+    ) -> str | None:
+        """Why ``parts`` brings a pair of hands too close, or ``None``."""
+        # Interpolated samples of a parallel move can come out a few ulp closer than the hands start.
+        tolerance = 1e-6
+        # A path that holds the targets moves the offset of two hands in a straight line from its measured value to
+        # its held value. That line can pass closer than both ends. While each hand of a pair is within
+        # `max_tracking_error` of its held target, the pair can come as close as that line, else as the nearer end.
+        # For a nearer end n above the error E, every offset on the line is at least sqrt(n**2 - E**2) long. For
+        # n <= E, one can be 0.
+        limit = self._policy.min_hand_distance
+        errors = {
+            arm: np.linalg.norm(hand.pose.translation - held[arm].pose.translation) for arm, hand in hands.items()
+        }
+        for (a, b), gap in closest_hand_distances(
+            {arm: hand.pose for arm, hand in hands.items()}, parts, self._policy.arms
+        ).items():
+            measured = hands[a].pose.translation - hands[b].pose.translation
+            targeted = held[a].pose.translation - held[b].pose.translation
+            nearer = min(np.linalg.norm(measured), np.linalg.norm(targeted))
+            off = [arm for arm in (a, b) if errors[arm] > self._policy.max_tracking_error]
+            closest = closest_approach(measured, targeted)
+            if gap >= min(limit, nearer if off else closest) - tolerance:
+                continue
+            reason = f'The path brings hands {a} and {b} {gap:.4f} m apart. '
+            if nearer < limit:
+                reason += (
+                    f'They are {np.linalg.norm(measured):.4f} m apart, and their previous targets are '
+                    f'{np.linalg.norm(targeted):.4f} m apart'
+                )
+            else:
+                reason += f'Keep them at least {limit:.4f} m apart'
+            if gap >= min(limit, closest) - tolerance:
+                reason += ''.join(
+                    f'. Hand {arm} is more than {self._policy.max_tracking_error} m off its previous target'
+                    for arm in off
+                )
+            return reason
+        return None
+
     def accept(
-        self, call: ToolCallPart, data: MovePath | Finish, obs: Mapping[str, Any], time_ns: int
+        self, call: ToolCallPart, data: list[Targets] | Finish, obs: Mapping[str, Any], time_ns: int
     ) -> list[list[dict]] | PolicyEnd:
         """The commands of each segment and gripper hold of a path from the pose in ``obs``, or the ``PolicyEnd`` of
-        a finish."""
+        a finish. A path that brings two hands too close plays as one empty part."""
         self._obs = None
         if isinstance(data, Finish):
             self._messages.append(
@@ -358,13 +437,21 @@ class Conversation:
             self._set_metadata(policy_keys.STOP_REASON, call.tool_name)
             self._set_metadata(policy_keys.HINDSIGHT, data.hindsight)
             return PolicyEnd.COMPLETE
-        start = _Observation.measured_pose(obs)
-        grip = float(obs[keys.GRIP]) if self._target is None else self._target.gripper
-        waypoints, parts = self._policy.motion.trajectory(start, grip, data.waypoints)
-        self._target = waypoints[-1]
+        hands = {arm: _Hand.read(obs, arm) for arm in self._policy.arms}
+        held = {arm: self._targets.get(arm, Waypoint.at(hand.pose, hand.grip)) for arm, hand in hands.items()}
+        bounded, parts, clamped = self._policy.motion.trajectory(
+            {arm: hand.pose for arm, hand in hands.items()}, held, data
+        )
+        if (error := self._hand_distance_error(hands, held, parts)) is not None:
+            self._messages.append(
+                ModelRequest([ToolReturnPart(call.tool_name, f'Rejected: {error}', tool_call_id=call.tool_call_id)])
+            )
+            self._record({'event': 'rejected', 'call': self._calls, 'time_ns': time_ns, 'reason': error})
+            return [[]]
+        self._targets = dict(bounded[-1])
         result = {
-            'waypoints': [waypoint.model_dump() for waypoint in waypoints],
-            'clamped': waypoints != data.waypoints,
+            'waypoints': [self._dump(targets) for targets in bounded],
+            'clamped': clamped,
             'duration_s': (sum(map(len, parts)) + 1) / self._policy.motion.fps,
             'feedback': 'Path scheduled. Check the next measured observation for actual arrival.',
         }
@@ -372,12 +459,22 @@ class Conversation:
         self._record({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
         return parts
 
+    @staticmethod
+    def _dump(targets: Targets) -> dict[str, Any]:
+        if (target := targets.get(None)) is not None:
+            return target.model_dump()
+        return {str(arm): target.model_dump() for arm, target in targets.items()}
+
 
 CacheTTL = Literal['5m', '1h']
 
 
 class LLMPolicy(Policy):
-    """An API-backed, single-arm Cartesian policy with independent episode conversations."""
+    """An API-backed Cartesian policy for one arm or for named arms, with independent episode conversations.
+
+    ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance`` and ``max_tracking_error`` are in
+    metres.
+    """
 
     def __init__(
         self,
@@ -385,6 +482,9 @@ class LLMPolicy(Policy):
         motion: Motion,
         *,
         images: Images = Images.ALWAYS,
+        arms: tuple[str | None, ...] = keys.ONE_ARM,
+        min_hand_distance: float = 0.1,
+        max_tracking_error: float = 0.005,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         image_size: int = 640,
         image_horizon: int = 3,
@@ -392,6 +492,13 @@ class LLMPolicy(Policy):
         max_invalid: int = 3,
         cache_ttl: CacheTTL = '5m',
     ):
+        valid_names = all(isinstance(arm, str) and arm and '.' not in arm for arm in arms)
+        if arms != keys.ONE_ARM and (not arms or len(set(arms)) != len(arms) or not valid_names):
+            raise ValueError('arms must be ONE_ARM or distinct non-empty names without a dot')
+        check_finite_positive(min_hand_distance, 'min_hand_distance')
+        check_finite_nonnegative(max_tracking_error, 'max_tracking_error')
+        if max_tracking_error >= min_hand_distance:
+            raise ValueError('max_tracking_error must be less than min_hand_distance')
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
@@ -408,17 +515,26 @@ class LLMPolicy(Policy):
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
+        self.arms, self.min_hand_distance, self.max_tracking_error = arms, min_hand_distance, max_tracking_error
+        self.schemas: dict[Tool, type[BaseModel]] = {
+            Tool.MOVE_PATH: MovePath if arms == keys.ONE_ARM else MoveArmsPath,
+            Tool.REVEAL_FRAMES: RevealFrames,
+            Tool.DONE: Finish,
+        }
         self.tools = [
             ToolDefinition(
                 name=tool.value, description=schema.__doc__ or '', parameters_json_schema=schema.model_json_schema()
             )
-            for tool, schema in _SCHEMAS.items()
+            for tool, schema in self.schemas.items()
             if tool is not Tool.REVEAL_FRAMES or images is Images.ON_DEMAND
         ]
 
     def meta(self) -> dict[str, Any]:
         # The model reads the measured pose and moves the hand in the frame the rig reports it in.
-        frames = ee_frames_entry(dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE)))
+        signals = [f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}' for arm in self.arms] + [
+            f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}' for arm in self.arms
+        ]
+        frames = ee_frames_entry(dict.fromkeys(signals, EEFrame(site=GRIPPER_SITE)))
         return frames | flatten_dict({
             policy_keys.TYPE: policy_keys.LLM_TYPE,
             policy_keys.MODEL: self.endpoint.model_id,
@@ -426,6 +542,9 @@ class LLMPolicy(Policy):
             'cache_breakpoints': self.endpoint.cache_breakpoints,
             'cache_ttl': self.cache_ttl,
             'motion': asdict(self.motion),
+            'arms': list(self.arms),
+            'min_hand_distance': self.min_hand_distance,
+            'max_tracking_error': self.max_tracking_error,
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
             'timeout': self.endpoint.timeout,
@@ -482,6 +601,9 @@ class LLMPolicy(Policy):
     settings={},
     motion=cfn.Config(Motion),
     images=Images.ALWAYS.value,
+    arms=keys.ONE_ARM,
+    min_hand_distance=0.1,
+    max_tracking_error=0.005,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     image_size=640,
     image_horizon=3,
@@ -496,6 +618,9 @@ def llm(
     settings: ModelSettings,
     motion: Motion,
     images: str,
+    arms: tuple[str | None, ...],
+    min_hand_distance: float,
+    max_tracking_error: float,
     camera_keys: tuple[str, ...],
     image_size: int,
     image_horizon: int,
@@ -509,6 +634,9 @@ def llm(
         Endpoint(model, timeout=timeout, settings=settings, cache_breakpoints=cache_breakpoints),
         motion,
         images=Images(images),
+        arms=tuple(arms),
+        min_hand_distance=min_hand_distance,
+        max_tracking_error=max_tracking_error,
         camera_keys=tuple(camera_keys),
         image_size=image_size,
         image_horizon=image_horizon,
@@ -516,3 +644,9 @@ def llm(
         max_invalid=max_invalid,
         cache_ttl=cache_ttl,
     )
+
+
+# The arms of a bimanual embodiment, with its top camera and the camera on each wrist.
+llm_bimanual = llm.override(
+    arms=keys.BIMANUAL_ARMS, camera_keys=(keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE)
+)

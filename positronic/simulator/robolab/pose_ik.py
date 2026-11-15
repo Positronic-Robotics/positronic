@@ -6,6 +6,9 @@ space pulls the joints towards ``POSTURE_JOINTS``. Poses are in the ``panda_link
 backtracks until it lowers the cost: without that, the steps near the stretched-arm singularity alternate between two
 poses, and so do the joint targets of successive control steps.
 
+Two parts are not in the driver. A joint that the physics pushed past a limit gets a target at that limit. The solve
+keeps j4 at or below ``ELBOW_STRETCHED``.
+
 This module must work in an isolated interpreter without Positronic installed.
 """
 
@@ -22,6 +25,8 @@ _STEP_TOLERANCE = 1e-9
 _LEVENBERG = 1e-4
 _LINE_SEARCH_STEPS = 20
 _ACTIVE_SET_PASSES = 64
+# The j4 of the longest shoulder-wrist distance: the a = 0.0825 offsets of joints 4 and 5 bend the stretched arm.
+ELBOW_STRETCHED = -(np.arctan(0.0825 / 0.316) + np.arctan(0.0825 / 0.384))
 
 # The Panda's modified Denavit-Hartenberg parameters (a, d, alpha) of joints 1 to 7, then of the flange.
 _DH = np.array([
@@ -135,6 +140,12 @@ def joint_targets(
 
     ``q0`` is the measured joints, and ``lower`` and ``upper`` are the joint limits.
     """
+    # Past ELBOW_STRETCHED the shoulder-wrist distance falls as j4 rises. A solve there pins j4 at its upper limit for a
+    # target that needs a shorter arm, and the folded elbow reaches every distance that the stretched one does.
+    # A j4 above it folds by at most MAX_JOINT_STEP a step, and a j4 past its limit goes to that limit first.
+    folded_upper = upper.copy()
+    folded_upper[3] = min(upper[3], max(ELBOW_STRETCHED, q0[3] - MAX_JOINT_STEP))
+
     jacobian0 = tool_kinematics(q0, flange_to_tool)[1]
     # Eigenvalues of J^T J ascend: the first is the null space, the second is s_min squared.
     eigenvalues, eigenvectors = np.linalg.eigh(jacobian0.T @ jacobian0)
@@ -146,10 +157,9 @@ def joint_targets(
     posture_target = -POSTURE_PULL_PER_STEP * null_direction @ (q0 - POSTURE_JOINTS)
     w_sq = _POSTURE_WEIGHT**2
 
-    lo = np.maximum(q0 - MAX_JOINT_STEP, lower)
-    hi = np.minimum(q0 + MAX_JOINT_STEP, upper)
-    if not np.all(lo <= hi):
-        raise ValueError('No joints are within MAX_JOINT_STEP of the measured joints and inside the joint limits')
+    # A joint past a limit gets a target at that limit or inside it.
+    lo = np.clip(q0 - MAX_JOINT_STEP, lower, folded_upper)
+    hi = np.clip(q0 + MAX_JOINT_STEP, lower, folded_upper)
 
     def cost(q: np.ndarray) -> float:
         e = pose_error(tool_kinematics(q, flange_to_tool)[0], target)

@@ -159,14 +159,22 @@ MULTITASK_200K_PROMPTS = {
     'hang mug on mug rack': 'hang the mug on the mug rack',
 }
 
-# The prompt of each task in ABC's real teleoperation data, keyed by the task instruction that ABC's sim reports. ABC's
-# dataloader makes the prompt from the task folder name of the ABC-130k release, with underscores as spaces. The
-# release holds no real data of `hang mug on mug rack`.
+# The prompt of each task in ABC's real teleoperation data, keyed by the task instruction. ABC's dataloader makes the
+# prompt from the task folder name of the ABC-130k release, with underscores as spaces. A task of ABC's sim takes the
+# instruction that ABC's sim reports as its key. A task with real data only takes its prompt as its key. The release
+# holds no real data of `hang mug on mug rack`.
 ABC_130K_PROMPTS = {
     'put the plastic bottles in the bin': 'put the plastic bottles in the bin',
     'sweep away paper scraps from the table': 'sweep away the paper scraps from the table',
     'turn mug right side up': 'turn the mug right side up',
     'load plates into tabletop dish rack': 'load the plates into the dish rack',
+    'unload the plates from the dish rack': 'unload the plates from the dish rack',
+    'load the cups into the dish rack': 'load the cups into the dish rack',
+    'put the screwdriver in the bin': 'put the screwdriver in the bin',
+    'place and organize the fake fruits in the fruit bowl': 'place and organize the fake fruits in the fruit bowl',
+    'build the wood block tower': 'build the wood block tower',
+    'place the snacks into the paper bag': 'place the snacks into the paper bag',
+    'take the snacks out of the paper bag': 'take the snacks out of the paper bag',
 }
 
 

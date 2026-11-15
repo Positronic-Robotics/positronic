@@ -92,6 +92,7 @@ trial that runs out of time scores 0. Progress is not part of `Scores`.
 trials with the seeds 20260511 to 20260530. By default, ABC's own sim eval draws its first 20 worlds from the same seeds.
 Both evals render from the `zed_x` camera view, a fit to the ZED-X stations of the ABC-130k dataset, at 416 by
 260 pixels.
+Both evals pin the timeout at 120.394 s, so ABC judges each trial at step 3540, the horizon of its own sim eval.
 
 ## MolmoSpaces episode lists
 

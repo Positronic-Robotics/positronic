@@ -4,6 +4,7 @@ This module must work in an isolated interpreter without Positronic installed.
 """
 
 import enum
+import math
 from collections.abc import Sequence
 
 # The arms ABC drives, in the order its 14-value action concatenates them.
@@ -26,6 +27,7 @@ TOKEN_SEED = 'seed'
 TOKEN_CAMERA_HEIGHT = 'camera_height'
 TOKEN_CAMERA_WIDTH = 'camera_width'
 TOKEN_CAMERA_VIEW = 'camera_view'
+TOKEN_EPISODE_STEPS = 'episode_steps'
 
 
 class CameraView(enum.StrEnum):
@@ -44,9 +46,20 @@ ABC_INFO_TASK_EVAL = 'task_eval'
 # ABC's verdict on the trial, and, from a task that reports it, the flag that ends the trial early.
 ABC_EVAL_EVER_SUCCESS = 'ever_success'
 ABC_EVAL_EVER_FAILED = 'ever_failed'
-# ABC's own sim eval runs every task for 236 chunks of 15 actions. A maintenance task succeeds only there,
-# and a count task is decided there.
+# ABC's own sim eval runs every task for 236 chunks of 15 actions. A maintenance task succeeds only where ABC
+# truncates the trial, and a count task is decided there.
 ABC_EVAL_STEPS = 236 * 15
+ABC_CONTROL_DT = 0.034  # s between two ABC actions
+
+
+def episode_steps(timeout_sec: float) -> int:
+    """The steps ABC runs a trial for, so that the verdict of the last action arrives by ``timeout_sec``."""
+    # Rounding drops the float error of a timeout that a whole number of periods makes.
+    steps = math.floor(round(timeout_sec / ABC_CONTROL_DT, 9)) - 1
+    if steps < 1:
+        raise ValueError(f'A timeout of {timeout_sec}s leaves no ABC action before it')
+    return steps
+
 
 # The raw observation this server reports beside the per-arm fields of ``protocol``. Each arm reports its
 # end-effector pose in ABC world coordinates, as a wxyz quaternion.

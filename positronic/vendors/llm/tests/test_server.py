@@ -23,10 +23,12 @@ from positronic.vendors.llm.motion import Motion
 from positronic.vendors.llm.policy import Images, LLMPolicy, Tool
 from positronic.vendors.llm.server import LLMModel, deployment, serve
 from positronic.vendors.llm.tests.test_policy import (
+    bimanual_observation,
     complete,
     execution,
     finish,
     move,
+    move_arms,
     observation,
     without_cache_points,
 )
@@ -120,6 +122,16 @@ def test_a_path_answers_one_part_per_call_and_asks_the_model_only_after_the_last
     assert llm_model(observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
     assert len(requests) == 2
     llm_model.close()
+
+
+def test_a_rejected_path_answers_one_held_period_and_the_next_call_asks_the_model_again(model, make_model):
+    requests, replies = model
+    replies.extend([move_arms({'left': (0.0, 0.05), 'right': (0.0, -0.03)}), finish()])
+    llm_model = make_model(arms=keys.BIMANUAL_ARMS, camera_keys=(keys.EXTERIOR_IMAGE,))
+    assert llm_model(bimanual_observation(), session_id='a') == [{}]
+    assert llm_model(bimanual_observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
+    assert len(requests) == 2
+    assert 'Rejected: The path brings hands left and right' in str(requests[1])
 
 
 def test_a_finish_answers_with_its_end_and_every_later_call_repeats_it_without_a_request(model, make_model):
@@ -390,12 +402,24 @@ def test_a_served_session_sends_the_model_what_a_local_run_sends(model, make_mod
     assert [comparable(messages) for messages in requests] == local
 
 
-def test_the_model_states_the_policy_meta_and_the_frames_of_its_poses(model, make_model):
-    meta = make_model().meta()
+@pytest.mark.parametrize(
+    'arms,poses',
+    [
+        (keys.ONE_ARM, [keys.EE_POSE, keys.TARGET_EE_POSE]),
+        (
+            keys.BIMANUAL_ARMS,
+            [f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS]
+            + [f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS],
+        ),
+    ],
+)
+def test_the_model_states_the_policy_meta_and_the_frames_of_its_poses(model, make_model, arms, poses):
+    meta = make_model(arms=arms).meta()
     assert meta[policy_keys.TYPE] == policy_keys.LLM_TYPE
     assert meta[policy_keys.MODEL] == 'test'
-    frames = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])
-    assert frames == dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE))
+    assert meta['arms'] == list(arms)
+    assert (meta['min_hand_distance'], meta['max_tracking_error']) == (0.1, 0.005)
+    assert parse_ee_frames(meta[roboarm_keys.EE_FRAMES]) == dict.fromkeys(poses, EEFrame(site=GRIPPER_SITE))
 
 
 def test_the_client_stack_ends_on_the_end_field_and_plays_at_the_motion_rate():

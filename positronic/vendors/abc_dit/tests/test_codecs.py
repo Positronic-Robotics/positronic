@@ -92,12 +92,29 @@ def test_an_empty_prompt_prefix_sends_the_trained_prompt_without_the_sim_prefix(
         ('sweep away paper scraps from the table', 'sweep away the paper scraps from the table'),
         ('turn mug right side up', 'turn the mug right side up'),
         ('load plates into tabletop dish rack', 'load the plates into the dish rack'),
+        ('unload the plates from the dish rack', 'unload the plates from the dish rack'),
+        ('load the cups into the dish rack', 'load the cups into the dish rack'),
+        ('put the screwdriver in the bin', 'put the screwdriver in the bin'),
+        (
+            'place and organize the fake fruits in the fruit bowl',
+            'place and organize the fake fruits in the fruit bowl',
+        ),
+        ('build the wood block tower', 'build the wood block tower'),
+        ('place the snacks into the paper bag', 'place the snacks into the paper bag'),
+        ('take the snacks out of the paper bag', 'take the snacks out of the paper bag'),
     ],
 )
 def test_the_real_prompts_send_the_wording_of_abcs_real_teleoperation_data(task, prompt):
     codec = codecs.multitask_200k.override(prompts=codecs.ABC_130K_PROMPTS, prompt_prefix='').instantiate()
 
     assert codec.encode(_obs(**{keys.TASK: task}))[abc_dit.PROMPT] == prompt
+
+
+def test_the_sim_prompts_refuse_a_task_that_only_abcs_real_data_holds():
+    codec = codecs.multitask_200k.instantiate()
+
+    with pytest.raises(ValueError, match='no prompt for the task'):
+        codec.encode(_obs(**{keys.TASK: 'build the wood block tower'}))
 
 
 def test_the_real_prompts_refuse_the_task_that_abcs_real_data_does_not_hold():
