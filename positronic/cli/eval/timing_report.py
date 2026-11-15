@@ -678,7 +678,6 @@ def _infer_segments(infer: SpanRec, children: dict[str, list[SpanRec]]) -> Itera
     if SPAN_WIRE_SEND in wire_ms and SPAN_WIRE_RECV in wire_ms:
         on_wire_ms = wire_ms[SPAN_WIRE_SEND] + wire_ms[SPAN_WIRE_RECV]
         yield _CALL_CODEC, _dur_s(infer) * 1000.0 - on_wire_ms
-        # The wait of a call sent behind another holds that call's serving time too, so only a lone call counts.
         if _SERVED_MS in infer.attrs and infer.attrs.get(ATTR_WIRE_SENT_ALONE) is True:
             yield _CALL_NETWORK, on_wire_ms - float(infer.attrs[_SERVED_MS])
 
