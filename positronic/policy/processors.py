@@ -29,7 +29,7 @@ from sys import maxsize
 from typing import Any, Self, TypeVar
 
 import numpy as np
-from attr import asdict, dataclass
+from attr import asdict, dataclass, evolve
 from positronic_model_server.serialization import check_int_range
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
@@ -281,6 +281,11 @@ class TrajectoryPlayer(Policy):
                 )
         while plan and plan[-1].due_ns >= update.start_ns:
             plan.pop()
+        # A retained chunk now ends where the new one starts.
+        for index in range(len(plan) - 1, -1, -1):
+            if plan[index].chunk_end_ns <= update.start_ns:
+                break
+            plan[index] = evolve(plan[index], chunk_end_ns=update.start_ns)
         plan.extend(incoming)
         return planned
 

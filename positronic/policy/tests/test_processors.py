@@ -963,6 +963,29 @@ def test_a_chunk_that_replaces_the_plan_tail_counts_the_hold_from_its_start(exec
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 150.0
 
 
+def test_a_queued_chunk_whose_tail_is_replaced_counts_the_hold_from_the_new_start(execution):
+    runtime, clock = execution
+    inner = Mock(
+        send=Mock(
+            side_effect=[
+                Step(_trajectory(range(3)), 100_000_000),
+                Step(_trajectory(range(3), 300_000_000), 200_000_000),
+                Step(_trajectory(range(3), 400_000_000), 2_000_000_000),
+            ]
+        )
+    )
+    run = runtime.start(TrajectoryPlayer(), inner)
+    try:
+        for now_ms in (0, 100, 200, 300, 450):
+            clock.advance_to_ns(now_ms * 1_000_000)
+            run.send({})
+    finally:
+        run.close()
+    # The third chunk replaces the queued second chunk from 400 ms, and its first round runs at 450 ms.
+    metadata = runtime.metadata_snapshot()
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 50.0
+
+
 def test_a_queued_chunk_counts_the_hold_from_the_end_of_the_chunk_before_it(execution):
     runtime, clock = execution
     inner = Mock(
