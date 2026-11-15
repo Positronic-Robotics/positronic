@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from enum import Enum
 from functools import partial
-from math import ceil, inf, isclose
+from math import ceil, floor, inf, isclose
 from statistics import fmean
 from sys import maxsize
 from typing import Any, Self, TypeVar
@@ -232,6 +232,13 @@ class Trajectory:
         duration_ns = factor * (self.end_ns - self.start_ns)
         # The tolerance keeps a float error from adding a command that would play for a nanosecond.
         count = ceil(duration_ns / self.period_ns - 1e-6)
+        # A command due before the end plays, however briefly, so the sample on it stays.
+        played = sum(self.due_ns(i) < self.end_ns for i in range(len(self.commands)))
+        if played:
+            last_position = (played - 1) * factor
+            if isclose(last_position, round(last_position), rel_tol=1e-12):
+                last_position = round(last_position)
+            count = max(count, floor(last_position) + 1)
         end_ns = min(self.start_ns + round(duration_ns), self.start_ns + round(count / self.fps * 1e9))
         return Trajectory([self._at(index / factor) for index in range(count)], self.start_ns, self.fps, end_ns)
 

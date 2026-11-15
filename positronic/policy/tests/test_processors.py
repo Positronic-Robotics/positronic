@@ -1399,6 +1399,17 @@ def test_a_slowed_trajectory_has_a_command_for_each_period_it_covers(factor, cou
     assert len(slowed.commands) == count
 
 
+def test_a_slowed_trajectory_reaches_a_last_command_that_plays_for_a_nanosecond():
+    slowed = Trajectory(_arm_chunk([0, 1], [0.0, 1.0]), 0, 10, PERIOD_NS + 1).slowed(2)
+    assert _played(slowed.commands) == [(0, 0), (0.5, 0), (1, 1)]
+    assert slowed.end_ns == 2 * PERIOD_NS + 2
+
+
+def test_a_slowed_trajectory_leaves_out_a_command_due_at_its_end():
+    slowed = Trajectory(_arm_chunk([0, 1], [0.0, 1.0]), 0, 10, PERIOD_NS).slowed(2)
+    assert _played(slowed.commands) == [(0, 0), (0.5, 0)]
+
+
 def test_a_slowed_trajectory_switches_the_grip_on_the_sample_that_lands_on_its_action():
     # At factor 1.1, sample 33 is action 30, but 33 / 1.1 computes to 29.999999999999996.
     grips = [0.0] * 30 + [1.0] * 2
