@@ -105,21 +105,6 @@ def _connect(host: str, port: int) -> EnvConnection:
     return conn
 
 
-def _connect_when_a_slot_frees(host: str, port: int) -> EnvConnection:
-    """A connection that holds a slot, made as soon as the server frees one."""
-    deadline = time.monotonic() + 10.0
-    while True:
-        conn = EnvConnection(host, port, connect_deadline=2.0)
-        try:
-            conn.tasks({})
-            return conn
-        except RuntimeError:
-            conn.close()
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(0.05)
-
-
 @contextmanager
 def _clients(
     env: _ClonedScene, count: int | None = None, join_deadline: float = DEFAULT_JOIN_DEADLINE
@@ -253,14 +238,38 @@ def test_a_client_that_never_asks_for_a_reset_sits_out_after_the_join_deadline()
     assert env.stepped == [{0}]
 
 
+def _watch_resets(monkeypatch) -> Callable[[str], None]:
+    """A wait that returns once the server has taken a reset for ``token``: parked it, or run it."""
+    taken: list[Any] = []
+    changed = threading.Condition()
+    take = server_module.EnvServer._take
+
+    def recording_take(server: server_module.EnvServer, request: Any) -> None:
+        take(server, request)
+        if getattr(request, 'msg', {}).get(protocol.CMD) == protocol.Command.RESET.value:
+            with changed:
+                taken.append(request.msg[protocol.TOKEN])
+                changed.notify_all()
+
+    monkeypatch.setattr(server_module.EnvServer, '_take', recording_take)
+
+    def wait_for(token: str) -> None:
+        with changed:
+            assert changed.wait_for(lambda: token in taken, timeout=10.0), f'the server never took the reset {token!r}'
+
+    return wait_for
+
+
 @pytest.mark.timeout(60.0)
-def test_a_slot_that_asks_inside_the_join_deadline_joins_the_reset():
+def test_a_slot_that_asks_inside_the_join_deadline_joins_the_reset(monkeypatch):
+    taken = _watch_resets(monkeypatch)
     env = _ClonedScene(ends_at=[9, 9])
     with _clients(env, join_deadline=10.0) as (first, second), ThreadPoolExecutor(1) as pool:
-        pending = pool.submit(first.reset, None)
+        pending = pool.submit(first.reset, 'scene')
+        taken('scene')
 
         assert _held_back(pending), 'the reset ran before the deadline, without the slow slot'
-        second.reset(None)
+        second.reset('scene')
         pending.result(timeout=10.0)
         _together(lambda: first.step(_action(0.0)), lambda: second.step(_action(0.0)))
     assert env.stepped == [{0, 1}] and len(env.resets) == 1
@@ -331,12 +340,14 @@ def test_a_batch_resets_at_its_join_deadline_when_no_request_comes(monkeypatch):
 def test_the_join_deadline_counts_from_when_the_previous_batch_left(monkeypatch):
     """A slot that waited through a running batch does not start the next batch alone."""
     now = _test_clock(monkeypatch)
+    taken = _watch_resets(monkeypatch)
     env = _ClonedScene(ends_at=[9, 9])
     with serve_env(env, join_deadline=1.0) as (host, port), ThreadPoolExecutor(1) as pool:
         first = _connect(host, port)
         _move_clock_until_done(now, pool.submit(first.reset, 'first batch'))
         late = _connect(host, port)
         joining = pool.submit(late.reset, 'second batch')
+        taken('second batch')
         assert _held_back(joining), 'the late slot joined a batch that was already running'
         now[0] += 10.0  # the late slot waits past the deadline while the batch runs
         first.close()
@@ -348,6 +359,21 @@ def test_the_join_deadline_counts_from_when_the_previous_batch_left(monkeypatch)
         newcomer.close()
     assert env.resets == ['first batch', 'second batch']
     assert env.stepped == [{0, 1}]
+
+
+def _connect_when_a_slot_frees(host: str, port: int) -> EnvConnection:
+    """A connection that holds a slot, made as soon as the server frees one."""
+    deadline = time.monotonic() + 10.0
+    while True:
+        conn = EnvConnection(host, port, connect_deadline=2.0)
+        try:
+            conn.tasks({})
+            return conn
+        except RuntimeError:
+            conn.close()
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 @pytest.mark.timeout(60.0)
@@ -373,14 +399,16 @@ def test_a_reset_parked_by_a_client_that_disconnects_never_joins_a_batch(monkeyp
 
 
 @pytest.mark.timeout(60.0)
-def test_a_slot_that_sat_out_a_batch_joins_the_next_one():
+def test_a_slot_that_sat_out_a_batch_joins_the_next_one(monkeypatch):
     """A late client waits while the batch runs, also through its later resets, and resets once the batch leaves."""
+    taken = _watch_resets(monkeypatch)
     env = _ClonedScene(ends_at=[9, 9])
     with serve_env(env, join_deadline=0.5) as (host, port), ThreadPoolExecutor(1) as pool:
         first = _connect(host, port)
         first.reset('first batch')
         late = _connect(host, port)
         joining = pool.submit(late.reset, 'second batch')
+        taken('second batch')
         first.step(_action(0.0))
         first.reset('first batch')
 
