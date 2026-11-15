@@ -174,7 +174,7 @@ percent, RSS) per process. The caller names a pid through `process_names` (a pim
 background process `<Class>.run`); a pid it does not name takes the OS process name. A process's CPU percent in its first
 sample covers no interval, so it is not a reading. The GPU list is empty on a box with no NVML, and shorter
 than the recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that
-count is what tells a reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot
+count tells a reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot
 be attributed (a PID namespace without `--pid=host`, or a driver that will not report it), and per-process GPU
 utilisation is always null: it is not reliably attributable under MPS / co-location.
 

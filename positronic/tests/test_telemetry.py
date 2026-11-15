@@ -522,14 +522,22 @@ def _sleeping_child():
         child.wait()
 
 
+def _first_written_sample(path, process_names=None):
+    """Run a sampler until it writes one sample to ``path``, and return that sample as the reader parses it."""
+    deadline = time.monotonic() + 5.0
+    with telemetry.StatsSampler(path, hz=200.0, process_names=process_names):
+        while not path.exists() or not path.read_text():
+            assert time.monotonic() < deadline, 'the sampler wrote no sample within 5 s'
+            time.sleep(0.01)
+    return next(telemetry.read_stats(path))
+
+
 def test_stats_sample_lists_each_process_under_the_callers_name(tmp_path, monkeypatch):
     _install_fake_nvml(monkeypatch)
     with _sleeping_child() as child:
-        sampler = telemetry.StatsSampler(
+        sample = _first_written_sample(
             tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', process_names=lambda: {child.pid: 'Camera.run'}
         )
-        sample = sampler._sample()
-        sampler._nvml.shutdown()
 
     procs = {proc[telemetry.PROC_PID]: proc for proc in sample[telemetry.STAT_PROCS]}
     assert procs[child.pid][telemetry.PROC_NAME] == 'Camera.run'
@@ -543,9 +551,7 @@ def test_stats_sample_names_a_process_by_the_os_without_a_mapping(tmp_path, monk
     _install_fake_nvml(monkeypatch)
     with _sleeping_child() as child:
         os_name = psutil.Process(child.pid).name()
-        sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
-        sample = sampler._sample()
-        sampler._nvml.shutdown()
+        sample = _first_written_sample(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
 
     procs = {proc[telemetry.PROC_PID]: proc for proc in sample[telemetry.STAT_PROCS]}
     assert procs[child.pid][telemetry.PROC_NAME] == os_name
