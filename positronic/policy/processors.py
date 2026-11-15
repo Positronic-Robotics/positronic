@@ -305,8 +305,9 @@ class TrajectoryPlayer(Policy):
         waypoints before the last one count as dropped, also when one of their channels went out. The due
         waypoints that a new chunk replaces count as dropped too.
 
-        A hold is the time from the end of the plan to the first round of the next chunk. The arm keeps its last
-        target during a hold. The wait for the first chunk and a hold that the episode end cuts do not count.
+        A hold is the time from the end of the plan to the first command of the next chunk. The arm keeps its last
+        target during a hold, also through a waypoint with no commands. The wait for the first chunk and a hold that
+        the episode end cuts do not count.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -336,19 +337,20 @@ class TrajectoryPlayer(Policy):
                 self._last_emit_ns = None
                 self._starting_chunk_end_ns = point.chunk_end_ns
 
-        def count_round(self, planned: int | None, now_ns: int, queued: int) -> None:
-            """Count new waypoints and the due commands emitted together at ``now_ns``."""
+        def count_round(self, planned: int | None, now_ns: int, queued: int, *, sent: bool) -> None:
+            """Count new waypoints and the due commands emitted together at ``now_ns``; ``sent`` if any went out."""
             if planned is None and self._round_due_ns is None:
                 return
             if planned is not None:
                 self._scheduled += planned
             if self._round_due_ns is not None:
                 insort(self._sorted_late_ns, now_ns - self._round_due_ns)
-                if self._last_emit_ns is None:
-                    self._end_hold(now_ns)
-                else:
-                    self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
-                self._last_emit_ns = now_ns
+                if sent:
+                    if self._last_emit_ns is None:
+                        self._end_hold(now_ns)
+                    else:
+                        self._gap_max_ns = max(self._gap_max_ns, now_ns - self._last_emit_ns)
+                    self._last_emit_ns = now_ns
                 self._round_due_ns = None
             self._write(queued)
 
@@ -443,7 +445,7 @@ class TrajectoryPlayer(Policy):
                     stats.record_waypoint(current_wp)
             recovering = recovering and not commands
             if stats is not None:
-                stats.count_round(planned, now_ns, queued=len(plan))
+                stats.count_round(planned, now_ns, queued=len(plan), sent=bool(commands))
             resume_at_ns = min(inner_resume_at_ns, plan[0].due_ns) if plan else inner_resume_at_ns
             obs = yield Step(commands, resume_at_ns, outputs=outputs)
 

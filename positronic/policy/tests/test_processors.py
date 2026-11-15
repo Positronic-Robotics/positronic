@@ -1010,6 +1010,24 @@ def test_a_queued_chunk_counts_the_hold_from_the_end_of_the_chunk_before_it(exec
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_MAX_MS}'] == 100.0
 
 
+def test_a_chunk_that_opens_with_an_empty_waypoint_counts_the_hold_to_its_first_command(execution):
+    runtime, clock = execution
+    opens_empty = _trajectory([None, 1, 2], 400_000_000)
+    opens_empty['commands'] = [{}, *opens_empty['commands'][1:]]
+    inner = Mock(send=Mock(side_effect=[Step(_trajectory(range(3)), 400_000_000), Step(opens_empty, 2_000_000_000)]))
+    run = runtime.start(TrajectoryPlayer(), inner)
+    try:
+        for now_ms in (0, 100, 200, 400, 500, 600):
+            clock.advance_to_ns(now_ms * 1_000_000)
+            run.send({})
+    finally:
+        run.close()
+    # The plan ends at 300 ms; the empty waypoint at 400 ms sends nothing, so the arm holds until 500 ms.
+    metadata = runtime.metadata_snapshot()
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 200.0
+    assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 100.0
+
+
 @pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
 def test_late_percentiles_match_numpy(execution, late_ms):
     runtime, clock = execution
