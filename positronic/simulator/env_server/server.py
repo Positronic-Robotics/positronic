@@ -24,8 +24,9 @@ different policies in one env:
 * A later reset of a batch answers when every slot of the batch has asked for one or has left.
 * A step answers when every slot in an episode has sent its action. The env gets no action for the other slots.
   A slot that reports ``done`` stops holding the others back; a client may still step it until its next reset.
-* A slot leaves when its client closes or disconnects, and a new client can then take it. A slot outside the batch
-  that asks for a reset waits until every slot of the batch has left, and then joins the next batch.
+* A slot leaves when its client closes or disconnects, also while it waits on an answer, and a new client can
+  then take it. A slot outside the batch that asks for a reset waits until every slot of the batch has left, and
+  then joins the next batch.
 * The server serves batch after batch until ``shutdown``.
 """
 
@@ -37,6 +38,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from websockets.protocol import State
 from websockets.sync.server import ServerConnection, serve
 
 # Isolated interpreters can import these modules as a package or as flat files.
@@ -47,6 +49,8 @@ else:
 
 # How long the first reset of a batch waits for the slots that have not asked for it, in seconds.
 DEFAULT_JOIN_DEADLINE = 600.0
+# How often a client thread that waits on an answer checks that its client is still connected, in seconds.
+_CONNECTION_CHECK_INTERVAL = 0.1
 
 
 class EnvProtocol(ABC):
@@ -150,12 +154,18 @@ class EnvServer:
                     return index
         return None
 
-    def _submit(self, request: _Request) -> dict[str, Any]:
+    def _submit(self, request: _Request, connection: ServerConnection) -> dict[str, Any] | None:
+        """The answer to ``request``, or ``None`` when its client disconnects first."""
         with self._lock:
             if self._stopped:
                 return {protocol.ERROR: 'RuntimeError: the env server stopped'}
             self._requests.put(request)
-        return request.reply.get()
+        while connection.state is State.OPEN:
+            try:
+                return request.reply.get(timeout=_CONNECTION_CHECK_INTERVAL)
+            except queue.Empty:
+                pass
+        return None
 
     def _refuse(self, connection: ServerConnection) -> None:
         """Answer a client that found no free slot with an error per request, until it closes."""
@@ -175,7 +185,9 @@ class EnvServer:
         try:
             for raw in connection:
                 msg = protocol.decode(raw)
-                answer = self._submit(_Request(slot, msg, queue.Queue(maxsize=1)))
+                answer = self._submit(_Request(slot, msg, queue.Queue(maxsize=1)), connection)
+                if answer is None:
+                    return
                 closed = msg.get(protocol.CMD) == protocol.Command.CLOSE.value
                 connection.send(protocol.encode(answer))
                 if closed:
@@ -189,7 +201,7 @@ class EnvServer:
         """Answer ``request`` now, or park it on its slot until the batch can run."""
         slot = self._slots[request.slot]
         if isinstance(request, _Disconnect):
-            slot.phase = _Phase.VACANT
+            slot.phase, slot.pending = _Phase.VACANT, None
             return
         try:
             match protocol.Command(request.msg[protocol.CMD]):

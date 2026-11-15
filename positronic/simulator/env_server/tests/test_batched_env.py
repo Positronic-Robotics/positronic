@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from websockets.sync.client import connect
 
 import pimm
 from positronic.eval import keys as eval_keys
@@ -282,6 +283,28 @@ def test_the_join_deadline_counts_from_when_the_previous_batch_left():
         _together(lambda: late.step(_action(0.0)), lambda: newcomer.step(_action(0.0)))
         late.close()
         newcomer.close()
+    assert env.resets == ['first batch', 'second batch']
+    assert env.stepped == [{0, 1}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_reset_parked_by_a_client_that_disconnects_never_joins_a_batch():
+    """A client asks to join while a batch runs, then drops its socket; the next clients get its slot."""
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env, join_deadline=0.5) as (host, port):
+        first = _connect(host, port)
+        first.reset('first batch')
+        dropped = connect(f'ws://{host}:{port}/', compression=None)
+        dropped.send(protocol.encode({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: 'stale batch'}))
+        time.sleep(_HELD)
+        dropped.close()
+        time.sleep(_HELD)
+        first.close()
+        newcomers = [_connect(host, port), _connect(host, port)]
+        _together(*[lambda conn=conn: conn.reset('second batch') for conn in newcomers])
+        _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in newcomers])
+        for conn in newcomers:
+            conn.close()
     assert env.resets == ['first batch', 'second batch']
     assert env.stepped == [{0, 1}]
 
