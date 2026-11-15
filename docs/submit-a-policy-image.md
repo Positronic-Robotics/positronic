@@ -402,10 +402,13 @@ the platform, and read the same two values with it:
 ```bash
 docker login <registry> --username=<user> --password-stdin < ~/.config/positronic/registry-password
 docker buildx imagetools inspect <registry>/<you>/<image>:v1                  # the digest
-docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1          # an index lists its images
-docker buildx imagetools inspect --raw <registry>/<you>/<image>@<amd64 digest> \
+docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1 \
   | jq '([.layers[].size] | add) + .config.size'                             # the compressed size
 ```
+
+When the tag names an index, the raw output lists `manifests` and no `layers`, and `jq` fails. Then
+run the size command on `<registry>/<you>/<image>@<digest>`, with the digest of the `linux/amd64`
+entry of that list.
 
 The platform sees the same `401` or `404`: the credential does not read the image, or the name is
 wrong.
