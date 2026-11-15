@@ -8,6 +8,9 @@ JOINT_NAMES = 'joint_names'
 MESHES = 'meshes'
 # The gripper spec the viewer drives: the signal it reads, the joints it moves, their travel at full closure.
 GRIPPER = 'gripper'
+GRIPPER_SIGNAL = 'signal'
+GRIPPER_JOINTS = 'joints'
+GRIPPER_TRAVEL = 'travel'
 
 # Where each pose signal sits, keyed by the signal, as dumped ``models.EEFrame`` entries. A rig, a recording and a
 # policy that reads poses state it.

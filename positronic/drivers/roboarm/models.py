@@ -108,6 +108,11 @@ class _UrdfRow(NamedTuple):
     visual_xyz: str | None
 
 
+def _2f85_pad(side: str) -> str:
+    """The link of the 2F-85 pad on ``side`` (``left`` or ``right``)."""
+    return f'{side}_pad'
+
+
 def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
     """One 2F-85 finger as URDF rows. ``sign`` mirrors the y-offsets and ``base_rpy`` (180deg Z on the
     left) mirrors the motion, so one positive ``grip`` closes both fingers. The follower rotates about
@@ -153,10 +158,13 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
             'follower.stl',
             '0 0.018 -0.0065',
         ),
-        _UrdfRow(f'{side}_pad', f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
-        _UrdfRow(f'{side}_silicone_pad', f'{side}_pad', None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
+        _UrdfRow(_2f85_pad(side), f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
+        _UrdfRow(f'{side}_silicone_pad', _2f85_pad(side), None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
     ]
 
+
+# The links of the two 2F-85 pads.
+ROBOTIQ_2F85_PADS = (_2f85_pad('left'), _2f85_pad('right'))
 
 # The 2F-85's closed pads meet 155 mm along the flange approach axis.
 GRIPPER_2F85_XYZ = '0 0 0.155'
@@ -215,7 +223,11 @@ def _bundled_robotiq_2f85() -> dict:
     return {
         'subtree': subtree,
         roboarm_keys.MESHES: {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
-        roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': _2F85_GRIP_ACTUATED_JOINTS, 'travel': 0.8},
+        roboarm_keys.GRIPPER: {
+            roboarm_keys.GRIPPER_SIGNAL: keys.GRIP,
+            roboarm_keys.GRIPPER_JOINTS: _2F85_GRIP_ACTUATED_JOINTS,
+            roboarm_keys.GRIPPER_TRAVEL: 0.8,
+        },
     }
 
 
@@ -306,5 +318,9 @@ def bundled_panda_model() -> dict:
         roboarm_keys.MESHES: {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
-        roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
+        roboarm_keys.GRIPPER: {
+            roboarm_keys.GRIPPER_SIGNAL: keys.GRIP,
+            roboarm_keys.GRIPPER_JOINTS: ['finger_joint1', 'finger_joint2'],
+            roboarm_keys.GRIPPER_TRAVEL: 0.04,
+        },
     }

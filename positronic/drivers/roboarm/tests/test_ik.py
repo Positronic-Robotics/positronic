@@ -33,6 +33,7 @@ from positronic.drivers.roboarm.models import (
     PANDA_HAND_FRAME,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
+    ROBOTIQ_2F85_PADS,
     YAM_GRASP_SITE_FRAME,
     YAM_JOINT_NAMES,
     YAM_WRIST_LINK,
@@ -530,14 +531,14 @@ def _franka_pads_at_grip_point(grip: float) -> np.ndarray:
     """The two 2F-85 pad origins of the bundled franka model at ``grip``, in ``GRIPPER_SITE`` axes."""
     model = bundled_franka_model()
     spec = model[roboarm_keys.GRIPPER]
-    compiled = _prepare_spec(model[roboarm_keys.URDF], GRIPPER_SITE, 'left_pad', 'right_pad').compile()
+    compiled = _prepare_spec(model[roboarm_keys.URDF], GRIPPER_SITE, *ROBOTIQ_2F85_PADS).compile()
     data = mj.MjData(compiled)
-    for joint in spec['joints']:
-        data.qpos[compiled.joint(joint).qposadr.item()] = spec['travel'] * grip
+    for joint in spec[roboarm_keys.GRIPPER_JOINTS]:
+        data.qpos[compiled.joint(joint).qposadr.item()] = spec[roboarm_keys.GRIPPER_TRAVEL] * grip
     mj.mj_kinematics(compiled, data)
     site = data.site(GRIPPER_SITE)
     to_site = site.xmat.reshape(3, 3).T
-    return np.array([to_site @ (data.site(pad).xpos - site.xpos) for pad in ('left_pad', 'right_pad')])
+    return np.array([to_site @ (data.site(pad).xpos - site.xpos) for pad in ROBOTIQ_2F85_PADS])
 
 
 def test_franka_pads_close_along_y_of_the_grip_point():
