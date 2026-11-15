@@ -25,9 +25,8 @@ from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server import server as server_module
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
-from positronic.simulator.env_server.launcher import free_port
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
-from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
+from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE, EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.env_server.tests.mujoco_env import make_mujoco_env
 from positronic.tests.testing_coutils import drive_scheduler
@@ -329,15 +328,17 @@ def test_a_batch_resets_at_its_join_deadline_when_no_request_comes(monkeypatch):
 
 
 @pytest.mark.timeout(60.0)
-def test_the_join_deadline_counts_from_when_the_previous_batch_left():
+def test_the_join_deadline_counts_from_when_the_previous_batch_left(monkeypatch):
     """A slot that waited through a running batch does not start the next batch alone."""
+    now = _test_clock(monkeypatch)
     env = _ClonedScene(ends_at=[9, 9])
-    with serve_env(env, join_deadline=0.5) as (host, port), ThreadPoolExecutor(1) as pool:
+    with serve_env(env, join_deadline=1.0) as (host, port), ThreadPoolExecutor(1) as pool:
         first = _connect(host, port)
-        first.reset('first batch')
+        _move_clock_until_done(now, pool.submit(first.reset, 'first batch'))
         late = _connect(host, port)
         joining = pool.submit(late.reset, 'second batch')
-        time.sleep(0.8)
+        assert _held_back(joining), 'the late slot joined a batch that was already running'
+        now[0] += 10.0  # the late slot waits past the deadline while the batch runs
         first.close()
         newcomer = _connect(host, port)
         newcomer.reset('second batch')
@@ -350,12 +351,13 @@ def test_the_join_deadline_counts_from_when_the_previous_batch_left():
 
 
 @pytest.mark.timeout(60.0)
-def test_a_reset_parked_by_a_client_that_disconnects_never_joins_a_batch():
+def test_a_reset_parked_by_a_client_that_disconnects_never_joins_a_batch(monkeypatch):
     """A client asks to join while a batch runs, then drops its socket; the next clients get its slot."""
+    now = _test_clock(monkeypatch)
     env = _ClonedScene(ends_at=[9, 9])
-    with serve_env(env, join_deadline=0.5) as (host, port):
+    with serve_env(env, join_deadline=1.0) as (host, port), ThreadPoolExecutor(1) as pool:
         first = _connect(host, port)
-        first.reset('first batch')
+        _move_clock_until_done(now, pool.submit(first.reset, 'first batch'))
         dropped = connect(f'ws://{host}:{port}/', compression=None)
         dropped.send(protocol.encode({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: 'stale batch'}))
         dropped.close()
@@ -406,18 +408,15 @@ def test_a_slot_whose_client_left_is_taken_by_a_new_client():
 
 @pytest.mark.timeout(60.0)
 def test_the_server_keeps_serving_after_every_slot_leaves():
-    host, port = 'localhost', free_port()
-    server = EnvServer(_ClonedScene(ends_at=[9, 9]), host, port)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env) as (host, port):
         for conn in [_connect(host, port), _connect(host, port)]:
             conn.close()
-        thread.join(timeout=2.0)
-        assert thread.is_alive(), 'the server ended when every slot had left'
-    finally:
-        server.shutdown()
-        thread.join(timeout=2.0)
+        again = EnvConnection(host, port, connect_deadline=2.0)
+        try:
+            assert again.tasks({}) == env.tasks({})
+        finally:
+            again.close()
 
 
 @pytest.mark.timeout(60.0)
