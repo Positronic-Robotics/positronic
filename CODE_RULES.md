@@ -463,8 +463,12 @@ with self._write_lock:
     conn.execute('UPDATE boards SET body = ? WHERE id = ?', (board, board_id))
 
 # Good — scan and build on a reader connection, then hold the lock for one keyed write
-rows = reader.execute('SELECT * FROM episodes').fetchall()
+seen = reader.execute('SELECT max(revision) FROM episodes').fetchone()[0]
+rows = reader.execute('SELECT * FROM episodes WHERE revision <= ?', (seen,)).fetchall()
 board = build_board(rows)
-with self._write_lock:  # one keyed UPDATE: the board row must change in one step
-    conn.execute('UPDATE boards SET body = ? WHERE id = ?', (board, board_id))
+with self._write_lock:  # one keyed UPDATE; it keeps a board built from newer rows
+    conn.execute(
+        'UPDATE boards SET body = ?, revision = ? WHERE id = ? AND revision < ?',
+        (board, seen, board_id, seen),
+    )
 ```
