@@ -31,7 +31,8 @@ class EnvHook:
     def eval_config(self, cfg: Any, episode: Any) -> None:
         """Change the MolmoSpaces eval config ``cfg`` of a copy of ``episode``, before the server uses ``cfg``.
 
-        The server lists each episode's horizon and builds its task with this config. After this call, it sets
+        The server calls this once to list the episode's horizon and again to build its task, so the changes must
+        depend on ``episode`` alone: no state kept between calls and no random draw. After this call, the server sets
         ``cfg.seed`` and ``cfg.task_horizon``.
         """
 
