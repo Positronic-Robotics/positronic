@@ -37,6 +37,8 @@ _STEPS = 'steps'
 _GRIP = 'grip'
 # How long a test waits to see that a request is still held back before it lets the batch run.
 _HELD = 0.3
+# A reset token that ``_ClonedScene`` refuses.
+_FAILING_TOKEN = 'unknown scene'
 
 
 def _action(grip: float) -> dict[str, Any]:
@@ -66,6 +68,8 @@ class _ClonedScene(EnvProtocol):
 
     def reset(self, token: Any) -> dict[str, Any]:
         self.resets.append(token)
+        if token == _FAILING_TOKEN:
+            raise ValueError(f'no scene for {token!r}')
         self._steps = [0] * len(self._ends_at)
         self._grips = [0.0] * len(self._ends_at)
         return {
@@ -263,23 +267,55 @@ def test_a_slot_that_asks_inside_the_join_deadline_joins_the_reset():
     assert env.stepped == [{0, 1}] and len(env.resets) == 1
 
 
+def _test_clock(monkeypatch) -> list[float]:
+    """Give the server a clock that only the test moves: the one value in the returned list."""
+    now = [0.0]
+    monkeypatch.setattr(server_module, 'time', SimpleNamespace(monotonic=lambda: now[0]))
+    return now
+
+
+def _move_clock_until_done(now: list[float], future: Future) -> None:
+    while not future.done():
+        now[0] += 2.0
+        time.sleep(0.05)
+
+
 @pytest.mark.timeout(60.0)
 def test_a_batch_waits_the_join_deadline_only_for_its_first_reset(monkeypatch):
     """The slots that reset together are the batch; a later reset of the batch waits only for them.
 
-    The server reads a clock that only the test moves, so a later reset that waited the deadline would never answer.
+    The test moves the clock only for the first reset, so a later reset that waited the deadline would never answer.
     """
-    now = [0.0]
-    monkeypatch.setattr(server_module, 'time', SimpleNamespace(monotonic=lambda: now[0]))
+    now = _test_clock(monkeypatch)
     env = _ClonedScene(ends_at=[9, 9])
     with _clients(env, count=1, join_deadline=1.0) as (conn,), ThreadPoolExecutor(1) as pool:
         first = pool.submit(conn.reset, None)
-        while not first.done():
-            now[0] += 2.0
-            time.sleep(0.05)
+        _move_clock_until_done(now, first)
         first.result()
         pool.submit(conn.reset, None).result(timeout=10.0)
     assert len(env.resets) == 2
+
+
+@pytest.mark.timeout(60.0)
+def test_a_batch_whose_reset_failed_retries_without_the_join_deadline(monkeypatch):
+    now = _test_clock(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, count=1, join_deadline=1.0) as (conn,), ThreadPoolExecutor(1) as pool:
+        failed = pool.submit(conn.reset, _FAILING_TOKEN)
+        _move_clock_until_done(now, failed)
+        with pytest.raises(RuntimeError, match='no scene for'):
+            failed.result()
+        pool.submit(conn.reset, 'known scene').result(timeout=10.0)
+    assert env.resets == [_FAILING_TOKEN, 'known scene']
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_whose_reset_failed_cannot_step():
+    with _clients(_ClonedScene(ends_at=[9])) as (conn,):
+        with pytest.raises(RuntimeError, match='no scene for'):
+            conn.reset(_FAILING_TOKEN)
+        with pytest.raises(RuntimeError, match='slot 0 stepped while reset failed'):
+            conn.step(_action(0.0))
 
 
 @pytest.mark.timeout(60.0)

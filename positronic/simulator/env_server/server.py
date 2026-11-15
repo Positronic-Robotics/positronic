@@ -21,7 +21,8 @@ different policies in one env:
 * The slots that reset together are a batch. All of them reset with one token, and the env resets every slot.
 * A batch's first reset waits for every slot, but not longer than ``join_deadline`` seconds after the first slot
   asks while no batch runs. A slot that has not asked by then sits out the batch, and the env gets no action for it.
-* A later reset of a batch answers when every slot of the batch has asked for one or has left.
+* A later reset of a batch answers when every slot of the batch has asked for one or has left. A batch whose reset
+  failed stays a batch, so its retry is a later reset.
 * A step answers when every slot in an episode has sent its action. The env gets no action for the other slots.
   A slot that reports ``done`` stops holding the others back; a client may still step it until its next reset.
 * A slot leaves when its client closes or disconnects, also while it waits on an answer, and a new client can
@@ -104,6 +105,7 @@ class _Phase(Enum):
     JOINING = 'joining'  # outside the batch, and asked to join the next one
     RUNNING = 'running'  # in an episode
     ENDED = 'ended'  # its episode reported ``done``
+    RESET_FAILED = 'reset failed'  # in the batch, and its last reset failed
 
 
 @dataclass
@@ -213,8 +215,8 @@ class EnvServer:
                 case protocol.Command.TASKS:
                     request.reply.put({protocol.TASKS: self._env.tasks(request.msg[protocol.SPEC])})
                 case protocol.Command.RESET:  # from a running slot too: its client gave up on the episode
-                    in_episode = slot.phase in (_Phase.RUNNING, _Phase.ENDED)
-                    slot.phase, slot.pending = (_Phase.WAITING if in_episode else _Phase.JOINING), request
+                    in_batch = slot.phase in (_Phase.RUNNING, _Phase.ENDED, _Phase.RESET_FAILED)
+                    slot.phase, slot.pending = (_Phase.WAITING if in_batch else _Phase.JOINING), request
                 case protocol.Command.STEP:
                     if slot.phase not in (_Phase.RUNNING, _Phase.ENDED) or slot.pending is not None:
                         raise RuntimeError(f'slot {request.slot} stepped while {slot.phase.value}')
@@ -234,8 +236,6 @@ class EnvServer:
     def _reset(self, indices: list[int]) -> None:
         """Reset the env for the slots ``indices``, which then are the batch."""
         requests = self._take_pending(indices)
-        for index in requests:
-            self._slots[index].phase = _Phase.IDLE
         try:
             tokens = {protocol.encode(request.msg[protocol.TOKEN]) for request in requests.values()}
             if len(tokens) > 1:
@@ -245,7 +245,8 @@ class EnvServer:
                 )
             answer = self._env.reset(next(iter(requests.values())).msg[protocol.TOKEN])
         except Exception as e:
-            for request in requests.values():
+            for index, request in requests.items():
+                self._slots[index].phase = _Phase.RESET_FAILED
                 request.reply.put(_error(e))
             return
         for index, request in requests.items():
@@ -268,7 +269,7 @@ class EnvServer:
 
     def _advance(self) -> None:
         """Run the batch step or the batch reset, or start a batch, if every slot it waits for is ready."""
-        in_batch = (_Phase.WAITING, _Phase.RUNNING, _Phase.ENDED)
+        in_batch = (_Phase.WAITING, _Phase.RUNNING, _Phase.ENDED, _Phase.RESET_FAILED)
         batch = [index for index, slot in enumerate(self._slots) if slot.phase in in_batch]
         if batch:
             running = [index for index in batch if self._slots[index].phase is _Phase.RUNNING]
