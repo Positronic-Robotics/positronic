@@ -7,22 +7,26 @@ reports the grip of the last action it received, so a test can see which client'
 
 import ast
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
+from websockets.sync.client import connect
 
 import pimm
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server import server as server_module
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
-from positronic.simulator.env_server.server import EnvProtocol
+from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE, EnvProtocol
 from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.env_server.tests.mujoco_env import make_mujoco_env
 from positronic.tests.testing_coutils import drive_scheduler
@@ -32,6 +36,8 @@ _STEPS = 'steps'
 _GRIP = 'grip'
 # How long a test waits to see that a request is still held back before it lets the batch run.
 _HELD = 0.3
+# A reset token that ``_ClonedScene`` refuses.
+_FAILING_TOKEN = 'unknown scene'
 
 
 def _action(grip: float) -> dict[str, Any]:
@@ -61,6 +67,8 @@ class _ClonedScene(EnvProtocol):
 
     def reset(self, token: Any) -> dict[str, Any]:
         self.resets.append(token)
+        if token == _FAILING_TOKEN:
+            raise ValueError(f'no scene for {token!r}')
         self._steps = [0] * len(self._ends_at)
         self._grips = [0.0] * len(self._ends_at)
         return {
@@ -91,15 +99,22 @@ class _ClonedScene(EnvProtocol):
         pass
 
 
+def _connect(host: str, port: int) -> EnvConnection:
+    conn = EnvConnection(host, port, connect_deadline=2.0)
+    conn.tasks({})  # a request the server answers at once, so this client holds its slot
+    return conn
+
+
 @contextmanager
-def _clients(env: _ClonedScene) -> Iterator[list[EnvConnection]]:
-    """One connection per clone of ``env``, opened in slot order."""
-    with serve_env(env) as (host, port):
+def _clients(
+    env: _ClonedScene, count: int | None = None, join_deadline: float = DEFAULT_JOIN_DEADLINE
+) -> Iterator[list[EnvConnection]]:
+    """``count`` connections, one per clone of ``env`` by default, opened in slot order."""
+    with serve_env(env, join_deadline) as (host, port):
         conns = []
         try:
-            for _ in range(env.num_slots):
-                conns.append(EnvConnection(host, port))
-                conns[-1].tasks({})  # a request the server answers at once, so this client holds its slot
+            for _ in range(env.num_slots if count is None else count):
+                conns.append(_connect(host, port))
             yield conns
         finally:
             for conn in conns:
@@ -191,13 +206,245 @@ def test_a_slot_whose_client_resets_early_waits_without_an_action():
 
 
 @pytest.mark.timeout(60.0)
-def test_a_client_that_leaves_holds_nobody_back():
+def test_a_client_that_leaves_its_episode_holds_nobody_back():
     env = _ClonedScene(ends_at=[9, 9])
     with _clients(env) as (first, second):
+        _together(lambda: first.reset(None), lambda: second.reset(None))
         first.close()
-        second.reset(None)
         second.step(_action(0.0))
-    assert env.stepped == [{1}]
+        second.reset(None)
+    assert env.stepped == [{1}] and len(env.resets) == 2
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_no_client_claims_sits_out_the_reset_after_the_join_deadline():
+    """1 of 4 clients never connects; the other 3 reset when the deadline passes and run to the end."""
+    env = _ClonedScene(ends_at=[2, 2, 2, 2])
+    with _clients(env, count=3, join_deadline=0.5) as conns:
+        _together(*[lambda conn=conn: conn.reset(None) for conn in conns])
+        _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in conns])
+        last = _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in conns])
+
+    assert all(frame[protocol.FRAME_DONE] for frame in last)
+    assert env.stepped == [{0, 1, 2}, {0, 1, 2}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_client_that_never_asks_for_a_reset_sits_out_after_the_join_deadline():
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, join_deadline=0.5) as (first, _silent):
+        first.reset(None)
+        first.step(_action(0.0))
+    assert env.stepped == [{0}]
+
+
+def _watch_resets(monkeypatch) -> Callable[[str], None]:
+    """A wait that returns once the server has taken a reset for ``token``: parked it, or run it."""
+    taken: list[Any] = []
+    changed = threading.Condition()
+    take = server_module.EnvServer._take
+
+    def recording_take(server: server_module.EnvServer, request: Any) -> None:
+        take(server, request)
+        if getattr(request, 'msg', {}).get(protocol.CMD) == protocol.Command.RESET.value:
+            with changed:
+                taken.append(request.msg[protocol.TOKEN])
+                changed.notify_all()
+
+    monkeypatch.setattr(server_module.EnvServer, '_take', recording_take)
+
+    def wait_for(token: str) -> None:
+        with changed:
+            assert changed.wait_for(lambda: token in taken, timeout=10.0), f'the server never took the reset {token!r}'
+
+    return wait_for
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_that_asks_inside_the_join_deadline_joins_the_reset(monkeypatch):
+    taken = _watch_resets(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, join_deadline=10.0) as (first, second), ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(first.reset, 'scene')
+        taken('scene')
+
+        assert _held_back(pending), 'the reset ran before the deadline, without the slow slot'
+        second.reset('scene')
+        pending.result(timeout=10.0)
+        _together(lambda: first.step(_action(0.0)), lambda: second.step(_action(0.0)))
+    assert env.stepped == [{0, 1}] and len(env.resets) == 1
+
+
+def _test_clock(monkeypatch) -> list[float]:
+    """Give the server a clock that only the test moves: the one value in the returned list."""
+    now = [0.0]
+    monkeypatch.setattr(server_module, 'time', SimpleNamespace(monotonic=lambda: now[0]))
+    return now
+
+
+def _move_clock_until_done(now: list[float], future: Future) -> None:
+    while not future.done():
+        now[0] += 2.0
+        time.sleep(0.05)
+
+
+@pytest.mark.timeout(60.0)
+def test_a_batch_waits_the_join_deadline_only_for_its_first_reset(monkeypatch):
+    """The slots that reset together are the batch; a later reset of the batch waits only for them.
+
+    The test moves the clock only for the first reset, so a later reset that waited the deadline would never answer.
+    """
+    now = _test_clock(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, count=1, join_deadline=1.0) as (conn,), ThreadPoolExecutor(1) as pool:
+        first = pool.submit(conn.reset, None)
+        _move_clock_until_done(now, first)
+        first.result()
+        pool.submit(conn.reset, None).result(timeout=10.0)
+    assert len(env.resets) == 2
+
+
+@pytest.mark.timeout(60.0)
+def test_a_batch_whose_reset_failed_retries_without_the_join_deadline(monkeypatch):
+    now = _test_clock(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, count=1, join_deadline=1.0) as (conn,), ThreadPoolExecutor(1) as pool:
+        failed = pool.submit(conn.reset, _FAILING_TOKEN)
+        _move_clock_until_done(now, failed)
+        with pytest.raises(RuntimeError, match='no scene for'):
+            failed.result()
+        pool.submit(conn.reset, 'known scene').result(timeout=10.0)
+    assert env.resets == [_FAILING_TOKEN, 'known scene']
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_whose_reset_failed_cannot_step():
+    with _clients(_ClonedScene(ends_at=[9])) as (conn,):
+        with pytest.raises(RuntimeError, match='no scene for'):
+            conn.reset(_FAILING_TOKEN)
+        with pytest.raises(RuntimeError, match='slot 0 stepped while reset failed'):
+            conn.step(_action(0.0))
+
+
+@pytest.mark.timeout(60.0)
+def test_a_batch_resets_at_its_join_deadline_when_no_request_comes(monkeypatch):
+    """The server wakes at the deadline, not at its next idle check, which this test moves far away."""
+    monkeypatch.setattr(server_module, '_IDLE_CHECK_INTERVAL', 10.0)
+    env = _ClonedScene(ends_at=[9, 9])
+    with _clients(env, count=1, join_deadline=0.05) as (conn,), ThreadPoolExecutor(1) as pool:
+        pool.submit(conn.reset, None).result(timeout=5.0)
+    assert len(env.resets) == 1
+
+
+@pytest.mark.timeout(60.0)
+def test_the_join_deadline_counts_from_when_the_previous_batch_left(monkeypatch):
+    """A slot that waited through a running batch does not start the next batch alone."""
+    now = _test_clock(monkeypatch)
+    taken = _watch_resets(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env, join_deadline=1.0) as (host, port), ThreadPoolExecutor(1) as pool:
+        first = _connect(host, port)
+        _move_clock_until_done(now, pool.submit(first.reset, 'first batch'))
+        late = _connect(host, port)
+        joining = pool.submit(late.reset, 'second batch')
+        taken('second batch')
+        assert _held_back(joining), 'the late slot joined a batch that was already running'
+        now[0] += 10.0  # the late slot waits past the deadline while the batch runs
+        first.close()
+        newcomer = _connect(host, port)
+        newcomer.reset('second batch')
+        joining.result(timeout=10.0)
+        _together(lambda: late.step(_action(0.0)), lambda: newcomer.step(_action(0.0)))
+        late.close()
+        newcomer.close()
+    assert env.resets == ['first batch', 'second batch']
+    assert env.stepped == [{0, 1}]
+
+
+def _connect_when_a_slot_frees(host: str, port: int) -> EnvConnection:
+    """A connection that holds a slot, made as soon as the server frees one."""
+    deadline = time.monotonic() + 10.0
+    while True:
+        conn = EnvConnection(host, port, connect_deadline=2.0)
+        try:
+            conn.tasks({})
+            return conn
+        except RuntimeError:
+            conn.close()
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
+@pytest.mark.timeout(60.0)
+def test_a_reset_parked_by_a_client_that_disconnects_never_joins_a_batch(monkeypatch):
+    """A client asks to join while a batch runs, then drops its socket; the next clients get its slot."""
+    now = _test_clock(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env, join_deadline=1.0) as (host, port), ThreadPoolExecutor(1) as pool:
+        first = _connect(host, port)
+        _move_clock_until_done(now, pool.submit(first.reset, 'first batch'))
+        dropped = connect(f'ws://{host}:{port}/', compression=None)
+        dropped.send(protocol.encode({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: 'stale batch'}))
+        dropped.close()
+        newcomers = [_connect_when_a_slot_frees(host, port)]
+        first.close()
+        newcomers.append(_connect(host, port))
+        _together(*[lambda conn=conn: conn.reset('second batch') for conn in newcomers])
+        _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in newcomers])
+        for conn in newcomers:
+            conn.close()
+    assert env.resets == ['first batch', 'second batch']
+    assert env.stepped == [{0, 1}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_that_sat_out_a_batch_joins_the_next_one(monkeypatch):
+    """A late client waits while the batch runs, also through its later resets, and resets once the batch leaves."""
+    taken = _watch_resets(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env, join_deadline=0.5) as (host, port), ThreadPoolExecutor(1) as pool:
+        first = _connect(host, port)
+        first.reset('first batch')
+        late = _connect(host, port)
+        joining = pool.submit(late.reset, 'second batch')
+        taken('second batch')
+        first.step(_action(0.0))
+        first.reset('first batch')
+
+        assert _held_back(joining), 'the late slot joined a batch that was already running'
+        first.close()
+        frame = joining.result(timeout=10.0)
+        late.step(_action(0.0))
+        late.close()
+    assert _steps(frame) == 0.0
+    assert env.resets == ['first batch', 'first batch', 'second batch']
+    assert env.stepped == [{0}, {1}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_whose_client_left_is_taken_by_a_new_client():
+    env = _ClonedScene(ends_at=[1])
+    with serve_env(env) as (host, port):
+        for batch in ('first batch', 'second batch'):
+            conn = _connect(host, port)
+            conn.reset(batch)
+            assert conn.step(_action(0.0))[protocol.FRAME_DONE]
+            conn.close()
+    assert env.resets == ['first batch', 'second batch']
+
+
+@pytest.mark.timeout(60.0)
+def test_the_server_keeps_serving_after_every_slot_leaves():
+    env = _ClonedScene(ends_at=[9, 9])
+    with serve_env(env) as (host, port):
+        for conn in [_connect(host, port), _connect(host, port)]:
+            conn.close()
+        again = EnvConnection(host, port, connect_deadline=2.0)
+        try:
+            assert again.tasks({}) == env.tasks({})
+        finally:
+            again.close()
 
 
 @pytest.mark.timeout(60.0)
