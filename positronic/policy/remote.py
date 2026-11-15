@@ -79,7 +79,8 @@ def round_trip(
             return session.infer(prepared)
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
-            telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing))
+            alone = {} if session.sent_alone is None else {telemetry_keys.ATTR_WIRE_SENT_ALONE: session.sent_alone}
+            telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing), **alone)
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:

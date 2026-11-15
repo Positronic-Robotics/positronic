@@ -88,7 +88,7 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
-| `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
 
@@ -158,7 +158,10 @@ server that sends no instants gives no `wire.*` values, and its `served.*` value
 
 A server reads a request only after it answers the request before it. So a call that the client sends while another
 call is in flight waits on the server before `received_ns`, and its one-way values would count that wait as network
-time. Such a call gives no `wire.*` values.
+time. Such a call gives no one-way values.
+
+`wire.sent_alone` is `true` on a call that the client sent with no earlier call in flight, and `false` on a call sent
+behind another. A call that never reached its send carries no mark.
 
 ### Stats schema (`*.stats.jsonl`)
 
@@ -191,8 +194,9 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
 - **inference latency** — call count and p50 / p95;
 - the **latency table** — the count, the episode count and the p50 / p90 / p99 of each part of a step and of a
   policy call, over the spans that start inside an episode of the same run. A row named with `+` and `-` is that
-  sum of spans. `wire.send + wire.recv - served.served_ms` holds the transfer both ways and no clock offset. A spans
-  file with no `harness.step` spans gives the call rows only;
+  sum of spans. `wire.send + wire.recv - served.served_ms` holds the transfer both ways and no clock offset. It counts
+  only the calls with `wire.sent_alone` `true`, so a spans file from a client that writes no such mark gives no such
+  row. A spans file with no `harness.step` spans gives the call rows only;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
   stream. The two peaks are box-wide totals, so they need samples that saw every device and read unavailable

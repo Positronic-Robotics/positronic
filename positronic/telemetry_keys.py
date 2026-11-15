@@ -55,6 +55,9 @@ ATTR_WIRE_BYTES = 'wire.bytes'
 ATTR_WIRE_UPLINK_MS = 'wire.uplink_ms'
 ATTR_WIRE_DOWNLINK_MS = 'wire.downlink_ms'
 ATTR_WIRE_NETWORK_MS = 'wire.network_ms'
+# On `policy.infer`: whether the client sent the call with no earlier call in flight. A server reads a request only
+# after it answers the one before, so the wait of a call sent behind another holds that earlier call's serving time.
+ATTR_WIRE_SENT_ALONE = 'wire.sent_alone'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.

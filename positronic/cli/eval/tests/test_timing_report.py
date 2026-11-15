@@ -45,6 +45,7 @@ from positronic.telemetry_keys import (
     ATTR_WAYPOINTS_LATE_SUM_MS,
     ATTR_WAYPOINTS_SCHEDULED,
     ATTR_WIRE_NETWORK_MS,
+    ATTR_WIRE_SENT_ALONE,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
@@ -988,8 +989,10 @@ _SERVED_RECEIVED_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_RECEIVED_NS}'
 _SERVED_SENT_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SENT_NS}'
 
 
-def _call(prefix, start_s, served_ms, run_id='rig-run'):
+def _call(prefix, start_s, served_ms, run_id='rig-run', sent_alone: bool | None = True):
     """One policy call on a worker, 0.1 s long: two overlapping image encodes, a prepare and a round trip.
+
+    ``sent_alone`` ``None`` leaves the mark out, as a file from a client that does not write it.
 
     The parent of the `policy.submit` span is not in the file, as in a file that holds only the calls.
     """
@@ -1023,7 +1026,8 @@ def _call(prefix, start_s, served_ms, run_id='rig-run'):
             start_s + 100 * ms,
             infer,
             transform,
-            {_SERVED_MS: served_ms, _SERVED_RECEIVED_NS: 1e18, _SERVED_SENT_NS: 1e18},
+            {_SERVED_MS: served_ms, _SERVED_RECEIVED_NS: 1e18, _SERVED_SENT_NS: 1e18}
+            | ({} if sent_alone is None else {ATTR_WIRE_SENT_ALONE: sent_alone}),
             run_id=run_id,
         ),
         _span(SPAN_WIRE_SEND, start_s + 45 * ms, start_s + 50 * ms, f'{prefix}-send', infer, run_id=run_id),
@@ -1112,7 +1116,15 @@ def test_a_retried_call_counts_every_attempt_on_the_wire(tmp_path):
         telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
         [
             _span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'),
-            _span(SPAN_POLICY_INFER, 1, 1 + 100 * ms, 'infer', 'ep0', {_SERVED_MS: 20.0}, run_id='rig-run'),
+            _span(
+                SPAN_POLICY_INFER,
+                1,
+                1 + 100 * ms,
+                'infer',
+                'ep0',
+                {_SERVED_MS: 20.0, ATTR_WIRE_SENT_ALONE: True},
+                run_id='rig-run',
+            ),
             # The first attempt loses its peer after the request is sent; the second attempt gets the answer.
             _span(SPAN_WIRE_SEND, 1 + 5 * ms, 1 + 10 * ms, 'send-1', 'infer', run_id='rig-run'),
             _span(SPAN_WIRE_RECV, 1 + 10 * ms, 1 + 30 * ms, 'recv-1', 'infer', run_id='rig-run'),
@@ -1125,3 +1137,28 @@ def test_a_retried_call_counts_every_attempt_on_the_wire(tmp_path):
     rows = {row.segment: row for row in report.latency}
     assert rows['policy.infer - wire.send - wire.recv'].p50_ms == pytest.approx(20.0)
     assert rows['wire.send + wire.recv - served.served_ms'].p50_ms == pytest.approx(60.0)
+
+
+def _network_rows(telemetry_dir, *calls):
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [_span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'), *(span for call in calls for span in call)],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    return [row for row in report.latency if row.segment == 'wire.send + wire.recv - served.served_ms']
+
+
+def test_the_network_row_counts_only_the_calls_sent_with_no_earlier_call_in_flight(tmp_path):
+    [network] = _network_rows(
+        tmp_path / TELEMETRY_SUBDIR,
+        _call('alone', 1, served_ms=10.0),
+        _call('queued', 2, served_ms=5.0, sent_alone=False),
+    )
+    assert network.count == 1
+    assert network.p50_ms == pytest.approx(40.0)
+
+
+def test_a_file_whose_calls_carry_no_alone_mark_gives_no_network_row(tmp_path):
+    rows = _network_rows(tmp_path / TELEMETRY_SUBDIR, _call('old', 1, served_ms=10.0, sent_alone=None))
+    assert rows == []
