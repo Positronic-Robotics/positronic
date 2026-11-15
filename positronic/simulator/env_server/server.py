@@ -49,6 +49,8 @@ else:
 
 # How long the first reset of a batch waits for the slots that have not asked for it, in seconds.
 DEFAULT_JOIN_DEADLINE = 600.0
+# How often the server loop wakes with no request, to check ``shutdown``, in seconds.
+_IDLE_CHECK_INTERVAL = 0.5
 # How often a client thread that waits on an answer checks that its client is still connected, in seconds.
 _CONNECTION_CHECK_INTERVAL = 0.1
 
@@ -288,8 +290,8 @@ class EnvServer:
 
     def _seconds_to_next_check(self) -> float:
         if self._join_started is None:
-            return 0.5
-        return max(0.0, min(0.5, self._join_started + self._join_deadline - time.monotonic()))
+            return _IDLE_CHECK_INTERVAL
+        return max(0.0, min(_IDLE_CHECK_INTERVAL, self._join_started + self._join_deadline - time.monotonic()))
 
     def _stop(self) -> None:
         """Fail every request still open, so no client thread waits on an answer that never comes."""

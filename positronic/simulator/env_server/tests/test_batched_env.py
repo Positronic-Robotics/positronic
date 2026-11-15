@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -21,6 +22,7 @@ from websockets.sync.client import connect
 import pimm
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server import server as server_module
 from positronic.simulator.env_server.adapter import EnvAdapter
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.env_server.launcher import free_port
@@ -262,23 +264,32 @@ def test_a_slot_that_asks_inside_the_join_deadline_joins_the_reset():
 
 
 @pytest.mark.timeout(60.0)
-def test_a_batch_waits_the_join_deadline_only_for_its_first_reset():
-    """The slots that reset together are the batch; a later reset of the batch waits only for them."""
+def test_a_batch_waits_the_join_deadline_only_for_its_first_reset(monkeypatch):
+    """The slots that reset together are the batch; a later reset of the batch waits only for them.
+
+    The server reads a clock that only the test moves, so a later reset that waited the deadline would never answer.
+    """
+    now = [0.0]
+    monkeypatch.setattr(server_module, 'time', SimpleNamespace(monotonic=lambda: now[0]))
     env = _ClonedScene(ends_at=[9, 9])
-    with _clients(env, count=1, join_deadline=1.0) as (conn,):
-        conn.reset(None)
-        started = time.monotonic()
-        conn.reset(None)
-        assert time.monotonic() - started < 0.5, 'the batch waited the join deadline again for the empty slot'
+    with _clients(env, count=1, join_deadline=1.0) as (conn,), ThreadPoolExecutor(1) as pool:
+        first = pool.submit(conn.reset, None)
+        while not first.done():
+            now[0] += 2.0
+            time.sleep(0.05)
+        first.result()
+        pool.submit(conn.reset, None).result(timeout=10.0)
+    assert len(env.resets) == 2
 
 
 @pytest.mark.timeout(60.0)
-def test_a_batch_resets_at_its_join_deadline_when_no_request_comes():
+def test_a_batch_resets_at_its_join_deadline_when_no_request_comes(monkeypatch):
+    """The server wakes at the deadline, not at its next idle check, which this test moves far away."""
+    monkeypatch.setattr(server_module, '_IDLE_CHECK_INTERVAL', 10.0)
     env = _ClonedScene(ends_at=[9, 9])
-    with _clients(env, count=1, join_deadline=0.05) as (conn,):
-        started = time.monotonic()
-        conn.reset(None)
-        assert time.monotonic() - started < 0.3, 'the reset ran long after the join deadline'
+    with _clients(env, count=1, join_deadline=0.05) as (conn,), ThreadPoolExecutor(1) as pool:
+        pool.submit(conn.reset, None).result(timeout=5.0)
+    assert len(env.resets) == 1
 
 
 @pytest.mark.timeout(60.0)
