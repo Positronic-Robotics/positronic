@@ -133,8 +133,8 @@ def benchmarks(
     ``env_server`` is the ``host:port`` of a MolmoSpaces env server that already runs. Without it, the eval launches
     a server of its own. ``env_hook`` applies only to a server that the eval launches; a dialed server reports its
     own hook. Start a server to dial with
-    ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook <file>]``: it serves one eval run,
-    with one episode at a time, and stops when that run ends.
+    ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook <file>]``: it serves eval runs one
+    after another, with one episode at a time, until Ctrl-C stops it.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
