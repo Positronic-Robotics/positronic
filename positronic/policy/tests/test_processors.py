@@ -1012,8 +1012,7 @@ def test_a_queued_chunk_counts_the_hold_from_the_end_of_the_chunk_before_it(exec
 
 def test_a_chunk_that_opens_with_an_empty_waypoint_counts_the_hold_to_its_first_command(execution):
     runtime, clock = execution
-    opens_empty = _trajectory([None, 1, 2], 400_000_000)
-    opens_empty['commands'] = [{}, *opens_empty['commands'][1:]]
+    opens_empty = asdict(Trajectory([{}, {MOTOR: 1}, {MOTOR: 2}], 400_000_000, 10, 700_000_000), recurse=False)
     inner = Mock(send=Mock(side_effect=[Step(_trajectory(range(3)), 400_000_000), Step(opens_empty, 2_000_000_000)]))
     run = runtime.start(TrajectoryPlayer(), inner)
     try:
