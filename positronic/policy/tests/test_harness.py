@@ -1528,6 +1528,48 @@ def test_step_spans_carry_the_collections_before_and_inside_the_step(episode_har
     assert third.attrs[telemetry_keys.ATTR_STEP_GC_GENERATION] == 1
 
 
+class CollectingDataset(MemoryDataset):
+    """A dataset whose episode opening runs a full collection."""
+
+    def new_episode(self):
+        gc.collect()
+        return super().new_episode()
+
+
+class HoldAfterCollecting(Policy):
+    """A policy that runs a full collection before it takes its first observation."""
+
+    def run(self, runtime):
+        gc.collect()
+        yield
+        while True:
+            yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+
+def _first_step_span(tmp_path, h, policy, dataset):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-first-step-gc'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), policy, dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    return min((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)
+
+
+def test_the_first_step_carries_a_collection_that_opening_the_recording_ran(
+    episode_harness, tmp_path, explicit_gc_only
+):
+    first = _first_step_span(tmp_path, episode_harness, Hold(), CollectingDataset())
+    assert first.attrs[telemetry_keys.ATTR_STEP_GC_WAIT_MS] > 0
+    assert first.attrs[telemetry_keys.ATTR_STEP_GC_GENERATION] == 2
+
+
+def test_the_first_step_leaves_out_a_collection_that_the_policy_start_ran(episode_harness, tmp_path, explicit_gc_only):
+    first = _first_step_span(tmp_path, episode_harness, HoldAfterCollecting(), None)
+    assert telemetry_keys.ATTR_STEP_GC_WAIT_MS not in first.attrs
+
+
 def test_the_harness_counts_collections_only_while_telemetry_records(episode_harness, tmp_path):
     h = episode_harness
     callbacks = list(gc.callbacks)

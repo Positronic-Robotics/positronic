@@ -104,8 +104,8 @@ A `harness.step` span holds the durations of one step in milliseconds, and one c
 - `step.policy_ms`: the policy call. Its processor spans are the children of the step.
 - `step.emit_ms`: the time to emit the commands.
 - `step.gc_wait_ms`: the garbage-collection time of the process from the end of the previous step to the start of
-  this step. A collection after the due time adds to `step.late_ms`. For the first step of an episode, the window starts at the start of
-  the rollout.
+  this step. A collection after the due time adds to `step.late_ms`. For the first step of an episode, the window
+  starts at the start of the rollout, so it covers the opening of the recording.
 - `step.gc_ms`: the garbage-collection time of the process inside the step.
 - `step.gc_generation`: the highest generation that a collection in either window reached, from 0 to 2.
 

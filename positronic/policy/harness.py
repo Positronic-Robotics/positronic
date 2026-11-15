@@ -160,8 +160,8 @@ class _GcMeter:
 class _GcSteps:
     """Stamp each step span of one rollout with the collection time before the step and inside it.
 
-    The wait window of a step opens when the previous step ends. For the first step, it opens when the rollout creates
-    this object.
+    The wait window of a step opens when the previous step ends. For the first step, it opens when the rollout starts,
+    so it covers the opening of the recording.
     """
 
     def __init__(self, meter: _GcMeter) -> None:
@@ -635,13 +635,13 @@ class Harness(pimm.ControlSystem):
         runtime: Executor,
         policy_run: PolicyRun,
         deadline_ns: int | None,
+        gc_steps: _GcSteps,
     ) -> pimm.Run[dict[str, Any] | None]:
         payload = None
         resume_at_ns = None
         ended = None
         sample_at_ns = runtime.time_ns
         completed = ()
-        gc_steps = _GcSteps(self._gc)
         while not should_stop.value and payload is None:
             sampled_ns = runtime.time_ns
             if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
@@ -702,10 +702,11 @@ class Harness(pimm.ControlSystem):
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
+            gc_steps = _GcSteps(self._gc)
             try:
                 with self._recording(rollout.writer):
                     payload = yield from self._rollout(
-                        should_stop, task, withheld_poses, runtime, stepped_run, deadline_ns
+                        should_stop, task, withheld_poses, runtime, stepped_run, deadline_ns, gc_steps
                     )
                     if self._writer is not None:
                         static = only_keep_written_signals(
