@@ -189,18 +189,22 @@ def test_bad_prefix_alignment_fails_before_prediction(rtc, kwargs):
     assert len(native.calls) == 1
 
 
-@pytest.mark.parametrize(
-    'config',
-    [
-        {'rtc_max_prefix': 0},
-        {'quantization': 'fp8r'},
-        {'action_parameterization': 'joint_delta'},
-        {'rtc_max_prefix': 2},
-    ],
-)
-def test_incompatible_checkpoint_cannot_start_rtc(config, rtc):
-    with pytest.raises(ValueError):
-        model(NativePolicy(**config), rtc)
+@pytest.mark.parametrize('capacity', [0, 2])
+def test_rtc_delay_must_fit_checkpoint_capacity(capacity, rtc):
+    with pytest.raises(ValueError, match='prefix capacity'):
+        model(NativePolicy(rtc_max_prefix=capacity), rtc)
+
+
+@pytest.mark.parametrize('steps', [1, 2, 4, 7])
+def test_rtc_preserves_fractional_period_boundaries(steps, rtc):
+    native = NativePolicy(rtc_max_prefix=steps)
+    served = model(native, {**rtc, keys.RTC.MAX_DELAY_SEC: steps / native.config.fps})
+    session = served.prepare_session(served.parameters)
+    session.infer(request())
+    session.infer(
+        request(range(20), observation_offset=-steps / native.config.fps, elapsed=[steps / native.config.fps])
+    )
+    np.testing.assert_array_equal(native.calls[-1][1][:, 0], np.arange(steps, 2 * steps))
 
 
 def test_ordinary_model_cannot_enable_unwarmed_rtc(rtc):

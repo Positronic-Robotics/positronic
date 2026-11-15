@@ -19,13 +19,18 @@ from . import keys, recipe
 logger = logging.getLogger(__name__)
 
 
+def _action_position(seconds: float, fps: float) -> float:
+    position = seconds * fps
+    nearest = round(position)
+    return float(nearest) if math.isclose(position, nearest, rel_tol=0, abs_tol=1e-6) else position
+
+
 class Flux3Session(Session):
     """Use recent round-trip durations to freeze the part of the plan executed during inference."""
 
-    def __init__(self, policy: Any, client_stack: dict, *, fps: float, rtc: dict[str, float] | None):
+    def __init__(self, policy: Any, client_stack: dict, *, rtc: dict[str, float] | None):
         super().__init__(client_stack)
         self._policy = policy
-        self._fps = fps
         self._rtc = rtc
         self._latencies: deque[float] = deque(maxlen=5)
         self._queries = 0
@@ -45,8 +50,9 @@ class Flux3Session(Session):
             value = prefix[name]
             if type(value) not in (int, float) or not math.isfinite(value):
                 raise ValueError(f'{name} must be finite seconds')
-        offset = prefix[keys.RTC.CHUNK_OFFSET_SEC] * self._fps
-        if offset < 0 or not math.isclose(offset, round(offset), abs_tol=1e-6):
+        fps = self._policy.config.fps
+        offset = _action_position(prefix[keys.RTC.CHUNK_OFFSET_SEC], fps)
+        if offset < 0 or not offset.is_integer():
             raise ValueError('The prefix must align with the preceding action grid')
         targets = prefix[keys.RTC.PREFIX_ACTIONS]
         if not isinstance(targets, list) or any(not isinstance(t, dict) or set(t) != {keys.ACTION} for t in targets):
@@ -61,8 +67,8 @@ class Flux3Session(Session):
         actions = np.asarray([target[keys.ACTION] for target in targets], dtype=np.float32)
         if actions.shape != (len(targets), 8) or not np.isfinite(actions).all():
             raise ValueError('RTC actions must be finite eight-dimensional absolute commands')
-        skipped = math.floor(round(-observation_offset * 1e9) * self._fps / 1e9)
-        count = math.ceil(round(delay * 1e9) * self._fps / 1e9)
+        skipped = math.floor(_action_position(-observation_offset, fps))
+        count = math.ceil(_action_position(delay, fps))
         committed = actions[skipped : skipped + count].copy()
         return committed if len(committed) else None
 
@@ -99,14 +105,12 @@ class Flux3Model(Model):
         if self.parameters[keys.RTC.FIELD] is None:
             raise ValueError('Launch droid_rtc or droid_3cam_rtc to enable warmed RTC sessions')
         cfg = self._policy.config
-        if cfg.rtc_max_prefix <= 0 or cfg.quantization is not None or cfg.action_parameterization == 'joint_delta':
-            raise ValueError('RTC requires a compatible BF16 checkpoint trained with rtc_max_prefix > 0')
         if not isinstance(rtc, dict) or set(rtc) != {keys.RTC.CALL_AFTER_SEC, keys.RTC.MAX_DELAY_SEC}:
             raise ValueError('rtc requires call_after_sec and max_delay_sec')
         for name, value in rtc.items():
             if type(value) not in (int, float) or not 0 < value < math.inf:
                 raise ValueError(f'rtc.{name} must be finite and positive')
-        if math.ceil(round(rtc[keys.RTC.MAX_DELAY_SEC] * 1e9) * cfg.fps / 1e9) > cfg.rtc_max_prefix:
+        if math.ceil(_action_position(rtc[keys.RTC.MAX_DELAY_SEC], cfg.fps)) > cfg.rtc_max_prefix:
             raise ValueError('rtc.max_delay_sec exceeds the checkpoint RTC prefix capacity')
         if rtc[keys.RTC.CALL_AFTER_SEC] >= cfg.chunk_size / cfg.fps:
             raise ValueError('rtc.call_after_sec must leave actions available for overlap')
@@ -130,12 +134,7 @@ class Flux3Model(Model):
         rtc = params[keys.RTC.FIELD]
         if rtc is not None:
             self._validate_rtc(rtc, horizon)
-        return Flux3Session(
-            self._policy,
-            recipe.client_stack(fps=self._policy.config.fps, **params),
-            fps=self._policy.config.fps,
-            rtc=rtc,
-        )
+        return Flux3Session(self._policy, recipe.client_stack(fps=self._policy.config.fps, **params), rtc=rtc)
 
     def close(self) -> None:
         self._policy.close()
@@ -166,7 +165,7 @@ def load_model(
     compile_dit: bool = True,
     offload_text_encoder: bool = False,
 ) -> Flux3Model:
-    from .native import Policy  # noqa: PLC0415
+    from .native import Policy  # noqa: PLC0415 — CLI help must load without native dependencies.
 
     policy = Policy(
         checkpoint,

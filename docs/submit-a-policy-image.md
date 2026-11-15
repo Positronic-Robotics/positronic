@@ -16,10 +16,10 @@ The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker 
 the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
 vendor stack. The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. Each
 recipe adds the weights, the positronic source with an offline environment, `EXPOSE 8000` and a
-start command. The layers go from the least often changed to the most: base, dependencies, source,
-weights. The source and the weights come in through `COPY --link` with no step after them, so a
-source change builds one new layer and reuses the rest from a cache. CI publishes all five images
-to Docker Hub. Build from the root of a positronic checkout:
+start command. Weight downloads use separate build stages, so source changes reuse the cached downloads.
+The FLUX adapter and weights use `COPY --link` after package installation. An adapter-only change
+reuses the package installation and weight layers. CI publishes all five images to Docker Hub.
+Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
@@ -125,7 +125,7 @@ submission.
   reducing GPU memory use on cards such as the 32 GB RTX 5090.
 - `droid_rtc` and `droid_3cam_rtc` use the client's remaining plan and recent round-trip durations
   to supply native `committed_actions`. They require a BF16 DROID checkpoint trained with
-  `rtc_max_prefix > 0`; the bundled guidance-distilled checkpoint is not asserted to support RTC.
+  `rtc_max_prefix > 0`. The bundled guidance-distilled checkpoint has `rtc_max_prefix=0` and cannot enable RTC.
   Select a compatible package with `--checkpoint`, `--revision` and `--subfolder`.
   `--rtc.call_after_sec` sets the replan interval; `--rtc.max_delay_sec` bounds the supported delay
   and must fit the checkpoint's prefix capacity. A measured delay beyond that bound fails explicitly.
@@ -332,11 +332,11 @@ after the image name, and it loads the model on the CPU and serves:
 ```bash
 bash docker/test_policy_image.sh docker.io/<you>/molmoact2-droid:v1 --model.device_map=cpu
 ```
- The GR00T recipe stops on the missing GPU
-with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
-the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
+The GR00T recipe stops on the missing GPU
+with `Flash Attention 2 is not available on CPU`. The FLUX 3 Action server loads weights on CPU,
+then fails when it initializes CUDA without a GPU. For the Cosmos3-Nano
 recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.
-These three stop before they read the weights, so for them, also run the test on a GPU below. The log
+These three recipes need the GPU test below to verify startup. The log
 must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
 albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
 `A new version of the following files was downloaded` when `transformers` copies the model's code
@@ -348,8 +348,8 @@ On a machine with a GPU, add `--gpu`:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140 s, and GR00T loads in
-about 151 s. `no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
+The script then waits up to 600 s. FLUX 3 Action binds port 8000 after model loading and compilation finish.
+`no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
 1800 s from the end of the pull.
 
 The platform gives the image one GPU with 24 GB of memory, or the slice that holds the need its

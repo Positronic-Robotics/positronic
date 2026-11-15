@@ -20,6 +20,7 @@ class Policy:
         offload_text_encoder: bool = False,
         rtc: bool = False,
     ):
+        target_device = torch.device(device)
         policy = FluxActionPolicy.from_pretrained(checkpoint, revision=revision, subfolder=subfolder, device='cpu')
         config = policy.config
         if config.camera_layout != 'droid' or config.inference_profile != 'default' or config.action_dim != 8:
@@ -33,13 +34,13 @@ class Policy:
                 'RTC requires a BF16 checkpoint trained with rtc_max_prefix and absolute or joint_relative actions'
             )
         # CUDA graph capture must be initialized outside inference mode before compiled DiT warm-up.
-        self._first_graph = torch.cuda.CUDAGraph() if device.startswith('cuda') else None
+        self._first_graph = torch.cuda.CUDAGraph() if target_device.type == 'cuda' else None
         if self._first_graph is not None:
             with torch.cuda.graph(self._first_graph):
-                torch.zeros(1, device=device)
+                torch.zeros(1, device=target_device)
         self._policy = robolab.prepare_serving_policy(
             policy,
-            device=device,
+            device=target_device,
             dtype='bfloat16',
             compile_dit=compile_dit,
             offload_text_encoder=offload_text_encoder,
