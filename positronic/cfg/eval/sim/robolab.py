@@ -4,7 +4,7 @@ import configuronic as cfn
 from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
 
 from positronic import keys
-from positronic.cfg.eval import number_trials, require_finite_positive, spec
+from positronic.cfg.eval import env_server_address, number_trials, require_finite_positive, spec
 from positronic.eval import Eval, Task
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.robolab import keys as robolab_keys
@@ -69,8 +69,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, cam
     if env_server is None:
         serve = serve_robolab(cameras)
     else:
-        host, port = env_server.rsplit(':', 1)
-        serve = nullcontext((host, int(port)))
+        serve = nullcontext(env_server_address(env_server))
     proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve)
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
