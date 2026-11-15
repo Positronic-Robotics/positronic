@@ -73,8 +73,7 @@ def cmd_delay_ms(
     ``min_travel`` on every component, or when no measured pose is ``max_delay_ms`` past the first command. Of
     several shifts with the same distance, it is the shortest, so the pose period limits the resolution.
 
-    On ``emitted.wall`` the delay holds the transfer of the command, the driver's loop and the motion of the arm. The
-    ``harness.wall`` of a pose adds the transfer of the pose to the harness.
+    The delay holds every stage between the points where ``timeline`` stamps a command and a pose.
     """
     cmd = episode.signals[cmd_signal]
     state = episode.signals[state_signal]
