@@ -24,6 +24,7 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
@@ -1520,6 +1521,41 @@ def test_a_submitted_call_carries_the_age_of_the_oldest_camera_frame(tmp_path):
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     [submit] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT]
     assert submit.attrs[telemetry_keys.ATTR_OBS_AGE_MS] == pytest.approx(30.0)
+
+
+def test_a_step_span_carries_the_age_of_each_camera_frame_in_two_parts(tmp_path):
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 10_000_000)
+
+    driver_stamps = pimm.Time(**{CAPTURE_TIME: 5_000, HANDOFF_TIME: 21_005_000})
+    with (
+        _episode_ports(observed=(keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)) as h,
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-frame-age'),
+    ):
+        h.device_observations[keys.EXTERIOR_IMAGE].emit(np.zeros(1), time=driver_stamps)
+        h.world.clock.advance_to_ns(10_000_000)
+        h.device_observations[keys.WRIST_IMAGE].emit(np.zeros(1))
+        h.world.clock.advance_to_ns(30_000_000)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), None))
+        next(h.loop)
+        h.world.clock.advance_to_ns(40_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    first, second = sorted((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)
+    wait, driver = telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX, telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX
+    assert first.attrs[wait + keys.EXTERIOR_IMAGE] == pytest.approx(30.0)
+    assert first.attrs[wait + keys.WRIST_IMAGE] == pytest.approx(20.0)
+    # A frame that the step reads again keeps getting older.
+    assert second.attrs[wait + keys.EXTERIOR_IMAGE] == pytest.approx(40.0)
+    assert first.attrs[driver + keys.EXTERIOR_IMAGE] == second.attrs[driver + keys.EXTERIOR_IMAGE] == 21.0
+    # A driver that stamps no capture time gives no driver part.
+    assert driver + keys.WRIST_IMAGE not in first.attrs
 
 
 def test_the_step_that_the_policy_ends_records_the_policy_duration(episode_harness, tmp_path):

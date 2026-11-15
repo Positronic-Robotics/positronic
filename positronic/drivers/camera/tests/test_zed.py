@@ -13,7 +13,7 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
-from positronic.drivers.camera import CAPTURE_TIME
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import RecoveryOutcome
@@ -175,7 +175,8 @@ class DroppingSdk:
     A camera opened before the drop grabs again only from ``sdk_recovers_at``. ``None`` is a model whose loss the SDK
     never recovers, such as the ZED Mini. The first ``failed_reopens`` opens after the drop fail. A camera opened
     before ``images_stop_at`` grabs with no error from then on, and gives no image. Every image shows ``scene``, a lit
-    room by default, and the grabs that ``torn_grabs`` counts from 0 give a torn image.
+    room by default, and the grabs that ``torn_grabs`` counts from 0 give a torn image. Each image's capture time is
+    ``image_age_ns`` before its grab.
     """
 
     def __init__(
@@ -188,8 +189,10 @@ class DroppingSdk:
         images_stop_at: float = float('inf'),
         scene: np.ndarray | None = None,
         torn_grabs: frozenset[int] = frozenset(),
+        image_age_ns: int = 0,
     ):
         self.clock = clock
+        self.image_age_ns = image_age_ns
         self.lost_at = lost_at
         self.listed_at = listed_at
         self.sdk_recovers_at = sdk_recovers_at
@@ -245,8 +248,10 @@ class FakeCamera:
     def close(self) -> None:
         self.closed_at = self._sdk.clock.now()
 
-    def get_timestamp(self, _reference) -> types.SimpleNamespace:
-        return types.SimpleNamespace(get_nanoseconds=self._sdk.clock.now_ns)
+    def get_timestamp(self, reference) -> types.SimpleNamespace:
+        now_ns = self._sdk.clock.now_ns()
+        stamp = now_ns - self._sdk.image_age_ns if reference == 'image' else now_ns
+        return types.SimpleNamespace(get_nanoseconds=lambda: stamp)
 
     def retrieve_image(self, image: 'FakeMat', _view) -> ErrorCode:
         assert self.opened_at is not None
@@ -302,7 +307,7 @@ def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter):
         VIEW=types.SimpleNamespace(LEFT='left', LEFT_UNRECTIFIED='left_unrectified'),
         DEPTH_MODE=types.SimpleNamespace(NONE='none'),
         UNIT=types.SimpleNamespace(METER='meter'),
-        TIME_REFERENCE=types.SimpleNamespace(IMAGE='image'),
+        TIME_REFERENCE=types.SimpleNamespace(IMAGE='image', CURRENT='current'),
     )
     camera = module.SLCamera(serial_number=SERIAL)
     camera.frame._bind(frames, clock=sdk.clock)
@@ -330,6 +335,14 @@ def _returned(loop: pimm.Run[None]) -> bool:
 
 def _frame_times(frames: RecordingEmitter) -> list[float]:
     return [time[CAPTURE_TIME] / 1e9 for time, data in frames.emitted if not isinstance(data, pimm.SignalError)]
+
+
+def _handoff_delays_ms(frames: RecordingEmitter) -> list[float]:
+    return [
+        (time[HANDOFF_TIME] - time[CAPTURE_TIME]) / 1e6
+        for time, data in frames.emitted
+        if not isinstance(data, pimm.SignalError)
+    ]
 
 
 def _errors(frames: RecordingEmitter) -> list[pimm.SignalError]:
@@ -663,6 +676,15 @@ def test_a_torn_frame_is_dropped_with_no_error_and_the_next_frame_is_sent(zed_mo
     assert not _errors(frames)
     sent = [t for i, t in enumerate(sdk.grab_times) if i not in sdk.torn_grabs]
     assert _frame_times(frames) == pytest.approx(sent)
+
+
+def test_each_frame_carries_its_hand_off_time_on_the_camera_clock(zed_module):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, image_age_ns=21_000_000)
+    _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=0.2)
+    delays = _handoff_delays_ms(frames)
+    assert delays and delays == pytest.approx([21.0] * len(delays))
+    assert _frame_times(frames) == pytest.approx([t - 0.021 for t in sdk.grab_times])
 
 
 def test_a_ready_call_that_reopens_the_camera_grabs_again_after_a_torn_frame(zed_module, world):

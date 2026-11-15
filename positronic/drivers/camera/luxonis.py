@@ -1,8 +1,9 @@
 from collections.abc import Iterator
+from datetime import timedelta
 
 import pimm
 from positronic.drivers import vendor_import
-from positronic.drivers.camera import CAPTURE_TIME
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 
 # TODO: `depthai` is in no extra, so this driver has no supported install path. Add it to `hardware` (with the
 # platform markers the SDK needs) or drop the driver.
@@ -43,8 +44,14 @@ class LuxonisCamera(pimm.ControlSystem):
                 fps_counter.tick()
 
                 image = frame.getCvFrame()[..., ::-1]  # BGR to RGB
-                capture_time = pimm.Time(**{CAPTURE_TIME: round(frame.getTimestamp().total_seconds() * 1e9)})
+                capture_ns = _ns(frame.getTimestamp())
 
                 self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
-                self.frame.emit(self._frame_adapter, time=capture_time)
+                # The device stamps a frame on the host's steady clock, which `dai.Clock.now()` reads.
+                frame_time = pimm.Time(**{CAPTURE_TIME: capture_ns, HANDOFF_TIME: _ns(dai.Clock.now())})
+                self.frame.emit(self._frame_adapter, time=frame_time)
                 yield pimm.Sleep(0.001)
+
+
+def _ns(stamp: timedelta) -> int:
+    return round(stamp.total_seconds() * 1e9)

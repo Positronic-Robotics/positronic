@@ -85,7 +85,7 @@ The span names are the contract:
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
 | `record.io` | `episode` | — | the recorder's serialize + append |
-| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
+| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
@@ -101,6 +101,13 @@ A `harness.step` span holds the durations of one step in milliseconds:
 - `step.observe_ms`: the time to read all observations. `step.read_ms.<signal>` is one receiver's read.
   `step.convert_ms.<signal>` is the serializer and the copy of a new message, and is absent when no new
   message arrived.
+- `step.frame_wait_ms.<signal>` and `step.frame_driver_ms.<signal>`: the two parts of the age of a camera frame
+  when the step reads it. Their sum is the age of the frame. `step.frame_wait_ms` is the time from the driver's
+  hand-off (the frame's `emitted` time) to the read, on the clock of the policy runtime. The step records it again
+  each time it reads the same frame, so it grows until a new frame arrives. `step.frame_driver_ms` is the driver's
+  time from capture to hand-off, on the camera's own clock: the frame's `camera.handoff` stamp less its
+  `camera.capture` stamp. The ZED and Luxonis drivers stamp both. The OpenCV and V4L2 drivers stamp no capture
+  time, so their frames have no driver part.
 - `step.policy_ms`: the policy call. Its processor spans are the children of the step.
 - `step.emit_ms`: the time to emit the commands.
 
