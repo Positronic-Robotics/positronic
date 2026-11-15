@@ -18,6 +18,10 @@ class LuxonisCamera(pimm.ControlSystem):
         self.frame: pimm.SignalEmitter = pimm.ControlSystemEmitter(self)
         self._frame_adapter = None
 
+    @staticmethod
+    def _ns(stamp: timedelta) -> int:
+        return round(stamp.total_seconds() * 1e9)
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         pipeline = dai.Pipeline()
         pipeline.setXLinkChunkSize(0)  # increases speed
@@ -44,14 +48,10 @@ class LuxonisCamera(pimm.ControlSystem):
                 fps_counter.tick()
 
                 image = frame.getCvFrame()[..., ::-1]  # BGR to RGB
-                capture_ns = _ns(frame.getTimestamp())
+                capture_ns = self._ns(frame.getTimestamp())
 
                 self._frame_adapter = pimm.shared_memory.NumpySMAdapter.lazy_init(image, self._frame_adapter)
                 # The device stamps a frame on the host's steady clock, which `dai.Clock.now()` reads.
-                frame_time = pimm.Time(**{CAPTURE_TIME: capture_ns, HANDOFF_TIME: _ns(dai.Clock.now())})
+                frame_time = pimm.Time(**{CAPTURE_TIME: capture_ns, HANDOFF_TIME: self._ns(dai.Clock.now())})
                 self.frame.emit(self._frame_adapter, time=frame_time)
                 yield pimm.Sleep(0.001)
-
-
-def _ns(stamp: timedelta) -> int:
-    return round(stamp.total_seconds() * 1e9)
