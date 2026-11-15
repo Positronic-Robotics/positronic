@@ -100,6 +100,21 @@ def _connect(host: str, port: int) -> EnvConnection:
     return conn
 
 
+def _connect_when_a_slot_frees(host: str, port: int) -> EnvConnection:
+    """A connection that holds a slot, made as soon as the server frees one."""
+    deadline = time.monotonic() + 10.0
+    while True:
+        conn = EnvConnection(host, port, connect_deadline=2.0)
+        try:
+            conn.tasks({})
+            return conn
+        except RuntimeError:
+            conn.close()
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
 @contextmanager
 def _clients(
     env: _ClonedScene, count: int | None = None, join_deadline: float = DEFAULT_JOIN_DEADLINE
@@ -296,11 +311,10 @@ def test_a_reset_parked_by_a_client_that_disconnects_never_joins_a_batch():
         first.reset('first batch')
         dropped = connect(f'ws://{host}:{port}/', compression=None)
         dropped.send(protocol.encode({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: 'stale batch'}))
-        time.sleep(_HELD)
         dropped.close()
-        time.sleep(_HELD)
+        newcomers = [_connect_when_a_slot_frees(host, port)]
         first.close()
-        newcomers = [_connect(host, port), _connect(host, port)]
+        newcomers.append(_connect(host, port))
         _together(*[lambda conn=conn: conn.reset('second batch') for conn in newcomers])
         _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in newcomers])
         for conn in newcomers:
