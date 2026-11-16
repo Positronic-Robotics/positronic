@@ -340,8 +340,13 @@ class _Arm(DriverRun[command.CommandType]):
         # A delta starts from the arm: a seed at an earlier target that the arm has not reached would drive on to it
         fresh = self.target is None or isinstance(cmd, command.CartesianDelta)
         seed = self.reading.q if fresh else self.target
-        pose = self._pose_of(cmd)
-        goal = None if pose is not None else self._within_limits(self._to_joints(cmd), self.reading.q)
+        try:
+            pose = self._pose_of(cmd)
+            goal = None if pose is not None else self._within_limits(self._to_joints(cmd), self.reading.q)
+        except Exception:
+            # The stream ends on a target it refuses, and the arm brakes: it must not drive on to the target before
+            self.target, self._pose, self._joint_goal = None, None, None
+            raise
         if self.target is None and not self.velocity.any():
             # Only from a stop: a stream that still brakes goes on, and a HOLD at speed stops the arm
             self.controller.to_hold()

@@ -1118,6 +1118,19 @@ def test_a_joint_target_of_the_wrong_shape_is_not_a_setpoint(rctl, driven, posit
     assert rctl.commanded == []
 
 
+def test_a_target_that_is_not_a_setpoint_ends_the_stream_and_the_arm_brakes_short_of_the_earlier_target(rctl, driven):
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 50)
+    assert 0.0 < rctl.q[0] < 0.5
+
+    commands.push(command.JointPosition(np.array([0.1, np.nan, 0.0, 0.0, 0.0, 0.0])))
+    _pump(loop, clock, 600)
+
+    assert rctl.q[0] < 0.9, 'the arm drove on to the target before the refused one'
+    assert not rctl.commanded[-1].any()
+
+
 def test_a_cartesian_target_that_is_not_finite_is_not_followed(rctl, driven):
     _, _, commands, clock, loop = driven()
     commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, np.nan, 0.3]))))
