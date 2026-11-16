@@ -16,12 +16,6 @@ if TYPE_CHECKING:
 FRANKA_NOMINAL_JOINTS = [0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0]
 YAM_NOMINAL_JOINTS = [0.0, 1.047, 1.047, 0.0, 0.0, 0.0]
 SO101_NOMINAL_JOINTS = [0.0, 0.0, 0.0, 0.0, 0.0]
-# The two CRON arms on one stand, with the tool axis level and the tool x axis vertical. The left pose is the mirror of
-# the right pose, joint by joint. Of the tool positions near the first start pose, this one has the most even reach
-# (2026-11-10, with the IK of the controller and a margin from each pose where joints turn with no limit): 0.53 m up,
-# 0.31 m toward the base, 0.55 m away from it and 0.70 m or more outward, inward and down.
-CRON_LEFT_NOMINAL_JOINTS = [-3.36325, -1.34565, -2.27067, 3.64774, 4.45932, 2.36322]
-CRON_RIGHT_NOMINAL_JOINTS = [0.22166, -1.79594, 2.27067, -0.50615, 1.82387, 7.06156]
 # How far, per joint, a start pose drawn around the Franka's nominal may sit from it.
 FRANKA_JOINTS_SPREAD = [0.03, 0.05, 0.08, 0.08, 0.10, 0.10, 0.10]
 # The law that DROID-pretrained checkpoints run under: the joint gains and the Cartesian damping of DROID's Franka,
@@ -80,6 +74,16 @@ def kinova(ip, relative_dynamics_factor):
     return Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor)
 
 
+# The DH AG-160-95 on its adapter in the collision model, on the axis of the flange, as spheres (centre, radius) in
+# metres: 225 mm from the flange to the finger tips; the levers of the jaws stick out to 162 mm across from about the
+# middle to the jaws, along the y axis of the flange (horizontal in the start pose); the open jaws are 95 mm apart
+# inside
+_DH_GRIPPER_SPHERES = [
+    *(([0.0, 0.0, z], 0.045) for z in (0.03, 0.07)),
+    *(([0.0, y, z], 0.031) for z in (0.11, 0.15, 0.19) for y in (-0.05, 0.0, 0.05)),
+    *(([0.0, y, 0.215], 0.025) for y in (-0.035, 0.035)),
+]
+
 # tool_length: a DH Robotics AG-160-95 on its flange adapter, from the flange to the middle of the finger pads
 @cfn.config(
     ip='192.168.68.63',
@@ -87,7 +91,7 @@ def kinova(ip, relative_dynamics_factor):
     power_off_on_exit=True,
     tool_length=0.195,
     projects=(),
-    tool_spheres=(),
+    tool_spheres=_DH_GRIPPER_SPHERES,
 )
 def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, tool_spheres):
     from positronic.drivers.roboarm.cron.driver import Robot
@@ -102,18 +106,8 @@ def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects,
     )
 
 
-# The DH AG-160-95 on its adapter in the collision model, on the axis of the flange, as spheres (centre, radius) in
-# metres: 225 mm from the flange to the finger tips; the levers of the jaws stick out to 162 mm across from about the
-# middle to the jaws, along the y axis of the flange (horizontal in the start pose); the open jaws are 95 mm apart
-# inside
-_DH_GRIPPER_SPHERES = [
-    *(([0.0, 0.0, z], 0.045) for z in (0.03, 0.07)),
-    *(([0.0, y, z], 0.031) for z in (0.11, 0.15, 0.19) for y in (-0.05, 0.0, 0.05)),
-    *(([0.0, y, 0.215], 0.025) for y in (-0.035, 0.035)),
-]
-
 # A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
-cron_with_gripper = cron.override(projects=['gripper_bridge'], tool_spheres=_DH_GRIPPER_SPHERES)
+cron_with_gripper = cron.override(projects=['gripper_bridge'])
 
 
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)

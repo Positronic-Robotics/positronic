@@ -10,7 +10,14 @@ import numpy as np
 import pimm
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State, command
-from positronic.drivers.roboarm.cron.controller import JOINTS, POWER_TIMEOUT_S, STARTUP_S, CronController, PowerState
+from positronic.drivers.roboarm.cron.controller import (
+    JOINTS,
+    POWER_TIMEOUT_S,
+    RESUME_EVERY_S,
+    STARTUP_S,
+    CronController,
+    PowerState,
+)
 from positronic.drivers.utils import DriverRun, MoveRefused, MoveStatus, log_failure
 from positronic.eval import NO_MODEL_ROBOT_META
 
@@ -67,8 +74,6 @@ _PATH_STEP = np.radians(1.0)
 # How long a move waits for the controller to clear its error: a FAILURE or a STANDBY needs a power off and a power up,
 # each of which can take POWER_TIMEOUT_S, and then the joint move after RUN
 _RECOVER_S = 2 * POWER_TIMEOUT_S + STARTUP_S + 4.0
-# A move that waits asks the controller to clear its error again after this: one request did not always clear it
-_RESUME_EVERY_S = 1.0
 # How many times a planned move starts again after the planner stops on an error. The driver does not know the space
 # around the arm: an error that comes back on each start can be a contact, and the move must not drive into it again
 _MAX_RESTARTS = 1
@@ -125,7 +130,7 @@ class _Arm(DriverRun[command.CommandType]):
         call: pimm.calls.Call[command.CommandType, None]
         # The move fails when it waits past this
         deadline: float
-        # The joints when the wait started, and the largest turn of a joint since: recovery can move the arm
+        # The joints when the wait started: recovery can move the arm
         start: np.ndarray
         # A FAILURE is a safety stop. The move clears a FAILURE that it was asked in, and is refused on one that comes
         # after
@@ -133,14 +138,13 @@ class _Arm(DriverRun[command.CommandType]):
         restarts: int = 0
         # The move waits to start: until the stream stops, or until the controller clears its error
         waiting: bool = True
-        moved: float = 0.0
+        # The largest turn of a joint since the wait started
+        moved_rad: float = 0.0
         cleared_at: float | None = None
 
     @dataclass
     class _PowerUp:
-        """The RUN that the driver asked for to clear a FAILURE. The arm moves its joints once about 0.5 s after RUN,
-        and a command meanwhile stops it on a following error. A RUN can come after the move that asked for it was
-        refused, so this outlives the move."""
+        """The RUN that the driver asked for to clear a FAILURE. It outlives the move that asked for it."""
 
         asked_at: float | None = None
         run_at: float | None = None
@@ -186,7 +190,7 @@ class _Arm(DriverRun[command.CommandType]):
             self._move = None
             return
         if move.waiting:
-            move.moved = max(move.moved, float(np.max(np.abs(self.reading.q - move.start))))
+            move.moved_rad = max(move.moved_rad, float(np.max(np.abs(self.reading.q - move.start))))
         if self.reading.power is not PowerState.FAILURE:
             move.in_failure = False
         elif not move.in_failure:
@@ -212,7 +216,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def _refuse(self, move: _Move) -> None:
         self._move = None
-        self.moves.fail(MoveRefused(self.controller.errors, move.moved))
+        self.moves.fail(MoveRefused(self.controller.errors, move.moved_rad))
 
     @staticmethod
     def _pose_error(target: geom.Transform3D, pose: geom.Transform3D) -> float:
@@ -263,14 +267,14 @@ class _Arm(DriverRun[command.CommandType]):
         joints = seed + turn * min(1.0, float(np.min(max_turn / np.maximum(np.abs(turn), 1e-12))))
         if self._drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
             return np.array(seed, dtype=np.float64)
-        return self._clear_of_itself(seed, joints)
+        return self._keep_clear(seed, joints)
 
     def _toward(self, goal: np.ndarray, seed: np.ndarray, max_turn: np.ndarray) -> np.ndarray:
         """The joints a step from ``seed`` toward ``goal``, each joint at most ``max_turn`` from ``seed``, and not
         nearer the arm itself than the clearance."""
-        return self._clear_of_itself(seed, seed + np.clip(goal - seed, -max_turn, max_turn))
+        return self._keep_clear(seed, seed + np.clip(goal - seed, -max_turn, max_turn))
 
-    def _clear_of_itself(self, seed: np.ndarray, joints: np.ndarray) -> np.ndarray:
+    def _keep_clear(self, seed: np.ndarray, joints: np.ndarray) -> np.ndarray:
         """``joints``, or ``seed`` if the step from ``seed`` to ``joints`` takes the arm nearer than the clearance to
         itself, by the collision model of the controller, at points ``_PATH_STEP`` apart. The model gives no depth in a
         collision, so a step into one is never taken."""
@@ -440,23 +444,24 @@ class _Arm(DriverRun[command.CommandType]):
         move = self._move
         if move is None or not move.waiting:
             return
-        clear_due = move.cleared_at is None or now - move.cleared_at >= _RESUME_EVERY_S
+        clear_due = move.cleared_at is None or now - move.cleared_at >= RESUME_EVERY_S
         # A request that did not reach RUN in the time the controller allows is lost
-        power_lost = self._power.asked_at is None or now - self._power.asked_at >= POWER_TIMEOUT_S
+        power_up_due = self._power.asked_at is None or now - self._power.asked_at >= POWER_TIMEOUT_S
         if self.reading.in_error or self.reading.power is PowerState.FAILURE:
-            # A power up that ends in an error is over: the next one asks for RUN again
-            self._power.asked_at = None
+            # A power up that ends in an error out of RUN is over: the next one asks for RUN again. One that reached
+            # RUN keeps its mark, so the joint move after RUN still gets its wait
+            if self.reading.power is not PowerState.RUN:
+                self._power.asked_at = None
             if clear_due:
                 self.controller.resume()
                 move.cleared_at = now
         elif self.reading.power is PowerState.STANDBY:
-            # A power up that stopped in STANDBY goes back to OFF first
-            if power_lost:
-                self._power.asked_at = None
-                if clear_due:
-                    self.controller.power_off()
-                    move.cleared_at = now
-        elif self.reading.power is PowerState.OFF and power_lost:
+            # A power up that stopped in STANDBY goes back to OFF first. It keeps its mark: a RUN that comes late still
+            # gets the wait for the joint move after RUN
+            if power_up_due and clear_due:
+                self.controller.power_off()
+                move.cleared_at = now
+        elif self.reading.power is PowerState.OFF and power_up_due:
             self.controller.power_up()
             self._power = self._PowerUp(asked_at=now)
 

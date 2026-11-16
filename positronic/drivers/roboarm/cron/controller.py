@@ -31,6 +31,8 @@ _POLL_S = 0.05
 _HOLD_POLL_S = 0.001
 # After RUN the controller moves the joints once, to take up the brake slack
 STARTUP_S = 1.0
+# A request to clear an error goes again after this: one request did not always clear it
+RESUME_EVERY_S = 1.0
 # Velocity commands that stop the arm, sent more than once so that one lost command does not leave it moving
 _STOP_REPEATS = 10
 _STOP_ACCEL = 5.0  # rad/s^2
@@ -185,10 +187,7 @@ class CronController:
             # error
             self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'), failed)
             if self.power_off_on_exit:
-                self._attempt(rctl.cmd_power_off, failed)
-                self._attempt(
-                    lambda: self._await(lambda: self.power is PowerState.OFF, POWER_TIMEOUT_S, 'power off'), failed
-                )
+                self._attempt(self._power_off_and_wait, failed)
             self._attempt(rctl.release_control, failed)
         self._attempt(rctl.disconnect, failed)
         # After a run that ended well, a failed step is the error of the run: the arm can be left powered or owned
@@ -215,10 +214,12 @@ class CronController:
             self.power_off()
 
     def power_off(self) -> None:
-        """Ask for OFF, with no wait. RUN goes only from OFF: on an arm whose multi-turn encoder asks for a preset
-        (Hand B, motor 4, 2026-11-06), RUN from STANDBY failed with "Robot error" 4 times in 4, and RUN from OFF passed
-        3 times in 3, as the RCUI does it."""
+        """Ask for OFF, with no wait."""
         rctl.cmd_power_off()
+
+    def _power_off_and_wait(self) -> None:
+        self.power_off()
+        self._await(lambda: self.power is PowerState.OFF, POWER_TIMEOUT_S, 'power off')
 
     def power_up(self) -> None:
         """Start the projects and ask for RUN, with no wait. The arm moves its joints once about ``STARTUP_S`` after
@@ -246,12 +247,7 @@ class CronController:
             rctl.cmd_joint_direct_vel(np.zeros(JOINTS))
 
     def to_hold(self) -> None:
-        """Stop the planner and take HOLD, for a change between a velocity stream and a planned move.
-
-        After a stream the planner starts a move at the end of its last move, not at the joints, and the jump stopped
-        the arm on a following error (2.6 rad, 2026-11-10). A stream that starts while the planner still finishes a
-        move stopped the arm with `JOINT_VEL: TIMEOUT` (3 times in 12). Both start well from HOLD.
-        """
+        """Stop the planner and take HOLD. A velocity stream and a planned move each start correctly only from HOLD."""
         if self.motion is MotionMode.MOVE:
             self.stop_move()
         if self.motion is not MotionMode.HOLD:
@@ -313,9 +309,14 @@ class CronController:
             logger.warning(f'{self.ip}: clearing errors: {self.power.name}, {self.errors}')
             # A safety stop (RB SFTY) also latches FAILURE: the OFF request clears it once the stop is released
             self.resume()
-        self._await(lambda: not rctl.is_error(), _CONNECT_TIMEOUT_S, 'clear error state (is the stop button released?)')
+        self._await(
+            lambda: not rctl.is_error(),
+            _CONNECT_TIMEOUT_S,
+            'clear error state (is the stop button released?)',
+            again=self.resume,
+        )
         # The error flag can clear before the power state leaves FAILURE, and RUN is refused from FAILURE
-        self._await(lambda: self.power is not PowerState.FAILURE, POWER_TIMEOUT_S, 'the arm out of FAILURE')
+        self._await(lambda: self.power is not PowerState.FAILURE, POWER_TIMEOUT_S, 'the arm out of FAILURE', again=self.resume)
 
     def _run_projects(self) -> None:
         for project in self.projects:
@@ -332,11 +333,16 @@ class CronController:
         return self.power is wanted
 
     @staticmethod
-    def _await(done, timeout_s: float, what: str, poll_s: float = _POLL_S) -> None:
-        deadline = time.monotonic() + timeout_s
+    def _await(done, timeout_s: float, what: str, poll_s: float = _POLL_S, again=None) -> None:
+        """Wait for ``done``, and call ``again`` each ``RESUME_EVERY_S`` meanwhile."""
+        deadline = asked = time.monotonic()
+        deadline += timeout_s
         while not done():
             if time.monotonic() > deadline:
                 raise TimeoutError(f'no {what} after {timeout_s} s')
+            if again is not None and time.monotonic() - asked >= RESUME_EVERY_S:
+                again()
+                asked = time.monotonic()
             # blocking-sleep-ok: the loop has no velocity to send while it waits
             time.sleep(poll_s)
 
