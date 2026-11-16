@@ -672,17 +672,16 @@ def _infer_segments(infer: SpanRec, children: dict[str, list[SpanRec]]) -> Itera
     for key, value in infer.attrs.items():
         if (key.startswith(ATTR_SERVED_PREFIX) and key not in _SERVED_INSTANTS) or key in _WIRE_SPLIT:
             yield key, float(value)
-    # A call that reconnects sends again, so each attempt adds its own wire spans.
     wire_ms: dict[str, float] = defaultdict(float)
     sends = 0
     for child in children.get(infer.span_id, []):
         wire_ms[child.name] += _dur_s(child) * 1000.0
         sends += child.name == SPAN_WIRE_SEND
-    if SPAN_WIRE_SEND in wire_ms and SPAN_WIRE_RECV in wire_ms:
+    # A retried call holds the reconnect between its attempts, and its served times are of the last attempt only.
+    if sends == 1 and SPAN_WIRE_RECV in wire_ms:
         on_wire_ms = wire_ms[SPAN_WIRE_SEND] + wire_ms[SPAN_WIRE_RECV]
         yield _CALL_CODEC, _dur_s(infer) * 1000.0 - on_wire_ms
-        # The served times come from the last attempt only, so a retried call gives no network value.
-        if sends == 1 and _SERVED_MS in infer.attrs and infer.attrs.get(ATTR_WIRE_SENT_ALONE) is True:
+        if _SERVED_MS in infer.attrs and infer.attrs.get(ATTR_WIRE_SENT_ALONE) is True:
             # The server encodes the answer's images after `served_ms` closes.
             server_ms = float(infer.attrs[_SERVED_MS]) + float(infer.attrs.get(_SERVED_ENCODE_MS, 0.0))
             yield _CALL_NETWORK, on_wire_ms - server_ms

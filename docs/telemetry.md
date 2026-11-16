@@ -197,8 +197,8 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
   sum of spans. `wire.send + wire.recv - served.served_ms - served.encode_ms` holds the transfer both ways and no
   clock offset. A call with no `served.encode_ms` subtracts 0 for it. The row still holds the serialise of the
   answer on the server. It counts only the calls with `wire.sent_alone` `true`, so a spans file from a client that
-  writes no such mark gives no such row. It leaves out a call that sent more than once: its `served.*` values are of
-  the last attempt only. A spans file with no `harness.step` spans gives the call rows only;
+  writes no such mark gives no such row. The `-` rows of a call leave out a call that sent more than once: it holds the
+  reconnect between its attempts, and its `served.*` values are of the last attempt only. A spans file with no `harness.step` spans gives the call rows only;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
   stream. The two peaks are box-wide totals, so they need samples that saw every device and read unavailable

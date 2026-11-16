@@ -1112,7 +1112,7 @@ def test_a_report_with_no_timed_span_shows_no_latency_table(tmp_path):
     assert not any(line.startswith('latency') for line in _render(report).splitlines())
 
 
-def test_a_retried_call_counts_every_attempt_on_the_wire_and_gives_no_network_value(tmp_path):
+def test_a_retried_call_gives_no_codec_and_no_network_value(tmp_path):
     ms = 0.001
     telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
@@ -1139,9 +1139,10 @@ def test_a_retried_call_counts_every_attempt_on_the_wire_and_gives_no_network_va
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
 
     rows = {row.segment: row for row in report.latency}
-    assert rows['policy.infer - wire.send - wire.recv'].p50_ms == pytest.approx(20.0)
-    # The served time is of the second attempt only; the first attempt's wait on the server is not network time.
+    # The 10 ms reconnect between the attempts is neither codec work nor network time.
+    assert 'policy.infer - wire.send - wire.recv' not in rows
     assert _NETWORK_ROW not in rows
+    assert rows['policy.infer'].count == 1
 
 
 def _network_rows(telemetry_dir, *calls):
