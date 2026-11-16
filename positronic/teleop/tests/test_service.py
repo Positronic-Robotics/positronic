@@ -60,7 +60,7 @@ from positronic.policy.codecs import EncodeImages, EncodeVideo, EndCommand
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.executor import Executor
 from positronic.policy.keys import END
-from positronic.policy.processors import ChunkedSchedule, EndOnField, TrajectoryPlayer
+from positronic.policy.processors import ChunkedSchedule, EndOnField, InferenceSchedule, RequestTiming, TrajectoryPlayer
 from positronic.policy.remote import RemotePolicy
 from positronic.policy.sequential import Sequential
 from positronic.teleop import command, protocol, scripted_headset
@@ -565,9 +565,20 @@ def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_fram
     end, player, schedule = stack['seq'][:3]
     assert end['name'] == EndOnField.WIRE_NAME
     assert player['name'] == TrajectoryPlayer.WIRE_NAME
-    assert schedule['name'] == ChunkedSchedule.WIRE_NAME
+    assert schedule['name'] == InferenceSchedule.WIRE_NAME
     assert schedule['args']['latency_estimate'] >= 1 / schedule['args']['fps']
     assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][3])
+
+
+@pytest.mark.parametrize(
+    'params, timing',
+    [({}, RequestTiming.before_end()), ({'video_bitrate': 1_000_000, 'video_fps': 15}, RequestTiming.every(1 / 15))],
+    ids=['jpeg', 'h264'],
+)
+def test_an_h264_session_asks_for_frames_at_most_at_the_video_frame_rate(params, timing):
+    stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,), **params))
+    schedule = stack['seq'][2]
+    assert schedule['args']['request_timing'] == timing.to_spec()
 
 
 @pytest.mark.parametrize(

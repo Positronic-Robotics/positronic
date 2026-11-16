@@ -42,7 +42,14 @@ from positronic.policy.codecs import (
 from positronic.policy.codecs.image import image_observation
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.keys import END
-from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndOnField, TrajectoryPlayer
+from positronic.policy.processors import (
+    ConstantDuration,
+    EndOnField,
+    InferenceSchedule,
+    RequestTiming,
+    TrajectoryMerge,
+    TrajectoryPlayer,
+)
 from positronic.policy.sequential import Sequential
 from positronic.utils import check_finite_positive
 
@@ -646,7 +653,8 @@ class TeleopModel(Model):
     ``ModelServer`` calls it on one worker thread only.
     """
 
-    # The schedule plays each answer of one element at once, and asks for the next frame at once.
+    # The schedule plays each answer of one element at once. It asks for the next frame at once, or on the frame grid
+    # of an H.264 session.
     FRAME_FPS = 100.0
 
     def __init__(self, service: TeleopService):
@@ -667,18 +675,26 @@ class TeleopModel(Model):
         a command, and the end of the trial."""
         # TODO: A sim run that does not charge inference time holds its clock during each call, so a person cannot
         #  control it. Refuse such a run.
+        if settings.video_bitrate is None:
+            images = EncodeImages(quality=settings.jpeg_quality)
+            timing = RequestTiming.before_end()
+        else:
+            images = EncodeVideo([[name] for name in settings.cameras], settings.video_bitrate, settings.video_fps)
+            # The encoder gives each call one frame of a stream at `video_fps`, so calls come at most that often.
+            timing = RequestTiming.every(1 / settings.video_fps)
         schedule = Sequential(
             TrajectoryPlayer(replan_on_error=True, record_stats=False),
-            ChunkedSchedule(fps=cls.FRAME_FPS, inference_lead=ConstantDuration(1 / cls.FRAME_FPS)),
+            InferenceSchedule(
+                cls.FRAME_FPS,
+                request_timing=timing,
+                merge=TrajectoryMerge.after_previous(),
+                latency_estimate=ConstantDuration(1 / cls.FRAME_FPS),
+            ),
         )
         observation = StateObservationCodec({EE_POSE: {keys.EE_POSE: 7}, GRIP: {keys.GRIP: 1}}, task_field=TASK) & (
             image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
         )
         action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
-        if settings.video_bitrate is None:
-            images = EncodeImages(quality=settings.jpeg_quality)
-        else:
-            images = EncodeVideo([[name] for name in settings.cameras], settings.video_bitrate, settings.video_fps)
         codec = (observation & action & EndCommand()) | images
         return Sequential(EndOnField(), schedule, codec).to_spec()
 

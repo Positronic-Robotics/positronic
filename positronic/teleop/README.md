@@ -116,7 +116,8 @@ Conversion for training picks its own keys from the recording.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480, as JPEG. A camera with another aspect gets black bars.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
-  changes between frames, so each frame request is smaller. Set `video_fps` to the frame rate of the cameras.
+  changes between frames, so each frame request is smaller. Set `video_fps` to the frame rate of the cameras. Such a
+  session asks for frames at most `video_fps` times a second, so the target of the robot updates at most that often.
 - `positronic teleop` sends the headset video as H.264 at 30 frames per second and 4 Mbit/s.
   `--webxr.video_fps=<frames per second>` and `--webxr.video_bitrate=<bits per second>` change them. Lower the bit rate
   if the video stutters on a slow Wi-Fi. The headset browser decodes the video with WebCodecs.
