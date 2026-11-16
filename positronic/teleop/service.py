@@ -215,8 +215,6 @@ OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
 # The controller that drives each arm, by the arm name of its channels. The one arm of a one-arm session has none.
 ARM_CONTROLLERS: dict[str | None, str] = {None: RIGHT, keys.LEFT_ARM: LEFT, keys.RIGHT_ARM: RIGHT}
-# The button that turns control of an arm on or off, by its controller, as the view names it
-CLUTCH_LABELS = {LEFT: 'X', RIGHT: 'A'}
 
 
 @dataclass(frozen=True)
@@ -517,11 +515,12 @@ class TeleopService:
 
     def _control_line(self) -> str:
         """The state of the clutch of each arm, and the button that changes it."""
+        clutch_labels = {LEFT: 'X', RIGHT: 'A'}
         parts = []
         with self._changed:
             for arm, tracker in self._trackers.items():
                 name = 'Control' if arm is None else arm.capitalize()
-                clutch = CLUTCH_LABELS[ARM_CONTROLLERS[arm]]
+                clutch = clutch_labels[ARM_CONTROLLERS[arm]]
                 parts.append(f'{name} on ({clutch}: off)' if tracker.on else f'{name} off ({clutch}: on)')
         return '. '.join(parts)
 
