@@ -476,6 +476,15 @@ class LeaderboardResponse(LeaderboardSummary):
         return self
 
     @model_validator(mode='after')
+    def _a_row_links_only_parts_named_by_metrics_of_the_descriptor(self) -> Self:
+        metrics = {metric.key for metric in self.descriptor.metrics}
+        for row in self.rows:
+            parts = set(row.submission.part_replays) if row.submission is not None else set()
+            if not parts <= metrics:
+                raise ValueError(f'row {row.key!r} links the replay of a part that no metric names: {sorted(parts)}')
+        return self
+
+    @model_validator(mode='after')
     def _a_row_names_only_outcome_groups_of_the_descriptor(self) -> Self:
         outcomes = {outcome.key for outcome in self.descriptor.outcomes}
         for row in self.rows:
