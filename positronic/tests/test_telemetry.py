@@ -514,8 +514,13 @@ def test_stats_sample_logs_a_child_it_may_not_read(tmp_path, monkeypatch, caplog
 
 @contextmanager
 def _sleeping_child():
-    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    # The child runs its code only after its start-up exec, so its OS name is final once it prints.
+    child = subprocess.Popen(
+        [sys.executable, '-c', 'import time; print(flush=True); time.sleep(60)'], stdout=subprocess.PIPE
+    )
     try:
+        assert child.stdout is not None
+        child.stdout.readline()
         yield child
     finally:
         child.kill()
