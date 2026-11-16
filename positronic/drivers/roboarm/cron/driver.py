@@ -110,41 +110,40 @@ class CronState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[start + 7] = status.value
 
 
-@dataclass
-class _Move:
-    """A planned move, from its call until the call is answered."""
-
-    target: np.ndarray
-    call: pimm.calls.Call[command.CommandType, None]
-    # The move fails when it waits past this
-    deadline: float
-    # The joints when the wait started, and the largest turn of a joint since: recovery can move the arm
-    start: np.ndarray
-    # A FAILURE is a safety stop. The move clears a FAILURE that it was asked in, and is refused on one that comes after
-    in_failure: bool
-    restarts: int = 0
-    # The move waits to start: until the stream stops, or until the controller clears its error
-    waiting: bool = True
-    moved: float = 0.0
-    cleared_at: float | None = None
-
-
-@dataclass
-class _PowerUp:
-    """The RUN that the driver asked for to clear a FAILURE. The arm moves its joints once about 0.5 s after RUN, and a
-    command meanwhile stops it on a following error. A RUN can come after the move that asked for it was refused, so
-    this outlives the move."""
-
-    asked_at: float | None = None
-    run_at: float | None = None
-
-
 class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives. A streamed setpoint is tracked by velocity commands that the speed and
     acceleration limits shape. A move that a caller waits for is planned by the controller.
 
     The arm holds the joints it has when no streamed target is set.
     """
+
+    @dataclass
+    class _Move:
+        """A planned move, from its call until the call is answered."""
+
+        target: np.ndarray
+        call: pimm.calls.Call[command.CommandType, None]
+        # The move fails when it waits past this
+        deadline: float
+        # The joints when the wait started, and the largest turn of a joint since: recovery can move the arm
+        start: np.ndarray
+        # A FAILURE is a safety stop. The move clears a FAILURE that it was asked in, and is refused on one that comes
+        # after
+        in_failure: bool
+        restarts: int = 0
+        # The move waits to start: until the stream stops, or until the controller clears its error
+        waiting: bool = True
+        moved: float = 0.0
+        cleared_at: float | None = None
+
+    @dataclass
+    class _PowerUp:
+        """The RUN that the driver asked for to clear a FAILURE. The arm moves its joints once about 0.5 s after RUN,
+        and a command meanwhile stops it on a following error. A RUN can come after the move that asked for it was
+        refused, so this outlives the move."""
+
+        asked_at: float | None = None
+        run_at: float | None = None
 
     def __init__(
         self,
@@ -169,8 +168,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._pose: geom.Transform3D | None = None
         # The joints of a streamed joint target, which the steps of each tick go to
         self._joint_goal: np.ndarray | None = None
-        self._move: _Move | None = None
-        self._power = _PowerUp()
+        self._move: _Arm._Move | None = None
+        self._power = self._PowerUp()
         # The joints the arm read, and the travel commanded on each tick of the stream
         self._stream: collections.deque[tuple[np.ndarray, np.ndarray]] = collections.deque(maxlen=_LAG_TICKS)
         self.velocity = np.zeros(JOINTS)
@@ -363,7 +362,7 @@ class _Arm(DriverRun[command.CommandType]):
         """Put the move to ``target`` in wait, until the stream brakes to a stop and the controller clears an error."""
         now = self.clock.now()
         in_failure = self.reading.power is PowerState.FAILURE
-        self._move = _Move(target, call, now + _RECOVER_S, self.reading.q.copy(), in_failure, restarts)
+        self._move = self._Move(target, call, now + _RECOVER_S, self.reading.q.copy(), in_failure, restarts)
         self.moves.accept(call, target, _ARRIVED_TOL, now, _RECOVER_S)
 
     def step(self) -> None:
@@ -380,12 +379,12 @@ class _Arm(DriverRun[command.CommandType]):
             self._recover(now)
             return
         if self._power.asked_at is not None:
-            self._power = _PowerUp(run_at=now)
+            self._power = self._PowerUp(run_at=now)
         if self._power.run_at is not None:
             # The arm gets no command until the joint move after RUN is over
             if now - self._power.run_at < STARTUP_S:
                 return
-            self._power = _PowerUp()
+            self._power = self._PowerUp()
         if self.target is None and self.velocity.any():
             self._command(np.zeros(JOINTS), dt)
             return
@@ -444,7 +443,7 @@ class _Arm(DriverRun[command.CommandType]):
                     move.cleared_at = now
         elif self.reading.power is PowerState.OFF and power_lost:
             self.controller.power_up()
-            self._power = _PowerUp(asked_at=now)
+            self._power = self._PowerUp(asked_at=now)
 
     def _start(self, move: _Move, now: float) -> None:
         """Start the move that waits, from the joints the arm reads now: a brake or a recovery can move the arm."""
