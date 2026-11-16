@@ -107,6 +107,7 @@ def yam(robot_arm, cameras):
         keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
         keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
     },
+    gripper_force_cap_n=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
@@ -118,6 +119,7 @@ def yam_bimanual(
     right_channel: str,
     mounts: dict[str, list[float]],
     compensation: dict[str, 'Compensation'],
+    gripper_force_cap_n: float | None,
     cameras,
     park_after_idle_s: float | None,
     park_tuning: dict[str, 'SettleTuning'],
@@ -130,7 +132,8 @@ def yam_bimanual(
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
     signal that drives it. ``compensation[side]`` is the gravity model and the friction that i2rt adds to the PD of
-    that arm. Each arm's meta carries the settings that its chain reports.
+    that arm. Each gripper closes with at most ``gripper_force_cap_n`` newtons; None sets no cap. Each arm's meta
+    carries the settings that its chain reports.
     """
     from positronic import geom
     from positronic.drivers.roboarm.yam import driver as yam_driver
@@ -143,6 +146,7 @@ def yam_bimanual(
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning[side],
             move_tuning=move_tuning[side],
+            gripper_force_cap_n=gripper_force_cap_n,
         )
         for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }

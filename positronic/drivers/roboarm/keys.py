@@ -26,3 +26,5 @@ USE_COULOMB_FRICTION = 'use_coulomb_friction'
 # How an arm's controller fades that friction at low speed, as a dumped ``FrictionFade``: none below one speed and
 # all of it from another, in rad/s. None adds the friction at any speed.
 COULOMB_FRICTION_FADE = 'coulomb_friction_fade'
+# The most force that an arm's gripper closes with, in newtons; None sets no cap.
+GRIPPER_FORCE_CAP = 'gripper_force_cap'
