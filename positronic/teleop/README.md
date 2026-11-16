@@ -14,15 +14,15 @@ The service prepares each session until the person presses Ready. Each session d
 client stack:
 - `end_on_field` ends the run when a reply carries the Complete or the Give up of the person;
 - `inference_schedule` asks for one frame at a time; `trajectory_player` plays each reply at once;
-- `change_ee_frame` states the grip point `gripper` as the frame of the pose and of the target;
-- `observation_codec` sends the task, the pose, the grip and the camera images of the robot;
-- `absolute_position_action` turns each reply into a command, and `end_command` gives the `end` of a reply to
-  `end_on_field`.
+- `change_ee_frame` states the grip point `gripper` as the frame of the pose and of the target of each arm;
+- `observation_codec` sends the task, the pose and the grip of each arm, and the camera images of the robot;
+- `absolute_position_action` turns each reply into a command, or `bimanual_cartesian_action` into one command for each
+  arm of a bimanual session (see [Two arms](#two-arms)), and `end_command` gives the `end` of a reply to `end_on_field`.
 - `encode_images` sends each camera image as JPEG. With the session parameter `video_bitrate`, `encode_video` sends
   each camera as an H.264 stream, and the service decodes it.
 
-The service keeps the state of the trial and the clutch. Its replies carry only the target pose and the grip, or the
-end. So the input of the person stays in the service. No model server gets it.
+The service keeps the state of the trial and the clutches. Its replies carry only the target pose and the grip of each
+arm, or the end. So the input of the person stays in the service. No model server gets it.
 
 The plain form of the policy works too:
 
@@ -70,6 +70,30 @@ confirms that the person holds the controller. The window on the laptop offers o
 
 When control comes on, the hand moves the robot from its current pose, so the robot does not jump. A turn of the hand
 turns the gripper about its grip point. When the phone or the controller is not tracked for 0.5 s, control goes off.
+
+### Two arms
+
+A session with `arms=BIMANUAL` drives two arms, for example the bimanual YAM. The left controller drives the left arm,
+and the right controller drives the right arm. Each arm has its own clutch. The other controls stay on the right
+controller, as for one arm.
+
+| Phase | Quest (left controller) | Quest (right controller) | What it does |
+|---|---|---|---|
+| The trial waits for Ready | | press B | Ready: the episode starts |
+| The trial waits for Ready | | press the stick | Cancel (see Limits) |
+| The trial runs | press X | | control of the left arm on or off |
+| The trial runs | | press A | control of the right arm on or off |
+| Control of the arm is on | the trigger | the trigger | the grip of the arm |
+| The trial runs | | hold B for 1 s | Complete: the episode ends |
+| The trial runs | | hold the stick for 1 s | Give up: the episode ends |
+| Each phase | press or hold Y | | the camera and the panel (see Cameras) |
+
+When the left controller is not tracked for 0.5 s, control of the left arm goes off. The right arm does the same with
+the right controller. The headset video shows the control state of each arm, for example `Left on (X: off). Right off
+(A: on)`. The window and the phone page show "Control on" while control of at least one arm is on.
+
+The phone is one controller, so a phone drives only a one-arm session. In a one-arm session, the left controller
+drives no arm.
 
 The phone page shows the phase above its buttons. It colours Control green while control is on and grey while it is
 off. The B button is labelled with what it does: Ready, or Complete while the trial runs. It pulses orange while the
@@ -187,6 +211,28 @@ uv run positronic eval run \
 
 Start `positronic teleop` first, as in MuJoCo.
 
+## Collect demonstrations on the bimanual YAM in ABC
+
+`teleop_yam` drives the two arms of the bimanual YAM. It shows `image.exterior`, `image.wrist_left` and
+`image.wrist_right`: the cameras of the ABC eval and of `cfg.embodiment.yam_bimanual`. It sets `operator_position` to
+`BACK`: stand behind the arms and look the way they look, so that the left arm is on your left.
+
+1. Start `positronic teleop` with the Quest config, as in MuJoCo.
+2. Start a run of the ABC task `put_plastic_bottles_in_bin`:
+
+   ```bash
+   uv run positronic eval run \
+     --eval=@positronic.cfg.eval.sim.amazon_abc.put_bottles --eval.timeout=120 \
+     --policy=@positronic.cfg.policy.teleop_yam \
+     --output_dir=~/datasets/abc_bottles_demos
+   ```
+
+   The first run prepares the ABC environment and its assets, which takes some minutes.
+3. In the headset, press B for Ready. Press X and A to turn on control of the left arm and the right arm. Use the
+   two triggers for the two grips. Hold B for 1 s for Complete.
+
+A rig run uses the same policy, with the eval of the rig in place of `amazon_abc`.
+
 ## Time a run with no person
 
 `positronic.teleop.scripted_headset` does the trials in place of the person and the headset. It connects to the page
@@ -218,6 +264,7 @@ one service serves runs with different parameters. A parameter that the run does
 | Parameter | Value | Default |
 |---|---|---|
 | `operator_position` | a member of `positronic.teleop.clutch.OperatorPosition`, for example `BACK`, or `None` for UMI mode, where control is always on and the hand pose is the robot pose | `FRONT` |
+| `arms` | a member of `positronic.teleop.protocol.Arms`: `ONE` for one arm, on the right controller, or `BIMANUAL` for two arms (see [Two arms](#two-arms)) | `ONE` |
 | `cameras` | the cameras that the person sees, in that order | none |
 | `headset_camera` | the camera of `cameras` that the headset shows | the first one |
 | `jpeg_quality` | the JPEG quality of the camera images | 90 |
@@ -225,8 +272,9 @@ one service serves runs with different parameters. A parameter that the run does
 | `video_fps` | the frame rate that the H.264 encoder spreads `video_bitrate` over | 30 |
 
 `positronic.teleop.protocol.session_query` builds the query. In `positronic.cfg.policy`, `teleop_query` is the query
-of `teleop` and `teleop_network`, and `teleop_collect_query` and `teleop_molmo_query` are the queries of
-`teleop_collect` and `teleop_molmo`. Both set `operator_position` to `BACK`. Set one parameter on the command line,
+of `teleop` and `teleop_network`, and `teleop_collect_query`, `teleop_molmo_query` and `teleop_yam_query` are the
+queries of `teleop_collect`, `teleop_molmo` and `teleop_yam`. All three set `operator_position` to `BACK`.
+`teleop_yam_query` also sets `arms` to `BIMANUAL`. Set one parameter on the command line,
 for example `--policy.address.query.headset_camera=image.wrist`. The episode records the values in
 `inference.policy.server.effective_params`.
 
@@ -304,6 +352,7 @@ and vary how you come to the object.
   recording and the time limit. The wait blocks the control loop of the World. The service ends the wait after 120 s.
   A Ctrl-C during the wait closes the session, and the service stops the wait.
 - The service serves one session at a time, and refuses a second one. Each trial opens a new session.
+- The scripted headset sends only the right controller, so it does the trials of one-arm sessions only.
 - When the connection drops before the first frame reply, the client opens the session again. The trial goes on with
   no second Ready. The service keeps such a trial for 45 s.
 - Each frame request carries the camera images, so the images go at the rate of the frames, about the rate of the
@@ -325,6 +374,9 @@ trial on it. No test can run it.
 5. Turn control on, and move your hand slowly. The arm must follow from where it is, with no jump.
 
 If the arm moves in step 3, stop the run, and report it before any human trial on that rig.
+
+On a bimanual rig, use `--policy=@positronic.cfg.policy.teleop_yam`, and do steps 3 to 5 for each arm. The signals are
+`robot_command.left`, `target_grip.left`, `robot_command.right` and `target_grip.right`.
 
 ## See Also
 

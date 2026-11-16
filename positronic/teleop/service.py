@@ -4,7 +4,8 @@
 session waits for Ready, and each frame request gets the next target of the teleoperator. Each session declares stock
 components only in its client stack. The service keeps the trial state and the clutch, so the input of the
 teleoperator stays in this process. The headset page shows the camera images of the run and the state of the trial.
-The teleoperator uses the buttons of the right controller.
+The teleoperator uses the buttons of the right controller. In a bimanual session, the left controller drives the left
+arm.
 """
 
 import _thread
@@ -29,12 +30,14 @@ from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWi
 from positronic import geom, keys
 from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
+from positronic.drivers.webxr import LEFT, RIGHT
 from positronic.gui.video_stream import AnnexBDecoder
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
 from positronic.policy.codecs import (
     AbsolutePositionAction,
+    BimanualCartesianAction,
     ChangeEEFrame,
     EncodeImages,
     EncodeVideo,
@@ -56,7 +59,7 @@ from positronic.policy.sequential import Sequential
 from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES, Tracker
-from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, SessionParams, camera_names
+from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, Arms, SessionParams, camera_names
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,8 @@ class Button(IntEnum):
     STICK = 3
     A = 4
     B = 5
+    # The left controller has X and Y at the indices of A and B.
+    X = 4
 
 
 class Event(StrEnum):
@@ -99,15 +104,22 @@ class ResumeOutcome(Enum):
 
 
 class ButtonMap:
-    """The buttons of the right controller as the answers and the events of a session.
+    """The buttons of one controller as the answers and the events of a session.
 
     - A: control on or off.
     - B: Ready while the service waits for it. A hold of B in the trial is Complete.
     - The stick: Cancel while the service waits for Ready. A hold of the stick is Give up.
     - The trigger: the grip.
+
+    It reads only ``buttons``: the left controller reads only X, because the headset page uses Y.
     """
 
-    def __init__(self, hold_sec: float, press_threshold: float = 0.6):
+    def __init__(
+        self,
+        hold_sec: float,
+        press_threshold: float = 0.6,
+        buttons: Sequence[Button] = (Button.STICK, Button.A, Button.B),
+    ):
         if not 0 < press_threshold <= 1:
             raise ValueError(f'press_threshold must be in (0, 1], got {press_threshold}')
         check_finite_positive(hold_sec, 'hold_sec')
@@ -118,11 +130,12 @@ class ButtonMap:
         self._down_since: dict[Button, int] = {}
         # The buttons whose press did something already, until they go up.
         self._used: set[Button] = set()
+        self._read = tuple(buttons)
 
     def _new_presses(self, buttons: Sequence[float], now_ns: int) -> set[Button]:
         """Record the state of the buttons, and return the buttons that went down since the previous sample."""
         new_presses = set()
-        for button in (Button.STICK, Button.A, Button.B):
+        for button in self._read:
             if buttons[button] < self._press_threshold:
                 self._down_since.pop(button, None)
                 self._used.discard(button)
@@ -200,6 +213,11 @@ Y_HINT = 'Y: next camera. Hold Y: panel'
 # The width of the column of the view that shows the other cameras of the session, half the width of the main camera
 OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
+# The controller that drives each arm, by the arm name of its channels. The one arm of a one-arm session has none.
+ARM_CONTROLLERS: dict[str | None, str] = {None: RIGHT, keys.LEFT_ARM: LEFT, keys.RIGHT_ARM: RIGHT}
+# The button that turns control of an arm on or off, by its controller, as the view names it
+CLUTCH_LABELS = {LEFT: 'X', RIGHT: 'A'}
+
 
 @dataclass(frozen=True)
 class CameraState:
@@ -215,11 +233,12 @@ class CameraState:
 
 @dataclass(frozen=True)
 class _Sample:
-    """What the headset sent last, and its number in the order of the samples."""
+    """What the headset sent last, by controller, and its number in the order of the samples. A controller that the
+    headset does not track is absent or ``None``."""
 
     number: int
-    pose: geom.Transform3D | None
-    buttons: Sequence[float] | None
+    poses: Mapping[str, geom.Transform3D | None]
+    buttons: Mapping[str, Sequence[float] | None]
 
 
 class TeleopService:
@@ -228,8 +247,8 @@ class TeleopService:
     With no ``auth_token``, a host and a port serve open to each peer that reaches them. The Unix socket is in a
     directory of this user only.
 
-    ``take_sample`` takes each sample of the right controller. A frame request waits for the next sample. When none
-    comes within ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The preparation of a
+    ``take_sample`` takes each sample of the controllers. A frame request waits for the next sample. When none comes
+    within ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The preparation of a
     session waits for Ready or Cancel up to ``ready_limit``.
     """
 
@@ -262,15 +281,19 @@ class TeleopService:
         self.controller_axes = controller_axes
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
-        self._buttons = ButtonMap(hold_sec, press_threshold)
+        self._buttons = {
+            RIGHT: ButtonMap(hold_sec, press_threshold),
+            LEFT: ButtonMap(hold_sec, press_threshold, (Button.X,)),
+        }
         self._changed = threading.Condition()
-        self._sample = _Sample(0, None, None)
+        self._sample = _Sample(0, {}, {})
         self._phase = Phase.IDLE
         self._ready: ReadyAnswer | None = None
-        self._events: list[Event] = []
+        # The events since the previous frame, each with the controller that made it
+        self._events: list[tuple[str, Event]] = []
         self._task = ''
-        # The clutch of the trial, from Ready on. A session that resumes the trial keeps it.
-        self._tracker: Tracker | None = None
+        # The clutch of each arm of the trial, from Ready on. A session that resumes the trial keeps them.
+        self._trackers: dict[str | None, Tracker] = {}
         # The last camera images of the run, by name, in the order that the client sends them.
         self._images: dict[str, np.ndarray] = {}
         # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
@@ -282,9 +305,10 @@ class TeleopService:
         # The camera that the teleoperator chose on the headset page. It holds over trials, and goes before the camera
         # of the session while the run sends it.
         self._chosen_camera: str | None = None
-        # The target pose and grip that each frame sends while control is off: the last target, or at first the state
-        # of the robot. So every command signal starts at the start of the episode, and the robot stays still.
-        self._hold: tuple[geom.Transform3D, float] | None = None
+        # The target pose and grip of each arm that each frame sends while control of the arm is off: the last target,
+        # or at first the state of the arm. So every command signal starts at the start of the episode, and the robot
+        # stays still.
+        self._hold: dict[str | None, tuple[geom.Transform3D, float]] = {}
         # The frames that the service answered in this trial.
         self._frames = 0
         # The element that ended the trial. Each later frame request gets it again, because the client can drop it
@@ -352,19 +376,24 @@ class TeleopService:
         self._server.shutdown()
         self._thread.join(timeout=10)
 
-    def take_sample(self, pose: geom.Transform3D | None, buttons: Sequence[float] | None) -> None:
-        """Take one sample of the right controller. ``None`` is a part that the headset does not track."""
+    def take_sample(
+        self, poses: Mapping[str, geom.Transform3D | None], buttons: Mapping[str, Sequence[float] | None]
+    ) -> None:
+        """Take one sample of the controllers, by ``LEFT`` and ``RIGHT``. A controller that the headset does not track
+        is absent or ``None``."""
         now_ns = time.monotonic_ns()
         with self._changed:
-            self._sample = _Sample(self._sample.number + 1, pose, buttons)
-            if buttons is None:
-                pass
-            elif self._phase is Phase.READY_WAIT and self._ready is None:
-                self._ready = self._buttons.ready_answer(buttons, now_ns)
-            elif self._phase is Phase.RUNNING:
-                self._events += self._buttons.events(buttons, now_ns)
-            else:
-                self._buttons.observe(buttons, now_ns)
+            self._sample = _Sample(self._sample.number + 1, poses, buttons)
+            for controller, button_map in self._buttons.items():
+                values = buttons.get(controller)
+                if values is None:
+                    continue
+                if self._phase is Phase.READY_WAIT and self._ready is None:
+                    self._ready = button_map.ready_answer(values, now_ns)
+                elif self._phase is Phase.RUNNING:
+                    self._events += [(controller, event) for event in button_map.events(values, now_ns)]
+                else:
+                    button_map.observe(values, now_ns)
             self._changed.notify_all()
 
     @property
@@ -376,7 +405,7 @@ class TeleopService:
     def state(self) -> TrialState:
         with self._changed:
             self._forget_an_old_dropped_trial()
-            control = self._tracker is not None and self._tracker.on
+            control = any(tracker.on for tracker in self._trackers.values())
             return TrialState(self._phase, self._task, control, tuple(self._images))
 
     def _forget_an_old_dropped_trial(self) -> None:
@@ -483,8 +512,18 @@ class TeleopService:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
-        control = 'Control on (A: off)' if state.control else 'Control off (A: on)'
+        control = self._control_line()
         return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer, others)
+
+    def _control_line(self) -> str:
+        """The state of the clutch of each arm, and the button that changes it."""
+        parts = []
+        with self._changed:
+            for arm, tracker in self._trackers.items():
+                name = 'Control' if arm is None else arm.capitalize()
+                clutch = CLUTCH_LABELS[ARM_CONTROLLERS[arm]]
+                parts.append(f'{name} on ({clutch}: off)' if tracker.on else f'{name} off ({clutch}: on)')
+        return '. '.join(parts)
 
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
@@ -530,7 +569,10 @@ class TeleopService:
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
             ready = self._ready
             if ready is ReadyAnswer.READY:
-                self._phase, self._tracker = Phase.RUNNING, Tracker(settings.operator(), self.controller_axes)
+                self._phase = Phase.RUNNING
+                self._trackers = {
+                    arm: Tracker(settings.operator(), self.controller_axes) for arm in settings.arms.value
+                }
             else:
                 self._clear_trial()
         if ready is ReadyAnswer.READY:
@@ -546,12 +588,11 @@ class TeleopService:
         the lock."""
         while self._sample.number == seen and not self._stopping and (left := deadline - time.monotonic()) > 0:
             self._changed.wait(left)
-        return self._sample if self._sample.number != seen else _Sample(seen, None, None)
+        return self._sample if self._sample.number != seen else _Sample(seen, {}, {})
 
     def next_frame(self, request: Mapping[str, Any], cameras: Sequence[str]) -> dict[str, Any]:
-        """Take the state of the robot and the images of ``cameras`` in ``request``, and answer with the element of the
+        """Take the state of the arms and the images of ``cameras`` in ``request``, and answer with the element of the
         next frame: the target of the teleoperator, with the end of the trial once the teleoperator ends it."""
-        robot_pose = geom.Transform3D.from_vector(np.asarray(request[EE_POSE], dtype=float), QUAT)
         deadline = time.monotonic() + self.silence_limit
         with self._changed:
             if self._phase is Phase.ENDED:
@@ -562,51 +603,69 @@ class TeleopService:
             self._task = str(request[TASK])
             self._images = {name: request[name] for name in cameras}
             self._seen.update(dict.fromkeys(cameras, time.monotonic()))
-            if self._hold is None:
-                self._hold = robot_pose, float(np.asarray(request[GRIP], dtype=float).reshape(-1)[0])
+            assert self._trackers, 'a running trial has the clutches of its Ready'
+            robot = {arm: self._arm_state(request, arm) for arm in self._trackers}
+            if not self._hold:
+                self._hold = dict(robot)
             sample = self._next_sample(self._sample.number, deadline)
             events, self._events = self._events, []
-            assert self._tracker is not None, 'a running trial has the clutch of its Ready'
-            element = self._apply(sample, events, self._tracker, robot_pose)
+            element = self._apply(sample, events, {arm: pose for arm, (pose, _) in robot.items()})
             self._frames += 1
             if END in element:
                 self._phase, self._end = Phase.ENDED, element
             return element
 
+    @staticmethod
+    def _arm_state(request: Mapping[str, Any], arm: str | None) -> tuple[geom.Transform3D, float]:
+        """The pose and the grip of ``arm`` in a frame request."""
+        pose = np.asarray(request[keys.arm_channel(EE_POSE, arm)], dtype=float)
+        grip = np.asarray(request[keys.arm_channel(GRIP, arm)], dtype=float).reshape(-1)[0]
+        return geom.Transform3D.from_vector(pose, QUAT), float(grip)
+
     def _apply(
-        self, sample: _Sample, events: Sequence[Event], tracker: Tracker, robot_pose: geom.Transform3D
+        self, sample: _Sample, events: Sequence[tuple[str, Event]], robot_poses: Mapping[str | None, geom.Transform3D]
     ) -> dict[str, Any]:
-        """The frame element of ``sample`` and ``events``. Control starts from ``robot_pose``, so the robot does not
-        jump. Hold the lock."""
-        target = None if sample.pose is None else tracker.update(sample.pose)
-        for event in events:
+        """The frame element of ``sample`` and ``events``. Control of each arm starts from its pose in
+        ``robot_poses``, so the robot does not jump. Hold the lock."""
+        for _, event in events:
             match event:
-                case Event.CLUTCH if tracker.on:
-                    tracker.turn_off()
-                case Event.CLUTCH if sample.pose is not None:
-                    tracker.turn_on(robot_pose, sample.pose)
-                    target = tracker.update(sample.pose)
                 case Event.COMPLETE:
                     return {**self._hold_element(), END: PolicyEnd.COMPLETE.value}
                 case Event.GIVE_UP:
                     return {**self._hold_element(), END: PolicyEnd.GIVE_UP.value}
+        for arm in self._trackers:
+            self._drive_arm(arm, sample, events, robot_poses[arm])
+        return self._hold_element()
+
+    def _drive_arm(
+        self, arm: str | None, sample: _Sample, events: Sequence[tuple[str, Event]], robot_pose: geom.Transform3D
+    ) -> None:
+        """Apply the clutch presses of the controller of ``arm`` in ``events``, and move the hold target of ``arm`` to
+        the hand. Hold the lock."""
+        tracker, controller = self._trackers[arm], ARM_CONTROLLERS[arm]
+        pose, buttons = sample.poses.get(controller), sample.buttons.get(controller)
+        target = None if pose is None else tracker.update(pose)
+        for _ in [event for source, event in events if source == controller and event is Event.CLUTCH]:
+            if tracker.on:
+                tracker.turn_off()
+            elif pose is not None:
+                tracker.turn_on(robot_pose, pose)
+                target = tracker.update(pose)
         if target is None and tracker.on:
             tracker.turn_off()
         if tracker.on and target is not None:
-            self._hold = target, 0.0 if sample.buttons is None else ButtonMap.grip(sample.buttons)
-        return self._hold_element()
+            self._hold[arm] = target, 0.0 if buttons is None else ButtonMap.grip(buttons)
 
     def _hold_element(self) -> dict[str, Any]:
-        """The element that sends the hold target. Hold the lock."""
-        assert self._hold is not None
-        pose, grip = self._hold
-        return {ACTION: np.append(pose.as_vector(QUAT), grip)}
+        """The element that sends the hold targets, arm after arm. Hold the lock."""
+        assert self._hold, 'the first frame request sets the hold targets'
+        return {ACTION: np.concatenate([np.append(pose.as_vector(QUAT), grip) for pose, grip in self._hold.values()])}
 
     def _clear_trial(self) -> None:
         """Show no trial. Hold the lock."""
         self._phase, self._events = Phase.IDLE, []
-        self._task, self._tracker, self._images, self._trial_cameras = '', None, {}, ()
-        self._headset_camera, self._hold, self._frames, self._resumable_until = None, None, 0, None
+        self._task, self._trackers, self._images, self._trial_cameras = '', {}, {}, ()
+        self._headset_camera, self._hold, self._frames, self._resumable_until = None, {}, 0, None
         self._end = None
 
     def end_session(self) -> None:
@@ -673,8 +732,8 @@ class TeleopModel(Model):
 
     @classmethod
     def client_stack(cls, settings: SessionParams) -> dict[str, Any]:
-        """The client stack of a session: one frame for each call, the state and the images of the robot at
-        ``GRIPPER_SITE``, the target as a command, and the end of the trial."""
+        """The client stack of a session: one frame for each call, the state of the arms at ``GRIPPER_SITE`` and the
+        images of the robot, the targets as commands, and the end of the trial."""
         # TODO: A sim run that does not charge inference time holds its clock during each call, so a person cannot
         #  control it. Refuse such a run.
         if settings.video_bitrate is None:
@@ -693,11 +752,22 @@ class TeleopModel(Model):
                 latency_estimate=ConstantDuration(1 / cls.FRAME_FPS),
             ),
         )
-        observation = StateObservationCodec({EE_POSE: {keys.EE_POSE: 7}, GRIP: {keys.GRIP: 1}}, task_field=TASK) & (
+        state, poses = {}, []
+        for arm in settings.arms.value:
+            pose = f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'
+            command = keys.arm_channel(keys.ROBOT_COMMAND, arm)
+            state[keys.arm_channel(EE_POSE, arm)] = {pose: 7}
+            state[keys.arm_channel(GRIP, arm)] = {keys.arm_channel(keys.GRIP, arm): 1}
+            poses += [pose, f'{command}{keys.POSE_SUFFIX}', command]
+        observation = StateObservationCodec(state, task_field=TASK) & (
             image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
         )
-        action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
-        frame = ChangeEEFrame(EEFrame(site=GRIPPER_SITE))
+        match settings.arms:
+            case Arms.ONE:
+                action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
+            case Arms.BIMANUAL:
+                action = BimanualCartesianAction()
+        frame = ChangeEEFrame(EEFrame(site=GRIPPER_SITE), tuple(poses))
         codec = frame | (observation & action & EndCommand()) | images
         return Sequential(EndOnField(), schedule, codec).to_spec()
 
