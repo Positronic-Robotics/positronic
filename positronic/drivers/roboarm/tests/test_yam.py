@@ -208,6 +208,7 @@ class Rig:
         park_after_idle_s=1.0,
         compensation=I2RT_COMPENSATION,
         gripper_force_cap_n=None,
+        driver: yam.Robot | None = None,
     ):
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
@@ -226,7 +227,7 @@ class Rig:
         ports |= {'grip': self.grips, 'robot_meta': RecordingEmitter(), 'arm_meta': self.arm_metas}
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
-        self.driver = yam.Robot(
+        self.driver = driver or yam.Robot(
             connect=lambda channel, sim, compensation: ports['vendor'],
             compensation=compensation,
             park_after_idle_s=park_after_idle_s,
@@ -2653,6 +2654,20 @@ def test_the_arm_meta_carries_the_gripper_force_cap_that_the_chain_runs(monkeypa
     rig.loop.close()
 
 
+def test_the_arm_meta_names_a_gripper_force_cap_set_during_a_blocking_move(world, monkeypatch):
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=SQUEEZE_CAP_N)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.ready()
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    rig.tick()
+    rig.driver.set_gripper_force_cap(0.0)
+    rig.tick()
+    assert not answer.done(), 'the move ended before the arm meta was read'
+    assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    rig.loop.close()
+
+
 @pytest.mark.parametrize('cap_n', [-1.0, math.nan, math.inf])
 def test_a_gripper_force_cap_that_is_not_a_finite_force_is_refused(cap_n):
     with pytest.raises(ValueError, match='gripper_force_cap_n'):
@@ -2661,11 +2676,18 @@ def test_a_gripper_force_cap_that_is_not_a_finite_force_is_refused(cap_n):
         yam.Robot().set_gripper_force_cap(cap_n)
 
 
-def test_the_yam_configs_give_each_gripper_its_force_cap():
-    assert roboarm_cfg.yam.override(gripper_force_cap_n=15.0).instantiate()._gripper_force_cap_n == 15.0
+def test_the_yam_configs_give_each_gripper_its_force_cap(monkeypatch):
+    single = roboarm_cfg.yam.override(gripper_force_cap_n=15.0).instantiate()
     bimanual = embodiment_cfg.yam_bimanual.override(cameras={}, gripper_force_cap_n=15.0).instantiate()
-    arms = [system for system in bimanual.control_systems if isinstance(system, yam.Robot)]
-    assert [arm._gripper_force_cap_n for arm in arms] == [15.0, 15.0]
+    arms = [single, *(system for system in bimanual.control_systems if isinstance(system, yam.Robot))]
+    assert len(arms) == 3
+    for arm in arms:
+        chain, _ = _gripper_chain(monkeypatch)
+        rig = Rig(driver=arm)
+        rig.driver._connect = lambda channel, sim, compensation, chain=chain: chain
+        rig.tick()
+        assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] == 15.0
+        rig.loop.close()
 
 
 @pytest.mark.parametrize(
