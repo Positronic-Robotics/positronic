@@ -194,9 +194,10 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
 - **inference latency** — call count and p50 / p95;
 - the **latency table** — the count, the episode count and the p50 / p90 / p99 of each part of a step and of a
   policy call, over the spans that start inside an episode of the same run. A row named with `+` and `-` is that
-  sum of spans. `wire.send + wire.recv - served.served_ms` holds the transfer both ways and no clock offset. It counts
-  only the calls with `wire.sent_alone` `true`, so a spans file from a client that writes no such mark gives no such
-  row. A spans file with no `harness.step` spans gives the call rows only;
+  sum of spans. `wire.send + wire.recv - served.served_ms - served.encode_ms` holds the transfer both ways and no
+  clock offset. A call with no `served.encode_ms` subtracts 0 for it. The row still holds the serialise of the
+  answer on the server. It counts only the calls with `wire.sent_alone` `true`, so a spans file from a client that
+  writes no such mark gives no such row. A spans file with no `harness.step` spans gives the call rows only;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
   stream. The two peaks are box-wide totals, so they need samples that saw every device and read unavailable

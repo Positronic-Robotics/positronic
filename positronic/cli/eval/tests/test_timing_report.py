@@ -987,12 +987,15 @@ def test_an_episode_carrying_no_waypoint_account_is_left_out_and_said_so(tmp_pat
 _SERVED_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SERVED}'
 _SERVED_RECEIVED_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_RECEIVED_NS}'
 _SERVED_SENT_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SENT_NS}'
+_SERVED_ENCODE_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_ENCODE}'
+_NETWORK_ROW = f'wire.send + wire.recv - {_SERVED_MS} - {_SERVED_ENCODE_MS}'
 
 
-def _call(prefix, start_s, served_ms, run_id='rig-run', sent_alone: bool | None = True):
+def _call(prefix, start_s, served_ms, run_id='rig-run', sent_alone: bool | None = True, encode_ms: float | None = None):
     """One policy call on a worker, 0.1 s long: two overlapping image encodes, a prepare and a round trip.
 
     ``sent_alone`` ``None`` leaves the mark out, as a file from a client that does not write it.
+    ``encode_ms`` ``None`` leaves out the encode of the answer's images, as a server that answers with no image.
 
     The parent of the `policy.submit` span is not in the file, as in a file that holds only the calls.
     """
@@ -1027,7 +1030,8 @@ def _call(prefix, start_s, served_ms, run_id='rig-run', sent_alone: bool | None 
             infer,
             transform,
             {_SERVED_MS: served_ms, _SERVED_RECEIVED_NS: 1e18, _SERVED_SENT_NS: 1e18}
-            | ({} if sent_alone is None else {ATTR_WIRE_SENT_ALONE: sent_alone}),
+            | ({} if sent_alone is None else {ATTR_WIRE_SENT_ALONE: sent_alone})
+            | ({} if encode_ms is None else {_SERVED_ENCODE_MS: encode_ms}),
             run_id=run_id,
         ),
         _span(SPAN_WIRE_SEND, start_s + 45 * ms, start_s + 50 * ms, f'{prefix}-send', infer, run_id=run_id),
@@ -1074,7 +1078,7 @@ def test_the_latency_of_each_segment_counts_the_spans_inside_the_episodes(tmp_pa
     assert f'{SPAN_POLICY_ENCODE}[Jpeg]' in rows
     assert rows[f'{SPAN_POLICY_ENCODE}[Jpeg]'].count == 4
     assert rows[f'{SPAN_POLICY_ENCODE} per call'].p50_ms == pytest.approx(30.0)  # two encodes overlap by 10 ms
-    assert rows['wire.send + wire.recv - served.served_ms'].p50_ms == pytest.approx(30.0)
+    assert rows[_NETWORK_ROW].p50_ms == pytest.approx(30.0)
     assert rows['policy.infer - wire.send - wire.recv'].p50_ms == pytest.approx(10.0)
     assert rows[SPAN_HARNESS_STEP].p50_ms == pytest.approx(4.0)
     assert rows[ATTR_STEP_LATE_MS].count == 1
@@ -1136,7 +1140,7 @@ def test_a_retried_call_counts_every_attempt_on_the_wire(tmp_path):
 
     rows = {row.segment: row for row in report.latency}
     assert rows['policy.infer - wire.send - wire.recv'].p50_ms == pytest.approx(20.0)
-    assert rows['wire.send + wire.recv - served.served_ms'].p50_ms == pytest.approx(60.0)
+    assert rows[_NETWORK_ROW].p50_ms == pytest.approx(60.0)
 
 
 def _network_rows(telemetry_dir, *calls):
@@ -1146,7 +1150,7 @@ def _network_rows(telemetry_dir, *calls):
         [_span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'), *(span for call in calls for span in call)],
     )
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
-    return [row for row in report.latency if row.segment == 'wire.send + wire.recv - served.served_ms']
+    return [row for row in report.latency if row.segment == _NETWORK_ROW]
 
 
 def test_the_network_row_counts_only_the_calls_sent_with_no_earlier_call_in_flight(tmp_path):
@@ -1157,6 +1161,11 @@ def test_the_network_row_counts_only_the_calls_sent_with_no_earlier_call_in_flig
     )
     assert network.count == 1
     assert network.p50_ms == pytest.approx(40.0)
+
+
+def test_the_network_row_leaves_out_the_server_encode_of_the_answer_images(tmp_path):
+    [network] = _network_rows(tmp_path / TELEMETRY_SUBDIR, _call('images', 1, served_ms=10.0, encode_ms=15.0))
+    assert network.p50_ms == pytest.approx(25.0)  # 50 ms on the wire, 10 ms served, 15 ms encoding the answer
 
 
 def test_a_file_whose_calls_carry_no_alone_mark_gives_no_network_row(tmp_path):
