@@ -1002,7 +1002,7 @@ class Robot(pimm.ControlSystem):
         elif asked is not None:
             with log_failure(asked):
                 serving.q_target = arm.streamed_target(asked, q)
-                arm.moves.stage()  # the step toward the target later in this tick sends it
+                arm.moves.stage()
             serving.idle_since = clock.now()
         elif self._should_park(serving.idle_since, clock.now()):
             serving.parking = arm.park(arm.read_grip(arm.observations()))
