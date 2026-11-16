@@ -373,13 +373,18 @@ class _Arm(DriverRun[command.CommandType]):
         # The move ends the stream also when it is refused: the arm brakes and does not drive on to the stream target
         self.target, self._pose, self._joint_goal = None, None, None
         with pimm.calls.raise_to(call):
+            if isinstance(call.request, command.CartesianDelta):
+                # A delta applies to the arm in HOLD: it is resolved and checked when the move starts. Until then the
+                # move holds the arm where it is
+                self._pose_of(call.request)
+                self._wait(self.reading.q.copy(), call, 0, call.request)
+                return
             target = self._to_joints(call.request)
             # The check samples each degree and the loop sends no velocity meanwhile, so a stream at speed brakes
             # first: the move is checked when it starts
             if not self.velocity.any():
                 self._check_move(target)
-            delta = call.request if isinstance(call.request, command.CartesianDelta) else None
-            self._wait(target, call, 0, delta)
+            self._wait(target, call, 0)
 
     def _wait(
         self,

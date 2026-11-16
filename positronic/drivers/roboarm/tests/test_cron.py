@@ -1081,6 +1081,26 @@ def test_a_planned_delta_applies_to_where_the_arm_is_once_it_holds(world, rctl, 
     np.testing.assert_allclose(rctl.q[0], 0.2, atol=0.01)
 
 
+def test_a_planned_delta_is_checked_from_where_the_arm_is_once_it_holds(world, rctl, driven, monkeypatch):
+    """From where the arm was asked, the delta would go through a collision; from where it holds, it does not."""
+    driver, _, _, clock, loop = driven()
+    move = _mover(world, driver)
+    _pump_until(loop, clock, move(command.JointPosition(_joints(0.1))))
+    rctl.band = (0.15, 0.2)
+    hold = rctl.cmd_hold
+
+    def hold_where_the_arm_braked():
+        rctl.q = _joints(0.5)
+        hold()
+
+    monkeypatch.setattr(rctl, 'cmd_hold', hold_where_the_arm_braked)
+    answer = move(command.CartesianDelta(geom.Transform3D(translation=np.array([0.2, 0.0, 0.0]))))
+    _pump_until(loop, clock, answer)
+
+    assert answer.result() is None
+    np.testing.assert_allclose(rctl.q[0], 0.7, atol=0.01)
+
+
 def test_a_planned_move_is_checked_again_from_where_the_arm_is_when_it_starts(world, rctl, driven):
     """The arm can move between the call and the start: a brake, a recovery."""
     driver, _, _, clock, loop = driven()
