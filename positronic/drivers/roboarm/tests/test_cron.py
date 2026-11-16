@@ -1212,9 +1212,10 @@ def test_leaving_the_run_stops_the_arm_powers_it_off_and_gives_control_back(rctl
 def test_a_run_that_ends_well_on_an_arm_in_an_error_ends_with_no_error(rctl, driven):
     """An arm in an error takes no HOLD, and needs none: no stream or move runs on it."""
     stop = StopFlag()
-    _, _, _, clock, loop = driven(stop=stop)
-    _pump(loop, clock, 2)
-    rctl.error, rctl.safety_latched = True, True
+    _, _, commands, clock, loop = driven(stop=stop)
+    commands.push(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, 20)
+    rctl.error, rctl.safety_latched = True, True  # a following error stops the stream
     _pump(loop, clock, 2)
 
     stop.stopped = True
