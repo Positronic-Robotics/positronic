@@ -581,9 +581,9 @@ class StatsSampler:
     attribution and the lifecycle stays trivial, at the cost of going blind if the harness itself hard-hangs —
     load-of-a-hang forensics this profiling does not need.
 
-    Each sample also lists every process of the tree by name. ``process_names`` maps a pid to the caller's name
-    for it (a pimm World passes its background processes); a pid it omits takes the OS process name. It is
-    called from the sampler thread, so it reads only state that is safe to read from another thread."""
+    Each sample also lists every process of the tree by name. ``process_names`` maps a pid to a name for it; a pid
+    it omits takes the OS process name. It is called from the sampler thread, so it reads only state that is safe
+    to read from another thread."""
 
     def __init__(
         self, out_path: Path | str, hz: float = 1.0, process_names: Callable[[], Mapping[int, str]] | None = None
