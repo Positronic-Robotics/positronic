@@ -411,7 +411,7 @@ def test_flange_offset_is_droid_ee_frame():
 def test_ee_recipe_sends_the_flange_pose_and_returns_targets_at_the_grip_point():
     native = NativeEEPolicy()
     served = model(native, three_cameras=True, ee=True)
-    session = served.prepare_session({**served.parameters, 'compress_images': False})
+    session = served.prepare_session({**served.parameters, policy_keys.COMPRESS_IMAGES: False})
     spec.from_spec(session.client_stack)
     codec = spec.from_spec(recipe.inference(recipe.droid_cameras(three_cameras=True), ee=True))
     obs = {**observation(), obs_keys.EE_POSE: GRIPPER_POSE}
