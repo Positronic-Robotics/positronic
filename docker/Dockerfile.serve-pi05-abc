@@ -13,7 +13,7 @@
 # settings come after them, so a source change builds one new layer and pulls no cached layer.
 #
 # The image holds two Python environments. positronic's server answers on port 8000. It starts the author's openpi
-# server in the fork's environment, on 127.0.0.1:8001 inside the container, and sends it each observation. The
+# server in the fork's environment, on 127.0.0.1:9000 inside the container, and sends it each observation. The
 # inference files of the checkpoint are 12.4 GB; the image leaves out its 30 GB of training state.
 
 # The author's fork at the commit that the checkpoint card names, and the Hub revision of the checkpoint.

@@ -16,6 +16,7 @@ from positronic_wire import websocket, wire
 
 from positronic import keys
 from positronic.offboard import roboarena
+from positronic.offboard import server as offboard_server
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
 from positronic.vendors.pi05_abc import codecs, server
@@ -183,3 +184,9 @@ def test_a_port_another_server_listens_on_fails_the_load_before_the_backend_star
                 checkpoint=str(tmp_path / 'checkpoint'), fork=str(fork), port=occupant.getsockname()[1]
             )
     assert not (tmp_path / LOG).exists()
+
+
+def test_the_default_backend_port_is_free_for_the_standard_wires():
+    backend_port = server.pi05_abc_model.kwargs['port']
+    wires = (offboard_server.websocket, offboard_server.grpc)
+    assert backend_port not in {served.kwargs['served_address'].kwargs['port'] for served in wires}

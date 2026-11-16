@@ -88,7 +88,7 @@ def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
     return code is not None, code
 
 
-@cfn.config(config_name='pi05_abc130k', port=8001)
+@cfn.config(config_name='pi05_abc130k', port=9000)
 def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int) -> Model:
     """The checkpoint directory `checkpoint`, served by its own server snapshot in the fork checkout `fork`.
 
