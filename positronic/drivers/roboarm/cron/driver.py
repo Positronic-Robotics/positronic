@@ -396,25 +396,24 @@ class _Arm(DriverRun[command.CommandType]):
             if now - self._power.run_at < STARTUP_S:
                 return
             self._power = self._PowerUp()
-        if self.target is None and self.velocity.any():
-            self._command(np.zeros(JOINTS), dt)
-            return
-        if self._move is not None and self._move.waiting:
+        if self._move is not None and self._move.waiting and not self.velocity.any():
             self._start(self._move, now)
             return
+        if self.target is not None:
+            try:
+                if self._pose is not None:
+                    self.target = self._follow(self._pose, self.target, self.max_speed * dt)
+                elif self._joint_goal is not None:
+                    self.target = self._toward(self._joint_goal, self.target, self.max_speed * dt)
+            except (ValueError, np.linalg.LinAlgError) as e:
+                # The model of the controller can refuse a pose on one tick. The stream ends, and the arm brakes and
+                # stays under control, as after a target it refuses
+                logger.error(f'{self.controller.ip}: the streamed target is dropped: {e}')
+                self.target, self._pose, self._joint_goal = None, None, None
         if self.target is None:
-            return
-        try:
-            if self._pose is not None:
-                self.target = self._follow(self._pose, self.target, self.max_speed * dt)
-            elif self._joint_goal is not None:
-                self.target = self._toward(self._joint_goal, self.target, self.max_speed * dt)
-        except (ValueError, np.linalg.LinAlgError) as e:
-            # The model of the controller can refuse a pose on one tick. The stream ends, and the arm brakes and stays
-            # under control, as after a target it refuses
-            logger.error(f'{self.controller.ip}: the streamed target is dropped: {e}')
-            self.target, self._pose, self._joint_goal = None, None, None
-            self._command(np.zeros(JOINTS), dt)
+            # A stream that ended, by a planned move or a refused target, brakes to a stop
+            if self.velocity.any():
+                self._command(np.zeros(JOINTS), dt)
             return
         error = self.target - self.reading.q
         # Not faster than the arm can stop from in the error left: at the gain alone, braking would need more
