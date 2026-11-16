@@ -1412,6 +1412,19 @@ def test_a_tick_where_the_model_refuses_a_pose_drops_the_stream_and_the_driver_g
     np.testing.assert_allclose(rctl.q[0], 0.5, atol=0.01)
 
 
+def test_a_stream_that_ends_sends_its_stop_more_than_once(rctl, driven):
+    """One lost command would leave the arm at the last speed of the brake."""
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 50)
+
+    commands.push(command.JointPosition(np.array([0.1, np.nan, 0.0, 0.0, 0.0, 0.0])))
+    _pump(loop, clock, 600)
+
+    stops = next(i for i, v in enumerate(reversed(rctl.commanded)) if v.any())
+    assert stops > 1
+
+
 def test_a_tick_that_drops_the_stream_brakes_the_arm(rctl, driven):
     """A pose that the model refuses on each tick would otherwise keep the arm at its speed."""
     _, _, commands, clock, loop = driven()

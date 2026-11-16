@@ -414,6 +414,9 @@ class _Arm(DriverRun[command.CommandType]):
             # A stream that ended, by a planned move or a refused target, brakes to a stop
             if self.velocity.any():
                 self._command(np.zeros(JOINTS), dt)
+                if not self.velocity.any():
+                    # One lost command would leave the arm at the last speed of the brake
+                    self.controller.stop()
             return
         error = self.target - self.reading.q
         # Not faster than the arm can stop from in the error left: at the gain alone, braking would need more
