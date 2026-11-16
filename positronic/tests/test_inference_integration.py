@@ -509,7 +509,7 @@ def test_scene_gripper_sits_midway_between_the_fingertip_pads():
     """The grip point is the midpoint of the two fingertip pads at every arm pose and every opening."""
     sim = MujocoSim('positronic/assets/mujoco/franka_table.xml', loaders=())
     joints = bundled_panda_model()[roboarm_keys.JOINT_NAMES]
-    fingers = bundled_panda_model()[roboarm_keys.GRIPPER]['joints']
+    fingers = bundled_panda_model()[roboarm_keys.GRIPPER][roboarm_keys.GRIPPER_JOINTS]
     # rules-allow: hardcoded-keys — the scene's name suffix and pad geoms are this test's input, not names it shares
     suffix, pads = '_ph', ('left_finger_pad_ph', 'right_finger_pad_ph')
     arm_qpos = [sim.model.joint(f'{n}{suffix}').qposadr.item() for n in joints]

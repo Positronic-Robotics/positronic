@@ -84,7 +84,7 @@ def serve_molmo_spaces(
 
 
 def main() -> None:
-    """Run a MolmoSpaces server that an eval dials with ``--eval.env_server``, until that eval run ends."""
+    """Run a MolmoSpaces server that evals dial with ``--eval.env_server``, one run after another, until Ctrl-C."""
     parser = argparse.ArgumentParser(description=main.__doc__)
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
