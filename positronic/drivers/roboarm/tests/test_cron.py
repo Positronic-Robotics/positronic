@@ -955,6 +955,22 @@ def test_a_planned_move_past_a_joint_limit_is_refused(world, rctl, driven):
     assert 'waypoint' not in rctl.calls
 
 
+def test_a_planned_move_past_a_joint_limit_is_refused_before_the_arm_is_powered_up(world, rctl, driven):
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    _pump(loop, clock, 2)
+    rctl.safety_latched = False
+    del rctl.calls[:]
+
+    answer = _mover(world, driver)(command.JointPosition(np.array([0.0, 0.0, np.radians(169.0), 0.0, 0.0, 0.0])))
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='joint limits'):
+        answer.result()
+    assert 'run' not in rctl.calls
+
+
 def test_a_planned_move_is_checked_again_from_where_the_arm_is_when_it_starts(world, rctl, driven):
     """The arm can move between the call and the start: a brake, a recovery."""
     driver, _, _, clock, loop = driven()

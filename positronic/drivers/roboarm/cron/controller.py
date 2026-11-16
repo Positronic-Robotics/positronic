@@ -178,7 +178,7 @@ class CronController:
         if self._has_control:
             # Each step runs on its own: one that fails must not keep the others from running. An arm under the
             # control of another client gets none of them
-            for step in (self.stop_move, self.stop, rctl.cmd_hold):
+            for step in (self.stop, self.stop_move, rctl.cmd_hold):
                 self._attempt(step)
             # A power off or a release that reaches the controller before HOLD can end a velocity stream in a TIMEOUT
             # error

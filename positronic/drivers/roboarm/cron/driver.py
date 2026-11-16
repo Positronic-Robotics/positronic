@@ -187,7 +187,7 @@ class _Arm(DriverRun[command.CommandType]):
             return
         if self.reading.power is not PowerState.FAILURE:
             move.in_failure = False
-        elif self.reading.power is PowerState.FAILURE and not move.in_failure:
+        elif not move.in_failure:
             if not move.waiting:
                 self.controller.stop_move()
             self._refuse(move)
@@ -357,11 +357,14 @@ class _Arm(DriverRun[command.CommandType]):
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there.
 
-        The move waits while the stream brakes to a stop, and while the controller clears an error. Its path is checked
-        when it starts: the check samples each degree, and the loop sends no velocity meanwhile.
+        The move waits while the stream brakes to a stop, and while the controller clears an error.
         """
         with pimm.calls.raise_to(call):
             target = self._to_joints(call.request)
+            # The check samples each degree and the loop sends no velocity meanwhile, so a stream at speed brakes
+            # first: the move is checked when it starts
+            if not self.velocity.any():
+                self._check_move(target)
             self.target, self._pose, self._joint_goal = None, None, None
             self._wait(target, call, 0)
 
