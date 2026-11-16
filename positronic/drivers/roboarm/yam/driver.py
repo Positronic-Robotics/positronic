@@ -63,23 +63,6 @@ class ChainFault(RuntimeError):
     """A call into the i2rt chain that raised, or a reading from a chain whose control loop stopped."""
 
 
-@runtime_checkable
-class _ControlLoop(Protocol):
-    """The CAN motor chain of i2rt, ``DMChainCanInterface``: when a call to a motor fails, its control loop sets
-    ``running`` false and ends."""
-
-    running: bool
-
-
-@runtime_checkable
-class _HardwareChain(Protocol):
-    """The hardware chain of i2rt, ``MotorChainRobot``; the sim chain of i2rt has no ``motor_chain``. After the control
-    loop ends, ``get_observations`` gives the last reading and ``command_joint_pos`` keeps a command that nothing
-    sends. Neither one raises."""
-
-    motor_chain: _ControlLoop
-
-
 def _arm_fault(exc: Exception) -> DeviceFault:
     """The ARM ``DeviceFault`` for ``exc``; a ``ChainFault`` reads as the arm lost."""
     return device_fault(exc, FaultKind.ARM, f'The YAM arm is lost: {exc}' if isinstance(exc, ChainFault) else '')
@@ -280,6 +263,23 @@ class _Kinematics:
             if np.linalg.norm(reached.translation - target.translation) < _IK_POS_TOL and rot_err < _IK_ROT_TOL:
                 return q
         return None
+
+
+@runtime_checkable
+class _ControlLoop(Protocol):
+    """The CAN motor chain of i2rt, ``DMChainCanInterface``: when a call to a motor fails, its control loop sets
+    ``running`` false and ends."""
+
+    running: bool
+
+
+@runtime_checkable
+class _HardwareChain(Protocol):
+    """The hardware chain of i2rt, ``MotorChainRobot``; the sim chain of i2rt has no ``motor_chain``. After the control
+    loop ends, ``get_observations`` gives the last reading and ``command_joint_pos`` keeps a command that nothing
+    sends. Neither one raises."""
+
+    motor_chain: _ControlLoop
 
 
 class _Arm(DriverRun[command.CommandType]):
