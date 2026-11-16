@@ -62,12 +62,7 @@ _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the ch
 # The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
 _COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
 _COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
-# The gripper of i2rt's hardware chain in get_robot_info(): its motor, its (closed, open) motor positions, the force
-# limit of i2rt's gripper force limiter, and the gripper and arm types that select the settings of that limiter
-_GRIPPER_INDEX, _GRIPPER_LIMITS, _LIMIT_GRIPPER_EFFORT = 'gripper_index', 'gripper_limits', 'limit_gripper_effort'
-_GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
-# The torque that i2rt's gripper force limiter adds against the friction of a stalled gripper (i2rt robots/utils.py:648)
-_GRIPPER_FRICTION_NM = 0.3
+_LIMIT_GRIPPER_EFFORT = 'limit_gripper_effort'  # the force limit of i2rt's gripper force limiter, in get_robot_info()
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 _LOOP_STOPPED = 'the control loop of the chain stopped, so its motors take no commands'
 _RELEASED_UNPARKED = f'Releasing the arm with no park and no hold: {_LOOP_STOPPED}'
@@ -177,6 +172,14 @@ class _GripperLoop(Protocol):
     _last_gripper_command_qpos: float
     remapper: _MotorSpace
     _update_joint_state: Callable[..., None]
+
+
+# The gripper of i2rt's hardware chain in get_robot_info(): its motor, its (closed, open) motor positions, and the
+# gripper and arm types that select the settings of its gripper force limiter
+_GRIPPER_INDEX, _GRIPPER_LIMITS = 'gripper_index', 'gripper_limits'
+_GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
+# The torque that i2rt's gripper force limiter adds against the friction of a stalled gripper (i2rt robots/utils.py:648)
+_GRIPPER_FRICTION_NM = 0.3
 
 
 def _cap_gripper_force(chain: Any, cap_n: Callable[[], float | None]) -> None:
