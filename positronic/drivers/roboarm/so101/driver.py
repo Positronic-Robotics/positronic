@@ -151,7 +151,7 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
     def track(self, cmd: roboarm_command.CommandType) -> None:
         """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self._qpos, self._unsent = self._target_qpos(cmd), True
-        self.moves.mark_applied()
+        self.moves.stage()
 
     def sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
         """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
@@ -159,7 +159,7 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
             target = self._target_qpos(call.request)
             self._qpos, self._unsent = target, True
             self.moves.accept(call, target, self._ARRIVED_TOL, self.clock.now(), self._MOVE_TIMEOUT_S)
-            self.moves.mark_applied()
+            self.moves.stage()
 
     def write(self) -> None:
         """Put the setpoint on the bus, if anything has asked for one since it was last written.
@@ -169,7 +169,8 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         """
         if not self._unsent:
             return
-        self.bus.set_target_position(np.concatenate([self._qpos, [self._grip]]))
+        with self.moves.sending():
+            self.bus.set_target_position(np.concatenate([self._qpos, [self._grip]]))
         self._unsent = False
 
     def publish(self) -> None:

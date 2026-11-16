@@ -130,7 +130,7 @@ class _Arm(DriverRun[command.CommandType]):
     def track(self, cmd: command.CommandType) -> None:
         """Put the controller on the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
         self.controller.set_target_qpos(self._to_joints(cmd))
-        self.moves.mark_applied()
+        self.moves.stage()
 
     def _travel_s(self, target: np.ndarray) -> float:
         """How long the arm may take to reach ``target``, from the speed its controller is capped at."""
@@ -144,13 +144,14 @@ class _Arm(DriverRun[command.CommandType]):
             # The branch the controller tracks: it wraps the target once, when it is set
             wrapped = wrap_joint_angle(target, self.q)
             self.moves.accept(call, wrapped, self._ARRIVED_TOL, self.clock.now(), self._travel_s(wrapped))
-            self.moves.mark_applied()
+            self.moves.stage()
 
     def step(self) -> None:
         """Drive one cycle: the controller's torque as current, and what the actuators report back."""
         torque = self.controller.compute_torque(self.q, self.dq, self.tau)
         np.divide(torque, self._TORQUE_CONSTANT, out=self._current)
-        self.q, self.dq, self.tau = self.api.apply_current_command(self._current)
+        with self.moves.sending():
+            self.q, self.dq, self.tau = self.api.apply_current_command(self._current)
 
     def publish(self) -> None:
         """Ship the arm as it reads now."""

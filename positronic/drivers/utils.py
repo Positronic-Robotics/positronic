@@ -96,6 +96,7 @@ class Moves(Generic[T]):
         # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
         self.errored = False
         self._receipt: _Receipt | None = None  # the request read last, until the driver applies it
+        self._staged: _Receipt | None = None  # a request taken, until the next command to the device carries it
 
     def __enter__(self) -> 'Moves[T]':
         return self
@@ -133,6 +134,7 @@ class Moves(Generic[T]):
         request, age_ms = (None, None) if self.busy else self._read_request()
         sync = isinstance(request, pimm.calls.Call)
         self._receipt = None if request is None else _Receipt(time.time_ns(), sync, age_ms)
+        self._staged = None
         return request
 
     def _read_request(self) -> tuple[pimm.calls.Call[T, None] | T | None, float | None]:
@@ -151,6 +153,31 @@ class Moves(Generic[T]):
         nothing.
         """
         receipt, self._receipt = self._receipt, None
+        self._record(receipt)
+
+    def stage(self) -> None:
+        """Take the request ``next_request`` returned last, for a driver that sends it to the device later.
+
+        Its ``driver.command`` span ends when the next ``sending`` block ends without an error.
+        """
+        self._staged, self._receipt = self._receipt, None
+
+    def unstage(self) -> None:
+        """Drop the staged request: no command to the device carries it."""
+        self._staged = None
+
+    @contextmanager
+    def sending(self) -> Iterator[None]:
+        """Wrap a command to the device. The staged request is applied when the command returns.
+
+        A command that raises applies nothing, and the staged request is dropped.
+        """
+        staged, self._staged = self._staged, None
+        yield
+        self._record(staged)
+
+    @staticmethod
+    def _record(receipt: _Receipt | None) -> None:
         if receipt is None or not telemetry.enabled():
             return
         attrs: dict[str, bool | float] = {ATTR_COMMAND_SYNC: receipt.sync}

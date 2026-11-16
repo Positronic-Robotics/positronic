@@ -328,3 +328,65 @@ def test_a_request_applied_twice_records_one_span(asking, tmp_path):
         moves.mark_applied()
 
     assert len(_command_spans(tmp_path)) == 1
+
+
+def test_a_staged_request_is_timed_until_the_next_send_returns(asking, tmp_path):
+    _, moves, stream = asking
+    stream.push(0.25)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        moves.next_request()
+        moves.stage()
+        with moves.sending():
+            time.sleep(0.002)
+            sent = time.time_ns()
+        with moves.sending():  # the next command carries the same target, and the request is timed once
+            pass
+
+    (span,) = _command_spans(tmp_path)
+    assert span.end_ns >= sent
+    assert span.attrs[ATTR_COMMAND_SYNC] is False
+
+
+def test_a_send_that_fails_applies_nothing_and_the_next_send_does_not_carry_the_request(asking, tmp_path):
+    _, moves, stream = asking
+    stream.push(0.25)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        moves.next_request()
+        moves.stage()
+        with pytest.raises(OSError), moves.sending():
+            raise OSError('the bus went away')
+        with moves.sending():
+            pass
+
+    assert _command_spans(tmp_path) == []
+
+
+def test_a_send_carries_only_a_staged_request(asking, tmp_path):
+    """A request the driver read but did not take, or took and then dropped, is not timed by a send."""
+    _, moves, stream = asking
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        stream.push(0.25)
+        moves.next_request()
+        with moves.sending():
+            pass
+        stream.push(0.5)
+        moves.next_request()
+        moves.stage()
+        moves.unstage()
+        with moves.sending():
+            pass
+
+    assert _command_spans(tmp_path) == []
+
+
+def test_a_staged_request_that_no_send_carried_is_dropped_at_the_next_read(asking, tmp_path):
+    _, moves, stream = asking
+    stream.push(0.25)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        moves.next_request()
+        moves.stage()
+        assert moves.next_request() is None
+        with moves.sending():
+            pass
+
+    assert _command_spans(tmp_path) == []

@@ -1,5 +1,7 @@
 """What the SO-101 driver puts on its bus, and what a caller waiting on a move hears."""
 
+import time
+
 import numpy as np
 import pytest
 
@@ -409,3 +411,43 @@ def test_each_streamed_command_the_arm_takes_is_timed_and_one_it_cannot_take_is_
 
     spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
     assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False]
+
+
+class TimedBus(FakeBus):
+    """A ``FakeBus`` that records the wall time in epoch nanoseconds at which each goal write returns."""
+
+    def __init__(self):
+        super().__init__()
+        self.written_ns: list[int] = []
+
+    def set_target_position(self, positions: np.ndarray) -> None:
+        super().set_target_position(positions)
+        self.written_ns.append(time.time_ns())
+
+
+def test_a_streamed_command_is_timed_until_the_bus_takes_its_goal(tmp_path):
+    bus = TimedBus()
+    driver, _, loop = _driven(bus)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        commands.push(command.JointPosition(JOGGED))
+        next(loop)
+
+    [span] = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert span.end_ns >= bus.written_ns[0]
+
+
+def test_a_sync_move_is_timed_once_until_the_bus_takes_its_goal(world, tmp_path):
+    bus = TimedBus()
+    driver, _, loop = _driven(bus)
+
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _mover(world, driver)(command.JointPosition(JOGGED))
+        _pump(loop, answer)
+        answer.result()
+
+    [span] = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert span.attrs[ATTR_COMMAND_SYNC] is True
+    assert span.end_ns >= bus.written_ns[0]
