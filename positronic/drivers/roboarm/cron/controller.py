@@ -260,8 +260,12 @@ class CronController:
         rctl.cmd_move_run()
 
     def stop_move(self) -> None:
+        """Pause the planner, and wait while it brakes: a HOLD at speed stops the arm."""
+        speed = float(np.max(np.abs(rctl.get_joint_vels())))
         rctl.cmd_move_pause(_STOP_ACCEL)
         rctl.cmd_drop_waypoints(True)
+        # blocking-sleep-ok: the planner brakes at _STOP_ACCEL, and the loop has no command to send meanwhile
+        time.sleep(speed / _STOP_ACCEL)
 
     def forward(self, q: np.ndarray) -> geom.Transform3D:
         solved = rctl.compute_fk(q)

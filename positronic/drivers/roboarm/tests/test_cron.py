@@ -231,6 +231,8 @@ class FakeRctl:
         return self.q.copy()
 
     def get_joint_vels(self):
+        if self.moving and not self.blocked:
+            return np.sign(self.waypoint - self.q) * self.waypoint_speed * self.planner_share
         return self.velocity.copy()
 
     def get_cart_pose(self):
@@ -1066,6 +1068,31 @@ def test_leaving_the_run_during_a_planned_move_stops_the_move_and_sends_no_veloc
     assert _called_in_order(rctl.calls, 'move_pause', 'drop_waypoints', 'hold', 'off')
 
 
+def test_leaving_the_run_during_a_planned_move_takes_hold_only_once_the_planner_braked(
+    world, rctl, driven, monkeypatch
+):
+    """A HOLD at speed stops the arm."""
+    braked = []
+
+    def sleep(seconds):
+        rctl.calls.append('wait')
+        braked.append(seconds)
+
+    monkeypatch.setattr(cron_controller.time, 'sleep', sleep)
+    stop = StopFlag()
+    driver, _, _, clock, loop = driven(stop=stop, factor=0.2)
+    _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 20)
+    del rctl.calls[:], braked[:]
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        _pump(loop, clock, 1)
+
+    assert _called_in_order(rctl.calls, 'move_pause', 'wait', 'hold')
+    assert max(braked) >= rctl.waypoint_speed / cron_controller._STOP_ACCEL
+
+
 def test_a_streamed_arm_is_powered_off_only_once_the_controller_holds(rctl, driven):
     rctl.hold_lag = 2
     stop = StopFlag()
@@ -1220,6 +1247,45 @@ def test_a_planned_move_that_stops_on_an_error_each_time_it_starts_again_is_refu
     assert rctl.calls.count('move_run') == cron._MAX_RESTARTS
 
 
+def test_a_safety_stop_while_a_move_clears_an_earlier_one_refuses_the_move(world, rctl, driven):
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched, rctl.power = True, True, PowerState.FAILURE
+    _pump(loop, clock, 2)
+    rctl.run_lag = 10**9
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    for _ in range(int(5.0 / TICK)):
+        _pump(loop, clock, 1)
+        if rctl.power is PowerState.OFF:
+            break
+    _pump(loop, clock, 2)
+
+    rctl.error, rctl.safety_latched, rctl.power, rctl._run_in = True, True, PowerState.FAILURE, None
+    _pump(loop, clock, 2)
+    rctl.safety_latched, rctl.run_lag = False, 0
+    _pump_until(loop, clock, answer, ticks=int(cron._RECOVER_S / TICK))
+    _pump(loop, clock, 200)
+
+    with pytest.raises(MoveRefused):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+
+
+def test_a_planned_move_on_an_arm_that_is_powered_off_is_refused_and_not_powered_up_again(world, rctl, driven):
+    driver, _, _, clock, loop = driven(factor=0.2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 200)
+    del rctl.calls[:]
+
+    rctl.power, rctl.moving = PowerState.OFF, False
+    _pump_until(loop, clock, answer, ticks=int(cron._RECOVER_S / TICK))
+    _pump(loop, clock, 200)
+
+    with pytest.raises(MoveRefused):
+        answer.result()
+    assert 'run' not in rctl.calls
+
+
 @pytest.mark.parametrize('waiting', [False, True], ids=['planned', 'waiting'])
 def test_a_safety_stop_after_a_move_was_asked_for_refuses_the_move(world, rctl, driven, waiting):
     """The arm must not drive off by itself when the stop is released."""
@@ -1291,6 +1357,36 @@ def test_a_tick_where_the_model_refuses_a_pose_drops_the_stream_and_the_driver_g
 
     assert any('dropped' in record.getMessage() for record in caplog.records)
     np.testing.assert_allclose(rctl.q[0], 0.5, atol=0.01)
+
+
+def test_a_tick_that_drops_the_stream_brakes_the_arm(rctl, driven):
+    """A pose that the model refuses on each tick would otherwise keep the arm at its speed."""
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 100)
+    rctl.fk_fails = True
+    before = len(rctl.commanded)
+
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.3, 0.0, 0.0]))))
+    _pump(loop, clock, 1)
+
+    assert len(rctl.commanded) == before + 1
+    assert np.max(np.abs(rctl.commanded[-1])) < np.max(np.abs(rctl.commanded[-2]))
+
+
+def test_an_error_in_a_planned_move_after_a_stream_logs_no_lag_of_the_stream(world, rctl, driven, caplog):
+    """The planner moves the arm on its own."""
+    driver, _, commands, clock, loop = driven(factor=0.2)
+    commands.push(command.JointPosition(_joints(0.3)))
+    _pump(loop, clock, 100)
+    _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 300)
+
+    with caplog.at_level(logging.ERROR, logger=cron.__name__):
+        rctl.error, rctl.moving = True, False
+        _pump(loop, clock, 2)
+
+    assert not any('lag' in record.getMessage() for record in caplog.records)
 
 
 def test_a_stream_that_comes_while_a_dropped_stream_brakes_does_not_hold_the_arm_at_speed(rctl, driven):

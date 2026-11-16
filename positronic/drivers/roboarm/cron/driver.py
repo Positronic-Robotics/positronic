@@ -185,7 +185,7 @@ class _Arm(DriverRun[command.CommandType]):
         if move is None or not self.moves.active:
             self._move = None
             return
-        if self.usable:
+        if self.reading.power is not PowerState.FAILURE:
             move.in_failure = False
         elif self.reading.power is PowerState.FAILURE and not move.in_failure:
             if not move.waiting:
@@ -200,7 +200,8 @@ class _Arm(DriverRun[command.CommandType]):
         if not self.usable:
             # The planner stopped on an error: the move waits for the error to clear and starts again
             self.controller.stop_move()
-            if move.restarts >= _MAX_RESTARTS:
+            # An arm out of RUN with no FAILURE was powered off, as deliberately as a stop
+            if move.restarts >= _MAX_RESTARTS or self.reading.power is not PowerState.RUN:
                 self._refuse(move)
             else:
                 self._wait(move.target, move.call, move.restarts + 1)
@@ -356,11 +357,11 @@ class _Arm(DriverRun[command.CommandType]):
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
         """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there.
 
-        The move waits while the stream brakes to a stop, and while the controller clears an error.
+        The move waits while the stream brakes to a stop, and while the controller clears an error. Its path is checked
+        when it starts: the check samples each degree, and the loop sends no velocity meanwhile.
         """
         with pimm.calls.raise_to(call):
             target = self._to_joints(call.request)
-            self._check_move(target)
             self.target, self._pose, self._joint_goal = None, None, None
             self._wait(target, call, 0)
 
@@ -409,6 +410,7 @@ class _Arm(DriverRun[command.CommandType]):
             # under control, as after a target it refuses
             logger.error(f'{self.controller.ip}: the streamed target is dropped: {e}')
             self.target, self._pose, self._joint_goal = None, None, None
+            self._command(np.zeros(JOINTS), dt)
             return
         error = self.target - self.reading.q
         # Not faster than the arm can stop from in the error left: at the gain alone, braking would need more
@@ -469,6 +471,8 @@ class _Arm(DriverRun[command.CommandType]):
         travel_s = _MOVE_GRACE_S + _MOVE_SLACK * distance / float(self.max_speed.min())
         self.moves.accept(move.call, move.target, _ARRIVED_TOL, now, travel_s)
         move.waiting = False
+        # The lag of a stream is measured from where the stream starts: the planner moves the arm on its own
+        self._stream.clear()
 
     def _report(self) -> None:
         """Log each change of the power state or the error state of the arm."""
@@ -485,6 +489,7 @@ class _Arm(DriverRun[command.CommandType]):
                 commanded = np.sum([travel for _, travel in self._stream], axis=0)
                 lag = np.round(np.degrees(commanded - (self.reading.q - self._stream[0][0])), 1).tolist()
                 logger.error(f'{self.controller.ip}: in the last {len(self._stream)} ticks the joints lag {lag} deg')
+                self._stream.clear()
         else:
             logger.info(f'{self.controller.ip}: {self.reading.power.name}, no error')
 
@@ -506,12 +511,14 @@ class _Arm(DriverRun[command.CommandType]):
 
     def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
         """Brake the stream to a stop, and answer what was waiting."""
-        self.moves.abandon(exc)
-        while self.usable and self.velocity.any():
-            self._command(np.zeros(JOINTS), 1.0 / _HZ)
-            # blocking-sleep-ok: the loop is over, and the controller needs the velocities at its own rate
-            time.sleep(1.0 / _HZ)
-            self.reading = self.controller.read()
+        try:
+            while self.usable and self.velocity.any():
+                self._command(np.zeros(JOINTS), 1.0 / _HZ)
+                # blocking-sleep-ok: the loop is over, and the controller needs the velocities at its own rate
+                time.sleep(1.0 / _HZ)
+                self.reading = self.controller.read()
+        finally:
+            self.moves.abandon(exc)
 
 
 class Robot(pimm.ControlSystem):
