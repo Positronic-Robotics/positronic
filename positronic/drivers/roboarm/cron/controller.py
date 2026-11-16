@@ -175,10 +175,11 @@ class CronController:
         time.sleep(STARTUP_S)
 
     def __exit__(self, *_) -> None:
-        # Each step runs on its own: one that fails must not keep the others from running
-        for step in (self.stop_move, self.stop, rctl.cmd_hold):
-            self._attempt(step)
         if self._has_control:
+            # Each step runs on its own: one that fails must not keep the others from running. An arm under the
+            # control of another client gets none of them
+            for step in (self.stop_move, self.stop, rctl.cmd_hold):
+                self._attempt(step)
             # A power off or a release that reaches the controller before HOLD can end a velocity stream in a TIMEOUT
             # error
             self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'))

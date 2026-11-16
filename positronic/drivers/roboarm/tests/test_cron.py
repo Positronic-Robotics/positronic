@@ -714,6 +714,7 @@ def test_a_controller_with_its_own_tool_is_refused_before_control_is_taken(rctl,
 
     assert 'take_control' not in rctl.calls
     assert rctl.calls[-1] == 'disconnect'
+    assert 'hold' not in rctl.calls and 'move_pause' not in rctl.calls, 'the arm of another client was commanded'
 
 
 _TILTED_UP = np.array([0.0, 1.0, 1.0]) / math.sqrt(2)  # a base mounted 45 deg over about its x axis
