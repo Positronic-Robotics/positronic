@@ -578,6 +578,7 @@ class _Arm(DriverRun[command.CommandType]):
         with self.lose_control_on_failure():
             self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
             self.robot.set_target_joints(target)
+        self.moves.mark_applied()
         self._refused = False  # the goal just dispatched is not the one the last reading found refused
 
     def await_goal(

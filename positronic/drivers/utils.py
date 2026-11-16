@@ -2,14 +2,18 @@
 
 import logging
 import math
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import Enum, auto
-from typing import Generic, TypeVar
+from typing import Generic, NamedTuple, TypeVar
 
 import numpy as np
 
 import pimm
+from pimm.time import EMITTED_WALL
+from positronic import telemetry
+from positronic.telemetry_keys import ATTR_COMMAND_AGE_MS, ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,14 @@ class MoveRefused(RuntimeError):
         return (MoveRefused, (self.error_message, self.moved_rad))
 
 
+class _Receipt(NamedTuple):
+    """When a driver read a request, for the span that ends when the driver applies it."""
+
+    read_ns: int  # epoch nanoseconds, the bound a span takes
+    sync: bool
+    age_ms: float | None  # from the emit to the read; a call carries no emit time
+
+
 class Moves(Generic[T]):
     """Both ways a device is asked to move, and the move it has in flight.
 
@@ -83,6 +95,7 @@ class Moves(Generic[T]):
         self._settled: tuple[pimm.calls.Call[T, None], TimeoutError | None] | None = None
         # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
         self.errored = False
+        self._receipt: _Receipt | None = None  # the request read last, until the driver applies it
 
     def __enter__(self) -> 'Moves[T]':
         return self
@@ -117,11 +130,33 @@ class Moves(Generic[T]):
         A call comes first, because a signal holds only its latest value and a setpoint read in the same tick
         would be lost. A device a move already owns is asked for nothing.
         """
-        if self.busy:
-            return None
+        request, age_ms = (None, None) if self.busy else self._read_request()
+        sync = isinstance(request, pimm.calls.Call)
+        self._receipt = None if request is None else _Receipt(time.time_ns(), sync, age_ms)
+        return request
+
+    def _read_request(self) -> tuple[pimm.calls.Call[T, None] | T | None, float | None]:
+        """The waiting call, else the new setpoint with its age in milliseconds since its emit."""
         if (call := next(self._sync_move.incoming(), None)) is not None:
-            return call
-        return pimm.value_updated(self._async_move)
+            return call, None
+        if (msg := pimm.read_updated(self._async_move)) is None:
+            return None, None
+        emitted = msg.time.get(EMITTED_WALL)  # every clock stamps this timeline from the host monotonic clock
+        return pimm.message_value(msg), None if emitted is None else (time.monotonic_ns() - emitted) / 1e6
+
+    def mark_applied(self) -> None:
+        """Record the request ``next_request`` returned last as applied now: the driver made it the device's target.
+
+        A ``driver.command`` span runs from the read to now. A second call, or one with no request read, records
+        nothing.
+        """
+        receipt, self._receipt = self._receipt, None
+        if receipt is None or not telemetry.enabled():
+            return
+        attrs: dict[str, bool | float] = {ATTR_COMMAND_SYNC: receipt.sync}
+        if receipt.age_ms is not None:
+            attrs[ATTR_COMMAND_AGE_MS] = receipt.age_ms
+        telemetry.record_span(SPAN_DRIVER_COMMAND, receipt.read_ns, time.time_ns(), **attrs)
 
     def drain_async(self) -> None:
         """Discard the streamed setpoint that waits, if there is one."""

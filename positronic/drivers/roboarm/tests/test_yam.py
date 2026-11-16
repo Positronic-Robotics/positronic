@@ -16,7 +16,7 @@ import pimm
 import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom, keys, wire
+from positronic import geom, keys, telemetry, wire
 from positronic.cfg.eval.real import yam as yam_eval
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.faults import DeviceFault, FaultKind
@@ -40,6 +40,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.amazon_abc import mapping as abc_mapping
+from positronic.telemetry_keys import ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.zeros(6)
@@ -2369,3 +2370,15 @@ def test_the_settings_of_the_configs_import_without_the_driver(module):
         check=True,
     ).stdout
     assert 'positronic.drivers.roboarm.yam.driver' not in loaded
+
+
+def test_each_streamed_command_the_arm_takes_is_timed_and_one_it_cannot_take_is_not(rig, tmp_path):
+    rig.ready()
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        rig.commands.push(command.JointPosition(np.full(6, np.nan)))
+        rig.tick(0.1)
+        rig.commands.push(command.JointPosition(RAISED))
+        rig.tick(0.1)
+
+    spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False]

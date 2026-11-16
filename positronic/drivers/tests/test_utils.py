@@ -1,13 +1,16 @@
 """When a device counts as arrived, and what a caller waiting on it hears."""
 
 import pickle
+import time
 
 import numpy as np
 import pytest
 
 import pimm
 from pimm.tests.testing import FakeCall, Passive, wire_call
+from positronic import telemetry
 from positronic.drivers.utils import _GRIP_TIMEOUT_S, MoveAbandoned, Moves, MoveStatus, grip_setpoint
+from positronic.telemetry_keys import ATTR_COMMAND_AGE_MS, ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver
 
 TOL = 0.05
@@ -269,3 +272,59 @@ def test_a_run_that_dies_after_a_move_settled_still_hands_over_the_outcome():
     moves.fail(RuntimeError('the bus went away'))
 
     assert call.answered and call.exception is None
+
+
+def _command_spans(tmp_path):
+    return [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+
+
+def test_a_streamed_setpoint_is_timed_from_its_read_to_its_apply_with_its_age_at_the_read(asking, tmp_path):
+    _, moves, stream = asking
+    stream.push(0.25, ts=time.monotonic_ns() - 5_000_000)  # emitted 5 ms before the driver reads it
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        before = time.time_ns()
+        assert moves.next_request() == 0.25
+        time.sleep(0.002)
+        moves.mark_applied()
+        after = time.time_ns()
+
+    (span,) = _command_spans(tmp_path)
+    assert before <= span.start_ns and span.start_ns + 2_000_000 <= span.end_ns <= after
+    assert span.attrs[ATTR_COMMAND_SYNC] is False
+    assert 5.0 <= span.attrs[ATTR_COMMAND_AGE_MS] < 1000.0
+
+
+def test_a_call_is_timed_from_its_read_to_its_apply_and_carries_no_age(asking, tmp_path):
+    ask, moves, _ = asking
+    ask(0.7)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        assert isinstance(moves.next_request(), pimm.calls.Call)
+        moves.mark_applied()
+
+    (span,) = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is True
+    assert ATTR_COMMAND_AGE_MS not in span.attrs
+
+
+def test_a_request_the_driver_never_applies_records_no_span(asking, tmp_path):
+    """A driver drops a malformed setpoint before it applies it. A later apply of nothing must not time that one."""
+    _, moves, stream = asking
+    stream.push(0.25)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        moves.next_request()
+        assert moves.next_request() is None
+        moves.mark_applied()
+
+    assert _command_spans(tmp_path) == []
+
+
+def test_a_request_applied_twice_records_one_span(asking, tmp_path):
+    """A driver can mark one request applied on more than one path."""
+    _, moves, stream = asking
+    stream.push(0.25)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        moves.next_request()
+        moves.mark_applied()
+        moves.mark_applied()
+
+    assert len(_command_spans(tmp_path)) == 1

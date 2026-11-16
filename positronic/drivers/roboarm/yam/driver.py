@@ -613,6 +613,7 @@ class _Arm(DriverRun[command.CommandType]):
         target: np.ndarray | None = None  # stays None for a malformed command, which the arm never sees
         try:
             target = self.to_joints(call.request, q)
+            self.moves.mark_applied()
             reference = yield from self._settle_onto(
                 target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
             )
@@ -997,6 +998,7 @@ class Robot(pimm.ControlSystem):
         elif asked is not None:
             with log_failure(asked):
                 serving.q_target = arm.streamed_target(asked, q)
+                arm.moves.mark_applied()
             serving.idle_since = clock.now()
         elif self._should_park(serving.idle_since, clock.now()):
             serving.parking = arm.park(arm.read_grip(arm.observations()))

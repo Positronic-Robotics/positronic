@@ -5,12 +5,13 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom
+from positronic import geom, telemetry
 from positronic.drivers.motors.feetech import MotorBus
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm.so101 import driver as so101
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned
+from positronic.telemetry_keys import ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 # Mid-range on every joint: a posture the arm can be commanded away from in either direction. Five arm
@@ -392,3 +393,19 @@ def test_a_run_that_dies_mid_move_hands_what_killed_it_to_the_asker(world):
 
     with pytest.raises(RuntimeError, match='the bus went away'):
         answer.result()
+
+
+def test_each_streamed_command_the_arm_takes_is_timed_and_one_it_cannot_take_is_not(tmp_path):
+    bus = FakeBus()
+    driver, _, loop = _driven(bus)
+    commands = ManualCommandReceiver()
+    driver.commands._bind(commands)
+
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        commands.push(command.CartesianPosition(geom.Transform3D(translation=np.full(3, 100.0))))
+        next(loop)
+        commands.push(command.JointPosition(JOGGED))
+        next(loop)
+
+    spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False]
