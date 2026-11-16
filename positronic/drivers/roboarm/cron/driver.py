@@ -2,6 +2,7 @@ import collections
 import logging
 import time
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -68,6 +69,9 @@ _PATH_STEP = np.radians(1.0)
 _RECOVER_S = 2 * POWER_TIMEOUT_S + STARTUP_S + 4.0
 # A move that waits asks the controller to clear its error again after this: one request did not always clear it
 _RESUME_EVERY_S = 1.0
+# How many times a planned move starts again after the planner stops on an error. The driver does not know the space
+# around the arm: an error that comes back on each start can be a contact, and the move must not drive into it again
+_MAX_RESTARTS = 1
 # The ticks of a stream that an error report looks back over
 _LAG_TICKS = _HZ // 2
 
@@ -106,6 +110,35 @@ class CronState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[start + 7] = status.value
 
 
+@dataclass
+class _Move:
+    """A planned move, from its call until the call is answered."""
+
+    target: np.ndarray
+    call: pimm.calls.Call[command.CommandType, None]
+    # The move fails when it waits past this
+    deadline: float
+    # The joints when the wait started, and the largest turn of a joint since: recovery can move the arm
+    start: np.ndarray
+    # A FAILURE is a safety stop. The move clears a FAILURE that it was asked in, and is refused on one that comes after
+    in_failure: bool
+    restarts: int = 0
+    # The move waits to start: until the stream stops, or until the controller clears its error
+    waiting: bool = True
+    moved: float = 0.0
+    cleared_at: float | None = None
+
+
+@dataclass
+class _PowerUp:
+    """The RUN that the driver asked for to clear a FAILURE. The arm moves its joints once about 0.5 s after RUN, and a
+    command meanwhile stops it on a following error. A RUN can come after the move that asked for it was refused, so
+    this outlives the move."""
+
+    asked_at: float | None = None
+    run_at: float | None = None
+
+
 class _Arm(DriverRun[command.CommandType]):
     """The arm the driver drives. A streamed setpoint is tracked by velocity commands that the speed and
     acceleration limits shape. A move that a caller waits for is planned by the controller.
@@ -136,21 +169,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._pose: geom.Transform3D | None = None
         # The joints of a streamed joint target, which the steps of each tick go to
         self._joint_goal: np.ndarray | None = None
-        # A move that waits to start: until the stream stops, or until the controller clears its error
-        self._deferred: np.ndarray | None = None
-        # The call of the planned move that waits or that the planner runs
-        self._move_call: pimm.calls.Call[command.CommandType, None] | None = None
-        self._deferred_until = 0.0
-        self._cleared_at: float | None = None
-        # The joints when the move was asked for, and the largest turn of a joint since: recovery can move the arm
-        self._deferred_from = np.zeros(JOINTS)
-        self._deferred_moved = 0.0
-        # The driver asked for RUN to clear a FAILURE, and when the arm reads RUN after that: the arm moves its joints
-        # once about 0.5 s after RUN, and a command meanwhile stops it on a following error. A RUN can come after the
-        # move that asked for it was refused, so these outlive the move
-        self._powering = False
-        self._powered_at = 0.0
-        self._run_at: float | None = None
+        self._move: _Move | None = None
+        self._power = _PowerUp()
         # The joints the arm read, and the travel commanded on each tick of the stream
         self._stream: collections.deque[tuple[np.ndarray, np.ndarray]] = collections.deque(maxlen=_LAG_TICKS)
         self.velocity = np.zeros(JOINTS)
@@ -162,22 +182,36 @@ class _Arm(DriverRun[command.CommandType]):
 
     def settle(self) -> None:
         """Judge a move in flight against the joints the arm reads. A move that did not start yet cannot arrive."""
-        if not self.moves.active:
+        move = self._move
+        if move is None or not self.moves.active:
+            self._move = None
             return
-        if self._deferred is not None:
-            moved = float(np.max(np.abs(self.reading.q - self._deferred_from)))
-            self._deferred_moved = max(self._deferred_moved, moved)
-            if self.clock.now() >= self._deferred_until:
-                self._deferred, self._move_call = None, None
-                self.moves.fail(MoveRefused(self.controller.errors, self._deferred_moved))
+        if self.usable:
+            move.in_failure = False
+        elif self.reading.power is PowerState.FAILURE and not move.in_failure:
+            if not move.waiting:
+                self.controller.stop_move()
+            self._refuse(move)
             return
-        if not self.usable and self._move_call is not None:
+        if move.waiting:
+            move.moved = max(move.moved, float(np.max(np.abs(self.reading.q - move.start))))
+            if self.clock.now() >= move.deadline:
+                self._refuse(move)
+            return
+        if not self.usable:
             # The planner stopped on an error: the move waits for the error to clear and starts again
             self.controller.stop_move()
-            self._defer(np.asarray(self.moves.target, dtype=np.float64), self._move_call)
+            if move.restarts >= _MAX_RESTARTS:
+                self._refuse(move)
+            else:
+                self._wait(move.target, move.call, move.restarts + 1)
             return
         if self.moves.settle(self.reading.q, self.clock.now()) is MoveStatus.GAVE_UP:
             self.controller.stop_move()
+
+    def _refuse(self, move: _Move) -> None:
+        self._move = None
+        self.moves.fail(MoveRefused(self.controller.errors, move.moved))
 
     @staticmethod
     def _pose_error(target: geom.Transform3D, pose: geom.Transform3D) -> float:
@@ -301,7 +335,7 @@ class _Arm(DriverRun[command.CommandType]):
         """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival. The target is the goal of
         steps on each tick, damped least squares steps for a Cartesian target: the joints move toward it no faster than
         the arm can follow, and not into the arm itself."""
-        if not self.usable or self._run_at is not None:
+        if not self.usable or self._power.run_at is not None:
             # An arm that is not in RUN, or that makes the joint move after RUN, takes no target; its status says so
             return
         # A delta starts from the arm: a seed at an earlier target that the arm has not reached would drive on to it
@@ -323,15 +357,14 @@ class _Arm(DriverRun[command.CommandType]):
             target = self._to_joints(call.request)
             self._check_move(target)
             self.target, self._pose, self._joint_goal = None, None, None
-            self._defer(target, call)
+            self._wait(target, call, 0)
 
-    def _defer(self, target: np.ndarray, call: pimm.calls.Call[command.CommandType, None]) -> None:
+    def _wait(self, target: np.ndarray, call: pimm.calls.Call[command.CommandType, None], restarts: int) -> None:
         """Put the move to ``target`` in wait, until the stream brakes to a stop and the controller clears an error."""
-        self._deferred, self._move_call = target, call
-        self._deferred_until = self.clock.now() + _RECOVER_S
-        self._deferred_from, self._deferred_moved = self.reading.q.copy(), 0.0
-        self._cleared_at = None
-        self.moves.accept(call, target, _ARRIVED_TOL, self.clock.now(), _RECOVER_S)
+        now = self.clock.now()
+        in_failure = self.reading.power is PowerState.FAILURE
+        self._move = _Move(target, call, now + _RECOVER_S, self.reading.q.copy(), in_failure, restarts)
+        self.moves.accept(call, target, _ARRIVED_TOL, now, _RECOVER_S)
 
     def step(self) -> None:
         """Read the arm, and command the velocity that takes it towards the target."""
@@ -346,18 +379,18 @@ class _Arm(DriverRun[command.CommandType]):
             self.velocity[:] = 0.0
             self._recover(now)
             return
-        if self._powering:
-            self._powering, self._run_at = False, now
-        if self._run_at is not None:
+        if self._power.asked_at is not None:
+            self._power = _PowerUp(run_at=now)
+        if self._power.run_at is not None:
             # The arm gets no command until the joint move after RUN is over
-            if now - self._run_at < STARTUP_S:
+            if now - self._power.run_at < STARTUP_S:
                 return
-            self._run_at = None
+            self._power = _PowerUp()
         if self.target is None and self.velocity.any():
             self._command(np.zeros(JOINTS), dt)
             return
-        if self._deferred is not None:
-            self._start_deferred(now)
+        if self._move is not None and self._move.waiting:
+            self._start(self._move, now)
             return
         if self.target is None:
             return
@@ -390,46 +423,47 @@ class _Arm(DriverRun[command.CommandType]):
     def _recover(self, now: float) -> None:
         """While a move waits, clear the error of the controller: a resume, which turns a FAILURE off, and then RUN,
         from OFF only. The error can come after the move was asked for."""
-        if self._deferred is None:
+        move = self._move
+        if move is None or not move.waiting:
             return
+        clear_due = move.cleared_at is None or now - move.cleared_at >= _RESUME_EVERY_S
+        # A request that did not reach RUN in the time the controller allows is lost
+        power_lost = self._power.asked_at is None or now - self._power.asked_at >= POWER_TIMEOUT_S
         if self.reading.in_error or self.reading.power is PowerState.FAILURE:
             # A power up that ends in an error is over: the next one asks for RUN again
-            self._powering = False
-            if self._cleared_at is None or now - self._cleared_at >= _RESUME_EVERY_S:
+            self._power.asked_at = None
+            if clear_due:
                 self.controller.resume()
-                self._cleared_at = now
+                move.cleared_at = now
         elif self.reading.power is PowerState.STANDBY:
-            # A request that did not reach RUN in the time the controller allows is lost; a power up that stopped in
-            # STANDBY goes back to OFF first
-            if self._powering and now - self._powered_at >= POWER_TIMEOUT_S:
-                self._powering = False
-            if not self._powering and (self._cleared_at is None or now - self._cleared_at >= _RESUME_EVERY_S):
-                self.controller.power_off()
-                self._cleared_at = now
-        elif self.reading.power is PowerState.OFF:
-            if not self._powering or now - self._powered_at >= POWER_TIMEOUT_S:
-                self.controller.power_up()
-                self._powering, self._powered_at = True, now
+            # A power up that stopped in STANDBY goes back to OFF first
+            if power_lost:
+                self._power.asked_at = None
+                if clear_due:
+                    self.controller.power_off()
+                    move.cleared_at = now
+        elif self.reading.power is PowerState.OFF and power_lost:
+            self.controller.power_up()
+            self._power = _PowerUp(asked_at=now)
 
-    def _start_deferred(self, now: float) -> None:
+    def _start(self, move: _Move, now: float) -> None:
         """Start the move that waits, from the joints the arm reads now: a brake or a recovery can move the arm."""
-        assert self._deferred is not None and self._move_call is not None
-        target, call = self._deferred, self._move_call
         try:
-            self._check_move(target)
+            self._check_move(move.target)
         except ValueError as e:
-            self._deferred, self._move_call = None, None
+            self._move = None
             self.moves.fail(e)
             return
         try:
-            self.controller.move_to(target, float(self.max_speed.min()), float(self.max_accel.min()))
+            self.controller.move_to(move.target, float(self.max_speed.min()), float(self.max_accel.min()))
         except TimeoutError as e:
             # No HOLD came, as when an error comes on this tick: the move waits on, and the next tick tries again
             logger.warning(f'{self.controller.ip}: the move waits: {e}')
             return
-        travel_s = _MOVE_GRACE_S + _MOVE_SLACK * float(np.max(np.abs(target - self.reading.q)) / self.max_speed.min())
-        self.moves.accept(call, target, _ARRIVED_TOL, now, travel_s)
-        self._deferred = None
+        distance = float(np.max(np.abs(move.target - self.reading.q)))
+        travel_s = _MOVE_GRACE_S + _MOVE_SLACK * distance / float(self.max_speed.min())
+        self.moves.accept(move.call, move.target, _ARRIVED_TOL, now, travel_s)
+        move.waiting = False
 
     def _report(self) -> None:
         """Log each change of the power state or the error state of the arm."""

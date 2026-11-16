@@ -1185,6 +1185,51 @@ def test_a_planned_move_that_stops_on_an_error_goes_on_once_the_error_clears(wor
     np.testing.assert_allclose(rctl.q, _joints(1.0), atol=cron._ARRIVED_TOL)
 
 
+def test_a_planned_move_that_stops_on_an_error_each_time_it_starts_again_is_refused(world, rctl, driven):
+    """An error that comes back on each start can be a contact, which the driver does not know of."""
+    driver, _, _, clock, loop = driven(factor=0.2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 200)
+    del rctl.calls[:]
+
+    for _ in range(cron._MAX_RESTARTS + 1):
+        rctl.error, rctl.moving = True, False
+        for _ in range(int(cron._RECOVER_S / TICK)):
+            _pump(loop, clock, 1)
+            if answer.done() or rctl.moving:
+                break
+        _pump(loop, clock, 20)
+    _pump_until(loop, clock, answer, ticks=int(cron._RECOVER_S / TICK))
+
+    with pytest.raises(MoveRefused):
+        answer.result()
+    assert rctl.calls.count('move_run') == cron._MAX_RESTARTS
+
+
+@pytest.mark.parametrize('waiting', [False, True], ids=['planned', 'waiting'])
+def test_a_safety_stop_after_a_move_was_asked_for_refuses_the_move(world, rctl, driven, waiting):
+    """The arm must not drive off by itself when the stop is released."""
+    driver, _, _, clock, loop = driven(factor=0.2)
+    _pump(loop, clock, 2)
+    if waiting:
+        rctl.error, rctl.safety_latched = True, True
+        _pump(loop, clock, 2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 200)
+    del rctl.calls[:]
+
+    rctl.error, rctl.safety_latched, rctl.moving, rctl.power = True, True, False, PowerState.FAILURE
+    _pump(loop, clock, 2)
+    rctl.safety_latched = False
+    _pump_until(loop, clock, answer, ticks=int(cron._RECOVER_S / TICK))
+    _pump(loop, clock, 200)
+
+    with pytest.raises(MoveRefused):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+    assert 'run' not in rctl.calls
+
+
 def test_a_move_whose_hold_does_not_come_waits_and_the_driver_goes_on(world, rctl, driven, monkeypatch):
     """An error on the tick of the start of a move keeps the controller out of HOLD."""
     monkeypatch.setattr(cron_controller, '_HOLD_TIMEOUT_S', 0.01)
