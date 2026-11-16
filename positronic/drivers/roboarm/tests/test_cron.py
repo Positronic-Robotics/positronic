@@ -122,7 +122,8 @@ class FakeRctl:
     def cmd_hold(self):
         self._call('hold')
         self.speed_at_hold = float(np.max(np.abs(self.get_joint_vels())))
-        self._hold_in = self.hold_lag
+        if self.power is PowerState.RUN and not self.error:  # an arm out of RUN or in an error takes no HOLD
+            self._hold_in = self.hold_lag
 
     def get_motion_mode(self):
         if self._hold_in == 0:
@@ -167,7 +168,8 @@ class FakeRctl:
     def cmd_power_off(self):
         self._call('off')
         self.mode_at_power_off = MotionMode(self.get_motion_mode())
-        self._off_in = self.off_lag
+        if self._off_in is None:
+            self._off_in = self.off_lag
         self._update_power()
         if self.safety_latched and not self.stop_pressed:
             self.safety_latched = self.error = False
@@ -226,9 +228,6 @@ class FakeRctl:
         self._call('drop_waypoints')
         self.waypoint = None
         self.moving = False
-
-    def is_moving(self, main=True):
-        return self.moving
 
     def get_joint_angles(self):
         if self.moving and not self.blocked:
@@ -823,6 +822,19 @@ def test_a_move_to_a_pose_out_of_reach_fails(world, rctl, driven):
         answer.result()
 
 
+def test_a_planned_delta_out_of_reach_fails_and_leaves_the_arm_available(world, rctl, driven):
+    """The arm holds where it was put."""
+    driver, states, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.CartesianDelta(geom.Transform3D(translation=np.full(3, 5.0))))
+
+    _pump_until(loop, clock, answer)
+    _pump(loop, clock, 2)
+
+    with pytest.raises(ValueError, match='out of reach'):
+        answer.result()
+    assert states.emitted[-1][1].status is RobotStatus.AVAILABLE
+
+
 def test_a_streamed_cartesian_target_is_reached_after_one_command(rctl, driven):
     """The damped steps go on each tick toward the last Cartesian target, not once per command."""
     _, _, commands, clock, loop = driven()
@@ -1101,7 +1113,7 @@ def test_a_planned_delta_is_checked_from_where_the_arm_is_once_it_holds(world, r
     np.testing.assert_allclose(rctl.q[0], 0.7, atol=0.01)
 
 
-def test_a_planned_move_is_checked_again_from_where_the_arm_is_when_it_starts(world, rctl, driven):
+def test_a_planned_move_is_checked_again_when_it_starts(world, rctl, driven):
     """The arm can move between the call and the start: a brake, a recovery."""
     driver, _, _, clock, loop = driven()
     _pump(loop, clock, 2)
@@ -1164,8 +1176,8 @@ def test_an_arm_that_leaves_run_is_not_commanded_and_does_not_resume_its_target(
     commands.push(command.JointPosition(_joints(0.5)))
     _pump(loop, clock, 20)
     rctl.power = PowerState.STANDBY
-    _pump(loop, clock, 5)
     sent = len(rctl.commanded)
+    _pump(loop, clock, 5)
 
     rctl.power = PowerState.RUN
     _pump(loop, clock, 20)
@@ -1195,6 +1207,21 @@ def test_leaving_the_run_stops_the_arm_powers_it_off_and_gives_control_back(rctl
 
     np.testing.assert_array_equal(rctl.commanded[-1], np.zeros(JOINTS))
     assert rctl.calls[-4:] == ['hold', 'off', 'release_control', 'disconnect']
+
+
+def test_a_run_that_ends_well_on_an_arm_in_an_error_ends_with_no_error(rctl, driven):
+    """An arm in an error takes no HOLD, and needs none: no stream or move runs on it."""
+    stop = StopFlag()
+    _, _, _, clock, loop = driven(stop=stop)
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched = True, True
+    _pump(loop, clock, 2)
+
+    stop.stopped = True
+    with pytest.raises(StopIteration):
+        _pump(loop, clock, 1)
+
+    assert rctl.calls[-2:] == ['release_control', 'disconnect']
 
 
 def test_a_power_off_that_fails_after_a_run_that_ended_well_fails_the_run_and_still_gives_control_back(
@@ -1417,6 +1444,30 @@ def test_a_planned_move_that_stops_on_an_error_each_time_it_starts_again_is_refu
     with pytest.raises(MoveRefused):
         answer.result()
     assert rctl.calls.count('move_run') == cron._MAX_RESTARTS
+
+
+def test_a_safety_stop_whose_failure_comes_while_the_planner_brakes_refuses_the_move(world, rctl, driven, monkeypatch):
+    """The stop button sets the error flag a tick before the power reads FAILURE."""
+    driver, _, _, clock, loop = driven(factor=0.2)
+    answer = _mover(world, driver)(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 200)
+    pause = rctl.cmd_move_pause
+
+    def pause_as_the_failure_comes(acceleration):
+        pause(acceleration)
+        rctl.power, rctl.safety_latched = PowerState.FAILURE, True
+
+    monkeypatch.setattr(rctl, 'cmd_move_pause', pause_as_the_failure_comes)
+    del rctl.calls[:]
+    rctl.error, rctl.moving = True, False
+    _pump(loop, clock, 2)
+    rctl.safety_latched = False
+    _pump_until(loop, clock, answer, ticks=int(cron._RECOVER_S / TICK))
+    _pump(loop, clock, 200)
+
+    with pytest.raises(MoveRefused):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
 
 
 def test_a_safety_stop_while_a_move_clears_an_earlier_one_refuses_the_move(world, rctl, driven):

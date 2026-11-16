@@ -182,11 +182,8 @@ class CronController:
         if self._has_control:
             # Each step runs on its own: one that fails must not keep the others from running. An arm under the
             # control of another client gets none of them
-            for step in (self.stop, self.stop_move, rctl.cmd_hold):
+            for step in (self.stop, self.stop_move, self._hold_in_run):
                 self._attempt(step, failed)
-            # A power off or a release that reaches the controller before HOLD can end a velocity stream in a TIMEOUT
-            # error
-            self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'), failed)
             if self.power_off_on_exit:
                 self._attempt(self._power_off_and_wait, failed)
             self._attempt(rctl.release_control, failed)
@@ -217,6 +214,13 @@ class CronController:
     def power_off(self) -> None:
         """Ask for OFF, with no wait."""
         rctl.cmd_power_off()
+
+    def _hold_in_run(self) -> None:
+        # A power off or a release that reaches the controller before HOLD can end a velocity stream in a TIMEOUT
+        # error. An arm out of RUN or in an error runs no stream and takes no HOLD
+        if self.power is PowerState.RUN and not rctl.is_error():
+            rctl.cmd_hold()
+            self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD')
 
     def _power_off_and_wait(self) -> None:
         self.power_off()

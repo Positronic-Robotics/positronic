@@ -17,6 +17,7 @@ from positronic.drivers.roboarm.cron.controller import (
     STARTUP_S,
     CronController,
     PowerState,
+    Reading,
 )
 from positronic.drivers.utils import DriverRun, MoveRefused, MoveStatus, log_failure
 from positronic.eval import NO_MODEL_ROBOT_META
@@ -207,13 +208,14 @@ class _Arm(DriverRun[command.CommandType]):
         if not self.usable:
             # The planner stopped on an error: the move waits for the error to clear and starts again
             self.controller.stop_move()
+            # The power is judged after the brake: a stop button sets the error flag a tick before FAILURE. The wait
+            # also counts the travel of the recovery from where the planner braked
+            self.reading = self.controller.read()
             # An arm out of RUN with no FAILURE was powered off, as deliberately as a stop
             if move.restarts >= _MAX_RESTARTS or self.reading.power is not PowerState.RUN:
                 self._refuse(move)
             else:
-                # The wait counts the travel of the recovery from where the planner braked
-                self.reading = self.controller.read()
-                self._wait(move.target, move.call, move.restarts + 1)
+                self._defer(move.target, move.call, move.restarts + 1, self.reading)
             return
         if self.moves.settle(self.reading.q, self.clock.now()) is MoveStatus.GAVE_UP:
             self.controller.stop_move()
@@ -290,11 +292,10 @@ class _Arm(DriverRun[command.CommandType]):
                 return np.array(seed, dtype=np.float64)
         return joints
 
-    def _check_move(self, target: np.ndarray) -> None:
-        """Refuse a planned move from the joints the arm reads to ``target`` that ends past a joint limit or in a
+    def _check_move(self, start: np.ndarray, target: np.ndarray) -> None:
+        """Refuse a planned move from the joints ``start`` to ``target`` that ends past a joint limit or in a
         collision, or that takes the arm nearer to itself than the clearance and than it came along the way. The
         controller plans a straight line in the joints, and does not know the tool spheres of the local model."""
-        start = self.reading.q
         if not np.array_equal(self._clamp_to_limits(target, start), target):
             raise ValueError(f'a move to {np.round(target, 3)} goes past the joint limits')
         least = min(_MIN_CLEARANCE, self.controller.clearance(start))
@@ -306,16 +307,16 @@ class _Arm(DriverRun[command.CommandType]):
                 raise ValueError(f'a move to {np.round(target, 3)} takes the arm {clearance:.3f} m from itself')
             least = min(_MIN_CLEARANCE, max(least, clearance))
 
-    def _pose_of(self, cmd: command.CommandType) -> geom.Transform3D | None:
+    def _pose_of(self, cmd: command.CommandType, reading: Reading) -> geom.Transform3D | None:
         """The tool pose that a Cartesian ``cmd`` asks for, or None for a joint target. A delta applies to the pose
-        that the arm reads."""
+        in ``reading``."""
         # TODO: PositionControl and Impedance need a controller that takes them; the velocity loop runs its own law
         command.require_native_mode(cmd, 'CRON')
         match cmd:
             case command.CartesianPosition(pose):
                 pass
             case command.CartesianDelta() as delta_cmd:
-                pose = delta_cmd.apply(self.reading.tcp_pose)
+                pose = delta_cmd.apply(reading.tcp_pose)
             case command.JointPosition():
                 return None
             case other:
@@ -332,11 +333,12 @@ class _Arm(DriverRun[command.CommandType]):
             raise ValueError(f'{cmd} asks for joints that are not {JOINTS} finite values: {joints}')
         return joints
 
-    def _to_joints(self, cmd: command.CommandType) -> np.ndarray:
-        """The joints that a move ``cmd`` goes to: a Cartesian target through the exact solution of the controller."""
-        pose = self._pose_of(cmd)
+    def _to_joints(self, cmd: command.CommandType, reading: Reading) -> np.ndarray:
+        """The joints that a move ``cmd`` goes to from ``reading``: a Cartesian target through the exact solution of
+        the controller."""
+        pose = self._pose_of(cmd, reading)
         if pose is not None:
-            return self.controller.inverse(pose, self.reading.q)
+            return self.controller.inverse(pose, reading.q)
         assert isinstance(cmd, command.JointPosition)
         return self._checked(cmd, np.asarray(cmd.positions, dtype=np.float64))
 
@@ -357,8 +359,10 @@ class _Arm(DriverRun[command.CommandType]):
         fresh = self.target is None or isinstance(cmd, command.CartesianDelta)
         seed = self.reading.q if fresh else self.target
         try:
-            pose = self._pose_of(cmd)
-            goal = None if pose is not None else self._clamp_to_limits(self._to_joints(cmd), self.reading.q)
+            pose = self._pose_of(cmd, self.reading)
+            goal = (
+                None if pose is not None else self._clamp_to_limits(self._to_joints(cmd, self.reading), self.reading.q)
+            )
         except Exception:
             # The stream ends on a target it refuses, and the arm brakes: it must not drive on to the target before
             self.target, self._pose, self._joint_goal = None, None, None
@@ -376,29 +380,29 @@ class _Arm(DriverRun[command.CommandType]):
             if isinstance(call.request, command.CartesianDelta):
                 # A delta applies to the arm in HOLD: it is resolved and checked when the move starts. Until then the
                 # move holds the arm where it is
-                self._pose_of(call.request)
-                self._wait(self.reading.q.copy(), call, 0, call.request)
+                self._pose_of(call.request, self.reading)
+                self._defer(self.reading.q.copy(), call, 0, self.reading, call.request)
                 return
-            target = self._to_joints(call.request)
+            target = self._to_joints(call.request, self.reading)
             # The check samples each degree and the loop sends no velocity meanwhile, so a stream at speed brakes
             # first: the move is checked when it starts
             if not self.velocity.any():
-                self._check_move(target)
-            self._wait(target, call, 0)
+                self._check_move(self.reading.q, target)
+            self._defer(target, call, 0, self.reading)
 
-    def _wait(
+    def _defer(
         self,
         target: np.ndarray,
         call: pimm.calls.Call[command.CommandType, None],
         restarts: int,
+        reading: Reading,
         delta: command.CartesianDelta | None = None,
     ) -> None:
-        """Put the move to ``target`` in wait, until the stream brakes to a stop and the controller clears an error."""
+        """Put the move to ``target`` in wait, from the arm in ``reading``, until the stream brakes to a stop and the
+        controller clears an error."""
         now = self.clock.now()
-        in_failure = self.reading.power is PowerState.FAILURE
-        self._move = self._Move(
-            target, call, now + _RECOVER_S, self.reading.q.copy(), in_failure, restarts, delta=delta
-        )
+        in_failure = reading.power is PowerState.FAILURE
+        self._move = self._Move(target, call, now + _RECOVER_S, reading.q.copy(), in_failure, restarts, delta=delta)
         self.moves.accept(call, target, _ARRIVED_TOL, now, _RECOVER_S)
 
     def step(self) -> None:
@@ -492,16 +496,19 @@ class _Arm(DriverRun[command.CommandType]):
             self.controller.to_hold()
             self.reading = self.controller.read()
             if move.delta is not None:
-                move.target, move.delta = self._to_joints(move.delta), None
-            self._check_move(move.target)
+                move.target, move.delta = self._to_joints(move.delta, self.reading), None
+            self._check_move(self.reading.q, move.target)
             self.controller.move_to(move.target, float(self.max_speed.min()), float(self.max_accel.min()))
         except TimeoutError as e:
             # No HOLD came, as when an error comes on this tick: the move waits on, and the next tick tries again
             logger.warning(f'{self.controller.ip}: the move waits: {e}')
             return
         except ValueError as e:
+            # The arm holds where it was put: a move refused before it starts does not mark it errored
+            errored = self.moves.errored
             self._move = None
             self.moves.fail(e)
+            self.moves.errored = errored
             return
         distance = float(np.max(np.abs(move.target - self.reading.q)))
         travel_s = _MOVE_GRACE_S + _MOVE_SLACK * distance / float(self.max_speed.min())
