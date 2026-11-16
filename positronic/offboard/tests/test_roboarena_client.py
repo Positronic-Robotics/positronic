@@ -1,5 +1,6 @@
 """The roboarena client, driven against a fake connection."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -62,6 +63,52 @@ def test_a_handshake_that_fails_closes_the_connection_it_opened_and_raises(failu
 
     connection.close.assert_called_once()
     assert client._connection is None
+
+
+# What a wall-clock test grants past a deadline: a thread start and a closed socket, on a loaded machine.
+_DEADLINE_SLACK_S = 2.0
+
+
+def test_a_port_that_never_accepts_ends_the_connect_by_its_deadline(never_accepting_port):
+    client = roboarena.RoboarenaClient('localhost', never_accepting_port, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(wire.ConnectRefused):
+        client.connect()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+
+
+def test_a_server_that_never_announces_its_config_ends_the_connect_by_its_deadline(silent_websocket_port):
+    client = roboarena.RoboarenaClient('localhost', silent_websocket_port, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client.connect()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+
+
+def test_a_server_that_answers_no_close_ends_the_connect_by_its_deadline(unanswering_websocket_port):
+    client = roboarena.RoboarenaClient('localhost', unanswering_websocket_port, connect_deadline=0.5)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        client.connect()
+
+    assert time.monotonic() - started < 0.5 + _DEADLINE_SLACK_S
+
+
+def test_the_default_deadline_gives_the_dial_and_the_config_read_a_handshake_timeout_each(fake_clock):
+    """The server answers the dial and announces its config each just inside one handshake timeout."""
+    almost = roboarena.HANDSHAKE_TIMEOUT_S - 1.0
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    def dial(address, headers, open_timeout):
+        assert fake_clock.answer(almost, open_timeout), 'the dial timed out'
+        return fake_clock.connection((almost, _ANNOUNCEMENT))
+
+    with patch.object(roboarena_wire.RoboarenaClientWire, 'dial', side_effect=dial):
+        assert client.connect() == deserialize(_ANNOUNCEMENT)
+
+    assert fake_clock.now == 2 * almost
 
 
 def test_the_client_hands_its_headers_to_every_handshake_it_opens():

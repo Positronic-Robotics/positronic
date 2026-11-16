@@ -302,8 +302,8 @@ def test_a_plan_names_its_rig_shape_and_runs_on_a_franka_when_it_names_none():
     assert EvalPlan.model_validate(yam.model_dump(mode='json')) == yam
 
 
-@pytest.mark.parametrize('shape', [RigShape.molmospaces, RigShape.robolab])
-def test_a_plan_names_a_simulator_as_its_rig_shape(shape: RigShape):
+@pytest.mark.parametrize('shape', [shape for shape in RigShape if shape is not RigShape.INVALID])
+def test_a_plan_names_each_rig_shape_it_takes(shape: RigShape):
     plan = a_plan(rig_shape=slug_of(shape))
     assert plan.rig_shape is shape
     assert EvalPlan.model_validate(plan.model_dump(mode='json')) == plan
@@ -311,7 +311,7 @@ def test_a_plan_names_a_simulator_as_its_rig_shape(shape: RigShape):
 
 @pytest.mark.parametrize('shape', ['ur5', 'sim'])
 def test_a_rig_shape_outside_the_closed_set_is_refused_with_the_shapes_it_takes(shape: str):
-    with pytest.raises(ValidationError, match="rig_shape\n.*'franka', 'yam', 'molmospaces' or 'robolab'"):
+    with pytest.raises(ValidationError, match="rig_shape\n.*'franka', 'yam', 'molmospaces', 'robolab' or 'abc'"):
         a_plan(rig_shape=shape)
 
 
@@ -441,6 +441,77 @@ def test_a_label_states_no_memory_need_of_its_own(label: dict[str, str]):
 def test_an_endpoint_without_a_memory_need_omits_it_from_its_dump(mode: str):
     assert 'min_vram_gb' not in Endpoint.model_validate(_IMAGE_ENTRY).model_dump(mode=mode)
     assert Endpoint.model_validate({**_IMAGE_ENTRY, 'min_vram_gb': 48}).model_dump(mode=mode)['min_vram_gb'] == 48
+
+
+def test_an_image_endpoint_states_the_session_params_of_its_image():
+    entry = Endpoint.model_validate({**_IMAGE_ENTRY, 'query': 'horizon_sec=0.5'})
+    assert entry.query == 'horizon_sec=0.5'
+    assert Endpoint.model_validate(entry.model_dump(mode='json')) == entry
+    assert Endpoint.model_validate(_IMAGE_ENTRY).query is None
+
+
+@pytest.mark.parametrize('query', ['', '?horizon_sec=0.5', 'horizon_sec=0.5#x', 'prompt=a b'])
+def test_an_image_query_holds_the_grammar_of_an_address_query(query: str):
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate({**_IMAGE_ENTRY, 'query': query})
+
+
+def test_a_remote_or_a_served_endpoint_states_no_image_query():
+    with pytest.raises(ValidationError, match='only an image endpoint carries'):
+        Endpoint.model_validate(remote('baseline', query='horizon_sec=0.5'))
+    with pytest.raises(ValidationError, match='only an image endpoint carries'):
+        Endpoint.model_validate({**_SERVED_ENTRY, 'query': 'horizon_sec=0.5'})
+
+
+@pytest.mark.parametrize('label', [{'name': 'policy'}, {'name': 'policy', 'kind': 'image'}])
+def test_a_label_states_no_image_query_of_its_own(label: dict[str, str]):
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        Endpoint.model_validate({**label, 'query': 'horizon_sec=0.5'})
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_an_image_endpoint_without_a_query_omits_it_from_its_dump(mode: str):
+    assert 'query' not in Endpoint.model_validate(_IMAGE_ENTRY).model_dump(mode=mode)
+    stated = Endpoint.model_validate({**_IMAGE_ENTRY, 'query': 'horizon_sec=0.5'}).model_dump(mode=mode)
+    assert stated['query'] == 'horizon_sec=0.5'
+
+
+def test_a_competition_plan_of_an_image_carries_its_query():
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), query='horizon_sec=0.5')
+    assert isinstance(plan.request_type, NebiusCompetition)
+    assert [entry.query for entry in plan.endpoints] == ['horizon_sec=0.5']
+    assert plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x')).endpoints[0].query is None
+
+
+@pytest.mark.parametrize('model', [Endpoint, EndpointFile])
+def test_a_remote_endpoint_states_the_policy_its_server_serves(model: type[Endpoint] | type[EndpointFile]):
+    entry = model.model_validate(remote('baseline', policy_spec='pi05'))
+    assert entry.policy_spec == 'pi05'
+    assert model.model_validate(entry.model_dump(mode='json')) == entry
+    assert model.model_validate(BASELINE).policy_spec is None
+
+
+@pytest.mark.parametrize('mode', ['python', 'json'])
+def test_a_remote_endpoint_without_a_policy_spec_omits_it_from_its_dump(mode: str):
+    assert 'policy_spec' not in Endpoint.model_validate(BASELINE).model_dump(mode=mode)
+    stated = Endpoint.model_validate(remote('baseline', policy_spec='pi05')).model_dump(mode=mode)
+    assert stated['policy_spec'] == 'pi05'
+
+
+@pytest.mark.parametrize('entry', [_SERVED_ENTRY, _IMAGE_ENTRY], ids=['served', 'image'])
+def test_a_served_or_an_image_endpoint_states_no_policy_spec(entry: dict):
+    with pytest.raises(ValidationError, match='only a remote endpoint carries'):
+        Endpoint.model_validate({**entry, 'policy_spec': 'pi05'})
+
+
+def test_a_label_states_no_policy_spec_of_its_own():
+    with pytest.raises(ValidationError, match='state it on the plan endpoint this label names'):
+        Endpoint.model_validate({'name': 'baseline', 'policy_spec': 'pi05'})
+
+
+def test_a_policy_spec_is_not_empty():
+    with pytest.raises(ValidationError):
+        Endpoint.model_validate(remote('baseline', policy_spec=''))
 
 
 def test_an_image_endpoint_names_the_image_and_its_wire_and_nothing_else():

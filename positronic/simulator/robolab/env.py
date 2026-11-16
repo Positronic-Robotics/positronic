@@ -40,6 +40,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
@@ -52,7 +53,7 @@ import pose_ik
 import protocol  # pyright: ignore[reportMissingImports]
 import torch
 from isaaclab.app import AppLauncher
-from server import EnvProtocol, EnvServer
+from server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
 
 
 class _NoopTelemetry:
@@ -92,6 +93,12 @@ parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
 parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
 parser.add_argument('--num-envs', type=int, default=1, help='scene clones this server steps at once')
+parser.add_argument(
+    '--join-deadline',
+    type=float,
+    default=DEFAULT_JOIN_DEADLINE,
+    help='seconds the first reset of a batch waits for the clones whose clients have not asked for it',
+)
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
@@ -192,6 +199,9 @@ class RobolabEnv(EnvProtocol):
         self._objects: list[str] = []
         self._subtask_recorder: Any = None
         self._shown_chains: list[Any] = [None] * num_envs  # each slot's chain machine at the last frame
+        self._episode = 0  # the number of the current episode, counted by resets
+        self._episode_task = ''  # the task of the current episode
+        self._far_past_limit_solves = [0] * num_envs  # per slot, this episode's IK solves with a joint far past a limit
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
@@ -339,8 +349,22 @@ class RobolabEnv(EnvProtocol):
         joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
         return ~torch.isfinite(joints).all(dim=1)
 
+    def _report_far_past_limit_solves(self) -> None:
+        """Print each slot's count of this episode's IK solves with a joint far past a limit, then zero the counts."""
+        for slot, solves in enumerate(self._far_past_limit_solves):
+            if solves:
+                print(
+                    f'{self._episode_task} episode {self._episode} slot {slot}: {solves} IK solves with a joint '
+                    f'more than {pose_ik.MAX_JOINT_STEP} rad past a limit',
+                    file=sys.stderr,
+                )
+        self._far_past_limit_solves = [0] * self._num_envs
+
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+        self._report_far_past_limit_solves()
+        self._episode += 1
+        self._episode_task = token[keys.TOKEN_TASK]
         key = (token[keys.TOKEN_TASK], token[keys.TOKEN_INSTRUCTION_TYPE], token.get(keys.TOKEN_EPISODE_LENGTH_S))
         if key != self._key:
             self._build(*key)
@@ -498,6 +522,17 @@ class RobolabEnv(EnvProtocol):
         for slot in slots:
             flange_to_tool = np.linalg.inv(pose_ik.panda_flange(joint_pos[slot])) @ measured[slot]
             lower, upper = limits[slot, :, 0], limits[slot, :, 1]
+            past = np.maximum(np.maximum(lower - joint_pos[slot], joint_pos[slot] - upper), 0.0)
+            if past.max() > pose_ik.MAX_JOINT_STEP:
+                # The solve clamps such a joint to its limit. Print it, so that a physics fault stays visible.
+                self._far_past_limit_solves[slot] += 1
+                if self._far_past_limit_solves[slot] == 1:
+                    print(
+                        f'{self._episode_task} episode {self._episode} slot {slot}: joints '
+                        f'{np.round(past, 3).tolist()} rad past their limits; the count of such solves follows at the '
+                        'episode end',
+                        file=sys.stderr,
+                    )
             targets.append(pose_ik.joint_targets(target[slot], joint_pos[slot], flange_to_tool, lower, upper))
         return torch.as_tensor(np.stack(targets), dtype=torch.float32, device=self._env.device)
 
@@ -618,6 +653,7 @@ class RobolabEnv(EnvProtocol):
         ]
 
     def close(self) -> None:
+        self._report_far_past_limit_solves()
         if self._env is not None:
             self._env.close()
             self._env = None
@@ -629,7 +665,7 @@ def main() -> None:
     # Under --timing the parent forwards the telemetry dir + run id via the environment; the server then
     # writes its own ``env.spans.jsonl`` sidecar. Inert otherwise.
     with telemetry.bind_from_env():
-        EnvServer(RobolabEnv(args.num_envs), args.host, args.port).serve_forever()
+        EnvServer(RobolabEnv(args.num_envs), args.host, args.port, join_deadline=args.join_deadline).serve_forever()
     simulation_app.close()
 
 

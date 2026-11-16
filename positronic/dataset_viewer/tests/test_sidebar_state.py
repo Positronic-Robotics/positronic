@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from positronic.server.positronic_server import _server_names
+from positronic.dataset_viewer.web_app import _server_names
 
 APP_JS = Path(__file__).resolve().parents[1] / 'static' / 'app.js'
 

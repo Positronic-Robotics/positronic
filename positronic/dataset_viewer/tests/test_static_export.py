@@ -9,6 +9,7 @@ import threading
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict, fields
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
@@ -30,9 +31,15 @@ from positronic.dataset.tests.test_episode import write_empty_scalar_file
 from positronic.dataset.transforms import TransformedDataset
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.server import export, positronic_server
-from positronic.server.dataset_utils import DEFAULT_MAX_HZ, ReplayLayout, get_dataset_root
-from positronic.server.export import (
+from positronic.dataset_viewer import static_export, web_app
+from positronic.dataset_viewer.rerun_replay import (
+    DEFAULT_MAX_HZ,
+    DURATION_COLUMN,
+    INDEX_COLUMN,
+    ReplayLayout,
+    get_dataset_root,
+)
+from positronic.dataset_viewer.static_export import (
     GROUP_INDEX_FILE,
     MAX_FILTER_KEYS_PER_GROUP,
     UNFILTERED_FILE,
@@ -47,7 +54,7 @@ from positronic.server.export import (
     large_file_links_under,
     validated_build_id,
 )
-from positronic.server.positronic_server import (
+from positronic.dataset_viewer.web_app import (
     DOWNLOAD_LINK,
     MAX_COMPONENT_BYTES,
     VIEWER_DIR,
@@ -68,7 +75,7 @@ HIDDEN_VALUE = 's3://internal/checkpoints/step_1000'
 OBJECTS = ('Plastic banana', 'Wooden block')
 
 TABLE = {
-    '__index__': ColumnConfig(label='#', format='%d'),
+    INDEX_COLUMN: ColumnConfig(label='#', format='%d'),
     OUTCOME: ColumnConfig(label='Outcome', filter=True),
     OBJECT: ColumnConfig(label='Object', filter=True),
     ATTEMPT: ColumnConfig(label='Attempt'),
@@ -229,7 +236,7 @@ def test_a_recording_is_moved_from_the_file_built_under_the_scratch_dir_and_not_
         moved[Path(target)] = Path(source)
         return move(source, target)
 
-    monkeypatch.setattr('positronic.server.export._fetch', fetch_no_recording)
+    monkeypatch.setattr('positronic.dataset_viewer.static_export._fetch', fetch_no_recording)
     monkeypatch.setattr(shutil, 'move', move_recording)
     scratch = tmp_path / 'scratch'
     scratch.mkdir()
@@ -275,14 +282,14 @@ def test_the_export_holds_no_episode_between_two_reads(dataset, tmp_path, monkey
         watch()
         return _fetch(client, path, params)
 
-    stream = positronic_server.stream_episode_rrd
+    stream = web_app.stream_episode_rrd
 
     def stream_and_watch(ds, episode_id, **kwargs):
         watch()
         yield from stream(ds, episode_id, **kwargs)
 
-    monkeypatch.setattr('positronic.server.export._fetch', fetch_and_watch)
-    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_watch)
+    monkeypatch.setattr('positronic.dataset_viewer.static_export._fetch', fetch_and_watch)
+    monkeypatch.setattr(web_app, 'stream_episode_rrd', stream_and_watch)
 
     export_all(
         shown_dataset,
@@ -317,14 +324,14 @@ def a_camera_dataset(root: Path, episodes: int) -> Dataset:
 
 def test_the_videos_of_a_built_recording_are_closed_before_the_next_recording_is_built(tmp_path, monkeypatch):
     dataset = a_camera_dataset(tmp_path / 'dataset', 3)
-    stream = positronic_server.stream_episode_rrd
+    stream = web_app.stream_episode_rrd
     open_video_counts: list[int] = []
 
     def stream_and_count(ds, episode_id, **kwargs):
         open_video_counts.append(sum(isinstance(o, InputContainer) for o in gc.get_objects()))
         yield from stream(ds, episode_id, **kwargs)
 
-    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_count)
+    monkeypatch.setattr(web_app, 'stream_episode_rrd', stream_and_count)
     gc.collect()
     # Off, so only the export's own collection can close a video.
     gc.disable()
@@ -340,27 +347,27 @@ def test_the_videos_of_a_built_recording_are_closed_before_the_next_recording_is
 
 def _recording_builder_threads(monkeypatch) -> list[int]:
     """Wrap the recording builder so each call records the thread it runs on."""
-    stream = positronic_server.stream_episode_rrd
+    stream = web_app.stream_episode_rrd
     threads: list[int] = []
 
     def stream_and_record(ds, episode_id, **kwargs):
         threads.append(threading.get_ident())
         yield from stream(ds, episode_id, **kwargs)
 
-    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_record)
+    monkeypatch.setattr(web_app, 'stream_episode_rrd', stream_and_record)
     return threads
 
 
 def test_each_recording_is_built_with_the_layout_the_export_is_given(dataset, tmp_path, monkeypatch):
     layout = ReplayLayout(split_shares=(3, 1), view_shares=(1, 3), charts={}, show_unnamed_signals=False)
-    stream = positronic_server.stream_episode_rrd
+    stream = web_app.stream_episode_rrd
     layouts: list[ReplayLayout | None] = []
 
     def stream_and_record(ds, episode_id, **kwargs):
         layouts.append(kwargs['layout'])
         yield from stream(ds, episode_id, **kwargs)
 
-    monkeypatch.setattr(positronic_server, 'stream_episode_rrd', stream_and_record)
+    monkeypatch.setattr(web_app, 'stream_episode_rrd', stream_and_record)
 
     an_export(dataset, tmp_path / 'out', layout=layout, workers=1)
 
@@ -407,7 +414,7 @@ def test_two_views_of_one_dataset_through_one_scratch_dir_each_get_their_own_rec
 STAGE = 'stage'
 STAGED_TABLE = {
     **TABLE,
-    '__duration__': ColumnConfig(label='Duration', format='%.3f sec'),
+    DURATION_COLUMN: ColumnConfig(label='Duration', format='%.3f sec'),
     STAGE: ColumnConfig(label='Stage', filter=True),
     # A column whose value is a download in the `dataset` fixture.
     'notes': ColumnConfig(label='Notes'),
@@ -453,8 +460,8 @@ def test_the_tables_an_export_writes_are_what_the_app_serves_reading_every_episo
     view, out = staged(dataset), tmp_path / 'out'
     export_all(view, out, ep_table_cfg=STAGED_TABLE, group_tables=STAGED_GROUPS, max_resolution=64, assets=False)
 
-    with positronic_server.app_state_restored():
-        positronic_server.configure_tables(
+    with web_app.app_state_restored():
+        web_app.configure_tables(
             root=get_dataset_root(view) or 'unknown_dataset',
             cache_dir=tmp_path / 'cache',
             ep_table_cfg=STAGED_TABLE,
@@ -464,8 +471,8 @@ def test_the_tables_an_export_writes_are_what_the_app_serves_reading_every_episo
             max_hz=DEFAULT_MAX_HZ,
             layout=None,
         )
-        positronic_server.configure_pages(show_paths=False, static_export=True)
-        positronic_server.install_dataset(view)
+        web_app.configure_pages(show_paths=False, static_export=True)
+        web_app.install_dataset(view)
         client = TestClient(app)
         for route in ('api/episodes', 'api/dataset_info'):
             assert (out / f'{route}.json').read_bytes() == _fetch(client, f'/{route}')[0]
@@ -476,6 +483,29 @@ def test_the_tables_an_export_writes_are_what_the_app_serves_reading_every_episo
             assert (out / 'api/groups/outcomes' / entry['file']).read_bytes() == served
 
 
+def test_an_export_writes_the_count_of_each_value_of_the_summary_column(dataset, tmp_path):
+    out = tmp_path / 'out'
+    an_export(dataset, out, summary_column=OUTCOME)
+
+    summary = json.loads((out / 'api/dataset_info.json').read_text())[web_app.DATASET_SUMMARY]
+    counts = [asdict(web_app.ValueCount(value, 1)) for value in ('Failure', 'Success')]
+    assert summary[fields(web_app.ColumnSummary)[1].name] == counts
+
+
+def test_a_summary_value_the_header_cannot_count_stops_the_export_before_its_episode_is_written(tmp_path):
+    dataset = a_dataset(
+        tmp_path / 'dataset',
+        {keys.TASK: 'Put the banana on the plate', OUTCOME: 'Success'},
+        {keys.TASK: 'Put the banana on the plate', OUTCOME: ['Success', 'Failure']},
+    )
+    out = tmp_path / 'out'
+
+    with pytest.raises(ValueError, match='holds a list in episode 1'):
+        export_all(dataset, out, ep_table_cfg=TABLE, summary_column=OUTCOME, max_resolution=64, assets=False, workers=1)
+    assert (out / 'episode/0/index.html').exists()
+    assert not (out / 'episode/1').exists()
+
+
 def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_starts_late(tmp_path):
     with LocalDatasetWriter(tmp_path / 'dataset') as writer, writer.new_episode() as episode:
         for second in range(1, 12):
@@ -483,7 +513,7 @@ def test_an_exported_duration_runs_from_the_first_sample_when_a_command_stream_s
         for second in (4, 10):
             episode.append(keys.TARGET_GRIP, 0.5, Time(**{RECORDED_TIME: second * 1_000_000_000}))
     out = tmp_path / 'out'
-    duration = {'__duration__': ColumnConfig(label='Duration')}
+    duration = {DURATION_COLUMN: ColumnConfig(label='Duration')}
     export_all(load_all_datasets(tmp_path / 'dataset'), out, ep_table_cfg=duration, max_resolution=64, assets=False)
 
     assert json.loads((out / 'api/episodes.json').read_text())['episodes'] == [[0, [10.0]]]
@@ -496,7 +526,7 @@ def test_an_episode_with_a_signal_of_no_rows_is_exported(tmp_path):
     [episode_dir] = [path.parent for path in (tmp_path / 'dataset').rglob('meta.json')]
     write_empty_scalar_file(episode_dir, 'marks')
     out = tmp_path / 'out'
-    duration = {'__duration__': ColumnConfig(label='Duration')}
+    duration = {DURATION_COLUMN: ColumnConfig(label='Duration')}
     export_all(load_all_datasets(tmp_path / 'dataset'), out, ep_table_cfg=duration, max_resolution=64, assets=False)
 
     assert json.loads((out / 'api/episodes.json').read_text())['episodes'] == [[0, [2.0]]]
@@ -807,7 +837,8 @@ def test_a_write_the_plan_does_not_name_is_refused(tmp_path):
 
 def test_the_path_limit_is_measured_with_the_working_directory_in_front_of_a_relative_output(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(export, '_path_max', lambda directory: export._path_length(tmp_path / 'out' / 'index.html'))
+    page = tmp_path / 'out' / 'index.html'
+    monkeypatch.setattr(static_export, '_path_max', lambda directory: static_export._path_length(page))
 
     with pytest.raises(ValueError, match='path limit'):
         _Output(Path('out')).plan([PurePosixPath('index.html')])
@@ -911,7 +942,7 @@ def test_a_second_export_into_the_directory_of_a_running_one_is_refused(dataset,
         except ValueError as error:
             refusals.append(error)
 
-    with positronic_server.app_state_restored():  # the first export, holding the state
+    with web_app.app_state_restored():  # the first export, holding the state
         thread = threading.Thread(target=second)
         thread.start()
         thread.join(0.2)
@@ -1144,7 +1175,7 @@ def test_a_download_named_past_a_windows_device_name_is_written(tmp_path):
 
 def _download_at(total_bytes: int, build_id: str) -> tuple[dict, tuple[str, ...]]:
     """A static dict with one download whose path on disk is `total_bytes` long, and that download's key path."""
-    stem = len(str(export._large_file_path(download_link(0, ('k',)), build_id))) - 1
+    stem = len(str(static_export._large_file_path(download_link(0, ('k',)), build_id))) - 1
     length = total_bytes - stem
     count = -(-(length + 1) // (MAX_COMPONENT_BYTES + 1))
     letters = length - (count - 1)
@@ -1158,8 +1189,8 @@ def _download_at(total_bytes: int, build_id: str) -> tuple[dict, tuple[str, ...]
 
 def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_export_before_it_writes(tmp_path):
     build_id = 'b' * MAX_COMPONENT_BYTES
-    static, keys = _download_at(export.MAX_KEY_BYTES + 1, build_id)
-    assert len(str(export._large_file_path(download_link(0, keys), build_id))) == export.MAX_KEY_BYTES + 1
+    static, keys = _download_at(static_export.MAX_KEY_BYTES + 1, build_id)
+    assert len(str(static_export._large_file_path(download_link(0, keys), build_id))) == static_export.MAX_KEY_BYTES + 1
     dataset = a_dataset(tmp_path / 'dataset', static)
 
     with pytest.raises(ValueError, match='key limit'):
@@ -1169,19 +1200,19 @@ def test_a_download_whose_path_on_disk_is_past_a_host_s_key_limit_stops_the_expo
 
 def test_a_path_at_a_host_s_key_limit_is_held_and_one_past_it_is_refused(monkeypatch):
     """The local limit is lifted: on macOS it equals the key limit, so no directory in front leaves room."""
-    monkeypatch.setattr(export, '_path_max', lambda directory: 1 << 16)
+    monkeypatch.setattr(static_export, '_path_max', lambda directory: 1 << 16)
     out = _Output(Path('out'))
     stem = '/'.join(['a' * MAX_COMPONENT_BYTES] * 4) + '/'
-    out.plan([PurePosixPath(stem + 'b' * (export.MAX_KEY_BYTES - len(stem)))])
+    out.plan([PurePosixPath(stem + 'b' * (static_export.MAX_KEY_BYTES - len(stem)))])
 
     with pytest.raises(ValueError, match='key limit'):
-        out.plan([PurePosixPath(stem + 'c' * (export.MAX_KEY_BYTES + 1 - len(stem)))])
+        out.plan([PurePosixPath(stem + 'c' * (static_export.MAX_KEY_BYTES + 1 - len(stem)))])
 
 
 def test_a_group_table_past_the_filter_set_bound_is_refused_before_the_episode_that_passes_it_is_written(
     dataset, tmp_path, monkeypatch
 ):
-    monkeypatch.setattr(export, 'MAX_FILTER_SETS_PER_GROUP', 6)
+    monkeypatch.setattr(static_export, 'MAX_FILTER_SETS_PER_GROUP', 6)
     out = tmp_path / 'out'
     with pytest.raises(ValueError, match='filter sets'):
         an_export(dataset, out, group_tables={'pairs': GROUPS['pairs']}, workers=1)
@@ -1190,7 +1221,7 @@ def test_a_group_table_past_the_filter_set_bound_is_refused_before_the_episode_t
 
 
 def test_a_group_table_at_the_filter_set_bound_is_written(dataset, tmp_path, monkeypatch):
-    monkeypatch.setattr(export, 'MAX_FILTER_SETS_PER_GROUP', 7)
+    monkeypatch.setattr(static_export, 'MAX_FILTER_SETS_PER_GROUP', 7)
     out = tmp_path / 'out'
 
     an_export(dataset, out, group_tables={'pairs': GROUPS['pairs']})
@@ -1203,26 +1234,26 @@ def test_a_local_path_at_the_filesystem_s_limit_is_refused_before_a_write_and_on
 ):
     out = tmp_path / 'out'
     probe = paths_of(an_export(dataset, tmp_path / 'probe'))
-    longest = max(export._path_length(out.joinpath(*PurePosixPath(path).parts)) for path in probe)
+    longest = max(static_export._path_length(out.joinpath(*PurePosixPath(path).parts)) for path in probe)
 
-    monkeypatch.setattr(export, '_path_max', lambda directory: longest)
+    monkeypatch.setattr(static_export, '_path_max', lambda directory: longest)
     with pytest.raises(ValueError, match='path limit'):
         an_export(dataset, out)
     assert not out.exists()
 
-    monkeypatch.setattr(export, '_path_max', lambda directory: longest + 1)
+    monkeypatch.setattr(static_export, '_path_max', lambda directory: longest + 1)
     assert paths_of(an_export(dataset, out)) == probe
 
 
 def test_where_the_platform_reports_no_path_limit_windows_s_holds_and_a_path_is_measured_in_utf_16_units(monkeypatch):
-    monkeypatch.setattr(export, '_REPORTS_PATH_MAX', False)
+    monkeypatch.setattr(static_export, '_REPORTS_PATH_MAX', False)
 
-    assert export._path_max(Path('out')) == export._WINDOWS_PATH_MAX
-    assert export._path_length(Path('\u00e9' * 10)) == 10 and export._path_length(Path('\U0001d11e')) == 2
+    assert static_export._path_max(Path('out')) == static_export._WINDOWS_PATH_MAX
+    assert static_export._path_length(Path('\u00e9' * 10)) == 10 and static_export._path_length(Path('\U0001d11e')) == 2
 
 
 def test_where_the_platform_reports_a_path_limit_a_path_is_measured_in_bytes():
-    assert export._path_length(Path('\u00e9' * 10)) == len(os.fsencode('\u00e9' * 10))
+    assert static_export._path_length(Path('\u00e9' * 10)) == len(os.fsencode('\u00e9' * 10))
 
 
 def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_before_it_writes(tmp_path, monkeypatch):
@@ -1231,11 +1262,11 @@ def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_befo
     dataset = a_dataset(tmp_path / 'dataset', {keys.TASK: 'Put it down'})
     out = tmp_path / 'out'
     probe = paths_of(export_all(dataset, tmp_path / 'probe', ep_table_cfg=TABLE, max_resolution=64, assets=False))
-    local = {path: export._path_length(out.joinpath(*PurePosixPath(path).parts)) for path in probe}
+    local = {path: static_export._path_length(out.joinpath(*PurePosixPath(path).parts)) for path in probe}
     longest = max(local.values())
     assert local['api/episode_rrd/0'] < longest
 
-    monkeypatch.setattr(export, '_path_max', lambda directory: longest)
+    monkeypatch.setattr(static_export, '_path_max', lambda directory: longest)
     with pytest.raises(ValueError, match='path limit'):
         export_all(dataset, out, ep_table_cfg=TABLE, max_resolution=64, assets=False)
     assert not out.exists()
@@ -1243,7 +1274,7 @@ def test_a_page_or_an_api_file_past_the_filesystem_s_limit_stops_the_export_befo
 
 def test_a_base_href_that_leaves_no_room_for_a_key_stops_the_export_before_it_writes(dataset, tmp_path):
     with pytest.raises(ValueError, match='key limit'):
-        an_export(dataset, tmp_path / 'out', base_href='/' + 'p' * (export.MAX_KEY_BYTES - 10) + '/')
+        an_export(dataset, tmp_path / 'out', base_href='/' + 'p' * (static_export.MAX_KEY_BYTES - 10) + '/')
     assert not (tmp_path / 'out').exists()
 
 

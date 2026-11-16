@@ -28,7 +28,7 @@ def _bimanual_trials(instruction: str, timeout: float | None, trial_count: int) 
     ]
 
 
-@cfn.config(embodiment=yam_bimanual, instruction='fold the towel', timeout=60, trial_count=1)
+@cfn.config(embodiment=yam_bimanual, instruction='put the plastic bottles in the bin', timeout=60, trial_count=1)
 def bimanual(embodiment, instruction: str, timeout: float | None, trial_count: int):
     """A real bimanual YAM eval: the operator sets the scene and annotates the outcome."""
     return Eval(embodiment, partial(_bimanual_trials, instruction, timeout, trial_count))

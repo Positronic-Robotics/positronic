@@ -1,6 +1,10 @@
+import base64
+import hashlib
 import os
+import socket
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -11,6 +15,7 @@ from positronic_model_server import grpc_wire, server_wire, websocket_wire
 from positronic_wire import wire
 from positronic_wire.grpc import GrpcClientWire
 from positronic_wire.websocket import WebsocketClientWire, WebsocketUnixClientWire
+from websockets.sync.server import ServerConnection, serve
 
 from positronic.offboard.server import PolicyServer
 from positronic.offboard.spec import Model, PolicyDeployment
@@ -123,3 +128,138 @@ def inference_server(start_server: StartServer, mock_model: MagicMock) -> tuple[
         mock_model, PolicyDeployment(Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)))
     )
     return host, port
+
+
+@pytest.fixture
+def never_accepting_port() -> Generator[int, None, None]:
+    """A port that listens and never accepts, so no handshake on it ever gets an answer."""
+    with socket.create_server(('localhost', 0)) as listener:
+        yield listener.getsockname()[1]
+
+
+@pytest.fixture
+def silent_websocket_port() -> Generator[int, None, None]:
+    """A port whose websocket server opens each connection and then sends nothing."""
+    stop = threading.Event()
+
+    def stay_silent(connection: ServerConnection) -> None:
+        stop.wait()
+
+    with serve(stay_silent, 'localhost', 0) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield server.socket.getsockname()[1]
+        stop.set()
+        server.shutdown()
+    thread.join(timeout=10.0)
+
+
+# The GUID a server appends to the client's key to compute Sec-WebSocket-Accept (RFC 6455, section 1.3).
+_WEBSOCKET_ACCEPT_GUID = b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+
+# How often the quiet peer's accept loop wakes to check whether the test has ended.
+_ACCEPT_POLL_S = 0.1
+
+
+def _accept_and_go_quiet(listener: socket.socket, held: list[socket.socket], stop: threading.Event) -> None:
+    """Answer each upgrade with 101, then read nothing and send nothing, as a peer cut off after the upgrade."""
+    while not stop.is_set():
+        try:
+            peer, _ = listener.accept()
+        except TimeoutError:
+            continue
+        held.append(peer)
+        peer.settimeout(None)
+        request = b''
+        while b'\r\n\r\n' not in request and (chunk := peer.recv(4096)):
+            request += chunk
+        if b'\r\n\r\n' not in request:
+            continue
+        key = next(
+            line.split(b':', 1)[1].strip()
+            for line in request.split(b'\r\n')
+            if line.lower().startswith(b'sec-websocket-key:')
+        )
+        accept = base64.b64encode(hashlib.sha1(key + _WEBSOCKET_ACCEPT_GUID).digest())
+        peer.sendall(
+            b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+            b'Sec-WebSocket-Accept: ' + accept + b'\r\n\r\n'
+        )
+
+
+@pytest.fixture
+def unanswering_websocket_port() -> Generator[int, None, None]:
+    """A port that completes each websocket upgrade and then answers nothing, not even a close."""
+    held: list[socket.socket] = []
+    stop = threading.Event()
+    with socket.create_server(('localhost', 0)) as listener:
+        # macOS refuses a shutdown of a listening socket, so the loop wakes on a timeout to read `stop`.
+        listener.settimeout(_ACCEPT_POLL_S)
+        thread = threading.Thread(target=_accept_and_go_quiet, args=(listener, held, stop), daemon=True)
+        thread.start()
+        yield listener.getsockname()[1]
+        stop.set()
+        thread.join(timeout=10.0)
+    assert not thread.is_alive(), 'the quiet peer did not stop when asked'
+    for peer in held:
+        peer.close()
+
+
+class FakeClock:
+    """``time`` as the client modules see it, on a clock that moves only when they sleep or a fake peer answers."""
+
+    time_ns = staticmethod(time.time_ns)
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+    def answer(self, after: float, timeout: float | None) -> bool:
+        """Wait for a peer that answers ``after`` seconds from now. False when ``timeout`` ends the wait first."""
+        if timeout is not None and after > timeout:
+            self.now += timeout
+            return False
+        self.now += after
+        return True
+
+    def connection(self, *answers: tuple[float, bytes | Exception]) -> wire.ClientConnection:
+        """A connection whose peer sends each of ``answers`` after its delay, counted from the previous one."""
+        return _ConnectionOnAFakeClock(self, list(answers))
+
+
+class _ConnectionOnAFakeClock(wire.ClientConnection):
+    def __init__(self, clock: FakeClock, answers: list[tuple[float, bytes | Exception]]):
+        self._clock = clock
+        self._answers = answers
+
+    def send(self, message: bytes) -> None:
+        pass
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        after, answer = self._answers[0]
+        if not self._clock.answer(after, timeout):
+            assert timeout is not None
+            self._answers[0] = (after - timeout, answer)
+            raise TimeoutError('no message within the timeout')
+        self._answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def close(self, timeout: float | None = None) -> str:
+        return 'closed'
+
+
+@pytest.fixture
+def fake_clock(monkeypatch) -> FakeClock:
+    """A ``FakeClock`` that both client modules read in place of ``time``."""
+    clock = FakeClock()
+    monkeypatch.setattr('positronic.offboard.client.time', clock)
+    monkeypatch.setattr('positronic.offboard.roboarena.time', clock)
+    return clock

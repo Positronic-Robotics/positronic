@@ -54,7 +54,7 @@ Open Oculus Browser, navigate to `https://<host-ip>:5005/`. Browser shows "Dange
 
 Press **Track** (or Right A) to enable controller. Press **Record** (or Right B) to start episode. Perform task (e.g., grasp cube, move, place). Press **Record** again to save. Press **Reset** (or Right stick press) to ready the rig for the next episode: the arm goes back to a start pose, and in sim the scene is drawn again. Teleoperation is held until every device is there. Press **Reset** during recording to abort and discard.
 
-**Best practices:** Record calibration runs first and review in Positronic server (`uv run positronic-server --dataset.path=~/datasets/my_task`). Collect 50+ demonstrations for single-task scenarios (minimum 30, multi-task needs 100-500+). Randomize object positions, vary approach angles, keep episodes short (10-30s), demonstrate successful and near-failure cases (not catastrophic failures).
+**Best practices:** Record calibration runs first and review in the dataset viewer (`uv run positronic-dataset-viewer --dataset.path=~/datasets/my_task`). Collect 50+ demonstrations for single-task scenarios (minimum 30, multi-task needs 100-500+). Randomize object positions, vary approach angles, keep episodes short (10-30s), demonstrate successful and near-failure cases (not catastrophic failures).
 
 ## Hardware Platforms
 
@@ -89,7 +89,7 @@ Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --loc
 
 Launch viewer:
 ```bash
-uv run positronic-server \
+uv run positronic-dataset-viewer \
     --dataset.path=~/datasets/my_task \
     --port=5001
 ```

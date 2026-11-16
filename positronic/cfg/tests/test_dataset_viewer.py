@@ -6,14 +6,15 @@ from eval_vocabulary.progress import LADDER, STAGE_LABELS, STATE_SIGNAL, Stage
 
 from pimm.time import RECEIVED_WORLD
 from positronic import keys
-from positronic.cfg import server as cfg_server
+from positronic.cfg import dataset_viewer as cfg_viewer
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.dataset_viewer.rerun_replay import DURATION_COLUMN, INDEX_COLUMN
+from positronic.dataset_viewer.rollout_cells import NO_RATE, NO_STAGE, StageCell
+from positronic.dataset_viewer.web_app import filter_spelling
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.policy import keys as policy_keys
-from positronic.server.positronic_server import filter_spelling
-from positronic.server.rollouts import NO_RATE, NO_STAGE, StageCell
 
 
 @pytest.mark.parametrize(
@@ -36,8 +37,8 @@ def test_finetuning_rates_use_the_recording_clock(timelines):
         keys.TASK: 'pick',
         'units': 2,
     })
-    assert cfg_server.uph(episode) == pytest.approx(120)
-    row = cfg_server.finetune_group_by_task().group_fn([episode, episode])
+    assert cfg_viewer.uph(episode) == pytest.approx(120)
+    row = cfg_viewer.finetune_group_by_task().group_fn([episode, episode])
     assert row['duration'] == pytest.approx(2 / 60)
     assert row['uph'] == pytest.approx(120)
     assert row['count'] == 2
@@ -51,14 +52,14 @@ def _with_stages(*codes):
 def _row(outcome, stage=NO_STAGE, model='pi05'):
     """One episode as the model table reads it: the three fields the preset derived onto it."""
     return EpisodeContainer({
-        cfg_server.DERIVED_MODEL: model,
-        cfg_server.DERIVED_OUTCOME: outcome,
-        cfg_server.DERIVED_STAGE: stage,
+        cfg_viewer.DERIVED_MODEL: model,
+        cfg_viewer.DERIVED_OUTCOME: outcome,
+        cfg_viewer.DERIVED_STAGE: stage,
     })
 
 
 def test_the_stage_cell_sorts_by_the_ladder_and_not_by_the_label():
-    cells = [cfg_server.highest_rollout_stage(_with_stages(stage.value)) for stage in LADDER]
+    cells = [cfg_viewer.highest_rollout_stage(_with_stages(stage.value)) for stage in LADDER]
     ranks = [cell.rank for cell in cells]
     labels = [cell.label for cell in cells]
 
@@ -69,12 +70,12 @@ def test_the_stage_cell_sorts_by_the_ladder_and_not_by_the_label():
 def test_the_stage_cell_shows_the_operators_word_for_the_rung():
     top = Stage.AT_TARGET
 
-    assert cfg_server.highest_rollout_stage(_with_stages(top)) == StageCell(LADDER.index(top), STAGE_LABELS[top])
+    assert cfg_viewer.highest_rollout_stage(_with_stages(top)) == StageCell(LADDER.index(top), STAGE_LABELS[top])
 
 
 def test_the_highest_rung_reached_is_the_one_shown():
     """A rollout records every rung it passes, and the cell shows the highest."""
-    cell = cfg_server.highest_rollout_stage(_with_stages('at-target', 'reaching', 'contact'))
+    cell = cfg_viewer.highest_rollout_stage(_with_stages('at-target', 'reaching', 'contact'))
 
     assert cell.label == STAGE_LABELS[Stage.AT_TARGET]
 
@@ -82,38 +83,38 @@ def test_the_highest_rung_reached_is_the_one_shown():
 def test_an_episode_that_recorded_no_progress_still_sorts_against_the_ladder():
     """A string cell among numeric ones is not an ordering: the page compares whatever each cell holds,
     so a no-progress episode could sit above a higher rung from one end of the sort."""
-    assert cfg_server.highest_rollout_stage(EpisodeContainer({})) == NO_STAGE
+    assert cfg_viewer.highest_rollout_stage(EpisodeContainer({})) == NO_STAGE
     assert NO_STAGE.rank < min(LADDER.index(stage) for stage in LADDER)
     assert isinstance(NO_STAGE.rank, int)
 
 
 def test_a_rung_the_ladder_does_not_carry_is_not_a_stage():
     """A recording made against a longer ladder carries codes that this ladder does not."""
-    assert cfg_server.highest_rollout_stage(_with_stages('teleporting')) == NO_STAGE
+    assert cfg_viewer.highest_rollout_stage(_with_stages('teleporting')) == NO_STAGE
 
 
 def test_every_column_of_the_episode_table_is_a_key_the_preset_derives():
     """A column keyed by a name that the preset does not derive shows empty and raises nothing."""
     derived = {
-        cfg_server.DERIVED_MODEL,
-        cfg_server.DERIVED_OUTCOME,
-        cfg_server.DERIVED_STAGE,
-        cfg_server.DERIVED_ITEMS,
-        cfg_server.DERIVED_STARTED,
+        cfg_viewer.DERIVED_MODEL,
+        cfg_viewer.DERIVED_OUTCOME,
+        cfg_viewer.DERIVED_STAGE,
+        cfg_viewer.DERIVED_ITEMS,
+        cfg_viewer.DERIVED_STARTED,
     }
-    built_in = {'__index__', '__duration__'}
+    built_in = {INDEX_COLUMN, DURATION_COLUMN}
     recorded = {'task'}
 
-    columns = set(cfg_server.rollouts_episodes_table.instantiate())
+    columns = set(cfg_viewer.rollouts_episodes_table.instantiate())
 
     assert columns - built_in - recorded <= derived
 
 
 def test_the_model_group_table_groups_on_the_key_the_preset_derives():
-    group = cfg_server.rollouts_by_model.instantiate()
+    group = cfg_viewer.rollouts_by_model.instantiate()
 
-    assert group.group_keys == cfg_server.DERIVED_MODEL
-    assert set(group.format_table) >= {cfg_server.DERIVED_MODEL}
+    assert group.group_keys == cfg_viewer.DERIVED_MODEL
+    assert set(group.format_table) >= {cfg_viewer.DERIVED_MODEL}
 
 
 def test_an_unlabelled_llm_rollout_takes_the_short_name_of_its_model():
@@ -122,21 +123,21 @@ def test_an_unlabelled_llm_rollout_takes_the_short_name_of_its_model():
         f'{policy_keys.POLICY_META}.{policy_keys.MODEL}': 'azure:gpt-4.1',
     })
 
-    assert cfg_server.rollout_model(ep) == 'gpt4.1'
+    assert cfg_viewer.rollout_model(ep) == 'gpt4.1'
 
 
 def test_a_stage_cell_would_spell_itself_into_a_filter_dropdown():
     """`filter_spelling` is `str(value)`, which spells a `StageCell` as its repr — so the Stage
     column offers no filter."""
     top = Stage.AT_TARGET
-    cell = cfg_server.highest_rollout_stage(_with_stages(top))
+    cell = cfg_viewer.highest_rollout_stage(_with_stages(top))
 
     assert filter_spelling(cell) == f'StageCell(rank={LADDER.index(top)}, label={STAGE_LABELS[top]!r})'
-    assert cfg_server.rollouts_episodes_table.instantiate()[cfg_server.DERIVED_STAGE].filter is False
+    assert cfg_viewer.rollouts_episodes_table.instantiate()[cfg_viewer.DERIVED_STAGE].filter is False
 
 
 def test_the_model_table_counts_a_target_reached_off_the_stage_cell():
-    group = cfg_server.rollouts_by_model.instantiate()
+    group = cfg_viewer.rollouts_by_model.instantiate()
     top = Stage.AT_TARGET
     at_target = _row(Outcome.SUCCESS, StageCell(LADDER.index(top), STAGE_LABELS[top]))
     short = _row(Outcome.OUT_OF_TIME, NO_STAGE)
@@ -148,7 +149,7 @@ def test_the_model_table_counts_a_target_reached_off_the_stage_cell():
 
 
 def test_a_rung_above_the_target_still_counts_as_reaching_it():
-    group = cfg_server.rollouts_by_model.instantiate()
+    group = cfg_viewer.rollouts_by_model.instantiate()
     beyond = LADDER.index(Stage.AT_TARGET) + 1
 
     row = group.group_fn([_row(Outcome.SUCCESS, StageCell(beyond, 'put it down again'))])
@@ -157,7 +158,7 @@ def test_a_rung_above_the_target_still_counts_as_reaching_it():
 
 
 def test_a_rung_below_the_target_does_not_count_as_reaching_it():
-    group = cfg_server.rollouts_by_model.instantiate()
+    group = cfg_viewer.rollouts_by_model.instantiate()
     below = Stage.CONTROL
 
     row = group.group_fn([_row(Outcome.FAIL, StageCell(LADDER.index(below), STAGE_LABELS[below]))])
@@ -167,17 +168,17 @@ def test_a_rung_below_the_target_does_not_count_as_reaching_it():
 
 def test_an_episode_nobody_scored_reads_as_unscored():
     """An absent outcome and `UNSCORED` are one state, and the page shows one word for it."""
-    assert cfg_server.rollout_outcome(EpisodeContainer({})) == Outcome.UNSCORED
-    assert cfg_server.rollout_outcome(EpisodeContainer({OUTCOME: Outcome.UNSCORED})) == Outcome.UNSCORED
+    assert cfg_viewer.rollout_outcome(EpisodeContainer({})) == Outcome.UNSCORED
+    assert cfg_viewer.rollout_outcome(EpisodeContainer({OUTCOME: Outcome.UNSCORED})) == Outcome.UNSCORED
 
 
 def test_a_word_this_vocabulary_does_not_carry_reaches_the_page_as_itself():
-    assert cfg_server.rollout_outcome(EpisodeContainer({OUTCOME: 'Rescored by hand'})) == 'Rescored by hand'
+    assert cfg_viewer.rollout_outcome(EpisodeContainer({OUTCOME: 'Rescored by hand'})) == 'Rescored by hand'
 
 
 def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():
     """A discarded attempt measured nothing, so counting it as a failure understates the endpoint."""
-    group = cfg_server.rollouts_by_model.instantiate()
+    group = cfg_viewer.rollouts_by_model.instantiate()
 
     row = group.group_fn([_row(Outcome.SUCCESS), _row(Outcome.DISCARDED), _row(Outcome.UNSCORED)])
 
@@ -189,7 +190,7 @@ def test_an_episode_the_operator_discarded_is_listed_and_left_out_of_the_rate():
 
 def test_a_model_nobody_scored_has_no_rate_rather_than_a_zero():
     """Zero would read as an endpoint that failed every attempt, which is the opposite of unscored."""
-    group = cfg_server.rollouts_by_model.instantiate()
+    group = cfg_viewer.rollouts_by_model.instantiate()
 
     row = group.group_fn([_row(Outcome.UNSCORED), _row(Outcome.DISCARDED)])
 

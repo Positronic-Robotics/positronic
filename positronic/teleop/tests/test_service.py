@@ -11,23 +11,38 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 import httpx
 import numpy as np
 import pos3
 import pytest
 from positronic_model_server import keys as server_keys
-from positronic_model_server.protocol import AUTH_HEADER, OBSERVATION, RESULT, SESSION_ID, STATUS, ServerStatus, bearer
+from positronic_model_server.protocol import (
+    AUTH_HEADER,
+    META,
+    OBSERVATION,
+    PROTOCOL_VERSION,
+    RESULT,
+    SESSION_ID,
+    STATUS,
+    ProtocolVersion,
+    ServerStatus,
+    bearer,
+)
 from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
+from positronic_model_server.server import ModelServer
 from positronic_model_server.server_wire import ServedHostPort
 from positronic_model_server.websocket_wire import ServedUnixSocket
-from positronic_wire import registry
+from positronic_wire import registry, wire
+from positronic_wire.websocket import WebsocketUnixClientWire
 from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddress
 from websockets.http11 import Request, Response
 from websockets.sync.client import unix_connect
 from websockets.sync.server import ServerConnection, serve
 
 import pimm
+import positronic.cfg.policy
 import positronic.cfg.simulator
 from pimm.time import EMITTED_WORLD
 from pimm.world import SystemClock
@@ -36,7 +51,7 @@ from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import main
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers import webxr
-from positronic.drivers.webxr import STATE_PATH, WebXR
+from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
@@ -52,7 +67,17 @@ from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
 from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
-from positronic.teleop.service import Button, ButtonMap, Event, Phase, ReadyAnswer, TeleopModel, TeleopService
+from positronic.teleop.service import (
+    OTHERS_WIDTH,
+    Button,
+    ButtonMap,
+    CameraState,
+    Event,
+    Phase,
+    ReadyAnswer,
+    TeleopModel,
+    TeleopService,
+)
 from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
 from positronic.tests.testing_inference import free_port
 from positronic.utils import package_assets_path
@@ -385,6 +410,86 @@ def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket
             assert service.phase is Phase.RUNNING
             pressing.join()
             run.close()
+
+
+# A teleoperator on a real rig can take about this long to get ready, and the opening of the session waits for it.
+TELEOPERATOR_GETS_READY_SEC = 300.0
+
+
+class _FakeTime:
+    """The ``time`` module as one module sees it, on a clock that moves only when that module sleeps or waits.
+
+    It replaces the module's ``time`` name, not the attributes of ``time``: a thread that an earlier test left
+    running and that sleeps would otherwise move this clock too."""
+
+    time_ns = staticmethod(time.time_ns)
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+# A client stack the fake teleop server declares on Ready.
+_TELEOP_STACK = Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=1.0))
+
+
+class _ReadyWaitOnAFakeClock(wire.ClientConnection):
+    """A teleop session on the fake clock ``clock``: a waiting status at each interval of the model server, and Ready
+    at ``ready_at``. A wait that ends before the next message advances the clock and times out. After Ready, the
+    server echoes the end of the session."""
+
+    def __init__(self, clock: _FakeTime, ready_at: float):
+        self._clock = clock
+        self._ready_at = ready_at
+        self._next_waiting = clock.now
+        self._sent: list[bytes] = []
+
+    def send(self, message: bytes) -> None:
+        assert self._clock.now >= self._ready_at, 'the opening sends nothing before Ready'
+        self._sent.append(message)
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        if self._sent:
+            return self._sent.pop(0)
+        arrives = min(self._next_waiting, self._ready_at)
+        if timeout is not None and arrives - self._clock.now > timeout:
+            self._clock.now += timeout
+            raise TimeoutError('no message within the timeout')
+        self._clock.now = max(self._clock.now, arrives)
+        if arrives == self._ready_at:
+            return serialise({
+                STATUS: ServerStatus.READY,
+                PROTOCOL_VERSION: ProtocolVersion.V3.value,
+                META: {server_keys.LOCAL_STACK: _TELEOP_STACK.to_spec()},
+                SESSION_ID: 'teleop',
+            })
+        self._next_waiting += ModelServer.WAITING_INTERVAL_SEC
+        return serialise({STATUS: ServerStatus.WAITING})
+
+    def close(self, timeout: float | None = None) -> str:
+        return 'closed'
+
+
+def test_the_default_deadlines_of_a_teleop_policy_outlast_a_five_minute_wait_for_ready(runtime):
+    """A run of ``cfg.policy.teleop`` with its default deadlines starts when Ready comes after five minutes."""
+    clock = _FakeTime()
+    ready_at = TELEOPERATOR_GETS_READY_SEC + ModelServer.WAITING_INTERVAL_SEC
+    policy = positronic.cfg.policy.teleop.instantiate()
+    with (
+        patch.object(WebsocketUnixClientWire, 'dial', return_value=_ReadyWaitOnAFakeClock(clock, ready_at)),
+        patch('positronic.offboard.client.time', clock),
+    ):
+        run = runtime.start(policy)
+    try:
+        assert runtime.metadata_snapshot()[policy_keys.SESSION_ID] == 'teleop'
+        assert clock.now == ready_at
+    finally:
+        run.close()
 
 
 def test_a_silent_headset_reads_as_not_tracked_and_turns_control_off(service, socket_path, runtime):
@@ -739,9 +844,270 @@ def test_the_headset_shows_the_first_camera_or_the_one_that_the_session_names(so
         encoded = {name: encode_jpeg(image) for name, image in images.items()}
         connection.frame({**FRAME_REQUEST, **encoded})
         shown = keys.WRIST_IMAGE if headset_camera is None else headset_camera
-        assert service.view().shape == images[shown].shape
+        assert _main_level(service.view()) == images[shown][0, 0, 0]
         assert service.state().cameras == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
         connection.close()
+
+
+def _main_level(view: np.ndarray) -> int:
+    """The value at the centre of the part of ``view`` that shows the main camera."""
+    width, height = VIEW_SIZE
+    return int(view[height // 2, width // 2, 0])
+
+
+def _column_levels(view: np.ndarray, count: int) -> list[int]:
+    """The value at the centre of each of the ``count`` cells of the column of the other cameras."""
+    width, height = VIEW_SIZE
+    cell = height // count
+    return [int(view[row * cell + cell // 2, width + OTHERS_WIDTH // 2, 0]) for row in range(count)]
+
+
+def test_the_headset_shows_the_other_cameras_in_a_column_beside_the_main_camera(socket_path, connect):
+    levels = {keys.EXTERIOR_IMAGE: 200, keys.WRIST_IMAGE: 50, keys.EXTERIOR_IMAGE_2: 120}
+    query = session_query(cameras=list(levels))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        images = {name: encode_jpeg(np.full((48, 64, 3), level, np.uint8)) for name, level in levels.items()}
+        frame = {**FRAME_REQUEST, **images}
+        connection.frame(frame)
+        connection.frame(frame)
+        width, height = VIEW_SIZE
+        view = service.view()
+        assert view.shape == (height, width + OTHERS_WIDTH, 3)
+        assert _main_level(view) == 200
+        assert _column_levels(view, 2) == [50, 120]
+        service.choose_camera(keys.WRIST_IMAGE)
+        assert _main_level(service.view()) == 50
+        assert _column_levels(service.view(), 2) == [200, 120]
+        assert _column_levels(service.view(camera=False), 2) == [0, 0], 'a clear panel shows the text alone'
+        connection.close()
+
+
+def test_the_headset_view_keeps_its_size_from_the_wait_for_a_trial_to_the_trial(socket_path, connect):
+    station = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=station) as service:
+        idle = service.view()
+        connection = _readied_connection(service, socket_path, connect)
+        image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+        connection.frame({**FRAME_REQUEST, **dict.fromkeys(station, image)})
+        assert service.view().shape == idle.shape
+        connection.close()
+
+
+def test_the_wait_for_ready_shows_the_cameras_of_its_session_and_not_those_of_the_last_run(socket_path, connect):
+    image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        last = _readied_connection(service, socket_path, connect, session_query(cameras=[keys.WRIST_IMAGE]))
+        for _ in range(2):
+            last.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: image})
+        last.close()
+        _until_cleared(service)
+        cameras = [keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2]
+        connection = connect(socket_path, session_query(cameras=cameras))
+        _until_phase(service, Phase.READY_WAIT)
+        assert service.cameras().names == tuple(cameras)
+        waiting = service.view()
+        service.take_sample(HAND, _buttons(b=1.0))
+        service.take_sample(HAND, _buttons())
+        connection.wait_open()
+        connection.frame({**FRAME_REQUEST, **dict.fromkeys(cameras, image)})
+        assert service.view().shape == waiting.shape
+        connection.close()
+
+
+def test_a_wait_for_ready_that_fails_leaves_the_cameras_of_the_station(socket_path):
+    session = protocol.SessionParams(cameras=(keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE]) as service:
+
+        def cancel_when_asked() -> None:
+            _until_phase(service, Phase.READY_WAIT)
+            service.cancel_ready_wait()
+
+        cancelling = threading.Thread(target=cancel_when_asked)
+        cancelling.start()
+        with pytest.raises(service_module.TrialNotStarted, match='cancelled the trial'):
+            service.wait_for_ready(session, threading.Event())
+        cancelling.join()
+        assert service.cameras().names == (keys.WRIST_IMAGE,)
+
+
+@pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
+def test_the_camera_that_the_teleoperator_chose_is_the_main_camera_of_the_wait_for_ready(
+    socket_path, connect, headset_camera
+):
+    station = [keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE]
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=station) as service:
+        service.choose_camera(keys.WRIST_IMAGE)
+        connection = connect(socket_path, session_query(cameras=station, headset_camera=headset_camera))
+        _until_phase(service, Phase.READY_WAIT)
+        assert service.cameras().shown == keys.WRIST_IMAGE
+        connection.close()
+
+
+def test_a_session_of_one_camera_shows_that_camera_with_no_column(socket_path, connect):
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: encode_jpeg(np.zeros((48, 64, 3), np.uint8))})
+        assert service.view().shape == (48, 64, 3)
+        connection.close()
+
+
+def test_a_session_that_names_no_cameras_gets_the_cameras_of_the_station(socket_path, connect):
+    """So a plan need not name the cameras of the rig that the station runs."""
+    station = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=station) as service:
+        assert service.cameras() == CameraState(station, (), None, None)
+        connection = _readied_connection(service, socket_path, connect)
+        image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+        connection.frame({**FRAME_REQUEST, **dict.fromkeys(station, image)})
+        assert service.state().cameras == station
+        assert service.cameras() == CameraState(station, station, keys.WRIST_IMAGE, None)
+        connection.close()
+
+
+def test_a_station_camera_list_that_is_one_string_is_refused(socket_path):
+    with pytest.raises(ValueError, match='cameras must be a list of camera names'):
+        TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=keys.WRIST_IMAGE)
+
+
+def test_the_cameras_that_a_session_names_go_before_the_cameras_of_the_station(socket_path, connect):
+    query = session_query(cameras=[keys.EXTERIOR_IMAGE])
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE]) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.EXTERIOR_IMAGE: encode_jpeg(np.zeros((24, 32, 3), np.uint8))})
+        assert service.state().cameras == (keys.EXTERIOR_IMAGE,)
+        connection.close()
+
+
+def test_the_camera_that_the_teleoperator_chose_goes_before_the_one_of_the_session_and_holds(socket_path, connect):
+    images = {
+        keys.WRIST_IMAGE: np.full((24, 32, 3), 50, np.uint8),
+        keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 200, np.uint8),
+    }
+    query = session_query(cameras=list(images), headset_camera=keys.WRIST_IMAGE)
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        frame = {**FRAME_REQUEST, **{name: encode_jpeg(image) for name, image in images.items()}}
+        # Two frames: a trial that answered one frame stays for a session that resumes it
+        connection.frame(frame)
+        connection.frame(frame)
+        service.choose_camera(keys.EXTERIOR_IMAGE)
+        assert _main_level(service.view()) == 200
+        assert service.cameras().shown == keys.EXTERIOR_IMAGE
+        service.choose_camera(None)
+        assert _main_level(service.view()) == 50
+        service.choose_camera(keys.EXTERIOR_IMAGE)
+        connection.close()
+        _until_cleared(service)
+        assert service.cameras().chosen == keys.EXTERIOR_IMAGE, 'the choice went with the trial'
+
+
+def test_a_view_with_no_camera_shows_the_text_on_black(socket_path, connect):
+    """A clear panel shows black as clear: with no camera image, only the text floats over the room."""
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    width, height = VIEW_SIZE
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        bright = np.full((height, width, 3), 200, np.uint8)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: encode_jpeg(bright)})
+        assert service.view()[height // 2, width // 2].min() > 150
+        assert not service.view(camera=False)[height // 2, width // 2].any()
+        connection.close()
+
+
+def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, connect):
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    width, height = VIEW_SIZE
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        idle = service.view()
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: encode_jpeg(np.zeros((height, width, 3), np.uint8))})
+        running = service.view(camera=False)
+        connection.close()
+    # One line of the hint while no camera shows, and the camera above it while one does
+    assert idle[height - 26 :].any() and not idle[height - 48 : height - 30].any()
+    assert running[height - 48 : height - 30].any()
+
+
+def test_a_camera_of_the_run_that_the_station_does_not_name_stays_listed_and_live_between_trials(socket_path, connect):
+    query = session_query(cameras=[keys.EXTERIOR_IMAGE])
+    image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE]) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.EXTERIOR_IMAGE: image})
+        connection.frame({**FRAME_REQUEST, keys.EXTERIOR_IMAGE: image})
+        connection.close()
+        _until_cleared(service)
+        cameras = service.cameras()
+    assert cameras.names == (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE)
+    assert cameras.live == (keys.EXTERIOR_IMAGE,)
+
+
+def test_a_camera_stays_live_between_trials_and_not_longer_than_the_live_window(socket_path, connect, monkeypatch):
+    """Images come only while a trial runs, when the teleoperator is in the headset and does not see the page."""
+    query = session_query(cameras=[keys.WRIST_IMAGE])
+    image = encode_jpeg(np.full((24, 32, 3), 50, np.uint8))
+    with TeleopService(ServedUnixSocket(socket_path), 5.0, 0.05, HOLD_SEC) as service:
+        connection = _readied_connection(service, socket_path, connect, query)
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: image})
+        connection.frame({**FRAME_REQUEST, keys.WRIST_IMAGE: image})
+        connection.close()
+        _until_cleared(service)
+        assert service.cameras().live == (keys.WRIST_IMAGE,)
+        monkeypatch.setattr(TeleopService, 'LIVE_SEC', 0.0)
+        assert service.cameras().live == ()
+
+
+def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(socket_path, monkeypatch):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
+    asked = []
+    monkeypatch.setattr(service, 'view', lambda camera=True: asked.append(camera) or np.zeros((2, 2, 3), np.uint8))
+    bridge = command._Headset(service)
+    bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
+    bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
+    bridge.controller_positions._bind(ManualCommandReceiver())
+    bridge.buttons._bind(ManualCommandReceiver())
+    page_input = ManualCommandReceiver()
+    bridge.page_input._bind(page_input)
+    stop = types.SimpleNamespace(value=False)
+    loop = bridge.run(cast(pimm.SignalReceiver, stop), SystemClock())
+    next(loop)
+    page_input.push({command.TEXT_ONLY: True})
+    next(loop)
+    page_input.push({command.TEXT_ONLY: False})
+    next(loop)
+    assert asked == [True, False, True]
+
+
+def test_a_camera_that_neither_the_run_nor_the_station_has_cannot_be_chosen(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE])
+    with pytest.raises(ValueError, match='no camera'):
+        service.choose_camera(keys.EXTERIOR_IMAGE)
+    service.choose_camera(keys.WRIST_IMAGE)
+    assert service.cameras().chosen == keys.WRIST_IMAGE
+
+
+@pytest.mark.parametrize(
+    ('camera', 'chosen'), [(keys.WRIST_IMAGE, keys.WRIST_IMAGE), ([], None), ({'name': keys.WRIST_IMAGE}, None)]
+)
+def test_the_headset_bridge_takes_the_camera_that_the_page_chose_and_logs_a_camera_that_is_no_name(
+    socket_path, camera, chosen
+):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE])
+    bridge = command._Headset(service)
+    sent = RecordingEmitter[dict]()
+    bridge.page_state._bind(sent, clock=SystemClock())
+    bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
+    bridge.controller_positions._bind(ManualCommandReceiver())
+    bridge.buttons._bind(ManualCommandReceiver())
+    page_input = ManualCommandReceiver()
+    page_input.push({command.HEADSET_CAMERA: camera})
+    bridge.page_input._bind(page_input)
+    stop = types.SimpleNamespace(value=False)
+    next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
+    [(_, state)] = sent.emitted
+    assert state['chosen'] == chosen and state['cameras'] == (keys.WRIST_IMAGE,)
 
 
 @pytest.mark.parametrize('view_fps', [0.0, -1.0, float('nan'), float('inf')])
@@ -837,7 +1203,7 @@ def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(soc
         trials = pool.submit(
             scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
         )
-        service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+        service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
         moves = []
         while END not in (element := service.next_frame(FRAME_REQUEST, [])):
             moves.append(element[ACTION][:3])
@@ -855,7 +1221,7 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
         )
         ends = []
         for _ in range(2):
-            service.wait_for_ready(OperatorPosition.BACK.value, None, threading.Event())
+            service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
             while END not in (element := service.next_frame(FRAME_REQUEST, [])):
                 pass
             ends.append(element[END])
@@ -863,10 +1229,17 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
     assert ends == [PolicyEnd.COMPLETE.value, PolicyEnd.COMPLETE.value]
 
 
-def test_the_phone_page_reads_the_fields_of_the_page_state():
+def test_the_phone_page_reads_fields_of_the_page_state():
     page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
     [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
-    assert set(re.findall(r"'(\w+)'", fields)) == set(command.PageState.__dataclass_fields__)
+    assert set(re.findall(r"'(\w+)'", fields)) <= set(command.PageState.__dataclass_fields__)
+
+
+def test_the_headset_page_names_the_routes_the_page_state_fields_and_the_input_fields_of_the_service():
+    page = Path(package_assets_path('assets/webxr/index.html')).read_text()
+    routes_and_inputs = [STATE_PATH, INPUT_PATH, command.HEADSET_CAMERA, command.TEXT_ONLY]
+    contract = [*routes_and_inputs, *command.PageState.__dataclass_fields__]
+    assert [name for name in contract if not re.search(f"""['"]{re.escape(name)}['"]""", page)] == []
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
@@ -880,7 +1253,7 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     stop = types.SimpleNamespace(value=False)
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
-    assert state == {'phase': Phase.IDLE, 'control': False}
+    assert state == {'phase': Phase.IDLE, 'control': False, 'cameras': (), 'live': (), 'shown': None, 'chosen': None}
 
 
 def _until_served(url: str, seconds: float = 10.0) -> None:

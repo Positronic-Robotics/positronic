@@ -145,6 +145,11 @@ class _Gripper(DriverRun[float]):
         self._status: Status | None = None
         self._disobeys = False
 
+    def disobeys_move(self, reading: Reading, target: float) -> bool:
+        """The gripper took ``target`` as its request, and reports its fingers there while they stand far from it."""
+        took_target = abs(reading.requested - int(target * 255)) <= 1
+        return took_target and reading.claims_arrival_farther_than(self._tuning.arrival_tolerance)
+
     def observe(self) -> Reading:
         """Read the gripper, publish how closed the fingers are, and log what changed."""
         response = self._client.read_input_registers(_REG_IN, count=3, device_id=_SLAVE)
@@ -198,9 +203,12 @@ class _Gripper(DriverRun[float]):
         if response.isError():
             raise ModbusException(f'the gripper refused a write: {response}')
 
-    def hold_error(self, cause: Exception) -> DeviceFault:
-        """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus."""
-        error = device_fault(cause, FaultKind.GRIPPER, f'The Robotiq gripper is lost: {cause}')
+    def hold_error(self, cause: Exception, message: str = '') -> DeviceFault:
+        """Put an error for ``cause`` on the width, answer the move in flight with it, and close the bus.
+
+        ``message`` defaults to saying the gripper is lost.
+        """
+        error = device_fault(cause, FaultKind.GRIPPER, message or f'The Robotiq gripper is lost: {cause}')
         logger.error(f'{error}; it holds the error until a ready call activates it again')
         # The Message types do not name the SignalError that any message can carry.
         self._out.emit(cast(float, error))
@@ -222,7 +230,7 @@ class Robotiq2F(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter(self)
         self.target_grip = pimm.ControlSystemReceiver[float](self)
         self.sync_move = pimm.calls.ControlSystemHandler[float, None](self)
-        # Answers at once while the bus answers. On a lost gripper it activates the gripper again first.
+        # Answers at once while the bus answers. On a gripper in error it activates the gripper again first.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # Re-activates the gripper: the fingers stroke fully open and closed, and drop what they hold.
         self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
@@ -271,13 +279,19 @@ class Robotiq2F(pimm.ControlSystem):
     ) -> Generator[pimm.Command, None, DeviceFault | None]:
         """Serve one tick of calls and moves. None while the bus answers, else the error now on ``grip``."""
         try:
-            grip = gripper.observe().width
+            reading = gripper.observe()
             for call in self.ready.incoming():
                 call.set_result(None)
             if asked := list(self.recover.incoming()):
                 return (yield from self._reactivate(gripper, asked))
+            # A streamed width raises no fault: the fingers are checked against a move that a caller waits on
+            if moves.active and gripper.disobeys_move(reading, float(moves.target)):
+                disobeys = RuntimeError(
+                    f'reports its fingers at the request of a move to {moves.target:.3f}: {reading}'
+                )
+                return gripper.hold_error(disobeys, f'The Robotiq gripper {disobeys}')
 
-            target = grip_setpoint(moves, grip, clock.now())
+            target = grip_setpoint(moves, reading.width, clock.now())
             if target is not None:
                 self._command(gripper, target)
             moves.answer()  # the width a settled move is answered with is on the fingers
@@ -299,7 +313,7 @@ class Robotiq2F(pimm.ControlSystem):
         if not readies and not recovers:
             yield gripper.limiter.wait()
             return held
-        logger.info('A call asked to activate the lost Robotiq gripper again')
+        logger.info('A call asked to activate the Robotiq gripper in error again')
         try:
             outcome = yield from gripper.activate()
         except _BUS_FAULTS as exc:

@@ -533,10 +533,8 @@ action = session.infer(observation)
 `wire.KeepaliveUnsupported` on a server without the call.
 
 `new_session` retries a cold backend until `connect_deadline`, and raises `TimeoutError` when it stays cold.
-The first dial gets the whole `open_timeout`, so `connect_deadline=0` is one attempt. Each retry gets
-`open_timeout` or the time left, whichever is shorter, so no retry waits past the deadline. An edge that holds
-a dial while it starts a backend wants `open_timeout` as long as the cold start, so one dial waits through it;
-`RemotePolicy` takes both. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says
+The deadline bounds the whole opening: each dial gets `open_timeout` or the time left, whichever is shorter,
+and no status wait lasts past the deadline. `RemotePolicy` takes both settings. A refusal that no retry clears raises `wire.ConnectRefused`, whose `refusal` says
 what the server answered: `FORBIDDEN` for a refused credential, `FINAL` for a permanent refusal. `new_session`
 raises no exception of the WebSocket or gRPC library.
 

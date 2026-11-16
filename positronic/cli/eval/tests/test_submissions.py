@@ -20,6 +20,7 @@ from platform_client.responses import (
     CancelResponse,
     EpisodeCounts,
     ErroredSubmissionView,
+    EvalView,
     FinishedSubmissionView,
     PendingSubmissionView,
     ReplayLink,
@@ -44,8 +45,13 @@ PARTIAL = ErroredSubmissionView(
     id=SUBMISSION,
     reason_code=ReasonCode.policy_inference_crash,
     reason='the policy session dropped; 6 of 12 episodes were published and scored',
-    scores=Scores(primary=0.5),
-    episodes=EpisodeCounts(total=12, done=6, outstanding=6),
+    evals=[
+        EvalView(
+            status=SubmissionStatus.errored,
+            scores=Scores(primary=0.5),
+            episodes=EpisodeCounts(total=12, done=6, outstanding=6),
+        )
+    ],
 )
 
 
@@ -81,14 +87,27 @@ def test_status_prints_no_score_for_a_failed_run_that_published_no_episodes(plat
 
     assert capsys.readouterr().out.splitlines() == [
         f'submission {ID} errored',
-        "  episodes: {'total': 0, 'done': 0, 'outstanding': 0}",
-        '  runs: []',
         '  resolved: None',
         '  reason_code: policy_oom',
         '  reason: out of memory',
-        '  artifacts: None',
         '  scores: None',
+        '  artifacts: None',
+        "  episodes: {'total': 0, 'done': 0, 'outstanding': 0}",
+        '  runs: []',
     ]
+
+
+def test_status_lists_each_eval_of_a_submission_of_several(platform, run_command, capsys):
+    entries = [
+        EvalView(eval=EvalRef('example.part_a'), status=SubmissionStatus.errored),
+        EvalView(eval=EvalRef('example.part_b'), status=SubmissionStatus.running),
+    ]
+    platform.answer(ErroredSubmissionView(id=SUBMISSION, reason='part a failed', evals=entries))
+
+    run_command(status, id=ID)
+
+    evals = next(line for line in capsys.readouterr().out.splitlines() if line.startswith('  evals: '))
+    assert 'example.part_a' in evals and 'example.part_b' in evals
 
 
 NO_SUBMISSION = (refusal(ErrorCode.not_found, 'no such submission'), 404)
@@ -116,7 +135,7 @@ def test_status_prints_the_replay_and_the_report_of_a_finished_run(platform, run
     platform.answer(
         FinishedSubmissionView(
             id=SUBMISSION,
-            artifacts=ArtifactRefs(result='s3://b/episodes/'),
+            evals=[EvalView(status=SubmissionStatus.finished, artifacts=ArtifactRefs(result='s3://b/episodes/'))],
             replay=ReplayLink(url=replay, expires_at=WHEN),
             report=ReportLink(url=report, expires_at=WHEN),
         )

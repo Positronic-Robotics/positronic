@@ -119,6 +119,11 @@ def test_an_abc_definition_pins_the_cameras_and_the_size_they_render_at(name: Ev
     assert (args['camera_view'], args['camera_height'], args['camera_width']) == ('zed_x', 260, 416)
 
 
+@pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == ABC_CONFIG])
+def test_an_abc_definition_pins_the_timeout_of_abcs_own_horizon(name: EvalRef):
+    assert public_eval(name).args['timeout'] == 120.394
+
+
 def _abc_episode(path: Path, static: dict[str, object] | str) -> Path:
     path.mkdir()
     (path / META_FILE).write_text(json.dumps({UID: path.name}))

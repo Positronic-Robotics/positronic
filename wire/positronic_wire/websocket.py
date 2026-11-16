@@ -43,8 +43,11 @@ class WebsocketClientConnection(wire.ClientConnection):
         assert isinstance(message, bytes), f'A frame is bytes, and this one is {type(message).__name__}'
         return message
 
-    def close(self) -> str:
+    def close(self, timeout: float | None = None) -> str:
         state_before_close = self._websocket.state.name
+        bound = self._websocket.close_timeout
+        if timeout is not None and (bound is None or timeout < bound):
+            self._websocket.close_timeout = timeout
         self._websocket.close()
         # A close that times out still reaches CLOSED locally; only the close code says the server answered.
         return f'state {state_before_close} -> {self._websocket.state.name}, close code {self._websocket.close_code}'

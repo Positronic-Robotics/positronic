@@ -37,7 +37,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
 The run is headless. `--output_dir` records every episode (robot state, camera feeds, actions); browse them with:
 
 ```bash
-uv run positronic-server --dataset.path=~/datasets/demo_run --port=5001
+uv run positronic-dataset-viewer --dataset.path=~/datasets/demo_run --port=5001
 # open http://localhost:5001
 ```
 
@@ -190,7 +190,7 @@ A rig with more than one arm names every channel after the arm that owns it: obs
 
 ## Debugging with recordings
 
-Pass `--output_dir` on the client to save the full episode as a Positronic dataset, browsable with `positronic-server`.
+Pass `--output_dir` on the client to save the full episode as a Positronic dataset, browsable with `positronic-dataset-viewer`.
 
 ## Implement your own server
 

@@ -1,6 +1,13 @@
 /**
  * WebXR Video Player class that displays a video stream on a plane in AR
  */
+
+// How the plane shows the video: as it is, with black clear so that only bright parts float over the room, or not at all
+export const PANEL_MODE = { ON_BLACK: 'on_black', CLEAR_BLACK: 'clear_black', HIDDEN: 'hidden' };
+const PANEL_CYCLE = [PANEL_MODE.ON_BLACK, PANEL_MODE.CLEAR_BLACK, PANEL_MODE.HIDDEN];
+// The height of the plane in meters, 2 m in front of the eyes. The view with the column of the other cameras is wider
+const PANEL_HEIGHT_M = 0.85;
+
 export class WebXRVideoPlayer {
     constructor() {
         this.videoTexture = null;
@@ -8,6 +15,8 @@ export class WebXRVideoPlayer {
         this.videoPlane = null;
         this.videoGroup = null;
         this.ws = null;
+        this.decoder = null;
+        this.canvas = null;
         this.lastFrameAt = 0;
         this.watchdog = null;
         this.scene = null;
@@ -19,13 +28,16 @@ export class WebXRVideoPlayer {
         this.scene = scene;
         this.camera = camera;
 
-        // Create video texture and material
-        this.videoTexture = new THREE.Texture();
+        // The decoder draws each frame on this canvas, and the plane shows the canvas
+        this.canvas = document.createElement('canvas');
+        this.videoTexture = new THREE.CanvasTexture(this.canvas);
         this.videoMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 map: { value: this.videoTexture },
                 blueBoost: { value: 1.0 },
-                contrast: { value: 1.0 }  // 1.0 is normal, >1.0 increases contrast
+                contrast: { value: 1.0 },  // 1.0 is normal, >1.0 increases contrast
+                // 1.0 shows black as clear: text on black floats over the room
+                clearBlack: { value: 0.0 }
             },
             vertexShader: `
                 varying vec2 vUv;
@@ -38,6 +50,7 @@ export class WebXRVideoPlayer {
                 uniform sampler2D map;
                 uniform float blueBoost;
                 uniform float contrast;
+                uniform float clearBlack;
                 varying vec2 vUv;
                 void main() {
                     vec4 texColor = texture2D(map, vUv);
@@ -47,6 +60,10 @@ export class WebXRVideoPlayer {
                     texColor.b = min(1.0, texColor.b * blueBoost);
                     // Clamp final colors to valid range
                     texColor.rgb = clamp(texColor.rgb, 0.0, 1.0);
+                    float brightest = max(texColor.r, max(texColor.g, texColor.b));
+                    if (clearBlack > 0.5 && brightest < 0.15) {
+                        texColor.a = 0.0;
+                    }
                     gl_FragColor = texColor;
                 }
             `,
@@ -54,21 +71,16 @@ export class WebXRVideoPlayer {
             transparent: true,
         });
 
-        // Create plane for video (1.5 meters wide, 16:9 aspect ratio)
-        const width = 1.5;
-        const height = width * (9/16);
-        this.videoPlane = new THREE.Mesh(
-            new THREE.PlaneGeometry(width, height),
-            this.videoMaterial
-        );
-
-        // this.videoPlane.rotation.z = -Math.PI / 2;
+        // A plane of a fixed height, whose width follows the aspect of each frame (see showFrame)
+        this.videoPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.videoMaterial);
+        this.videoPlane.scale.set(PANEL_HEIGHT_M * 4 / 3, PANEL_HEIGHT_M, 1);
 
         // Create a group to hold the video plane
         this.videoGroup = new THREE.Group();
         this.videoGroup.add(this.videoPlane);
         this.scene.add(this.videoGroup);
-        this.videoGroup.visible = true;
+        this.mode = PANEL_MODE.ON_BLACK;
+        this.applyMode();
 
 
         // Connect to video websocket
@@ -82,21 +94,13 @@ export class WebXRVideoPlayer {
         const wsUrl = `${protocol}//${window.location.host}/video`;
 
         this.ws = new WebSocket(wsUrl);
+        this.ws.binaryType = 'arraybuffer';
         this.lastFrameAt = performance.now();
+        const stream = this.openStream();
 
-        this.ws.onmessage = async (event) => {
+        this.ws.onmessage = (event) => {
             this.lastFrameAt = performance.now();
-            try {
-                // Create an image from the base64 data
-                const img = new Image();
-                img.onload = () => {
-                    this.videoTexture.image = img;
-                    this.videoTexture.needsUpdate = true;
-                };
-                img.src = 'data:image/jpeg;base64,' + event.data;
-            } catch (error) {
-                console.error("Error processing video frame:", error);
-            }
+            stream(event.data);
         };
 
         this.ws.onopen = () => {
@@ -110,6 +114,53 @@ export class WebXRVideoPlayer {
         this.ws.onclose = () => {
             console.log("Video WebSocket closed");
         };
+    }
+
+    // The handler of one socket: a text message is the decoder config of the next key frame, a binary one a frame.
+    // A decoder error closes the socket, so that the watchdog opens a new one with a stream from a key frame
+    openStream() {
+        if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
+        const ws = this.ws;
+        const decoder = new VideoDecoder({
+            output: (frame) => this.showFrame(frame),
+            error: (error) => {
+                console.error("Video decoder error:", error);
+                ws.close();
+            },
+        });
+        this.decoder = decoder;
+        let config = null;
+        let keyNext = false;
+        let timestamp = 0;
+        return (data) => {
+            if (decoder.state === 'closed') return;
+            if (typeof data === 'string') {
+                const next = JSON.parse(data);
+                if (!config || next.codec !== config.codec || next.width !== config.width || next.height !== config.height) {
+                    decoder.configure({
+                        codec: next.codec, codedWidth: next.width, codedHeight: next.height, optimizeForLatency: true,
+                    });
+                    config = next;
+                }
+                keyNext = true;
+                return;
+            }
+            if (!config) return;
+            decoder.decode(new EncodedVideoChunk({ type: keyNext ? 'key' : 'delta', timestamp: timestamp++, data }));
+            keyNext = false;
+        };
+    }
+
+    showFrame(frame) {
+        if (this.canvas.width !== frame.displayWidth || this.canvas.height !== frame.displayHeight) {
+            this.canvas.width = frame.displayWidth;
+            this.canvas.height = frame.displayHeight;
+            this.videoTexture.dispose();
+        }
+        this.canvas.getContext('2d').drawImage(frame, 0, 0);
+        frame.close();
+        this.videoTexture.needsUpdate = true;
+        this.videoPlane.scale.x = PANEL_HEIGHT_M * this.canvas.width / this.canvas.height;
     }
 
     replaceLostSocket() {
@@ -141,6 +192,19 @@ export class WebXRVideoPlayer {
         this.videoGroup.quaternion.copy(cameraQuaternion);
     }
 
+    applyMode() {
+        if (!this.videoGroup) return;
+        this.videoGroup.visible = this.mode !== PANEL_MODE.HIDDEN;
+        this.videoMaterial.uniforms.clearBlack.value = this.mode === PANEL_MODE.CLEAR_BLACK ? 1.0 : 0.0;
+    }
+
+    // The next mode in PANEL_CYCLE: on black, with black clear, hidden, and on black again. Returns the new mode
+    cycleMode() {
+        this.mode = PANEL_CYCLE[(PANEL_CYCLE.indexOf(this.mode) + 1) % PANEL_CYCLE.length];
+        this.applyMode();
+        return this.mode;
+    }
+
     show() {
         if (this.videoGroup) {
             console.log("Showing video plane");
@@ -159,6 +223,9 @@ export class WebXRVideoPlayer {
         clearInterval(this.watchdog);
         if (this.ws) {
             this.ws.close();
+        }
+        if (this.decoder && this.decoder.state !== 'closed') {
+            this.decoder.close();
         }
         if (this.videoTexture) {
             this.videoTexture.dispose();

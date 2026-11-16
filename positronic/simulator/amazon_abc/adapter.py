@@ -38,6 +38,7 @@ class AbcAdapter(WireCommandAdapter):
             mapping.TOKEN_CAMERA_HEIGHT: params[abc_keys.CAMERA_HEIGHT],
             mapping.TOKEN_CAMERA_WIDTH: params[abc_keys.CAMERA_WIDTH],
             mapping.TOKEN_CAMERA_VIEW: params[abc_keys.CAMERA_VIEW],
+            mapping.TOKEN_EPISODE_STEPS: params[abc_keys.EPISODE_STEPS],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

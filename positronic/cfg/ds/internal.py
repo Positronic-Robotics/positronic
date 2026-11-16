@@ -27,6 +27,9 @@ from positronic.dataset.transforms import Elementwise, TransformedDataset, agg_f
 from positronic.dataset.transforms.episode import Concat, Derive, FromValue, Get, Group, Identity, Rename
 from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import RECORDED_TIME
+from positronic.dataset_viewer.rerun_replay import DURATION_COLUMN, INDEX_COLUMN
+from positronic.dataset_viewer.web_app import ColumnConfig as C
+from positronic.dataset_viewer.web_app import main as server_main
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.ik import MoveToSite
 from positronic.drivers.roboarm.models import (
@@ -45,8 +48,6 @@ from positronic.drivers.roboarm.models import (
 )
 from positronic.eval import keys as eval_keys
 from positronic.geom import Transform3D
-from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import main as server_main
 
 from . import concat_ds, local, transform
 
@@ -354,8 +355,8 @@ _quality_scalars = Derive(
 
 
 _droid_debug_table = {
-    '__index__': C(label='#', format='%d'),
-    '__duration__': C(label='Duration', format='%.0f sec'),
+    INDEX_COLUMN: C(label='#', format='%d'),
+    DURATION_COLUMN: C(label='Duration', format='%.0f sec'),
     'task': C(label='Task', filter=True),
     'idle_frac': C(label='Idle %', format='%.1f%%'),
     'cmd_lag_max': C(label='Lag Max', format='%.3f m'),

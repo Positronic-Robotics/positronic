@@ -3,7 +3,7 @@
 The URL's precedence — argument, then environment, then the saved record, then the default platform
 — belongs to `platform_client.config`, so a script and a command cannot resolve it differently. A
 key or a credential is never an argument: a command line is readable by every process on the box and
-lands in shell history.
+lands in shell history. A one-use coupon code is not a key: the same command spends it.
 """
 
 import json

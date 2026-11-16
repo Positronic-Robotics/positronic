@@ -404,7 +404,7 @@ def test_a_port_that_never_answers_is_named_at_the_deadline():
 def test_an_open_timeout_under_the_probe_budget_still_opens(both_wires):
     served, _policy = both_wires
     budget = client_grpc._REFUSAL_PROBE_SEC / 2
-    session = InferenceClient(*served.grpc(), open_timeout=budget, connect_deadline=0.0).new_session()
+    session = InferenceClient(*served.grpc(), open_timeout=budget, connect_deadline=budget).new_session()
     try:
         assert session.infer({'image': 'test'}) == [{'action': [1, 2, 3]}]
     finally:

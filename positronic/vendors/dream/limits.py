@@ -1,4 +1,5 @@
-"""Motion limits on Dream-1 chunks, after the Default Limits of the Dream SDK station (`robots/control.py`).
+"""Motion limits on Dream-1 chunks, after the Default Limits of the Dream SDK station (`robots/control.py`), with a
+lower hand speed.
 
 DreamAPI enforces no motion limit, and the terms of its API make the client responsible for one (API Terms 4.7(d),
 10.5). The station applies its limits at the motors; these apply to each chunk before the client plays it.
@@ -15,7 +16,8 @@ from positronic.utils import check_finite_nonnegative, package_assets_path
 
 @dataclass(frozen=True)
 class ChunkLimits:
-    """The limits a chunk keeps, with the Default Limits of the Dream SDK station as defaults.
+    """The limits a chunk keeps. The defaults are the Default Limits of the Dream SDK station, except the hand speed:
+    the station allows 0.6 m/s, and a hand at that speed hits the table hard.
 
     The hand moves at most `max_ee_speed_m_s`, and each gripper opening changes by at most `max_grip_step` per row. For
     the first `ramp_s` of a session, and again after the client drops the rest of a chunk, no joint moves faster than
@@ -25,7 +27,7 @@ class ChunkLimits:
     never toward the stop.
     """
 
-    max_ee_speed_m_s: float = 0.6
+    max_ee_speed_m_s: float = 0.3
     max_grip_step: float = 0.05
     ramp_s: float = 2.0
     ramp_max_rad_s: float = 0.5

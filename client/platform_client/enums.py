@@ -224,7 +224,7 @@ class CameraVantage(IntEnum):
 
 @unique
 class RigShape(IntEnum):
-    """The embodiment a rig plan runs on: a single-arm Franka, a bimanual YAM, or one of two simulators."""
+    """The embodiment a rig plan runs on: a single-arm Franka, a bimanual YAM, or one of three simulators."""
 
     INVALID = 0
     franka = 1
@@ -232,6 +232,7 @@ class RigShape(IntEnum):
     # 3 named every simulator as one shape. Do not reuse it: a stored 3 must not read as a new shape.
     molmospaces = 4
     robolab = 5
+    abc = 6
 
 
 @unique

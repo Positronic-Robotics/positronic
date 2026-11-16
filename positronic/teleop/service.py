@@ -3,7 +3,7 @@
 ``positronic teleop`` runs it beside a run whose policy dials its socket. It is a model server: the preparation of a
 session waits for Ready, and each frame request gets the next target of the teleoperator. Each session declares stock
 components only in its client stack. The service keeps the trial state and the clutch, so the input of the
-teleoperator stays in this process. The headset page shows the camera image of the run and the state of the trial.
+teleoperator stays in this process. The headset page shows the camera images of the run and the state of the trial.
 The teleoperator uses the buttons of the right controller.
 """
 
@@ -15,7 +15,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, IntEnum, StrEnum
 from pathlib import Path
 from typing import Any
@@ -27,6 +27,7 @@ from positronic_model_server.server_wire import ServedAddress
 from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWire
 
 from positronic import geom, keys
+from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
@@ -38,8 +39,8 @@ from positronic.policy.processors import ChunkedSchedule, ConstantDuration, EndO
 from positronic.policy.sequential import Sequential
 from positronic.utils import check_finite_positive
 
-from .clutch import Tracker
-from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, SessionParams
+from .clutch import CONTROLLER_AXES, Tracker
+from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, SessionParams, camera_names
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,24 @@ class TrialState:
     cameras: tuple[str, ...]
 
 
+# The use of Y on the left controller, at the bottom of the view
+Y_HINT = 'Y: next camera. Hold Y: panel'
+# The width of the column of the view that shows the other cameras of the session, half the width of the main camera
+OTHERS_WIDTH = VIEW_SIZE[0] // 2
+
+
+@dataclass(frozen=True)
+class CameraState:
+    """The cameras that the headset page offers: the cameras of the run, or of the station before a run sends one;
+    the ones whose images come now; the one that the headset shows; and the one that the teleoperator chose, or
+    ``None`` for the camera of the session."""
+
+    names: tuple[str, ...]
+    live: tuple[str, ...]
+    shown: str | None
+    chosen: str | None
+
+
 @dataclass(frozen=True)
 class _Sample:
     """What the headset sent last, and its number in the order of the samples."""
@@ -200,6 +219,9 @@ class TeleopService:
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
     CANCEL_POLL_SEC = 0.1
+    # A camera is live while its last image is younger than this. Images come only while a trial runs, when the
+    # teleoperator is in the headset, so the window spans the gap between trials for the page before Enter AR.
+    LIVE_SEC = 30.0
     # A client opens a session again within its reconnect deadline when the connection drops before its first answer.
     RESUME_LIMIT_SEC = DEFAULT_RECONNECT_DEADLINE
 
@@ -211,11 +233,17 @@ class TeleopService:
         hold_sec: float,
         press_threshold: float = 0.6,
         auth_token: str | None = None,
+        cameras: Sequence[str] = (),
+        controller_axes: geom.Rotation | None = CONTROLLER_AXES,
     ):
         for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
             check_finite_positive(value, name)
         self._binds = served_address
         self._auth_token = auth_token
+        # The cameras of the station: a session that names no cameras gets these
+        self.station_cameras = camera_names(cameras)
+        # The axes of the controller in the frame of the headset, or None for the axes of the headset (see `Tracker`)
+        self.controller_axes = controller_axes
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
         self._buttons = ButtonMap(hold_sec, press_threshold)
@@ -229,8 +257,15 @@ class TeleopService:
         self._tracker: Tracker | None = None
         # The last camera images of the run, by name, in the order that the client sends them.
         self._images: dict[str, np.ndarray] = {}
-        # The camera that the headset shows in this trial. ``None`` is the first camera of the run.
+        # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
+        self._seen: dict[str, float] = {}
+        # The cameras that the session of this trial sends, from the wait for Ready on
+        self._trial_cameras: tuple[str, ...] = ()
+        # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
         self._headset_camera: str | None = None
+        # The camera that the teleoperator chose on the headset page. It holds over trials, and goes before the camera
+        # of the session while the run sends it.
+        self._chosen_camera: str | None = None
         # The target pose and grip that each frame sends while control is off: the last target, or at first the state
         # of the robot. So every command signal starts at the start of the episode, and the robot stays still.
         self._hold: tuple[geom.Transform3D, float] | None = None
@@ -333,6 +368,24 @@ class TeleopService:
         if self._resumable_until is not None and time.monotonic() >= self._resumable_until:
             self._clear_trial()
 
+    def cameras(self) -> CameraState:
+        with self._changed:
+            now = time.monotonic()
+            recent = tuple(name for name, seen_at in self._seen.items() if now - seen_at < self.LIVE_SEC)
+            # Between trials: the cameras of the station, and the cameras of the last run that are still live
+            names = self._trial_cameras or tuple(dict.fromkeys((*self.station_cameras, *recent)))
+            live = tuple(name for name in names if name in recent)
+            return CameraState(names, live, self._shown_camera(), self._chosen_camera)
+
+    def choose_camera(self, name: str | None) -> None:
+        """Show camera ``name`` in the headset from now on, or the camera of the session for ``None``. Raise
+        ``ValueError`` for a camera that neither the run nor the station has."""
+        with self._changed:
+            if name is not None and name not in self._trial_cameras and name not in self.station_cameras:
+                known = sorted({*self._trial_cameras, *self.station_cameras})
+                raise ValueError(f'no camera {name!r}: the run and the station have {known}')
+            self._chosen_camera = name
+
     def camera_image(self, name: str) -> np.ndarray:
         """The last image of camera ``name``. Raise ``KeyError`` for a camera that the run does not send."""
         with self._changed:
@@ -350,39 +403,85 @@ class TeleopService:
             self._changed.notify_all()
 
     @staticmethod
-    def _view(image: np.ndarray | None, lines: Sequence[str]) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top."""
+    def _text(view: np.ndarray, origin: tuple[int, int], line: str, scale: float) -> None:
+        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
+
+    @classmethod
+    def _view(
+        cls,
+        image: np.ndarray | None,
+        lines: Sequence[str],
+        footer: Sequence[str] = (),
+        others: Sequence[tuple[str, np.ndarray | None]] = (),
+    ) -> np.ndarray:
+        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom.
+
+        With ``others``, the view has a column on its right with one named cell for each of them, and ``image`` fits
+        the left part of the view size.
+        """
         width, height = VIEW_SIZE
-        blank = (height, width, 3)
-        # A copy: the text goes on the view, not on the image that the service holds.
-        view = np.zeros(blank, dtype=np.uint8) if image is None else np.array(image, dtype=np.uint8, order='C')
+        if others:
+            view = np.zeros((height, width + OTHERS_WIDTH, 3), dtype=np.uint8)
+            if image is not None:
+                view[:, :width] = transform_frame(image, width, height, mode=ResizeMode.PAD, resample=Resample.AREA)
+            cell_height = height // len(others)
+            for row, (name, other) in enumerate(others):
+                top = row * cell_height
+                if other is not None:
+                    cell = transform_frame(
+                        other, OTHERS_WIDTH, cell_height, mode=ResizeMode.PAD, resample=Resample.AREA
+                    )
+                    view[top : top + cell_height, width:] = cell
+                cls._text(view, (width + 6, top + 18), name.removeprefix(keys.IMAGE_PREFIX), 0.5)
+        elif image is None:
+            view = np.zeros((height, width, 3), dtype=np.uint8)
+        else:
+            # A copy: the text goes on the view, not on the image that the service holds.
+            view = np.array(image, dtype=np.uint8, order='C')
+        bottom = view.shape[0]
         for row, line in enumerate(lines):
-            origin = (10, 30 + 36 * row)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 5, cv2.LINE_AA)
-            cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
+            cls._text(view, (10, 26 + 30 * row), line, 0.75)
+        for row, line in enumerate(reversed(footer)):
+            cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
 
-    def view(self) -> np.ndarray:
-        """The image for the headset: the camera image of the run, with the state of the trial."""
+    def view(self, camera: bool = True) -> np.ndarray:
+        """The image for the headset: the camera image of the run, or black with no ``camera``, with the state of the
+        trial. With more than one camera, a column on the right shows the other cameras."""
         with self._changed:
             state = self.state()
-            image = self._headset_image()
+            shown = self._shown_camera()
+            image = self._headset_image() if camera else None
+            names = self.cameras().names
+            main = shown if shown in names else next(iter(names), None)
+            shows_images = state.phase is Phase.RUNNING and camera
+            others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
+        footer = [Y_HINT]
         match state.phase:
             case Phase.IDLE:
-                return self._view(None, ['Waiting for a trial'])
+                return self._view(None, ['Waiting for a trial'], footer, others)
             case Phase.READY_WAIT:
-                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'])
+                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'], footer, others)
             case Phase.ENDED:
-                return self._view(None, ['The trial ended', 'Give the verdict on the console'])
+                return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
+        if shown is not None:
+            footer = [f'Camera: {shown}', *footer]
         control = 'Control on (A: off)' if state.control else 'Control off (A: on)'
-        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'])
+        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer, others)
+
+    def _shown_camera(self) -> str | None:
+        """The camera that the headset shows. Hold the lock."""
+        for name in (self._chosen_camera, self._headset_camera):
+            if name is not None and name in self._trial_cameras:
+                return name
+        return next(iter(self._trial_cameras), None)
 
     def _headset_image(self) -> np.ndarray | None:
-        if self._headset_camera is not None:
-            return self._images.get(self._headset_camera)
-        return next(iter(self._images.values()), None)
+        shown = self._shown_camera()
+        return None if shown is None else self._images.get(shown)
 
-    def resume_dropped_trial(self, headset_camera: str | None) -> ResumeOutcome:
+    def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped before its first answer, as the next session of its client.
 
         The client opens such a session again within its reconnect deadline, and the teleoperator pressed Ready already.
@@ -391,14 +490,12 @@ class TeleopService:
             self._forget_an_old_dropped_trial()
             if self._resumable_until is None:
                 return ResumeOutcome.NO_DROPPED_TRIAL
-            self._resumable_until, self._headset_camera = None, headset_camera
+            self._resumable_until, self._trial_cameras = None, settings.cameras
+            self._headset_camera = settings.headset_camera
             return ResumeOutcome.RESUMED
 
-    def wait_for_ready(
-        self, operator: geom.Transform3D | None, headset_camera: str | None, cancelled: threading.Event
-    ) -> None:
-        """Start a new trial, and wait up to the ready limit for Ready. The clutch maps the hand with ``operator``, and
-        the headset shows ``headset_camera``, or the first camera for ``None``.
+    def wait_for_ready(self, settings: SessionParams, cancelled: threading.Event) -> None:
+        """Start a new trial of a session with ``settings``, and wait up to the ready limit for Ready.
 
         Raise ``TrialNotStarted`` for Cancel or for no Ready within the ready limit, and ``PreparationCancelled`` when
         ``cancelled`` is set or the service stops.
@@ -406,7 +503,8 @@ class TeleopService:
         deadline = time.monotonic() + self.ready_limit
         with self._changed:
             self._clear_trial()
-            self._phase, self._ready, self._headset_camera = Phase.READY_WAIT, None, headset_camera
+            self._phase, self._ready = Phase.READY_WAIT, None
+            self._trial_cameras, self._headset_camera = settings.cameras, settings.headset_camera
             while (
                 self._ready is None
                 and not self._stopping
@@ -414,9 +512,11 @@ class TeleopService:
                 and (left := deadline - time.monotonic()) > 0
             ):
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
-            ready, self._phase = self._ready, Phase.RUNNING if self._ready is ReadyAnswer.READY else Phase.IDLE
+            ready = self._ready
             if ready is ReadyAnswer.READY:
-                self._tracker = Tracker(operator)
+                self._phase, self._tracker = Phase.RUNNING, Tracker(settings.operator(), self.controller_axes)
+            else:
+                self._clear_trial()
         if ready is ReadyAnswer.READY:
             return
         if self._stopping or cancelled.is_set():
@@ -445,6 +545,7 @@ class TeleopService:
                 raise ValueError(f'a frame request came in the {self._phase} phase')
             self._task = str(request[TASK])
             self._images = {name: request[name] for name in cameras}
+            self._seen.update(dict.fromkeys(cameras, time.monotonic()))
             if self._hold is None:
                 self._hold = robot_pose, float(np.asarray(request[GRIP], dtype=float).reshape(-1)[0])
             sample = self._next_sample(self._sample.number, deadline)
@@ -488,7 +589,7 @@ class TeleopService:
     def _clear_trial(self) -> None:
         """Show no trial. Hold the lock."""
         self._phase, self._events = Phase.IDLE, []
-        self._task, self._tracker, self._images = '', None, {}
+        self._task, self._tracker, self._images, self._trial_cameras = '', None, {}, ()
         self._headset_camera, self._hold, self._frames, self._resumable_until = None, None, 0, None
         self._end = None
 
@@ -571,10 +672,12 @@ class TeleopModel(Model):
         if self._open:
             raise RuntimeError('the teleop service serves one session at a time')
         settings = SessionParams.from_json(**params)
+        if not settings.cameras:
+            settings = replace(settings, cameras=self._service.station_cameras)
         self._open = True
         try:
-            if self._service.resume_dropped_trial(settings.headset_camera) is ResumeOutcome.NO_DROPPED_TRIAL:
-                self._service.wait_for_ready(settings.operator(), settings.headset_camera, self.preparation_cancelled)
+            if self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
+                self._service.wait_for_ready(settings, self.preparation_cancelled)
         except BaseException:
             self._open = False
             raise

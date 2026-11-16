@@ -24,9 +24,10 @@ runs only behind DreamAPI. Dream Labs does not release the weights. Each call se
 - The server sends the YAM station observation of the Dream SDK (`state.arm_l.joint_pos`, `image_window.top`, ...).
   DreamAPI computes each hand's pose from the joints, so no IK runs here.
 - The server blurs every face before a frame leaves it, and limits each chunk (`limits.py`): the hand moves at most
-  0.6 m/s, each gripper changes by at most 0.05 per row, and each joint moves at most 0.5 rad/s for the first 2 s.
-  These are the Default Limits of the Dream SDK station. Each joint also stays 0.03 rad inside its range, as the
-  station's tracker clips its reference, because Dream commands joints 2 and 3 past their 0 stop.
+  0.3 m/s, each gripper changes by at most 0.05 per row, and each joint moves at most 0.5 rad/s for the first 2 s.
+  These are the Default Limits of the Dream SDK station, except the hand speed, which the station sets to 0.6 m/s.
+  Each joint also stays 0.03 rad inside its range, as the station's tracker clips its reference, because Dream
+  commands joints 2 and 3 past their 0 stop.
 - Each session first sends a canary: a fixed observation. A change of its hash means that the model changed. DreamAPI
   gives no model version, and `dreamlabs/dream-1-beta` can change at any time.
 - Each session writes `<sessions_dir>/<session_id>.json` (the canary, and the trace id, timing and limits of each

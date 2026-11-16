@@ -1,8 +1,10 @@
 """Absolute hand waypoints and their bounded Cartesian trajectories."""
 
+import itertools
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +28,12 @@ class Waypoint(BaseModel):
     yaw: Finite
     gripper: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 
+    @classmethod
+    def at(cls, pose: geom.Transform3D, gripper: float) -> 'Waypoint':
+        x, y, z = pose.translation
+        roll, pitch, yaw = pose.rotation.as_euler
+        return cls(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, gripper=gripper)
+
     @property
     def pose(self) -> geom.Transform3D:
         return geom.Transform3D([self.x, self.y, self.z], geom.Rotation.from_euler([self.roll, self.pitch, self.yaw]))
@@ -37,6 +45,28 @@ class MovePath(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     waypoints: Annotated[list[Waypoint], Field(min_length=1)]
     note: Annotated[str, Field(min_length=1)]
+
+
+class MoveArmsPath(BaseModel):
+    """Move the hands through absolute waypoints in order, without an observation between them. A waypoint maps the
+    name of an arm to its hand target; an arm that it leaves out holds its previous target."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
+    waypoints: Annotated[list[Annotated[dict[str, Waypoint], Field(min_length=1)]], Field(min_length=1)]
+    note: Annotated[str, Field(min_length=1)]
+
+
+# The waypoint of each arm, keyed by the arm's name; `None` names the arm of a one-arm embodiment.
+Targets = Mapping[str | None, Waypoint]
+
+
+class Trajectory(NamedTuple):
+    """The clamped targets of every arm at each waypoint, the commands of each segment and gripper hold, and
+    whether a clamp changed a requested target."""
+
+    bounded: list[Targets]
+    parts: list[list[dict]]
+    clamped: bool
 
 
 @dataclass(frozen=True)
@@ -73,31 +103,71 @@ class Motion:
             bounded.roll, bounded.pitch, bounded.yaw = rotation.as_euler
         return bounded
 
-    def _segment(self, start: geom.Transform3D, target: Waypoint) -> list[dict]:
-        end = target.pose
-        distance = math.hypot(*(end.translation - start.translation))
-        angle = (end.rotation * start.rotation.inv).angle
-        duration = max(distance / self.linear_speed, angle / self.angular_speed, 1 / self.fps)
+    @staticmethod
+    def _commands(poses: Mapping[str | None, geom.Transform3D], targets: Targets) -> dict:
+        commands = {}
+        for arm, pose in poses.items():
+            commands[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = CartesianPosition(pose)
+            commands[keys.arm_channel(keys.TARGET_GRIP, arm)] = targets[arm].gripper
+        return commands
+
+    def _segment(self, starts: Mapping[str | None, geom.Transform3D], targets: Targets) -> list[dict]:
+        def span(start: geom.Transform3D, end: geom.Transform3D) -> float:
+            distance = math.hypot(*(end.translation - start.translation))
+            angle = (end.rotation * start.rotation.inv).angle
+            return max(distance / self.linear_speed, angle / self.angular_speed)
+
+        ends = {arm: target.pose for arm, target in targets.items()}
+        duration = max(*(span(starts[arm], end) for arm, end in ends.items()), 1 / self.fps)
         steps = math.ceil(duration * self.fps)
         return [
-            {
-                keys.ROBOT_COMMAND: CartesianPosition(start.interpolate(end, float(fraction))),
-                keys.TARGET_GRIP: target.gripper,
-            }
+            self._commands({arm: starts[arm].interpolate(end, float(fraction)) for arm, end in ends.items()}, targets)
             for fraction in np.arange(1, steps + 1) / steps
         ]
 
     def trajectory(
-        self, start: geom.Transform3D, grip: float, path: list[Waypoint]
-    ) -> tuple[list[Waypoint], list[list[dict]]]:
-        """Return the clamped waypoints and the commands of each segment and gripper hold, in order."""
-        bounded, parts = [], []
+        self, starts: Mapping[str | None, geom.Transform3D], held: Targets, path: list[Targets]
+    ) -> Trajectory:
+        """The trajectory of ``path`` from ``starts``.
+
+        ``held`` is the target of each arm of ``starts`` before the path. An arm that a waypoint of ``path`` leaves
+        out holds its previous clamped target. All arms reach a waypoint together.
+        """
+        bounded, parts, clamped = [], [], False
         for waypoint in path:
-            target = self._clamp(start, waypoint)
-            parts.append(self._segment(start, target))
-            if target.gripper != grip:
-                hold = {keys.ROBOT_COMMAND: CartesianPosition(target.pose), keys.TARGET_GRIP: target.gripper}
+            requested = {arm: waypoint.get(arm, held[arm]) for arm in starts}
+            targets = {arm: self._clamp(start, requested[arm]) for arm, start in starts.items()}
+            clamped = clamped or targets != requested
+            parts.append(self._segment(starts, targets))
+            if any(target.gripper != held[arm].gripper for arm, target in targets.items()):
+                hold = self._commands({arm: target.pose for arm, target in targets.items()}, targets)
                 parts.append([hold] * math.ceil(self.grip_hold * self.fps))
-            bounded.append(target)
-            start, grip = target.pose, target.gripper
-        return bounded, parts
+            bounded.append(targets)
+            starts = {arm: target.pose for arm, target in targets.items()}
+            held = targets
+        return Trajectory(bounded, parts, clamped)
+
+
+def closest_approach(start: np.ndarray, end: np.ndarray) -> float:
+    """The smallest length of a vector that moves in a straight line from ``start`` to ``end``."""
+    step = end - start
+    span = float(np.dot(step, step))
+    fraction = 0.0 if span == 0 else float(np.clip(-np.dot(start, step) / span, 0, 1))
+    return float(np.linalg.norm(start + fraction * step))
+
+
+def closest_hand_distances(
+    starts: Mapping[str | None, geom.Transform3D], parts: list[list[dict]], arms: tuple[str | None, ...]
+) -> dict[tuple[str | None, str | None], float]:
+    """The smallest distance between the hands of each pair of ``arms`` as they move in straight lines from
+    ``starts`` through the commands of ``parts``."""
+    channels = {arm: keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in arms}
+    positions = [{arm: starts[arm].translation for arm in arms}] + [
+        {arm: command[channels[arm]].pose.translation for arm in arms} for part in parts for command in part
+    ]
+    return {
+        (a, b): min(
+            (closest_approach(p[a] - p[b], q[a] - q[b]) for p, q in itertools.pairwise(positions)), default=math.inf
+        )
+        for a, b in itertools.combinations(arms, 2)
+    }

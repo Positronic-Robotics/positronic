@@ -96,6 +96,8 @@ OrgSlug = NewType('OrgSlug', str)
 
 PurchaseId = NewType('PurchaseId', str)
 PackageId = NewType('PackageId', str)
+# The code of a credit coupon, as its mail gives it.
+CouponCode = NewType('CouponCode', str)
 
 # The plaintext API key, returned by `users.register` exactly once and stored only as a hash.
 ApiKey = NewType('ApiKey', str)

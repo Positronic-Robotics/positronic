@@ -354,7 +354,13 @@ def test_a_value_the_wire_types_refuse_is_a_refusal_naming_it_rather_than_a_trac
 
 @pytest.mark.parametrize(
     'platform_only',
-    [{'alias': 'demo'}, {'transaction_key': 'k'}, {'platform_url': 'http://x.test'}, {'sample_count': 5}],
+    [
+        {'alias': 'demo'},
+        {'transaction_key': 'k'},
+        {'platform_url': 'http://x.test'},
+        {'sample_count': 5},
+        {'policy_query': 'horizon_sec=0.5'},
+    ],
 )
 def test_a_local_run_refuses_what_only_a_platform_run_can_mean(platform, run_command, platform_only: dict):
     # The mirror of the check below it: no place may drop another place's arguments in silence.
@@ -369,6 +375,20 @@ def test_the_sample_flags_state_the_sample_the_platform_draws(platform, run_comm
     run_command(run, eval='fake.smoke', policy_image='org/p:v1', sample_percent=10, sample_seed=7)
 
     assert platform.body['sample'] == {'count': None, 'percent': 10, 'seed': 7}
+
+
+def test_a_policy_query_states_the_session_params_of_the_image(platform, run_command):
+    platform.answer(_created(SubmissionStatus.pending))
+
+    run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_query='horizon_sec=0.5')
+
+    assert [entry['query'] for entry in platform.body['endpoints']] == ['horizon_sec=0.5']
+
+
+def test_a_policy_query_with_a_leading_question_mark_is_refused_before_anything_is_sent(platform, run_command):
+    with pytest.raises(SystemExit, match='starts with `\\?`'):
+        run_command(run, eval='fake.smoke', policy_image='org/p:v1', policy_query='?horizon_sec=0.5')
+    assert platform.seen is None
 
 
 def test_a_sample_seed_alone_is_refused_before_anything_is_sent(platform, run_command):

@@ -29,7 +29,7 @@ for module_name, source_dir in (
 CORE_PACKAGES = [
     'positronic.cfg',
     'positronic.dataset',
-    'positronic.server',
+    'positronic.dataset_viewer',
     'positronic.policy',
     'positronic.utils',
     'positronic.geom',

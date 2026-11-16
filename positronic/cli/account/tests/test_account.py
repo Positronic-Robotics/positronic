@@ -45,9 +45,9 @@ def test_register_saves_the_minted_key_in_the_record(platform, run_command, caps
 
     run_command(register, alias='demo')
 
-    assert platform.request.url.path == routes.USERS_REGISTER
-    assert 'authorization' not in platform.request.headers
-    assert platform.body == {'credential': 'token', 'alias': 'demo', 'rotate': False}
+    assert platform.request_to(routes.USERS_REGISTER).url.path == routes.USERS_REGISTER
+    assert 'authorization' not in platform.request_to(routes.USERS_REGISTER).headers
+    assert platform.body_to(routes.USERS_REGISTER) == {'credential': 'token', 'alias': 'demo', 'rotate': False}
     saved = read_config(config_dir(os.environ))
     assert saved is not None and saved.api_key == 'pk_new'
     out = capsys.readouterr().out
@@ -75,8 +75,8 @@ def test_a_registration_goes_to_the_platform_it_names_whatever_the_record_holds(
     run_command(register, platform_url='http://other.test')
 
     assert platform.base_url == 'http://other.test'
-    assert platform.request.url.path == routes.USERS_REGISTER
-    assert 'authorization' not in platform.request.headers
+    assert platform.request_to(routes.USERS_REGISTER).url.path == routes.USERS_REGISTER
+    assert 'authorization' not in platform.request_to(routes.USERS_REGISTER).headers
 
 
 def test_a_config_directory_that_cannot_be_named_stops_before_a_key_is_minted(platform, run_command, monkeypatch):
@@ -113,7 +113,7 @@ def test_a_registration_naming_its_platform_reads_no_key_and_no_record(platform,
 
     run_command(register, platform_url='http://other.test')
 
-    assert platform.request.url.path == routes.USERS_REGISTER
+    assert platform.request_to(routes.USERS_REGISTER).url.path == routes.USERS_REGISTER
 
 
 def test_a_registration_naming_its_platform_replaces_a_malformed_record(platform, run_command, monkeypatch):
@@ -127,7 +127,7 @@ def test_a_registration_naming_its_platform_replaces_a_malformed_record(platform
 
     run_command(register, platform_url='http://other.test')
 
-    assert platform.request.url.path == routes.USERS_REGISTER
+    assert platform.request_to(routes.USERS_REGISTER).url.path == routes.USERS_REGISTER
     saved = read_config(config_dir(os.environ))
     assert saved is not None and saved.api_key == 'pk_new'
 
@@ -173,8 +173,8 @@ def test_register_without_a_credential_signs_in_through_the_provider_the_platfor
 
     run_command(register, alias='demo', plaintext_http=True)
 
-    assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER]
-    assert platform.body == {'credential': 'eyJ.access', 'alias': 'demo', 'rotate': False}
+    assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER, routes.TERMS_GET]
+    assert platform.body_to(routes.USERS_REGISTER) == {'credential': 'eyJ.access', 'alias': 'demo', 'rotate': False}
     saved = read_config(config_dir(os.environ))
     assert saved is not None and saved.api_key == 'pk_new'
     captured = capsys.readouterr()
@@ -188,8 +188,8 @@ def test_register_with_a_credential_runs_no_sign_in_and_waits_out_the_longest_ch
 
     run_command(register)
 
-    assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER]
-    assert platform.request.extensions['timeout'] == timeout_after_deadline(75.0).as_dict()
+    assert platform.paths == [routes.AUTH_CONFIG, routes.USERS_REGISTER, routes.TERMS_GET]
+    assert platform.request_to(routes.USERS_REGISTER).extensions['timeout'] == timeout_after_deadline(75.0).as_dict()
 
 
 def test_an_empty_credential_is_refused_rather_than_read_as_a_request_to_sign_in(platform, run_command, monkeypatch):

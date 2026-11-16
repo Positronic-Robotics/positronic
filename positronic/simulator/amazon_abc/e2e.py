@@ -103,6 +103,7 @@ def main() -> None:
             abc_keys.CAMERA_HEIGHT: args.camera_height,
             abc_keys.CAMERA_WIDTH: args.camera_width,
             abc_keys.CAMERA_VIEW: args.camera_view.value,
+            abc_keys.EPISODE_STEPS: mapping.ABC_EVAL_STEPS,
         })
         frame = conn.reset(token)
         assert frame[protocol.FRAME_META][mapping.META_TASK], 'the env reported no instruction'

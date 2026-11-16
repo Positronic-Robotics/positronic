@@ -67,6 +67,7 @@ def submit(
     registry_username: str | None = None,
     registry_password_file: str | None = None,
     sample: Sample | None = None,
+    query: str | None = None,
 ) -> SubmissionCreateResponse:
     """Submit one policy image against one eval, print what came back, and return it.
 
@@ -77,8 +78,9 @@ def submit(
     returns the original instead of spending another day's quota. `org` runs it as a private
     request for that organisation instead of a `nebius_competition` one. An image the platform
     cannot pull anonymously takes a credential: `registry_username` and `registry_password_file`,
-    the file the password is in. `sample` runs a random subset of the eval's trials. With no
-    `eval_name`, the run takes the eval that the leaderboards rank (`leaderboard_eval`).
+    the file the password is in. `sample` runs a random subset of the eval's trials. `query` holds the
+    params the platform puts on each session URL of the image. With no `eval_name`, the run takes the
+    eval that the leaderboards rank (`leaderboard_eval`).
     """
     with gateway(platform_url) as client:
         if eval_name is None:
@@ -96,6 +98,7 @@ def submit(
                 credential=_credential(registry_username, registry_password_file),
                 org=OrgSlug(org) if org is not None else None,
                 sample=sample,
+                query=query,
             )
         submission = client.create_submission(plan)
     print(f'submission {submission.submission_id} ({submission.status.name})')

@@ -169,8 +169,15 @@ def _noisy_scene(low: int, high: int, shape: tuple[int, int] = (72, 128)) -> np.
     return scene
 
 
+class FakeModel(enum.Enum):
+    ZED_M = 'ZED_M'
+    ZED2 = 'ZED2'
+    ZED2i = 'ZED2i'
+
+
 class DroppingSdk:
-    """Stands in for `sl.Camera` over one ZED that leaves the device list at ``lost_at`` and returns at ``listed_at``.
+    """Stands in for `sl.Camera` over one ZED of ``model`` that leaves the device list at ``lost_at`` and returns at
+    ``listed_at``.
 
     A camera opened before the drop grabs again only from ``sdk_recovers_at``. ``None`` is a model whose loss the SDK
     never recovers, such as the ZED Mini. The first ``failed_reopens`` opens after the drop fail. A camera opened
@@ -188,7 +195,9 @@ class DroppingSdk:
         images_stop_at: float = float('inf'),
         scene: np.ndarray | None = None,
         torn_grabs: frozenset[int] = frozenset(),
+        model: FakeModel = FakeModel.ZED2i,
     ):
+        self.model = model
         self.clock = clock
         self.lost_at = lost_at
         self.listed_at = listed_at
@@ -244,6 +253,10 @@ class FakeCamera:
 
     def close(self) -> None:
         self.closed_at = self._sdk.clock.now()
+
+    def get_camera_information(self) -> types.SimpleNamespace:
+        assert self.opened_at is not None and self.closed_at is None, 'camera information of a camera that is not open'
+        return types.SimpleNamespace(camera_model=self._sdk.model)
 
     def get_timestamp(self, _reference) -> types.SimpleNamespace:
         return types.SimpleNamespace(get_nanoseconds=self._sdk.clock.now_ns)
@@ -470,12 +483,6 @@ def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
     assert _returned(loop)
 
 
-class FakeModel(enum.Enum):
-    ZED_M = 'ZED_M'
-    ZED2 = 'ZED2'
-    ZED2i = 'ZED2i'
-
-
 # A rebooted camera stays on the device list for this long, then leaves it for `REBOOT_AWAY_S`.
 REBOOT_LEAVES_AFTER_S = 1.0
 REBOOT_AWAY_S = 4.0
@@ -484,8 +491,9 @@ REBOOT_AWAY_S = 4.0
 class RebootingSdk(DroppingSdk):
     """A `DroppingSdk` over one camera of ``model`` that the SDK reboots.
 
-    The SDK refuses the reboot while a camera object holds the device open. A reboot that runs leaves a listed camera on
-    the device list for ``leaves_after_s``, then off it for ``away_s``.
+    The SDK refuses the reboot while a camera object holds the device open. The device list leaves out a camera that a
+    camera object holds open, as the SDK before 5.4 does, unless ``lists_open_camera``. A reboot that runs leaves a
+    listed camera on the device list for ``leaves_after_s``, then off it for ``away_s``.
     """
 
     def __init__(
@@ -496,21 +504,26 @@ class RebootingSdk(DroppingSdk):
         leaves_after_s: float = REBOOT_LEAVES_AFTER_S,
         away_s: float = REBOOT_AWAY_S,
         images_stop_at: float = NEVER,
+        lists_open_camera: bool = False,
     ):
-        super().__init__(clock, lost_at=NEVER, listed_at=NEVER, images_stop_at=images_stop_at)
-        self.model = model
+        super().__init__(clock, lost_at=NEVER, listed_at=NEVER, images_stop_at=images_stop_at, model=model)
         self.reboot_result = reboot_result
         self.leaves_after_s = leaves_after_s
         self.away_s = away_s
+        self.lists_open_camera = lists_open_camera
         self.reboot_times: list[float] = []
+
+    def _held_open(self) -> bool:
+        return any(camera.opened_at is not None and camera.closed_at is None for camera in self.cameras)
 
     def get_device_list(self) -> list[types.SimpleNamespace]:
         listed = types.SimpleNamespace(serial_number=SERIAL, camera_model=self.model)
-        return [listed] if self.is_listed() else []
+        shown = self.is_listed() and (self.lists_open_camera or not self._held_open())
+        return [listed] if shown else []
 
     def reboot(self, serial: int) -> ErrorCode:
         self.reboots.append(serial)
-        if any(camera.opened_at is not None and camera.closed_at is None for camera in self.cameras):
+        if self._held_open():
             return ErrorCode.FAILURE
         if self.reboot_result is not ErrorCode.SUCCESS:
             return self.reboot_result
@@ -624,9 +637,12 @@ def test_a_recover_call_on_a_camera_that_does_not_come_back_answers_a_camera_fau
     [(NEVER, RecoveryOutcome.CLEARED), (LOST_AT, RecoveryOutcome.NOT_CLEARED)],
     ids=['sending', 'stale'],
 )
-def test_a_recover_call_does_not_touch_a_model_the_sdk_cannot_reboot(zed_module, world, images_stop_at, outcome):
+@pytest.mark.parametrize('lists_open_camera', [True, False], ids=['listed_while_open', 'unlisted_while_open'])
+def test_a_recover_call_does_not_touch_a_model_the_sdk_cannot_reboot(
+    zed_module, world, images_stop_at, outcome, lists_open_camera
+):
     clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
-    sdk = RebootingSdk(clock, model=FakeModel.ZED_M, images_stop_at=images_stop_at)
+    sdk = RebootingSdk(clock, model=FakeModel.ZED_M, images_stop_at=images_stop_at, lists_open_camera=lists_open_camera)
     camera = _rebooting_camera(zed_module, sdk, frames)
     loop = camera.run(stop, clock)
     _drive(loop, clock, until=5.0)
@@ -638,6 +654,23 @@ def test_a_recover_call_does_not_touch_a_model_the_sdk_cannot_reboot(zed_module,
     assert sdk.reboots == []
     (held,) = sdk.cameras
     assert held.closed_at is None
+
+
+def test_a_recover_call_reboots_a_camera_that_never_opened_and_that_the_sdk_does_not_list(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = RebootingSdk(clock, model=FakeModel.ZED_M, reboot_result=ErrorCode.INVALID_FUNCTION_CALL)
+    sdk.lost_at = 0.0
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=5.0)
+    reboots_of_the_open = len(sdk.reboots)
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert len(sdk.reboots) > reboots_of_the_open
+    with pytest.raises(DeviceFault, match='did not open'):
+        answer.result()
 
 
 def test_a_recover_call_does_not_reboot_a_mono_camera(zed_module, world):

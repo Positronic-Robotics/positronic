@@ -159,22 +159,20 @@ class GrpcClientConnection(wire.ClientConnection):
         self._received = True
         return answer
 
-    def close(self) -> str:
+    def close(self, timeout: float | None = None) -> str:
         if self._closed:
             return 'already closed'
         self._closed = True
         self._outbox.put(None)
         # The half-close ends the server's session, and the server then ends the stream. A channel closed
         # before that cuts the server's cleanup short.
-        self._reader.join(timeout=_CLOSE_TIMEOUT_SEC)
+        wait = _CLOSE_TIMEOUT_SEC if timeout is None else min(timeout, _CLOSE_TIMEOUT_SEC)
+        self._reader.join(timeout=wait)
         server_ended_stream = not self._reader.is_alive()
         self._channel.close()
         # A stream the server never ended means the server still holds this session, and the next session's
         # handshake waits on its slot.
-        return (
-            f'peer had ended the stream {self._ended}, '
-            f'server ended it within {_CLOSE_TIMEOUT_SEC}s {server_ended_stream}'
-        )
+        return f'peer had ended the stream {self._ended}, server ended it within {wait}s {server_ended_stream}'
 
 
 # The largest share of one connect attempt's budget the refusal probe may spend. Both waits fit inside

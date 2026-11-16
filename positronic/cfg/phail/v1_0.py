@@ -22,9 +22,10 @@ from positronic.dataset import Episode
 from positronic.dataset.episode import META_CREATED_TS_NS
 from positronic.dataset.transforms.episode import Derive, FromValue, Identity
 from positronic.dataset.vector import RECORDED_TIME
-from positronic.server.positronic_server import ColumnConfig as C
-from positronic.server.positronic_server import GroupTableConfig
-from positronic.server.positronic_server import main as server_main
+from positronic.dataset_viewer.rerun_replay import DURATION_COLUMN, INDEX_COLUMN
+from positronic.dataset_viewer.web_app import ColumnConfig as C
+from positronic.dataset_viewer.web_app import GroupTableConfig
+from positronic.dataset_viewer.web_app import main as server_main
 
 # The PUBLIC@ profile selector resolves to anonymous (unsigned) access, so these URLs work
 # with no AWS credentials — a reader can pass a model URL straight to an inference server's
@@ -53,8 +54,8 @@ teleop_unified = transform.override(
 @cfn.config()
 def episodes_table():
     return {
-        '__index__': C(label='#', format='%d'),
-        '__duration__': C(label='Duration', format='%.0f sec'),
+        INDEX_COLUMN: C(label='#', format='%d'),
+        DURATION_COLUMN: C(label='Duration', format='%.0f sec'),
         'task': C(label='Task', filter=True),
         'started': C(label='Started', format='%Y-%m-%d %H:%M'),
     }
@@ -76,7 +77,7 @@ def group_by_task():
 
 
 # TODO: bad smell. This wrapper exists only to materialize `meta['created_ts_ns']`
-# as a signal so the server table can display it. Teach `positronic_server`'s
+# as a signal so the server table can display it. Teach `web_app`'s
 # column resolver to fall back on `meta.*` keys (so `episodes_table` can reference
 # `meta.created_ts_ns` directly), then delete this transform.
 phail_with_started = transform.override(
