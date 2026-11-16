@@ -182,7 +182,7 @@ ABC_DIT_REPO ?= $(NEBIUS_REGISTRY)/abc-dit-yam
 $(eval $(call SERVE_IMAGE,abc-dit,$(ABC_DIT_REPO)))
 push-serve-abc-dit: $(if $(filter $(NEBIUS_REGISTRY_HOST)/%,$(ABC_DIT_REPO)),nebius-login)
 
-# The same image, started with ABC's real-data prompts as the default: the platform passes an image no session query.
+# The same image, started with ABC's real-data prompts as the default.
 ABC_DIT_REAL_PROMPTS_REPO ?= $(NEBIUS_REGISTRY)/abc-dit-yam-real-prompts
 SERVE_DOCKERFILE_abc-dit-real-prompts := Dockerfile.serve-abc-dit
 SERVE_BUILD_FLAGS_abc-dit-real-prompts := --build-arg SERVE_COMMAND=multitask_200k_yambox_wide_top_rtc_real_prompts
