@@ -2476,7 +2476,9 @@ def test_the_friction_fade_runs_on_the_hardware_chain_of_i2rt(monkeypatch):
 
 GRIPPER_OPEN_RAD = 6.57  # the motor turn over the stroke of i2rt's linear 4310 gripper, which closes at 0 rad
 OBJECT_AT_RAD = 2.0  # where the fingers meet an object
-SQUEEZE_CAP_N = 20.0  # its torque is past the 0.5 Nm at which i2rt's limiter finds a stall
+STALL_EFFORT_NM = 0.5  # i2rt's limiter finds a stall when the mean gripper effort over its window passes this
+STALL_WINDOW_S = 0.1  # the window of i2rt's limiter
+SQUEEZE_CAP_N = 20.0  # its torque is past STALL_EFFORT_NM
 ARM_TARGET = np.array([0.1, -0.2, 0.3, -0.4, 0.5, -0.6])
 CHAIN_CLOSED, CHAIN_OPEN = 0.0, 1.0  # the grip as the chain takes it
 
@@ -2510,6 +2512,8 @@ class GripperMotors(FakeMotorChain):
         self.now = 1e4
         self.commands: list[np.ndarray] = []
         self.asked: list[float] = []
+        self.efforts: list[float] = []
+        self.at_object: list[bool] = []
 
     def set_commands(self, torques: np.ndarray, **commands) -> list[types.SimpleNamespace]:
         pos, vel, kp, kd = commands['pos'], commands['vel'], commands['kp'], commands['kd']  # what i2rt passes
@@ -2527,11 +2531,25 @@ class GripperMotors(FakeMotorChain):
         self.pos[6] = max(q + new_v * self.STEP_S, self.stop_at)
         self.vel[6] = 0.0 if self.pos[6] == self.stop_at else new_v
         self.eff[6] = torque
+        self.efforts.append(torque)
+        self.at_object.append(self.pos[6] == self.stop_at)
         self.now += self.STEP_S
         return self.read_states()
 
     def closing_torques(self) -> np.ndarray:
         return -np.asarray(self.asked)
+
+    def first_stall_step(self) -> int | None:
+        """The first step by which i2rt's limiter has found a stall: the fingers stood at the object for a window of the
+        limiter, with a mean effort past ``STALL_EFFORT_NM``. None if no step came after such a window."""
+        window = round(STALL_WINDOW_S / self.STEP_S)
+        for end in range(window, len(self.efforts)):
+            if (
+                all(self.at_object[end - window : end])
+                and abs(np.mean(self.efforts[end - window : end])) > STALL_EFFORT_NM
+            ):
+                return end
+        return None
 
 
 def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float = GRIPPER_OPEN_RAD):
@@ -2583,9 +2601,12 @@ def _squeeze(monkeypatch, gripper_force_cap_n: float | None) -> tuple[Any, Gripp
 
 def test_the_gripper_force_cap_holds_before_and_after_i2rt_finds_a_stall(monkeypatch):
     """i2rt's limiter replaces the gripper target once it finds a stall, so a cap on the target sent to i2rt is lost."""
-    chain, motors = _squeeze(monkeypatch, SQUEEZE_CAP_N)
-    assert chain._gripper_force_limiter._is_clogged, 'the squeeze did not reach the stall of i2rt'
-    assert np.max(motors.closing_torques()) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+    _, motors = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    stall = motors.first_stall_step()
+    assert stall is not None, 'the squeeze did not reach the stall of i2rt'
+    closing = motors.closing_torques()
+    assert np.max(closing[:stall]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+    assert np.max(closing[stall:]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
 
 
 def test_the_gripper_force_cap_leaves_the_commands_of_the_arm_motors_alone(monkeypatch):
