@@ -56,6 +56,8 @@ class FakeRctl:
         self.floor: float | None = None
         # A thin part of the arm: the first joint collides between these two angles, and is clear on both sides
         self.band: tuple[float, float] | None = None
+        # The joint of the wrist that the model limits, and its limit
+        self.wrist_limit: float | None = None
         # The model refuses forward kinematics, as it can for a pose
         self.fk_fails = False
         self.tool_capsules: list[dict] = []
@@ -272,7 +274,8 @@ class FakeRctl:
         if self.band is not None:
             low, high = self.band
             clearance = min(clearance, 0.0 if low <= q[0] <= high else min(abs(q[0] - low), abs(q[0] - high)))
-        return {'lim': 0, 'coll': int(clearance <= 0), 'min_dist': max(clearance, 0.0), 'threshold': 0.005}
+        lim = int(self.wrist_limit is not None and abs(q[5]) > self.wrist_limit)
+        return {'lim': lim, 'coll': int(clearance <= 0), 'min_dist': max(clearance, 0.0), 'threshold': 0.005}
 
     def jacob(self, q, in_tcp):
         """As the controller gives it: the flange in the base frame, rows vx, vy, vz, wx, wy, wz."""
@@ -886,6 +889,28 @@ def test_a_streamed_joint_target_turns_a_joint_no_further_than_where_the_control
     _pump(loop, clock, 3000)
 
     np.testing.assert_allclose(rctl.q[joint], np.radians(limit) - np.sign(limit) * cron._LIMIT_MARGIN, atol=0.01)
+
+
+def test_a_streamed_joint_target_stops_short_of_a_joint_limit_of_the_model(rctl, driven):
+    rctl.wrist_limit = 0.3
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0])))
+
+    _pump(loop, clock, 600)
+
+    assert abs(rctl.q[5]) <= 0.3
+
+
+def test_a_planned_move_past_a_joint_limit_of_the_model_is_refused(world, rctl, driven):
+    rctl.wrist_limit = 0.3
+    driver, _, _, clock, loop = driven()
+    answer = _mover(world, driver)(command.JointPosition(np.array([0.0, 0.0, 0.0, 0.0, 0.0, 1.0])))
+
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='from itself'):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
 
 
 def test_a_streamed_cartesian_target_stops_short_of_the_arm_itself(rctl, driven):

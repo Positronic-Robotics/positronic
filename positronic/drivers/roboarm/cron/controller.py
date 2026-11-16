@@ -37,7 +37,8 @@ RESUME_EVERY_S = 1.0
 _STOP_REPEATS = 10
 _STOP_ACCEL = 5.0  # rad/s^2
 # The fields of the results of `compute_fk`, `compute_ik` and `model_is_collision`
-_ERR, _ERR_CODE, _POSE, _SOLUTIONS, _COLL, _MIN_DIST = 'err', 'err_code', 'pose', 'solutions', 'coll', 'min_dist'
+_ERR, _ERR_CODE, _POSE, _SOLUTIONS = 'err', 'err_code', 'pose', 'solutions'
+_COLL, _LIM, _MIN_DIST = 'coll', 'lim', 'min_dist'
 
 
 class PowerState(enum.IntEnum):
@@ -277,9 +278,10 @@ class CronController:
 
     def clearance(self, q: np.ndarray) -> float:
         """Metres: how near the arm, with the capsules of the tool, comes to itself at the joints ``q``; 0 in a
-        collision."""
+        collision, and past a joint limit of the model."""
         checked = rctl.model_is_collision(list(q))
-        return 0.0 if checked[_COLL] else float(checked[_MIN_DIST])
+        # The model limits the joints of the wrist (more than 10 rad from zero, Hand A, 2026-11-16)
+        return 0.0 if checked[_COLL] or checked[_LIM] else float(checked[_MIN_DIST])
 
     def jacobian(self, q: np.ndarray) -> np.ndarray:
         """The 6x6 map from joint speeds at ``q`` to the speed of the tool point and the turn rate of the tool, in the
