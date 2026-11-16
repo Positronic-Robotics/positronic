@@ -437,7 +437,8 @@ comment, rewrite the code instead.
 
 ### R6. Code Organization
 
-- **Top-level imports only** — no imports inside functions (except circular deps).
+- **Top-level imports only** — no imports inside functions, except a circular dependency or a large dependency
+  that the usual paths do not need (CLAUDE.md § Code style).
 - **Module-level private functions** over nested functions/closures:
   ```python
   # BAD

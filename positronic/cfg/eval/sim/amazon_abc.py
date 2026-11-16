@@ -1,7 +1,7 @@
 import configuronic as cfn
 from eval_vocabulary.episode import ABC_TASK_EVAL_SIGNAL
 
-from positronic.cfg.eval import build_tasks, spec
+from positronic.cfg.eval import build_tasks, require_finite_positive, spec
 from positronic.drivers.roboarm.models import bundled_yam_model
 from positronic.eval import Eval, Task
 from positronic.simulator.amazon_abc import keys as abc_keys
@@ -25,14 +25,17 @@ def all_tasks(task, trial_count, timeout, camera_dict, camera_height, camera_wid
     """An ABC eval on the bimanual i2rt YAM.
 
     ``task`` is a name, an alias, a prompt, or a list of them; unbound, it sweeps every task ABC lists.
-    ``camera_view`` is a ``mapping.CameraView`` or its value. ABC truncates each trial at ``timeout``; the default is
-    the horizon of ABC's own eval.
+    ``camera_view`` is a ``mapping.CameraView`` or its value. ABC truncates each trial one or two actions before
+    ``timeout``, so the verdict of its last action arrives by then. The default timeout gives the horizon of ABC's own
+    eval, and ``timeout=None`` gives that horizon with no deadline. A run with another timeout is not comparable with
+    ABC's own scores.
 
     A task's instruction is the prompt ABC lists for it. A seeded reset draws the prompt of some tasks, and some
     tasks move the prompt during an episode: the env publishes each such prompt as a new goal.
     """
+    require_finite_positive('timeout', timeout)
     view = mapping.CameraView(camera_view)
-    episode_steps = mapping.episode_steps(timeout)
+    episode_steps = mapping.ABC_EVAL_STEPS if timeout is None else mapping.episode_steps(timeout)
     proxy = RemoteEnvControlSystem(AbcAdapter(camera_dict), serve_abc(mapping.task_names(task)))
     embodiment = remote_embodiment(
         proxy, camera_dict, descriptor='remote.abc.yam_bimanual', arms=mapping.ARMS, static_meta=bundled_yam_model()

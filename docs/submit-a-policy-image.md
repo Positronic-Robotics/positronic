@@ -16,10 +16,10 @@ The openpi and GR00T recipes build on a `positro/<vendor>-base` image on Docker 
 the vendor stack. The MolmoAct2 recipe builds on a Python 3.13 image with uv: MolmoAct2 has no
 vendor stack. The FLUX 3 Action and Cosmos3-Nano recipes build the vendor stack themselves. Each
 recipe adds the weights, the positronic source with an offline environment, `EXPOSE 8000` and a
-start command. The layers go from the least often changed to the most: base, dependencies, source,
-weights. The source and the weights come in through `COPY --link` with no step after them, so a
-source change builds one new layer and reuses the rest from a cache. CI publishes all five images
-to Docker Hub. Build from the root of a positronic checkout:
+start command. Weight downloads use separate build stages, so source changes reuse the cached downloads.
+The FLUX adapter and weights use `COPY --link` after package installation. An adapter-only change
+reuses the package installation and weight layers. CI publishes all five images to Docker Hub.
+Build from the root of a positronic checkout:
 
 | Model | Recipe | Base | Serves |
 |---|---|---|---|
@@ -116,16 +116,21 @@ address.
 every weight the server loads. It serves the session protocol, and the platform runs the published image as a
 submission.
 
-- The image holds two Python environments. positronic's server answers on port 8000. It starts BFL's
-  own server in BFL's environment, on port 9000 inside the container, and sends it each observation.
-- The image serves the `droid` command. It sends the policy the wrist view and `image.exterior` in
-  both exterior slots, so it runs on every eval. An eval with two exterior views, such as RoboLab or
-  a DROID rig, runs better on `droid_3cam`: to select it in your own image, change `droid` to
-  `droid_3cam` in the recipe's `ENTRYPOINT`.
-- BFL's server compiles the model for about 140 s, and port 8000 binds after it. The GPU memory peaks
-  at about 33 000 MiB.
-- The client plays each chunk whole. A session with the query `horizon_sec=<seconds>` plays only the
-  commands of each chunk before that time ([Session params](#session-params)).
+- The thin server runs in BFL's Python environment on port 8000 and calls the model directly.
+  Model loading and warm-up finish before the listener binds.
+- The default command is `droid`: wrist plus `image.exterior` in both exterior slots. Run the image
+  with `droid_3cam` to use `image.exterior_2` as the second exterior view.
+- Ordinary sessions play each chunk whole. `horizon_sec=<seconds>` limits playback before replanning.
+- `--offload_text_encoder=True` keeps the text encoder on CPU between prompt-cache misses,
+  reducing GPU memory use on cards such as the 32 GB RTX 5090.
+- `droid_rtc` and `droid_3cam_rtc` use the client's remaining plan and recent round-trip durations
+  to supply native `committed_actions`. They require a BF16 DROID checkpoint trained with
+  `rtc_max_prefix > 0`. The bundled guidance-distilled checkpoint has `rtc_max_prefix=0` and cannot enable RTC.
+  Select a compatible package with `--checkpoint`, `--revision` and `--subfolder`.
+  `--rtc.call_after_sec` sets the replan interval; `--rtc.max_delay_sec` bounds the supported delay
+  and must fit the checkpoint's prefix capacity. A measured delay beyond that bound fails explicitly.
+  RTC sessions require `horizon_sec=None` and return the full chunk; the client schedules it from
+  the observation time, skipping commands whose times have passed.
 - `black-forest-labs/flux-3-action-droid` and `black-forest-labs/flux-3-action-base` are gated. Accept
   BFL's terms on the Hub page of each, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
   `make -C docker build-serve-flux3-action`. The build reads the token through a secret mount, and it
@@ -327,11 +332,11 @@ after the image name, and it loads the model on the CPU and serves:
 ```bash
 bash docker/test_policy_image.sh docker.io/<you>/molmoact2-droid:v1 --model.device_map=cpu
 ```
- The GR00T recipe stops on the missing GPU
-with `Flash Attention 2 is not available on CPU`. For the FLUX 3 Action recipe, BFL's server exits on
-the missing GPU, and the server reports `FLUX 3 Action backend exited with code 1`. For the Cosmos3-Nano
+The GR00T recipe stops on the missing GPU
+with `Flash Attention 2 is not available on CPU`. The FLUX 3 Action server loads weights on CPU,
+then fails when it initializes CUDA without a GPU. For the Cosmos3-Nano
 recipe, NVIDIA's server exits the same way, and the server reports `Cosmos3 backend exited with code 1`.
-These three stop before they read the weights, so for them, also run the test on a GPU below. The log
+These three recipes need the GPU test below to verify startup. The log
 must not show `NameResolutionError`, `dns error` or `OfflineModeIsEnabled`.
 albumentations prints a `UserWarning` about fetching its version; ignore it. MolmoAct2 prints
 `A new version of the following files was downloaded` when `transformers` copies the model's code
@@ -343,8 +348,8 @@ On a machine with a GPU, add `--gpu`:
 bash docker/test_policy_image.sh --gpu docker.io/<you>/<image>:v1
 ```
 
-The script then waits up to 600 s: FLUX 3 Action binds port 8000 after about 140 s, and GR00T loads in
-about 151 s. `no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
+The script then waits up to 600 s. FLUX 3 Action binds port 8000 after model loading and compilation finish.
+`no answer in 600 s` means a hung server, or a slow one. The platform gives the server's start
 1800 s from the end of the pull.
 
 The platform gives the image one GPU with 24 GB of memory, or the slice that holds the need its
@@ -387,7 +392,8 @@ docker/read_image_digest.sh <you>/<image>:v1
 [`docker/read_image_digest.sh`](../docker/read_image_digest.sh) prints the `docker-content-digest`
 header, which names the manifest the registry served. Pin that digest. The `config.digest` inside
 the manifest names the config blob, and the registry refuses a reference to it. The size adds the layers and the config blob, which is the count the platform makes against
-the 50 GB budget. The platform sees the same `401` or `404`: the image is not public, or the name
+the 50 GB budget. When the tag names an index, as a push from the containerd image store does, the
+digest is the index's and the size is its linux/amd64 image's, as the platform counts it. The platform sees the same `401` or `404`: the image is not public, or the name
 is wrong.
 
 The script reads a public image only. For a private image, log in with the credential you give
@@ -399,6 +405,10 @@ docker buildx imagetools inspect <registry>/<you>/<image>:v1                  # 
 docker buildx imagetools inspect --raw <registry>/<you>/<image>:v1 \
   | jq '([.layers[].size] | add) + .config.size'                             # the compressed size
 ```
+
+When the tag names an index, the raw output lists `manifests` and no `layers`, and `jq` fails. Then
+run the size command on `<registry>/<you>/<image>@<digest>`, with the digest of the `linux/amd64`
+entry of that list.
 
 The platform sees the same `401` or `404`: the credential does not read the image, or the name is
 wrong.

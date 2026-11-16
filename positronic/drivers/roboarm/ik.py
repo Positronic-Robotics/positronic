@@ -14,8 +14,6 @@ from typing import Any
 import mujoco as mj
 import numpy as np
 from eval_vocabulary.timeline import recording_timeline
-from scipy.optimize import lsq_linear
-from scipy.spatial.transform import Rotation as ScipyRotation
 
 from positronic import geom, keys
 from positronic.dataset import transforms
@@ -193,6 +191,8 @@ def _parse_target(target_ee_pose_vec):
 
 def _cartesian_error(pos_cur, R_cur, t_tgt, R_tgt):
     """6D Cartesian error matching cartesian_error_ from positronic-franka robot.hpp."""
+    from scipy.spatial.transform import Rotation as ScipyRotation  # noqa: PLC0415
+
     e_pos = pos_cur - t_tgt
     e_rot = -R_cur @ ScipyRotation.from_matrix(R_cur.T @ R_tgt).as_rotvec()
     return np.concatenate([e_pos, e_rot])
@@ -464,6 +464,8 @@ class DLSIKSolverWithLimits(_SolverBase):
         self.max_step = max_step
 
     def solve(self, current_q, target_ee_pose_vec):
+        from scipy.optimize import lsq_linear  # noqa: PLC0415
+
         t_tgt, R_tgt = _parse_target(target_ee_pose_vec)
         q0 = current_q.astype(np.float64)
         n = len(q0)

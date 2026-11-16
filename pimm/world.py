@@ -3,6 +3,7 @@
 import contextlib
 import ctypes
 import functools
+import gc
 import heapq
 import importlib
 import logging
@@ -527,14 +528,16 @@ def _bg_wrapper(
             logger.info(f'{name}: the World stopped before this process started; not starting')
             return
         _stop_when_orphaned(stop_flag, name, parent_pid)
-        for command in run_func(StopFlagReceiver(stop_flag, clock), clock):
-            match command:
-                case Sleep(seconds):
-                    time.sleep(seconds)
-                case Yield():
-                    time.sleep(0)  # hand the OS scheduler a turn, like a zero-length sleep
-                case _:
-                    raise ValueError(f'Unknown command: {command}')
+        # A spawned process imports the parent's main module again, so its heap is as large as the parent's.
+        with World._heap_out_of_collections():
+            for command in run_func(StopFlagReceiver(stop_flag, clock), clock):
+                match command:
+                    case Sleep(seconds):
+                        time.sleep(seconds)
+                    case Yield():
+                        time.sleep(0)  # hand the OS scheduler a turn, like a zero-length sleep
+                    case _:
+                        raise ValueError(f'Unknown command: {command}')
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
@@ -827,6 +830,32 @@ class World:
         self._foreground_cleanup.append(scheduler.close)
         return scheduler
 
+    # Worlds can run in threads of one process, and the freeze belongs to the process.
+    _heap_freeze_lock = threading.Lock()
+    _schedulers_running_in_process = 0
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _heap_out_of_collections() -> Iterator[None]:
+        """Keep the objects that exist when the first loop driver of the process starts out of each collection.
+
+        A full collection stops every loop of the process while it scans. An import heap of about 140,000 objects
+        takes about 100 ms to scan on an ARM robot computer. The last driver unfreezes the whole permanent
+        generation: a freeze has no owner, and CPython 3.12 freezes objects at startup.
+        """
+        with World._heap_freeze_lock:
+            if World._schedulers_running_in_process == 0:
+                # No collection first: it would stop the process for as long as the passes this freeze avoids.
+                gc.freeze()
+            World._schedulers_running_in_process += 1
+        try:
+            yield
+        finally:
+            with World._heap_freeze_lock:
+                World._schedulers_running_in_process -= 1
+                if World._schedulers_running_in_process == 0:
+                    gc.unfreeze()
+
     def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         with contextlib.ExitStack() as scope:
 
@@ -844,6 +873,7 @@ class World:
                     raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
             self._foreground_cleanup.append(scope.close)
+            scope.enter_context(self._heap_out_of_collections())
             scope.callback(close_loops)
             scheduler = self._schedule(iters)
             scope.callback(scheduler.close)

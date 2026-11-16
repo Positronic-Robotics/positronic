@@ -6,6 +6,7 @@ Runs in ABC's own interpreter, which the launcher builds.
 import argparse
 import functools
 import logging
+import math
 from typing import Any
 
 import abc_sim  # pyright: ignore[reportMissingImports] -- installed only in ABC's own venv
@@ -107,6 +108,13 @@ class AbcEnv(EnvProtocol):
         obs, _info = self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)
         # A reset recompiles the scene and renumbers every joint and site.
         self._arms = [_Arm(self._env.model, name) for name in self._env.robot_names]
+        control_dt = self._control_dt()
+        # The eval converts its timeout to the steps of the token at this period.
+        if not math.isclose(control_dt, mapping.ABC_CONTROL_DT):
+            raise RuntimeError(
+                f'The ABC scene of {token[mapping.TOKEN_TASK]} steps every {control_dt}s, but the eval converts its '
+                f'timeout to steps at {mapping.ABC_CONTROL_DT}s'
+            )
         if mapping.CameraView(token[mapping.TOKEN_CAMERA_VIEW]) is mapping.CameraView.ZED_X:
             camera_fit.place_cameras(
                 camera_fit.ZED_X_FIT, self._env.model, self._env.data, [arm.base_body_id for arm in self._arms]
