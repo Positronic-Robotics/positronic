@@ -1068,6 +1068,26 @@ def test_leaving_the_run_stops_the_arm_powers_it_off_and_gives_control_back(rctl
     assert rctl.calls[-4:] == ['hold', 'off', 'release_control', 'disconnect']
 
 
+def test_a_power_off_that_fails_after_a_run_that_ended_well_fails_the_run_and_still_gives_control_back(
+    rctl, driven, monkeypatch
+):
+    """The arm can be left powered."""
+
+    def power_off_fails():
+        raise RuntimeError('no power off')
+
+    stop = StopFlag()
+    _, _, _, clock, loop = driven(stop=stop)
+    _pump(loop, clock, 2)
+    monkeypatch.setattr(rctl, 'cmd_power_off', power_off_fails)
+
+    stop.stopped = True
+    with pytest.raises(RuntimeError, match='no power off'):
+        _pump(loop, clock, 1)
+
+    assert rctl.calls[-2:] == ['release_control', 'disconnect']
+
+
 def test_leaving_the_run_during_a_planned_move_stops_the_move_and_sends_no_velocity(world, rctl, driven):
     """A velocity that reaches the controller while a planned move runs stops the arm with `JOINT_VEL: TIMEOUT`."""
     stop = StopFlag()

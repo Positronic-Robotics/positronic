@@ -232,7 +232,7 @@ class _Arm(DriverRun[command.CommandType]):
         return bool(away and gain < _MIN_PROGRESS * cls._pose_error(after, before))
 
     @staticmethod
-    def _within_limits(joints: np.ndarray, start: np.ndarray) -> np.ndarray:
+    def _clamp_to_limits(joints: np.ndarray, start: np.ndarray) -> np.ndarray:
         """``joints`` with each joint ``_LIMIT_MARGIN`` inside its limit. A joint that ``start`` has past a limit
         already does not go further, and is not pushed back either."""
         low = np.minimum(_JOINT_LIMITS[:, 0] + _LIMIT_MARGIN, start)
@@ -257,7 +257,7 @@ class _Arm(DriverRun[command.CommandType]):
             elbow = float(np.remainder(joints[_ELBOW] + np.pi, 2 * np.pi) - np.pi)
             if side * elbow < least:
                 joints[_ELBOW] += side * least - elbow
-            joints = self._within_limits(joints, seed)
+            joints = self._clamp_to_limits(joints, seed)
         turn = joints - seed
         joints = seed + turn * min(1.0, float(np.min(max_turn / np.maximum(np.abs(turn), 1e-12))))
         if self._drifts(pose, self.controller.forward(seed), self.controller.forward(joints)):
@@ -286,7 +286,7 @@ class _Arm(DriverRun[command.CommandType]):
         collision, or that takes the arm nearer to itself than the clearance and than it came along the way. The
         controller plans a straight line in the joints, and does not know the tool spheres of the local model."""
         start = self.reading.q
-        if not np.array_equal(self._within_limits(target, start), target):
+        if not np.array_equal(self._clamp_to_limits(target, start), target):
             raise ValueError(f'a move to {np.round(target, 3)} goes past the joint limits')
         least = min(_MIN_CLEARANCE, self.controller.clearance(start))
         points = max(1, int(np.ceil(np.max(np.abs(target - start)) / _PATH_STEP)))
@@ -343,7 +343,7 @@ class _Arm(DriverRun[command.CommandType]):
         seed = self.reading.q if fresh else self.target
         try:
             pose = self._pose_of(cmd)
-            goal = None if pose is not None else self._within_limits(self._to_joints(cmd), self.reading.q)
+            goal = None if pose is not None else self._clamp_to_limits(self._to_joints(cmd), self.reading.q)
         except Exception:
             # The stream ends on a target it refuses, and the arm brakes: it must not drive on to the target before
             self.target, self._pose, self._joint_goal = None, None, None

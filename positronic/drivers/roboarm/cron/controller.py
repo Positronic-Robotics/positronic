@@ -143,8 +143,8 @@ class CronController:
         try:
             self._take_arm()
         # rules-allow: swallowed-error — re-raised after the arm is left safe
-        except BaseException:
-            self.__exit__(None, None, None)
+        except BaseException as e:
+            self.__exit__(type(e), e, e.__traceback__)
             raise
         return self
 
@@ -174,20 +174,26 @@ class CronController:
         # blocking-sleep-ok: connect-time handshake, before any control loop exists to yield from
         time.sleep(STARTUP_S)
 
-    def __exit__(self, *_) -> None:
+    def __exit__(self, exc_type, exc: BaseException | None, tb) -> None:
+        failed: list[Exception] = []
         if self._has_control:
             # Each step runs on its own: one that fails must not keep the others from running. An arm under the
             # control of another client gets none of them
             for step in (self.stop, self.stop_move, rctl.cmd_hold):
-                self._attempt(step)
+                self._attempt(step, failed)
             # A power off or a release that reaches the controller before HOLD can end a velocity stream in a TIMEOUT
             # error
-            self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'))
+            self._attempt(lambda: self._await(lambda: self.motion is MotionMode.HOLD, _HOLD_TIMEOUT_S, 'HOLD'), failed)
             if self.power_off_on_exit:
-                self._attempt(rctl.cmd_power_off)
-                self._attempt(lambda: self._await(lambda: self.power is PowerState.OFF, POWER_TIMEOUT_S, 'power off'))
-            self._attempt(rctl.release_control)
-        self._attempt(rctl.disconnect)
+                self._attempt(rctl.cmd_power_off, failed)
+                self._attempt(
+                    lambda: self._await(lambda: self.power is PowerState.OFF, POWER_TIMEOUT_S, 'power off'), failed
+                )
+            self._attempt(rctl.release_control, failed)
+        self._attempt(rctl.disconnect, failed)
+        # After a run that ended well, a failed step is the error of the run: the arm can be left powered or owned
+        if exc is None and failed:
+            raise failed[0]
 
     @property
     def power(self) -> PowerState:
@@ -335,9 +341,10 @@ class CronController:
             time.sleep(poll_s)
 
     @staticmethod
-    def _attempt(step) -> None:
+    def _attempt(step, failed: list[Exception]) -> None:
         try:
             step()
-        # rules-allow: swallowed-error — shutdown: every later step must still run, and the first failure is the cause
-        except Exception:
-            pass
+        # rules-allow: swallowed-error — shutdown: every later step must still run; `__exit__` raises the first failure
+        except Exception as e:
+            logger.error(f'a step of the shutdown failed: {e}')
+            failed.append(e)
