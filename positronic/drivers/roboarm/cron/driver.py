@@ -185,6 +185,8 @@ class _Arm(DriverRun[command.CommandType]):
         if move is None or not self.moves.active:
             self._move = None
             return
+        if move.waiting:
+            move.moved = max(move.moved, float(np.max(np.abs(self.reading.q - move.start))))
         if self.reading.power is not PowerState.FAILURE:
             move.in_failure = False
         elif not move.in_failure:
@@ -193,7 +195,6 @@ class _Arm(DriverRun[command.CommandType]):
             self._refuse(move)
             return
         if move.waiting:
-            move.moved = max(move.moved, float(np.max(np.abs(self.reading.q - move.start))))
             if self.clock.now() >= move.deadline:
                 self._refuse(move)
             return
@@ -460,18 +461,20 @@ class _Arm(DriverRun[command.CommandType]):
             self._power = self._PowerUp(asked_at=now)
 
     def _start(self, move: _Move, now: float) -> None:
-        """Start the move that waits, from the joints the arm reads now: a brake or a recovery can move the arm."""
+        """Start the move that waits, from the joints the arm reads in HOLD: a brake, a recovery or the end of an
+        earlier move can move the arm."""
         try:
+            self.controller.to_hold()
+            self.reading = self.controller.read()
             self._check_move(move.target)
-        except ValueError as e:
-            self._move = None
-            self.moves.fail(e)
-            return
-        try:
             self.controller.move_to(move.target, float(self.max_speed.min()), float(self.max_accel.min()))
         except TimeoutError as e:
             # No HOLD came, as when an error comes on this tick: the move waits on, and the next tick tries again
             logger.warning(f'{self.controller.ip}: the move waits: {e}')
+            return
+        except ValueError as e:
+            self._move = None
+            self.moves.fail(e)
             return
         distance = float(np.max(np.abs(move.target - self.reading.q)))
         travel_s = _MOVE_GRACE_S + _MOVE_SLACK * distance / float(self.max_speed.min())

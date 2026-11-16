@@ -972,6 +972,27 @@ def test_a_planned_move_past_a_joint_limit_is_refused_before_the_arm_is_powered_
     assert 'run' not in rctl.calls
 
 
+def test_a_planned_move_is_checked_from_where_the_arm_is_once_it_holds(world, rctl, driven, monkeypatch):
+    """The arm can move while it takes HOLD: the planner of an earlier move brakes."""
+    driver, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(0.0)))
+    _pump(loop, clock, 5)
+    rctl.band = (0.4, 0.45)
+    hold = rctl.cmd_hold
+
+    def hold_where_the_arm_braked():
+        rctl.q = _joints(0.5)
+        hold()
+
+    monkeypatch.setattr(rctl, 'cmd_hold', hold_where_the_arm_braked)
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+    _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='from itself'):
+        answer.result()
+    assert 'waypoint' not in rctl.calls
+
+
 def test_a_planned_move_is_checked_again_from_where_the_arm_is_when_it_starts(world, rctl, driven):
     """The arm can move between the call and the start: a brake, a recovery."""
     driver, _, _, clock, loop = driven()
