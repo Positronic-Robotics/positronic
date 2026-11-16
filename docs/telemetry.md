@@ -105,7 +105,7 @@ The span names are the contract:
 
 An arm driver records one `driver.command` span in its own file for each command that it takes. The span starts
 when a tick of the driver reads the command. It ends when the driver makes the command the arm's target: the driver
-hands it to the arm's controller, or sets it as the setpoint that it sends in that tick.
+hands it to the arm's controller, or its first joint command for it reaches the arm.
 
 - `command.sync` is true for a call whose asker waits for the arrival, and false for a streamed setpoint.
 - `command.age_ms` is the time from the emit of a streamed setpoint to its read, on the host's monotonic clock.
@@ -113,7 +113,7 @@ hands it to the arm's controller, or sets it as the setpoint that it sends in th
 
 The span of a call ends when the move starts, not when the arm arrives. A call that waits through an arm error is
 timed from its first read. A command that the driver drops, for example a target with no finite joints, records no
-span.
+span. A move that a stop or a failure ends before its first joint command also records no span.
 
 ### Reading harness steps
 

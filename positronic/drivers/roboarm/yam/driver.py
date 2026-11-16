@@ -300,6 +300,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
+        self._next_command_marks_applied = False  # the request read last becomes applied at the next command
 
     @functools.cached_property
     @_chain_call()
@@ -363,9 +364,19 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_joints = np.array(joints, dtype=np.float64)
         self._sent_at = self.clock.now()
 
+    def mark_applied_at_next_command(self) -> None:
+        """Mark the request read last as applied when the next command reaches the chain.
+
+        A failed send marks nothing, and the next command after it marks nothing.
+        """
+        self._next_command_marks_applied = True
+
     def command_target(self, joints: np.ndarray, grip: float) -> None:
         """Command the joints and the grip; the vendor takes the grip as open width."""
+        marks, self._next_command_marks_applied = self._next_command_marks_applied, False
         self._send(joints, aperture.flip_grip(grip))
+        if marks:
+            self.moves.mark_applied()
 
     def command_step_toward(self, target: np.ndarray, grip: float) -> None:
         """Command the grip, and the joints toward ``target`` as far as the speed cap allows since the last joints
@@ -613,10 +624,13 @@ class _Arm(DriverRun[command.CommandType]):
         target: np.ndarray | None = None  # stays None for a malformed command, which the arm never sees
         try:
             target = self.to_joints(call.request, q)
-            self.moves.mark_applied()
-            reference = yield from self._settle_onto(
-                target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
-            )
+            self.mark_applied_at_next_command()
+            try:
+                reference = yield from self._settle_onto(
+                    target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
+                )
+            finally:  # a move that ends before its first command took nothing
+                self._next_command_marks_applied = False
             if reference is not None:
                 self.publish(self.observations())
                 call.set_result(None)
@@ -998,7 +1012,7 @@ class Robot(pimm.ControlSystem):
         elif asked is not None:
             with log_failure(asked):
                 serving.q_target = arm.streamed_target(asked, q)
-                arm.moves.mark_applied()
+                arm.mark_applied_at_next_command()  # the step toward the target later in this tick sends it
             serving.idle_since = clock.now()
         elif self._should_park(serving.idle_since, clock.now()):
             serving.parking = arm.park(arm.read_grip(arm.observations()))

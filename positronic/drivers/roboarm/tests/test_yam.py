@@ -3,6 +3,7 @@ import logging
 import math
 import subprocess
 import sys
+import time
 import types
 from collections.abc import Callable, Iterator
 from enum import Enum
@@ -2382,3 +2383,64 @@ def test_each_streamed_command_the_arm_takes_is_timed_and_one_it_cannot_take_is_
 
     spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
     assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False]
+
+
+def _command_spans(tmp_path):
+    return [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+
+
+def _time_chain_writes(rig, monkeypatch):
+    """Record the wall time of each command that reaches the chain, in epoch nanoseconds."""
+    written_ns, send = [], rig.vendor.command_joint_pos
+
+    def timed(joint_pos):
+        send(joint_pos)
+        written_ns.append(time.time_ns())
+
+    monkeypatch.setattr(rig.vendor, 'command_joint_pos', timed)
+    return written_ns
+
+
+def test_a_blocking_move_is_timed_once_until_its_first_command_reaches_the_chain(world, rig, tmp_path, monkeypatch):
+    rig.raise_arm()
+    written_ns = _time_chain_writes(rig, monkeypatch)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _sync_caller(world, rig)(command.JointPosition(PARK))
+        _until_answered(rig, answer)
+        answer.result()
+
+    [span] = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is True
+    sent = [w for w in written_ns if w >= span.start_ns]
+    assert len(sent) > 1  # the ramp sends many commands, and one span times the move
+    assert span.end_ns >= sent[0]
+
+
+def test_a_blocking_move_stopped_before_its_first_command_is_not_timed(world, rig, tmp_path, monkeypatch):
+    rig.rest()
+    to_joints = yam._Arm.to_joints
+
+    def stop_while_solving(arm, cmd, q):
+        rig.stop.stopped = True
+        return to_joints(arm, cmd, q)
+
+    monkeypatch.setattr(yam._Arm, 'to_joints', stop_while_solving)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+        rig.tick(0.05)
+        rig.finish()
+    with pytest.raises(yam.MoveAbandoned):
+        answer.result()
+    assert _command_spans(tmp_path) == []
+
+
+def test_a_streamed_command_is_timed_until_its_command_reaches_the_chain(rig, tmp_path, monkeypatch):
+    rig.ready()
+    written_ns = _time_chain_writes(rig, monkeypatch)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        rig.commands.push(command.JointPosition(RAISED))
+        rig.tick(0.01)
+
+    [span] = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is False
+    assert span.end_ns >= next(w for w in written_ns if w >= span.start_ns)
