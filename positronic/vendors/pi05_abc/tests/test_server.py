@@ -181,13 +181,14 @@ class MultiTaskCommand:
     norm_stats: str
 
 
+def _multi_task_command(name: str, prompts: list[tuple[str, str]], norm_stats: str) -> MultiTaskCommand:
+    command = server.COMMANDS[name]
+    return MultiTaskCommand(command.kwargs['pipeline'], command.kwargs['model'], prompts, norm_stats)
+
+
 MULTI_TASK_COMMANDS = {
-    'abc4_30k': MultiTaskCommand(
-        server.abc4_pipeline, server.abc4_model, ABC4_INSTRUCTION_PROMPTS, 'assets/abc4_yam/norm_stats.json'
-    ),
-    'abc11_30k': MultiTaskCommand(
-        server.abc11_pipeline, server.abc11_model, ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam/norm_stats.json'
-    ),
+    'abc4_30k': _multi_task_command('abc4_30k', ABC4_INSTRUCTION_PROMPTS, 'assets/abc4_yam/norm_stats.json'),
+    'abc11_30k': _multi_task_command('abc11_30k', ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam/norm_stats.json'),
 }
 COMMAND_PROMPTS = [
     (name, instruction, prompt)

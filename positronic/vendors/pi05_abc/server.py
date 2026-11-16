@@ -178,17 +178,16 @@ def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
     )
 
 
-# The checkpoint fine-tuned on the real data of four ABC tasks, and the prompt of each task.
-abc4_model = pi05_abc_model.override(norm_stats=ABC4_NORM_STATS)
-abc4_pipeline = pipeline.override(prompts=codecs.ABC4_PROMPTS)
-# The checkpoint fine-tuned on the real data of eleven ABC tasks, and the prompt of each task.
-abc11_model = pi05_abc_model.override(norm_stats=ABC11_NORM_STATS)
-abc11_pipeline = pipeline.override(prompts=codecs.ABC11_PROMPTS)
-
 COMMANDS = {
     'bottles_16k': serve.override(model=pi05_abc_model, pipeline=pipeline),
-    'abc4_30k': serve.override(model=abc4_model, pipeline=abc4_pipeline),
-    'abc11_30k': serve.override(model=abc11_model, pipeline=abc11_pipeline),
+    'abc4_30k': serve.override(
+        model=pi05_abc_model.override(norm_stats=ABC4_NORM_STATS),
+        pipeline=pipeline.override(prompts=codecs.ABC4_PROMPTS),
+    ),
+    'abc11_30k': serve.override(
+        model=pi05_abc_model.override(norm_stats=ABC11_NORM_STATS),
+        pipeline=pipeline.override(prompts=codecs.ABC11_PROMPTS),
+    ),
 }
 
 
