@@ -84,6 +84,7 @@ _DH_GRIPPER_SPHERES = [
     *(([0.0, y, 0.215], 0.025) for y in (-0.035, 0.035)),
 ]
 
+
 # tool_length: a DH Robotics AG-160-95 on its flange adapter, from the flange to the middle of the finger pads
 @cfn.config(
     ip='192.168.68.63',

@@ -547,7 +547,6 @@ def test_a_sync_move_answers_once_the_arm_reads_back_at_the_target(world, rctl, 
     np.testing.assert_allclose(rctl.q, _joints(0.3), atol=cron._ARRIVED_TOL)
 
 
-
 def test_a_move_that_a_caller_waits_for_is_planned_by_the_controller_and_not_streamed(world, rctl, driven):
     driver, _, _, clock, loop = driven()
     answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))

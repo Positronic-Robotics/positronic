@@ -316,7 +316,9 @@ class CronController:
             again=self.resume,
         )
         # The error flag can clear before the power state leaves FAILURE, and RUN is refused from FAILURE
-        self._await(lambda: self.power is not PowerState.FAILURE, POWER_TIMEOUT_S, 'the arm out of FAILURE', again=self.resume)
+        self._await(
+            lambda: self.power is not PowerState.FAILURE, POWER_TIMEOUT_S, 'the arm out of FAILURE', again=self.resume
+        )
 
     def _run_projects(self) -> None:
         for project in self.projects:
