@@ -55,10 +55,29 @@ _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the ch
 _COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
 _COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
+_LOOP_STOPPED = 'the control loop of the chain stopped, so its motors take no commands'
+_RELEASED_UNPARKED = f'Releasing the arm with no park and no hold: {_LOOP_STOPPED}'
 
 
 class ChainFault(RuntimeError):
-    """A call into the i2rt chain that raised."""
+    """A call into the i2rt chain that raised, or a reading from a chain whose control loop stopped."""
+
+
+@runtime_checkable
+class _ControlLoop(Protocol):
+    """The CAN motor chain of i2rt, ``DMChainCanInterface``: when a call to a motor fails, its control loop sets
+    ``running`` false and ends."""
+
+    running: bool
+
+
+@runtime_checkable
+class _HardwareChain(Protocol):
+    """The hardware chain of i2rt, ``MotorChainRobot``; the sim chain of i2rt has no ``motor_chain``. After the control
+    loop ends, ``get_observations`` gives the last reading and ``command_joint_pos`` keeps a command that nothing
+    sends. Neither one raises."""
+
+    motor_chain: _ControlLoop
 
 
 def _arm_fault(exc: Exception) -> DeviceFault:
@@ -330,7 +349,13 @@ class _Arm(DriverRun[command.CommandType]):
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
-            return self.vendor.get_observations()
+            obs = self.vendor.get_observations()
+        if self._loop_stopped():
+            raise ChainFault(_LOOP_STOPPED)
+        return obs
+
+    def _loop_stopped(self) -> bool:
+        return isinstance(self.vendor, _HardwareChain) and not self.vendor.motor_chain.running
 
     @staticmethod
     def read_grip(obs: dict[str, np.ndarray]) -> float:
@@ -576,7 +601,8 @@ class _Arm(DriverRun[command.CommandType]):
             logger.exception('The arm is parked, but its state could not be published')
 
     def shutdown(self, *, withhold_readings: bool) -> Generator[pimm.Command, None, None]:
-        """Park and release the arm. ``withhold_readings`` keeps a fault already on the state and the grip there."""
+        """Park and release the arm, or release it with no park where the control loop of the chain stopped.
+        ``withhold_readings`` keeps a fault already on the state and the grip there."""
         self._shutting_down = True
         self._readings_withheld = withhold_readings
         hold_target = None
@@ -585,8 +611,11 @@ class _Arm(DriverRun[command.CommandType]):
             if ended is MoveStatus.ARRIVED:
                 return
             hold_target = joints, grip
-        # rules-allow: swallowed-error — a failure before a verified park keeps the torque on
+        # rules-allow: swallowed-error — a failure before a verified park keeps the torque on, unless the loop stopped
         except Exception:
+            if self._loop_stopped():
+                logger.error(_RELEASED_UNPARKED)
+                return
             self.moves.errored = True
             logger.exception('Could not verify parking; keeping the arm powered')
 
@@ -598,8 +627,11 @@ class _Arm(DriverRun[command.CommandType]):
                 q, grip = hold_target
                 self.command_target(q, grip)
                 self.publish(self.observations())
-            # rules-allow: swallowed-error — a failed hold keeps the shutdown blocked
+            # rules-allow: swallowed-error — a failed hold keeps the shutdown blocked, unless the loop stopped
             except Exception:
+                if self._loop_stopped():
+                    logger.error(_RELEASED_UNPARKED)
+                    return
                 logger.exception('Could not hold the arm; shutdown remains blocked')
             yield self.limiter.wait()
 
@@ -636,7 +668,8 @@ class _Arm(DriverRun[command.CommandType]):
 
 @contextlib.contextmanager
 def _opened(vendor: Any) -> Iterator[Any]:
-    """Hold the open chain. Release torque only on a normal exit, which follows a verified park."""
+    """Hold the open chain. Release torque only on a normal exit, which follows a verified park or a stopped control
+    loop."""
     try:
         yield vendor
     except BaseException:
@@ -828,8 +861,8 @@ class Robot(pimm.ControlSystem):
         ``should_stop``. Park and release it after.
 
         A ``ChainFault`` goes on the state and the grip once, before a park that publishes no readings. It answers
-        ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked. Any other
-        fault is raised again.
+        ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked, or
+        released where the control loop of the chain stopped. Any other fault is raised again.
         """
         try:
             with _chain_call():
