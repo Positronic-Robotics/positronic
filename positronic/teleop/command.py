@@ -186,8 +186,7 @@ network = cfn.Config(ServedHostPort, host='0.0.0.0', port=DEFAULT_PORT)
 
 
 @cfn.config(
-    # At the WebXR default quality of 50, the headset text and small objects are not clear
-    webxr=positronic.cfg.webxr.oculus.override(jpeg_quality=90),
+    webxr=positronic.cfg.webxr.oculus,
     served_address=socket_at.override(uds=str(default_socket_path())),
     ready_limit=120.0,
     window_port=5006,
@@ -202,7 +201,6 @@ def serve(
     silence_limit: float = 0.5,
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
-    view_fps: float = 30.0,
     open_window: bool = True,
     cameras: Sequence[str] = (),
     controller_axes: geom.Rotation | None = CONTROLLER_AXES,
@@ -243,7 +241,7 @@ def serve(
         cameras=cameras,
         controller_axes=controller_axes,
     )
-    headset = _Headset(service, view_fps)
+    headset = _Headset(service, webxr.video_fps)
     text = (
         f'A teleoperation trial waits for Ready. Within {ready_limit:g} s, press B on the Quest, '
         'or tap Ready on the phone page.'

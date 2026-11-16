@@ -432,3 +432,43 @@ assertions.
 
 Use controlled asynchronous completion when testing asynchronous behavior. Assert timing, call counts
 or ordering when they are part of the contract—for example, keeping at most one request pending.
+
+### work-under-lock
+
+Don't do non-trivial work while you hold a lock. A mutex, a database write lock, a transaction that
+blocks other writers and a file lock all make each other user wait until you release them. So the
+time you hold the lock adds to the latency of every path that takes it, and the site that takes the
+lock does not show those paths.
+
+Keep in the critical section only short, bounded steps that must be atomic: read a few rows by key,
+compare, write. Trivial work does no I/O outside the guarded state, and its time does not grow with
+the data. Move everything else out: a call to another service or process, a scan, a large read, the
+build of a large result, a sleep, a retry. Read, release, compute, then take the lock again to
+write, and check there that what you read is still true.
+
+Where one owner must hold a resource for longer than a short step — a job that one worker runs, a
+device that one process drives — consider a lease in place of a held lock. A lease is a
+time-bounded claim, recorded in the guarded state, that its holder renews and that expires when the
+holder stops. It fits only where a holder can lose the claim safely and another holder can take
+over, so it is not always the answer.
+
+Argue each critical section at the site, in one line: what must be atomic, and what bounds the time
+the lock is held. Work that stays under the lock with no stated bound is the violation.
+
+```python
+# Bad — the scan grows with the table, and every writer waits for the scan and the build
+with self._write_lock:
+    rows = conn.execute('SELECT * FROM episodes').fetchall()
+    board = build_board(rows)
+    conn.execute('UPDATE boards SET body = ? WHERE id = ?', (board, board_id))
+
+# Good — scan and build on a reader connection, then hold the lock for one keyed write
+seen = reader.execute('SELECT max(revision) FROM episodes').fetchone()[0]
+rows = reader.execute('SELECT * FROM episodes WHERE revision <= ?', (seen,)).fetchall()
+board = build_board(rows)
+with self._write_lock:  # one keyed UPDATE; it keeps a board built from newer rows
+    conn.execute(
+        'UPDATE boards SET body = ?, revision = ? WHERE id = ? AND revision < ?',
+        (board, seen, board_id, seen),
+    )
+```
