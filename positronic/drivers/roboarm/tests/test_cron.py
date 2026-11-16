@@ -232,6 +232,7 @@ class FakeRctl:
 
     def get_joint_vels(self):
         if self.moving and not self.blocked:
+            assert self.waypoint is not None, 'a move runs only to a waypoint'
             return np.sign(self.waypoint - self.q) * self.waypoint_speed * self.planner_share
         return self.velocity.copy()
 
