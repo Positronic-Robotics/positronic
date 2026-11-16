@@ -101,14 +101,16 @@ Conversion for training picks its own keys from the recording.
   station send, or the run fails at its first frame. With neither, the person sees no camera. A session that names
   `headset_camera` must also name `cameras`.
 - The window shows the cameras of the policy in a grid, each with its name.
-- The headset video shows one camera: the one that the teleoperator chose last, else the one that the session
-  parameter `headset_camera` names, else the first camera. The choice holds over the trials.
+- The headset video shows all the cameras of the session. The main camera fills the left part. A column on the right
+  shows each other camera, with its name. The teleoperator's last choice sets the main camera. With no choice, the
+  session parameter `headset_camera` sets it, else the first camera. The choice holds over the trials.
+- The panel in the headset has the aspect of the video: 4:3 for one camera, 2:1 with the column.
 - The headset page (before Enter AR) shows the state of the cameras: each camera, a green dot on each camera whose
   images came in the last 30 s (also between trials), and the camera that the headset shows.
-- In the headset, Y on the left controller works the video panel. A press shows the next camera whose images come
-  now. A hold of 1 s cycles the panel: on black with the camera, the text alone over the room (the service then sends
-  the view with no camera, and the page shows black as clear), and hidden. The bottom of the view names the camera
-  and the use of Y.
+- In the headset, Y on the left controller works the video panel. A press makes the next camera whose images come
+  now the main camera. A hold of 1 s cycles the panel: on black with the camera, the text alone over the room (the
+  service then sends the view with no camera, and the page shows black as clear), and hidden. The bottom of the view
+  names the camera and the use of Y.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480. A camera with another aspect gets black bars.
 - `positronic teleop` sends the headset video at JPEG quality 90. `--webxr.jpeg_quality=<0..100>` changes it. Lower
