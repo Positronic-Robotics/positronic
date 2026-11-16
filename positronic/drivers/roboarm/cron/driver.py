@@ -141,6 +141,8 @@ class _Arm(DriverRun[command.CommandType]):
         # The largest turn of a joint since the wait started
         moved_rad: float = 0.0
         cleared_at: float | None = None
+        # A delta that the move resolves when it starts, from the arm then: the arm can move until it holds
+        delta: command.CartesianDelta | None = None
 
     @dataclass
     class _PowerUp:
@@ -376,13 +378,22 @@ class _Arm(DriverRun[command.CommandType]):
             # first: the move is checked when it starts
             if not self.velocity.any():
                 self._check_move(target)
-            self._wait(target, call, 0)
+            delta = call.request if isinstance(call.request, command.CartesianDelta) else None
+            self._wait(target, call, 0, delta)
 
-    def _wait(self, target: np.ndarray, call: pimm.calls.Call[command.CommandType, None], restarts: int) -> None:
+    def _wait(
+        self,
+        target: np.ndarray,
+        call: pimm.calls.Call[command.CommandType, None],
+        restarts: int,
+        delta: command.CartesianDelta | None = None,
+    ) -> None:
         """Put the move to ``target`` in wait, until the stream brakes to a stop and the controller clears an error."""
         now = self.clock.now()
         in_failure = self.reading.power is PowerState.FAILURE
-        self._move = self._Move(target, call, now + _RECOVER_S, self.reading.q.copy(), in_failure, restarts)
+        self._move = self._Move(
+            target, call, now + _RECOVER_S, self.reading.q.copy(), in_failure, restarts, delta=delta
+        )
         self.moves.accept(call, target, _ARRIVED_TOL, now, _RECOVER_S)
 
     def step(self) -> None:
@@ -475,6 +486,8 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             self.controller.to_hold()
             self.reading = self.controller.read()
+            if move.delta is not None:
+                move.target, move.delta = self._to_joints(move.delta), None
             self._check_move(move.target)
             self.controller.move_to(move.target, float(self.max_speed.min()), float(self.max_accel.min()))
         except TimeoutError as e:
