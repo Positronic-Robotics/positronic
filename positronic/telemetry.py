@@ -235,15 +235,17 @@ def bind_from_env(process: str) -> Iterator[None]:
 @contextmanager
 def one_run_id() -> Iterator[None]:
     """Hold one run id in the environment while the block runs, so this process and each process it spawns bind
-    under the same id. A run id set before the block is kept. The environment is restored on exit."""
+    under the same id. A non-empty run id set before the block is kept. The environment is restored on exit."""
     previous = os.environ.get(ENV_RUN_ID)
-    if previous is None:
+    if not previous:
         os.environ[ENV_RUN_ID] = uuid.uuid4().hex
     try:
         yield
     finally:
         if previous is None:
             os.environ.pop(ENV_RUN_ID, None)
+        elif not previous:
+            os.environ[ENV_RUN_ID] = previous
 
 
 def force_flush() -> None:

@@ -662,6 +662,14 @@ def test_one_run_id_keeps_a_run_id_set_before_it(monkeypatch):
     assert os.environ[ENV_RUN_ID] == 'given'
 
 
+def test_one_run_id_replaces_an_empty_run_id_and_restores_it(monkeypatch):
+    """bind_from_env reads an empty run id as absent, so one_run_id must hold a real id for it."""
+    monkeypatch.setenv(ENV_RUN_ID, '')
+    with telemetry.one_run_id():
+        assert os.environ[ENV_RUN_ID]
+    assert os.environ[ENV_RUN_ID] == ''
+
+
 def test_bind_from_env_records_nothing_when_the_sidecar_cannot_open(tmp_path, monkeypatch, caplog):
     """Every recording run binds from the environment, so a sidecar that refuses to open must cost its
     timings and not the run. The warning names the path, so the loss is in the log rather than silent."""
