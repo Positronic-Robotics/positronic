@@ -6,14 +6,14 @@ import subprocess
 import tempfile
 import threading
 import traceback
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 import pimm
@@ -289,6 +289,14 @@ class WebXR(pimm.ControlSystem):
             # The page sends nothing on `/video`, so the first message it receives is the disconnect. Without a
             # receive, a closed socket stays unseen until the next frame goes out.
             closed = asyncio.ensure_future(websocket.receive())
+
+            async def send_unless_closed(send: Callable[[Any], Awaitable[None]], data: str | bytes) -> None:
+                # The server answers the close frame of the page with its own close and then refuses a send.
+                # No await comes between this check and the send, so the close cannot arrive between them.
+                if not closed.done():
+                    await send(data)
+
+            dropped = False
             try:
                 encoder = AnnexBEncoder(self.video_fps, self.video_fps, self.video_bitrate)
                 fps = pimm.utils.RateCounter('Video Stream')
@@ -302,15 +310,19 @@ class WebXR(pimm.ControlSystem):
                     last_sent_time = msg.time
                     for unit in encoder.encode(msg.data):
                         if unit.config is not None:
-                            await websocket.send_text(unit.config.model_dump_json())
-                        await websocket.send_bytes(unit.data)
+                            await send_unless_closed(websocket.send_text, unit.config.model_dump_json())
+                        await send_unless_closed(websocket.send_bytes, unit.data)
                     fps.tick()
+            except WebSocketDisconnect:
+                # The page dropped the connection with no close frame, so the send found it broken.
+                dropped = True
             except Exception as e:
                 logger.error(f'Video WebSocket error: {e}')
                 logger.error(traceback.format_exc())
             finally:
+                page_closed = dropped or closed.done()
                 closed.cancel()
-                logger.info('Video WebSocket connection closed')
+                logger.info('The page closed the video socket' if page_closed else 'Video WebSocket connection closed')
 
     def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
         """``/ws``: the controller stream from the page."""
