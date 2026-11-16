@@ -1044,6 +1044,24 @@ def test_a_planned_move_is_checked_from_where_the_arm_is_once_it_holds(world, rc
     assert 'waypoint' not in rctl.calls
 
 
+def test_a_stream_after_a_planned_move_starts_from_where_the_arm_is_once_it_holds(world, rctl, driven, monkeypatch):
+    """The arm can move while it takes HOLD: the planner of the earlier move brakes."""
+    driver, _, commands, clock, loop = driven()
+    answer = _mover(world, driver)(command.JointPosition(_joints(0.1)))
+    _pump_until(loop, clock, answer)
+    hold = rctl.cmd_hold
+
+    def hold_where_the_arm_braked():
+        rctl.q = _joints(0.2)
+        hold()
+
+    monkeypatch.setattr(rctl, 'cmd_hold', hold_where_the_arm_braked)
+    commands.push(command.CartesianDelta(geom.Transform3D()))
+    _pump(loop, clock, 400)
+
+    np.testing.assert_allclose(rctl.q[0], 0.2, atol=0.01)
+
+
 def test_a_planned_move_is_checked_again_from_where_the_arm_is_when_it_starts(world, rctl, driven):
     """The arm can move between the call and the start: a brake, a recovery."""
     driver, _, _, clock, loop = driven()

@@ -209,6 +209,8 @@ class _Arm(DriverRun[command.CommandType]):
             if move.restarts >= _MAX_RESTARTS or self.reading.power is not PowerState.RUN:
                 self._refuse(move)
             else:
+                # The wait counts the travel of the recovery from where the planner braked
+                self.reading = self.controller.read()
                 self._wait(move.target, move.call, move.restarts + 1)
             return
         if self.moves.settle(self.reading.q, self.clock.now()) is MoveStatus.GAVE_UP:
@@ -343,6 +345,12 @@ class _Arm(DriverRun[command.CommandType]):
         if not self.usable or self._power.run_at is not None:
             # An arm that is not in RUN, or that makes the joint move after RUN, takes no target; its status says so
             return
+        if self.target is None and not self.velocity.any():
+            # Only from a stop: a stream that still brakes goes on, and a HOLD at speed stops the arm. The arm can move
+            # while it takes HOLD (the planner of an earlier move brakes), so the target comes from the joints after it
+            self.controller.to_hold()
+            self.reading = self.controller.read()
+            self._stream.clear()
         # A delta starts from the arm: a seed at an earlier target that the arm has not reached would drive on to it
         fresh = self.target is None or isinstance(cmd, command.CartesianDelta)
         seed = self.reading.q if fresh else self.target
@@ -353,10 +361,6 @@ class _Arm(DriverRun[command.CommandType]):
             # The stream ends on a target it refuses, and the arm brakes: it must not drive on to the target before
             self.target, self._pose, self._joint_goal = None, None, None
             raise
-        if self.target is None and not self.velocity.any():
-            # Only from a stop: a stream that still brakes goes on, and a HOLD at speed stops the arm
-            self.controller.to_hold()
-            self._stream.clear()
         self.target, self._pose, self._joint_goal = np.array(seed, dtype=np.float64), pose, goal
 
     def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
