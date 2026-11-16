@@ -322,11 +322,17 @@ class Baseline(_Wire):
 
 
 class TeamSubmission(_Wire):
-    """The submission that the numbers of a team row come from. `replay` is absent until its page is built."""
+    """The submission that the numbers of a team row come from. `replay` is absent until its page is built.
+
+    A submission that runs in more than one simulator has a replay for each part: `part_replays` holds them, by the
+    metric key of the part's score. A part whose page is not built has no entry, and `replay` is the replay of the
+    first part.
+    """
 
     id: SubmissionId
     submitted_at: AwareDatetime
     replay: DataBackedReplayLink | None = None
+    part_replays: dict[MetricKey, DataBackedReplayLink] = Field(default_factory=dict)
 
 
 class LeaderboardRow(_Wire):
