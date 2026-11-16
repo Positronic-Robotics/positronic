@@ -17,6 +17,12 @@ import numpy as np
 from positronic_model_server.serialization import deserialize, serialize
 from websockets.sync.server import ServerConnection, serve
 
+# The keys of the log entries.
+REQUEST = 'request'
+ARGV = 'argv'
+CWD = 'cwd'
+PID = 'pid'
+
 # The chunk that answers every request: 50 actions of 14 values, per arm 6 joints then the gripper width.
 CHUNK = np.arange(50 * 14, dtype=np.float32).reshape(50, 14) / 1000
 
@@ -43,10 +49,12 @@ def main() -> None:
     def handle(connection: ServerConnection) -> None:
         connection.send(serialize({}))
         for message in connection:
-            record({'request': _summary(deserialize(message))})
+            record({REQUEST: _summary(deserialize(message))})
+            # rules-allow: hardcoded-keys — the key of the author's server as its code spells it, pinned apart from
+            # `pi05_abc.ACTIONS` so a typo in that constant fails the tests.
             connection.send(serialize({'actions': CHUNK}))
 
-    record({'argv': argv, 'cwd': os.getcwd(), 'pid': os.getpid()})
+    record({ARGV: argv, CWD: os.getcwd(), PID: os.getpid()})
     port = int(argv[argv.index('--port') + 1])
     with serve(handle, '127.0.0.1', port, compression=None, max_size=None) as backend:
         backend.serve_forever()

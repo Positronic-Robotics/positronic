@@ -110,7 +110,7 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
         assert action[keys.arm_channel(keys.TARGET_GRIP, keys.RIGHT_ARM)] == pytest.approx(1.0 - expected[13])
     # One warm-up request comes before the session's own.
     started, _, request = _log(tmp_path)
-    fields = request['request']
+    fields = request[author_server_stand_in.REQUEST]
     # rules-allow: hardcoded-keys — the fields and flags of the author's server as its code spells them, pinned apart
     # from the package constants so a typo in a constant fails here.
     images = fields.pop('images')
@@ -124,8 +124,8 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
         ('top', 'left', 'right'), [3, 168, 224]
     )
     assert {name: round(view['mean']) for name, view in images.items()} == {'top': 40, 'left': 120, 'right': 200}
-    assert started['cwd'] == str(fork / 'third_party/policy/openpi')
-    script, *flags = started['argv']
+    assert started[author_server_stand_in.CWD] == str(fork / 'third_party/policy/openpi')
+    script, *flags = started[author_server_stand_in.ARGV]
     assert script == str(checkpoint / 'inference/openpi_server.py')
     assert dict(zip(flags[::2], flags[1::2], strict=True)) == {
         '--host': '127.0.0.1',
@@ -138,7 +138,7 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
         '--flatten-prefix': 'observation/',
         '--state-key': 'observation/state',
     }
-    assert not _alive(started['pid']), 'the server left the backend running after it stopped'
+    assert not _alive(started[author_server_stand_in.PID]), 'the server left the backend running after it stopped'
 
 
 def test_a_task_other_than_the_bottles_is_refused():
@@ -169,7 +169,7 @@ def test_a_load_with_relative_paths_reaches_the_server_with_absolute_ones(tmp_pa
 
     server.pi05_abc_model(checkpoint='checkpoint', fork='fork', port=_free_port()).close()
 
-    argv = _log(tmp_path)[0]['argv']
+    argv = _log(tmp_path)[0][author_server_stand_in.ARGV]
     assert argv[0] == str(tmp_path / 'checkpoint/inference/openpi_server.py')
     assert argv[argv.index('--checkpoint') + 1] == str(tmp_path / 'checkpoint')
     assert argv[argv.index('--norm-stats-path') + 1].startswith(str(tmp_path / 'checkpoint'))
