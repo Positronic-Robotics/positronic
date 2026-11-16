@@ -5,6 +5,7 @@ import os
 import socket
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from positronic.offboard import roboarena
 from positronic.offboard import server as offboard_server
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
+from positronic.vendors import pi05_abc
 from positronic.vendors.pi05_abc import codecs, server
 from positronic.vendors.pi05_abc.tests import author_server_stand_in
 
@@ -127,7 +129,7 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
     assert {name: round(view['mean']) for name, view in images.items()} == {'top': 40, 'left': 120, 'right': 200}
     assert started[author_server_stand_in.CWD] == str(fork / 'third_party/policy/openpi')
     script, *flags = started[author_server_stand_in.ARGV]
-    assert script == str(checkpoint / 'inference/openpi_server.py')
+    assert script == str(fork / 'yam_abc_reproduce/deploy/servers/openpi_server.py')
     assert dict(zip(flags[::2], flags[1::2], strict=True)) == {
         '--host': '127.0.0.1',
         '--port': str(port),
@@ -144,8 +146,79 @@ def test_a_session_reaches_the_authors_server_in_its_fields_and_gets_the_whole_c
 
 def test_a_task_other_than_the_bottles_is_refused():
     codec = server.pipeline().codec
-    with pytest.raises(ValueError, match='knows only the task'):
-        codec.encode(_obs('sweep away the paper scraps from the table'))
+    with pytest.raises(ValueError, match='has no prompt for the task'):
+        codec.encode(_obs('sweep away paper scraps from the table'))
+
+
+# rules-allow: hardcoded-keys — the task instructions of ABC's sim and the task strings of ABC's real data, pinned apart
+# from the package constants so a typo in a constant fails here.
+ABC4_INSTRUCTION_PROMPTS = [
+    ('put the plastic bottles in the bin', 'put the plastic bottles in the bin'),
+    ('sweep away paper scraps from the table', 'sweep away the paper scraps from the table'),
+    ('turn mug right side up', 'turn the mug right side up'),
+    ('load plates into tabletop dish rack', 'load the plates into the dish rack'),
+]
+# rules-allow: hardcoded-keys — pinned apart from the package constants, as above.
+ABC11_INSTRUCTION_PROMPTS = [
+    *ABC4_INSTRUCTION_PROMPTS,
+    ('unload the plates from the dish rack', 'unload the plates from the dish rack'),
+    ('load the cups into the dish rack', 'load the cups into the dish rack'),
+    ('put the screwdriver in the bin', 'put the screwdriver in the bin'),
+    ('place and organize the fake fruits in the fruit bowl', 'place and organize the fake fruits in the fruit bowl'),
+    ('build the wood block tower', 'build the wood block tower'),
+    ('place the snacks into the paper bag', 'place the snacks into the paper bag'),
+    ('take the snacks out of the paper bag', 'take the snacks out of the paper bag'),
+]
+
+
+@dataclass(frozen=True)
+class MultiTaskCommand:
+    """A serve command of a checkpoint trained on several tasks, and what it must send and load."""
+
+    pipeline: Any
+    model: Any
+    prompts: list[tuple[str, str]]
+    norm_stats: str
+
+
+def _multi_task_command(name: str, prompts: list[tuple[str, str]], norm_stats: str) -> MultiTaskCommand:
+    command = server.COMMANDS[name]
+    return MultiTaskCommand(command.kwargs['pipeline'], command.kwargs['model'], prompts, norm_stats)
+
+
+MULTI_TASK_COMMANDS = {
+    'abc4_30k': _multi_task_command('abc4_30k', ABC4_INSTRUCTION_PROMPTS, 'assets/abc4_yam/norm_stats.json'),
+    'abc11_30k': _multi_task_command('abc11_30k', ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam/norm_stats.json'),
+}
+COMMAND_PROMPTS = [
+    (name, instruction, prompt)
+    for name, command in MULTI_TASK_COMMANDS.items()
+    for instruction, prompt in command.prompts
+]
+
+
+@pytest.mark.parametrize(('name', 'instruction', 'prompt'), COMMAND_PROMPTS)
+def test_a_multi_task_command_sends_the_real_data_prompt_of_each_task(name, instruction, prompt):
+    codec = MULTI_TASK_COMMANDS[name].pipeline().codec
+    assert codec.encode(_obs(instruction))[pi05_abc.PROMPT] == prompt
+
+
+@pytest.mark.parametrize('name', list(MULTI_TASK_COMMANDS))
+def test_a_multi_task_command_refuses_a_task_it_did_not_train_on(name):
+    command = MULTI_TASK_COMMANDS[name]
+    codec = command.pipeline().codec
+    assert codec.meta[codecs.PROMPTS_META] == dict(command.prompts)
+    with pytest.raises(ValueError, match='has no prompt for the task'):
+        codec.encode(_obs('hang mug on mug rack'))
+
+
+@pytest.mark.parametrize('name', list(MULTI_TASK_COMMANDS))
+def test_a_multi_task_command_loads_its_own_norm_stats(name, tmp_path):
+    command = MULTI_TASK_COMMANDS[name]
+    command.model(checkpoint=str(tmp_path / 'checkpoint'), fork=str(_fork(tmp_path)), port=_free_port()).close()
+
+    argv = _log(tmp_path)[0][author_server_stand_in.ARGV]
+    assert argv[argv.index('--norm-stats-path') + 1] == str(tmp_path / 'checkpoint' / command.norm_stats)
 
 
 @pytest.mark.parametrize('crop', list(codecs.Crop))
@@ -171,7 +244,7 @@ def test_a_load_with_relative_paths_reaches_the_server_with_absolute_ones(tmp_pa
     server.pi05_abc_model(checkpoint='checkpoint', fork='fork', port=_free_port()).close()
 
     argv = _log(tmp_path)[0][author_server_stand_in.ARGV]
-    assert argv[0] == str(tmp_path / 'checkpoint/inference/openpi_server.py')
+    assert argv[0] == str(tmp_path / 'fork/yam_abc_reproduce/deploy/servers/openpi_server.py')
     assert argv[argv.index('--checkpoint') + 1] == str(tmp_path / 'checkpoint')
     assert argv[argv.index('--norm-stats-path') + 1].startswith(str(tmp_path / 'checkpoint'))
 
