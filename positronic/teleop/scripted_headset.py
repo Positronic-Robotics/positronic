@@ -201,8 +201,9 @@ def drive(
     circle_sec: float,
 ) -> None:
     """Do ``trials`` trials on the page of ``positronic teleop`` at the URL ``page``. Each trial moves the hand for
-    ``trial_sec`` on a circle of ``radius``, once each ``circle_sec``. ``view_fps`` is the ``--view_fps`` of the
-    service. ``min_hold_sec`` is the shortest release of a button after a press; a loaded machine needs a longer one.
+    ``trial_sec`` on a circle of ``radius``, once each ``circle_sec``. ``view_fps`` is the ``--webxr.video_fps`` of
+    the service. ``min_hold_sec`` is the shortest release of a button after a press; a loaded machine needs a longer
+    one.
 
     The page of the service has a self-signed certificate, so the scripted headset does not check it.
     """
