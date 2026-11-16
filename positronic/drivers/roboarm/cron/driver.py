@@ -342,7 +342,8 @@ class _Arm(DriverRun[command.CommandType]):
         seed = self.reading.q if fresh else self.target
         pose = self._pose_of(cmd)
         goal = None if pose is not None else self._within_limits(self._to_joints(cmd), self.reading.q)
-        if self.target is None:
+        if self.target is None and not self.velocity.any():
+            # Only from a stop: a stream that still brakes goes on, and a HOLD at speed stops the arm
             self.controller.to_hold()
             self._stream.clear()
         self.target, self._pose, self._joint_goal = np.array(seed, dtype=np.float64), pose, goal

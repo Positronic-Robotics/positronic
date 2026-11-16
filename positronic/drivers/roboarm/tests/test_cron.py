@@ -410,7 +410,7 @@ def test_a_safety_stop_whose_error_clears_before_the_arm_is_off_is_powered_once_
 
 
 def test_an_arm_in_standby_at_start_is_powered_to_run_through_off(rctl, driven):
-    """RUN from STANDBY failed on an arm whose multi-turn encoder asks for a preset, and RUN from OFF passed."""
+    """RUN from STANDBY fails on an arm whose multi-turn encoder asks for a preset, and RUN from OFF passes."""
     rctl.power = PowerState.STANDBY
     _, _, _, clock, loop = driven()
 
@@ -1280,6 +1280,23 @@ def test_a_tick_where_the_model_refuses_a_pose_drops_the_stream_and_the_driver_g
     np.testing.assert_allclose(rctl.q[0], 0.5, atol=0.01)
 
 
+def test_a_stream_that_comes_while_a_dropped_stream_brakes_does_not_hold_the_arm_at_speed(rctl, driven):
+    _, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 100)
+    rctl.fk_fails = True
+    commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.3, 0.0, 0.0]))))
+    _pump(loop, clock, 2)
+    rctl.fk_fails = False
+    del rctl.calls[:]
+
+    commands.push(command.JointPosition(_joints(0.5)))
+    _pump(loop, clock, 600)
+
+    assert 'hold' not in rctl.calls
+    np.testing.assert_allclose(rctl.q[0], 0.5, atol=0.01)
+
+
 def test_a_refused_move_reports_how_far_the_arm_moved_while_the_driver_cleared_the_error(world, rctl, driven):
     """The controller moves the joints once just after RUN."""
     driver, _, _, clock, loop = driven()
@@ -1403,7 +1420,7 @@ def test_a_move_powers_an_arm_in_standby_to_run_through_off(world, rctl, driven)
 def test_a_power_up_that_stops_in_standby_goes_back_to_off_before_it_asks_for_run_again(
     world, rctl, driven, monkeypatch
 ):
-    """RUN from STANDBY failed on an arm whose multi-turn encoder asks for a preset."""
+    """RUN from STANDBY fails on an arm whose multi-turn encoder asks for a preset."""
     monkeypatch.setattr(cron, 'POWER_TIMEOUT_S', 2.0)
     driver, _, _, clock, loop = driven()
     _pump(loop, clock, 2)
