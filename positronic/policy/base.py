@@ -198,6 +198,11 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
         """
         return {}
 
+    @property
+    def ordered(self) -> bool:
+        """Each call of a run depends on the call before it, so the calls run one at a time."""
+        return False
+
     def to_spec(self) -> dict[str, Any]:
         """A versioned component declaration with plain-data arguments."""
         raise NotImplementedError(f'{type(self).__name__} has no wire spec')

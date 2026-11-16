@@ -26,6 +26,8 @@ from positronic.policy.codecs import (
     TransformImages,
 )
 from positronic.policy.keys import RTC
+from positronic.policy.processors import EndOnField
+from positronic.policy.sequential import Sequential
 
 
 @pytest.mark.parametrize(
@@ -490,6 +492,31 @@ class TestEncodeVideo:
     def test_a_path_that_selects_no_rgb_image_is_refused(self, value):
         with pytest.raises(ValueError, match='RGB image'):
             EncodeVideo([['cam']], bitrate=500_000, fps=15).encode({'cam': value})
+
+    @pytest.mark.parametrize(
+        'compose',
+        [
+            lambda video: video,
+            lambda video: EncodeImages() & video,
+            lambda video: EncodeImages() | video,
+            lambda video: Sequential(EndOnField(), EncodeImages() | video),
+        ],
+        ids=['alone', 'parallel', 'sequential', 'stack'],
+    )
+    def test_a_stack_that_holds_a_video_codec_is_ordered(self, compose):
+        assert compose(EncodeVideo([['cam']], bitrate=500_000, fps=15)).ordered
+
+    @pytest.mark.parametrize(
+        'stack',
+        [
+            EncodeImages(),
+            EncodeImages() & EncodeImages(),
+            Sequential(EndOnField(), EncodeImages() | TransformImages(8, 8, mode=ResizeMode.BOUND)),
+        ],
+        ids=['alone', 'parallel', 'stack'],
+    )
+    def test_a_stack_with_no_video_codec_is_not_ordered(self, stack):
+        assert not stack.ordered
 
     @pytest.mark.parametrize('name', ['bitrate', 'fps'])
     @pytest.mark.parametrize('value', [0, -1, 1.5, True])

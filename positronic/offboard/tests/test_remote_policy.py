@@ -55,7 +55,15 @@ from positronic.offboard.client import (
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
-from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
+from positronic.policy.codecs import (
+    ChangeEEFrame,
+    Codec,
+    EncodeVideo,
+    EndCommand,
+    PolicyCommandError,
+    ResizeMode,
+    TransformImages,
+)
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
@@ -1328,6 +1336,39 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+def test_a_stack_with_a_video_codec_keeps_one_call_in_flight_when_the_server_allows_more(runtime):
+    schedule = InferenceSchedule(
+        10,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+    )
+    stack = Sequential(schedule, EncodeVideo([['cam']], bitrate=500_000, fps=10))
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
+    session.protocol_version = protocol.ProtocolVersion.V3
+    session.max_in_flight = 3
+    started = threading.Event()
+    release = threading.Event()
+
+    def infer(obs):
+        started.set()
+        assert release.wait(timeout=5)
+
+    session.infer.side_effect = infer
+    image = np.zeros((16, 16, 3), dtype=np.uint8)
+    run = runtime.start(policy)
+    try:
+        run.send({policy_keys.OBS_TIME_NS: 0, 'cam': image})
+        assert started.wait(timeout=2)
+        run.send({policy_keys.OBS_TIME_NS: 100_000_000, 'cam': image})
+        assert runtime.metadata_snapshot()[policy_keys.SKIPPED_SAMPLES] == 1
+        assert session.infer.call_count == 1
+    finally:
+        release.set()
+        runtime.close()
+        run.close()
 
 
 @pytest.mark.parametrize('capacity', [1, 3, 20])

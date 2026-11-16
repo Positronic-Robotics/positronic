@@ -93,6 +93,10 @@ class EncodeVideo(Codec):
     def decode(self, data: Any) -> Any:
         return data
 
+    @property
+    def ordered(self) -> bool:
+        return True
+
     def to_spec(self) -> dict[str, Any]:
         args = {'paths': [list(path) for path in self._encoders], 'bitrate': self._bitrate, 'fps': self._fps}
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
