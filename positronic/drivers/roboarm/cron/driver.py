@@ -359,13 +359,14 @@ class _Arm(DriverRun[command.CommandType]):
 
         The move waits while the stream brakes to a stop, and while the controller clears an error.
         """
+        # The move ends the stream also when it is refused: the arm brakes and does not drive on to the stream target
+        self.target, self._pose, self._joint_goal = None, None, None
         with pimm.calls.raise_to(call):
             target = self._to_joints(call.request)
             # The check samples each degree and the loop sends no velocity meanwhile, so a stream at speed brakes
             # first: the move is checked when it starts
             if not self.velocity.any():
                 self._check_move(target)
-            self.target, self._pose, self._joint_goal = None, None, None
             self._wait(target, call, 0)
 
     def _wait(self, target: np.ndarray, call: pimm.calls.Call[command.CommandType, None], restarts: int) -> None:

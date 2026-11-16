@@ -1174,6 +1174,22 @@ def test_a_target_that_is_not_a_setpoint_ends_the_stream_and_the_arm_brakes_shor
     assert not rctl.commanded[-1].any()
 
 
+def test_a_refused_planned_move_ends_the_stream_and_the_arm_brakes_short_of_the_stream_target(world, rctl, driven):
+    driver, _, commands, clock, loop = driven()
+    commands.push(command.JointPosition(_joints(1.0)))
+    _pump(loop, clock, 50)
+    assert 0.0 < rctl.q[0] < 0.5
+
+    answer = _mover(world, driver)(command.JointPosition(np.array([0.1, np.nan, 0.0, 0.0, 0.0, 0.0])))
+    _pump_until(loop, clock, answer)
+    _pump(loop, clock, 600)
+
+    with pytest.raises(ValueError):
+        answer.result()
+    assert rctl.q[0] < 0.9, 'the arm drove on to the stream target after the move was refused'
+    assert not rctl.commanded[-1].any()
+
+
 def test_a_cartesian_target_that_is_not_finite_is_not_followed(rctl, driven):
     _, _, commands, clock, loop = driven()
     commands.push(command.CartesianPosition(geom.Transform3D(translation=np.array([0.1, np.nan, 0.3]))))
