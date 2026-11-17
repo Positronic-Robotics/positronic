@@ -12,6 +12,7 @@ from positronic_model_server.serialization import encode_jpeg
 from positronic_model_server.websocket_wire import ServedUnixSocket
 
 from positronic import geom, keys
+from positronic.drivers.webxr import RIGHT
 from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
 from positronic.teleop import protocol
@@ -60,7 +61,7 @@ def _ready_from_the_headset(service, waiting) -> None:
     """Press B on the headset, as only the headset or the phone gives Ready."""
     buttons = [0.0] * (max(Button) + 1)
     buttons[Button.B] = 1.0
-    service.take_sample(None, buttons)
+    service.take_sample({}, {RIGHT: buttons})
     waiting.wait_open()
 
 
@@ -161,12 +162,12 @@ def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(win
     _ready_from_the_headset(service, waiting)
     pressed, released = [0.0] * (max(Button) + 1), [0.0] * (max(Button) + 1)
     pressed[Button.B] = 1.0
-    service.take_sample(None, released)
-    service.take_sample(None, pressed)
-    service.take_sample(None, released)
-    service.take_sample(None, pressed)
+    service.take_sample({}, {RIGHT: released})
+    service.take_sample({}, {RIGHT: pressed})
+    service.take_sample({}, {RIGHT: released})
+    service.take_sample({}, {RIGHT: pressed})
     time.sleep(0.3)
-    service.take_sample(None, pressed)
+    service.take_sample({}, {RIGHT: pressed})
     assert waiting.frame(FRAME_REQUEST)[END] == PolicyEnd.COMPLETE.value
     assert window.get('/status').json()['phase'] == 'ended'
     waiting.close()
