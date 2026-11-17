@@ -9,7 +9,7 @@ import pytest
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
-from positronic.simulator.env_server.launcher import PYTHONPATH_ENV, free_port
+from positronic.simulator.env_server.launcher import PYTHONPATH_ENV, _await_bind, free_port, terminate
 
 _ENV_SERVER_DIR = Path(__file__).parents[1]
 
@@ -17,11 +17,12 @@ _OLDEST_WEBSOCKETS = '12.0'
 
 _SERVE_ONE_TASK = """
 import sys
+from protocol import TASK_INSTRUCTION
 from server import EnvProtocol, EnvServer
 
 class OneTask(EnvProtocol):
     def tasks(self, spec):
-        return [{'name': 'idle', 'instruction': 'wait'}]
+        return [{'name': 'idle', TASK_INSTRUCTION: 'wait'}]
     def reset(self, token):
         raise NotImplementedError
     def step(self, actions):
@@ -63,11 +64,11 @@ def test_a_server_on_the_oldest_websockets_answers_a_request(uv):
     env = {**os.environ, PYTHONPATH_ENV: str(_ENV_SERVER_DIR)}
     server = subprocess.Popen(command, env=env)
     try:
-        conn = EnvConnection('localhost', port, connect_deadline=300.0)
+        _await_bind(server, 'localhost', port, deadline=300.0)
+        conn = EnvConnection('localhost', port)
         try:
             assert conn.tasks({}) == [{'name': 'idle', protocol.TASK_INSTRUCTION: 'wait'}]
         finally:
             conn.close()
     finally:
-        server.terminate()
-        server.wait(timeout=10.0)
+        terminate(server)
