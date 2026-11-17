@@ -3,6 +3,7 @@
 from .action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
+    BimanualCartesianAction,
     BimanualJointsAction,
     CartesianDeltaAction,
     IKJointsAction,

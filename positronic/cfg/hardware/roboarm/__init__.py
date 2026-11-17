@@ -74,6 +74,43 @@ def kinova(ip, relative_dynamics_factor):
     return Robot(ip=ip, relative_dynamics_factor=relative_dynamics_factor)
 
 
+# The DH AG-160-95 on its adapter in the collision model, on the axis of the flange, as spheres (centre, radius) in
+# metres: 225 mm from the flange to the finger tips; the levers of the jaws stick out to 162 mm across from about the
+# middle to the jaws, along the y axis of the flange (horizontal in the start pose); the open jaws are 95 mm apart
+# inside
+_DH_GRIPPER_SPHERES = [
+    *(([0.0, 0.0, z], 0.045) for z in (0.03, 0.07)),
+    *(([0.0, y, z], 0.031) for z in (0.11, 0.15, 0.19) for y in (-0.05, 0.0, 0.05)),
+    *(([0.0, y, 0.215], 0.025) for y in (-0.035, 0.035)),
+]
+
+
+# tool_length: a DH Robotics AG-160-95 on its flange adapter, from the flange to the middle of the finger pads
+@cfn.config(
+    ip='192.168.68.63',
+    relative_dynamics_factor=0.2,
+    power_off_on_exit=True,
+    tool_length=0.195,
+    projects=(),
+    tool_spheres=_DH_GRIPPER_SPHERES,
+)
+def cron(ip, relative_dynamics_factor, power_off_on_exit, tool_length, projects, tool_spheres):
+    from positronic.drivers.roboarm.cron.driver import Robot
+
+    return Robot(
+        ip=ip,
+        relative_dynamics_factor=relative_dynamics_factor,
+        power_off_on_exit=power_off_on_exit,
+        tool_length=tool_length,
+        projects=projects,
+        tool_spheres=tool_spheres,
+    )
+
+
+# A CRON arm with the DH gripper on its wrist: the arm starts the bridge project to the gripper on its control box
+cron_with_gripper = cron.override(projects=['gripper_bridge'])
+
+
 @cfn.config(motor_bus=positronic.cfg.hardware.motors.so101_follower)
 def so101(motor_bus):
     from positronic.drivers.roboarm.so101.driver import Robot
