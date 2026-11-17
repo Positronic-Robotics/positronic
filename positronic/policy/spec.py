@@ -14,6 +14,7 @@ from positronic.policy.codecs import (
     ChangeEEFrame,
     Codec,
     EncodeImages,
+    EncodeVideo,
     EndCommand,
     FlipGrip,
     Metadata,
@@ -58,6 +59,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
     for component in (
         EncodeImages,
+        EncodeVideo,
         EndCommand,
         EndOnField,
         InferenceSchedule,

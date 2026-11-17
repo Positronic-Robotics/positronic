@@ -3,8 +3,9 @@ import queue
 
 import av
 import numpy as np
+import pytest
 
-from positronic.gui.video_stream import AnnexBEncoder, VideoStream, codec_string
+from positronic.gui.video_stream import AnnexBDecoder, AnnexBEncoder, VideoStream, codec_string
 
 
 def _frame(i: int, height: int = 480, width: int = 640) -> np.ndarray:
@@ -103,3 +104,17 @@ def test_a_frame_of_a_new_size_starts_a_new_stream_at_a_key_frame():
 def test_a_frame_with_an_odd_side_is_encoded_one_pixel_larger():
     (unit,) = AnnexBEncoder(fps=30, keyframe_interval=30, bitrate=2_000_000).encode(_frame(0, 47, 63))
     assert unit.config is not None and (unit.config.width, unit.config.height) == (64, 48)
+
+
+def test_the_annex_b_decoder_gives_the_frame_of_each_access_unit_at_once():
+    encoder, decoder = AnnexBEncoder(fps=30, keyframe_interval=3, bitrate=2_000_000), AnnexBDecoder()
+    for level in (0, 60, 120, 180, 240):
+        units = encoder.encode(np.full((48, 64, 3), level, np.uint8))
+        decoded = decoder.decode(b''.join(unit.data for unit in units))
+        assert decoded.shape == (48, 64, 3) and decoded.dtype == np.uint8
+        assert abs(decoded.mean() - level) < 4
+
+
+def test_the_annex_b_decoder_refuses_data_that_holds_no_frame():
+    with pytest.raises(ValueError, match='no frame'):
+        AnnexBDecoder().decode(b'')
