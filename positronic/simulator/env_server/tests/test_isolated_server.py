@@ -108,12 +108,14 @@ def test_a_server_on_the_oldest_websockets_frees_the_slot_of_a_client_that_drops
 
     deadline = time.monotonic() + 10.0
     while True:
-        conn = EnvConnection('localhost', oldest_websockets_server_port)
+        remaining = max(deadline - time.monotonic(), 0.0)
+        conn = EnvConnection('localhost', oldest_websockets_server_port, connect_deadline=remaining)
         try:
             frame = conn.reset(None)
             break
-        except RuntimeError as refused:
-            if 'slots are taken' not in str(refused) or time.monotonic() >= deadline:
+        except RuntimeError:
+            # The server frees the dropped slot after its handler returns, so a reset can still find it taken.
+            if time.monotonic() >= deadline:
                 raise
         finally:
             conn.close()
