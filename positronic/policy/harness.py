@@ -18,6 +18,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition
 from positronic.drivers.roboarm.ik import ee_frames
@@ -382,6 +383,20 @@ class Harness(pimm.ControlSystem):
             self._append(values, timestamps)
         return values
 
+    def _time_frame(self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float]) -> None:
+        """Put the two parts of the age of camera frame ``name`` into ``step_ms``.
+
+        The wait from the hand-off ``emitted_ns`` to the read, before any conversion, is on the runtime clock. The
+        driver's time from capture to hand-off is on the camera's clock, and is absent when the driver stamps no
+        capture time.
+        """
+        if emitted_ns is not None and self._clock is not None:
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + name] = (self._clock.now_ns() - emitted_ns) / 1e6
+        if CAPTURE_TIME in stamps and HANDOFF_TIME in stamps:
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX + name] = (
+                stamps[HANDOFF_TIME] - stamps[CAPTURE_TIME]
+            ) / 1e6
+
     def _sample(self, step_ms: dict[str, float] | None = None) -> None:
         for name, obs in self._embodiment.observations.items():
             read_started_ns = time.perf_counter_ns()
@@ -393,11 +408,15 @@ class Harness(pimm.ControlSystem):
             if message is None or isinstance(message.data, pimm.SignalError):
                 self._obs_by_signal[name] = message.data if message is not None else None
                 self._frame_ns_by_signal.pop(name, None)
-            elif message.updated or not isinstance(self._obs_by_signal.get(name), dict):
-                self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
+            else:
                 emitted_ns = message.time.get(EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL)
-                if name.startswith(keys.IMAGE_PREFIX) and emitted_ns is not None:
-                    self._frame_ns_by_signal[name] = emitted_ns
+                is_frame = name.startswith(keys.IMAGE_PREFIX)
+                if is_frame and step_ms is not None:
+                    self._time_frame(name, message.time, emitted_ns, step_ms)
+                if message.updated or not isinstance(self._obs_by_signal.get(name), dict):
+                    self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
+                    if is_frame and emitted_ns is not None:
+                        self._frame_ns_by_signal[name] = emitted_ns
         if self._writer is not None:
             for name, receiver in self.privileged.items():
                 message = receiver.read()

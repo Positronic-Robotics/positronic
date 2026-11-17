@@ -73,6 +73,10 @@ ATTR_STEP_GC_GENERATION = 'step.gc_generation'
 # The signal's name follows each prefix.
 ATTR_STEP_READ_MS_PREFIX = 'step.read_ms.'
 ATTR_STEP_CONVERT_MS_PREFIX = 'step.convert_ms.'
+# The two parts of a camera frame's age at the step's read: the wait from the driver's hand-off on the runtime clock,
+# and the driver's own time from capture to hand-off on the camera clock.
+ATTR_STEP_FRAME_WAIT_MS_PREFIX = 'step.frame_wait_ms.'
+ATTR_STEP_FRAME_DRIVER_MS_PREFIX = 'step.frame_driver_ms.'
 
 # One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint that
 # came due and went out on no round.
