@@ -501,18 +501,19 @@ def test_the_page_input_emits_each_object_that_the_page_posts(world):
 
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
-    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0]})
+    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0, 0.0, 1.0, 0.0]})
     positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
     assert positions[webxr.LEFT] is None and buttons[webxr.LEFT] is None
     right, right_buttons = positions[webxr.RIGHT], buttons[webxr.RIGHT]
     assert right is not None and right_buttons is not None
     np.testing.assert_allclose(right.translation, pose.translation)
     np.testing.assert_allclose(right.rotation.as_quat, pose.rotation.as_quat)
-    np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0])
+    np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0, 0.0, 1.0, 0.0])
 
 
-def test_a_hand_with_no_button_values_parses_as_a_controller_that_is_not_tracked():
-    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: []})
+@pytest.mark.parametrize('values', [[], [0.0, 1.0]], ids=['no values', 'too few values'])
+def test_a_hand_with_too_few_button_values_parses_as_a_controller_that_is_not_tracked(values):
+    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: values})
     positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
     assert positions[webxr.RIGHT] is None and buttons[webxr.RIGHT] is None
 

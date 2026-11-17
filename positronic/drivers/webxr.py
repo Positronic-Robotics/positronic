@@ -30,6 +30,8 @@ STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
 
 # The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
+# The button values of a controller in the xr-standard gamepad layout, up to B or Y at index 5
+_CONTROLLER_BUTTONS = 6
 
 
 def parse_controller_message(
@@ -40,9 +42,9 @@ def parse_controller_message(
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
     buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
-        # The page sends a hand that the headset tracks with no controller in it with no button values. The pose and
-        # the buttons go out on two signals, so only here is the pose known to be of the hand.
-        if data[_CONTROLLERS][side] is not None and len(data[_CONTROLLERS][side][_BUTTONS]):
+        # A hand that the headset tracks with no controller in it has fewer values than a controller, or none. The pose
+        # and the buttons go out on two signals, so only here is the pose known to be of the hand.
+        if data[_CONTROLLERS][side] is not None and len(data[_CONTROLLERS][side][_BUTTONS]) >= _CONTROLLER_BUTTONS:
             translation = np.array(data[_CONTROLLERS][side][_POSITION], dtype=np.float64)
             rotation = np.array(data[_CONTROLLERS][side][_ORIENTATION], dtype=np.float64)
             buttons = np.array(data[_CONTROLLERS][side][_BUTTONS], dtype=np.float64)
