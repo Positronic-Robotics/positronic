@@ -555,10 +555,16 @@ def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0, 0.0, 1.0, 0.0])
 
 
+def _hand_message(values: list[float]) -> dict:
+    """A page message of a right hand that the headset tracks with no controller in it, with ``values``."""
+    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
+    message['controllers'][webxr.RIGHT]['buttons'] = values
+    return message
+
+
 @pytest.mark.parametrize('values', [[], [0.0, 1.0]], ids=['no values', 'too few values'])
 def test_a_hand_with_too_few_button_values_parses_as_a_controller_that_is_not_tracked(values):
-    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: values})
-    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
+    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(_hand_message(values))))
     assert positions[webxr.RIGHT] is None and buttons[webxr.RIGHT] is None
 
 
@@ -568,7 +574,7 @@ def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(
     served.controller_positions._bind(positions, clock=world.clock)
     served.buttons._bind(buttons, clock=world.clock)
     controller = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
-    hand = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: []})
+    hand = _hand_message([])
     with (
         _served_webxr(webxr=served) as base,
         ws_client.connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as ws,
@@ -587,6 +593,11 @@ def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(
 def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
     with pytest.raises(ValueError, match='positions and buttons must name the same controllers'):
         webxr.controller_message({webxr.RIGHT: Transform3D()}, {})
+
+
+def test_a_controller_message_refuses_a_controller_with_fewer_button_values_than_a_controller_has():
+    with pytest.raises(ValueError, match='at least 6 button values'):
+        webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 5})
 
 
 def test_the_phone_page_for_data_collection_keeps_its_own_mode():

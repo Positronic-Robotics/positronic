@@ -64,6 +64,8 @@ def controller_message(
         raise ValueError(
             f'positions and buttons must name the same controllers, got {list(positions)}, {list(buttons)}'
         )
+    if short := {side: len(values) for side, values in buttons.items() if len(values) < _CONTROLLER_BUTTONS}:
+        raise ValueError(f'a controller has at least {_CONTROLLER_BUTTONS} button values, got {short}')
     tracked = {
         side: {
             _POSITION: pose.translation.tolist(),
