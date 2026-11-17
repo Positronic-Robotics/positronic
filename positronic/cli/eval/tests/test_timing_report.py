@@ -37,6 +37,8 @@ from positronic.telemetry_keys import (
     ATTR_CODEC,
     ATTR_EPISODE_VIRTUAL_S,
     ATTR_SERVED_PREFIX,
+    ATTR_STEP_GC_GENERATION,
+    ATTR_STEP_GC_MS,
     ATTR_STEP_LATE_MS,
     ATTR_STEP_POLICY_MS,
     ATTR_WAYPOINTS_DROPPED,
@@ -44,8 +46,10 @@ from positronic.telemetry_keys import (
     ATTR_WAYPOINTS_LATE_MAX_MS,
     ATTR_WAYPOINTS_LATE_SUM_MS,
     ATTR_WAYPOINTS_SCHEDULED,
+    ATTR_WIRE_DOWNLINK_MS,
     ATTR_WIRE_NETWORK_MS,
     ATTR_WIRE_SENT_ALONE,
+    ATTR_WIRE_UPLINK_MS,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
@@ -1092,6 +1096,39 @@ def test_the_latency_leaves_out_the_server_instants_and_a_split_the_server_did_n
 
     segments = {row.segment for row in report.latency}
     assert not segments & {_SERVED_RECEIVED_NS, _SERVED_SENT_NS, ATTR_WIRE_NETWORK_MS}
+
+
+def _latency_rows_of(telemetry_dir, *spans):
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [_span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'), *spans],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    return {row.segment: row for row in report.latency}
+
+
+def test_the_latency_leaves_out_a_step_value_that_is_not_milliseconds(tmp_path):
+    read_ms = 'step.read_ms.camera'
+    step_attrs = {ATTR_STEP_GC_GENERATION: 2, ATTR_STEP_GC_MS: 3.0, read_ms: 4.0}
+    rows = _latency_rows_of(
+        tmp_path / TELEMETRY_SUBDIR, _span(SPAN_HARNESS_STEP, 1, 1.01, 'step0', 'ep0', step_attrs, run_id='rig-run')
+    )
+
+    assert ATTR_STEP_GC_GENERATION not in rows
+    assert rows[ATTR_STEP_GC_MS].p50_ms == pytest.approx(3.0)
+    assert rows[read_ms].p50_ms == pytest.approx(4.0)
+
+
+def test_the_latency_leaves_out_the_one_way_wire_values_and_keeps_their_sum(tmp_path):
+    wire_attrs = {ATTR_WIRE_UPLINK_MS: -5.0, ATTR_WIRE_DOWNLINK_MS: 25.0, ATTR_WIRE_NETWORK_MS: 20.0}
+    rows = _latency_rows_of(
+        tmp_path / TELEMETRY_SUBDIR, _span(SPAN_POLICY_INFER, 1, 1.1, 'infer', 'ep0', wire_attrs, run_id='rig-run')
+    )
+
+    assert ATTR_WIRE_UPLINK_MS not in rows
+    assert ATTR_WIRE_DOWNLINK_MS not in rows
+    assert rows[ATTR_WIRE_NETWORK_MS].p50_ms == pytest.approx(20.0)
 
 
 def test_render_shows_the_latency_table(tmp_path):

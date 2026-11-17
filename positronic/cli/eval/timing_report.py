@@ -54,10 +54,8 @@ from positronic.telemetry_keys import (
     ATTR_WAYPOINTS_LATE_MAX_MS,
     ATTR_WAYPOINTS_LATE_SUM_MS,
     ATTR_WAYPOINTS_SCHEDULED,
-    ATTR_WIRE_DOWNLINK_MS,
     ATTR_WIRE_NETWORK_MS,
     ATTR_WIRE_SENT_ALONE,
-    ATTR_WIRE_UPLINK_MS,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
@@ -642,13 +640,14 @@ _TIMED_SPANS = frozenset({
 })
 _SERVED_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SERVED}'
 _SERVED_ENCODE_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_ENCODE}'
-_SERVED_INSTANTS = frozenset(
-    f'{ATTR_SERVED_PREFIX}{key}' for key in (protocol.TIMING_RECEIVED_NS, protocol.TIMING_SENT_NS)
-)
-_WIRE_SPLIT = (ATTR_WIRE_UPLINK_MS, ATTR_WIRE_DOWNLINK_MS, ATTR_WIRE_NETWORK_MS)
 # The latency segments that combine spans. Each label spells how it is made.
 _CALL_ENCODE = f'{SPAN_POLICY_ENCODE} per call'
 _CALL_NETWORK = f'{SPAN_WIRE_SEND} + {SPAN_WIRE_RECV} - {_SERVED_MS} - {_SERVED_ENCODE_MS}'
+
+
+def _is_ms_key(key: str) -> bool:
+    """Whether an attribute holds milliseconds: its name ends in `_ms`, or a `_ms.` part names one signal."""
+    return key.endswith('_ms') or '_ms.' in key
 
 
 def _segments(span: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tuple[str, float]]:
@@ -658,7 +657,7 @@ def _segments(span: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tup
     if span.name == SPAN_POLICY_ENCODE:
         yield f'{SPAN_POLICY_ENCODE}[{span.attrs.get(ATTR_CODEC, "")}]', _dur_s(span) * 1000.0
     elif span.name == SPAN_HARNESS_STEP:
-        yield from ((key, float(value)) for key, value in span.attrs.items())
+        yield from ((key, float(value)) for key, value in span.attrs.items() if _is_ms_key(key))
     elif span.name == SPAN_POLICY_SUBMIT:
         encodes = [s for s in _descendants(span, children) if s.name == SPAN_POLICY_ENCODE]
         if encodes:
@@ -669,7 +668,8 @@ def _segments(span: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tup
 
 def _infer_segments(infer: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tuple[str, float]]:
     for key, value in infer.attrs.items():
-        if (key.startswith(ATTR_SERVED_PREFIX) and key not in _SERVED_INSTANTS) or key in _WIRE_SPLIT:
+        # The one-way wire values hold the offset between the two clocks, so only their sum is a latency.
+        if (key.startswith(ATTR_SERVED_PREFIX) and _is_ms_key(key)) or key == ATTR_WIRE_NETWORK_MS:
             yield key, float(value)
     wire_ms: dict[str, float] = defaultdict(float)
     sends = 0
