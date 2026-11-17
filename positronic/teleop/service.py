@@ -132,7 +132,7 @@ class ButtonMap:
         self._used: set[Button] = set()
         self._read = tuple(buttons)
 
-    def _new_presses(self, buttons: Sequence[float], now_ns: int) -> set[Button]:
+    def presses(self, buttons: Sequence[float], now_ns: int) -> set[Button]:
         """Record the state of the buttons, and return the buttons that went down since the previous sample."""
         new_presses = set()
         for button in self._read:
@@ -146,7 +146,7 @@ class ButtonMap:
 
     def observe(self, buttons: Sequence[float], now_ns: int) -> None:
         """Record the state of the buttons, outside a trial. A button that is down here does not press in the next."""
-        self._new_presses(buttons, now_ns)
+        self.presses(buttons, now_ns)
         self._used.update(self._down_since)
 
     def lose(self) -> None:
@@ -159,7 +159,7 @@ class ButtonMap:
         return since is not None and button not in self._used and now_ns - since >= self._hold_ns
 
     def ready_answer(self, buttons: Sequence[float], now_ns: int) -> ReadyAnswer | None:
-        new_presses = self._new_presses(buttons, now_ns)
+        new_presses = self.presses(buttons, now_ns)
         # A button that is down before the trial runs does not hold in it.
         self._used.update(self._down_since)
         if Button.B in new_presses:
@@ -169,7 +169,7 @@ class ButtonMap:
         return None
 
     def events(self, buttons: Sequence[float], now_ns: int) -> list[Event]:
-        new_presses = self._new_presses(buttons, now_ns)
+        new_presses = self.presses(buttons, now_ns)
         events = []
         if Button.A in new_presses:
             events.append(Event.CLUTCH)

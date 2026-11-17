@@ -378,6 +378,31 @@ If the arm moves in step 3, stop the run, and report it before any human trial o
 On a bimanual rig, use `--policy=@positronic.cfg.policy.teleop_yam`, and do steps 3 to 5 for each arm. The signals are
 `robot_command.left`, `target_grip.left`, `robot_command.right` and `target_grip.right`.
 
+## Debug a robot with no eval
+
+`positronic teleop-debug <robot>` drives the arms of a station with no eval, no task and no recording. Use it to bring
+up a new robot, or to find a fault. The robots are `franka`, `yam`, `yam_bimanual`, `so101` and `cron_bimanual`.
+
+```bash
+uv run positronic teleop-debug cron_bimanual --arms.left_arm.ip=192.168.68.67 --arms.right_arm.ip=192.168.68.66
+```
+
+Open the page of the headset, as for `positronic teleop`. One arm follows the right controller. On two arms, the left
+controller drives the left arm.
+
+| Quest | What it does |
+|---|---|
+| A (right) or X (left) | control of the arm on or off |
+| B (right) or Y (left) | control off, the errors of the arm and its gripper cleared, and the arm at its start pose |
+| the trigger | the grip |
+| the left stick | the panel (see Cameras) |
+
+Control of an arm goes off when its controller is not tracked, when the headset sends nothing for 0.5 s
+(`--silence_sec`), and when the arm is in an error, busy or gives no state. The headset video shows the state of each
+arm, the trigger and the grip, the shift of the target and of the arm since control came on, and the last events.
+The log has the same events. `--arms.start_joints` (or `--arms.left_start_joints` and `--arms.right_start_joints`)
+changes the start pose.
+
 ## See Also
 
 - [Data Collection](../../docs/data-collection.md) – headset setup, and collection with `positronic-data-collection`
