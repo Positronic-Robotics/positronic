@@ -258,15 +258,13 @@ class DiskEpisodeWriter(EpisodeWriter):
             return
 
         self._abort_waiting()
-        # Always try to close all signal writers
-        for writer in self._writers.values():
-            try:
-                writer.__exit__(exc_type, exc, tb)
-            except Exception:
-                # Do not suppress exceptions, just ensure we attempt to close others
-                if exc is None:
-                    raise
-        self._chunk_writer.shutdown()
+        with self._chunk_writer:
+            for writer in self._writers.values():
+                try:
+                    writer.__exit__(exc_type, exc, tb)
+                except Exception:
+                    if exc is None:
+                        raise
 
         if self._aborted:
             return

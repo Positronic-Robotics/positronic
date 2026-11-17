@@ -235,17 +235,18 @@ def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(
     np.testing.assert_array_equal(q[-1][0], [_DEFAULT_CHUNK_ROWS - 1, 1 - _DEFAULT_CHUNK_ROWS])
 
 
-def test_an_episode_whose_close_failed_on_a_chunk_write_can_be_aborted(tmp_path, monkeypatch):
+def test_an_episode_whose_close_failed_on_a_chunk_write_ends_its_thread_and_can_be_aborted(tmp_path, monkeypatch):
     def fail(writer, *args, **kwargs):
         raise OSError('disk full')
 
     monkeypatch.setattr(pq.ParquetWriter, 'write_table', fail)
-    ep_dir = tmp_path / 'ep'
+    ep_dir = tmp_path / 'ep_close_failed'
     writer = DiskEpisodeWriter(ep_dir)
     for i in range(_DEFAULT_CHUNK_ROWS):
         writer.append('q', i, Time(**{RECORDED_TIME: i + 1}))
     with pytest.raises(OSError, match='disk full'):
         writer.__exit__(None, None, None)
+    assert not [t for t in threading.enumerate() if t.name.startswith(f'chunks:{ep_dir.name}_')]
     writer.abort()
     assert not ep_dir.exists()
 
