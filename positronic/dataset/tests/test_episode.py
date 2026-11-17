@@ -210,12 +210,14 @@ def test_episode_writer_marks_unfinished_and_clears_on_close(tmp_path):
     assert not (ep_dir / UNFINISHED_MARKER).exists()
 
 
+_DEFAULT_CHUNK_ROWS = 10_000
+
+
 def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(tmp_path, monkeypatch):
     started, release = hold_parquet_writes(monkeypatch)
     ep_dir = tmp_path / 'ep'
     writer = DiskEpisodeWriter(ep_dir)
-    # 10,000 rows fill one chunk at the default chunk size, and the append that fills it returns.
-    for i in range(10_000):
+    for i in range(_DEFAULT_CHUNK_ROWS):
         writer.append('q', np.array([i, -i], dtype=np.float32), Time(**{RECORDED_TIME: i + 1}))
     assert started.wait(timeout=5)
 
@@ -229,8 +231,8 @@ def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(
     assert not closer.is_alive()
     assert not (ep_dir / UNFINISHED_MARKER).exists()
     q = DiskEpisode(ep_dir)['q']
-    assert len(q) == 10_000
-    np.testing.assert_array_equal(q[-1][0], [9_999, -9_999])
+    assert len(q) == _DEFAULT_CHUNK_ROWS
+    np.testing.assert_array_equal(q[-1][0], [_DEFAULT_CHUNK_ROWS - 1, 1 - _DEFAULT_CHUNK_ROWS])
 
 
 def test_an_episode_whose_close_failed_on_a_chunk_write_can_be_aborted(tmp_path, monkeypatch):
@@ -240,8 +242,7 @@ def test_an_episode_whose_close_failed_on_a_chunk_write_can_be_aborted(tmp_path,
     monkeypatch.setattr(pq.ParquetWriter, 'write_table', fail)
     ep_dir = tmp_path / 'ep'
     writer = DiskEpisodeWriter(ep_dir)
-    # The 10,000th row fills a chunk at the default chunk size, so its write fails on the writer thread.
-    for i in range(10_000):
+    for i in range(_DEFAULT_CHUNK_ROWS):
         writer.append('q', i, Time(**{RECORDED_TIME: i + 1}))
     with pytest.raises(OSError, match='disk full'):
         writer.__exit__(None, None, None)

@@ -205,9 +205,8 @@ class TestSignalWriterChunkWrite:
         np.testing.assert_array_equal(np.stack([value for value, _ in signal]), [[1, -1], [2, -2], [3, -3]])
 
     def test_an_array_mutated_after_append_is_recorded_as_appended(self, tmp_path, chunk_writer):
-        # The writer thread is busy with another signal, so the full chunk waits behind it.
-        other_write = threading.Event()
-        chunk_writer.submit(other_write.wait, 5)
+        another_signal_written = threading.Event()
+        chunk_writer.submit(another_signal_written.wait, 5)
         path = tmp_path / 'signal.parquet'
         with SimpleSignalWriter(path, chunk_size=3, chunk_writer=chunk_writer) as writer:
             arrays = [np.array([t, -t], dtype=np.float32) for t in (1, 2, 3, 4)]
@@ -215,7 +214,7 @@ class TestSignalWriterChunkWrite:
                 writer.append(array, Time(**{RECORDED_TIME: t}))
             for array in arrays:
                 array[:] = 0
-            other_write.set()
+            another_signal_written.set()
 
         np.testing.assert_array_equal(
             np.stack([value for value, _ in SimpleSignal(path)]), [[1, -1], [2, -2], [3, -3], [4, -4]]

@@ -190,9 +190,8 @@ class SimpleSignalWriter(SignalWriter[T]):
         Args:
             filepath: Path to the output parquet file
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
-            chunk_writer: Runs the write of each chunk that ``append`` fills, so ``append`` does not wait for it.
-                The write updates this writer, so it runs on a thread of this process. A failed write raises on a
-                later ``append`` or on close. None writes the chunk in ``append``.
+            chunk_writer: Writes each full chunk, so ``append`` does not wait for the disk. A failed write raises
+                on a later ``append`` or on close. None writes the chunk in ``append``.
         """
         super().__init__()
         self.filepath = filepath
@@ -205,18 +204,17 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._expected_shape = None
         self._expected_dtype = None
         self._chunk_writer = chunk_writer
-        # At most one chunk of this file is in flight, so the chunks reach the file in order.
         self._chunk_in_flight: Future[None] | None = None
 
-    def _flush_chunk(self, chunk_writer: ThreadPoolExecutor | None) -> None:
+    def _flush_chunk(self) -> None:
         if not self._values:
             return
         self._wait_for_chunk()
         timestamps, values = self._timestamps, self._values
-        if chunk_writer is None:
+        if self._chunk_writer is None:
             self._write_chunk(timestamps, values)
         else:
-            self._chunk_in_flight = chunk_writer.submit(self._write_chunk, timestamps, values)
+            self._chunk_in_flight = self._chunk_writer.submit(self._write_chunk, timestamps, values)
         self._timestamps, self._values = {name: [] for name in timestamps}, []
 
     def _write_chunk(self, timestamps: Mapping[str, Sequence[int]], values: Sequence[object]) -> None:
@@ -226,7 +224,6 @@ class SimpleSignalWriter(SignalWriter[T]):
         self._writer.write_table(table)
 
     def _wait_for_chunk(self) -> None:
-        """Wait for the chunk in flight. A failed write raises here, and again on each later call."""
         if self._chunk_in_flight is not None:
             self._chunk_in_flight.result()
 
@@ -237,7 +234,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         elif isinstance(value, list | tuple):
             value = np.array(value)
         elif isinstance(value, np.ndarray):
-            # The chunk converts after `append` returns, so the writer keeps its own copy of the caller's array.
+            # The chunk converts after `append` returns, so keep a copy the caller cannot change.
             value = value.copy()
 
         if isinstance(value, np.ndarray):
@@ -277,16 +274,15 @@ class SimpleSignalWriter(SignalWriter[T]):
             self._timestamps[name].append(coordinate)
 
         if len(self._values) >= self.chunk_size:
-            self._flush_chunk(self._chunk_writer)
+            self._flush_chunk()
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Finalize the file on context exit (even on exceptions). After a failed close, ``abort`` removes the file."""
+        """Finalize the file on context exit (even on exceptions)."""
         if self._finished or self._aborted:
             return
         try:
+            self._flush_chunk()
             self._wait_for_chunk()
-            # The close waits for the disk anyway, so it writes the last chunk itself.
-            self._flush_chunk(chunk_writer=None)
         finally:
             if self._writer:
                 self._writer.close()
@@ -303,7 +299,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             raise RuntimeError('Cannot abort a finished writer')
 
         if self._chunk_in_flight is not None:
-            # The file is removed, so only the end of the chunk write matters, not its result.
+            # The file goes, so a failed write does not stop the abort.
             wait((self._chunk_in_flight,))
         if self._writer is not None:
             self._writer.close()

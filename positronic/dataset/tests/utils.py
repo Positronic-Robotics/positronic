@@ -88,10 +88,6 @@ class DummyTransform(EpisodeTransform):
 
 
 def hold_parquet_writes(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
-    """Hold each Parquet table write until the test sets ``release``. Set ``started`` when a write begins.
-
-    A write still held after 5 s raises ``TimeoutError``.
-    """
     started, release = threading.Event(), threading.Event()
     write_table = pq.ParquetWriter.write_table
 

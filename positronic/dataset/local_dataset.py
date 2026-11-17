@@ -128,7 +128,6 @@ class DiskEpisodeWriter(EpisodeWriter):
         _mark_unfinished(self._path)
 
         self._writers: dict[str, SimpleSignalWriter | VideoSignalWriter] = {}
-        # One thread for all signals: a thread per signal stalls `append` when many fill a chunk on one step.
         self._chunk_writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'chunks:{directory.name}')
         # Video writers with an open encoder, until the first frame of their signal
         self._waiting: dict[str, VideoSignalWriter] = {}
@@ -259,17 +258,15 @@ class DiskEpisodeWriter(EpisodeWriter):
             return
 
         self._abort_waiting()
-        try:
-            # Always try to close all signal writers
-            for writer in self._writers.values():
-                try:
-                    writer.__exit__(exc_type, exc, tb)
-                except Exception:
-                    # Do not suppress exceptions, just ensure we attempt to close others
-                    if exc is None:
-                        raise
-        finally:
-            self._chunk_writer.shutdown()
+        # Always try to close all signal writers
+        for writer in self._writers.values():
+            try:
+                writer.__exit__(exc_type, exc, tb)
+            except Exception:
+                # Do not suppress exceptions, just ensure we attempt to close others
+                if exc is None:
+                    raise
+        self._chunk_writer.shutdown()
 
         if self._aborted:
             return
