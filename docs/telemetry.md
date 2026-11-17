@@ -39,8 +39,8 @@ positronic eval run --eval <eval> --policy <policy> --output_dir <dir> --timing
 
 `--timing` needs `--output_dir` (the sidecars are written under it) and an **all-simulated** sweep: everything
 under the bound tracer enters the report, so a sweep containing a real embodiment is rejected up front rather
-than allowed to pollute it. (A real eval runs its recorder and producers as separate processes with no shared
-tracer, so there is nothing to time there anyway — run real embodiments in a separate untimed invocation.)
+than allowed to pollute it. (A real eval runs its producers as separate processes, each with its own sidecar and
+no pass span — run real embodiments in a separate untimed invocation.)
 
 A run that records episodes writes the harness sidecar without being asked: `prepare_output_dir` points
 `POSITRONIC_ENV_TELEMETRY_DIR` at `<output_dir>/telemetry/`, so the spans land where `pos3.sync` mirrors them
@@ -63,10 +63,18 @@ Everything lands under `<output_dir>/telemetry/`, one set of files per process:
 | `harness.spans.jsonl` | the eval process | OTLP/JSON-lines spans: the pass, each episode, and its phase spans |
 | `harness.stats.jsonl` | the eval process | one machine-load sample per line |
 | `env.spans.jsonl` | a launched env server (e.g. RoboLab) | the server's own step decomposition, in its own file |
+| `<process>.spans.jsonl` | each background process of a rig World (a camera, arm or gripper driver) | the spans that process opens, in its own file |
 
 A launched env server writes its own files because it runs in its own interpreter (RoboLab's Isaac venv, where
 positronic cannot be imported); it is handed the telemetry dir and run id through the environment its launcher
 forwards, and writes the same OTLP/JSON-lines shape with a stdlib-only writer. Nothing rides over the wire.
+
+On a rig, the camera, arm and gripper drivers run as background processes of the World. The World opens
+`telemetry.bind_from_env` in each of them at start, under the process's name (`ZedCamera.run`, for example), so
+each one records into its own file and none takes the harness's file. The World gives two processes of one class
+two names: the second is `ZedCamera.run.2`. The World runs inside `telemetry.one_run_id`, so the harness and
+every background process stamp the same run id. The recorder encodes on a thread of the harness process, so its
+spans stay in `harness.spans.jsonl`.
 
 ### Span schema (`*.spans.jsonl`)
 
@@ -125,7 +133,8 @@ A step can find a required observation missing, for example while a camera start
 so its span has only `step.late_ms`, the observe values and the collection values.
 
 The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
-recorder and the producers run in other processes. Their cost reaches a step only as CPU contention.
+producers run in other processes, and each writes its own sidecar. Their cost reaches a step only as CPU
+contention.
 
 This prints the p10, p50 and p90 of each value over all steps that called the policy in a spans file:
 

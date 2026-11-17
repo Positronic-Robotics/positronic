@@ -125,7 +125,10 @@ def run_world(
     ``done`` ends an episode from outside the policy: the env's terminal in a sim eval, the operator in an attended run.
     """
     harness = Harness(embodiment)
-    with pimm.World(virtual_time=embodiment.simulated) as world:
+    with (
+        telemetry.one_run_id(),
+        pimm.World(virtual_time=embodiment.simulated, process_scope=telemetry.bind_from_env) as world,
+    ):
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged, done=done)
         world.connect(driver.perform_task, harness.perform_task)
 
