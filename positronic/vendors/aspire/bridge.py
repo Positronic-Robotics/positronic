@@ -5,19 +5,23 @@ ends the move. The rig plays the targets as action chunks: its driver solves IK 
 states how a move ends and what each result field means.
 """
 
+import hashlib
 import importlib
 import logging
 import math
 import threading
+import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import wraps
-from types import CodeType
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
+from pydantic import BaseModel, JsonValue
+from pydantic_core import to_jsonable_python
 
 from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
@@ -111,6 +115,61 @@ class MoveEnd(StrEnum):
 DIAGNOSTIC_ACCEPTED = 'accepted'
 DIAGNOSTIC_ARRIVED = 'arrived'
 DIAGNOSTIC_MOVE_END = 'move_end'
+
+
+@dataclass(frozen=True)
+class Program:
+    """A CapApi program: its name, as the session asked for it, and its source."""
+
+    name: str
+    source: str
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.source.encode()).hexdigest()
+
+
+class CallTrace(BaseModel):
+    """One CapApi call that a program made: its arguments, its result or what it raised, and when it ran.
+
+    ``*_wall_s`` are seconds of wall time since the program started. ``*_robot_s`` are seconds of the bridge's
+    clock: the time of the chunks it answered. Each observation in ``result`` carries no camera images.
+    """
+
+    name: str
+    args: list[JsonValue]
+    kwargs: dict[str, JsonValue]
+    result: JsonValue = None
+    raised: str | None = None
+    move_end: MoveEnd | None = None
+    started_wall_s: float
+    ended_wall_s: float
+    started_robot_s: float
+    ended_robot_s: float
+
+
+def _jsonable(value: Any) -> Any:
+    """The JSON form of what pydantic cannot dump itself: numpy values and read-only mappings."""
+    match value:
+        case np.ndarray():
+            return value.tolist()
+        case np.generic():
+            return value.item()
+        case MappingProxyType():
+            return dict(value)
+    raise TypeError(f'{type(value).__name__} has no JSON form in a call trace')
+
+
+def _without_images(value: Any) -> Any:
+    """``value`` with every observation in it stripped of its camera images, which the episode records."""
+    match value:
+        case Observation():
+            return replace(value, cameras={})
+        case ExecutionResult(final_observation=Observation() as observation):
+            return replace(value, final_observation=_without_images(observation))
+        case StepResult(observation=Observation() as observation):
+            return replace(value, observation=_without_images(observation))
+    return value
 
 
 @dataclass(frozen=True)
@@ -254,9 +313,11 @@ class CapBridge:
 
     embodiment = EMBODIMENT
 
-    def __init__(self, program: CodeType, settings: BridgeSettings):
+    def __init__(self, program: Program, settings: BridgeSettings):
         self._program = program
         self._settings = settings
+        self._calls: list[CallTrace] = []
+        self._started_wall_s = 0.0
         self._turn = threading.Condition()
         self._thread: threading.Thread | None = None
         self._observation: Observation | None = None
@@ -270,6 +331,16 @@ class CapBridge:
     @property
     def outcome(self) -> ProgramOutcome | None:
         return self._outcome
+
+    @property
+    def program(self) -> Program:
+        return self._program
+
+    @property
+    def calls(self) -> list[CallTrace]:
+        """The CapApi calls the program made so far, in order."""
+        with self._turn:
+            return list(self._calls)
 
     def answer(self, obs: Obs) -> list[dict[str, Any]]:
         observation = self._observe(obs)
@@ -408,9 +479,11 @@ class CapBridge:
         constructors = {
             t.__name__: t for t in (ArmCommand, MotionStrategy, Pose, RobotAction, SynchronizedTrajectory, Trajectory)
         }
-        namespace: dict[str, Any] = {'__builtins__': builtins, **constructors, **self._tools()}
+        tools = {name: self._traced(name, tool) for name, tool in self._tools().items()}
+        namespace: dict[str, Any] = {'__builtins__': builtins, **constructors, **tools}
+        self._started_wall_s = time.monotonic()
         try:
-            exec(self._program, namespace)
+            exec(compile(self._program.source, self._program.name, 'exec'), namespace)
             outcome = ProgramOutcome(PolicyEnd.COMPLETE)
         except ProgramStopped:
             return
@@ -421,6 +494,42 @@ class CapBridge:
         with self._turn:
             self._outcome = outcome
             self._turn.notify_all()
+
+    def _traced(self, name: str, tool: Callable[..., Any]) -> Callable[..., Any]:
+        """``tool``, which also records each call the program makes to it."""
+
+        @wraps(tool)
+        def call(*args: Any, **kwargs: Any) -> Any:
+            started_wall_s, started_robot_s = time.monotonic() - self._started_wall_s, self._robot_clock_s()
+            result, raised = None, None
+            try:
+                result = tool(*args, **kwargs)
+                return result
+            except Exception as error:
+                raised = f'{type(error).__name__}: {error}'
+                raise
+            finally:
+                diagnostics = result.diagnostics if isinstance(result, ExecutionResult | StepResult) else {}
+                trace = CallTrace(
+                    name=name,
+                    args=to_jsonable_python(args, fallback=_jsonable),
+                    kwargs=to_jsonable_python(kwargs, fallback=_jsonable),
+                    result=to_jsonable_python(_without_images(result), fallback=_jsonable),
+                    raised=raised,
+                    move_end=diagnostics.get(DIAGNOSTIC_MOVE_END),
+                    started_wall_s=started_wall_s,
+                    ended_wall_s=time.monotonic() - self._started_wall_s,
+                    started_robot_s=started_robot_s,
+                    ended_robot_s=self._robot_clock_s(),
+                )
+                with self._turn:
+                    self._calls.append(trace)
+
+        return call
+
+    def _robot_clock_s(self) -> float:
+        with self._turn:
+            return self._clock_s
 
     @staticmethod
     def _unsupported(name: str) -> Callable[..., Any]:
@@ -558,7 +667,9 @@ class CapBridge:
             grip = targets[arm].grip if command.gripper_position is None else 1.0 - command.gripper_position
             targets[arm] = _ArmTarget(JointPosition(command.target), grip)
         call = self._await(_Call([targets], {}, one_period=True))
-        return StepResult(ok=True, observation=call.final, diagnostics={DIAGNOSTIC_ACCEPTED: True})
+        assert call.end is not None
+        diagnostics = {DIAGNOSTIC_ACCEPTED: True, DIAGNOSTIC_MOVE_END: call.end.value}
+        return StepResult(ok=True, observation=call.final, diagnostics=diagnostics)
 
     @_refusal_is_a_result
     def execute_trajectory(self, trajectory: Trajectory | SynchronizedTrajectory) -> ExecutionResult:

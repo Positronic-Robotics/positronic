@@ -80,6 +80,16 @@ class _ServedTiming:
             return function(obs)
 
 
+async def _outlast_cancellation(function: Callable[..., Any], *args: Any) -> Any:
+    """Run ``function`` in a worker thread; a cancelled caller still waits for it, as session cleanup uses its state."""
+    work = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(work)
+    except asyncio.CancelledError:
+        await work
+        raise
+
+
 def _error_text(error: Exception) -> str:
     """The error a client reads: the type names an exception whose text is empty, such as a bare ``TimeoutError``."""
     return f'{type(error).__name__}: {error}'
@@ -89,9 +99,9 @@ class PolicyServer:
     """Serve one model through a policy deployment: a declared client processor stack and a server codec.
 
     ``build_model`` runs once, when ``serve`` starts, and its model serves every session. It returns the model
-    warmed, with ``server_utils.warmup``: a client reads any keepalive answer as ready. A config-launched
-    pipeline accepts session parameters as dotted configuration overrides. They build a new pipeline and
-    never reach the model. An instantiated PolicyDeployment refuses session parameters.
+    warmed, with ``server_utils.warmup``: a client reads any keepalive answer as ready. A session parameter that the
+    model declares goes to the model's ``open_session``. Every other one is a dotted override of a config-launched
+    pipeline and builds a new pipeline. An instantiated PolicyDeployment refuses those.
     """
 
     def __init__(
@@ -190,13 +200,7 @@ class PolicyServer:
                     await self._infer_lock.acquire()
                 try:
                     with timing.phase(protocol.TIMING_INFER):
-                        work = asyncio.create_task(asyncio.to_thread(timing.infer, infer, raw_obs))
-                        try:
-                            actions = await asyncio.shield(work)
-                        except asyncio.CancelledError:
-                            # Session cleanup must wait for the worker that still uses its state.
-                            await work
-                            raise
+                        actions = await _outlast_cancellation(timing.infer, infer, raw_obs)
                 finally:
                     self._infer_lock.release()
                 answer = serialise({protocol.RESULT: actions, protocol.TIMING: timing.report()})
@@ -215,21 +219,27 @@ class PolicyServer:
         try:
             model = self._model
             assert model is not None, 'A session arrived before the model loaded'
-            pipeline = self._session_pipeline(spec.parse_params(conn.query_params))
+            requested = spec.parse_params(conn.query_params)
+            declared = model.parameters()
+            model_params = spec.resolve_params(declared, {k: v for k, v in requested.items() if k in declared})
+            pipeline = self._session_pipeline({k: v for k, v in requested.items() if k not in declared})
             session_id = uuid4().hex
-            meta = {
-                **conn.served_address.meta,
-                **model.meta(),
-                **pipeline.meta(),
-                offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
-                policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
-                policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
-            }
             infer = partial(model, session_id=session_id)
             infer = telemetry.traced(protocol.MODEL_CALL)(infer)
             if pipeline.codec is not None:
                 infer = pipeline.codec.wrap(infer)
             try:
+                async with self._infer_lock:
+                    session_meta = await _outlast_cancellation(model.open_session, session_id, model_params)
+                meta = {
+                    **conn.served_address.meta,
+                    **model.meta(),
+                    **session_meta,
+                    **pipeline.meta(),
+                    offboard_keys.LOCAL_STACK: pipeline.local.to_spec(),
+                    policy_keys.COMPRESS_IMAGES: pipeline.compress_images,
+                    policy_keys.POSITRONIC_VERSION: _pkg_version('positronic'),
+                }
                 await conn.send(
                     serialise({
                         protocol.STATUS: protocol.ServerStatus.READY,

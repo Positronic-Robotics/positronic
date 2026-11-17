@@ -11,18 +11,21 @@ licence.
 
 ## Run
 
-Serve one program. Each session runs a new copy of it:
+Serve the programs in a directory. `--programs_dir` is [`examples`](examples) by default:
 
 ```bash
 uv run --locked python -m positronic.vendors.aspire.server \
-  --program=positronic/vendors/aspire/examples/lift_and_return.py --websocket.served_address.port=8000
+  --programs_dir=positronic/vendors/aspire/examples --websocket.served_address.port=8000
 ```
 
-Run it on the bimanual YAM in the ABC simulator:
+Each session names its program with the session parameter `program`, a path relative to `--programs_dir`. The
+server reads the file when the session opens, so an edit applies to the next session. A session that names no file in
+the directory fails at connect. Run a program on the bimanual YAM in the ABC simulator:
 
 ```bash
 uv run --locked positronic eval run --eval=.sim.amazon_abc.put_bottles --eval.timeout=60 \
-  --policy=.remote --policy.address.port=8000 --output_dir=~/datasets/aspire/abc
+  --policy=.remote --policy.address.port=8000 --policy.address.query=program=lift_and_return.py \
+  --output_dir=~/datasets/aspire/abc
 ```
 
 [`examples/lift_and_return.py`](examples/lift_and_return.py) lifts each hand by 5 cm, closes and opens both grippers,
@@ -64,7 +67,7 @@ A result keeps three facts apart:
 | `move_to_joints`, `go_home`, `step`, `execute_trajectory`, joints in `move_synchronized` | `JointPosition` on `robot_command.{arm}` |
 | `set_gripper(s)`, `open_gripper`, `close_gripper` | `target_grip.{arm}`, as `1 - position`: ASPIRE's 1 is open, positronic's 1 is closed |
 | The program ends | `end` with `complete` on every later answer |
-| The program raises | `end` with `give_up`; the server logs the traceback and records it |
+| The program raises, or does not compile | `end` with `give_up`; the server logs the traceback and records it |
 
 An arm that a call does not move keeps its last target. At the first observation each arm holds its measured joints,
 and `go_home` returns an arm to those joints. `execute_trajectory` plays its waypoints at the chunk rate and refuses a
@@ -84,9 +87,23 @@ program to ASPIRE's contract; they are not a sandbox. Run a program only from a 
 ## Records
 
 The server writes `<sessions_dir>/<session_id>.json` when a program ends and again when its session ends. The record
-holds the SHA-256 of the program, the `end`, and the traceback of a program that raised. A session that ended before
-its program has no `end`. `--sessions_dir` is `aspire_sessions` under the working directory by default. The episode
-records the program name and its SHA-256 under `inference.policy.server`.
+holds the program name, its source and SHA-256, the `end`, the traceback of a program that raised, and `calls`: one
+entry for each CapApi call the program made. A session that ended before its program has no `end`.
+`--sessions_dir` is `aspire_sessions` under the working directory by default.
+
+An entry of `calls` holds:
+
+| Field | Value |
+| --- | --- |
+| `name`, `args`, `kwargs` | The call as the program made it |
+| `result` | The value the call returned, without camera images |
+| `raised` | The exception the call raised, for example `NotImplementedError` |
+| `move_end` | How the bridge ended the move: `arrived`, `stopped`, `timeout` or `period`. Empty for a call that does not move |
+| `started_wall_s`, `ended_wall_s` | Server wall time, in seconds from the program's start |
+| `started_robot_s`, `ended_robot_s` | Robot time, in seconds of the chunks the bridge answered |
+
+The episode records the program name, its SHA-256 and the record's file name (`session_record`) under
+`inference.policy.server`.
 
 ## Tests
 

@@ -11,7 +11,10 @@ from positronic.policy.keys import END
 from positronic.policy.spec import from_spec
 from positronic.vendors.aspire.bridge import BridgeSettings
 from positronic.vendors.aspire.server import (
+    META_PROGRAM,
     META_PROGRAM_SHA256,
+    META_SESSION_RECORD,
+    PARAM_PROGRAM,
     POLICY_TYPE,
     CapProgramModel,
     SessionRecord,
@@ -27,22 +30,27 @@ if not result.ok:
 
 
 @pytest.fixture
-def make_model(tmp_path):
-    made = []
-
-    def make(program: str) -> CapProgramModel:
-        path = tmp_path / 'program.py'
-        path.write_text(program)
-        settings = BridgeSettings(fps=10.0, round_s=0.2, call_timeout_s=2.0, think_timeout_s=30.0)
-        made.append(CapProgramModel(path, settings, tmp_path))
-        return made[-1]
-
-    yield make
-    for model in made:
-        model.close()
+def programs(tmp_path):
+    directory = tmp_path / 'programs'
+    directory.mkdir()
+    (directory / 'program.py').write_text(PROGRAM)
+    return directory
 
 
-def run_session(model: CapProgramModel, session_id: str, rig: Rig) -> list[dict]:
+@pytest.fixture
+def model(programs, tmp_path):
+    settings = BridgeSettings(fps=10.0, round_s=0.2, call_timeout_s=2.0, think_timeout_s=30.0)
+    model = CapProgramModel(programs, settings, tmp_path)
+    yield model
+    model.close()
+
+
+def open_session(model: CapProgramModel, session_id: str, program: str = 'program.py') -> dict:
+    return model.open_session(session_id, {**model.parameters(), PARAM_PROGRAM: program})
+
+
+def run_session(model: CapProgramModel, session_id: str, rig: Rig, program: str = 'program.py') -> list[dict]:
+    open_session(model, session_id, program)
     for _ in range(100):
         chunk = model(rig.obs(), session_id=session_id)
         if END in chunk[-1]:
@@ -55,32 +63,33 @@ def record(tmp_path, session_id: str) -> SessionRecord:
     return SessionRecord.model_validate_json((tmp_path / f'{session_id}.json').read_text())
 
 
-def test_each_session_runs_the_program_and_records_how_it_ended(make_model, tmp_path):
-    model = make_model(PROGRAM)
+def test_each_session_runs_the_program_and_records_how_it_ended(model, tmp_path):
     stalled = Rig()
     stalled.grip_limit['left'] = 0.5
     assert run_session(model, 'free', Rig())[-1][END] == PolicyEnd.COMPLETE.value
     assert run_session(model, 'stalled', stalled)[-1][END] == PolicyEnd.GIVE_UP.value
 
-    sha = hashlib.sha256(PROGRAM.encode()).hexdigest()
-    expected = SessionRecord(session_id='free', program_sha256=sha, end=PolicyEnd.COMPLETE, error=None)
-    assert record(tmp_path, 'free') == expected
+    free = record(tmp_path, 'free')
+    assert free.program == 'program.py' and free.program_source == PROGRAM
+    assert free.program_sha256 == hashlib.sha256(PROGRAM.encode()).hexdigest()
+    assert free.end is PolicyEnd.COMPLETE and free.error is None
+    assert [call.name for call in free.calls] == ['close_gripper']
     failed = record(tmp_path, 'stalled')
     assert failed.end is PolicyEnd.GIVE_UP
     assert 'ValueError' in failed.error
 
 
-def test_a_session_that_ends_before_its_program_records_no_end(make_model, tmp_path):
-    model = make_model("move_to_joints([1, 1, 1, 1, 1, 1], arm='left')")
+def test_a_session_that_ends_before_its_program_records_no_end(model, programs, tmp_path):
+    (programs / 'wait.py').write_text("move_to_joints([1, 1, 1, 1, 1, 1], arm='left')")
+    open_session(model, 'dropped', 'wait.py')
     model(Rig().obs(), session_id='dropped')
     model.end_session('dropped')
     assert record(tmp_path, 'dropped').end is None
 
 
-def test_meta_states_the_hand_frames_it_reads_and_commands(make_model):
-    meta = make_model(PROGRAM).meta()
+def test_meta_states_the_hand_frames_it_reads_and_commands(model):
+    meta = model.meta()
     assert meta[policy_keys.TYPE] == POLICY_TYPE
-    assert meta[META_PROGRAM_SHA256] == hashlib.sha256(PROGRAM.encode()).hexdigest()
     frames = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])
     assert frames == {
         signal: EEFrame(site=GRIPPER_SITE)
@@ -95,3 +104,36 @@ def test_meta_states_the_hand_frames_it_reads_and_commands(make_model):
 def test_the_client_stack_plays_at_the_bridge_rate():
     stack = deployment(BridgeSettings(fps=25.0)).local
     assert from_spec(stack.to_spec()).meta()[policy_keys.ACTION_FPS] == 25.0
+
+
+def test_each_session_runs_the_program_it_names(model, programs, tmp_path):
+    (programs / 'nested').mkdir()
+    (programs / 'nested' / 'open.py').write_text("open_gripper(arm='right')")
+    meta = open_session(model, 'named', 'nested/open.py')
+    assert meta[META_PROGRAM] == 'nested/open.py'
+    assert meta[META_PROGRAM_SHA256] == hashlib.sha256(b"open_gripper(arm='right')").hexdigest()
+    assert meta[META_SESSION_RECORD] == 'named.json'
+    model.end_session('named')
+    run_session(model, 'other', Rig())
+    assert [call.name for call in record(tmp_path, 'other').calls] == ['close_gripper']
+
+
+def test_a_session_runs_the_program_as_it_reads_when_the_session_opens(model, programs, tmp_path):
+    run_session(model, 'first', Rig())
+    (programs / 'program.py').write_text("open_gripper(arm='right')")
+    run_session(model, 'second', Rig())
+    assert [call.name for call in record(tmp_path, 'second').calls] == ['open_gripper']
+
+
+@pytest.mark.parametrize('program', [None, '', 'missing.py', '../program.py', '/etc/hostname', '.'])
+def test_a_session_that_names_no_program_in_the_directory_is_refused(model, programs, program):
+    (programs.parent / 'program.py').write_text(PROGRAM)
+    with pytest.raises(ValueError, match='program'):
+        open_session(model, 'refused', program)
+
+
+def test_a_program_that_does_not_compile_gives_up_with_its_error(model, programs, tmp_path):
+    (programs / 'broken.py').write_text('close_gripper(')
+    assert run_session(model, 'broken', Rig(), 'broken.py')[-1][END] == PolicyEnd.GIVE_UP.value
+    broken = record(tmp_path, 'broken')
+    assert 'SyntaxError' in broken.error and broken.calls == []
