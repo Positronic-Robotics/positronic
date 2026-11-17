@@ -7,13 +7,14 @@ import pimm
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.webxr import LEFT, RIGHT
 from positronic.geom import Rotation, Transform3D
-from positronic.teleop.clutch import OperatorPosition
+from positronic.teleop.clutch import CONTROLLER_AXES, OperatorPosition
 from positronic.teleop.debug import Arm, ArmControl, Panel, debug
 from positronic.teleop.service import Button
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
 START_JOINTS = [0.1, -0.2, 0.3, -0.4, 0.5, -0.6]
 ROBOT_POSE = Transform3D(np.array([0.4, 0.0, 0.3]), Rotation.identity)
+SILENCE_SEC = 0.5
 HAND = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.identity)
 
 
@@ -42,7 +43,7 @@ class _Rig:
     """An ``ArmControl`` with each of its ports paired, and recorders on what it emits."""
 
     def __init__(self, world: pimm.World, side: str = RIGHT):
-        self.control = ArmControl(side, START_JOINTS, OperatorPosition.FRONT)
+        self.control = ArmControl(side, START_JOINTS, OperatorPosition.FRONT, CONTROLLER_AXES, SILENCE_SEC)
         self.poses = world.pair(self.control.controller_positions)
         self.buttons = world.pair(self.control.buttons)
         self.state = world.pair(self.control.robot_state)
@@ -134,6 +135,7 @@ def test_b_turns_control_off_clears_the_errors_and_then_puts_the_arm_at_its_star
         (lambda: rig.take_calls(), 0.01),
         (lambda: marks.update(moves_before_clear=len(rig.calls)), 0.01),
         (lambda: [call.set_result(None) for call in cleared], 0.01),
+        (lambda: rig.state.emit(_state()), 0.01),
         (lambda: rig.take_calls(), 0.01),
         (lambda: rig.calls[0].set_result(None), 0.01),
         (lambda: marks.update(at_start=len(rig.commands.emitted)), 0.01),
@@ -150,12 +152,38 @@ def test_b_turns_control_off_clears_the_errors_and_then_puts_the_arm_at_its_star
     assert marks['after'] == marks['at_start'], 'control is off at the start pose'
 
 
+def test_the_start_move_waits_for_a_state_of_the_arm_after_the_press(world):
+    rig = _Rig(world)
+    marks = {}
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.press(b=1.0), 0.01),
+        (lambda: rig.take_calls(), 0.01),
+        (lambda: marks.update(before_state=len(rig.calls)), 0.01),
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.take_calls(), 0.0),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    assert marks['before_state'] == 0 and len(rig.calls) == 1
+
+
+def test_the_grip_goes_to_the_gripper_once_for_each_sample_of_the_buttons(world):
+    rig = _Rig(world)
+    driver = ManualDriver([(lambda: rig.press(trigger=0.6), 0.05)])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    assert [grip for _, grip in rig.grips.emitted] == [pytest.approx(0.6)]
+
+
 def test_a_start_pose_that_the_arm_refuses_is_an_event_and_the_teleoperation_goes_on(world):
     rig = _Rig(world)
     driver = ManualDriver([
         (lambda: rig.state.emit(_state()), 0.01),
         (lambda: rig.press(), 0.01),
         (lambda: rig.press(b=1.0), 0.01),
+        (lambda: rig.state.emit(_state()), 0.01),
         (lambda: rig.take_calls(), 0.01),
         (lambda: rig.calls[0].set_exception(RuntimeError('out of reach')), 0.01),
         (lambda: rig.press(trigger=0.4), 0.01),
@@ -188,7 +216,7 @@ def test_control_goes_off_when_the_headset_sends_nothing_for_a_while(world):
     marks = {}
     driver = ManualDriver([
         *rig.control_on(),
-        (lambda: marks.update(on=len(rig.commands.emitted)), ArmControl.SILENCE_SEC + 0.1),
+        (lambda: marks.update(on=len(rig.commands.emitted)), SILENCE_SEC + 0.1),
         (lambda: rig.hand(_raised(HAND, 0.10)), 0.01),
         (lambda: marks.update(after=len(rig.commands.emitted)), 0.0),
     ])
@@ -210,7 +238,7 @@ def test_control_does_not_come_on_while_the_arm_moves_by_itself(world):
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
     assert not rig.commands.emitted
-    assert rig.events()[-1] == 'control refused: the controller is not tracked, or the arm is not available'
+    assert rig.events()[-1] == 'control refused: the arm is not available'
 
 
 def test_the_controller_on_the_other_side_drives_nothing(world):
