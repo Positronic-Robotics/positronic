@@ -396,9 +396,10 @@ def so101_arms(robot_arm, start_joints: Sequence[float]) -> dict[str, Arm]:
 
 
 # TODO: Drive the DH gripper on each CRON arm, once the DH driver reaches it through the bridge project on the box.
+# The speed of 0.7 is the one that an operator of the stand found right for teleoperation.
 @cfn.config(
-    left_arm=positronic.cfg.hardware.roboarm.cron.override(ip='192.168.68.67'),
-    right_arm=positronic.cfg.hardware.roboarm.cron.override(ip='192.168.68.66'),
+    left_arm=positronic.cfg.hardware.roboarm.cron.override(ip='192.168.68.67', relative_dynamics_factor=0.7),
+    right_arm=positronic.cfg.hardware.roboarm.cron.override(ip='192.168.68.66', relative_dynamics_factor=0.7),
     left_start_joints=positronic.cfg.hardware.roboarm.CRON_LEFT_NOMINAL_JOINTS,
     right_start_joints=positronic.cfg.hardware.roboarm.CRON_RIGHT_NOMINAL_JOINTS,
 )
