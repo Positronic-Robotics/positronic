@@ -1,4 +1,5 @@
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -135,6 +136,22 @@ def chunk_writer():
         yield executor
 
 
+def _changeable_values(row: int) -> dict[str, tuple[object, Callable[[], object]]]:
+    """A value of each mutable type that `pa.array` converts, with a function that changes it in place."""
+    array, inner, buffer, members = np.array([row, -row], dtype=np.float32), {'a': [row]}, bytearray([row]), {row}
+    return {
+        'ndarray': (array, lambda: array.fill(0)),
+        'object_ndarray': (np.array([inner], dtype=object), lambda: inner['a'].append(0)),
+        'list': ([inner], lambda: inner['a'].append(0)),
+        'tuple': ((inner,), lambda: inner['a'].append(0)),
+        'arrow_array': (pa.array(array), lambda: array.fill(0)),
+        'bytearray': (buffer, lambda: buffer.__setitem__(0, 255)),
+        'memoryview': (memoryview(buffer), lambda: buffer.__setitem__(0, 255)),
+        'dict': (inner, lambda: inner['a'].append(0)),
+        'set': (members, lambda: members.add(0)),
+    }
+
+
 class TestSignalWriterChunking:
     def test_large_dataset_chunked_writing(self, tmp_path):
         filepath = tmp_path / 'large_test.parquet'
@@ -204,21 +221,25 @@ class TestSignalWriterChunkWrite:
         assert [ts[RECORDED_TIME] for _, ts in signal] == [1, 2, 3]
         np.testing.assert_array_equal(np.stack([value for value, _ in signal]), [[1, -1], [2, -2], [3, -3]])
 
-    def test_an_array_mutated_after_append_is_recorded_as_appended(self, tmp_path, chunk_writer):
+    @pytest.mark.parametrize('kind', list(_changeable_values(0)))
+    def test_a_value_changed_after_append_is_recorded_as_appended(self, tmp_path, chunk_writer, kind):
         another_signal_written = threading.Event()
         chunk_writer.submit(another_signal_written.wait, 5)
-        path = tmp_path / 'signal.parquet'
+        path, expected = tmp_path / 'signal.parquet', tmp_path / 'expected.parquet'
         with SimpleSignalWriter(path, chunk_size=3, chunk_writer=chunk_writer) as writer:
-            arrays = [np.array([t, -t], dtype=np.float32) for t in (1, 2, 3, 4)]
-            for t, array in enumerate(arrays, 1):
-                writer.append(array, Time(**{RECORDED_TIME: t}))
-            for array in arrays:
-                array[:] = 0
+            changes = []
+            for t in (1, 2, 3, 4):
+                value, change = _changeable_values(t)[kind]
+                writer.append(value, Time(**{RECORDED_TIME: t}))
+                changes.append(change)
+            for change in changes:
+                change()
             another_signal_written.set()
+        with SimpleSignalWriter(expected) as writer:
+            for t in (1, 2, 3, 4):
+                writer.append(_changeable_values(t)[kind][0], Time(**{RECORDED_TIME: t}))
 
-        np.testing.assert_array_equal(
-            np.stack([value for value, _ in SimpleSignal(path)]), [[1, -1], [2, -2], [3, -3], [4, -4]]
-        )
+        assert pq.read_table(path)[VALUE_COLUMN].to_pylist() == pq.read_table(expected)[VALUE_COLUMN].to_pylist()
 
     def test_close_waits_for_the_chunk_in_flight(self, tmp_path, monkeypatch, chunk_writer):
         started, release = hold_parquet_writes(monkeypatch)

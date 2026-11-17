@@ -1,3 +1,4 @@
+import copy
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from functools import cached_property
@@ -233,9 +234,10 @@ class SimpleSignalWriter(SignalWriter[T]):
             value = value.to_numpy()
         elif isinstance(value, list | tuple):
             value = np.array(value)
-        elif isinstance(value, np.ndarray):
-            # The chunk converts after `append` returns, so keep a copy the caller cannot change.
-            value = value.copy()
+        elif isinstance(value, memoryview):
+            value = bytes(value)
+        # The chunk converts after `append` returns, so keep a copy the caller cannot change.
+        value = copy.deepcopy(value)
 
         if isinstance(value, np.ndarray):
             if self._expected_shape is None:
