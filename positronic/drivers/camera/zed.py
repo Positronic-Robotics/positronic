@@ -8,7 +8,7 @@ import numpy as np
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
-from positronic.drivers.camera import CAPTURE_TIME
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.camera.device_open_lock import device_open_lock
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.utils import RecoveryOutcome
@@ -120,6 +120,8 @@ class SLCamera(pimm.ControlSystem):
         self._model: sl.MODEL | None = None
         # The time of the first image of the current run of near-black images. None when the last image was not one.
         self._near_black_since: float | None = None
+        # The hand-off time of the last frame sent. A recorder refuses a time that decreases.
+        self._last_handoff_ns: int | None = None
 
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
@@ -364,7 +366,19 @@ class SLCamera(pimm.ControlSystem):
             init_params.enable_image_enhancement = self._image_enhancement
         return init_params
 
-    def _emit_depth(self, zed, capture_time: pimm.Time) -> None:
+    def _frame_time(self, camera, capture_ns: int) -> pimm.Time:
+        """The capture time ``capture_ns`` and the hand-off time now, both on the camera's clock.
+
+        The hand-off time reads the host clock, which a clock correction can step back. It then stays 1 ns after the
+        last hand-off until the host clock passes it again.
+        """
+        handoff_ns = camera.get_timestamp(sl.TIME_REFERENCE.CURRENT).get_nanoseconds()
+        if self._last_handoff_ns is not None:
+            handoff_ns = max(handoff_ns, self._last_handoff_ns + 1)
+        self._last_handoff_ns = handoff_ns
+        return pimm.Time(**{CAPTURE_TIME: capture_ns, HANDOFF_TIME: handoff_ns})
+
+    def _emit_depth(self, zed, capture_ns: int) -> None:
         depth = sl.Mat()
         if zed.retrieve_measure(depth, sl.MEASURE.DEPTH) != sl.ERROR_CODE.SUCCESS:
             return
@@ -378,7 +392,7 @@ class SLCamera(pimm.ControlSystem):
             self._depth_mask_adapter = NumpySMAdapter.lazy_init(
                 depth_mask.astype(np.uint8)[..., np.newaxis], self._depth_mask_adapter
             )
-            self.depth_mask.emit(self._depth_mask_adapter, time=capture_time)
+            self.depth_mask.emit(self._depth_mask_adapter, time=self._frame_time(zed, capture_ns))
 
         # Process and emit depth if connected
         if self.depth.num_bound > 0:
@@ -387,7 +401,7 @@ class SLCamera(pimm.ControlSystem):
             depth_uint8 = depth_data.astype(np.uint8)[..., np.newaxis]
 
             self._depth_adapter = NumpySMAdapter.lazy_init(depth_uint8, self._depth_adapter)
-            self.depth.emit(self._depth_adapter, time=capture_time)
+            self.depth.emit(self._depth_adapter, time=self._frame_time(zed, capture_ns))
 
     @property
     def _view(self):
@@ -415,7 +429,7 @@ class SLCamera(pimm.ControlSystem):
             if starts_with_zero_fill(image.get_data()):
                 logger.warning('Camera %s sent a torn frame; dropping it', self._serial_number)
                 return GrabOutcome.TORN
-        capture_time = pimm.Time(**{CAPTURE_TIME: camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()})
+        capture_ns = camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()
         if camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
             return GrabOutcome.NO_IMAGE
         bgra = image.get_data()
@@ -435,12 +449,12 @@ class SLCamera(pimm.ControlSystem):
         # Note: For side-by-side, we emit the full (H, W*2, 3) image
         # Consumer is responsible for splitting if needed
         self._frame_adapter = NumpySMAdapter.lazy_init(np_image, self._frame_adapter)
-        self.frame.emit(self._frame_adapter, time=capture_time)
+        self.frame.emit(self._frame_adapter, time=self._frame_time(camera, capture_ns))
         self._frame_at = clock.now()
 
         # Only retrieve depth data if depth is enabled and at least one depth channel is connected
         if self._depth_mode != sl.DEPTH_MODE.NONE and (self.depth.num_bound > 0 or self.depth_mask.num_bound > 0):
-            self._emit_depth(camera, capture_time)
+            self._emit_depth(camera, capture_ns)
         return GrabOutcome.SENT
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
