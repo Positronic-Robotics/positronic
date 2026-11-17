@@ -174,6 +174,13 @@ class DataCollectionController(pimm.ControlSystem):
                 if 'right_trigger' in button_handler:  # a session can start with no right controller tracked
                     self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
+                hand_pos = cp_msg.data.get(RIGHT)
+                # Before the arm state, which can raise: the hand can come back at another pose, and only a new press
+                # of A starts control from there
+                if tracker.on and hand_pos is None and not tracker.is_umi_mode:
+                    logging.warning('Control is off: the right controller is not tracked')
+                    tracker.turn_off()
+                    self.sound.emit(error_wav_path)
 
                 if tracker.on:
                     in_error, entered_error = _check_error(
@@ -181,14 +188,8 @@ class DataCollectionController(pimm.ControlSystem):
                     )
                     if entered_error:
                         self.sound.emit(error_wav_path)
-                    hand_pos = cp_msg.data.get(RIGHT)
                     if not in_error and cp_msg.updated and hand_pos is not None:
                         self.robot_commands.emit(roboarm.command.CartesianPosition(tracker.update(hand_pos)))
-                    elif cp_msg.updated and hand_pos is None and not tracker.is_umi_mode:
-                        # The hand can come back at another pose: a new press of A starts control from there
-                        logging.warning('Control is off: the right controller is not tracked')
-                        tracker.turn_off()
-                        self.sound.emit(error_wav_path)
 
                 yield pimm.Sleep(0.001)
 

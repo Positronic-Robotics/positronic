@@ -175,6 +175,15 @@ class TestButtonMap:
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
 
+    def test_a_hold_does_not_count_the_time_the_controller_is_not_tracked(self):
+        buttons = ButtonMap(HOLD_SEC)
+        assert buttons.events(_buttons(b=1.0), 0) == []
+        buttons.lose()
+        assert buttons.events(_buttons(b=1.0), 300_000_000) == []
+        assert buttons.events(_buttons(), 310_000_000) == []
+        assert buttons.events(_buttons(b=1.0), 320_000_000) == []
+        assert buttons.events(_buttons(b=1.0), 620_000_000) == [Event.COMPLETE]
+
     def test_the_map_of_the_left_controller_reads_only_x(self):
         buttons = ButtonMap(HOLD_SEC, buttons=(Button.X,))
         assert buttons.ready_answer(_buttons(b=1.0), 0) is None

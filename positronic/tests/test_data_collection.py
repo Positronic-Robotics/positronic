@@ -348,6 +348,32 @@ def test_a_lost_right_controller_turns_control_off(world):
     assert [path.name for _, path in sounds.emitted] == ['error-occurred.wav']
 
 
+def test_a_right_controller_lost_while_the_arm_state_is_an_error_turns_control_off(world):
+    dc, _arm, buttons, _grips, _sounds = build_teleop_arm(world)
+    state, poses = world.pair(dc.robot_state), world.pair(dc.controller_positions)
+    commands = RecordingEmitter()
+    dc.robot_commands._bind(commands, clock=world.clock)
+    hand = Transform3D(np.array([0.1, 0.2, 0.3]), Rotation.identity)
+    available = types.SimpleNamespace(ee_pose=Transform3D(), status=RobotStatus.AVAILABLE)
+    marks = {}
+
+    driver = ManualDriver([
+        (lambda: state.emit(available), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: hand}), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (lambda: state.emit(pimm.SignalError('Release the emergency stop button')), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: None}), 0.01),
+        (lambda: state.emit(available), 0.01),
+        (lambda: marks.update(back=len(commands.emitted)), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: hand}), 0.01),
+        (lambda: marks.update(after=len(commands.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert marks['after'] == marks['back']
+
+
 def test_a_session_that_starts_with_no_controller_tracked_sends_no_grip_until_the_trigger_comes(world):
     dc, _arm, buttons, grips, _sounds = build_teleop_arm(world)
     marks = {}
