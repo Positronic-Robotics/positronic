@@ -267,6 +267,12 @@ Implement `end_session(session_id)` to release that episode's state. It runs aft
 outstanding inference finishes, both on explicit session end and on disconnect.
 The model remains loaded for subsequent episodes.
 
+A model that takes input per session declares its parameters and their defaults in
+`parameters()`. The server passes the resolved values of a session to
+`open_session(session_id, params)` before the first inference, and adds the metadata
+it returns to that session's handshake. An exception from `open_session` refuses the
+session at connect.
+
 Test the deployment with the normal client:
 
 ```bash

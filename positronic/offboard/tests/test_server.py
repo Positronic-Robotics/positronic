@@ -929,6 +929,42 @@ def test_a_session_param_cannot_reach_the_model(param_server):
         _param_session(host, port, [('model.checkpoint', '"other"')])
 
 
+class _SessionModel(_ScriptedModel):
+    """A model that takes the session parameter ``tag`` and states it in the session's metadata."""
+
+    def __init__(self):
+        self.opened: dict[str, dict] = {}
+
+    def parameters(self):
+        return {'tag': 'untagged'}
+
+    def open_session(self, session_id, params):
+        self.opened[session_id] = params
+        return {'tag': params['tag']}
+
+
+def test_a_param_the_model_declares_reaches_the_model_and_the_rest_tune_the_pipeline(start_server):
+    model = _SessionModel()
+    host, port, *_ = start_server(model, cfn.Config(_fps_pipe))
+    tagged = _param_session(host, port, [('tag', 'first'), ('fps', '5')])
+    plain = _param_session(host, port, [])
+    try:
+        assert tagged.metadata['tag'] == 'first' and plain.metadata['tag'] == 'untagged'
+        assert tagged.metadata[offboard_keys.LOCAL_STACK][SEQ][1][ARGS]['fps'] == 5
+        assert model.opened == {tagged.session_id: {'tag': 'first'}, plain.session_id: {'tag': 'untagged'}}
+    finally:
+        tagged.close()
+        plain.close()
+
+
+def test_a_model_that_refuses_a_session_ends_it_at_connect(start_server):
+    model = _SessionModel()
+    model.open_session = MagicMock(side_effect=ValueError('no such tag'))
+    host, port, *_ = start_server(model, cfn.Config(_fps_pipe))
+    with pytest.raises(RuntimeError, match='no such tag'):
+        _param_session(host, port, [('tag', 'missing')])
+
+
 def test_plain_pipe_server_rejects_session_params(start_server, make_mock_model):
     stub = make_mock_model([{'action': [1, 2, 3]}], {'model_name': 'stub', 'type': 'stub'})
     host, port, *_ = start_server(stub, _tunable_pipe())
