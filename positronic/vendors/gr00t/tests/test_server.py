@@ -12,7 +12,7 @@ from positronic_model_server.spec import ARGS, SEQ, resolve_params
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.codecs.metadata import MODEL_SETTINGS_PATH
-from positronic.policy.processors import RTCSchedule
+from positronic.policy.processors import RequestTiming, RTCSchedule
 from positronic.vendors.gr00t import serving as gr00t
 from positronic.vendors.gr00t.serving import keys, server
 from positronic.vendors.gr00t.serving import settings as model_settings
@@ -224,11 +224,12 @@ def _schedule_args(session):
 
 def test_session_inference_lead_requests_before_the_chunk_ends(model):
     assert model.parameters[keys.INFERENCE_LEAD] == 0.0
-    assert _schedule_args(model.prepare_session(resolve_params(model.parameters, {})))['latency_estimate'] == 0.0
+    default = _schedule_args(model.prepare_session(resolve_params(model.parameters, {})))
+    assert default[RTCSchedule.LATENCY_ESTIMATE_ARG] == 0.0
     session = model.prepare_session(resolve_params(model.parameters, {keys.INFERENCE_LEAD: 0.25}))
     args = _schedule_args(session)
-    assert args['request_timing']['reference'] == 'before_end'
-    assert args['latency_estimate'] == 0.25
+    assert args['request_timing'] == RequestTiming.before_end().to_spec()
+    assert args[RTCSchedule.LATENCY_ESTIMATE_ARG] == 0.25
 
 
 @pytest.fixture
