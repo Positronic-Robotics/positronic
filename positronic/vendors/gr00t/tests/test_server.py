@@ -207,11 +207,28 @@ def test_sessions_keep_their_own_parameters_and_share_native_weights(model):
         (keys.JPEG_QUALITY, False),
         (keys.COMPRESS_IMAGES, 'yes'),
         (model_settings.IMAGE_MAPPINGS, {}),
+        (keys.INFERENCE_LEAD, -0.1),
+        (keys.INFERENCE_LEAD, float('inf')),
+        (keys.INFERENCE_LEAD, True),
+        (keys.INFERENCE_LEAD, '0.25'),
     ],
 )
 def test_invalid_session_controls_fail_before_ready(model, name, value):
     with pytest.raises(ValueError):
         model.prepare_session({**model.parameters, name: value})
+
+
+def _schedule_args(session):
+    return spec.from_spec(json.loads(json.dumps(session.client_stack))).to_spec()[SEQ][1][ARGS]
+
+
+def test_session_inference_lead_requests_before_the_chunk_ends(model):
+    assert model.parameters[keys.INFERENCE_LEAD] == 0.0
+    assert _schedule_args(model.prepare_session(resolve_params(model.parameters, {})))['latency_estimate'] == 0.0
+    session = model.prepare_session(resolve_params(model.parameters, {keys.INFERENCE_LEAD: 0.25}))
+    args = _schedule_args(session)
+    assert args['request_timing']['reference'] == 'before_end'
+    assert args['latency_estimate'] == 0.25
 
 
 @pytest.fixture
@@ -405,6 +422,12 @@ def test_rtc_stack_rejects_clients_without_trajectory_scheduling(native_policy, 
     monkeypatch.delitem(spec.COMPONENTS, RTCSchedule.WIRE_NAME)
     with pytest.raises(ValueError, match="Unknown local-stack entry 'inference_schedule'"):
         spec.from_spec(json.loads(json.dumps(session.client_stack)))
+
+
+def test_rtc_refuses_an_inference_lead(native_policy, rtc_settings):
+    model = server.Gr00tModel(native_policy, model_settings.droid(), {}, rtc=rtc_settings, horizon_sec=None)
+    with pytest.raises(ValueError, match='call_after_sec'):
+        model.prepare_session(resolve_params(model.parameters, {keys.INFERENCE_LEAD: 0.25}))
 
 
 def test_ordinary_launch_refuses_enabling_an_unwarmed_rtc_path(model, rtc_settings):

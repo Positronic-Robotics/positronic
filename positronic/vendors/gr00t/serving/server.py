@@ -198,6 +198,7 @@ class Gr00tModel(Model):
         *,
         fps: float | None = None,
         horizon_sec: float | None = 1.0,
+        inference_lead: float = 0.0,
         compress_images: bool = True,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
         rtc: dict[str, float] | None = None,
@@ -209,6 +210,7 @@ class Gr00tModel(Model):
             parameters={
                 keys.FPS: settings[model_settings.ACTION_FPS] if fps is None else fps,
                 keys.HORIZON_SEC: horizon_sec,
+                keys.INFERENCE_LEAD: inference_lead,
                 model_settings.IMAGE_MAPPINGS: settings[model_settings.IMAGE_MAPPINGS],
                 keys.COMPRESS_IMAGES: compress_images,
                 keys.JPEG_QUALITY: jpeg_quality,
@@ -296,6 +298,11 @@ class Gr00tModel(Model):
         fps, horizon = params[keys.FPS], params[keys.HORIZON_SEC]
         if rtc is not None and horizon is not None:
             raise ValueError('RTC uses call_after_sec; set horizon_sec=None')
+        lead = params[keys.INFERENCE_LEAD]
+        if not _is_finite_number(lead) or lead < 0:
+            raise ValueError(f'{keys.INFERENCE_LEAD} must be finite and not negative')
+        if rtc is not None and lead:
+            raise ValueError(f'RTC uses call_after_sec; set {keys.INFERENCE_LEAD}=0')
         for name, value in ((keys.FPS, fps), (keys.HORIZON_SEC, horizon)):
             if name == keys.HORIZON_SEC and value is None:
                 continue
@@ -324,6 +331,7 @@ def load_model(
     device: str = 'cuda',
     fps: float | None = None,
     horizon_sec: float | None = 1.0,
+    inference_lead: float = 0.0,
     compress_images: bool = True,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     rtc: dict[str, float] | None = None,
@@ -341,6 +349,7 @@ def load_model(
         metadata,
         fps=fps,
         horizon_sec=horizon_sec,
+        inference_lead=inference_lead,
         compress_images=compress_images,
         jpeg_quality=jpeg_quality,
         rtc=rtc,
@@ -364,6 +373,7 @@ def grpc(served_address: dict[str, Any]):
         'settings': model_settings.droid(),
         keys.FPS: None,
         keys.HORIZON_SEC: 1.0,
+        keys.INFERENCE_LEAD: 0.0,
         keys.COMPRESS_IMAGES: True,
         keys.JPEG_QUALITY: DEFAULT_JPEG_QUALITY,
         keys.RTC.FIELD: None,
