@@ -2,6 +2,7 @@ from functools import partial
 
 import numpy as np
 import pytest
+from eval_vocabulary.timeline import EMITTED_WALL, HARNESS_WALL
 
 from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
@@ -17,7 +18,7 @@ from positronic.dataset.transforms import (
     recode_transform,
     view,
 )
-from positronic.dataset.transforms.quality import cmd_lag, cmd_velocity, idle_mask, jerk
+from positronic.dataset.transforms.quality import cmd_delay_ms, cmd_lag, cmd_velocity, idle_mask, jerk
 from positronic.dataset.vector import RECORDED_TIME, SimpleSignal, SimpleSignalWriter
 from positronic.geom import Rotation
 
@@ -715,3 +716,39 @@ def test_quality_transforms_select_timelines(timelines, transform, expected):
     })
     signal = transform(episode, timelines=timelines)
     np.testing.assert_allclose(signal.values()[:-1], expected)
+
+
+def _arm_episode(delay_ms: int, *, travel: float = 0.5, read_lag_ms: int = 0) -> EpisodeContainer:
+    """Commands every 50 ms for 2 s. The arm emits each command ``delay_ms`` later as its pose, every 1 ms, and the
+    harness reads each pose ``read_lag_ms`` after its emission."""
+    cmd_ms = np.arange(0, 2000, 50)
+    commands = np.zeros((len(cmd_ms), 7))
+    commands[:, 0] = travel * np.sin(cmd_ms / 300)
+    state_ms = np.arange(0, 2600)
+    state = commands[np.maximum(np.searchsorted(cmd_ms, state_ms - delay_ms, side='right') - 1, 0)]
+    names = (EMITTED_WALL, HARNESS_WALL)
+    return EpisodeContainer({
+        keys.TARGET_EE_POSE: DummySignal(np.column_stack([cmd_ms, cmd_ms]) * 1_000_000, commands, timelines=names),
+        keys.EE_POSE: DummySignal(
+            np.column_stack([state_ms, state_ms + read_lag_ms]) * 1_000_000, state, timelines=names
+        ),
+    })
+
+
+@pytest.mark.parametrize('delay_ms', [0, 80, 230])
+def test_cmd_delay_is_the_shift_at_which_the_arm_matches_the_commands(delay_ms):
+    assert cmd_delay_ms(_arm_episode(delay_ms), timeline=EMITTED_WALL) == delay_ms
+
+
+def test_cmd_delay_reads_the_named_timeline():
+    episode = _arm_episode(80, read_lag_ms=40)
+    assert cmd_delay_ms(episode, timeline=EMITTED_WALL) == 80
+    assert cmd_delay_ms(episode, timeline=HARNESS_WALL) == 120
+
+
+def test_cmd_delay_is_none_when_the_commands_stay_still():
+    assert cmd_delay_ms(_arm_episode(80, travel=0.001), timeline=EMITTED_WALL) is None
+
+
+def test_cmd_delay_is_none_without_a_measured_pose_past_the_longest_shift():
+    assert cmd_delay_ms(_arm_episode(80), max_delay_ms=3000, timeline=EMITTED_WALL) is None
