@@ -183,7 +183,8 @@ class DroppingSdk:
     never recovers, such as the ZED Mini. The first ``failed_reopens`` opens after the drop fail. A camera opened
     before ``images_stop_at`` grabs with no error from then on, and gives no image. Every image shows ``scene``, a lit
     room by default, and the grabs that ``torn_grabs`` counts from 0 give a torn image. Each image's capture time is
-    ``image_age_ns`` before its grab.
+    ``image_age_ns`` before its grab. From ``clock_back_at`` the host clock reads ``clock_back_ns`` earlier, as after a
+    clock correction, while the image clock keeps its course.
     """
 
     def __init__(
@@ -197,11 +198,15 @@ class DroppingSdk:
         scene: np.ndarray | None = None,
         torn_grabs: frozenset[int] = frozenset(),
         image_age_ns: int = 0,
+        clock_back_at: float = float('inf'),
+        clock_back_ns: int = 0,
         model: FakeModel = FakeModel.ZED2i,
     ):
         self.model = model
         self.clock = clock
         self.image_age_ns = image_age_ns
+        self.clock_back_at = clock_back_at
+        self.clock_back_ns = clock_back_ns
         self.lost_at = lost_at
         self.listed_at = listed_at
         self.sdk_recovers_at = sdk_recovers_at
@@ -263,7 +268,12 @@ class FakeCamera:
 
     def get_timestamp(self, reference) -> types.SimpleNamespace:
         now_ns = self._sdk.clock.now_ns()
-        stamp = now_ns - self._sdk.image_age_ns if reference == 'image' else now_ns
+        if reference == 'image':
+            stamp = now_ns - self._sdk.image_age_ns
+        elif self._sdk.clock.now() >= self._sdk.clock_back_at:
+            stamp = now_ns - self._sdk.clock_back_ns
+        else:
+            stamp = now_ns
         return types.SimpleNamespace(get_nanoseconds=lambda: stamp)
 
     def retrieve_image(self, image: 'FakeMat', _view) -> ErrorCode:
@@ -718,6 +728,16 @@ def test_each_frame_carries_its_hand_off_time_on_the_camera_clock(zed_module):
     delays = _handoff_delays_ms(frames)
     assert delays and delays == pytest.approx([21.0] * len(delays))
     assert _frame_times(frames) == pytest.approx([t - 0.021 for t in sdk.grab_times])
+
+
+def test_hand_off_times_keep_increasing_when_the_host_clock_steps_back(zed_module):
+    """A recorder refuses a frame whose time decreases, so a host clock that steps back must not abort the episode."""
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, clock_back_at=0.1, clock_back_ns=50_000_000)
+    _drive(_camera(zed_module, sdk, frames).run(stop, clock), clock, until=0.2)
+    handoffs = [time[HANDOFF_TIME] for time, data in frames.emitted if not isinstance(data, pimm.SignalError)]
+    assert len(handoffs) > 2
+    assert all(earlier < later for earlier, later in zip(handoffs, handoffs[1:], strict=False))
 
 
 def test_a_ready_call_that_reopens_the_camera_grabs_again_after_a_torn_frame(zed_module, world):

@@ -120,6 +120,8 @@ class SLCamera(pimm.ControlSystem):
         self._model: sl.MODEL | None = None
         # The time of the first image of the current run of near-black images. None when the last image was not one.
         self._near_black_since: float | None = None
+        # The hand-off time of the last frame sent. A recorder refuses a time that decreases.
+        self._last_handoff_ns: int | None = None
 
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
@@ -364,13 +366,17 @@ class SLCamera(pimm.ControlSystem):
             init_params.enable_image_enhancement = self._image_enhancement
         return init_params
 
-    @staticmethod
-    def _frame_time(camera, capture_ns: int) -> pimm.Time:
-        """The capture time ``capture_ns`` and the hand-off time now, both on the camera's clock."""
-        return pimm.Time(**{
-            CAPTURE_TIME: capture_ns,
-            HANDOFF_TIME: camera.get_timestamp(sl.TIME_REFERENCE.CURRENT).get_nanoseconds(),
-        })
+    def _frame_time(self, camera, capture_ns: int) -> pimm.Time:
+        """The capture time ``capture_ns`` and the hand-off time now, both on the camera's clock.
+
+        The hand-off time reads the host clock, which a clock correction can step back. It then stays 1 ns after the
+        last hand-off until the host clock passes it again.
+        """
+        handoff_ns = camera.get_timestamp(sl.TIME_REFERENCE.CURRENT).get_nanoseconds()
+        if self._last_handoff_ns is not None:
+            handoff_ns = max(handoff_ns, self._last_handoff_ns + 1)
+        self._last_handoff_ns = handoff_ns
+        return pimm.Time(**{CAPTURE_TIME: capture_ns, HANDOFF_TIME: handoff_ns})
 
     def _emit_depth(self, zed, capture_ns: int) -> None:
         depth = sl.Mat()

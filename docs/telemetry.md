@@ -107,7 +107,8 @@ A `harness.step` span holds the durations of one step in milliseconds, and one c
   each time it reads the same frame, so it grows until a new frame arrives. `step.frame_driver_ms` is the driver's
   time from capture to hand-off, on the camera's own clock: the frame's `camera.handoff` stamp less its
   `camera.capture` stamp. The ZED and Luxonis drivers stamp both. The OpenCV and V4L2 drivers stamp no capture
-  time, so their frames have no driver part.
+  time, so their frames have no driver part. The ZED hand-off stamp reads the host clock. When that clock steps
+  back, the stamp stays above the last one until the clock passes it, and the driver part is wrong for that time.
 - `step.policy_ms`: the policy call. Its processor spans are the children of the step.
 - `step.emit_ms`: the time to emit the commands.
 - `step.gc_wait_ms`: the garbage-collection time of the process from the end of the previous step to the start of
