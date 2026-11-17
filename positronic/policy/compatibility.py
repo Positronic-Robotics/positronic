@@ -109,6 +109,10 @@ class WithTraining(Codec):
         return self._inference.meta
 
     @property
+    def ordered(self):
+        return self._inference.ordered
+
+    @property
     def training_encoder(self):
         return self._training
 
