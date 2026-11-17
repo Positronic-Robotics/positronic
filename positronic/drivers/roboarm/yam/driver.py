@@ -818,8 +818,8 @@ class Robot(pimm.ControlSystem):
         self.grip = pimm.ControlSystemEmitter[float](self)
         self.robot_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
         self.arm_meta = pimm.ControlSystemEmitter[dict[str, Any]](self)
-        # Answers once the arm is at the start pose, and opens a lost chain first. After a missed start or idle park,
-        # each call moves the arm to that pose and fails until it arrives.
+        # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
+        # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
 
     @property
