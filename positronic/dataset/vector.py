@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Executor, Future, wait
 from functools import cached_property
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -183,34 +184,50 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path, chunk_size: int = 10000):
+    def __init__(self, filepath: Path, chunk_size: int = 10000, chunk_writer: Executor | None = None):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
             filepath: Path to the output parquet file
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
+            chunk_writer: Runs the write of each chunk that ``append`` fills, so ``append`` does not wait for it.
+                A failed write raises on a later ``append`` or on close. None writes the chunk in ``append``.
         """
         super().__init__()
         self.filepath = filepath
         self.chunk_size = chunk_size
-        self._writer = None
+        self._writer: pq.ParquetWriter | None = None
         self._timestamps: dict[str, list[int]] = {}
         self._values: list[object] = []
         self._finished = False
         self._aborted = False
         self._expected_shape = None
         self._expected_dtype = None
+        self._chunk_writer = chunk_writer
+        # At most one chunk of this file is in flight, so the chunks reach the file in order.
+        self._chunk_in_flight: Future[None] | None = None
 
-    def _flush_chunk(self):
+    def _flush_chunk(self, chunk_writer: Executor | None) -> None:
         if not self._values:
             return
-        table = timestamp_table(self._timestamps).append_column(VALUE_COLUMN, pa.array(self._values))
+        self._wait_for_chunk()
+        timestamps, values = self._timestamps, self._values
+        if chunk_writer is None:
+            self._write_chunk(timestamps, values)
+        else:
+            self._chunk_in_flight = chunk_writer.submit(self._write_chunk, timestamps, values)
+        self._timestamps, self._values = {name: [] for name in timestamps}, []
+
+    def _write_chunk(self, timestamps: Mapping[str, Sequence[int]], values: Sequence[object]) -> None:
+        table = timestamp_table(timestamps).append_column(VALUE_COLUMN, pa.array(values))
         if self._writer is None:
             self._writer = pq.ParquetWriter(self.filepath, table.schema, **parquet_write_options(table.schema))
         self._writer.write_table(table)
-        self._values.clear()
-        for values in self._timestamps.values():
-            values.clear()
+
+    def _wait_for_chunk(self) -> None:
+        """Wait for the chunk in flight. A failed write raises here, and again on each later call."""
+        if self._chunk_in_flight is not None:
+            self._chunk_in_flight.result()
 
     def _normalize_value(self, data: T) -> object:
         value: Any = data
@@ -241,6 +258,8 @@ class SimpleSignalWriter(SignalWriter[T]):
             raise RuntimeError('Cannot append to a finished writer')
         if self._aborted:
             raise RuntimeError('Cannot append to an aborted writer')
+        if self._chunk_in_flight is not None and self._chunk_in_flight.done():
+            self._wait_for_chunk()
 
         self._validate_timestamps(timestamps)
         value = self._normalize_value(data)
@@ -254,7 +273,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             self._timestamps[name].append(coordinate)
 
         if len(self._values) >= self.chunk_size:
-            self._flush_chunk()
+            self._flush_chunk(self._chunk_writer)
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Finalize the file on context exit (even on exceptions)."""
@@ -262,7 +281,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             return
         self._finished = True
         try:
-            self._flush_chunk()
+            self._wait_for_chunk()
+            # The close waits for the disk anyway, so it writes the last chunk itself.
+            self._flush_chunk(chunk_writer=None)
         finally:
             if self._writer:
                 self._writer.close()
@@ -277,6 +298,9 @@ class SimpleSignalWriter(SignalWriter[T]):
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
+        if self._chunk_in_flight is not None:
+            # The file is removed, so only the end of the chunk write matters, not its result.
+            wait((self._chunk_in_flight,))
         if self._writer is not None:
             self._writer.close()
         self._writer = None

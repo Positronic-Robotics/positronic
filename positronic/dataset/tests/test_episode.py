@@ -1,4 +1,5 @@
 import json
+import threading
 import uuid
 
 import numpy as np
@@ -13,6 +14,7 @@ from positronic.dataset import Episode
 from positronic.dataset.episode import META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import UNFINISHED_MARKER, DiskEpisode, DiskEpisodeWriter, _cached_env_writer_info
 from positronic.dataset.tests.test_video import FakeEncoder, assert_frames_equal, create_frame
+from positronic.dataset.tests.utils import hold_parquet_writes
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
 from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY, VALUE_COLUMN
@@ -206,6 +208,29 @@ def test_episode_writer_marks_unfinished_and_clears_on_close(tmp_path):
         w.set_static('id', 1)
 
     assert not (ep_dir / UNFINISHED_MARKER).exists()
+
+
+def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(tmp_path, monkeypatch):
+    started, release = hold_parquet_writes(monkeypatch)
+    ep_dir = tmp_path / 'ep'
+    writer = DiskEpisodeWriter(ep_dir)
+    # 10,000 rows fill one chunk at the default chunk size, and the append that fills it returns.
+    for i in range(10_000):
+        writer.append('q', np.array([i, -i], dtype=np.float32), Time(**{RECORDED_TIME: i + 1}))
+    assert started.wait(timeout=5)
+
+    closer = threading.Thread(target=writer.__exit__, args=(None, None, None))
+    closer.start()
+    closer.join(timeout=0.2)
+    assert closer.is_alive()
+    assert (ep_dir / UNFINISHED_MARKER).exists()
+    release.set()
+    closer.join(timeout=5)
+    assert not closer.is_alive()
+    assert not (ep_dir / UNFINISHED_MARKER).exists()
+    q = DiskEpisode(ep_dir)['q']
+    assert len(q) == 10_000
+    np.testing.assert_array_equal(q[-1][0], [9_999, -9_999])
 
 
 def test_episode_reader_rejects_unfinished(tmp_path):

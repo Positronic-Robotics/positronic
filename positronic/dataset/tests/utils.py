@@ -1,8 +1,11 @@
+import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import pyarrow.parquet as pq
+import pytest
 from botocore.exceptions import ClientError
 
 from positronic.dataset.episode import Episode, EpisodeContainer
@@ -82,6 +85,24 @@ class DummyTransform(EpisodeTransform):
                     data[key] = episode[key]
 
         return EpisodeContainer(data=data, meta=episode.meta)
+
+
+def hold_parquet_writes(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
+    """Hold each Parquet table write until the test sets ``release``. Set ``started`` when a write begins.
+
+    A write still held after 5 s raises ``TimeoutError``.
+    """
+    started, release = threading.Event(), threading.Event()
+    write_table = pq.ParquetWriter.write_table
+
+    def held(writer: pq.ParquetWriter, *args: Any, **kwargs: Any) -> None:
+        started.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError('Nothing released the held Parquet write')
+        write_table(writer, *args, **kwargs)
+
+    monkeypatch.setattr(pq.ParquetWriter, 'write_table', held)
+    return started, release
 
 
 class InMemoryS3:
