@@ -257,8 +257,8 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self.abort()
             return
 
-        self._abort_waiting()
         with self._chunk_writer:
+            self._abort_waiting()
             for writer in self._writers.values():
                 try:
                     writer.__exit__(exc_type, exc, tb)
@@ -291,10 +291,10 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
-        self._abort_waiting()
-        for w in list(self._writers.values()):
-            w.abort()
-        self._chunk_writer.shutdown()
+        with self._chunk_writer:
+            self._abort_waiting()
+            for w in list(self._writers.values()):
+                w.abort()
 
         shutil.rmtree(self._path, ignore_errors=True)
         self._aborted = True

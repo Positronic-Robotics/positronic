@@ -235,20 +235,82 @@ def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(
     np.testing.assert_array_equal(q[-1][0], [_DEFAULT_CHUNK_ROWS - 1, 1 - _DEFAULT_CHUNK_ROWS])
 
 
-def test_an_episode_whose_close_failed_on_a_chunk_write_ends_its_thread_and_can_be_aborted(tmp_path, monkeypatch):
-    def fail(writer, *args, **kwargs):
-        raise OSError('disk full')
+@pytest.fixture
+def threads_before() -> set[threading.Thread]:
+    return set(threading.enumerate())
 
-    monkeypatch.setattr(pq.ParquetWriter, 'write_table', fail)
-    ep_dir = tmp_path / 'ep_close_failed'
-    writer = DiskEpisodeWriter(ep_dir)
-    for i in range(_DEFAULT_CHUNK_ROWS):
+
+def _disk_full(*args, **kwargs) -> None:
+    raise OSError('disk full')
+
+
+def _append_rows(writer: DiskEpisodeWriter, rows: int = _DEFAULT_CHUNK_ROWS) -> None:
+    for i in range(rows):
         writer.append('q', i, Time(**{RECORDED_TIME: i + 1}))
+
+
+def test_a_closed_episode_ends_its_chunk_thread(tmp_path, threads_before):
+    with DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        _append_rows(writer)
+
+    assert set(threading.enumerate()) <= threads_before
+    assert len(DiskEpisode(tmp_path / 'ep')['q']) == _DEFAULT_CHUNK_ROWS
+
+
+def test_an_aborted_episode_ends_its_chunk_thread(tmp_path, threads_before):
+    writer = DiskEpisodeWriter(tmp_path / 'ep')
+    _append_rows(writer)
+    writer.abort()
+
+    assert set(threading.enumerate()) <= threads_before
+    assert not (tmp_path / 'ep').exists()
+
+
+def test_an_episode_whose_abort_failed_ends_its_chunk_thread_and_can_be_aborted_again(
+    tmp_path, monkeypatch, threads_before
+):
+    writer = DiskEpisodeWriter(tmp_path / 'ep')
+    _append_rows(writer)
+    with monkeypatch.context() as patch:
+        patch.setattr(pq.ParquetWriter, 'close', _disk_full)
+        with pytest.raises(OSError, match='disk full'):
+            writer.abort()
+
+    assert set(threading.enumerate()) <= threads_before
+    writer.abort()
+    assert not (tmp_path / 'ep').exists()
+
+
+def test_an_episode_whose_close_failed_ends_its_chunk_thread_and_can_be_aborted(tmp_path, monkeypatch, threads_before):
+    monkeypatch.setattr(pq.ParquetWriter, 'write_table', _disk_full)
+    writer = DiskEpisodeWriter(tmp_path / 'ep')
+    _append_rows(writer)
     with pytest.raises(OSError, match='disk full'):
         writer.__exit__(None, None, None)
-    assert not [t for t in threading.enumerate() if t.name.startswith(f'chunks:{ep_dir.name}_')]
+
+    assert set(threading.enumerate()) <= threads_before
     writer.abort()
-    assert not ep_dir.exists()
+    assert not (tmp_path / 'ep').exists()
+
+
+def test_a_failed_chunk_write_raises_on_append_and_the_episode_is_removed(tmp_path, monkeypatch, threads_before):
+    monkeypatch.setattr(pq.ParquetWriter, 'write_table', _disk_full)
+    with pytest.raises(OSError, match='disk full'), DiskEpisodeWriter(tmp_path / 'ep') as writer:
+        _append_rows(writer, rows=2 * _DEFAULT_CHUNK_ROWS)
+
+    assert set(threading.enumerate()) <= threads_before
+    assert not (tmp_path / 'ep').exists()
+
+
+def test_an_exception_in_the_caller_reaches_it_when_the_abort_fails(tmp_path, monkeypatch, threads_before):
+    with monkeypatch.context() as patch:
+        patch.setattr(pq.ParquetWriter, 'close', _disk_full)
+        with pytest.raises(ValueError, match='caller'), DiskEpisodeWriter(tmp_path / 'ep') as writer:
+            _append_rows(writer)
+            raise ValueError('caller')
+
+    assert set(threading.enumerate()) <= threads_before
+    assert (tmp_path / 'ep' / UNFINISHED_MARKER).exists()
 
 
 def test_episode_reader_rejects_unfinished(tmp_path):
