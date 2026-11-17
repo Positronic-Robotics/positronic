@@ -115,19 +115,25 @@ def test_a_lost_controller_turns_control_off_and_its_return_does_not_move_the_ar
     assert rig.events()[-1] == 'control off: the controller is not tracked'
 
 
-def test_b_turns_control_off_clears_the_error_and_then_puts_the_arm_at_its_start_pose(world):
+def test_b_turns_control_off_clears_the_errors_and_then_puts_the_arm_at_its_start_pose(world):
     rig = _Rig(world)
-    ready = world.pair(rig.control.ready)
+    # The handlers of the arm and of its gripper
+    readies = [world.pair(rig.control.ready['0']), world.pair(rig.control.ready['1'])]
     cleared: list = []
     marks = {}
+
+    def clear() -> None:
+        for ready in readies:
+            cleared.extend(ready.incoming())
+
     driver = ManualDriver([
         *rig.control_on(),
         (lambda: rig.press(), 0.01),
         (lambda: rig.press(b=1.0), 0.01),
-        (lambda: cleared.extend(ready.incoming()), 0.01),
+        (clear, 0.01),
         (lambda: rig.take_calls(), 0.01),
         (lambda: marks.update(moves_before_clear=len(rig.calls)), 0.01),
-        (lambda: cleared[0].set_result(None), 0.01),
+        (lambda: [call.set_result(None) for call in cleared], 0.01),
         (lambda: rig.take_calls(), 0.01),
         (lambda: rig.calls[0].set_result(None), 0.01),
         (lambda: marks.update(at_start=len(rig.commands.emitted)), 0.01),
@@ -136,7 +142,7 @@ def test_b_turns_control_off_clears_the_error_and_then_puts_the_arm_at_its_start
     ])
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
-    assert len(cleared) == 1 and marks['moves_before_clear'] == 0 and len(rig.calls) == 1
+    assert len(cleared) == 2 and marks['moves_before_clear'] == 0 and len(rig.calls) == 1
     move = rig.calls[0].request
     assert isinstance(move, command.JointPosition)
     np.testing.assert_allclose(move.positions, START_JOINTS)
@@ -160,21 +166,51 @@ def test_a_start_pose_that_the_arm_refuses_is_an_event_and_the_teleoperation_goe
     assert rig.grips.emitted[-1][1] == pytest.approx(0.4)
 
 
-def test_an_arm_in_error_gets_no_target_and_its_error_is_an_event(world):
+def test_an_error_turns_control_off_so_the_arm_stays_when_the_error_clears(world):
     rig = _Rig(world)
     marks = {}
     driver = ManualDriver([
         *rig.control_on(),
         (lambda: rig.state.emit(_state(RobotStatus.ERROR)), 0.01),
         (lambda: marks.update(error=len(rig.commands.emitted)), 0.01),
+        (lambda: rig.state.emit(_state()), 0.01),
         (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
         (lambda: marks.update(after=len(rig.commands.emitted)), 0.0),
     ])
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
     assert marks['after'] == marks['error']
-    assert rig.events()[-1] == 'the arm reports an error: B or Y clears it'
-    assert rig.reports.emitted[-1][1].status is RobotStatus.ERROR
+    assert rig.events()[-2:] == ['the arm reports an error: B or Y clears it', 'control off: the arm is not available']
+
+
+def test_control_goes_off_when_the_headset_sends_nothing_for_a_while(world):
+    rig = _Rig(world)
+    marks = {}
+    driver = ManualDriver([
+        *rig.control_on(),
+        (lambda: marks.update(on=len(rig.commands.emitted)), ArmControl.SILENCE_SEC + 0.1),
+        (lambda: rig.hand(_raised(HAND, 0.10)), 0.01),
+        (lambda: marks.update(after=len(rig.commands.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=1000)
+
+    assert marks['after'] == marks['on']
+    assert 'control off: the headset sends no sample' in rig.events()
+
+
+def test_control_does_not_come_on_while_the_arm_moves_by_itself(world):
+    rig = _Rig(world)
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_state(RobotStatus.BUSY)), 0.01),
+        (lambda: rig.hand(HAND), 0.01),
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.press(a=1.0), 0.01),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    assert not rig.commands.emitted
+    assert rig.events()[-1] == 'control refused: the controller is not tracked, or the arm is not available'
 
 
 def test_the_controller_on_the_other_side_drives_nothing(world):
@@ -189,7 +225,6 @@ def test_the_controller_on_the_other_side_drives_nothing(world):
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
     assert not rig.commands.emitted and not rig.grips.emitted
-    assert not rig.reports.emitted[-1][1].control
 
 
 def test_the_left_arm_reads_x_and_the_trigger_of_the_left_controller(world):

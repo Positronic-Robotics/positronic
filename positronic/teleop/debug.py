@@ -5,11 +5,13 @@ fault.
 Each arm has its own controls:
 
 - A (right controller) or X (left controller): control of the arm on or off.
-- B or Y: control off, the error of the arm cleared, and the arm at its start pose.
+- B or Y: control off, the errors of the arm and its gripper cleared, and the arm at its start pose.
 - The trigger: the grip.
 
-When a controller is not tracked, control of its arm goes off. The headset video shows a panel with the state of
-each arm and its last events, and the log has the same events.
+Control of an arm goes off when its controller is not tracked, when the headset sends nothing for a while, and when
+the arm is not available: in an error, busy with a move of its own, or with no state. A press of A or X turns it on
+again from where the hand and the arm are then. The headset video shows a panel with the state of each arm and its
+last events, and the log has the same events.
 """
 
 import collections
@@ -32,30 +34,22 @@ from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.webxr import LEFT, RIGHT, WebXR
 
-from .clutch import CONTROLLER_AXES, OperatorPosition, Tracker
+from .clutch import OperatorPosition, Tracker
 from .service import Button, ButtonMap
-
-# The events that the report of an arm keeps, and how often an arm sends its report
-_EVENTS = 4
-_REPORT_SEC = 0.2
-# The size of the panel image, and how often the panel sends it
-_PANEL_SIZE = (960, 540)
-_PANEL_SEC = 0.2
-_WHITE, _GREEN, _RED, _YELLOW = (255, 255, 255), (80, 255, 80), (255, 80, 80), (255, 230, 80)
 
 
 @dataclass(frozen=True)
 class Arm:
-    """An arm that one controller drives: the robot, its start pose, and the devices that grip and clear its error.
+    """An arm that one controller drives: the robot, its start pose, its gripper, and the handlers that clear errors.
 
     ``robot`` emits ``state`` and takes ``commands`` and ``sync_move``. ``gripper`` emits ``grip`` and takes
-    ``target_grip``, and can be ``robot`` itself. ``ready`` is the handler of the robot that clears its error.
+    ``target_grip``, and can be ``robot`` itself. ``ready`` holds the handler of each device that clears its error.
     """
 
     robot: pimm.ControlSystem
     start_joints: Sequence[float]
     gripper: pimm.ControlSystem | None = None
-    ready: pimm.calls.ControlSystemHandler[None, None] | None = None
+    ready: tuple[pimm.calls.ControlSystemHandler[None, None], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,19 +69,19 @@ class ArmReport:
 class ArmControl(pimm.ControlSystem):
     """The teleoperation of one arm from the controller on ``side``."""
 
-    def __init__(
-        self,
-        side: str,
-        start_joints: Sequence[float],
-        operator_position: OperatorPosition,
-        controller_axes: geom.Rotation | None = CONTROLLER_AXES,
-    ):
+    # The events that a report keeps, and how often the arm sends its report
+    EVENTS = 4
+    REPORT_SEC = 0.2
+    # Control goes off when no sample of the controllers comes for this long, as in the teleop service
+    SILENCE_SEC = 0.5
+
+    def __init__(self, side: str, start_joints: Sequence[float], operator_position: OperatorPosition):
         self.side = side
         self._start_joints = np.asarray(start_joints, dtype=np.float64)
-        self._tracker = Tracker(operator_position.value, controller_axes)
+        self._tracker = Tracker(operator_position.value)
         # A and B, which are X and Y on the left controller. Only the presses count, so the hold time does not matter.
         self._buttons = ButtonMap(1.0, buttons=(Button.A, Button.B))
-        self._events: collections.deque[str] = collections.deque(maxlen=_EVENTS)
+        self._events: collections.deque[str] = collections.deque(maxlen=self.EVENTS)
         # The tool point when control came on, and the last target since then
         self._start: np.ndarray | None = None
         self._target: np.ndarray | None = None
@@ -100,7 +94,7 @@ class ArmControl(pimm.ControlSystem):
         self.robot_commands = pimm.ControlSystemEmitter[command.CommandType](self)
         self.target_grip = pimm.ControlSystemEmitter[float](self)
         self.sync_move = pimm.calls.ControlSystemCaller[command.CommandType, None](self)
-        self.ready = pimm.calls.ControlSystemCaller[None, None](self)
+        self.ready = pimm.calls.CallerDict[None, None](self)
         self.report = pimm.ControlSystemEmitter[ArmReport](self)
 
     def _state(self) -> Any:
@@ -133,14 +127,19 @@ class ArmControl(pimm.ControlSystem):
         self._events.append(f'{time.strftime("%H:%M:%S")} {text}')
         self._send_report()
 
+    def _control_off(self, reason: str) -> None:
+        if self._tracker.on:
+            self._tracker.turn_off()
+            self._note(f'control off: {reason}', logging.WARNING)
+
     def _toggle_control(self, hand: geom.Transform3D | None) -> None:
         if self._tracker.on:
             self._tracker.turn_off()
             self._note('control off')
             return
         state = self._state()
-        if hand is None or state is None:
-            self._note('control refused: no pose of the controller or no state of the arm', logging.WARNING)
+        if hand is None or state is None or state.status is not RobotStatus.AVAILABLE:
+            self._note('control refused: the controller is not tracked, or the arm is not available', logging.WARNING)
             return
         self._tracker.turn_on(state.ee_pose, hand)
         self._start, self._target = np.array(state.ee_pose.translation, dtype=np.float64), None
@@ -148,7 +147,7 @@ class ArmControl(pimm.ControlSystem):
 
     @staticmethod
     def _wait(answer: pimm.calls.Answer, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        """Yield until ``answer`` comes, and raise what it failed on."""
+        """Yield until ``answer`` comes, and raise what it failed on. Return early when the world stops."""
         while not answer.done():
             if should_stop.value:
                 return
@@ -156,16 +155,23 @@ class ArmControl(pimm.ControlSystem):
         answer.result()
 
     def _to_start(self, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        """Clear the error of the arm, and put it at its start pose. Raise what the arm failed on."""
-        if self.ready.connected:
-            yield from self._wait(self.ready(None), should_stop)
+        """Clear the errors of the arm and its gripper, and put the arm at its start pose. Raise what a device failed
+        on."""
+        yield from self._wait(pimm.calls.all_of([ready(None) for ready in self.ready.values()]), should_stop)
+        if should_stop.value:
+            return
         yield from self._wait(self.sync_move(command.JointPosition(self._start_joints)), should_stop)
+        if not should_stop.value:
+            self._note('at the start pose')
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         next_report = clock.now()
+        last_sample = clock.now()
         in_error = False
         while not should_stop.value:
             positions = self.controller_positions.read()
+            if positions.updated:
+                last_sample = clock.now()
             hand = positions.data.get(self.side)
             values = self.buttons.value.get(self.side)
             presses: set[Button] = set()
@@ -176,9 +182,18 @@ class ArmControl(pimm.ControlSystem):
                 self._trigger = ButtonMap.grip(values)
                 self.target_grip.emit(self._trigger)
 
-            if self._tracker.on and hand is None:
-                self._tracker.turn_off()
-                self._note('control off: the controller is not tracked', logging.WARNING)
+            state = self._state()
+            error = state is not None and state.status is RobotStatus.ERROR
+            if error and not in_error:
+                self._note('the arm reports an error: B or Y clears it', logging.ERROR)
+            in_error = error
+            if hand is None:
+                self._control_off('the controller is not tracked')
+            elif clock.now() - last_sample > self.SILENCE_SEC:
+                self._control_off('the headset sends no sample')
+            elif state is None or state.status is not RobotStatus.AVAILABLE:
+                self._control_off('the arm is not available')
+
             if Button.A in presses:
                 self._toggle_control(hand)
             elif Button.B in presses:
@@ -186,24 +201,17 @@ class ArmControl(pimm.ControlSystem):
                 self._note('to the start pose')
                 try:
                     yield from self._to_start(should_stop)
-                    self._note('at the start pose')
                 # rules-allow: swallowed-error — the operator reads the failure on the panel and presses again
                 except Exception as e:
                     self._note(f'the start pose failed: {e}', logging.ERROR)
-
-            state = self._state()
-            error = state is not None and state.status is RobotStatus.ERROR
-            if error and not in_error:
-                self._note('the arm reports an error: B or Y clears it', logging.ERROR)
-            in_error = error
-            if self._tracker.on and state is not None and not error and positions.updated and hand is not None:
+            elif self._tracker.on and positions.updated and hand is not None:
                 target = self._tracker.update(hand)
                 self.robot_commands.emit(command.CartesianPosition(target))
                 self._target = np.array(target.translation, dtype=np.float64)
 
             if clock.now() >= next_report:
                 self._send_report()
-                next_report = clock.now() + _REPORT_SEC
+                next_report = clock.now() + self.REPORT_SEC
             yield pimm.Sleep(0.001)
 
 
@@ -217,6 +225,11 @@ def _shift_text(shift: np.ndarray | None) -> str:
 class Panel(pimm.ControlSystem):
     """The state of each arm as text on black, for the headset video."""
 
+    # The size of the image, and how often the panel sends it
+    SIZE = (960, 540)
+    PERIOD_SEC = 0.2
+    WHITE, GREEN, RED, YELLOW = (255, 255, 255), (80, 255, 80), (255, 80, 80), (255, 230, 80)
+
     def __init__(self, sides: Sequence[str]):
         self._sides = tuple(sides)
         self.reports = pimm.ReceiverDict(self)
@@ -225,22 +238,22 @@ class Panel(pimm.ControlSystem):
     def _lines(self, side: str) -> list[tuple[str, tuple[int, int, int]]]:
         message = self.reports[side].read()
         if message is None:
-            return [(f'{side}: no report', _RED)]
+            return [(f'{side}: no report', self.RED)]
         report: ArmReport = message.data
         status = 'no state' if report.status is None else report.status.name
         error = report.status is None or report.status is RobotStatus.ERROR
-        color = _RED if error else (_GREEN if report.control else _WHITE)
+        color = self.RED if error else (self.GREEN if report.control else self.WHITE)
         grip = '' if report.trigger is None else f', trigger {report.trigger:.2f}'
         if report.grip is not None:
             grip += f', grip {report.grip:.2f}'
         lines = [(f'{side}: {status}, control {"ON" if report.control else "off"}{grip}', color)]
         if report.control:
-            lines.append((f'  target {_shift_text(report.target_shift)}', _YELLOW))
-            lines.append((f'  arm    {_shift_text(report.arm_shift)}', _YELLOW))
-        return lines + [(f'  {event}', _WHITE) for event in report.events]
+            lines.append((f'  target {_shift_text(report.target_shift)}', self.YELLOW))
+            lines.append((f'  arm    {_shift_text(report.arm_shift)}', self.YELLOW))
+        return lines + [(f'  {event}', self.WHITE) for event in report.events]
 
     def view(self) -> np.ndarray:
-        width, height = _PANEL_SIZE
+        width, height = self.SIZE
         image = np.zeros((height, width, 3), dtype=np.uint8)
         row = 0
         for side in self._sides:
@@ -253,15 +266,10 @@ class Panel(pimm.ControlSystem):
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         while not should_stop.value:
             self.frame.emit(self.view())
-            yield pimm.Sleep(_PANEL_SEC)
+            yield pimm.Sleep(self.PERIOD_SEC)
 
 
-def debug(
-    arms: Mapping[str, Arm],
-    webxr: WebXR,
-    operator_position: OperatorPosition,
-    controller_axes: geom.Rotation | None = CONTROLLER_AXES,
-) -> None:
+def debug(arms: Mapping[str, Arm], webxr: WebXR, operator_position: OperatorPosition) -> None:
     """Run the teleoperation of ``arms`` until Ctrl-C. The controller on the side of each arm drives it."""
     if not arms or not set(arms) <= {LEFT, RIGHT}:
         raise ValueError(f'the arms are on the {LEFT} side, the {RIGHT} side or both, got {list(arms)}')
@@ -274,7 +282,7 @@ def debug(
         controls: list[pimm.ControlSystem | None] = [panel]
         devices: list[pimm.ControlSystem | None] = [webxr]
         for side, arm in arms.items():
-            control = ArmControl(side, arm.start_joints, operator_position, controller_axes)
+            control = ArmControl(side, arm.start_joints, operator_position)
             world.connect(webxr.controller_positions, control.controller_positions)
             world.connect(webxr.buttons, control.buttons)
             # A driver's ports are its own: `pimm.ControlSystem` declares none for the checker to find
@@ -282,8 +290,8 @@ def debug(
             world.connect(robot.state, control.robot_state)
             world.connect(control.robot_commands, robot.commands)
             world.connect(control.sync_move, robot.sync_move)
-            if arm.ready is not None:
-                world.connect(control.ready, arm.ready)
+            for index, ready in enumerate(arm.ready):
+                world.connect(control.ready[str(index)], ready)
             devices.append(arm.robot)
             if arm.gripper is not None:
                 gripper: Any = arm.gripper
@@ -300,66 +308,73 @@ def debug(
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.franka_droid,
     gripper=positronic.cfg.hardware.gripper.robotiq,
+    start_joints=positronic.cfg.hardware.roboarm.FRANKA_NOMINAL_JOINTS,
     webxr=positronic.cfg.webxr.oculus,
     operator_position=OperatorPosition.BACK,
 )
-def franka(robot_arm, gripper, webxr: WebXR, operator_position: OperatorPosition):
+def franka(robot_arm, gripper, start_joints: Sequence[float], webxr: WebXR, operator_position: OperatorPosition):
     """A Franka arm with a Robotiq gripper."""
-    arm = Arm(robot_arm, positronic.cfg.hardware.roboarm.FRANKA_NOMINAL_JOINTS, gripper, robot_arm.ready)
+    arm = Arm(robot_arm, start_joints, gripper, (robot_arm.ready, gripper.ready))
     debug({RIGHT: arm}, webxr, operator_position)
 
 
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.yam,
+    start_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
     webxr=positronic.cfg.webxr.oculus,
     operator_position=OperatorPosition.BACK,
 )
-def yam(robot_arm, webxr: WebXR, operator_position: OperatorPosition):
+def yam(robot_arm, start_joints: Sequence[float], webxr: WebXR, operator_position: OperatorPosition):
     """One YAM arm. Its driver also drives its gripper, on the same CAN chain."""
-    arm = Arm(robot_arm, positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS, robot_arm, robot_arm.ready)
-    debug({RIGHT: arm}, webxr, operator_position)
+    debug({RIGHT: Arm(robot_arm, start_joints, robot_arm, (robot_arm.ready,))}, webxr, operator_position)
 
 
 @cfn.config(
     left_arm=positronic.cfg.hardware.roboarm.yam.override(channel='can0'),
     right_arm=positronic.cfg.hardware.roboarm.yam.override(channel='can1'),
+    start_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
     webxr=positronic.cfg.webxr.oculus,
     operator_position=OperatorPosition.BACK,
 )
-def yam_bimanual(left_arm, right_arm, webxr: WebXR, operator_position: OperatorPosition):
-    """Two YAM arms on two CAN chains. The driver of each arm also drives its gripper."""
-    joints = positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS
-    arms = {side: Arm(robot, joints, robot, robot.ready) for side, robot in ((LEFT, left_arm), (RIGHT, right_arm))}
+def yam_bimanual(left_arm, right_arm, start_joints: Sequence[float], webxr: WebXR, operator_position: OperatorPosition):
+    """Two YAM arms on two CAN chains. The driver of each arm also drives its gripper. A station whose chains have
+    other names sets ``--left_arm.channel`` and ``--right_arm.channel``."""
+    arms = {
+        side: Arm(robot, start_joints, robot, (robot.ready,)) for side, robot in ((LEFT, left_arm), (RIGHT, right_arm))
+    }
     debug(arms, webxr, operator_position)
 
 
 @cfn.config(
     robot_arm=positronic.cfg.hardware.roboarm.so101,
+    start_joints=positronic.cfg.hardware.roboarm.SO101_NOMINAL_JOINTS,
     webxr=positronic.cfg.webxr.oculus,
     operator_position=OperatorPosition.BACK,
 )
-def so101(robot_arm, webxr: WebXR, operator_position: OperatorPosition):
+def so101(robot_arm, start_joints: Sequence[float], webxr: WebXR, operator_position: OperatorPosition):
     """One SO-101 arm. Its driver also drives its gripper, on the same motor bus."""
-    arm = Arm(robot_arm, positronic.cfg.hardware.roboarm.SO101_NOMINAL_JOINTS, robot_arm)
-    debug({RIGHT: arm}, webxr, operator_position)
+    debug({RIGHT: Arm(robot_arm, start_joints, robot_arm)}, webxr, operator_position)
 
 
+# TODO: Drive the DH gripper on each CRON arm, once the DH driver reaches it through the bridge project on the box.
 @cfn.config(
-    left_arm=positronic.cfg.hardware.roboarm.cron_with_gripper.override(ip='192.168.68.67'),
-    right_arm=positronic.cfg.hardware.roboarm.cron_with_gripper.override(ip='192.168.68.66'),
-    left_gripper=positronic.cfg.hardware.gripper.dh_gripper.override(port='socket://192.168.68.67:7663'),
-    right_gripper=positronic.cfg.hardware.gripper.dh_gripper.override(port='socket://192.168.68.66:7663'),
+    left_arm=positronic.cfg.hardware.roboarm.cron.override(ip='192.168.68.67'),
+    right_arm=positronic.cfg.hardware.roboarm.cron.override(ip='192.168.68.66'),
+    left_start_joints=positronic.cfg.hardware.roboarm.CRON_LEFT_NOMINAL_JOINTS,
+    right_start_joints=positronic.cfg.hardware.roboarm.CRON_RIGHT_NOMINAL_JOINTS,
     webxr=positronic.cfg.webxr.oculus,
     operator_position=OperatorPosition.FRONT,
 )
-def cron_bimanual(left_arm, right_arm, left_gripper, right_gripper, webxr: WebXR, operator_position: OperatorPosition):
-    """Two CRON arms with a DH gripper each, through the bridge project on each control box. A move of a CRON arm
-    clears its error before it starts."""
-    roboarm = positronic.cfg.hardware.roboarm
-    arms = {
-        LEFT: Arm(left_arm, roboarm.CRON_LEFT_NOMINAL_JOINTS, left_gripper),
-        RIGHT: Arm(right_arm, roboarm.CRON_RIGHT_NOMINAL_JOINTS, right_gripper),
-    }
+def cron_bimanual(
+    left_arm,
+    right_arm,
+    left_start_joints: Sequence[float],
+    right_start_joints: Sequence[float],
+    webxr: WebXR,
+    operator_position: OperatorPosition,
+):
+    """Two CRON arms. A move of a CRON arm clears its error before it starts."""
+    arms = {LEFT: Arm(left_arm, left_start_joints), RIGHT: Arm(right_arm, right_start_joints)}
     debug(arms, webxr, operator_position)
 
 
