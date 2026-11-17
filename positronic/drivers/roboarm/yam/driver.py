@@ -785,8 +785,9 @@ class Robot(pimm.ControlSystem):
         :param base_pose: Arm-base mount pose in the world frame; None keeps everything in the arm-base frame.
         :param sim: Run against i2rt's own MuJoCo sim instead of hardware.
         :param compensation: The gravity model and the Coulomb friction that i2rt adds to the PD of the chain.
-        :param park_after_idle_s: Park after this many seconds with no arm or gripper command, counted from the
-            end of a blocking move or of the start. None disables idle parking; the driver still parks on shutdown.
+        :param park_after_idle_s: Park after this many seconds with no arm or gripper command while ``idle_park_on``
+            is on, counted from the end of a blocking move, of the start, or of the moment ``idle_park_on`` turns on.
+            None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
@@ -821,6 +822,8 @@ class Robot(pimm.ControlSystem):
         # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
         # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
+        # On until a message says otherwise; the park on shutdown does not read it.
+        self.idle_park_on = pimm.DefaultingReceiver[bool](self, default=True)
 
     @property
     def base_pose(self) -> geom.Transform3D:
@@ -1013,16 +1016,22 @@ class Robot(pimm.ControlSystem):
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
     ) -> tuple[pimm.calls.Call | command.CommandType | None, np.ndarray]:
-        """Read the grip and the next request, and return the request with the joints. Either one stops an idle park."""
+        """Read the grip, the next request and ``idle_park_on``, and return the request with the joints. A grip, a
+        request or ``idle_park_on`` off stops an idle park."""
         asked = arm.moves.next_request()
         with self._answer_failed_setup(asked):
             grip = grip_setpoint(fingers, arm.read_grip(arm.observations()), clock.now())
-            if serving.parking is not None and (grip is not None or asked is not None):
+            idle_park_off = not self.idle_park_on.value
+            if serving.parking is not None and (grip is not None or asked is not None or idle_park_off):
                 serving.parking.close()
                 serving.parking = None
                 serving.q_target, serving.grip_target = arm.hold_where_it_stopped()
+                serving.idle_since = clock.now()
             if grip is not None:
                 serving.grip_target = grip
+                serving.idle_since = clock.now()
+            # A park that ended leaves ``idle_since`` None until a command, so the arm does not park again.
+            if idle_park_off and serving.idle_since is not None:
                 serving.idle_since = clock.now()
             return asked, arm.observations()[_JOINT_POS]
 

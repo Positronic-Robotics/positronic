@@ -85,7 +85,7 @@ The span names are the contract:
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
 | `record.io` | `episode` | — | the recorder's serialize + append |
-| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
+| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
@@ -94,7 +94,7 @@ The span names are the contract:
 
 ### Reading harness steps
 
-A `harness.step` span holds the durations of one step in milliseconds:
+A `harness.step` span holds the durations of one step in milliseconds, and one collection generation:
 
 - `step.late_ms`: the time from the step's due time to its start. Other loops in the process and a late wake
   from sleep add to it. An answer can start a step before its due time; that step has no value.
@@ -103,9 +103,18 @@ A `harness.step` span holds the durations of one step in milliseconds:
   message arrived.
 - `step.policy_ms`: the policy call. Its processor spans are the children of the step.
 - `step.emit_ms`: the time to emit the commands.
+- `step.gc_wait_ms`: the garbage-collection time of the process from the end of the previous step to the start of
+  this step. A collection after the due time adds to `step.late_ms`. For the first step of an episode, the window
+  starts at the start of the rollout, so it covers the opening of the recording.
+- `step.gc_ms`: the garbage-collection time of the process inside the step.
+- `step.gc_generation`: the highest generation that a collection in either window reached, from 0 to 2.
+
+The three collection values are present only when a collection ran in one of the two windows. A collection in any
+thread stops the harness thread too, so each value counts all threads. The harness counts collections only while
+telemetry records.
 
 A step can find a required observation missing, for example while a camera starts. That step calls no policy,
-so its span has only `step.late_ms` and the observe values.
+so its span has only `step.late_ms`, the observe values and the collection values.
 
 The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
 recorder and the producers run in other processes. Their cost reaches a step only as CPU contention.
