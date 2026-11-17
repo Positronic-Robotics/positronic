@@ -2,7 +2,8 @@
 
 ``_ClonedScene`` holds one step count per clone and FREEZES a clone that ends: it stops advancing and reports
 the verdict it ended on, the way RoboLab's env does instead of re-rolling a terminated clone. Each clone also
-reports the grip of the last action it received, so a test can see which client's action reached it.
+reports the grip of the last action it received, so a test can see which client's action reached it. Each reset
+builds as many clones as the batch has slots, as RoboLab's env does.
 """
 
 import ast
@@ -45,19 +46,22 @@ def _action(grip: float) -> dict[str, Any]:
 
 
 class _ClonedScene(EnvProtocol):
-    """``len(ends_at)`` clones of one scene: clone ``i`` ends on step ``ends_at[i]`` with verdict ``succeeds[i]``."""
+    """Up to ``len(ends_at)`` clones of one scene: clone ``i`` ends on step ``ends_at[i]`` with verdict
+    ``succeeds[i]``."""
 
     def __init__(self, ends_at: list[int], succeeds: list[bool] | None = None):
+        self._max_ends_at = ends_at
         self._ends_at = ends_at
         self._succeeds = succeeds if succeeds is not None else [False] * len(ends_at)
         self._steps = [0] * len(ends_at)
         self._grips = [0.0] * len(ends_at)
         self.resets: list[Any] = []
+        self.built: list[int] = []  # the clone count of each reset
         self.stepped: list[set[int]] = []  # the slots each env step received an action for
 
     @property
     def num_slots(self) -> int:
-        return len(self._ends_at)
+        return len(self._max_ends_at)
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         return [{'name': _SCENE, protocol.TASK_INSTRUCTION: f'run {_SCENE}'}]
@@ -65,10 +69,12 @@ class _ClonedScene(EnvProtocol):
     def _observed(self, slot: int) -> dict[str, Any]:
         return {_STEPS: np.full(2, self._steps[slot], dtype=np.float64), _GRIP: self._grips[slot]}
 
-    def reset(self, token: Any) -> dict[str, Any]:
+    def reset(self, token: Any, slots: int | None = None) -> dict[str, Any]:
         self.resets.append(token)
         if token == _FAILING_TOKEN:
             raise ValueError(f'no scene for {token!r}')
+        self._ends_at = self._max_ends_at[: self.num_slots if slots is None else slots]
+        self.built.append(len(self._ends_at))
         self._steps = [0] * len(self._ends_at)
         self._grips = [0.0] * len(self._ends_at)
         return {
@@ -419,7 +425,78 @@ def test_a_slot_that_sat_out_a_batch_joins_the_next_one(monkeypatch):
         late.close()
     assert _steps(frame) == 0.0
     assert env.resets == ['first batch', 'first batch', 'second batch']
-    assert env.stepped == [{0}, {1}]
+    assert env.stepped == [{0}, {0}]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_batch_smaller_than_the_env_starts_at_once_on_as_many_clones():
+    """The join deadline is the default 600 s, so a reset that waited for the other two clones would time out."""
+    env = _ClonedScene(ends_at=[9, 9, 9, 9])
+    with _clients(env, count=2) as conns:
+        _together(*[lambda conn=conn: conn.reset('scene', batch_size=2) for conn in conns])
+        _together(*[lambda conn=conn: conn.step(_action(0.0)) for conn in conns])
+    assert env.built == [2]
+    assert env.stepped == [{0, 1}]
+
+
+@pytest.mark.timeout(60.0)
+def test_the_slots_of_a_batch_drive_the_first_clones_in_slot_order():
+    """The client on slot 0 never resets; the batch of the clients on slots 1 and 2 drives clones 0 and 1."""
+    env = _ClonedScene(ends_at=[9, 9, 9])
+    with _clients(env) as (_idle, first, second):
+        _together(lambda: first.reset('scene', batch_size=2), lambda: second.reset('scene', batch_size=2))
+        frames = _together(lambda: first.step(_action(0.25)), lambda: second.step(_action(0.75)))
+    assert [frame[protocol.FRAME_OBS][_GRIP] for frame in frames] == [0.25, 0.75]
+    assert env.built == [2] and env.stepped == [{0, 1}]
+
+
+@pytest.mark.timeout(60.0)
+def test_each_batch_builds_the_clones_its_own_size_asks_for():
+    env = _ClonedScene(ends_at=[9, 9, 9])
+    with serve_env(env) as (host, port):
+        for size in (2, 3, 1):
+            conns = [_connect(host, port) for _ in range(size)]
+            _together(*[lambda conn=conn, size=size: conn.reset('scene', batch_size=size) for conn in conns])
+            for conn in conns:
+                conn.close()
+    assert env.built == [2, 3, 1]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_slot_past_the_batch_size_waits_for_the_next_batch(monkeypatch):
+    taken = _watch_resets(monkeypatch)
+    env = _ClonedScene(ends_at=[9, 9, 9])
+    with _clients(env) as (first, second, third), ThreadPoolExecutor(2) as pool:
+        first.reset('first batch', batch_size=1)
+        joining = [pool.submit(conn.reset, 'second batch', batch_size=1) for conn in (second, third)]
+        taken('second batch')
+        first.close()
+        joining[0].result(timeout=10.0)
+
+        assert _held_back(joining[1]), 'a slot past the batch size of 1 joined the batch'
+        second.close()
+        joining[1].result(timeout=10.0)
+    assert env.resets == ['first batch', 'second batch', 'second batch'] and env.built == [1, 1, 1]
+
+
+@pytest.mark.timeout(60.0)
+def test_a_reset_that_asks_for_another_batch_size_than_the_waiting_slots_is_refused(monkeypatch):
+    taken = _watch_resets(monkeypatch)
+    with _clients(_ClonedScene(ends_at=[9, 9, 9])) as (first, second, _), ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(first.reset, 'scene', batch_size=2)
+        taken('scene')
+        with pytest.raises(RuntimeError, match='the next batch has 2 slots, but this reset asks for a batch of 3'):
+            second.reset('scene', batch_size=3)
+        second.reset('scene', batch_size=2)
+        pending.result(timeout=10.0)
+
+
+@pytest.mark.timeout(60.0)
+@pytest.mark.parametrize('size', [0, 3])
+def test_a_batch_size_the_env_cannot_serve_is_refused(size):
+    with _clients(_ClonedScene(ends_at=[9, 9]), count=1) as (conn,):
+        with pytest.raises(RuntimeError, match=f'a batch of {size} slots is asked for, but this env serves 1 to 2'):
+            conn.reset('scene', batch_size=size)
 
 
 @pytest.mark.timeout(60.0)

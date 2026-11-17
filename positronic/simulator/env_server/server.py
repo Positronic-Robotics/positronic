@@ -5,6 +5,7 @@ This module must work in an isolated interpreter without Positronic installed.
 Protocol (msgpack frames, see ``protocol``), between a client and its slot:
   client ``{'cmd': 'tasks', 'spec': ...}``    -> server ``{'tasks': [{...}, ...]}``
   client ``{'cmd': 'reset', 'token': ...}``   -> server ``{'obs', 'meta', 'robot_meta', 'control_dt'}``, opt. ``goal``
+    (a reset can also carry ``'batch_size': n``)
   client ``{'cmd': 'step', 'action': {...}}`` -> server ``{'obs', 'done', 'control_dt'}``, opt. ``goal``
   client ``{'cmd': 'close'}``                 -> server ``{'ok': True}``
 Command handling failures return ``{'error': str}`` without closing the session; the client re-raises them.
@@ -14,13 +15,17 @@ Command handling failures return ``{'error': str}`` without closing the session;
 client supplies that information. A task record's ``instruction`` is the text the policy gets for that task. A frame
 carries ``goal`` when the env moves the goal away from that text, and a later ``goal`` replaces an earlier one.
 
-An env serves a fixed number of slots, ``num_slots``: independent episodes that one env call steps together. Most
-envs serve one. Each client that connects takes the next free slot and drives only that slot, so N clients can run N
-different policies in one env:
+An env serves at most ``num_slots`` slots: independent episodes that one env call steps together. Most envs serve
+one. Each client that connects takes the next free slot and drives only that slot, so N clients can run N different
+policies in one env:
 
 * The slots that reset together are a batch. All of them reset with one token, and the env resets every slot.
-* A batch's first reset waits for every slot, but not longer than ``join_deadline`` seconds after the first slot
-  asks while no batch runs. A slot that has not asked by then sits out the batch, and the env gets no action for it.
+* The first reset of a batch carries the batch size, at most ``num_slots``. A reset with no batch size asks for
+  ``num_slots``. The env resets for a batch of that size, and each slot of the batch drives one env slot.
+* A batch's first reset waits for as many slots as the batch size, but not longer than ``join_deadline`` seconds
+  after the first slot asks while no batch runs. An env slot that no client takes by then sits out the batch, and
+  the env gets no action for it. A slot that asks for another batch size than the slots that wait is refused. A
+  slot past the batch size waits for the next batch.
 * A later reset of a batch answers when every slot of the batch has asked for one or has left. A batch whose reset
   failed stays a batch, so its retry is a later reset.
 * A step answers when every slot in an episode has sent its action. The env gets no action for the other slots.
@@ -71,14 +76,16 @@ class EnvProtocol(ABC):
 
     @property
     def num_slots(self) -> int:
-        """How many episodes the env steps together, each driven by a client of its own."""
+        """The most episodes the env steps together, each driven by a client of its own."""
         return 1
 
     @abstractmethod
-    def reset(self, token: Any) -> dict[str, Any]:
-        """Construct or reuse the environment and re-randomize every slot from an opaque token.
+    def reset(self, token: Any, slots: int | None = None) -> dict[str, Any]:
+        """Construct or reuse the environment for ``slots`` slots, and re-randomize every slot from an opaque token.
 
-        Return ``slots`` (one ``{'obs': ...}`` per slot), scene ``meta``, ``robot_meta``, and ``control_dt``
+        ``slots`` is at most ``num_slots``, and ``None`` asks for ``num_slots``. An env that builds its slots at reset
+        builds that many; an env with one slot ignores it.
+        Return the ``slots`` field (one ``{'obs': ...}`` per slot), scene ``meta``, ``robot_meta``, and ``control_dt``
         in seconds. Either metadata dict may be empty when the client supplies it. A slot whose scene draws a goal
         other than its task's listed instruction also carries ``goal``.
         """
@@ -144,6 +151,8 @@ class EnvServer:
         self._join_deadline = join_deadline
         self._join_started: float | None = None  # when the first slot asked for the reset that starts a batch
         self._slots = [_Slot() for _ in range(env.num_slots)]
+        self._batch_size = env.num_slots
+        self._env_slots: dict[int, int] = {}  # the env slot of each slot of the batch
         self._requests: queue.Queue[_Request | _Disconnect] = queue.Queue()
         self._lock = threading.Lock()  # guards slot claims and ``_stopped``
         self._stopped = False
@@ -217,6 +226,8 @@ class EnvServer:
                     request.reply.put({protocol.TASKS: self._env.tasks(request.msg[protocol.SPEC])})
                 case protocol.Command.RESET:  # from a running slot too: its client gave up on the episode
                     in_batch = slot.phase in (_Phase.RUNNING, _Phase.ENDED, _Phase.RESET_FAILED)
+                    if not in_batch:
+                        self._check_batch_size(request)
                     slot.phase, slot.pending = (_Phase.WAITING if in_batch else _Phase.JOINING), request
                 case protocol.Command.STEP:
                     if slot.phase not in (_Phase.RUNNING, _Phase.ENDED) or slot.pending is not None:
@@ -224,6 +235,25 @@ class EnvServer:
                     slot.phase, slot.pending = _Phase.RUNNING, request
         except Exception as e:
             request.reply.put(_error(e))
+
+    def _asked_batch_size(self, request: _Request) -> int:
+        return request.msg.get(protocol.BATCH_SIZE, len(self._slots))
+
+    def _joining_batch_size(self) -> int | None:
+        """The batch size the slots that wait to join ask for, or ``None`` when no slot waits to join."""
+        for slot in self._slots:
+            if slot.phase is _Phase.JOINING and slot.pending is not None:
+                return self._asked_batch_size(slot.pending)
+        return None
+
+    def _check_batch_size(self, request: _Request) -> None:
+        """Raise unless ``request`` asks for a batch size this server serves, and the size the waiting slots ask for."""
+        size = self._asked_batch_size(request)
+        if not 1 <= size <= len(self._slots):
+            raise ValueError(f'a batch of {size} slots is asked for, but this env serves 1 to {len(self._slots)} slots')
+        waiting = self._joining_batch_size()
+        if waiting is not None and size != waiting:
+            raise ValueError(f'the next batch has {waiting} slots, but this reset asks for a batch of {size}')
 
     def _take_pending(self, indices: list[int]) -> dict[int, _Request]:
         """The parked request of each slot in ``indices``, by slot index, cleared from its slot."""
@@ -244,7 +274,7 @@ class EnvServer:
                     f'{len(requests)} slots asked for {len(tokens)} different resets at once, but all slots of one env '
                     'server share one scene and one task: run every client of this server in one task order'
                 )
-            answer = self._env.reset(next(iter(requests.values())).msg[protocol.TOKEN])
+            answer = self._env.reset(next(iter(requests.values())).msg[protocol.TOKEN], self._batch_size)
         except Exception as e:
             for index, request in requests.items():
                 self._slots[index].phase = _Phase.RESET_FAILED
@@ -252,18 +282,25 @@ class EnvServer:
             return
         for index, request in requests.items():
             self._slots[index].phase = _Phase.RUNNING
-            request.reply.put(protocol.slot_frame(answer, index))
+            request.reply.put(protocol.slot_frame(answer, self._env_slots[index]))
+
+    def _start_batch(self, indices: list[int], size: int) -> None:
+        """Reset the env for a batch of ``size`` env slots, driven by the slots ``indices``, in that order."""
+        self._batch_size = size
+        self._env_slots = {index: env_slot for env_slot, index in enumerate(indices)}
+        self._reset(indices)
 
     def _step(self, indices: list[int]) -> None:
         requests = self._take_pending(indices)
         try:
-            answer = self._env.step({index: request.msg[protocol.ACTION] for index, request in requests.items()})
+            actions = {self._env_slots[index]: request.msg[protocol.ACTION] for index, request in requests.items()}
+            answer = self._env.step(actions)
         except Exception as e:
             for request in requests.values():
                 request.reply.put(_error(e))
             return
         for index, request in requests.items():
-            frame = protocol.slot_frame(answer, index)
+            frame = protocol.slot_frame(answer, self._env_slots[index])
             if frame[protocol.FRAME_DONE]:
                 self._slots[index].phase = _Phase.ENDED
             request.reply.put(frame)
@@ -281,14 +318,15 @@ class EnvServer:
                 self._reset(batch)
             return
         joining = [index for index, slot in enumerate(self._slots) if slot.phase is _Phase.JOINING]
-        if not joining:
+        size = self._joining_batch_size()
+        if size is None:
             self._join_started = None
             return
         if self._join_started is None:
             self._join_started = time.monotonic()
-        if len(joining) == len(self._slots) or time.monotonic() - self._join_started >= self._join_deadline:
+        if len(joining) >= size or time.monotonic() - self._join_started >= self._join_deadline:
             self._join_started = None
-            self._reset(joining)
+            self._start_batch(joining[:size], size)
 
     def _seconds_to_next_check(self) -> float:
         if self._join_started is None:

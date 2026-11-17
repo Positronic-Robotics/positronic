@@ -52,8 +52,13 @@ class EnvConnection:
     def tasks(self, spec: Any) -> list[dict[str, Any]]:
         return self._request({protocol.CMD: protocol.Command.TASKS.value, protocol.SPEC: spec})[protocol.TASKS]
 
-    def reset(self, token: Any) -> dict[str, Any]:
-        return self._request({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: token})
+    def reset(self, token: Any, batch_size: int | None = None) -> dict[str, Any]:
+        """This client's frame of the reset. ``batch_size`` is how many clients start the batch; ``None`` asks for
+        every slot of the server."""
+        msg = {protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: token}
+        if batch_size is not None:
+            msg[protocol.BATCH_SIZE] = batch_size
+        return self._request(msg)
 
     def step(self, action: dict[str, Any]) -> dict[str, Any]:
         return self._request({protocol.CMD: protocol.Command.STEP.value, protocol.ACTION: action})
