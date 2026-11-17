@@ -1,5 +1,6 @@
 """Timing contracts for processor execution and simulated chunk playback."""
 
+import gc
 import threading
 import time
 import traceback
@@ -24,6 +25,7 @@ from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import Episode, EpisodeWriter
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm import RobotStatus
@@ -39,7 +41,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
 from positronic.policy.executor import Executor, _UnchargedAnswer
-from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout
+from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _GcSteps
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.remote import round_trip
 from positronic.policy.sequential import Sequential
@@ -174,7 +176,16 @@ def observed_harness():
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         policy_run = runtime.start(Observe())
-        step = partial(harness._step, Task('test', None), frozenset(), frozenset(), runtime, policy_run, None)
+        step = partial(
+            harness._step,
+            Task('test', None),
+            frozenset(),
+            frozenset(),
+            runtime,
+            policy_run,
+            None,
+            _GcSteps(harness._gc),
+        )
         try:
             yield world, harness, emitters, serializers, calls, step
         finally:
@@ -1466,6 +1477,126 @@ def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harne
     assert {s.parent_id for s in policy_spans} == {first.span_id, second.span_id}
 
 
+@pytest.fixture
+def explicit_gc_only():
+    """Stop automatic collections, so that only the test's own ``gc.collect`` calls run."""
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
+def test_step_spans_carry_the_collections_before_and_inside_the_step(episode_harness, tmp_path, explicit_gc_only):
+    h = episode_harness
+
+    class CollectOnThirdCall(Policy):
+        def run(self, runtime):
+            yield
+            calls = 0
+            while True:
+                calls += 1
+                if calls == 3:
+                    gc.collect(1)
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-step-gc'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), CollectOnThirdCall(), None))
+        next(h.loop)
+        gc.collect()
+        h.world.clock.advance_to_ns(10_000_000)
+        next(h.loop)
+        h.world.clock.advance_to_ns(20_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    first, second, third = sorted(
+        (s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns
+    )[:3]
+    gc_keys = (
+        telemetry_keys.ATTR_STEP_GC_WAIT_MS,
+        telemetry_keys.ATTR_STEP_GC_MS,
+        telemetry_keys.ATTR_STEP_GC_GENERATION,
+    )
+    assert not any(key in first.attrs for key in gc_keys)
+    assert second.attrs[telemetry_keys.ATTR_STEP_GC_WAIT_MS] > 0
+    assert second.attrs[telemetry_keys.ATTR_STEP_GC_MS] == 0
+    assert second.attrs[telemetry_keys.ATTR_STEP_GC_GENERATION] == 2
+    assert third.attrs[telemetry_keys.ATTR_STEP_GC_WAIT_MS] == 0
+    assert third.attrs[telemetry_keys.ATTR_STEP_GC_MS] > 0
+    assert third.attrs[telemetry_keys.ATTR_STEP_GC_GENERATION] == 1
+
+
+class CollectingDataset(MemoryDataset):
+    """A dataset whose episode opening runs a full collection."""
+
+    def new_episode(self):
+        gc.collect()
+        return super().new_episode()
+
+
+class HoldAfterCollecting(Policy):
+    """A policy that runs a full collection before it takes its first observation."""
+
+    def run(self, runtime):
+        gc.collect()
+        yield
+        while True:
+            yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+
+def _first_step_span(tmp_path, h, policy, dataset):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-first-step-gc'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), policy, dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    return min((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)
+
+
+def test_the_first_step_carries_a_collection_that_opening_the_recording_ran(
+    episode_harness, tmp_path, explicit_gc_only
+):
+    first = _first_step_span(tmp_path, episode_harness, Hold(), CollectingDataset())
+    assert first.attrs[telemetry_keys.ATTR_STEP_GC_WAIT_MS] > 0
+    assert first.attrs[telemetry_keys.ATTR_STEP_GC_GENERATION] == 2
+
+
+def test_the_first_step_leaves_out_a_collection_that_the_policy_start_ran(episode_harness, tmp_path, explicit_gc_only):
+    first = _first_step_span(tmp_path, episode_harness, HoldAfterCollecting(), None)
+    assert telemetry_keys.ATTR_STEP_GC_WAIT_MS not in first.attrs
+
+
+def test_the_harness_counts_collections_only_while_telemetry_records(episode_harness, tmp_path):
+    h = episode_harness
+    callbacks = list(gc.callbacks)
+    h.observation.emit(1)
+    h.caller(Rollout(Task('move', None), Hold(), None))
+    next(h.loop)
+    assert gc.callbacks == callbacks
+    h.world.request_stop()
+    list(h.loop)
+
+
+def test_the_harness_stops_counting_collections_when_it_stops(episode_harness, tmp_path):
+    h = episode_harness
+    callbacks = list(gc.callbacks)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-gc-callback'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), Hold(), None))
+        next(h.loop)
+        assert len(gc.callbacks) == len(callbacks) + 1
+        h.world.request_stop()
+        list(h.loop)
+    assert gc.callbacks == callbacks
+
+
 def test_the_episode_span_carries_the_holds_of_the_schedule(episode_harness, tmp_path):
     h = episode_harness
 
@@ -1513,6 +1644,65 @@ def test_a_submitted_call_carries_the_age_of_the_oldest_camera_frame(tmp_path):
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
     [submit] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT]
     assert submit.attrs[telemetry_keys.ATTR_OBS_AGE_MS] == pytest.approx(30.0)
+
+
+def test_a_step_span_carries_the_age_of_each_camera_frame_in_two_parts(tmp_path):
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({}, runtime.time_ns + 10_000_000)
+
+    driver_stamps = pimm.Time(**{CAPTURE_TIME: 5_000, HANDOFF_TIME: 21_005_000})
+    with (
+        _episode_ports(observed=(keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE)) as h,
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-frame-age'),
+    ):
+        h.device_observations[keys.EXTERIOR_IMAGE].emit(np.zeros(1), time=driver_stamps)
+        h.world.clock.advance_to_ns(10_000_000)
+        h.device_observations[keys.WRIST_IMAGE].emit(np.zeros(1))
+        h.world.clock.advance_to_ns(30_000_000)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), None))
+        next(h.loop)
+        h.world.clock.advance_to_ns(40_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    first, second = sorted((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)
+    wait, driver = telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX, telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX
+    assert first.attrs[wait + keys.EXTERIOR_IMAGE] == pytest.approx(30.0)
+    assert first.attrs[wait + keys.WRIST_IMAGE] == pytest.approx(20.0)
+    # A frame that the step reads again keeps getting older.
+    assert second.attrs[wait + keys.EXTERIOR_IMAGE] == pytest.approx(40.0)
+    assert first.attrs[driver + keys.EXTERIOR_IMAGE] == second.attrs[driver + keys.EXTERIOR_IMAGE] == 21.0
+    # A driver that stamps no capture time gives no driver part.
+    assert driver + keys.WRIST_IMAGE not in first.attrs
+
+
+def test_the_frame_wait_ends_at_the_read_and_leaves_out_the_conversion(tmp_path):
+    with (
+        _episode_ports(observed=(keys.EXTERIOR_IMAGE,)) as h,
+        telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-frame-wait-conversion'),
+    ):
+
+        def slow_conversion(value):
+            h.world.clock.advance_to_ns(h.world.clock.now_ns() + 7_000_000)
+            return value
+
+        observations = h.embodiment.observations
+        observations[keys.EXTERIOR_IMAGE] = replace(observations[keys.EXTERIOR_IMAGE], serializer=slow_conversion)
+        h.device_observations[keys.EXTERIOR_IMAGE].emit(np.zeros(1))
+        h.world.clock.advance_to_ns(30_000_000)
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EndAfter(1), None))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    (step,) = [s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP]
+    assert step.attrs[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + keys.EXTERIOR_IMAGE] == pytest.approx(30.0)
 
 
 def test_the_step_that_the_policy_ends_records_the_policy_duration(episode_harness, tmp_path):
@@ -2296,7 +2486,10 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
     runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
     run = runtime.start(Slow())
     try:
-        assert h.harness._step(Task('test', None), frozenset(), frozenset(), runtime, run, None) == expected_ns
+        assert (
+            h.harness._step(Task('test', None), frozenset(), frozenset(), runtime, run, None, _GcSteps(h.harness._gc))
+            == expected_ns
+        )
     finally:
         runtime.close()
         run.close()
@@ -2329,7 +2522,9 @@ def test_robot_observation_serialization_and_typed_command_emission():
         runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
         run = runtime.start(policy)
         try:
-            harness._step(Task('move', None), frozenset(), frozenset(RIG_FRAMES), runtime, run, None)
+            harness._step(
+                Task('move', None), frozenset(), frozenset(RIG_FRAMES), runtime, run, None, _GcSteps(harness._gc)
+            )
         finally:
             runtime.close()
             run.close()

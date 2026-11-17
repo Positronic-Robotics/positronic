@@ -1,3 +1,4 @@
+import gc
 import logging
 import math
 import time
@@ -5,6 +6,7 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -16,6 +18,7 @@ from positronic import keys, telemetry, telemetry_keys
 from positronic.dataset.dataset import DatasetWriter
 from positronic.dataset.episode import EpisodeWriter
 from positronic.dataset.serializers import Serializer, expand_suffixed
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition
 from positronic.drivers.roboarm.ik import ee_frames
@@ -117,6 +120,77 @@ class _EpisodeTelemetry:
         telemetry.force_flush()
 
 
+class _GcPhase(StrEnum):
+    """The phase that ``gc`` passes to a ``gc.callbacks`` entry."""
+
+    START = 'start'
+    STOP = 'stop'
+
+
+class _GcMeter:
+    """Sum this process's garbage-collection time, and count its collections by generation.
+
+    A collection in any thread stops the harness thread too. Each collection costs two clock reads and integer sums,
+    and the meter records no span, because young-generation collections run often.
+    """
+
+    def __init__(self) -> None:
+        self._collection_started_ns = 0
+        self.ns = 0
+        self.collections = [0] * len(gc.get_count())
+
+    def __call__(self, phase: str, info: dict[str, int]) -> None:
+        match _GcPhase(phase):
+            case _GcPhase.START:
+                self._collection_started_ns = time.perf_counter_ns()
+            case _GcPhase.STOP:
+                self.ns += time.perf_counter_ns() - self._collection_started_ns
+                self.collections[info['generation']] += 1
+
+    @contextmanager
+    def counting(self) -> Iterator[None]:
+        gc.callbacks.append(self)
+        try:
+            yield
+        finally:
+            gc.callbacks.remove(self)
+
+
+class _GcSteps:
+    """Stamp each step span of one rollout with the collection time before the step and inside it.
+
+    The wait window of a step opens when the previous step ends. For the first step, it opens when the rollout starts.
+    """
+
+    def __init__(self, meter: _GcMeter) -> None:
+        self._meter = meter
+        self._step_ended_ns = meter.ns
+        self._step_ended_collections = tuple(meter.collections)
+
+    @contextmanager
+    def step(self, span: Span) -> Iterator[None]:
+        started_ns = self._meter.ns
+        try:
+            yield
+        finally:
+            ended_ns, collections = self._meter.ns, tuple(self._meter.collections)
+            collected = [
+                g
+                for g, (now, before) in enumerate(zip(collections, self._step_ended_collections, strict=True))
+                if now > before
+            ]
+            if collected:
+                telemetry.set_attrs(
+                    span,
+                    **{
+                        telemetry_keys.ATTR_STEP_GC_WAIT_MS: (started_ns - self._step_ended_ns) / 1e6,
+                        telemetry_keys.ATTR_STEP_GC_MS: (ended_ns - started_ns) / 1e6,
+                        telemetry_keys.ATTR_STEP_GC_GENERATION: max(collected),
+                    },
+                )
+            self._step_ended_ns, self._step_ended_collections = ended_ns, collections
+
+
 @dataclass(frozen=True)
 class _PolicyEnded:
     """What a policy run returned, and the episode time at which it returned."""
@@ -171,6 +245,7 @@ class Harness(pimm.ControlSystem):
         self._goal: str | None = None
         self._clock: pimm.Clock | None = None
         self._telemetry = _EpisodeTelemetry()
+        self._gc = _GcMeter()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
 
@@ -308,6 +383,20 @@ class Harness(pimm.ControlSystem):
             self._append(values, timestamps)
         return values
 
+    def _time_frame(self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float]) -> None:
+        """Put the two parts of the age of camera frame ``name`` into ``step_ms``.
+
+        The wait from the hand-off ``emitted_ns`` to the read, before any conversion, is on the runtime clock. The
+        driver's time from capture to hand-off is on the camera's clock, and is absent when the driver stamps no
+        capture time.
+        """
+        if emitted_ns is not None and self._clock is not None:
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + name] = (self._clock.now_ns() - emitted_ns) / 1e6
+        if CAPTURE_TIME in stamps and HANDOFF_TIME in stamps:
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX + name] = (
+                stamps[HANDOFF_TIME] - stamps[CAPTURE_TIME]
+            ) / 1e6
+
     def _sample(self, step_ms: dict[str, float] | None = None) -> None:
         for name, obs in self._embodiment.observations.items():
             read_started_ns = time.perf_counter_ns()
@@ -319,11 +408,15 @@ class Harness(pimm.ControlSystem):
             if message is None or isinstance(message.data, pimm.SignalError):
                 self._obs_by_signal[name] = message.data if message is not None else None
                 self._frame_ns_by_signal.pop(name, None)
-            elif message.updated or not isinstance(self._obs_by_signal.get(name), dict):
-                self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
+            else:
                 emitted_ns = message.time.get(EMITTED_WORLD if self._embodiment.simulated else EMITTED_WALL)
-                if name.startswith(keys.IMAGE_PREFIX) and emitted_ns is not None:
-                    self._frame_ns_by_signal[name] = emitted_ns
+                is_frame = name.startswith(keys.IMAGE_PREFIX)
+                if is_frame and step_ms is not None:
+                    self._time_frame(name, message.time, emitted_ns, step_ms)
+                if message.updated or not isinstance(self._obs_by_signal.get(name), dict):
+                    self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
+                    if is_frame and emitted_ns is not None:
+                        self._frame_ns_by_signal[name] = emitted_ns
         if self._writer is not None:
             for name, receiver in self.privileged.items():
                 message = receiver.read()
@@ -389,15 +482,17 @@ class Harness(pimm.ControlSystem):
         runtime: Executor,
         policy_run: PolicyRun,
         due_ns: int | None,
+        gc_steps: _GcSteps,
     ) -> int | _PolicyEnded | None:
         """Read sensors, call the policy, emit commands, and return its clamped next wake-up time. Return a
         ``_PolicyEnded`` when the policy run returns, and ``None`` without an observation.
 
         ``due_ns`` is the wake-up time the previous step returned, or ``None`` for the first step. The step span
-        records the step's durations. A pose command on a channel whose pose is not in ``stated_poses`` fails the step.
+        records the step's durations, and the garbage-collection time before and inside the step. A pose command on a
+        channel whose pose is not in ``stated_poses`` fails the step.
         """
         step_ms: dict[str, float] = {}
-        with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span:
+        with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span, gc_steps.step(span):
             try:
                 if due_ns is not None and runtime.time_ns >= due_ns:
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
@@ -507,6 +602,7 @@ class Harness(pimm.ControlSystem):
         runtime: Executor,
         policy_run: PolicyRun,
         deadline_ns: int | None,
+        gc_steps: _GcSteps,
     ) -> pimm.Run[dict[str, Any] | None]:
         payload = None
         resume_at_ns = None
@@ -516,7 +612,7 @@ class Harness(pimm.ControlSystem):
         while not should_stop.value and payload is None:
             sampled_ns = runtime.time_ns
             if completed or resume_at_ns is None or sampled_ns >= resume_at_ns:
-                stepped = self._step(task, withheld_poses, stated_poses, runtime, policy_run, resume_at_ns)
+                stepped = self._step(task, withheld_poses, stated_poses, runtime, policy_run, resume_at_ns, gc_steps)
                 if isinstance(stepped, _PolicyEnded):
                     ended = stepped
                 else:
@@ -613,10 +709,11 @@ class Harness(pimm.ControlSystem):
             deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
             self.deadline_ns.emit(deadline_ns)
             self._telemetry.start_rollout(clock.now())
+            gc_steps = _GcSteps(self._gc)
             try:
                 with self._recording(rollout.writer):
                     payload = yield from self._rollout(
-                        should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns
+                        should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns, gc_steps
                     )
                     if self._writer is not None:
                         static = only_keep_written_signals(
@@ -658,7 +755,9 @@ class Harness(pimm.ControlSystem):
             # A command without a device receiver still needs the world's emission timestamps.
             emitter._clock = clock
         # Episode spans must end before leaving the scope that closes the telemetry provider.
-        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS):
+        with telemetry.bind_from_env(telemetry_keys.HARNESS_PROCESS), ExitStack() as gc_scope:
+            if telemetry.enabled():
+                gc_scope.enter_context(self._gc.counting())
             while not should_stop.value:
                 call = next(self.perform_task.incoming(), None)
                 manual = pimm.value_updated(self.manual_command)
