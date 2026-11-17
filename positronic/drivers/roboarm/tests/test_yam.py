@@ -147,6 +147,7 @@ class Site(Enum):
     GRIP_EMIT = ('grip', '_emit')
     COMMANDS_READ = ('commands', 'read')
     TARGET_GRIP_READ = ('target_grip', 'read')
+    IDLE_PARK_READ = ('idle_park_on', 'read')
 
 
 # Calls made after torque is released, outside the protected region.
@@ -199,11 +200,13 @@ class Rig:
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
+        self.idle_park_on = ManualCommandReceiver()
         self.states = RecordingEmitter()
         ports: dict[str, Any] = {
             'vendor': self.vendor,
             'commands': self.commands,
             'target_grip': self.grip,
+            'idle_park_on': self.idle_park_on,
             'state': self.states,
         }
         self.grips = RecordingEmitter()
@@ -221,6 +224,7 @@ class Rig:
         self.clock = MockClock()
         self.driver.commands._bind(ports['commands'])
         self.driver.target_grip._bind(ports['target_grip'])
+        self.driver.idle_park_on._bind(ports['idle_park_on'])
         self.driver.state._bind(ports['state'], clock=self.clock)
         self.driver.grip._bind(ports['grip'], clock=self.clock)
         self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
@@ -356,6 +360,70 @@ def test_disabling_idle_parking_still_parks_on_exit(rig):
     rig.raise_arm()
     rig.tick(60)
     np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
+def test_an_arm_whose_idle_park_is_off_stays_where_its_last_command_left_it(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(False)
+    rig.tick(10)
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_an_idle_park_turned_on_again_parks_after_the_idle_time_counted_from_then(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(False)
+    rig.tick(10)
+    rig.idle_park_on.push(True)
+    rig.tick(0.8)
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_an_idle_park_turned_off_stops_where_it_is_and_parks_once_turned_on_again(rig):
+    rig.raise_arm()
+    rig.tick(1.5)  # one second into the park
+    rig.idle_park_on.push(False)
+    rig.tick(0.1)
+    stopped_at = rig.vendor._pos[:6].copy()
+    rig.tick(10)
+    np.testing.assert_allclose(rig.vendor._pos[:6], stopped_at, atol=0.005)
+    assert not np.allclose(stopped_at, PARK, atol=0.05) and not np.allclose(stopped_at, RAISED, atol=0.05)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    rig.idle_park_on.push(True)
+    rig.tick(0.8)
+    np.testing.assert_allclose(rig.vendor._pos[:6], stopped_at, atol=0.005)
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_a_parked_arm_does_not_park_again_when_its_idle_park_turns_on(rig):
+    rig.vendor.bias[:] = 0.01  # a park corrects for the bias, so a second park sends targets the hold does not
+    rig.rest()
+    sent = len(rig.vendor.targets)
+    held = rig.vendor.targets[-1].copy()
+    rig.idle_park_on.push(False)
+    rig.tick(0.1)
+    rig.idle_park_on.push(True)
+    rig.tick(10)
+    np.testing.assert_allclose(rig.vendor.targets[sent:], [held] * (len(rig.vendor.targets) - sent), atol=1e-9)
+
+
+def test_an_idle_park_left_on_parks_after_the_idle_time(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(True)
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_an_arm_whose_idle_park_is_off_still_parks_on_exit(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(False)
+    rig.tick(10)
     rig.finish()
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
     assert rig.vendor.closed
