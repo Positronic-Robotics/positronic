@@ -111,7 +111,7 @@ class ButtonMap:
     - The stick: Cancel while the service waits for Ready. A hold of the stick is Give up.
     - The trigger: the grip.
 
-    It reads only ``buttons``: the left controller reads only X, because the headset page uses Y.
+    It reads only ``buttons``: the left controller reads only X, because the headset page uses its stick.
     """
 
     def __init__(
@@ -208,8 +208,8 @@ class TrialState:
     cameras: tuple[str, ...]
 
 
-# The use of Y on the left controller, at the bottom of the view
-Y_HINT = 'Y: next camera. Hold Y: panel'
+# The use of the left stick, at the bottom of the view
+CAMERA_HINT = 'Left stick: next camera. Hold it: panel'
 # The width of the column of the view that shows the other cameras of the session, half the width of the main camera
 OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
@@ -500,7 +500,7 @@ class TeleopService:
             main = shown if shown in names else next(iter(names), None)
             shows_images = state.phase is Phase.RUNNING and camera
             others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
-        footer = [Y_HINT]
+        footer = [CAMERA_HINT]
         match state.phase:
             case Phase.IDLE:
                 return self._view(None, ['Waiting for a trial'], footer, others)
