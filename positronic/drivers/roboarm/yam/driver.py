@@ -617,8 +617,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._readings_withheld = withhold_readings
         hold_target = None
         try:
-            joints, grip, missed = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
-            if missed is None:
+            joints, grip, failure = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
+            if failure is None:
                 return
             hold_target = joints, grip
         # rules-allow: swallowed-error — a failure before a verified park keeps the torque on, unless the loop stopped
@@ -752,7 +752,7 @@ class _Serving:
     q_target: np.ndarray
     grip_target: float
     # The failed start or idle park that a ready call clears first, by a move to the start pose
-    missed: Exception | None
+    failed_move: Exception | None
     idle_since: float | None = None
     parking: Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]] | None = None
 
@@ -999,16 +999,16 @@ class Robot(pimm.ControlSystem):
         self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
         """Answer ``asked``. After a missed start or idle park, move the arm to the start pose first."""
-        if serving.missed is not None:
+        if serving.failed_move is not None:
             if serving.parking is not None:
                 serving.parking.close()
                 serving.parking = None
             with contextlib.ExitStack() as answers:
                 for call in asked:
                     answers.enter_context(self._answer_failed_setup(call))
-                serving.q_target, serving.grip_target, serving.missed = yield from arm.go_to_start()
+                serving.q_target, serving.grip_target, serving.failed_move = yield from arm.go_to_start()
             serving.idle_since = clock.now()
-        self._answer_ready(asked, serving.missed)
+        self._answer_ready(asked, serving.failed_move)
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
@@ -1054,9 +1054,9 @@ class Robot(pimm.ControlSystem):
         try:
             return next(serving.parking)
         except StopIteration as done:
-            serving.q_target, serving.grip_target, missed = done.value
-            if missed is not None:
-                serving.missed = missed
+            serving.q_target, serving.grip_target, failure = done.value
+            if failure is not None:
+                serving.failed_move = failure
             serving.parking = None
             return None
 
