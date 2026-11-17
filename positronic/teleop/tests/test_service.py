@@ -85,6 +85,7 @@ from positronic.tests.testing_inference import free_port
 from positronic.utils import package_assets_path
 
 HAND = geom.Transform3D(np.array([0.1, 0.2, 1.0]), geom.Rotation.identity)
+LEFT_HAND = geom.Transform3D(np.array([-0.3, 0.2, 1.0]), geom.Rotation.identity)
 ROBOT_POSE = geom.Transform3D(np.array([0.4, 0.0, 0.3]), geom.Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
 OBS = {
     keys.EE_POSE: ROBOT_POSE.as_vector(geom.Rotation.Representation.QUAT),
@@ -93,6 +94,23 @@ OBS = {
     keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 128, dtype=np.uint8),
 }
 FRAME_REQUEST = {protocol.TASK: OBS[keys.TASK], protocol.EE_POSE: OBS[keys.EE_POSE], protocol.GRIP: [OBS[keys.GRIP]]}
+ARM_POSES = {
+    keys.LEFT_ARM: geom.Transform3D(np.array([0.3, 0.3, 0.4]), geom.Rotation.from_quat([0.0, 1.0, 0.0, 0.0])),
+    keys.RIGHT_ARM: geom.Transform3D(np.array([0.3, -0.3, 0.4]), geom.Rotation.from_quat([0.0, 1.0, 0.0, 0.0])),
+}
+ARM_GRIPS = {keys.LEFT_ARM: 0.0, keys.RIGHT_ARM: 0.5}
+BIMANUAL_OBS = {
+    keys.TASK: OBS[keys.TASK],
+    **{
+        f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}': pose.as_vector(
+            geom.Rotation.Representation.QUAT
+        )
+        for arm, pose in ARM_POSES.items()
+    },
+    **{keys.arm_channel(keys.GRIP, arm): grip for arm, grip in ARM_GRIPS.items()},
+}
+ARM_COMMANDS = {arm: keys.arm_channel(keys.ROBOT_COMMAND, arm) for arm in keys.BIMANUAL_ARMS}
+ARM_TARGET_GRIPS = {arm: keys.arm_channel(keys.TARGET_GRIP, arm) for arm in keys.BIMANUAL_ARMS}
 HOLD_SEC = 0.2
 
 
@@ -157,6 +175,13 @@ class TestButtonMap:
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
 
+    def test_the_map_of_the_left_controller_reads_only_x(self):
+        buttons = ButtonMap(HOLD_SEC, buttons=(Button.X,))
+        assert buttons.ready_answer(_buttons(b=1.0), 0) is None
+        assert buttons.ready_answer(_buttons(stick=1.0), 10) is None
+        assert buttons.events(_buttons(a=1.0, b=1.0, stick=1.0), 20) == [Event.CLUTCH]
+        assert buttons.events(_buttons(a=1.0, b=1.0, stick=1.0), 1_000_000_000) == []
+
 
 @pytest.fixture
 def service(socket_path):
@@ -182,20 +207,29 @@ def _client(socket_path: Path, query: str = '') -> InferenceClient:
     return InferenceClient(registry.client_wire('websocket_unix'), address, infer_timeout=5, connect_deadline=5)
 
 
+def _take(service: TeleopService, buttons: list[float]) -> None:
+    """Pass one sample of the right controller at ``HAND`` with ``buttons`` to ``service``."""
+    service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: buttons})
+
+
 class _Headset:
-    """A headset that sends one sample of the right controller every 10 ms, with the buttons that a test sets."""
+    """A headset that sends one sample of both controllers every 10 ms, with the poses and the buttons that a test
+    sets. ``pose`` and ``buttons`` are of the right controller."""
 
     def __init__(self, service: TeleopService):
         self._service = service
         self.pose: geom.Transform3D | None = HAND
         self.buttons = _buttons()
+        self.left_pose: geom.Transform3D | None = LEFT_HAND
+        self.left_buttons = _buttons()
         self.sent = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._send, daemon=True)
 
     def _send(self) -> None:
         while not self._stop.is_set():
-            self._service.take_sample(self.pose, self.buttons)
+            poses = {webxr.LEFT: self.left_pose, webxr.RIGHT: self.pose}
+            self._service.take_sample(poses, {webxr.LEFT: self.left_buttons, webxr.RIGHT: self.buttons})
             self.sent += 1
             time.sleep(0.01)
 
@@ -207,9 +241,8 @@ class _Headset:
         self._stop.set()
         self._thread.join()
 
-    def _hold(self, buttons: list[float], samples: int) -> None:
-        """Send ``buttons`` in at least ``samples`` samples, so a loaded machine does not miss them."""
-        self.buttons = buttons
+    def _samples(self, samples: int) -> None:
+        """Wait for at least ``samples`` samples, so a loaded machine does not miss the buttons that they send."""
         until = self.sent + samples
         deadline = time.monotonic() + 5
         while self.sent < until:
@@ -217,9 +250,18 @@ class _Headset:
             time.sleep(0.005)
 
     def press(self, **buttons: float) -> None:
-        """Press ``buttons`` for a few samples, and release them."""
-        self._hold(_buttons(**buttons), samples=3)
-        self._hold(_buttons(), samples=3)
+        """Press ``buttons`` of the right controller for a few samples, and release them."""
+        self.buttons = _buttons(**buttons)
+        self._samples(3)
+        self.buttons = _buttons()
+        self._samples(3)
+
+    def press_left(self, **buttons: float) -> None:
+        """Press ``buttons`` of the left controller for a few samples, and release them. X is at the index of A."""
+        self.left_buttons = _buttons(**buttons)
+        self._samples(3)
+        self.left_buttons = _buttons()
+        self._samples(3)
 
 
 def _until_phase(service: TeleopService, phase: Phase, seconds: float = 5.0) -> None:
@@ -246,13 +288,13 @@ def _press_ready_when_asked(service: TeleopService, headset: _Headset, **buttons
     return thread
 
 
-def _drive(run, seconds: float) -> tuple[list[Step], PolicyEnd | None]:
-    """Send ``OBS`` to the run for ``seconds``. Return its steps, and its end if it ended."""
+def _drive(run, seconds: float, obs: dict = OBS) -> tuple[list[Step], PolicyEnd | None]:
+    """Send ``obs`` to the run for ``seconds``. Return its steps, and its end if it ended."""
     steps = []
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         try:
-            step = run.send(OBS)
+            step = run.send(obs)
         except StopIteration as end:
             return steps, end.value
         assert step is not None
@@ -269,11 +311,11 @@ def _is_move(step: Step) -> bool:
     return keys.ROBOT_COMMAND in step.commands
 
 
-def _drive_until(run, condition: Callable[[Step], bool], seconds: float = 5.0) -> Step:
-    """Send ``OBS`` to the run until it makes a step for which ``condition`` holds, and return that step."""
+def _drive_until(run, condition: Callable[[Step], bool], seconds: float = 5.0, obs: dict = OBS) -> Step:
+    """Send ``obs`` to the run until it makes a step for which ``condition`` holds, and return that step."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        step = run.send(OBS)
+        step = run.send(obs)
         assert step is not None
         if condition(step):
             return step
@@ -348,6 +390,77 @@ def test_with_no_operator_position_the_hand_pose_is_the_robot_pose_and_control_i
         run = _readied_run(service, headset, runtime, socket_path, operator_position=None)
         moved = _drive_until(run, _is_move)
         np.testing.assert_allclose(_target(moved).translation, HAND.translation, atol=1e-6)
+        run.close()
+
+
+def _raised(pose: geom.Transform3D) -> geom.Transform3D:
+    return geom.Transform3D(pose.translation + np.array([0.0, 0.0, 0.05]), pose.rotation)
+
+
+def _arm_target(step: Step, arm: str) -> geom.Transform3D:
+    return step.commands[ARM_COMMANDS[arm]].pose
+
+
+def _arm_moved(step: Step, arm: str, start: geom.Transform3D) -> bool:
+    return ARM_COMMANDS[arm] in step.commands and bool(
+        np.linalg.norm(_arm_target(step, arm).translation - start.translation) > 0.04
+    )
+
+
+def test_in_a_bimanual_session_each_controller_drives_its_arm_from_where_its_control_came_on(
+    service, socket_path, runtime
+):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path, arms='BIMANUAL')
+        first = _drive_until(run, lambda step: ARM_COMMANDS[keys.LEFT_ARM] in step.commands, obs=BIMANUAL_OBS)
+        for arm, pose in ARM_POSES.items():
+            np.testing.assert_allclose(_arm_target(first, arm).translation, pose.translation, atol=1e-6)
+            assert first.commands[ARM_TARGET_GRIPS[arm]] == ARM_GRIPS[arm]
+
+        headset.press_left(a=1.0)
+        _drive_until(run, lambda _: service.state().control, obs=BIMANUAL_OBS)
+        headset.left_pose, headset.left_buttons = _raised(LEFT_HAND), _buttons(trigger=0.8)
+        headset.pose = _raised(HAND)
+        left = keys.LEFT_ARM
+        moved = _drive_until(run, lambda step: _arm_moved(step, left, ARM_POSES[left]), obs=BIMANUAL_OBS)
+        shift = _arm_target(moved, left).translation - ARM_POSES[left].translation
+        np.testing.assert_allclose(np.linalg.norm(shift), 0.05, atol=1e-6)
+        assert moved.commands[ARM_TARGET_GRIPS[left]] == pytest.approx(0.8)
+        # Control of the right arm is off, so the right arm holds while the right hand moves.
+        np.testing.assert_allclose(
+            _arm_target(moved, keys.RIGHT_ARM).translation, ARM_POSES[keys.RIGHT_ARM].translation
+        )
+
+        headset.press(a=1.0)
+        # A frame applies the press, so frames must run before the hand moves.
+        _drive(run, 0.5, obs=BIMANUAL_OBS)
+        headset.pose = _raised(_raised(HAND))
+        right = keys.RIGHT_ARM
+        moved = _drive_until(run, lambda step: _arm_moved(step, right, ARM_POSES[right]), obs=BIMANUAL_OBS)
+        shift = _arm_target(moved, right).translation - ARM_POSES[right].translation
+        np.testing.assert_allclose(np.linalg.norm(shift), 0.05, atol=1e-6)
+        np.testing.assert_allclose(_arm_target(moved, left).translation, ARM_POSES[left].translation + shift, atol=1e-6)
+        run.close()
+
+
+def test_in_a_bimanual_session_in_umi_mode_each_arm_is_at_the_pose_of_its_hand(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path, operator_position=None, arms='BIMANUAL')
+        moved = _drive_until(run, lambda step: ARM_COMMANDS[keys.LEFT_ARM] in step.commands, obs=BIMANUAL_OBS)
+        np.testing.assert_allclose(_arm_target(moved, keys.LEFT_ARM).translation, LEFT_HAND.translation, atol=1e-6)
+        np.testing.assert_allclose(_arm_target(moved, keys.RIGHT_ARM).translation, HAND.translation, atol=1e-6)
+        run.close()
+
+
+def test_in_a_one_arm_session_the_left_controller_drives_nothing(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        headset.press_left(a=1.0)
+        headset.left_pose = _raised(LEFT_HAND)
+        steps, _ = _drive(run, 0.3)
+        assert _moves(steps) and not service.state().control
+        for step in _moves(steps):
+            np.testing.assert_allclose(_target(step).translation, ROBOT_POSE.translation, atol=1e-6)
         run.close()
 
 
@@ -528,6 +641,11 @@ def test_a_session_with_a_headset_camera_that_it_does_not_send_is_refused_at_con
         _client(socket_path, 'headset_camera="image.wrist"').new_session()
 
 
+def test_a_session_with_unknown_arms_is_refused_at_connect(service, socket_path):
+    with pytest.raises(RuntimeError, match='arms must be one of ONE, BIMANUAL'):
+        _client(socket_path, 'arms="BOTH"').new_session()
+
+
 def test_a_session_with_a_jpeg_quality_out_of_range_is_refused_at_connect(service, socket_path):
     with pytest.raises(RuntimeError, match='jpeg_quality must be an integer between 0 and 100'):
         _client(socket_path, 'jpeg_quality=101').new_session()
@@ -545,6 +663,8 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
         session_query(cameras=[keys.WRIST_IMAGE], headset_camera=keys.EXTERIOR_IMAGE)
     with pytest.raises(ValueError, match='must not be a field of a frame request'):
         session_query(cameras=[protocol.TASK])
+    with pytest.raises(ValueError, match='must not be a field of a frame request'):
+        session_query(arms='BIMANUAL', cameras=[keys.arm_channel(protocol.GRIP, keys.LEFT_ARM)])
     with pytest.raises(ValueError, match='jpeg_quality must be an integer between 0 and 100'):
         session_query(jpeg_quality=90.5)
     with pytest.raises(ValueError, match='video_bitrate must be a positive integer'):
@@ -572,11 +692,15 @@ def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_fram
     assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][3])
 
 
-def test_the_client_stack_states_the_grip_point_as_the_frame_of_the_pose_and_the_target():
-    client_stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,)))
+@pytest.mark.parametrize('arms', list(protocol.Arms))
+def test_the_client_stack_states_the_grip_point_as_the_frame_of_the_pose_and_the_target_of_each_arm(arms):
+    client_stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,), arms=arms))
     stack = declared_stack({server_keys.LOCAL_STACK: client_stack}, ProtocolVersion.V3)
     frames = ee_frames(stack.meta())
-    assert frames[keys.EE_POSE] == frames[keys.TARGET_EE_POSE] == EEFrame(site=GRIPPER_SITE)
+    for arm in arms.value:
+        pose = f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'
+        target = f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}'
+        assert frames[pose] == frames[target] == EEFrame(site=GRIPPER_SITE)
 
 
 @pytest.mark.parametrize(
@@ -719,8 +843,8 @@ def _raw_session(service: TeleopService, socket_path: Path):
     """A websocket on the service whose session the teleoperator readied, and the ID of its session."""
     websocket = _raw_connection(socket_path)
     _until_phase(service, Phase.READY_WAIT)
-    service.take_sample(HAND, _buttons(b=1.0))
-    service.take_sample(HAND, _buttons())
+    _take(service, _buttons(b=1.0))
+    _take(service, _buttons())
     while (message := deserialise(websocket.recv(5)))[STATUS] != ServerStatus.READY:
         pass
     return websocket, message[SESSION_ID]
@@ -833,17 +957,17 @@ def _readied_connection(service: TeleopService, socket_path: Path, connect, quer
     """A test session with ``query`` that the teleoperator readied from the headset."""
     connection = connect(socket_path, query)
     _until_phase(service, Phase.READY_WAIT)
-    service.take_sample(HAND, _buttons(b=1.0))
-    service.take_sample(HAND, _buttons())
+    _take(service, _buttons(b=1.0))
+    _take(service, _buttons())
     connection.wait_open()
     return connection
 
 
 def test_a_hold_of_b_completes_in_one_frame(service, socket_path, connect):
     connection = _readied_connection(service, socket_path, connect)
-    service.take_sample(HAND, _buttons(b=1.0))
+    _take(service, _buttons(b=1.0))
     time.sleep(HOLD_SEC + 0.05)
-    service.take_sample(HAND, _buttons(b=1.0))
+    _take(service, _buttons(b=1.0))
     ended = connection.frame(FRAME_REQUEST)
     assert ended[END] == PolicyEnd.COMPLETE.value
     np.testing.assert_allclose(ended[ACTION], [*OBS[keys.EE_POSE], OBS[keys.GRIP]])
@@ -852,9 +976,9 @@ def test_a_hold_of_b_completes_in_one_frame(service, socket_path, connect):
 
 def test_each_frame_request_after_the_end_gets_the_same_end(service, socket_path, connect):
     connection = _readied_connection(service, socket_path, connect)
-    service.take_sample(HAND, _buttons(stick=1.0))
+    _take(service, _buttons(stick=1.0))
     time.sleep(HOLD_SEC + 0.05)
-    service.take_sample(HAND, _buttons(stick=1.0))
+    _take(service, _buttons(stick=1.0))
     ended = connection.frame(FRAME_REQUEST)
     again = connection.frame(FRAME_REQUEST)
     assert ended[END] == again[END] == PolicyEnd.GIVE_UP.value
@@ -953,8 +1077,8 @@ def test_the_wait_for_ready_shows_the_cameras_of_its_session_and_not_those_of_th
         _until_phase(service, Phase.READY_WAIT)
         assert service.cameras().names == tuple(cameras)
         waiting = service.view()
-        service.take_sample(HAND, _buttons(b=1.0))
-        service.take_sample(HAND, _buttons())
+        _take(service, _buttons(b=1.0))
+        _take(service, _buttons())
         connection.wait_open()
         connection.frame({**FRAME_REQUEST, **dict.fromkeys(cameras, image)})
         assert service.view().shape == waiting.shape
@@ -1209,7 +1333,11 @@ class _PagePassingASampleAtEachPoll:
             positions, buttons = webxr.parse_controller_message(self._latest)
             right = buttons[webxr.RIGHT]
             if self._passes(right):
-                self._service.take_sample(positions[webxr.RIGHT], None if right is None else right.tolist())
+                values = {
+                    side: None if side_buttons is None else side_buttons.tolist()
+                    for side, side_buttons in buttons.items()
+                }
+                self._service.take_sample(positions, values)
         state = self._service.state()
         self._answered(state.phase)
         return connection.respond(200, json.dumps(asdict(command.PageState(state.phase, state.control))))
