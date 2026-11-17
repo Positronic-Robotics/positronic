@@ -3,9 +3,12 @@
 import os
 import shutil
 import subprocess
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from websockets.sync.client import connect
 
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
@@ -13,20 +16,26 @@ from positronic.simulator.env_server.launcher import PYTHONPATH_ENV, _await_bind
 
 _ENV_SERVER_DIR = Path(__file__).parents[1]
 
+# The websockets that RoboLab's Isaac Lab venv resolves to.
 _OLDEST_WEBSOCKETS = '12.0'
 
+# Lists one task, and ends each episode at its second step.
 _SERVE_ONE_TASK = """
 import sys
-from protocol import TASK_INSTRUCTION
+import numpy as np
+from protocol import FRAME_CONTROL_DT, FRAME_DONE, FRAME_META, FRAME_OBS, FRAME_ROBOT_META, SLOTS, TASK_INSTRUCTION
 from server import EnvProtocol, EnvServer
 
 class OneTask(EnvProtocol):
     def tasks(self, spec):
         return [{'name': 'idle', TASK_INSTRUCTION: 'wait'}]
     def reset(self, token):
-        raise NotImplementedError
+        self.steps = 0
+        return {SLOTS: [{FRAME_OBS: {'steps': 0}}], FRAME_META: {}, FRAME_ROBOT_META: {}, FRAME_CONTROL_DT: 0.1}
     def step(self, actions):
-        raise NotImplementedError
+        self.steps += 1
+        slot = {FRAME_OBS: {'steps': self.steps}, FRAME_DONE: self.steps >= 2}
+        return {SLOTS: [slot], FRAME_CONTROL_DT: 0.1}
     def close(self):
         pass
 
@@ -41,7 +50,9 @@ def uv() -> str:
     return found
 
 
-def test_a_server_on_the_oldest_websockets_answers_a_request(uv):
+@pytest.fixture
+def oldest_websockets_server(uv: str) -> Iterator[int]:
+    """The port of an env server that runs on the oldest websockets that a simulator's venv carries."""
     port = free_port()
     command = [
         uv,
@@ -65,10 +76,47 @@ def test_a_server_on_the_oldest_websockets_answers_a_request(uv):
     server = subprocess.Popen(command, env=env)
     try:
         _await_bind(server, 'localhost', port, deadline=300.0)
-        conn = EnvConnection('localhost', port)
-        try:
-            assert conn.tasks({}) == [{'name': 'idle', protocol.TASK_INSTRUCTION: 'wait'}]
-        finally:
-            conn.close()
+        yield port
     finally:
         terminate(server)
+
+
+def test_a_server_on_the_oldest_websockets_answers_a_request(oldest_websockets_server):
+    conn = EnvConnection('localhost', oldest_websockets_server)
+    try:
+        assert conn.tasks({}) == [{'name': 'idle', protocol.TASK_INSTRUCTION: 'wait'}]
+    finally:
+        conn.close()
+
+
+def test_a_server_on_the_oldest_websockets_runs_an_episode_to_its_end(oldest_websockets_server):
+    conn = EnvConnection('localhost', oldest_websockets_server)
+    try:
+        frames = [conn.reset(None), conn.step({}), conn.step({})]
+    finally:
+        conn.close()
+
+    assert [frame[protocol.FRAME_OBS] for frame in frames] == [{'steps': 0}, {'steps': 1}, {'steps': 2}]
+    assert [frame.get(protocol.FRAME_DONE) for frame in frames] == [None, False, True]
+
+
+def test_a_server_on_the_oldest_websockets_frees_the_slot_of_a_client_that_drops(oldest_websockets_server):
+    """The client closes its socket with no close request, so only the server's own handling frees the slot."""
+    with connect(f'ws://localhost:{oldest_websockets_server}/', compression=None) as dropped:
+        dropped.send(protocol.encode({protocol.CMD: protocol.Command.RESET.value, protocol.TOKEN: None}))
+        dropped.recv(timeout=10.0)
+
+    deadline = time.monotonic() + 10.0
+    while True:
+        conn = EnvConnection('localhost', oldest_websockets_server)
+        try:
+            frame = conn.reset(None)
+            break
+        except RuntimeError as refused:
+            if 'slots are taken' not in str(refused) or time.monotonic() >= deadline:
+                raise
+        finally:
+            conn.close()
+        time.sleep(0.1)
+
+    assert frame[protocol.FRAME_OBS] == {'steps': 0}
