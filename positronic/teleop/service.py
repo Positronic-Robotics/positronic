@@ -28,12 +28,14 @@ from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWi
 
 from positronic import geom, keys
 from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
+from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.gui.video_stream import AnnexBDecoder
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
 from positronic.policy.codecs import (
     AbsolutePositionAction,
+    ChangeEEFrame,
     EncodeImages,
     EncodeVideo,
     EndCommand,
@@ -671,8 +673,8 @@ class TeleopModel(Model):
 
     @classmethod
     def client_stack(cls, settings: SessionParams) -> dict[str, Any]:
-        """The client stack of a session: one frame for each call, the state and the images of the robot, the target as
-        a command, and the end of the trial."""
+        """The client stack of a session: one frame for each call, the state and the images of the robot at
+        ``GRIPPER_SITE``, the target as a command, and the end of the trial."""
         # TODO: A sim run that does not charge inference time holds its clock during each call, so a person cannot
         #  control it. Refuse such a run.
         if settings.video_bitrate is None:
@@ -695,7 +697,8 @@ class TeleopModel(Model):
             image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
         )
         action = AbsolutePositionAction(keys.TARGET_EE_POSE, keys.TARGET_GRIP)
-        codec = (observation & action & EndCommand()) | images
+        frame = ChangeEEFrame(EEFrame(site=GRIPPER_SITE))
+        codec = frame | (observation & action & EndCommand()) | images
         return Sequential(EndOnField(), schedule, codec).to_spec()
 
     def prepare_session(self, params: dict[str, Any]) -> TeleopSession:
