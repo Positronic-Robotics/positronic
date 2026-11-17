@@ -40,7 +40,9 @@ def parse_controller_message(
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
     buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
-        if data[_CONTROLLERS][side] is not None:
+        # The page sends a hand that the headset tracks with no controller in it with no button values. The pose and
+        # the buttons go out on two signals, so only here is the pose known to be of the hand.
+        if data[_CONTROLLERS][side] is not None and len(data[_CONTROLLERS][side][_BUTTONS]):
             translation = np.array(data[_CONTROLLERS][side][_POSITION], dtype=np.float64)
             rotation = np.array(data[_CONTROLLERS][side][_ORIENTATION], dtype=np.float64)
             buttons = np.array(data[_CONTROLLERS][side][_BUTTONS], dtype=np.float64)

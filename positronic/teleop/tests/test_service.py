@@ -385,7 +385,7 @@ def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_targe
         run.close()
 
 
-def test_a_hand_with_no_buttons_turns_control_off_and_the_robot_holds(service, socket_path, runtime):
+def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         headset.press(a=1.0)

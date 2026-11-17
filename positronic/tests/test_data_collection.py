@@ -511,6 +511,12 @@ def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0])
 
 
+def test_a_hand_with_no_button_values_parses_as_a_controller_that_is_not_tracked():
+    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: []})
+    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
+    assert positions[webxr.RIGHT] is None and buttons[webxr.RIGHT] is None
+
+
 def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
     with pytest.raises(ValueError, match='positions and buttons must name the same controllers'):
         webxr.controller_message({webxr.RIGHT: Transform3D()}, {})

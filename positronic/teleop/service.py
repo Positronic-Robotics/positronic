@@ -380,7 +380,7 @@ class TeleopService:
         """Take one sample of the controllers, by ``LEFT`` and ``RIGHT``. A controller that the headset does not track
         is absent or ``None``."""
         now_ns = time.monotonic_ns()
-        # The page sends a hand that the headset tracks with no controller in it, with too few button values or none
+        # A controller with fewer button values than the maps read cannot press the clutch, so it drives no arm
         controllers = {name for name, values in buttons.items() if values is not None and len(values) > max(Button)}
         poses = {name: pose for name, pose in poses.items() if name in controllers}
         buttons = {name: buttons[name] for name in controllers}
