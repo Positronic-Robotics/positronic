@@ -86,7 +86,7 @@ controller, as for one arm.
 | Control of the arm is on | the trigger | the trigger | the grip of the arm |
 | The trial runs | | hold B for 1 s | Complete: the episode ends |
 | The trial runs | | hold the stick for 1 s | Give up: the episode ends |
-| Each phase | press or hold Y | | the camera and the panel (see Cameras) |
+| Each phase | press or hold the stick | | the camera and the panel (see Cameras) |
 
 When the left controller is not tracked for 0.5 s, control of the left arm goes off. The right arm does the same with
 the right controller. The headset video shows the control state of each arm, for example `Left on (X: off). Right off
