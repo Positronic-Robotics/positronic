@@ -10,7 +10,7 @@ import logging
 import math
 import threading
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import wraps
@@ -56,6 +56,10 @@ TRAJECTORY_START_TOLERANCE_RAD = 0.02
 TASK_SUITE = TASK_FAMILY = 'positronic'
 
 
+# Absorbs float error in `round_s * fps`, so 1.1 s at 50 Hz is 55 ticks and not 56.
+_TICK_EPSILON = 1e-9
+
+
 @dataclass(frozen=True)
 class BridgeSettings:
     """How the bridge paces the rig and decides that a move ended.
@@ -91,7 +95,7 @@ class BridgeSettings:
 
     @property
     def round_ticks(self) -> int:
-        return max(1, round(self.round_s * self.fps))
+        return max(1, math.ceil(self.round_s * self.fps - _TICK_EPSILON))
 
 
 class MoveEnd(StrEnum):
@@ -126,6 +130,30 @@ class _ArmTarget:
     command: CartesianPosition | JointPosition
     # Positronic closure: 0 open, 1 closed.
     grip: float
+
+
+@dataclass(frozen=True)
+class _ChunkPlan:
+    """One answer, decided under the lock and built after it: the path, then `holds` copies of `hold`."""
+
+    path: Sequence[Mapping[str, _ArmTarget]]
+    hold: Mapping[str, _ArmTarget]
+    holds: int
+    end: PolicyEnd | None
+
+    def chunk(self) -> list[dict[str, Any]]:
+        chunk = [_commands(targets) for targets in self.path] + [_commands(self.hold)] * self.holds
+        if self.end is not None:
+            chunk[-1] = {**chunk[-1], END: self.end.value}
+        return chunk
+
+
+def _commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
+    commands: dict[str, Any] = {}
+    for arm, target in targets.items():
+        commands[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = target.command
+        commands[keys.arm_channel(keys.TARGET_GRIP, arm)] = target.grip
+    return commands
 
 
 @dataclass(frozen=True)
@@ -245,7 +273,7 @@ class CapBridge:
 
     def answer(self, obs: Obs) -> list[dict[str, Any]]:
         observation = self._observe(obs)
-        # Each step under the lock is bounded by the arm count and the length of one path; `wait_for` releases it.
+        # Each step under the lock is bounded by the arm count; `wait_for` releases it.
         with self._turn:
             previous, self._observation = self._observation, observation
             if self._thread is None:
@@ -255,7 +283,8 @@ class CapBridge:
                 self._judge(self._call, previous.robot_state, observation)
             self._turn.notify_all()
             self._turn.wait_for(self._program_is_waiting, timeout=self._settings.think_timeout_s)
-            return self._chunk()
+            plan = self._advance()
+        return plan.chunk()
 
     def close(self) -> None:
         with self._turn:
@@ -307,31 +336,21 @@ class CapBridge:
     def _program_is_waiting(self) -> bool:
         return self._outcome is not None or (self._call is not None and self._call.end is None)
 
-    def _chunk(self) -> list[dict[str, Any]]:
+    def _advance(self) -> _ChunkPlan:
         if self._outcome is not None:
-            return [{**self._commands(self._targets), END: self._outcome.end.value}]
+            return _ChunkPlan([], self._targets, 1, self._outcome.end)
         call = self._call
         sending = call is not None and call.end is None and call.deadline_s is None
         path = call.path if sending else []
         ticks = max(len(path), self._settings.round_ticks)
         if path:
             self._targets = path[-1]
-        chunk = [self._commands(targets) for targets in path]
-        chunk += [self._commands(self._targets)] * (ticks - len(path))
         self._clock_s += ticks / self._settings.fps
         if call is not None and call.end is None:
             call.ticks += ticks
             if sending:
                 call.deadline_s = self._clock_s + self._settings.call_timeout_s
-        return chunk
-
-    @staticmethod
-    def _commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
-        commands: dict[str, Any] = {}
-        for arm, target in targets.items():
-            commands[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = target.command
-            commands[keys.arm_channel(keys.TARGET_GRIP, arm)] = target.grip
-        return commands
+        return _ChunkPlan(path, self._targets, ticks - len(path), None)
 
     def _judge(self, call: _Call, previous: RobotState, observation: Observation) -> None:
         settings, state = self._settings, observation.robot_state

@@ -140,6 +140,11 @@ def test_each_answer_holds_at_least_one_round(run, settings):
     assert all(len(chunk) == settings.round_ticks for chunk in chunks[:-1])
 
 
+@pytest.mark.parametrize(('round_s', 'fps', 'ticks'), [(0.25, 10.0, 3), (1.1, 50.0, 55), (0.01, 10.0, 1)])
+def test_a_round_holds_at_least_round_s_and_no_extra_tick(round_s, fps, ticks):
+    assert BridgeSettings(fps=fps, round_s=round_s).round_ticks == ticks
+
+
 def test_a_refused_call_was_not_accepted_and_moves_nothing(run):
     bridge, chunks = run("""
         refused = move_to_pose({'position': [0.3, 0.0, 0.3], 'rpy_deg': [0, 0, 0], 'frame': 'camera'}, arm='left')
