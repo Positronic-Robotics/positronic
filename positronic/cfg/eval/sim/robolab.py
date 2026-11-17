@@ -32,8 +32,9 @@ def _camera_dict(cameras: str) -> dict[str, str]:
     timeout=None,
     horizon_sec=None,
     env_server=None,
+    batch_size=None,
 )
-def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, cameras, env_server):
+def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, cameras, env_server, batch_size):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
     RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: tabletop manipulation
@@ -55,6 +56,8 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, cam
     ``env_server`` is the ``host:port`` of a RoboLab env server that already runs, which this eval shares with
     other evals: each drives one clone of its scene. The server's camera set must be ``cameras``, and every eval
     that shares it must set the same ``horizon_sec``. Without it, the eval launches a server of its own.
+    ``batch_size`` is how many evals start each batch on that server; the server builds that many clones for them.
+    Without it, a batch waits for every clone of the server.
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name, instruction type and episode length override ride each trial's
@@ -70,7 +73,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, cam
         serve = serve_robolab(cameras)
     else:
         serve = nullcontext(env_server_address(env_server))
-    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve)
+    proxy = RemoteEnvControlSystem(RobolabAdapter(camera_dict), serve, batch_size)
     # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
     # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
     embodiment = remote_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')

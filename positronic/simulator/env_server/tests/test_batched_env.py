@@ -579,10 +579,12 @@ class _GripAdapter(EnvAdapter):
         return {eval_keys.SUCCESS: result[protocol.FRAME_SUCCESS]} if result[protocol.FRAME_DONE] else None
 
 
-def _drive_one_proxy(host: str, port: int, grip: float, started: threading.Barrier) -> float:
+def _drive_one_proxy(
+    host: str, port: int, grip: float, started: threading.Barrier, batch_size: int | None = None
+) -> float:
     """Run one proxy in a World of its own through a reset and a few steps; return the grip it observed."""
     with pimm.World(virtual_time=True) as world:
-        proxy = RemoteEnvControlSystem(_GripAdapter(grip), nullcontext((host, port)))
+        proxy = RemoteEnvControlSystem(_GripAdapter(grip), nullcontext((host, port)), batch_size)
         grip_rx = world.pair(proxy.observations[_GRIP])
         scheduler = world.start([proxy])
         started.wait(timeout=10.0)
@@ -600,6 +602,18 @@ def test_two_proxies_drive_two_slots_of_one_env():
             lambda: _drive_one_proxy(host, port, 0.25, started), lambda: _drive_one_proxy(host, port, 0.75, started)
         )
     assert grips == [0.25, 0.75]
+
+
+@pytest.mark.timeout(60.0)
+def test_two_proxies_start_a_batch_of_two_on_an_env_of_four_clones():
+    env = _ClonedScene(ends_at=[99, 99, 99, 99])
+    with serve_env(env) as (host, port):
+        started = threading.Barrier(2)
+        grips = _together(
+            lambda: _drive_one_proxy(host, port, 0.25, started, batch_size=2),
+            lambda: _drive_one_proxy(host, port, 0.75, started, batch_size=2),
+        )
+    assert grips == [0.25, 0.75] and env.built == [2]
 
 
 def test_an_env_serves_one_slot_unless_it_says_otherwise():
