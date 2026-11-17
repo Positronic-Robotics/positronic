@@ -434,6 +434,57 @@ def test_a_gap_wider_than_the_correction_bound_keeps_the_arm_powered(rig, caplog
     assert np.min(_asked(rig)) >= -MAX_CORRECTION
 
 
+def _block_joints_2_and_3_at(rig, rad):
+    """Put an object under the arm, which stops joints 2 and 3 at ``rad`` on their way down to the parking pose."""
+    rig.vendor.stops = np.array([rad, rad])
+
+
+def test_an_idle_park_that_stops_against_an_object_holds_there_reads_error_and_pushes_no_harder(rig, caplog):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    sent = len(rig.vendor.targets)
+    rig.tick(20)
+    stopped_at = rig.vendor._pos[:6].copy()
+    np.testing.assert_allclose(stopped_at[1:3], [0.3, 0.3], atol=0.005)
+    assert np.min(_asked(rig)[sent:]) >= 0.0  # no reference past the parking pose
+    np.testing.assert_allclose(rig.vendor.targets[-1][:6], stopped_at, atol=0.005)
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert 'something blocks it' in caplog.text
+    assert not rig.vendor.released_at
+
+
+def test_a_ready_call_takes_an_arm_whose_park_stopped_to_the_start_pose(world, rig):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    _block_joints_2_and_3_at(rig, 0.0)  # the operator takes the object away
+    answer = _readier(world, rig)(None)
+    _until_answered(rig, answer)
+    answer.result()
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_a_ready_call_on_an_arm_that_parked_answers_with_no_move(world, rig):
+    rig.rest()
+    sent = len(rig.vendor.targets)
+    answer = _readier(world, rig)(None)
+    _until_answered(rig, answer)
+    answer.result()
+    np.testing.assert_allclose(_asked(rig)[sent:], np.zeros((len(rig.vendor.targets) - sent, 6)), atol=0.005)
+
+
+def test_a_gap_the_largest_correction_still_closes_is_corrected_and_not_taken_for_an_object(rig, caplog):
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.0, 0.0, MAX_CORRECTION + DEFAULT_TUNING.tolerance_rad / 2, 0.0, 0.0, 0.0])
+    rig.tick(20)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=DEFAULT_TUNING.tolerance_rad)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    assert 'something blocks it' not in caplog.text
+
+
 def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
     rig = Rig(dataclasses.replace(DEFAULT_TUNING, max_correction_rad=0.2))
     rig.raise_arm()
@@ -907,6 +958,17 @@ def test_a_blocking_move_past_the_chain_limit_never_sends_a_target_past_it(world
     assert np.max(_asked(rig)[sent:, JOINT3]) <= I2RT_YAM_LIMITS[JOINT3, 1] - yam._Arm._CHAIN_LIMIT_MARGIN_RAD + 1e-12
 
 
+def test_a_blocking_move_past_the_joint_range_is_not_taken_for_an_object(world, rig):
+    rig.raise_arm()
+    folded = RAISED.copy()
+    folded[JOINT3] = 3.6
+    answer = _sync_caller(world, rig)(command.JointPosition(folded))
+    _until_answered(rig, answer)
+    with pytest.raises(DeviceFault, match='rests') as answered:
+        answer.result()
+    assert 'something blocks it' not in str(answered.value)
+
+
 def test_the_park_holds_its_correction_past_the_joint_range(rig):
     rig.raise_arm()
     rig.vendor.bias = np.array([0.0, 0.0, 0.025, 0.0, 0.0, 0.0])
@@ -1018,11 +1080,11 @@ def test_parking_accepts_error_within_its_tolerance(rig):
 
 def test_parking_allows_more_time_than_an_ordinary_move(rig):
     rig.raise_arm()
-    rig.vendor.stuck = True
+    rig.vendor._alpha = 0.002  # the chain still creeps toward the parking pose after the ramp ends
     rig.stop.stopped = True
     rig.tick(4)
     assert rig.states.emitted[-1][1].status == RobotStatus.BUSY
-    rig.vendor.stuck = False
+    rig.vendor._alpha = 0.3
     rig.finish(within_s=3)
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
