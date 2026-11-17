@@ -649,7 +649,6 @@ _WIRE_SPLIT = (ATTR_WIRE_UPLINK_MS, ATTR_WIRE_DOWNLINK_MS, ATTR_WIRE_NETWORK_MS)
 # The latency segments that combine spans. Each label spells how it is made.
 _CALL_ENCODE = f'{SPAN_POLICY_ENCODE} per call'
 _CALL_NETWORK = f'{SPAN_WIRE_SEND} + {SPAN_WIRE_RECV} - {_SERVED_MS} - {_SERVED_ENCODE_MS}'
-_CALL_CODEC = f'{SPAN_POLICY_INFER} - {SPAN_WIRE_SEND} - {SPAN_WIRE_RECV}'
 
 
 def _segments(span: SpanRec, children: dict[str, list[SpanRec]]) -> Iterator[tuple[str, float]]:
@@ -678,13 +677,15 @@ def _infer_segments(infer: SpanRec, children: dict[str, list[SpanRec]]) -> Itera
         wire_ms[child.name] += _dur_s(child) * 1000.0
         sends += child.name == SPAN_WIRE_SEND
     # A retried call holds the reconnect between its attempts, and its served times are of the last attempt only.
-    if sends == 1 and SPAN_WIRE_RECV in wire_ms:
-        on_wire_ms = wire_ms[SPAN_WIRE_SEND] + wire_ms[SPAN_WIRE_RECV]
-        yield _CALL_CODEC, _dur_s(infer) * 1000.0 - on_wire_ms
-        if _SERVED_MS in infer.attrs and infer.attrs.get(ATTR_WIRE_SENT_ALONE) is True:
-            # The server encodes the answer's images after `served_ms` closes.
-            server_ms = float(infer.attrs[_SERVED_MS]) + float(infer.attrs.get(_SERVED_ENCODE_MS, 0.0))
-            yield _CALL_NETWORK, on_wire_ms - server_ms
+    if (
+        sends == 1
+        and SPAN_WIRE_RECV in wire_ms
+        and _SERVED_MS in infer.attrs
+        and infer.attrs.get(ATTR_WIRE_SENT_ALONE) is True
+    ):
+        # The server encodes the answer's images after `served_ms` closes.
+        server_ms = float(infer.attrs[_SERVED_MS]) + float(infer.attrs.get(_SERVED_ENCODE_MS, 0.0))
+        yield _CALL_NETWORK, wire_ms[SPAN_WIRE_SEND] + wire_ms[SPAN_WIRE_RECV] - server_ms
 
 
 def _episode_finder(episodes: list[SpanRec]) -> Callable[[SpanRec], str | None]:

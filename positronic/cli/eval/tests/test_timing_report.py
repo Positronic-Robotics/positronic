@@ -1079,7 +1079,7 @@ def test_the_latency_of_each_segment_counts_the_spans_inside_the_episodes(tmp_pa
     assert rows[f'{SPAN_POLICY_ENCODE}[Jpeg]'].count == 4
     assert rows[f'{SPAN_POLICY_ENCODE} per call'].p50_ms == pytest.approx(30.0)  # two encodes overlap by 10 ms
     assert rows[_NETWORK_ROW].p50_ms == pytest.approx(30.0)
-    assert rows['policy.infer - wire.send - wire.recv'].p50_ms == pytest.approx(10.0)
+    assert not any(segment.startswith(f'{SPAN_POLICY_INFER} -') for segment in rows)
     assert rows[SPAN_HARNESS_STEP].p50_ms == pytest.approx(4.0)
     assert rows[ATTR_STEP_LATE_MS].count == 1
     assert rows[ATTR_STEP_LATE_MS].episodes == 1
@@ -1112,7 +1112,7 @@ def test_a_report_with_no_timed_span_shows_no_latency_table(tmp_path):
     assert not any(line.startswith('latency') for line in _render(report).splitlines())
 
 
-def test_a_retried_call_gives_no_codec_and_no_network_value(tmp_path):
+def test_a_retried_call_gives_no_network_value(tmp_path):
     ms = 0.001
     telemetry_dir = tmp_path / TELEMETRY_SUBDIR
     telemetry_dir.mkdir()
@@ -1139,8 +1139,7 @@ def test_a_retried_call_gives_no_codec_and_no_network_value(tmp_path):
     report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
 
     rows = {row.segment: row for row in report.latency}
-    # The 10 ms reconnect between the attempts is neither codec work nor network time.
-    assert 'policy.infer - wire.send - wire.recv' not in rows
+    # The 10 ms reconnect between the attempts is not network time.
     assert _NETWORK_ROW not in rows
     assert rows['policy.infer'].count == 1
 
