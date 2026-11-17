@@ -235,6 +235,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             value = value.to_numpy()
         elif isinstance(value, list | tuple):
             value = np.array(value)
+        elif isinstance(value, np.ndarray):
+            # The chunk converts after `append` returns, so the writer keeps its own copy of the caller's array.
+            value = value.copy()
 
         if isinstance(value, np.ndarray):
             if self._expected_shape is None:
