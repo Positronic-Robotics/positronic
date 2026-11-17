@@ -192,11 +192,15 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
 
         The harness reads one entry: ``ee_frames``, nested and keyed by pose signal, states the frame of each pose
         signal the policy reads. A run that learns its frames only as it starts, such as a remote run, writes the
-        same entry with ``runtime.set_metadata`` before its first yield. A policy that states entries observes only
-        those pose signals. A policy that states none observes each pose at the rig's legacy point
-        (``Harness._pose_handshake``).
+        same entry with ``runtime.set_metadata`` before its first yield. ``positronic/drivers/roboarm/README.md`` says
+        what the harness does with the entry, and with a policy that states none.
         """
         return {}
+
+    @property
+    def ordered(self) -> bool:
+        """Each call of a run depends on the call before it, so the calls run one at a time."""
+        return False
 
     def to_spec(self) -> dict[str, Any]:
         """A versioned component declaration with plain-data arguments."""

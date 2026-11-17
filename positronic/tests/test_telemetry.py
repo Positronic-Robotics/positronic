@@ -2,6 +2,7 @@ import contextvars
 import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -511,6 +512,56 @@ def test_stats_sample_logs_a_child_it_may_not_read(tmp_path, monkeypatch, caplog
     sampler._nvml.shutdown()
 
 
+@contextmanager
+def _sleeping_child():
+    # The child runs its code only after its start-up exec, so its OS name is final once it prints.
+    child = subprocess.Popen(
+        [sys.executable, '-c', 'import time; print(flush=True); time.sleep(60)'], stdout=subprocess.PIPE
+    )
+    try:
+        assert child.stdout is not None
+        child.stdout.readline()
+        yield child
+    finally:
+        child.kill()
+        child.wait()
+
+
+def _first_written_sample(path, process_names=None):
+    """Run a sampler until it writes one sample to ``path``, and return that sample as the reader parses it."""
+    deadline = time.monotonic() + 5.0
+    with telemetry.StatsSampler(path, hz=200.0, process_names=process_names):
+        while not path.exists() or not path.read_text():
+            assert time.monotonic() < deadline, 'the sampler wrote no sample within 5 s'
+            time.sleep(0.01)
+    return next(telemetry.read_stats(path))
+
+
+def test_stats_sample_lists_each_process_under_the_callers_name(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    with _sleeping_child() as child:
+        sample = _first_written_sample(
+            tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', process_names=lambda: {child.pid: 'Camera.run'}
+        )
+
+    procs = {proc[telemetry.PROC_PID]: proc for proc in sample[telemetry.STAT_PROCS]}
+    assert procs[child.pid][telemetry.PROC_NAME] == 'Camera.run'
+    assert procs[child.pid][telemetry.PROC_RSS_B] > 0
+    assert procs[os.getpid()][telemetry.PROC_NAME] == psutil.Process().name()
+    assert sample[telemetry.STAT_RSS_PROC_B] == sum(proc[telemetry.PROC_RSS_B] for proc in procs.values())
+    assert sample[telemetry.STAT_CPU_PROC_PCT] == sum(proc[telemetry.PROC_CPU_PCT] for proc in procs.values())
+
+
+def test_stats_sample_names_a_process_by_the_os_without_a_mapping(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    with _sleeping_child() as child:
+        os_name = psutil.Process(child.pid).name()
+        sample = _first_written_sample(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+
+    procs = {proc[telemetry.PROC_PID]: proc for proc in sample[telemetry.STAT_PROCS]}
+    assert procs[child.pid][telemetry.PROC_NAME] == os_name
+
+
 def test_stats_sample_without_gpu(tmp_path, monkeypatch):
     def _raise():
         raise pynvml.NVMLError(pynvml.NVML_ERROR_DRIVER_NOT_LOADED)
@@ -655,11 +706,20 @@ def test_one_run_id_gives_a_background_process_the_id_of_the_process_that_spawne
     assert ENV_RUN_ID not in os.environ
 
 
-def test_one_run_id_keeps_a_run_id_set_before_it(monkeypatch):
+def test_one_run_id_keeps_a_run_id_set_before_it_and_restores_it(monkeypatch):
     monkeypatch.setenv(ENV_RUN_ID, 'given')
     with telemetry.one_run_id():
         assert os.environ[ENV_RUN_ID] == 'given'
+        os.environ[ENV_RUN_ID] = 'changed in the block'
     assert os.environ[ENV_RUN_ID] == 'given'
+
+
+def test_one_run_id_replaces_an_empty_run_id_and_restores_it(monkeypatch):
+    """bind_from_env reads an empty run id as absent, so one_run_id must hold a real id for it."""
+    monkeypatch.setenv(ENV_RUN_ID, '')
+    with telemetry.one_run_id():
+        assert os.environ[ENV_RUN_ID]
+    assert os.environ[ENV_RUN_ID] == ''
 
 
 def test_bind_from_env_records_nothing_when_the_sidecar_cannot_open(tmp_path, monkeypatch, caplog):

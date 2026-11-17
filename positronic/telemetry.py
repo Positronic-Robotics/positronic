@@ -38,7 +38,7 @@ import socket
 import threading
 import time
 import uuid
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -91,6 +91,13 @@ STAT_CPU_PROC_PCT = 'cpu_proc_pct'
 STAT_RSS_PROC_B = 'rss_proc_b'
 STAT_GPU_COUNT = 'gpu_count'
 STAT_GPUS = 'gpus'
+STAT_PROCS = 'procs'
+
+# The fields of one ``STAT_PROCS`` entry: one process of the sampled tree.
+PROC_NAME = 'name'
+PROC_PID = 'pid'
+PROC_CPU_PCT = 'cpu_pct'
+PROC_RSS_B = 'rss_b'
 
 # The per-device fields of one ``STAT_GPUS`` entry.
 GPU_INDEX = 'i'
@@ -235,15 +242,17 @@ def bind_from_env(process: str) -> Iterator[None]:
 @contextmanager
 def one_run_id() -> Iterator[None]:
     """Hold one run id in the environment while the block runs, so this process and each process it spawns bind
-    under the same id. A run id set before the block is kept. The environment is restored on exit."""
+    under the same id. A non-empty run id set before the block is kept. The environment is restored on exit."""
     previous = os.environ.get(ENV_RUN_ID)
-    if previous is None:
+    if not previous:
         os.environ[ENV_RUN_ID] = uuid.uuid4().hex
     try:
         yield
     finally:
         if previous is None:
             os.environ.pop(ENV_RUN_ID, None)
+        else:
+            os.environ[ENV_RUN_ID] = previous
 
 
 def force_flush() -> None:
@@ -586,9 +595,15 @@ class StatsSampler:
     It free-runs on wall time — no span context, no episode boundary — so no sample is lost at a phase edge.
     It runs as an in-process daemon thread, not a subprocess: ``os.getpid()`` gives exact process-tree
     attribution and the lifecycle stays trivial, at the cost of going blind if the harness itself hard-hangs —
-    load-of-a-hang forensics this profiling does not need."""
+    load-of-a-hang forensics this profiling does not need.
 
-    def __init__(self, out_path: Path | str, hz: float = 1.0) -> None:
+    Each sample also lists every process of the tree by name. ``process_names`` maps a pid to a name for it; a pid
+    it omits takes the OS process name. It is called from the sampler thread, so it reads only state that is safe
+    to read from another thread."""
+
+    def __init__(
+        self, out_path: Path | str, hz: float = 1.0, process_names: Callable[[], Mapping[int, str]] | None = None
+    ) -> None:
         global psutil, pynvml
         try:  # the sampler's probes ship in the optional `telemetry` extra
             import psutil  # noqa: PLC0415
@@ -602,6 +617,7 @@ class StatsSampler:
         self._nvml = _Nvml()
         self._self = psutil.Process(os.getpid())
         self._proc_cache: dict[int, psutil.Process] = {}
+        self._process_names = process_names
         psutil.cpu_percent(interval=None)  # prime the host CPU counter so the first sample is a real delta
 
     def __enter__(self) -> 'StatsSampler':
@@ -613,9 +629,9 @@ class StatsSampler:
         self._thread.join(timeout=5)
         self._nvml.shutdown()
 
-    def _tree(self) -> tuple[set[int], float, int]:
-        """This process tree's pids, summed CPU percent, and summed RSS. Process objects are cached across
-        samples so ``cpu_percent`` reads a real interval delta; dead processes are dropped."""
+    def _tree(self) -> tuple[set[int], list[dict[str, Any]]]:
+        """This process tree's pids, and one ``PROC_*`` reading per live process. Process objects are cached
+        across samples so ``cpu_percent`` reads a real interval delta; dead processes are dropped."""
         try:
             processes = [self._self, *self._self.children(recursive=True)]
         except psutil.Error:
@@ -624,35 +640,40 @@ class StatsSampler:
         for pid in list(self._proc_cache):
             if pid not in pids:
                 del self._proc_cache[pid]
-        cpu_pct = 0.0
-        rss = 0
+        names = self._process_names() if self._process_names is not None else {}
+        readings = []
         for proc in processes:
             try:
                 if proc.pid not in self._proc_cache:
                     self._proc_cache[proc.pid] = proc
                     proc.cpu_percent(interval=None)  # prime; the first read is meaningless
                 cached = self._proc_cache[proc.pid]
-                cpu_pct += cached.cpu_percent(interval=None)
-                rss += cached.memory_info().rss
+                readings.append({
+                    PROC_NAME: names.get(proc.pid) or cached.name(),
+                    PROC_PID: proc.pid,
+                    PROC_CPU_PCT: cached.cpu_percent(interval=None),
+                    PROC_RSS_B: cached.memory_info().rss,
+                })
             except psutil.NoSuchProcess:
                 self._proc_cache.pop(proc.pid, None)
             except psutil.Error as error:
                 logger.error('telemetry: dropping pid %d from the process-tree sample: %r', proc.pid, error)
                 self._proc_cache.pop(proc.pid, None)
-        return pids, cpu_pct, rss
+        return pids, readings
 
     def _sample(self) -> dict[str, Any]:
         cpu_times = psutil.cpu_times_percent(interval=None)
-        tree_pids, cpu_proc_pct, rss_proc_b = self._tree()
+        tree_pids, procs = self._tree()
         return {
             STAT_T_NS: time.time_ns(),
             STAT_CPU_SYS_PCT: psutil.cpu_percent(interval=None),
             STAT_IOWAIT_PCT: float(getattr(cpu_times, 'iowait', 0.0)),
             STAT_MEM_SYS_USED_B: int(psutil.virtual_memory().used),
-            STAT_CPU_PROC_PCT: cpu_proc_pct,
-            STAT_RSS_PROC_B: rss_proc_b,
+            STAT_CPU_PROC_PCT: sum(proc[PROC_CPU_PCT] for proc in procs),
+            STAT_RSS_PROC_B: sum(proc[PROC_RSS_B] for proc in procs),
             STAT_GPU_COUNT: self._nvml.device_count,
             STAT_GPUS: self._nvml.sample(tree_pids),
+            STAT_PROCS: procs,
         }
 
     def _loop(self) -> None:

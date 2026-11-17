@@ -14,7 +14,7 @@ The package root exposes public names; implementations and their tests are group
 | [`action`](action.py) | Prediction decoding, training labels and command control modes |
 | [`geometry`](geometry.py) | Pose representations and end-effector frames |
 | [`gripper`](gripper.py) | Grip thresholds and conventions |
-| [`image`](image.py) | Image selection, resizing, padding and JPEG encoding |
+| [`image`](image.py) | Image selection, resizing, padding, and JPEG or H.264 encoding |
 | [`metadata`](metadata.py) | Metadata attachment and dataset feature descriptors |
 
 Codec tests live in [`tests/`](tests/). Model-specific recipes compose these operations under
@@ -114,6 +114,7 @@ that path back into model values, such as an RTC prefix.
 | [`AbsolutePositionAction`](action.py) | Builds pose/grip training labels and decodes predictions into `CartesianPosition` commands plus grip. | The model predicts absolute end-effector poses in a chosen rotation representation. |
 | [`AbsoluteJointsAction`](action.py) | Builds joint/grip training labels and decodes predictions into `JointPosition` commands plus grip. | The model predicts absolute joint positions. |
 | [`BimanualJointsAction`](action.py) | Inference: decodes a two-arm action into one `JointPosition` command and one grip target per arm. Per arm, the action holds the joints and then the grip, left arm first. | The model predicts absolute joints for two arms, as MolmoAct2-BimanualYAM and ABC-DiT do. [`bimanual_joints_state`](observation.py) packs the state in the same layout. Compose `FlipGrip(arms=…)` for a model that speaks a gripper width. |
+| [`BimanualCartesianAction`](action.py) | Decodes a two-arm action into one `CartesianPosition` command and one grip target per arm. Per arm, the action holds the pose as xyz and a wxyz quaternion, and then the grip, left arm first. | The policy gives an absolute end-effector pose for each of two arms, as the teleop service does for a bimanual session. |
 | [`JointPositionAction`](action.py) | Decodes named joint and grip predictions into `JointPosition` commands plus grip. | Convert between model values and absolute robot commands, including planned actions sent with a request. |
 | [`CartesianDeltaAction`](action.py) | Inference: decodes translation in metres, rotation in the selected `rotation_rep` format (default `rotvec`) and grip closure into a `CartesianDelta` command plus absolute grip. | Predictions describe per-step Cartesian deltas in physical units. |
 | [`IKJointsAction`](action.py) | Training: replaces pose targets with joint targets through inverse kinematics. Inference: passes through. | Train a joint-position model from recorded pose targets; compose before `AbsoluteJointsAction`. |
@@ -142,6 +143,7 @@ that path back into model values, such as an RTC prefix.
 |-------|--------------|----------------|
 | [`TransformImages`](image.py) | Resizes RGB images and frame stacks with explicit dimensions and mode. | Limit upload size or match the model’s image preparation. |
 | [`EncodeImages`](image.py) | Inference: JPEG-encodes images recursively, selecting uint8 RGB arrays automatically. Supports explicit paths and JPEG quality. | Reduce network payload size with lossy image compression after preparing the model inputs. |
+| [`EncodeVideo`](image.py) | Inference: encodes the image at each explicit path as one H.264 access unit, one video stream for each path. The receiver decodes each stream in order with `AnnexBDecoder`, so the codec is `ordered`, and a client keeps one call in flight for a stack that holds it. | Send the camera images of a run to a server that keeps a decoder for each stream, such as the teleop service. |
 
 Choose `ResizeMode.BOUND` to shrink within bounds, `PAD` to fit and pad to the exact size, or
 `STRETCH` to resize exactly, allowing distortion. Bilinear is the default interpolation;
@@ -191,10 +193,7 @@ assigns their timing and horizon; `TrajectoryPlayer` emits the commands when due
 
 `ChangeEEFrame(EEFrame(site=site, offset=T))` converts at that boundary: observations compose forward into the policy's frame (`pose * T`), commands compose back (`pose * T⁻¹`). `T` places the checkpoint's frame relative to `site`, a site of the rig's model, so it belongs to the checkpoint and travels with it. Nothing about the rig's model crosses the wire.
 
-The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states:
-
-- A policy that states no `ee_frames` gets each pose at the rig's legacy point, as [the frame contract](../../drivers/roboarm/README.md) says.
-- A policy that names a site the rig does not report that signal at is refused.
+The codec states its frame as the `ee_frames` entry of each pose signal it converts: `{signal: {site, offset}}`. At the start of each episode the harness compares that entry with the `ee_frames` the rig states, as [the frame contract](../../drivers/roboarm/README.md) says. A policy that states no `ee_frames` gets no pose.
 
 A pose-reading checkpoint states its frame, also when the offset is the identity (`cfg.codecs.gripper_frame`).
 

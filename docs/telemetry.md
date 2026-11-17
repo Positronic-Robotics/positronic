@@ -93,7 +93,7 @@ The span names are the contract:
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
 | `record.io` | `episode` | — | the recorder's serialize + append |
-| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>` | one harness step: it reads the observations, calls the policy and emits the commands |
+| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
@@ -117,18 +117,35 @@ span. A command whose first write fails, or a move that a stop ends before its f
 
 ### Reading harness steps
 
-A `harness.step` span holds the durations of one step in milliseconds:
+A `harness.step` span holds the durations of one step in milliseconds, and one collection generation:
 
 - `step.late_ms`: the time from the step's due time to its start. Other loops in the process and a late wake
   from sleep add to it. An answer can start a step before its due time; that step has no value.
 - `step.observe_ms`: the time to read all observations. `step.read_ms.<signal>` is one receiver's read.
   `step.convert_ms.<signal>` is the serializer and the copy of a new message, and is absent when no new
   message arrived.
+- `step.frame_wait_ms.<signal>` and `step.frame_driver_ms.<signal>`: the two parts of the age of a camera frame
+  when the step reads it. Their sum is the age of the frame. `step.frame_wait_ms` is the time from the driver's
+  hand-off (the frame's `emitted` time) to the read, on the clock of the policy runtime. The step records it again
+  each time it reads the same frame, so it grows until a new frame arrives. `step.frame_driver_ms` is the driver's
+  time from capture to hand-off, on the camera's own clock: the frame's `camera.handoff` stamp less its
+  `camera.capture` stamp. The ZED and Luxonis drivers stamp both. The OpenCV and V4L2 drivers stamp no capture
+  time, so their frames have no driver part. The ZED hand-off stamp reads the host clock. When that clock steps
+  back, the stamp stays above the last one until the clock passes it, and the driver part is wrong for that time.
 - `step.policy_ms`: the policy call. Its processor spans are the children of the step.
 - `step.emit_ms`: the time to emit the commands.
+- `step.gc_wait_ms`: the garbage-collection time of the process from the end of the previous step to the start of
+  this step. A collection after the due time adds to `step.late_ms`. For the first step of an episode, the window
+  starts at the start of the rollout, so it covers the opening of the recording.
+- `step.gc_ms`: the garbage-collection time of the process inside the step.
+- `step.gc_generation`: the highest generation that a collection in either window reached, from 0 to 2.
+
+The three collection values are present only when a collection ran in one of the two windows. A collection in any
+thread stops the harness thread too, so each value counts all threads. The harness counts collections only while
+telemetry records.
 
 A step can find a required observation missing, for example while a camera starts. That step calls no policy,
-so its span has only `step.late_ms` and the observe values.
+so its span has only `step.late_ms`, the observe values and the collection values.
 
 The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
 producers run in other processes, and each writes its own sidecar. Their cost reaches a step only as CPU
@@ -188,15 +205,19 @@ time. Such a call gives no `wire.*` values.
 
 One JSON sample per line, sampled free-running at 1 Hz (default) on wall time — no span context, no episode
 boundary, so no sample is lost at a phase edge. A sample is a flat object of host and process readings plus a
-list holding one object per GPU. Its keys are the `STAT_*` and `GPU_*` constants in `positronic/telemetry.py`
+list holding one object per GPU and a list holding one object per process. Its keys are the `STAT_*`, `GPU_*`
+and `PROC_*` constants in `positronic/telemetry.py`
 — read them there; the sampler writes them and the reduce imports them.
 
-The process readings cover this eval's whole process tree (harness + env server + Isaac children). The GPU
-list is empty on a box with no NVML, and shorter than the recorded device count when a device refuses a query
-mid-run (MIG, a transiently lost GPU) — so that count is what tells a reader whether a sample saw the whole
-box. Per-process GPU memory is null where it cannot be attributed (a PID namespace without `--pid=host`, or a
-driver that will not report it), and per-process GPU utilisation is always null: it is not reliably
-attributable under MPS / co-location.
+The process readings cover this eval's whole process tree (harness + env server + Isaac children): the
+tree sums (`STAT_CPU_PROC_PCT`, `STAT_RSS_PROC_B`), and a list with one `PROC_*` entry (name, pid, CPU
+percent, RSS) per process. The caller names a pid through `process_names`; a pid it does not name takes
+the OS process name. A process's CPU percent in its first
+sample covers no interval, so it is not a reading. The GPU list is empty on a box with no NVML, and shorter
+than the recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that
+count tells a reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot
+be attributed (a PID namespace without `--pid=host`, or a driver that will not report it), and per-process GPU
+utilisation is always null: it is not reliably attributable under MPS / co-location.
 
 ## Reporting
 
