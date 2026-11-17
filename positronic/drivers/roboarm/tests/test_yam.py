@@ -401,15 +401,16 @@ def test_an_idle_park_turned_off_stops_where_it_is_and_parks_once_turned_on_agai
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
 
 
-def test_a_parked_arm_does_not_park_again_when_its_idle_park_turns_on(rig, caplog):
-    caplog.set_level(logging.INFO, logger=yam.__name__)
+def test_a_parked_arm_does_not_park_again_when_its_idle_park_turns_on(rig):
+    rig.vendor.bias[:] = 0.01  # a park corrects for the bias, so a second park sends targets the hold does not
     rig.rest()
-    parks = caplog.text.count('Moving the arm to the parking pose')
+    sent = len(rig.vendor.targets)
+    held = rig.vendor.targets[-1].copy()
     rig.idle_park_on.push(False)
     rig.tick(0.1)
     rig.idle_park_on.push(True)
     rig.tick(10)
-    assert caplog.text.count('Moving the arm to the parking pose') == parks
+    np.testing.assert_allclose(rig.vendor.targets[sent:], [held] * (len(rig.vendor.targets) - sent), atol=1e-9)
 
 
 def test_an_idle_park_left_on_parks_after_the_idle_time(rig):
