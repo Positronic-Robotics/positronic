@@ -751,7 +751,7 @@ class _Serving:
 
     q_target: np.ndarray
     grip_target: float
-    # The failed start or idle park that a ready call clears first, by a move to the start pose
+    # Why a start or idle park did not arrive; None once the arm reaches the start pose
     failed_move: Exception | None
     idle_since: float | None = None
     parking: Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]] | None = None
