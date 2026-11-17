@@ -94,8 +94,9 @@ class FakeYam(yam._FakeYam):
     """A ``_FakeYam`` that misses its command the two ways a real chain does.
 
     ``bias`` offsets every joint. ``gives_back`` is the fraction of the way from ``floats_at`` to the command
-    that the chain travels. ``stops`` places the lower stops of joints 2 and 3. ``motor_chain`` stands for the
-    CAN motor chain of i2rt, whose control loop runs until ``stop_loop``.
+    that the chain travels. ``stops`` places the lower stops of joints 2 and 3. ``speed`` is the fraction of its
+    usual step toward each command that the chain takes. ``motor_chain`` stands for the CAN motor chain of i2rt,
+    whose control loop runs until ``stop_loop``.
     """
 
     def __init__(self):
@@ -104,6 +105,7 @@ class FakeYam(yam._FakeYam):
         self.gives_back = 1.0
         self.floats_at = np.zeros(6)
         self.stops = np.zeros(2)
+        self.speed = 1.0
         self.joint_limits = I2RT_YAM_LIMITS.copy()
         self.stuck = False
         self.targets = []
@@ -124,6 +126,7 @@ class FakeYam(yam._FakeYam):
             position[:6] += self.bias
             position[:6] = self.floats_at + self.gives_back * (position[:6] - self.floats_at)
             position[1:3] = np.maximum(position[1:3], self.stops)
+            position[:6] = self._pos[:6] + self.speed * (position[:6] - self._pos[:6])
             super().command_joint_pos(position)
 
     def zero_torque_mode(self):
@@ -1080,11 +1083,11 @@ def test_parking_accepts_error_within_its_tolerance(rig):
 
 def test_parking_allows_more_time_than_an_ordinary_move(rig):
     rig.raise_arm()
-    rig.vendor._alpha = 0.002  # the chain still creeps toward the parking pose after the ramp ends
+    rig.vendor.speed = 0.01  # the chain still creeps toward the parking pose after the ramp ends
     rig.stop.stopped = True
     rig.tick(4)
     assert rig.states.emitted[-1][1].status == RobotStatus.BUSY
-    rig.vendor._alpha = 0.3
+    rig.vendor.speed = 1.0
     rig.finish(within_s=3)
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
