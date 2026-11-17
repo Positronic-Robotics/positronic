@@ -383,6 +383,20 @@ class Harness(pimm.ControlSystem):
             self._append(values, timestamps)
         return values
 
+    def _time_frame(self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float]) -> None:
+        """Put the two parts of the age of camera frame ``name`` into ``step_ms``.
+
+        The wait from the hand-off ``emitted_ns`` to the read, before any conversion, is on the runtime clock. The
+        driver's time from capture to hand-off is on the camera's clock, and is absent when the driver stamps no
+        capture time.
+        """
+        if emitted_ns is not None and self._clock is not None:
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + name] = (self._clock.now_ns() - emitted_ns) / 1e6
+        if CAPTURE_TIME in stamps and HANDOFF_TIME in stamps:
+            step_ms[telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX + name] = (
+                stamps[HANDOFF_TIME] - stamps[CAPTURE_TIME]
+            ) / 1e6
+
     def _sample(self, step_ms: dict[str, float] | None = None) -> None:
         for name, obs in self._embodiment.observations.items():
             read_started_ns = time.perf_counter_ns()
@@ -411,20 +425,6 @@ class Harness(pimm.ControlSystem):
                 if message.updated or name not in self._recorded_privileged:
                     self._convert_and_record(name, message, None)
                     self._recorded_privileged.add(name)
-
-    def _time_frame(self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float]) -> None:
-        """Put the two parts of the age of camera frame ``name`` into ``step_ms``.
-
-        The wait from the hand-off ``emitted_ns`` to the read, before any conversion, is on the runtime clock. The
-        driver's time from capture to hand-off is on the camera's clock, and is absent when the driver stamps no
-        capture time.
-        """
-        if emitted_ns is not None and self._clock is not None:
-            step_ms[telemetry_keys.ATTR_STEP_FRAME_WAIT_MS_PREFIX + name] = (self._clock.now_ns() - emitted_ns) / 1e6
-        if CAPTURE_TIME in stamps and HANDOFF_TIME in stamps:
-            step_ms[telemetry_keys.ATTR_STEP_FRAME_DRIVER_MS_PREFIX + name] = (
-                stamps[HANDOFF_TIME] - stamps[CAPTURE_TIME]
-            ) / 1e6
 
     def read_obs(self, task: Task, withheld_poses: frozenset[str], step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives. Leave out every pose

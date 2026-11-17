@@ -360,14 +360,6 @@ def _frame_times(frames: RecordingEmitter) -> list[float]:
     return [time[CAPTURE_TIME] / 1e9 for time, data in frames.emitted if not isinstance(data, pimm.SignalError)]
 
 
-def _handoff_delays_ms(frames: RecordingEmitter) -> list[float]:
-    return [
-        (time[HANDOFF_TIME] - time[CAPTURE_TIME]) / 1e6
-        for time, data in frames.emitted
-        if not isinstance(data, pimm.SignalError)
-    ]
-
-
 def _errors(frames: RecordingEmitter) -> list[pimm.SignalError]:
     return [data for _, data in frames.emitted if isinstance(data, pimm.SignalError)]
 
@@ -719,6 +711,14 @@ def test_a_torn_frame_is_dropped_with_no_error_and_the_next_frame_is_sent(zed_mo
     assert not _errors(frames)
     sent = [t for i, t in enumerate(sdk.grab_times) if i not in sdk.torn_grabs]
     assert _frame_times(frames) == pytest.approx(sent)
+
+
+def _handoff_delays_ms(frames: RecordingEmitter) -> list[float]:
+    return [
+        (time[HANDOFF_TIME] - time[CAPTURE_TIME]) / 1e6
+        for time, data in frames.emitted
+        if not isinstance(data, pimm.SignalError)
+    ]
 
 
 def test_each_frame_carries_its_hand_off_time_on_the_camera_clock(zed_module):
