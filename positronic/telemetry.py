@@ -251,7 +251,7 @@ def one_run_id() -> Iterator[None]:
     finally:
         if previous is None:
             os.environ.pop(ENV_RUN_ID, None)
-        elif not previous:
+        else:
             os.environ[ENV_RUN_ID] = previous
 
 

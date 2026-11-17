@@ -706,10 +706,11 @@ def test_one_run_id_gives_a_background_process_the_id_of_the_process_that_spawne
     assert ENV_RUN_ID not in os.environ
 
 
-def test_one_run_id_keeps_a_run_id_set_before_it(monkeypatch):
+def test_one_run_id_keeps_a_run_id_set_before_it_and_restores_it(monkeypatch):
     monkeypatch.setenv(ENV_RUN_ID, 'given')
     with telemetry.one_run_id():
         assert os.environ[ENV_RUN_ID] == 'given'
+        os.environ[ENV_RUN_ID] = 'changed in the block'
     assert os.environ[ENV_RUN_ID] == 'given'
 
 
