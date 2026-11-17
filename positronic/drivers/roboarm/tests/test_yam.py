@@ -90,12 +90,17 @@ I2RT_ARM_META = {
 }
 
 
+CONTACT_RAD = 1e-6
+
+
 class FakeYam(yam._FakeYam):
     """A ``_FakeYam`` that misses its command the two ways a real chain does.
 
     ``bias`` offsets every joint. ``gives_back`` is the fraction of the way from ``floats_at`` to the command
-    that the chain travels. ``stops`` places the lower stops of joints 2 and 3. ``motor_chain`` stands for the
-    CAN motor chain of i2rt, whose control loop runs until ``stop_loop``.
+    that the chain travels. ``stops`` places the lower stops of joints 2 and 3, and a joint closer than
+    ``CONTACT_RAD`` to a stop rests on it. ``speed`` is the fraction of its usual step toward each command that
+    the chain takes. ``motor_chain`` stands for the CAN motor chain of i2rt, whose control loop runs until
+    ``stop_loop``.
     """
 
     def __init__(self):
@@ -104,6 +109,7 @@ class FakeYam(yam._FakeYam):
         self.gives_back = 1.0
         self.floats_at = np.zeros(6)
         self.stops = np.zeros(2)
+        self.speed = 1.0
         self.joint_limits = I2RT_YAM_LIMITS.copy()
         self.stuck = False
         self.targets = []
@@ -124,7 +130,10 @@ class FakeYam(yam._FakeYam):
             position[:6] += self.bias
             position[:6] = self.floats_at + self.gives_back * (position[:6] - self.floats_at)
             position[1:3] = np.maximum(position[1:3], self.stops)
+            position[:6] = self._pos[:6] + self.speed * (position[:6] - self._pos[:6])
             super().command_joint_pos(position)
+            on_stop = np.abs(self._pos[1:3] - self.stops) < CONTACT_RAD
+            self._pos[1:3] = np.where(on_stop, self.stops, self._pos[1:3])
 
     def zero_torque_mode(self):
         self.released_at.append(self._pos.copy())
@@ -147,6 +156,7 @@ class Site(Enum):
     GRIP_EMIT = ('grip', '_emit')
     COMMANDS_READ = ('commands', 'read')
     TARGET_GRIP_READ = ('target_grip', 'read')
+    IDLE_PARK_READ = ('idle_park_on', 'read')
 
 
 # Calls made after torque is released, outside the protected region.
@@ -199,11 +209,13 @@ class Rig:
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
+        self.idle_park_on = ManualCommandReceiver()
         self.states = RecordingEmitter()
         ports: dict[str, Any] = {
             'vendor': self.vendor,
             'commands': self.commands,
             'target_grip': self.grip,
+            'idle_park_on': self.idle_park_on,
             'state': self.states,
         }
         self.grips = RecordingEmitter()
@@ -221,6 +233,7 @@ class Rig:
         self.clock = MockClock()
         self.driver.commands._bind(ports['commands'])
         self.driver.target_grip._bind(ports['target_grip'])
+        self.driver.idle_park_on._bind(ports['idle_park_on'])
         self.driver.state._bind(ports['state'], clock=self.clock)
         self.driver.grip._bind(ports['grip'], clock=self.clock)
         self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
@@ -361,6 +374,70 @@ def test_disabling_idle_parking_still_parks_on_exit(rig):
     assert rig.vendor.closed
 
 
+def test_an_arm_whose_idle_park_is_off_stays_where_its_last_command_left_it(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(False)
+    rig.tick(10)
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+
+
+def test_an_idle_park_turned_on_again_parks_after_the_idle_time_counted_from_then(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(False)
+    rig.tick(10)
+    rig.idle_park_on.push(True)
+    rig.tick(0.8)
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_an_idle_park_turned_off_stops_where_it_is_and_parks_once_turned_on_again(rig):
+    rig.raise_arm()
+    rig.tick(1.5)  # one second into the park
+    rig.idle_park_on.push(False)
+    rig.tick(0.1)
+    stopped_at = rig.vendor._pos[:6].copy()
+    rig.tick(10)
+    np.testing.assert_allclose(rig.vendor._pos[:6], stopped_at, atol=0.005)
+    assert not np.allclose(stopped_at, PARK, atol=0.05) and not np.allclose(stopped_at, RAISED, atol=0.05)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    rig.idle_park_on.push(True)
+    rig.tick(0.8)
+    np.testing.assert_allclose(rig.vendor._pos[:6], stopped_at, atol=0.005)
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_a_parked_arm_does_not_park_again_when_its_idle_park_turns_on(rig):
+    rig.vendor.bias[:] = 0.01  # a park corrects for the bias, so a second park sends targets the hold does not
+    rig.rest()
+    sent = len(rig.vendor.targets)
+    held = rig.vendor.targets[-1].copy()
+    rig.idle_park_on.push(False)
+    rig.tick(0.1)
+    rig.idle_park_on.push(True)
+    rig.tick(10)
+    np.testing.assert_allclose(rig.vendor.targets[sent:], [held] * (len(rig.vendor.targets) - sent), atol=1e-9)
+
+
+def test_an_idle_park_left_on_parks_after_the_idle_time(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(True)
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_an_arm_whose_idle_park_is_off_still_parks_on_exit(rig):
+    rig.raise_arm()
+    rig.idle_park_on.push(False)
+    rig.tick(10)
+    rig.finish()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
 def test_the_start_raises_the_arm_and_opens_the_gripper(rig):
     rig.vendor._pos[6] = 0.4
     rig.ready()
@@ -432,6 +509,67 @@ def test_a_gap_wider_than_the_correction_bound_keeps_the_arm_powered(rig, caplog
     assert 'Parking failed; arm still powered' in caplog.text
     assert not rig.vendor.released_at
     assert np.min(_asked(rig)) >= -MAX_CORRECTION
+
+
+def _block_joints_2_and_3_at(rig, rad):
+    """Put an object under the arm, which stops joints 2 and 3 at ``rad`` on their way down to the parking pose."""
+    rig.vendor.stops = np.array([rad, rad])
+
+
+def test_an_idle_park_that_stops_against_an_object_holds_there_reads_error_and_pushes_no_harder(rig, caplog):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    sent = len(rig.vendor.targets)
+    rig.tick(20)
+    stopped_at = rig.vendor._pos[:6].copy()
+    np.testing.assert_allclose(stopped_at[1:3], [0.3, 0.3], atol=0.005)
+    assert np.min(_asked(rig)[sent:]) >= 0.0  # no reference past the parking pose
+    np.testing.assert_allclose(rig.vendor.targets[-1][:6], stopped_at, atol=0.005)
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert 'something blocks it' in caplog.text
+    assert not rig.vendor.released_at
+
+
+def test_a_ready_call_takes_an_arm_whose_park_stopped_to_the_start_pose(world, rig):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    _block_joints_2_and_3_at(rig, 0.0)  # the operator takes the object away
+    answer = _readier(world, rig)(None)
+    _until_answered(rig, answer)
+    answer.result()
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    rig.tick(5)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+
+
+def test_a_ready_call_on_an_arm_that_parked_answers_with_no_move(world, rig):
+    rig.rest()
+    sent = len(rig.vendor.targets)
+    answer = _readier(world, rig)(None)
+    _until_answered(rig, answer)
+    answer.result()
+    np.testing.assert_allclose(_asked(rig)[sent:], np.zeros((len(rig.vendor.targets) - sent, 6)), atol=0.005)
+
+
+def test_an_object_at_the_edge_of_the_largest_correction_gets_no_correction(rig, caplog):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, MAX_CORRECTION + DEFAULT_TUNING.tolerance_rad)
+    sent = len(rig.vendor.targets)
+    rig.tick(20)
+    assert np.min(_asked(rig)[sent:]) >= 0.0  # no reference past the parking pose
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert 'something blocks it' in caplog.text
+
+
+def test_a_gap_the_largest_correction_still_closes_is_corrected_and_not_taken_for_an_object(rig, caplog):
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.0, 0.0, MAX_CORRECTION + DEFAULT_TUNING.tolerance_rad / 2, 0.0, 0.0, 0.0])
+    rig.tick(20)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=DEFAULT_TUNING.tolerance_rad)
+    assert rig.states.emitted[-1][1].status == RobotStatus.AVAILABLE
+    assert 'something blocks it' not in caplog.text
 
 
 def test_a_bench_with_a_wider_gap_is_tuned_not_edited():
@@ -907,6 +1045,17 @@ def test_a_blocking_move_past_the_chain_limit_never_sends_a_target_past_it(world
     assert np.max(_asked(rig)[sent:, JOINT3]) <= I2RT_YAM_LIMITS[JOINT3, 1] - yam._Arm._CHAIN_LIMIT_MARGIN_RAD + 1e-12
 
 
+def test_a_blocking_move_past_the_joint_range_is_not_taken_for_an_object(world, rig):
+    rig.raise_arm()
+    folded = RAISED.copy()
+    folded[JOINT3] = 3.6
+    answer = _sync_caller(world, rig)(command.JointPosition(folded))
+    _until_answered(rig, answer)
+    with pytest.raises(DeviceFault, match='rests') as answered:
+        answer.result()
+    assert 'something blocks it' not in str(answered.value)
+
+
 def test_the_park_holds_its_correction_past_the_joint_range(rig):
     rig.raise_arm()
     rig.vendor.bias = np.array([0.0, 0.0, 0.025, 0.0, 0.0, 0.0])
@@ -1018,11 +1167,11 @@ def test_parking_accepts_error_within_its_tolerance(rig):
 
 def test_parking_allows_more_time_than_an_ordinary_move(rig):
     rig.raise_arm()
-    rig.vendor.stuck = True
+    rig.vendor.speed = 0.01  # the chain still creeps toward the parking pose after the ramp ends
     rig.stop.stopped = True
     rig.tick(4)
     assert rig.states.emitted[-1][1].status == RobotStatus.BUSY
-    rig.vendor.stuck = False
+    rig.vendor.speed = 1.0
     rig.finish(within_s=3)
     np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
 
