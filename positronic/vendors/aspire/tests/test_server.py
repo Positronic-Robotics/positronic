@@ -1,5 +1,4 @@
 import hashlib
-import json
 
 import pytest
 
@@ -11,7 +10,13 @@ from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
 from positronic.policy.spec import from_spec
 from positronic.vendors.aspire.bridge import BridgeSettings
-from positronic.vendors.aspire.server import POLICY_TYPE, CapProgramModel, deployment
+from positronic.vendors.aspire.server import (
+    META_PROGRAM_SHA256,
+    POLICY_TYPE,
+    CapProgramModel,
+    SessionRecord,
+    deployment,
+)
 from positronic.vendors.aspire.tests.test_bridge import Rig
 
 PROGRAM = """
@@ -46,8 +51,8 @@ def run_session(model: CapProgramModel, session_id: str, rig: Rig) -> list[dict]
     raise AssertionError('the program did not end')
 
 
-def record(tmp_path, session_id: str) -> dict:
-    return json.loads((tmp_path / f'{session_id}.json').read_text())
+def record(tmp_path, session_id: str) -> SessionRecord:
+    return SessionRecord.model_validate_json((tmp_path / f'{session_id}.json').read_text())
 
 
 def test_each_session_runs_the_program_and_records_how_it_ended(make_model, tmp_path):
@@ -58,23 +63,24 @@ def test_each_session_runs_the_program_and_records_how_it_ended(make_model, tmp_
     assert run_session(model, 'stalled', stalled)[-1][END] == PolicyEnd.GIVE_UP.value
 
     sha = hashlib.sha256(PROGRAM.encode()).hexdigest()
-    assert record(tmp_path, 'free') == {'session_id': 'free', 'program_sha256': sha, 'end': 'complete', 'error': None}
+    expected = SessionRecord(session_id='free', program_sha256=sha, end=PolicyEnd.COMPLETE, error=None)
+    assert record(tmp_path, 'free') == expected
     failed = record(tmp_path, 'stalled')
-    assert failed['end'] == 'give_up'
-    assert 'ValueError' in failed['error']
+    assert failed.end is PolicyEnd.GIVE_UP
+    assert 'ValueError' in failed.error
 
 
 def test_a_session_that_ends_before_its_program_records_no_end(make_model, tmp_path):
     model = make_model("move_to_joints([1, 1, 1, 1, 1, 1], arm='left')")
     model(Rig().obs(), session_id='dropped')
     model.end_session('dropped')
-    assert record(tmp_path, 'dropped')['end'] is None
+    assert record(tmp_path, 'dropped').end is None
 
 
 def test_meta_states_the_hand_frames_it_reads_and_commands(make_model):
     meta = make_model(PROGRAM).meta()
     assert meta[policy_keys.TYPE] == POLICY_TYPE
-    assert meta['program_sha256'] == hashlib.sha256(PROGRAM.encode()).hexdigest()
+    assert meta[META_PROGRAM_SHA256] == hashlib.sha256(PROGRAM.encode()).hexdigest()
     frames = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])
     assert frames == {
         signal: EEFrame(site=GRIPPER_SITE)

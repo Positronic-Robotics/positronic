@@ -33,6 +33,8 @@ from positronic.utils import check_finite_positive
 from .contracts import (
     EMBODIMENT,
     JOINT_DIMENSION,
+    PRIMARY_ARM,
+    SECONDARY_ARM,
     ApiError,
     ArmCommand,
     CameraObservation,
@@ -82,7 +84,9 @@ class BridgeSettings:
     call_timeout_s: float = 10.0
     think_timeout_s: float = 5.0
     base_frame: str = 'world'
-    aliases: Mapping[str, str] = field(default_factory=lambda: {'primary': keys.RIGHT_ARM, 'secondary': keys.LEFT_ARM})
+    aliases: Mapping[str, str] = field(
+        default_factory=lambda: {PRIMARY_ARM: keys.RIGHT_ARM, SECONDARY_ARM: keys.LEFT_ARM}
+    )
 
     def __post_init__(self) -> None:
         for name in ('fps', 'round_s', 'call_timeout_s', 'think_timeout_s'):
@@ -579,7 +583,7 @@ class CapBridge:
         return self._result(self._await(_Call(path, goals)), self._settings.joint_tolerance_rad)
 
     @_refusal_is_a_result
-    def set_gripper(self, position: float, *, arm: str = 'primary') -> ExecutionResult:
+    def set_gripper(self, position: float, *, arm: str = PRIMARY_ARM) -> ExecutionResult:
         return self._settle(self._grip_goals({arm: position}), None)
 
     @_refusal_is_a_result
@@ -603,7 +607,7 @@ class CapBridge:
 
     @_refusal_is_a_result
     def move_to_joints(
-        self, target: np.ndarray, tolerance: float = 0.01, max_steps: int = 120, *, arm: str = 'primary'
+        self, target: np.ndarray, tolerance: float = 0.01, max_steps: int = 120, *, arm: str = PRIMARY_ARM
     ) -> ExecutionResult:
         _motion_options(tolerance, max_steps)
         return self._settle({self._arm(arm): _Goal(self._joint_target(target))}, tolerance)
@@ -615,7 +619,7 @@ class CapBridge:
         tolerance: float = 0.01,
         max_steps: int = 120,
         *,
-        arm: str = 'primary',
+        arm: str = PRIMARY_ARM,
         strategy: MotionStrategy | None = None,
     ) -> ExecutionResult:
         _motion_options(tolerance, max_steps)
@@ -638,14 +642,14 @@ class CapBridge:
             goals[self._arm(name)] = _Goal(command)
         return self._settle(goals, tolerance)
 
-    def open_gripper(self, *, arm: str = 'primary') -> ExecutionResult:
+    def open_gripper(self, *, arm: str = PRIMARY_ARM) -> ExecutionResult:
         return self.set_gripper(1.0, arm=arm)
 
-    def close_gripper(self, *, arm: str = 'primary') -> ExecutionResult:
+    def close_gripper(self, *, arm: str = PRIMARY_ARM) -> ExecutionResult:
         return self.set_gripper(0.0, arm=arm)
 
     @_refusal_is_a_result
-    def go_home(self, *, arm: str = 'primary') -> ExecutionResult:
+    def go_home(self, *, arm: str = PRIMARY_ARM) -> ExecutionResult:
         """Move ``arm`` to the joints it had at the first observation."""
         return self.move_to_joints(self._home[self._arm(arm)], arm=arm)
 

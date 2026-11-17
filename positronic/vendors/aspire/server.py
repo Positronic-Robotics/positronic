@@ -31,6 +31,9 @@ from .bridge import BridgeSettings, CapBridge, ProgramOutcome
 logger = logging.getLogger(__name__)
 
 POLICY_TYPE = 'aspire_program'
+META_PROGRAM = 'program'
+META_PROGRAM_SHA256 = 'program_sha256'
+META_SETTINGS = 'settings'
 
 
 class SessionRecord(BaseModel):
@@ -97,9 +100,9 @@ class CapProgramModel(Model):
         frames = ee_frames_entry(dict.fromkeys(signals, EEFrame(site=GRIPPER_SITE)))
         return frames | flatten_dict({
             policy_keys.TYPE: POLICY_TYPE,
-            'program': self._program_name,
-            'program_sha256': self._program_sha256,
-            'settings': asdict(self._settings),
+            META_PROGRAM: self._program_name,
+            META_PROGRAM_SHA256: self._program_sha256,
+            META_SETTINGS: asdict(self._settings),
         })
 
     def close(self) -> None:

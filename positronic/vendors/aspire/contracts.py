@@ -16,6 +16,8 @@ import numpy as np
 
 EMBODIMENT = 'yam_real'
 JOINT_DIMENSION = 6
+PRIMARY_ARM = 'primary'
+SECONDARY_ARM = 'secondary'
 
 
 class ErrorCode(StrEnum):
@@ -273,7 +275,7 @@ class Trajectory:
     planner: str
     collision_aware: bool
     expected_start: RobotState
-    arm: str = 'primary'
+    arm: str = PRIMARY_ARM
     gripper_positions: np.ndarray | None = None
     embodiment: str = EMBODIMENT
 
@@ -430,7 +432,7 @@ class EnvironmentAdapter(Protocol):
 
     def execute_trajectory(self, trajectory: Trajectory | SynchronizedTrajectory) -> ExecutionResult: ...
 
-    def set_gripper(self, position: float, *, arm: str = 'primary') -> ExecutionResult: ...
+    def set_gripper(self, position: float, *, arm: str = PRIMARY_ARM) -> ExecutionResult: ...
 
     def set_grippers(self, positions: Mapping[str, float]) -> ExecutionResult: ...
 
