@@ -47,6 +47,11 @@ class Codec:
     def meta(self) -> dict:
         return {}
 
+    @property
+    def ordered(self) -> bool:
+        """Each encode depends on the encode before it, so the calls through this codec run one at a time."""
+        return False
+
     @overload
     def wrap(self, function: cabc.Callable[[dict], Any]) -> cabc.Callable[[Obs], Any]: ...
 
@@ -213,6 +218,10 @@ class _ComposedCodec(Codec):
             )
         return _merged_meta(left, right)
 
+    @property
+    def ordered(self):
+        return self._left.ordered or self._right.ordered
+
     def to_spec(self):
         return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
 
@@ -243,6 +252,10 @@ class _ParallelCodec(Codec):
     @property
     def meta(self):
         return _merged_meta(self._left.meta, self._right.meta)
+
+    @property
+    def ordered(self):
+        return self._left.ordered or self._right.ordered
 
     def to_spec(self):
         return {PAR: [self._left.to_spec(), self._right.to_spec()]}

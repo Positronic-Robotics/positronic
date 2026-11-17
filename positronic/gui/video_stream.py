@@ -1,4 +1,4 @@
-"""Live H.264 for a browser: fragmented MP4 for Media Source Extensions, and Annex B access units for WebCodecs."""
+"""Live H.264: fragmented MP4 for Media Source Extensions, and Annex B access units for WebCodecs or a peer."""
 
 import queue
 import threading
@@ -220,3 +220,18 @@ class AnnexBEncoder:
             )
             for packet in codec.encode(frame)
         ]
+
+
+class AnnexBDecoder:
+    """Decodes the H.264 access units of one stream in Annex B form into RGB frames, one frame for each access unit."""
+
+    def __init__(self):
+        self._codec = av.CodecContext.create('h264', 'r')
+
+    def decode(self, access_unit: bytes) -> np.ndarray:
+        frames = self._codec.decode(av.Packet(access_unit))
+        if not frames:
+            raise ValueError(f'the access unit of {len(access_unit)} bytes gives no frame')
+        frame = frames[-1]
+        assert isinstance(frame, av.VideoFrame), 'h264 is a video codec'
+        return frame.to_ndarray(format='rgb24')
