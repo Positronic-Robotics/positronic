@@ -219,8 +219,8 @@ class RemotePolicy(Policy):
         try:
             try:
                 server_meta = dict(session.metadata)
-                execution = ExecutionRuntime(runtime, max_in_flight=session.max_in_flight)
                 stack = declared_stack(server_meta, session.protocol_version)
+                execution = ExecutionRuntime(runtime, max_in_flight=1 if stack.ordered else session.max_in_flight)
                 client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.

@@ -60,12 +60,16 @@ ATTR_WIRE_NETWORK_MS = 'wire.network_ms'
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
 
-# One harness step and its durations in milliseconds. docs/telemetry.md defines each value.
+# One harness step: its durations in milliseconds, and the highest generation a collection reached. docs/telemetry.md
+# defines each value.
 SPAN_HARNESS_STEP = 'harness.step'
 ATTR_STEP_LATE_MS = 'step.late_ms'
 ATTR_STEP_OBSERVE_MS = 'step.observe_ms'
 ATTR_STEP_POLICY_MS = 'step.policy_ms'
 ATTR_STEP_EMIT_MS = 'step.emit_ms'
+ATTR_STEP_GC_WAIT_MS = 'step.gc_wait_ms'
+ATTR_STEP_GC_MS = 'step.gc_ms'
+ATTR_STEP_GC_GENERATION = 'step.gc_generation'
 # The signal's name follows each prefix.
 ATTR_STEP_READ_MS_PREFIX = 'step.read_ms.'
 ATTR_STEP_CONVERT_MS_PREFIX = 'step.convert_ms.'

@@ -94,7 +94,8 @@ class FakeYam(yam._FakeYam):
     """A ``_FakeYam`` that misses its command the two ways a real chain does.
 
     ``bias`` offsets every joint. ``gives_back`` is the fraction of the way from ``floats_at`` to the command
-    that the chain travels. ``stops`` places the lower stops of joints 2 and 3.
+    that the chain travels. ``stops`` places the lower stops of joints 2 and 3. ``motor_chain`` stands for the
+    CAN motor chain of i2rt, whose control loop runs until ``stop_loop``.
     """
 
     def __init__(self):
@@ -108,6 +109,13 @@ class FakeYam(yam._FakeYam):
         self.targets = []
         self.released_at = []
         self.closed = False
+        self.motor_chain = types.SimpleNamespace(running=True)
+
+    def stop_loop(self):
+        """Stop the control loop as i2rt does when a motor stops answering: the readings freeze and the commands
+        go nowhere."""
+        self.motor_chain.running = False
+        self.stuck = True
 
     def command_joint_pos(self, joint_pos):
         self.targets.append(joint_pos.copy())
@@ -628,6 +636,17 @@ def test_failed_shutdown_parking_keeps_the_arm_powered(rig, caplog):
     np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED, atol=0.005)
 
 
+def test_a_shutdown_releases_a_chain_whose_control_loop_stopped_with_no_park_and_no_hold(rig, caplog):
+    rig.raise_arm()
+    sent = len(rig.vendor.targets)
+    rig.vendor.stop_loop()
+    rig.finish()
+    assert 'its motors take no commands' in caplog.text
+    assert 'arm still powered' not in caplog.text
+    assert len(rig.vendor.targets) == sent
+    assert rig.vendor.released_at and rig.vendor.closed
+
+
 def test_stop_during_a_move_answers_the_caller_and_parks(world, rig):
     rig.rest()
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)
@@ -1028,6 +1047,20 @@ def test_a_move_that_cannot_reach_its_target_fails_within_its_bound(world, rig):
     assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
 
 
+def test_a_running_chain_whose_readings_stop_changing_misses_its_move_and_is_not_lost(world, rig):
+    rig.raise_arm()
+    rig.vendor.stuck = True
+    answer = _sync_caller(world, rig)(command.JointPosition(PARK))
+    _until_answered(rig, answer, within_s=120)
+
+    with pytest.raises(DeviceFault, match='rests') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert not rig.vendor.released_at and not rig.vendor.closed
+
+
 def test_world_exit_parks_a_foreground_yam_before_closing():
     vendor = FakeYam()
     driver = yam.Robot(connect=lambda channel, sim, compensation: vendor)
@@ -1182,6 +1215,13 @@ def test_failed_command_does_not_end_blocked_shutdown(blocked_shutdown_rig, monk
     assert not blocked_shutdown_rig.vendor.released_at
 
 
+def test_a_blocked_shutdown_ends_when_the_control_loop_of_the_chain_stops(blocked_shutdown_rig, caplog):
+    blocked_shutdown_rig.vendor.stop_loop()
+    blocked_shutdown_rig.finish()
+    assert 'its motors take no commands' in caplog.text
+    assert blocked_shutdown_rig.vendor.closed
+
+
 def test_interrupted_driver_does_not_explicitly_release_torque(rig, caplog):
     rig.raise_arm()
     rig.loop.close()
@@ -1214,6 +1254,7 @@ class FakeMotorInterface:
 def motors(rig, monkeypatch):
     """Give the rig's chain seven CAN motors, and collect every interface the driver opens to disable them."""
     rig.vendor.motor_chain = types.SimpleNamespace(
+        running=True,
         channel='can_arm',
         motor_list=[(motor_id, 'DM4310') for motor_id in range(1, 8)],
         motor_interface=types.SimpleNamespace(control_mode='mit'),
@@ -1594,6 +1635,24 @@ def test_a_ready_call_on_a_lost_arm_opens_the_chain_again_and_moves_it_to_the_st
     rig.commands.push(command.JointPosition(PARK))
     rig.tick(1)
     np.testing.assert_allclose(reopened._pos[:6], PARK, atol=0.005)
+
+
+def test_a_chain_whose_control_loop_stopped_holds_the_arm_as_lost_until_a_ready_call_opens_it_again(world, rig):
+    rig.raise_arm()
+    rig.vendor.stop_loop()
+    rig.tick(1)
+
+    for emitter in (rig.states, rig.grips):
+        error = _last(emitter)
+        assert isinstance(error, DeviceFault) and error.kind is FaultKind.ARM
+        assert 'The YAM arm is lost: the control loop of the chain stopped' in str(error)
+    reopened = FakeYam()
+    rig.driver._connect = lambda channel, sim, compensation: reopened
+    answer = _readier(world, rig)(None)
+    rig.tick(0.1)
+    rig.ready()
+    assert answer.result() is None
+    np.testing.assert_allclose(reopened._pos[:6], RAISED, atol=0.005)
 
 
 def test_a_ready_call_whose_chain_does_not_open_answers_its_error_and_the_next_one_opens_it(world, rig):
