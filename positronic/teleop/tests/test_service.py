@@ -692,11 +692,15 @@ def test_the_client_stack_ends_the_run_outside_a_schedule_that_asks_for_one_fram
     assert EndCommand.WIRE_NAME in json.dumps(stack['seq'][3])
 
 
-def test_the_client_stack_states_the_grip_point_as_the_frame_of_the_pose_and_the_target():
-    client_stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,)))
+@pytest.mark.parametrize('arms', list(protocol.Arms))
+def test_the_client_stack_states_the_grip_point_as_the_frame_of_the_pose_and_the_target_of_each_arm(arms):
+    client_stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,), arms=arms))
     stack = declared_stack({server_keys.LOCAL_STACK: client_stack}, ProtocolVersion.V3)
     frames = ee_frames(stack.meta())
-    assert frames[keys.EE_POSE] == frames[keys.TARGET_EE_POSE] == EEFrame(site=GRIPPER_SITE)
+    for arm in arms.value:
+        pose = f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}'
+        target = f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}'
+        assert frames[pose] == frames[target] == EEFrame(site=GRIPPER_SITE)
 
 
 @pytest.mark.parametrize(
