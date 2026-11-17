@@ -164,7 +164,8 @@ class EnvServer:
             if self._stopped:
                 return {protocol.ERROR: 'RuntimeError: the env server stopped'}
             self._requests.put(request)
-        while connection.state is State.OPEN:
+        # ``connection.state`` needs websockets 13; a simulator's venv can carry 12, which has only this path.
+        while connection.protocol.state is State.OPEN:
             try:
                 return request.reply.get(timeout=_CONNECTION_CHECK_INTERVAL)
             except queue.Empty:
