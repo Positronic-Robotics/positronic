@@ -7,7 +7,7 @@ class SettleTuning:
 
     Once the chain is still, a move measures how far each joint rests from the target, and moves the reference
     past the target by up to ``max_correction_rad``, until every joint rests within ``tolerance_rad``. A joint
-    that rests farther than ``max_correction_rad`` plus ``tolerance_rad`` from the target is blocked, and the
+    that rests ``max_correction_rad`` plus ``tolerance_rad`` or farther from the target is blocked, and the
     move stops there.
     """
 

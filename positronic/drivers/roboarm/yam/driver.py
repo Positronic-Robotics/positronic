@@ -538,7 +538,7 @@ class _Arm(DriverRun[command.CommandType]):
                     self.moves.errored = False
                     return reference
                 bound = tuning.max_correction_rad
-                if np.any(np.abs(obs[_JOINT_POS] - reachable) > bound + tuning.tolerance_rad):
+                if np.any(np.abs(obs[_JOINT_POS] - reachable) >= bound + tuning.tolerance_rad):
                     raise TimeoutError(
                         f'the arm rests {np.max(np.abs(obs[_JOINT_POS] - reachable)):.4f} rad from {reachable}, '
                         f'farther than a correction of {bound:.4f} rad can close: something blocks it; '

@@ -90,13 +90,17 @@ I2RT_ARM_META = {
 }
 
 
+CONTACT_RAD = 1e-6
+
+
 class FakeYam(yam._FakeYam):
     """A ``_FakeYam`` that misses its command the two ways a real chain does.
 
     ``bias`` offsets every joint. ``gives_back`` is the fraction of the way from ``floats_at`` to the command
-    that the chain travels. ``stops`` places the lower stops of joints 2 and 3. ``speed`` is the fraction of its
-    usual step toward each command that the chain takes. ``motor_chain`` stands for the CAN motor chain of i2rt,
-    whose control loop runs until ``stop_loop``.
+    that the chain travels. ``stops`` places the lower stops of joints 2 and 3, and a joint closer than
+    ``CONTACT_RAD`` to a stop rests on it. ``speed`` is the fraction of its usual step toward each command that
+    the chain takes. ``motor_chain`` stands for the CAN motor chain of i2rt, whose control loop runs until
+    ``stop_loop``.
     """
 
     def __init__(self):
@@ -128,6 +132,8 @@ class FakeYam(yam._FakeYam):
             position[1:3] = np.maximum(position[1:3], self.stops)
             position[:6] = self._pos[:6] + self.speed * (position[:6] - self._pos[:6])
             super().command_joint_pos(position)
+            on_stop = np.abs(self._pos[1:3] - self.stops) < CONTACT_RAD
+            self._pos[1:3] = np.where(on_stop, self.stops, self._pos[1:3])
 
     def zero_torque_mode(self):
         self.released_at.append(self._pos.copy())
@@ -477,6 +483,16 @@ def test_a_ready_call_on_an_arm_that_parked_answers_with_no_move(world, rig):
     _until_answered(rig, answer)
     answer.result()
     np.testing.assert_allclose(_asked(rig)[sent:], np.zeros((len(rig.vendor.targets) - sent, 6)), atol=0.005)
+
+
+def test_an_object_at_the_edge_of_the_largest_correction_gets_no_correction(rig, caplog):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, MAX_CORRECTION + DEFAULT_TUNING.tolerance_rad)
+    sent = len(rig.vendor.targets)
+    rig.tick(20)
+    assert np.min(_asked(rig)[sent:]) >= 0.0  # no reference past the parking pose
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    assert 'something blocks it' in caplog.text
 
 
 def test_a_gap_the_largest_correction_still_closes_is_corrected_and_not_taken_for_an_object(rig, caplog):
