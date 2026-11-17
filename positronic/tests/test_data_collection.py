@@ -374,6 +374,21 @@ def test_a_right_controller_lost_while_the_arm_state_is_an_error_turns_control_o
     assert marks['after'] == marks['back']
 
 
+def test_a_press_of_b_just_before_the_controller_is_lost_starts_one_recording(world):
+    dc, _arm, buttons, _grips, _sounds = build_teleop_arm(world)
+    commands = RecordingEmitter()
+    dc.ds_agent_commands._bind(commands, clock=world.clock)
+
+    driver = ManualDriver([
+        (lambda: buttons.emit(make_buttons(B=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(B=True)), 0.001),
+        (lambda: buttons.emit({webxr.LEFT: None, webxr.RIGHT: None}), 0.05),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert len(commands.emitted) == 1
+
+
 def test_a_session_that_starts_with_no_controller_tracked_sends_no_grip_until_the_trigger_comes(world):
     dc, _arm, buttons, grips, _sounds = build_teleop_arm(world)
     marks = {}

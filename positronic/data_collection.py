@@ -34,19 +34,17 @@ from positronic.teleop.clutch import CONTROLLER_AXES, OperatorPosition, Tracker
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 
+_BUTTON_INDICES = {'A': 4, 'B': 5, 'trigger': 0, 'thumb': 1, 'stick': 3}
+
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
     for side in [LEFT, RIGHT]:
+        names = {f'{side}_{button}': index for button, index in _BUTTON_INDICES.items()}
         if buttons[side] is None:
-            continue
-
-        mapping = {
-            f'{side}_A': buttons[side][4],
-            f'{side}_B': buttons[side][5],
-            f'{side}_trigger': buttons[side][0],
-            f'{side}_thumb': buttons[side][1],
-            f'{side}_stick': buttons[side][3],
-        }
+            # A controller that is not tracked keeps its last values, so a press before the loss counts once
+            mapping = {name: button_handler.get_value(name) for name in names if name in button_handler}
+        else:
+            mapping = {name: buttons[side][index] for name, index in names.items()}
         button_handler.update_buttons(mapping)
 
 
