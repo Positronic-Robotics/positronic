@@ -14,6 +14,7 @@ from positronic.policy.codecs import (
     ChangeEEFrame,
     Codec,
     EncodeImages,
+    EncodeVideo,
     EndCommand,
     FlipGrip,
     Metadata,
@@ -22,6 +23,7 @@ from positronic.policy.codecs import (
 from positronic.policy.codecs.action import (
     AbsoluteJointsAction,
     AbsolutePositionAction,
+    BimanualCartesianAction,
     BimanualJointsAction,
     CartesianDeltaAction,
     JointDeltaAction,
@@ -58,6 +60,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
     component.WIRE_NAME: {component.WIRE_VERSION: Version(component.from_spec_args)}
     for component in (
         EncodeImages,
+        EncodeVideo,
         EndCommand,
         EndOnField,
         InferenceSchedule,
@@ -80,6 +83,7 @@ COMPONENTS: dict[str, dict[int, Version[ComponentFactory]]] = {
         CartesianDeltaAction,
         AbsoluteJointsAction,
         BimanualJointsAction,
+        BimanualCartesianAction,
         JointDeltaAction,
         JointPositionAction,
         SetControlMode,

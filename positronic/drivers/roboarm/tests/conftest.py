@@ -1,11 +1,11 @@
 """Stand-ins for the vendor packages the arm drivers import.
 
 ``positronic_franka`` builds against libfranka, ``scservo_sdk`` talks to a serial servo bus, ``placo``
-solves kinematics and ``i2rt`` opens a YAM CAN chain; all four ship only in an extra, so the driver modules
-cannot be imported from a default sync. Their Python-side logic needs no vendor behaviour, so a stub carrying
-the names each module binds at import is enough — a test that needs a vendor to compute something stands in
-for the class that wraps it instead. Installed here, before any test module imports a driver, and only where the real
-package is absent.
+solves kinematics, ``i2rt`` opens a YAM CAN chain and ``rctlstd`` talks to a CRON controller; all five ship only in
+an extra or a vendor wheel, so the driver modules cannot be imported from a default sync. Their Python-side logic
+needs no vendor behaviour, so a stub carrying the names each module binds at import is enough — a test that
+needs a vendor to compute something stands in for the class that wraps it instead. Installed here, before any
+test module imports a driver, and only where the real package is absent.
 """
 
 import importlib.util
@@ -21,6 +21,7 @@ PACKAGE = 'positronic_franka'
 VENDOR = f'{PACKAGE}._franka'
 DESK = f'{PACKAGE}.desk'
 I2RT = 'i2rt'
+RCTLSTD = 'rctlstd'
 
 
 def _install_vendor_stub() -> None:
@@ -116,6 +117,14 @@ def _install_i2rt_stub() -> None:
     sys.modules.update({stub.__name__: stub for stub in stubs})
 
 
+def _install_rctlstd_stub() -> None:
+    """Bind the module the CRON controller imports. A test replaces the handle ``controller.rctl`` with a fake."""
+    rctlext = types.ModuleType(f'{RCTLSTD}.rctlext')
+    package = types.ModuleType(RCTLSTD)
+    package.__dict__.update(rctlext=rctlext)
+    sys.modules.update({package.__name__: package, rctlext.__name__: rctlext})
+
+
 # Both are reached for only inside the functions that use them, so an empty module carries the import
 _EMPTY_STUBS = ('scservo_sdk', 'placo')
 
@@ -124,6 +133,9 @@ if importlib.util.find_spec(PACKAGE) is None:
 
 if importlib.util.find_spec(I2RT) is None:
     _install_i2rt_stub()
+
+if importlib.util.find_spec(RCTLSTD) is None:
+    _install_rctlstd_stub()
 
 for _name in _EMPTY_STUBS:
     if importlib.util.find_spec(_name) is None:
