@@ -233,6 +233,22 @@ def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(
     np.testing.assert_array_equal(q[-1][0], [9_999, -9_999])
 
 
+def test_an_episode_whose_close_failed_on_a_chunk_write_can_be_aborted(tmp_path, monkeypatch):
+    def fail(writer, *args, **kwargs):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(pq.ParquetWriter, 'write_table', fail)
+    ep_dir = tmp_path / 'ep'
+    writer = DiskEpisodeWriter(ep_dir)
+    # The 10,000th row fills a chunk at the default chunk size, so its write fails on the writer thread.
+    for i in range(10_000):
+        writer.append('q', i, Time(**{RECORDED_TIME: i + 1}))
+    with pytest.raises(OSError, match='disk full'):
+        writer.__exit__(None, None, None)
+    writer.abort()
+    assert not ep_dir.exists()
+
+
 def test_episode_reader_rejects_unfinished(tmp_path):
     ep_dir = tmp_path / 'ep_incomplete'
     ep_dir.mkdir()

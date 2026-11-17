@@ -280,10 +280,9 @@ class SimpleSignalWriter(SignalWriter[T]):
             self._flush_chunk(self._chunk_writer)
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        """Finalize the file on context exit (even on exceptions)."""
+        """Finalize the file on context exit (even on exceptions). After a failed close, ``abort`` removes the file."""
         if self._finished or self._aborted:
             return
-        self._finished = True
         try:
             self._wait_for_chunk()
             # The close waits for the disk anyway, so it writes the last chunk itself.
@@ -294,6 +293,7 @@ class SimpleSignalWriter(SignalWriter[T]):
             else:
                 table = timestamp_table(self._timestamps).append_column(VALUE_COLUMN, pa.array([], type=pa.int64()))
                 pq.write_table(table, self.filepath, **parquet_write_options(table.schema))
+        self._finished = True
 
     def abort(self) -> None:
         """Abort writing and remove any partial output file."""

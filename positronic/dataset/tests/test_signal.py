@@ -246,6 +246,17 @@ class TestSignalWriterChunkWrite:
         with pytest.raises(OSError, match='disk full'):
             writer.__exit__(None, None, None)
 
+    def test_a_writer_whose_close_failed_can_be_aborted(self, tmp_path, monkeypatch, chunk_writer):
+        _fail_parquet_writes(monkeypatch)
+        path = tmp_path / 'signal.parquet'
+        writer = SimpleSignalWriter(path, chunk_size=2, chunk_writer=chunk_writer)
+        for t in (1, 2):
+            writer.append(t, Time(**{RECORDED_TIME: t}))
+        with pytest.raises(OSError, match='disk full'):
+            writer.__exit__(None, None, None)
+        writer.abort()
+        assert not path.exists()
+
     def test_a_failed_chunk_write_surfaces_on_append_by_the_next_chunk(self, tmp_path, monkeypatch, chunk_writer):
         _fail_parquet_writes(monkeypatch)
         path = tmp_path / 'signal.parquet'
