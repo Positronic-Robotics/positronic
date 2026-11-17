@@ -380,8 +380,10 @@ class TeleopService:
         """Take one sample of the controllers, by ``LEFT`` and ``RIGHT``. A controller that the headset does not track
         is absent or ``None``."""
         now_ns = time.monotonic_ns()
-        # The page can send fewer values, or none, for a controller that loses tracking
-        buttons = {name: values for name, values in buttons.items() if values is not None and len(values) > max(Button)}
+        # The page sends a hand that the headset tracks with no controller in it, with too few button values or none
+        controllers = {name for name, values in buttons.items() if values is not None and len(values) > max(Button)}
+        poses = {name: pose for name, pose in poses.items() if name in controllers}
+        buttons = {name: buttons[name] for name in controllers}
         with self._changed:
             self._sample = _Sample(self._sample.number + 1, poses, buttons)
             for controller, button_map in self._buttons.items():
@@ -655,7 +657,7 @@ class TeleopService:
         if target is None and tracker.on:
             tracker.turn_off()
         if tracker.on and target is not None:
-            self._hold[arm] = target, self._hold[arm][1] if buttons is None else ButtonMap.grip(buttons)
+            self._hold[arm] = target, 0.0 if buttons is None else ButtonMap.grip(buttons)
 
     def _hold_element(self) -> dict[str, Any]:
         """The element that sends the hold targets, arm after arm. Hold the lock."""

@@ -385,17 +385,19 @@ def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_targe
         run.close()
 
 
-def test_a_sample_with_no_buttons_keeps_control_and_the_grip(service, socket_path, runtime):
+def test_a_hand_with_no_buttons_turns_control_off_and_the_robot_holds(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         headset.press(a=1.0)
         headset.buttons = _buttons(trigger=0.8)
-        _drive_until(run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(0.8))
+        held = _drive_until(run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(0.8))
         headset.buttons = []
-        headset._samples(3)
+        headset.pose = _raised(HAND)
+        _drive_until(run, lambda _: not service.state().control)
         steps, end = _drive(run, 0.3)
-        assert end is None and _moves(steps) and service.state().control
+        assert end is None and _moves(steps)
         for step in _moves(steps):
+            np.testing.assert_allclose(_target(step).translation, _target(held).translation, atol=1e-6)
             assert step.commands[keys.TARGET_GRIP] == pytest.approx(0.8)
         run.close()
 
