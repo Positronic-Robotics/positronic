@@ -171,7 +171,8 @@ class DataCollectionController(pimm.ControlSystem):
                         logging.error(f'The rig was not readied: {e}')
                         self.sound.emit(error_wav_path)
 
-                self.target_grip.emit(button_handler.get_value('right_trigger'))
+                if 'right_trigger' in button_handler:  # a session can start with no right controller tracked
+                    self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
 
                 if tracker.on:
@@ -180,9 +181,14 @@ class DataCollectionController(pimm.ControlSystem):
                     )
                     if entered_error:
                         self.sound.emit(error_wav_path)
-                    if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(tracker.update(cp_msg.data[RIGHT]))
-                        self.robot_commands.emit(cmd)
+                    hand_pos = cp_msg.data.get(RIGHT)
+                    if not in_error and cp_msg.updated and hand_pos is not None:
+                        self.robot_commands.emit(roboarm.command.CartesianPosition(tracker.update(hand_pos)))
+                    elif cp_msg.updated and hand_pos is None and not tracker.is_umi_mode:
+                        # The hand can come back at another pose: a new press of A starts control from there
+                        logging.warning('Control is off: the right controller is not tracked')
+                        tracker.turn_off()
+                        self.sound.emit(error_wav_path)
 
                 yield pimm.Sleep(0.001)
 

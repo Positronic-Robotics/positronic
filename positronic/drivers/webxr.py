@@ -38,7 +38,8 @@ def parse_controller_message(
     data: Mapping[str, Any],
 ) -> tuple[dict[str, geom.Transform3D | None], dict[str, np.ndarray | None]]:
     """The poses and the buttons of the controllers in a message of the page on ``/ws``, the inverse of
-    ``controller_message``. A controller that the page does not track has ``None`` for both."""
+    ``controller_message``. A controller that the page does not track has ``None`` for both, and a tracked
+    controller has at least ``_CONTROLLER_BUTTONS`` button values."""
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
     buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
@@ -337,10 +338,9 @@ class WebXR(pimm.ControlSystem):
                             if transform is not None:
                                 transform.translation *= self.sensitivity
 
-                        if controller_positions[LEFT] is not None or controller_positions[RIGHT] is not None:
-                            self.controller_positions.emit(controller_positions)
-                        if buttons[LEFT] is not None or buttons[RIGHT] is not None:
-                            self.buttons.emit(buttons)
+                        # A sample with no controller in it tells a reader that the controllers are not tracked
+                        self.controller_positions.emit(controller_positions)
+                        self.buttons.emit(buttons)
                         fps.tick()
                     except TimeoutError:
                         # Timeout is normal, just continue to check should_stop

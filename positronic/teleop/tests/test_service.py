@@ -394,6 +394,7 @@ def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds
         headset.buttons = []
         headset.pose = _raised(HAND)
         _drive_until(run, lambda _: not service.state().control)
+        headset._samples(3)
         steps, end = _drive(run, 0.3)
         assert end is None and _moves(steps)
         for step in _moves(steps):
