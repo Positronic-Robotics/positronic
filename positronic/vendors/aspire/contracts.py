@@ -1,9 +1,8 @@
 """The ASPIRE CapApi value types and environment boundary that a program sees, for the ``yam_real`` embodiment.
 
 Ported from NVlabs/ASPIRE ``src/cap_harness/{contracts,errors,protocols}.py`` at commit ``fa00f0e``, under the Apache
-License 2.0 (see ``NOTICE``). The field names, defaults and result semantics are ASPIRE's. This copy carries one
-embodiment, ``yam_real``, and no perception types. A camera observation holds RGB only: its depth, intrinsics and
-pose are ``None``, because the rig sends no calibrated depth.
+License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are ASPIRE's. A camera observation holds
+RGB only: its depth, intrinsics and pose are ``None``, because the rig sends no calibrated depth.
 """
 
 from collections.abc import Mapping, Sequence

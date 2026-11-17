@@ -1,13 +1,8 @@
 """Run an ASPIRE CapApi program against a stream of positronic observations.
 
-The program runs in a thread of its own and calls the CapApi functions that ``CapBridge`` injects. A call that moves
-the robot puts its target in the queue and blocks. Each ``CapBridge.answer`` reads one observation, decides whether
-the move in flight ended, wakes the program when it did, and answers the current targets as an action chunk. The rig
-plays the chunk and asks again. The program never drives a motor: the rig's driver solves IK and limits speed.
-
-A result keeps three facts apart. ``diagnostics[DIAGNOSTIC_ACCEPTED]`` says the bridge took the target.
-``diagnostics[DIAGNOSTIC_ARRIVED]`` says the robot came within the bridge's tolerance of it. ``ok`` says the final
-state meets the tolerance of the call, as ASPIRE's CapApi judges it.
+A call that moves the robot puts its target in a queue and blocks until ``CapBridge.answer`` reads an observation that
+ends the move. The rig plays the targets as action chunks: its driver solves IK and limits speed. The vendor README
+states how a move ends and what each result field means.
 """
 
 import importlib
