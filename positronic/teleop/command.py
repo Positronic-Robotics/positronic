@@ -17,7 +17,7 @@ from positronic_model_server.server_wire import ServedAddress, ServedHostPort
 import pimm
 import positronic.cfg.webxr
 from positronic import geom
-from positronic.drivers.webxr import RIGHT, WebXR
+from positronic.drivers.webxr import WebXR
 from positronic.offboard.server import socket_at
 from positronic.utils import check_finite_positive
 
@@ -71,8 +71,7 @@ class _Headset(pimm.ControlSystem):
             positions = pimm.read_updated(self.controller_positions)
             if positions is not None:
                 buttons = self.buttons.read()
-                right = None if buttons is None else buttons.data[RIGHT]
-                self._service.take_sample(positions.data[RIGHT], right)
+                self._service.take_sample(positions.data, {} if buttons is None else buttons.data)
             page_input = pimm.read_updated(self.page_input)
             if page_input is not None and HEADSET_CAMERA in page_input.data:
                 camera = page_input.data[HEADSET_CAMERA]
