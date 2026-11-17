@@ -96,9 +96,8 @@ An entry of `calls` holds:
 | Field | Value |
 | --- | --- |
 | `name`, `args`, `kwargs` | The call as the program made it |
-| `result` | The value the call returned, without camera images |
+| `result` | The value the call returned, without camera images. A move result names its end in `diagnostics['move_end']` |
 | `raised` | The exception the call raised, for example `NotImplementedError` |
-| `move_end` | How the bridge ended the move: `arrived`, `stopped`, `timeout` or `period`. Empty for a call that does not move |
 | `started_wall_s`, `ended_wall_s` | Server wall time, in seconds from the program's start |
 | `started_robot_s`, `ended_robot_s` | Robot time, in seconds of the chunks the bridge answered |
 

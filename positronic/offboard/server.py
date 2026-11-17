@@ -229,6 +229,7 @@ class PolicyServer:
             if pipeline.codec is not None:
                 infer = pipeline.codec.wrap(infer)
             try:
+                # ``open_session`` is a model call, so it takes the lock too; the ``Model`` contract keeps it short.
                 async with self._infer_lock:
                     session_meta = await _outlast_cancellation(model.open_session, session_id, model_params)
                 meta = {

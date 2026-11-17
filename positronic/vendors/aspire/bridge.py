@@ -141,35 +141,10 @@ class CallTrace(BaseModel):
     kwargs: dict[str, JsonValue]
     result: JsonValue = None
     raised: str | None = None
-    move_end: MoveEnd | None = None
     started_wall_s: float
     ended_wall_s: float
     started_robot_s: float
     ended_robot_s: float
-
-
-def _jsonable(value: Any) -> Any:
-    """The JSON form of what pydantic cannot dump itself: numpy values and read-only mappings."""
-    match value:
-        case np.ndarray():
-            return value.tolist()
-        case np.generic():
-            return value.item()
-        case MappingProxyType():
-            return dict(value)
-    raise TypeError(f'{type(value).__name__} has no JSON form in a call trace')
-
-
-def _without_images(value: Any) -> Any:
-    """``value`` with every observation in it stripped of its camera images, which the episode records."""
-    match value:
-        case Observation():
-            return replace(value, cameras={})
-        case ExecutionResult(final_observation=Observation() as observation):
-            return replace(value, final_observation=_without_images(observation))
-        case StepResult(observation=Observation() as observation):
-            return replace(value, observation=_without_images(observation))
-    return value
 
 
 @dataclass(frozen=True)
@@ -495,6 +470,30 @@ class CapBridge:
             self._outcome = outcome
             self._turn.notify_all()
 
+    @staticmethod
+    def _jsonable(value: Any) -> Any:
+        """The JSON form of what pydantic cannot dump itself: numpy values and read-only mappings."""
+        match value:
+            case np.ndarray():
+                return value.tolist()
+            case np.generic():
+                return value.item()
+            case MappingProxyType():
+                return dict(value)
+        raise TypeError(f'{type(value).__name__} has no JSON form in a call trace')
+
+    @staticmethod
+    def _without_images(value: Any) -> Any:
+        """``value`` with every observation in it stripped of its camera images."""
+        match value:
+            case Observation():
+                return replace(value, cameras={})
+            case ExecutionResult(final_observation=Observation() as observation):
+                return replace(value, final_observation=replace(observation, cameras={}))
+            case StepResult(observation=Observation() as observation):
+                return replace(value, observation=replace(observation, cameras={}))
+        return value
+
     def _traced(self, name: str, tool: Callable[..., Any]) -> Callable[..., Any]:
         """``tool``, which also records each call the program makes to it."""
 
@@ -509,14 +508,12 @@ class CapBridge:
                 raised = f'{type(error).__name__}: {error}'
                 raise
             finally:
-                diagnostics = result.diagnostics if isinstance(result, ExecutionResult | StepResult) else {}
                 trace = CallTrace(
                     name=name,
-                    args=to_jsonable_python(args, fallback=_jsonable),
-                    kwargs=to_jsonable_python(kwargs, fallback=_jsonable),
-                    result=to_jsonable_python(_without_images(result), fallback=_jsonable),
+                    args=to_jsonable_python(args, fallback=self._jsonable),
+                    kwargs=to_jsonable_python(kwargs, fallback=self._jsonable),
+                    result=to_jsonable_python(self._without_images(result), fallback=self._jsonable),
                     raised=raised,
-                    move_end=diagnostics.get(DIAGNOSTIC_MOVE_END),
                     started_wall_s=started_wall_s,
                     ended_wall_s=time.monotonic() - self._started_wall_s,
                     started_robot_s=started_robot_s,

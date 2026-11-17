@@ -9,7 +9,7 @@ from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
 from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
-from positronic.vendors.aspire.bridge import BridgeSettings, CapBridge, MoveEnd, Program
+from positronic.vendors.aspire.bridge import DIAGNOSTIC_MOVE_END, BridgeSettings, CapBridge, MoveEnd, Program
 from positronic.vendors.aspire.contracts import EnvironmentAdapter
 
 ARMS = keys.BIMANUAL_ARMS
@@ -308,11 +308,12 @@ def test_the_trace_records_each_call_with_its_arguments_result_and_end(run, sett
     ]
     state, grip_call, move, period, unsupported = calls
     assert state.result['gripper_positions'] == {'left': 1.0, 'right': 1.0}
-    assert grip_call.kwargs == {'arm': 'left'} and grip_call.move_end is MoveEnd.ARRIVED
+    assert grip_call.kwargs == {'arm': 'left'}
+    assert grip_call.result['diagnostics'][DIAGNOSTIC_MOVE_END] == MoveEnd.ARRIVED
     assert move.args == [[0.5] * 6] and move.result['ok'] and move.result['diagnostics']['accepted']
     assert move.result['final_observation']['cameras'] == {}
-    assert period.move_end is MoveEnd.PERIOD
-    assert state.move_end is None and unsupported.result is None and 'NotImplementedError' in unsupported.raised
+    assert period.result['diagnostics'][DIAGNOSTIC_MOVE_END] == MoveEnd.PERIOD
+    assert unsupported.result is None and 'NotImplementedError' in unsupported.raised
     assert move.ended_robot_s - move.started_robot_s == pytest.approx(settings.round_s)
     assert all(a.ended_wall_s <= b.started_wall_s for a, b in zip(calls, calls[1:], strict=False))
 
@@ -321,4 +322,5 @@ def test_the_trace_records_a_call_that_the_bridge_refused(run):
     bridge, _ = run("move_to_joints([1.0] * 5, arm='left')")
     completed(bridge)
     (call,) = bridge.calls
-    assert call.move_end is None and not call.result['ok'] and not call.result['diagnostics']['accepted']
+    assert not call.result['ok'] and not call.result['diagnostics']['accepted']
+    assert DIAGNOSTIC_MOVE_END not in call.result['diagnostics']

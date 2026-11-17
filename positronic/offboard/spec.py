@@ -23,7 +23,10 @@ class Model(ABC):
         return {}
 
     def open_session(self, session_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Prepare one session from its resolved ``parameters``; return the metadata of that session only."""
+        """Prepare one session from its resolved ``parameters``; return the metadata of that session only.
+
+        Inference of every other session waits for it, so it must stay short.
+        """
         return {}
 
     def end_session(self, session_id: str) -> None:
