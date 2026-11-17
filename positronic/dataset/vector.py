@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from concurrent.futures import Executor, Future, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from functools import cached_property
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -184,14 +184,15 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path, chunk_size: int = 10000, chunk_writer: Executor | None = None):
+    def __init__(self, filepath: Path, chunk_size: int = 10000, chunk_writer: ThreadPoolExecutor | None = None):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
             filepath: Path to the output parquet file
             chunk_size: Number of records to accumulate before writing a chunk (default 10000)
             chunk_writer: Runs the write of each chunk that ``append`` fills, so ``append`` does not wait for it.
-                A failed write raises on a later ``append`` or on close. None writes the chunk in ``append``.
+                The write updates this writer, so it runs on a thread of this process. A failed write raises on a
+                later ``append`` or on close. None writes the chunk in ``append``.
         """
         super().__init__()
         self.filepath = filepath
@@ -207,7 +208,7 @@ class SimpleSignalWriter(SignalWriter[T]):
         # At most one chunk of this file is in flight, so the chunks reach the file in order.
         self._chunk_in_flight: Future[None] | None = None
 
-    def _flush_chunk(self, chunk_writer: Executor | None) -> None:
+    def _flush_chunk(self, chunk_writer: ThreadPoolExecutor | None) -> None:
         if not self._values:
             return
         self._wait_for_chunk()
