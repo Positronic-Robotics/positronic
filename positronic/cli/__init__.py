@@ -7,6 +7,7 @@ from pimm.logging import init_logging
 from positronic.cli.account import commands as account_commands
 from positronic.cli.account.gateway import CommandFailed
 from positronic.cli.eval import commands as eval_commands
+from positronic.teleop import debug
 from positronic.teleop.command import serve as teleop
 
 
@@ -14,7 +15,7 @@ from positronic.teleop.command import serve as teleop
 def _internal_main():
     init_logging()
     try:
-        cfn.cli({'eval': eval_commands, 'account': account_commands, 'teleop': teleop})
+        cfn.cli({'eval': eval_commands, 'account': account_commands, 'teleop': teleop, 'teleop-debug': debug.commands})
     except CommandFailed as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(exc.fault) from None
