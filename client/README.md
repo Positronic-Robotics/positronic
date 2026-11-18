@@ -618,9 +618,13 @@ properties that read the first entry, and a dump of the view does not hold them.
 
 `submissions.artifacts` lists what a finished run wrote, one page at a time. It also lists a failed
 run that carries `scores`. Each entry names its `key` under the submission's own prefix, its `size`,
-and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree, so one
-attempt's episodes are `attempts/<n>/episodes/` and `result.json`'s `attempt_location` names the
-attempt that scored. Pass `after` with the `next` of the page before it to read the rest. Pass `eval`
+and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree, such as the
+folder of one episode. `result.json` holds the scores, and `episode_locations` lists the folder of each
+episode that counts, in episode order. Each entry starts with the run's `artifact_location`; remove
+that start to pass the folder as `prefix`. A folder that the list does not name counts nothing. Where
+`episode_locations` is absent, `attempt_location` names the attempt that scored: its
+`attempts/<n>/episodes/` holds the episodes that count, and its `scores.json` holds their scores.
+Pass `after` with the `next` of the page before it to read the rest. Pass `eval`
 to list the records of one eval of a submission of several; without it, the page lists the first. The route
 refuses an `eval` that the submission does not run. A platform that sends no `evals` ignores `eval`. The route
 refuses every other run: a run still going has a part-written prefix, and a run that failed with no
