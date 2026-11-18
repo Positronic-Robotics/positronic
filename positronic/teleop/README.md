@@ -86,7 +86,7 @@ controller, as for one arm.
 | Control of the arm is on | the trigger | the trigger | the grip of the arm |
 | The trial runs | | hold B for 1 s | Complete: the episode ends |
 | The trial runs | | hold the stick for 1 s | Give up: the episode ends |
-| Each phase | press or hold the stick | | the camera and the panel (see Cameras) |
+| Each phase | press or hold Y | | the camera and the panel (see Cameras) |
 
 When the left controller is not tracked for 0.5 s, control of the left arm goes off. The right arm does the same with
 the right controller. The headset video shows the control state of each arm, for example `Left on (X: off). Right off
@@ -134,10 +134,10 @@ Conversion for training picks its own keys from the recording.
 - The panel in the headset has the aspect of the video: 4:3 for one camera, 2:1 with the column.
 - The headset page (before Enter AR) shows the state of the cameras: each camera, a green dot on each camera whose
   images came in the last 30 s (also between trials), and the camera that the headset shows.
-- In the headset, the stick of the left controller works the video panel. A press of the stick makes the next camera
-  whose images come now the main camera. A hold of 1 s cycles the panel: on black with the camera, the text alone
-  over the room (the service then sends the view with no camera, and the page shows black as clear), and hidden. The
-  bottom of the view names the camera and the use of the left stick.
+- In the headset, Y on the left controller works the video panel. A press of Y makes the next camera whose images
+  come now the main camera. A hold of 1 s cycles the panel: on black with the camera, the text alone over the room
+  (the service then sends the view with no camera, and the page shows black as clear), and hidden. The bottom of the
+  view names the camera and the use of Y.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480, as JPEG. A camera with another aspect gets black bars.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
