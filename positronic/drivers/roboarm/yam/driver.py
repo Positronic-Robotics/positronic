@@ -182,13 +182,6 @@ _GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
 _GRIPPER_FRICTION_NM = 0.3
 
 
-def _checked_gripper_force_cap(cap_n: float | None) -> float | None:
-    """``cap_n`` as the cap that the chain runs: None for no cap. Raises ValueError where it is no finite force."""
-    if cap_n is not None:
-        check_finite_nonnegative(cap_n, 'gripper_force_cap_n')
-    return float(cap_n) if cap_n else None
-
-
 def _cap_gripper_force(chain: Any, cap_n: Callable[[], float | None]) -> None:
     """Cap the closing torque that the P-D loop of the gripper motor asks for, in each ``update`` of i2rt's hardware
     ``chain``, after its gripper force limiter. The cap is the torque at which that limiter holds a stalled gripper with
@@ -933,7 +926,7 @@ class Robot(pimm.ControlSystem):
         if park_after_idle_s is not None:
             check_finite_positive(park_after_idle_s, 'park_after_idle_s')
         # The cap that the control thread of the chain reads. The driver loop writes it from ``gripper_force_cap_n``.
-        self._gripper_force_cap_n = _checked_gripper_force_cap(gripper_force_cap_n)
+        self._gripper_force_cap_n = self._checked_gripper_force_cap(gripper_force_cap_n)
         # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
         # it does, those checks and a check that each value is finite run here first.
         friction = compensation.coulomb_friction
@@ -971,10 +964,17 @@ class Robot(pimm.ControlSystem):
         """The arm-base mount pose in the world frame."""
         return self._base_pose
 
+    @staticmethod
+    def _checked_gripper_force_cap(cap_n: float | None) -> float | None:
+        """``cap_n`` as the cap that the chain runs: None for no cap. Raises ValueError where it is no finite force."""
+        if cap_n is not None:
+            check_finite_nonnegative(cap_n, 'gripper_force_cap_n')
+        return float(cap_n) if cap_n else None
+
     def _take_gripper_force_cap(self) -> float | None:
         """Read ``gripper_force_cap_n`` and return the cap that the chain runs from its next control step."""
         # One reference write: the control thread of the chain reads the old cap or the new one
-        self._gripper_force_cap_n = _checked_gripper_force_cap(self.gripper_force_cap_n.value)
+        self._gripper_force_cap_n = self._checked_gripper_force_cap(self.gripper_force_cap_n.value)
         return self._gripper_force_cap_n
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
