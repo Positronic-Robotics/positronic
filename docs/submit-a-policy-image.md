@@ -492,7 +492,7 @@ what its `reason` names. A `running` run reports its `stage`:
 | `persisting` | the run writes its files |
 
 Reaching `evaluating` proves the image works. A run can go back to `provisioning` from
-`evaluating`: a lost simulator VM is replaced, and `result.json` records which attempt scored.
+`evaluating`: a lost simulator VM is replaced, and `result.json` records where the episodes are.
 An image run reports `episodes` as `0/0` and `runs` as an empty list while it runs.
 
 A `finished` submission carries `scores.primary`, the value a leaderboard ranks on, and
@@ -500,7 +500,7 @@ A `finished` submission carries `scores.primary`, the value a leaderboard ranks 
 
 | link | content | present |
 |---|---|---|
-| `result` | the run id, the attempt that scored, and `scores` with `primary`, `episodes` and `unscored` | on a finished run, and on an errored run that wrote its records |
+| `result` | the run id, where its episodes are, and `scores` with `primary`, `episodes` and `unscored` | on a finished run, and on an errored run that wrote its records |
 | `policy_log` | your container's stdout and stderr, from the attempt that decided the run | on the same runs as `result`, when the container printed anything |
 | `diagnostics` | why the run failed, and the state of the box | on an errored run whose record was written |
 
@@ -543,8 +543,8 @@ log cannot:
 route to an episode: a signed link covers one key, and the bucket refuses a listing. The
 client calls it with `list_artifacts`, and `positronic eval` has no command for it.
 
-- Read `result.json` first. Its `attempt_location` names the attempt that scored. A reprovisioned
-  run writes one tree per attempt, and only that tree holds the episodes that count.
+- Read `result.json` first. Its `episode_locations` lists the addresses of the episodes. Where it
+  is absent, its `attempt_location` gives the address.
 - The route's `prefix` filter is read under the submission's own prefix, so one attempt's
   episodes are `attempts/<n>/episodes/`. The same attempt holds `logs/` and `timing.jsonl`.
   `control/` is never listed.
