@@ -97,8 +97,26 @@ The span names are the contract:
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `driver.command` | root (an arm driver's file) | `command.sync`; `command.age_ms` on a streamed setpoint | one command that an arm driver takes, from its read to its apply |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
+
+### Reading arm commands
+
+An arm driver records one `driver.command` span in its own file for each command that it takes. The span starts
+when a tick of the driver reads the command. It ends when the first write to the hardware that carries the command
+returns: the franka controller call, the kinova current command, the so101 bus write, the yam joint command, or the
+CRON velocity command or planned move. The driver takes a `CommandReceipt` from `Moves.take()` right after the read,
+passes it with the target, and calls `receipt.applied()` after the write. A second call records nothing.
+
+- `command.sync` is true for a call whose asker waits for the arrival, and false for a streamed setpoint.
+- `command.age_ms` is the time from the emit of a streamed setpoint to its read, on the host's monotonic clock.
+  A call carries no emit time, so its span has no age.
+
+The span of a call ends when the move starts, not when the arm arrives. A call that waits through an arm error is
+timed from its first read. A command that the driver drops, for example a target with no finite joints, records no
+span. A command whose first write fails, a target that the driver replaces before its first write, and a move that a
+stop or a refusal ends before its first write also record no span.
 
 ### Reading harness steps
 

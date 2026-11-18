@@ -9,13 +9,14 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom
+from positronic import geom, telemetry
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.roboarm.cron import controller as cron_controller
 from positronic.drivers.roboarm.cron import driver as cron
 from positronic.drivers.roboarm.cron.controller import JOINTS, MotionMode, PowerState, to_pose
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveRefused
+from positronic.telemetry_keys import ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 TICK = 1.0 / cron._HZ
@@ -1867,3 +1868,87 @@ def test_leaving_the_run_brakes_the_stream_to_a_stop(rctl, driven):
     braking = np.array(rctl.commanded[streamed - 1 : -cron_controller._STOP_REPEATS])
     assert np.all(np.abs(np.diff(braking, axis=0)) <= cron._MAX_JOINT_ACCEL * cron._WRIST_SCALE * TICK + 1e-9)
     np.testing.assert_array_equal(braking[-1], np.zeros(JOINTS))
+
+
+def _command_spans(tmp_path):
+    return [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+
+
+def _time_writes(rctl, monkeypatch, name: str) -> list[int]:
+    """Record the wall time in epoch nanoseconds at which each call of ``name`` on the controller returns."""
+    written_ns, send = [], getattr(rctl, name)
+
+    def timed(*args, **kwargs):
+        send(*args, **kwargs)
+        written_ns.append(time.time_ns())
+
+    monkeypatch.setattr(rctl, name, timed)
+    return written_ns
+
+
+def test_a_streamed_command_and_a_planned_move_are_each_timed_until_the_controller_takes_them(
+    world, rctl, driven, tmp_path, monkeypatch
+):
+    driver, _, commands, clock, loop = driven()
+    velocities_ns = _time_writes(rctl, monkeypatch, 'cmd_joint_direct_vel')
+    moves_ns = _time_writes(rctl, monkeypatch, 'cmd_move_run')
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        commands.push(command.JointPosition(_joints(0.3)))
+        _pump(loop, clock, 600)
+        answer = _mover(world, driver)(command.JointPosition(_joints(0.0)))
+        _pump_until(loop, clock, answer)
+        answer.result()
+
+    streamed, planned = _command_spans(tmp_path)
+    assert (streamed.attrs[ATTR_COMMAND_SYNC], planned.attrs[ATTR_COMMAND_SYNC]) == (False, True)
+    assert streamed.end_ns >= next(w for w in velocities_ns if w >= streamed.start_ns)
+    assert planned.end_ns >= next(w for w in moves_ns if w >= planned.start_ns)
+
+
+def test_a_planned_move_that_waits_through_an_error_is_timed_from_its_read_until_the_planner_takes_it(
+    world, rctl, driven, tmp_path, monkeypatch
+):
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error = True
+    _pump(loop, clock, 2)
+    moves_ns = _time_writes(rctl, monkeypatch, 'cmd_move_run')
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        asked_ns = time.time_ns()
+        answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+        _pump_until(loop, clock, answer)
+        answer.result()
+
+    [span] = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is True
+    assert asked_ns <= span.start_ns and span.end_ns >= moves_ns[0]
+
+
+def test_a_command_the_arm_refuses_is_not_timed(world, rctl, driven, tmp_path):
+    driver, _, commands, clock, loop = driven()
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        commands.push(command.JointPosition(np.array([0.1, np.nan, 0.0, 0.0, 0.0, 0.0])))
+        _pump(loop, clock, 5)
+        answer = _mover(world, driver)(command.JointPosition(np.array([0.0, 0.0, np.radians(169.0), 0.0, 0.0, 0.0])))
+        _pump_until(loop, clock, answer)
+
+    with pytest.raises(ValueError, match='joint limits'):
+        answer.result()
+    assert rctl.commanded == [] and 'move_run' not in rctl.calls
+    assert _command_spans(tmp_path) == []
+
+
+def test_a_planned_move_refused_while_it_waits_on_an_error_is_not_timed(world, rctl, driven, tmp_path):
+    driver, _, _, clock, loop = driven()
+    _pump(loop, clock, 2)
+    rctl.error, rctl.safety_latched = True, True
+    _pump(loop, clock, 2)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _mover(world, driver)(command.JointPosition(_joints(0.3)))
+        _pump_until(loop, clock, answer, ticks=10000)
+        rctl.safety_latched, rctl.error = False, False
+        _pump(loop, clock, 20)
+
+    with pytest.raises(MoveRefused):
+        answer.result()
+    assert _command_spans(tmp_path) == []

@@ -3,6 +3,7 @@ import logging
 import math
 import subprocess
 import sys
+import time
 import types
 from collections.abc import Callable, Iterator
 from enum import Enum
@@ -16,7 +17,7 @@ import pimm
 import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom, keys, wire
+from positronic import geom, keys, telemetry, wire
 from positronic.cfg.eval.real import yam as yam_eval
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.faults import DeviceFault, FaultKind
@@ -40,6 +41,7 @@ from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.amazon_abc import mapping as abc_mapping
+from positronic.telemetry_keys import ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.zeros(6)
@@ -2577,3 +2579,76 @@ def test_the_settings_of_the_configs_import_without_the_driver(module):
         check=True,
     ).stdout
     assert 'positronic.drivers.roboarm.yam.driver' not in loaded
+
+
+def test_each_streamed_command_the_arm_takes_is_timed_and_one_it_cannot_take_is_not(rig, tmp_path):
+    rig.ready()
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        rig.commands.push(command.JointPosition(np.full(6, np.nan)))
+        rig.tick(0.1)
+        rig.commands.push(command.JointPosition(RAISED))
+        rig.tick(0.1)
+
+    spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False]
+
+
+def _command_spans(tmp_path):
+    return [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+
+
+def _time_chain_writes(rig, monkeypatch):
+    """Record the wall time of each command that reaches the chain, in epoch nanoseconds."""
+    written_ns, send = [], rig.vendor.command_joint_pos
+
+    def timed(joint_pos):
+        send(joint_pos)
+        written_ns.append(time.time_ns())
+
+    monkeypatch.setattr(rig.vendor, 'command_joint_pos', timed)
+    return written_ns
+
+
+def test_a_blocking_move_is_timed_once_until_its_first_command_reaches_the_chain(world, rig, tmp_path, monkeypatch):
+    rig.raise_arm()
+    written_ns = _time_chain_writes(rig, monkeypatch)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _sync_caller(world, rig)(command.JointPosition(PARK))
+        _until_answered(rig, answer)
+        answer.result()
+
+    [span] = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is True
+    sent = [w for w in written_ns if w >= span.start_ns]
+    assert len(sent) > 1  # the ramp sends many commands, and one span times the move
+    assert span.end_ns >= sent[0]
+
+
+def test_a_blocking_move_stopped_before_its_first_command_is_not_timed(world, rig, tmp_path, monkeypatch):
+    rig.rest()
+    to_joints = yam._Arm.to_joints
+
+    def stop_while_solving(arm, cmd, q):
+        rig.stop.stopped = True
+        return to_joints(arm, cmd, q)
+
+    monkeypatch.setattr(yam._Arm, 'to_joints', stop_while_solving)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+        rig.tick(0.05)
+        rig.finish()
+    with pytest.raises(yam.MoveAbandoned):
+        answer.result()
+    assert _command_spans(tmp_path) == []
+
+
+def test_a_streamed_command_is_timed_until_its_command_reaches_the_chain(rig, tmp_path, monkeypatch):
+    rig.ready()
+    written_ns = _time_chain_writes(rig, monkeypatch)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        rig.commands.push(command.JointPosition(RAISED))
+        rig.tick(0.01)
+
+    [span] = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is False
+    assert span.end_ns >= next(w for w in written_ns if w >= span.start_ns)
