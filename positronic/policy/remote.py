@@ -79,7 +79,8 @@ def round_trip(
             return session.infer(prepared)
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
-            telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing))
+            alone = {} if session.sent_alone is None else {telemetry_keys.ATTR_WIRE_SENT_ALONE: session.sent_alone}
+            telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing), **alone)
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
@@ -219,8 +220,8 @@ class RemotePolicy(Policy):
         try:
             try:
                 server_meta = dict(session.metadata)
-                execution = ExecutionRuntime(runtime, max_in_flight=session.max_in_flight)
                 stack = declared_stack(server_meta, session.protocol_version)
+                execution = ExecutionRuntime(runtime, max_in_flight=1 if stack.ordered else session.max_in_flight)
                 client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.

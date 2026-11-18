@@ -322,7 +322,7 @@ class _MolmoObservationEnv(EnvProtocol):
             }
         ]
 
-    def reset(self, token):
+    def reset(self, token, slots=None):
         self.tokens.append(token)
         self.actions.clear()
         return {

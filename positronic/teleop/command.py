@@ -17,7 +17,7 @@ from positronic_model_server.server_wire import ServedAddress, ServedHostPort
 import pimm
 import positronic.cfg.webxr
 from positronic import geom
-from positronic.drivers.webxr import RIGHT, WebXR
+from positronic.drivers.webxr import WebXR
 from positronic.offboard.server import socket_at
 from positronic.utils import check_finite_positive
 
@@ -71,8 +71,7 @@ class _Headset(pimm.ControlSystem):
             positions = pimm.read_updated(self.controller_positions)
             if positions is not None:
                 buttons = self.buttons.read()
-                right = None if buttons is None else buttons.data[RIGHT]
-                self._service.take_sample(positions.data[RIGHT], right)
+                self._service.take_sample(positions.data, {} if buttons is None else buttons.data)
             page_input = pimm.read_updated(self.page_input)
             if page_input is not None and HEADSET_CAMERA in page_input.data:
                 camera = page_input.data[HEADSET_CAMERA]
@@ -186,8 +185,7 @@ network = cfn.Config(ServedHostPort, host='0.0.0.0', port=DEFAULT_PORT)
 
 
 @cfn.config(
-    # At the WebXR default quality of 50, the headset text and small objects are not clear
-    webxr=positronic.cfg.webxr.oculus.override(jpeg_quality=90),
+    webxr=positronic.cfg.webxr.oculus,
     served_address=socket_at.override(uds=str(default_socket_path())),
     ready_limit=120.0,
     window_port=5006,
@@ -202,7 +200,6 @@ def serve(
     silence_limit: float = 0.5,
     hold_sec: float = 1.0,
     press_threshold: float = 0.6,
-    view_fps: float = 30.0,
     open_window: bool = True,
     cameras: Sequence[str] = (),
     controller_axes: geom.Rotation | None = CONTROLLER_AXES,
@@ -243,7 +240,7 @@ def serve(
         cameras=cameras,
         controller_axes=controller_axes,
     )
-    headset = _Headset(service, view_fps)
+    headset = _Headset(service, webxr.video_fps)
     text = (
         f'A teleoperation trial waits for Ready. Within {ready_limit:g} s, press B on the Quest, '
         'or tap Ready on the phone page.'

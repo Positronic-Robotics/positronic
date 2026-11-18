@@ -6,7 +6,9 @@ from platform_client.policy_container import AUTH_TOKEN_ENV
 from positronic_model_server.spec import parse_params
 
 from positronic import keys
+from positronic.cfg import embodiment
 from positronic.cfg import policy as policy_cfg
+from positronic.cfg.eval.sim.amazon_abc import all_tasks as abc_tasks
 from positronic.cfg.eval.sim.positronic import stack_cubes_collect
 from positronic.cfg.policy import file_headers
 from positronic.policy import RemotePolicy
@@ -81,6 +83,13 @@ def test_the_collection_eval_records_every_camera_that_the_teleop_collection_pol
 def test_a_teleop_collection_policy_asks_the_service_for_its_cameras_with_the_person_at_the_back(config, cameras):
     query = config.instantiate()._client.session_url.split('?', 1)[1]
     assert parse_params(parse_qsl(query)) == {'operator_position': 'BACK', 'cameras': list(cameras)}
+
+
+def test_the_yam_teleop_policy_drives_both_arms_and_shows_the_cameras_of_the_yam_and_of_the_abc_eval():
+    query = policy_cfg.teleop_yam.instantiate()._client.session_url.split('?', 1)[1]
+    cameras = list(policy_cfg.TELEOP_YAM_CAMERAS)
+    assert parse_params(parse_qsl(query)) == {'operator_position': 'BACK', 'arms': 'BIMANUAL', 'cameras': cameras}
+    assert set(cameras) == set(embodiment.yam_bimanual.kwargs['cameras']) == set(abc_tasks.kwargs['camera_dict'])
 
 
 @pytest.mark.parametrize('name', ['teleop', 'teleop_network'])

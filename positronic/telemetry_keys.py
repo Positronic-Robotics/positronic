@@ -43,6 +43,10 @@ ATTR_PASS_FAILED = 'pass.failed'
 # durations and the instants `served.received_ns` and `served.sent_ns`, straight from the answer's own `timing` block.
 ATTR_SERVED_PREFIX = 'served.'
 
+# On `policy.submit`: the age in milliseconds of the newest frame of each camera that the harness reads, the oldest
+# of them, when the call starts. The history frames of a temporal stack do not count.
+ATTR_OBS_AGE_MS = 'obs.age_ms'
+
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.
 ATTR_CODEC = 'codec'
 ATTR_WIRE_BYTES = 'wire.bytes'
@@ -51,20 +55,30 @@ ATTR_WIRE_BYTES = 'wire.bytes'
 ATTR_WIRE_UPLINK_MS = 'wire.uplink_ms'
 ATTR_WIRE_DOWNLINK_MS = 'wire.downlink_ms'
 ATTR_WIRE_NETWORK_MS = 'wire.network_ms'
+# On `policy.infer`: whether the client sent the call with no earlier call in flight (docs/telemetry.md).
+ATTR_WIRE_SENT_ALONE = 'wire.sent_alone'
 
 # The harness process's sidecar name — the discriminator between client-side spans (episode, client env.step)
 # and an env server's own file, which reduces rely on.
 HARNESS_PROCESS = 'harness'
 
-# One harness step and its durations in milliseconds. docs/telemetry.md defines each value.
+# One harness step: its durations in milliseconds, and the highest generation a collection reached. docs/telemetry.md
+# defines each value.
 SPAN_HARNESS_STEP = 'harness.step'
 ATTR_STEP_LATE_MS = 'step.late_ms'
 ATTR_STEP_OBSERVE_MS = 'step.observe_ms'
 ATTR_STEP_POLICY_MS = 'step.policy_ms'
 ATTR_STEP_EMIT_MS = 'step.emit_ms'
+ATTR_STEP_GC_WAIT_MS = 'step.gc_wait_ms'
+ATTR_STEP_GC_MS = 'step.gc_ms'
+ATTR_STEP_GC_GENERATION = 'step.gc_generation'
 # The signal's name follows each prefix.
 ATTR_STEP_READ_MS_PREFIX = 'step.read_ms.'
 ATTR_STEP_CONVERT_MS_PREFIX = 'step.convert_ms.'
+# The two parts of a camera frame's age at the step's read: the wait from the driver's hand-off on the runtime clock,
+# and the driver's own time from capture to hand-off on the camera clock.
+ATTR_STEP_FRAME_WAIT_MS_PREFIX = 'step.frame_wait_ms.'
+ATTR_STEP_FRAME_DRIVER_MS_PREFIX = 'step.frame_driver_ms.'
 
 # One episode's waypoint account, totalled over its command channels. ``DROPPED`` counts a waypoint that
 # came due and went out on no round.
@@ -73,3 +87,14 @@ ATTR_WAYPOINTS_EMITTED = 'episode.waypoints.emitted'
 ATTR_WAYPOINTS_DROPPED = 'episode.waypoints.dropped'
 ATTR_WAYPOINTS_LATE_SUM_MS = 'episode.waypoints.late_sum_ms'
 ATTR_WAYPOINTS_LATE_MAX_MS = 'episode.waypoints.late_max_ms'
+# The total and the longest time in milliseconds that the arm holds its last target between two chunks.
+ATTR_WAYPOINTS_HOLD_SUM_MS = 'episode.waypoints.hold_sum_ms'
+ATTR_WAYPOINTS_HOLD_MAX_MS = 'episode.waypoints.hold_max_ms'
+
+# One command that a driver takes: from the tick that reads it to the moment the driver makes it the device's target.
+SPAN_DRIVER_COMMAND = 'driver.command'
+# On `driver.command`: true for a call whose asker waits for the arrival, false for a streamed setpoint.
+ATTR_COMMAND_SYNC = 'command.sync'
+# On `driver.command` of a streamed setpoint: the milliseconds from its emit to its read, on the host's monotonic clock.
+# A call carries no emit time, so its span has no age.
+ATTR_COMMAND_AGE_MS = 'command.age_ms'

@@ -21,6 +21,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import Step
 from positronic.policy.codecs import (
     ACTION,
+    BimanualCartesianAction,
     BimanualJointsAction,
     CartesianDeltaAction,
     ChangeEEFrame,
@@ -50,6 +51,7 @@ from positronic.policy.spec import from_spec
         AbsolutePositionAction('pose', 'grip'),
         AbsoluteJointsAction('joints', 'grip'),
         BimanualJointsAction(),
+        BimanualCartesianAction(),
         JointDeltaAction(),
     ],
 )
@@ -108,6 +110,7 @@ def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input()
     [
         lambda path: JointPositionAction('joints', 'grip', commands_path=path),
         lambda path: BimanualJointsAction(commands_path=path),
+        lambda path: BimanualCartesianAction(commands_path=path),
         lambda path: FlipGrip(commands_path=path),
         lambda path: ChangeEEFrame(EEFrame(site=GRIPPER_SITE), commands_path=path),
         lambda path: AbsoluteJointsAction('joints', 'grip', commands_path=path),
@@ -118,6 +121,7 @@ def test_joint_command_encoding_distinguishes_empty_absent_and_malformed_input()
     ids=[
         'one_arm',
         'two_arms',
+        'two_arm_poses',
         'flip_grip',
         'change_ee_frame',
         'absolute_joints',
@@ -538,6 +542,51 @@ def test_bimanual_joints_action_restores_from_its_wire_spec(commands_path):
     assert restored.to_spec() == description
     decoded = restored.decode({ACTION: np.array([1, 2, 0.5, 3, 4, 0.0], dtype=np.float32)})
     np.testing.assert_array_equal(decoded[RIGHT_COMMAND].positions, [3, 4])
+
+
+LEFT_POSE = Transform3D(np.array([0.3, 0.2, 0.4]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
+RIGHT_POSE = Transform3D(np.array([0.3, -0.2, 0.5]), Rotation.identity)
+TWO_ARM_POSE_ACTION = np.concatenate([
+    LEFT_POSE.as_vector(Rotation.Representation.QUAT),
+    [1.0],
+    RIGHT_POSE.as_vector(Rotation.Representation.QUAT),
+    [0.25],
+]).astype(np.float32)
+
+
+def test_bimanual_cartesian_action_splits_into_per_arm_pose_commands_and_grip_targets():
+    decoded = BimanualCartesianAction().decode({ACTION: TWO_ARM_POSE_ACTION})
+
+    for channel, pose in ((LEFT_COMMAND, LEFT_POSE), (RIGHT_COMMAND, RIGHT_POSE)):
+        assert isinstance(decoded[channel], cmd_module.CartesianPosition)
+        np.testing.assert_allclose(decoded[channel].pose.translation, pose.translation, atol=1e-6)
+        np.testing.assert_allclose(decoded[channel].pose.rotation.as_quat, pose.rotation.as_quat, atol=1e-6)
+    assert decoded[LEFT_GRIP] == pytest.approx(1.0)
+    assert decoded[RIGHT_GRIP] == pytest.approx(0.25)
+
+
+def test_bimanual_cartesian_action_of_the_wrong_width_is_refused():
+    with pytest.raises(ValueError, match='16-D'):
+        BimanualCartesianAction().decode({ACTION: np.zeros(8, dtype=np.float32)})
+
+
+@pytest.mark.parametrize('commands_path', [None, RTC_PREFIX_PATH])
+def test_bimanual_cartesian_action_restores_from_its_wire_spec_and_encodes_what_it_decodes(commands_path):
+    description = json.loads(json.dumps(BimanualCartesianAction(commands_path=commands_path).to_spec()))
+
+    restored = from_spec(description)
+
+    assert isinstance(restored, BimanualCartesianAction)
+    assert restored.to_spec() == description
+    decoded = restored.decode({ACTION: TWO_ARM_POSE_ACTION})
+    encoded = BimanualCartesianAction(commands_path=('plan',)).encode({'plan': [decoded]})
+    np.testing.assert_allclose(encoded['plan'][0][ACTION], TWO_ARM_POSE_ACTION, atol=1e-6)
+
+
+def test_bimanual_cartesian_action_refuses_to_encode_a_joint_target():
+    commands = [two_arm_command([1, 2], 0.0, [3, 4], 1.0)]
+    with pytest.raises(ValueError, match='absolute Cartesian targets'):
+        BimanualCartesianAction(commands_path=('plan',)).encode({'plan': commands})
 
 
 def test_a_declared_two_arm_stack_decodes_a_chunk_into_commands_for_each_arm():

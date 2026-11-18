@@ -42,7 +42,7 @@ class Message(Generic[T]):
         return Message(self.data, Time(**self.time, **{f'{RECEIVED_PREFIX}{k}': v for k, v in clock.time().items()}))
 
 
-def _message_value(msg: Message[T]) -> T:
+def message_value(msg: Message[T]) -> T:
     """The data of ``msg``. Raises the data when it is a ``SignalError``."""
     if isinstance(msg.data, SignalError):
         # A signal returns one instance on many reads, and each raise adds to its traceback. So start a new one.
@@ -95,7 +95,7 @@ class SignalReceiver(ABC, Generic[T]):
         msg = self.read()
         if msg is None:
             raise NoValueException
-        return _message_value(msg)
+        return message_value(msg)
 
 
 class NoOpEmitter(SignalEmitter[T]):

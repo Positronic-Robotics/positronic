@@ -14,7 +14,7 @@ import positronic.cfg.embodiment
 import positronic.cfg.eval.real.droid
 import positronic.cfg.policy as policy_cfg
 from pimm.logging import init_logging
-from positronic import keys, wire
+from positronic import keys, telemetry, wire
 from positronic.cfg.eval.sim.positronic import stack_cubes
 from positronic.cli.eval.run import prepare_output_dir, run, run_world, scoped_env_var
 from positronic.dataset.dataset import DatasetFactory, DatasetWriter
@@ -126,7 +126,7 @@ def web(
     writer = dataset_factory(output_path) if output_path is not None else None
     console = StationConsole(next_task, policy, writer, host=host, port=port)
     harness = Harness(embodiment)
-    with pimm.World() as world:
+    with telemetry.one_run_id(), pimm.World(process_scope=telemetry.bind_from_env) as world:
         wire.wire_embodiment(world, harness, embodiment, done=console.done)
         world.connect(console.perform_task, harness.perform_task)
         for name, observation in embodiment.observations.items():

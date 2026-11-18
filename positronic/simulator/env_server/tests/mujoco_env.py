@@ -113,7 +113,7 @@ class MujocoEnv(EnvProtocol):
             raise ValueError(f'MujocoEnv serves {SCENE_NAME!r}, not {names}')
         return [{'name': name, protocol.TASK_INSTRUCTION: STACK_CUBES_INSTRUCTION} for name in names]
 
-    def reset(self, token: Any) -> dict[str, Any]:
+    def reset(self, token: Any, slots: int | None = None) -> dict[str, Any]:
         # Close the prior generator before rebuilding the scene, so its ``run`` cleanup tears down the old
         # renderer before ``reset`` creates the new one. ``reset`` loads the scene and publishes it, so the
         # frame returned here is the one it drew, unstepped. The first ``step`` advances the generator with

@@ -466,7 +466,7 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
         'submission',
         'caveats',
     },
-    TeamSubmission: {'id', 'submitted_at', 'replay'},
+    TeamSubmission: {'id', 'submitted_at', 'replay', 'part_replays'},
     PairVerdict: {'rows', 'separated'},
     LeaderboardTask: {'id', 'label', 'counted', 'difficulty'},
     LeaderboardCounts: {'tasks', 'episodes'},
@@ -586,6 +586,44 @@ def test_a_team_row_whose_replay_is_not_built_still_names_its_submission():
     wire = {**TEAM_ROW_WIRE, 'submission': {'id': '1f', 'submitted_at': '2026-03-04T05:06:07Z'}}
     row = LeaderboardRow.model_validate_json(json.dumps(wire))
     assert row.submission == TeamSubmission(id=SUB, submitted_at=AT)
+
+
+def test_a_team_row_reads_the_replay_of_each_part_by_its_metric_key():
+    other = {'url': 'https://replays.example/r/other/', 'data_url': 'https://replays.example/r/other/r.json'}
+    submission = {
+        **TEAM_ROW_WIRE['submission'],
+        'part_replays': {'sim_a': TEAM_ROW_WIRE['submission']['replay'], 'sim_b': other},
+    }
+    row = LeaderboardRow.model_validate_json(json.dumps({**TEAM_ROW_WIRE, 'submission': submission}))
+    assert row.submission is not None
+    assert row.submission.part_replays == {
+        MetricKey('sim_a'): REPLAY,
+        MetricKey('sim_b'): DataBackedReplayLink.model_validate(other),
+    }
+    assert json.loads(row.model_dump_json())['submission']['part_replays']['sim_b'] == other
+
+
+def _with_part_replays(keys: list[str]) -> dict:
+    wire = json.loads(TEAM_LEADERBOARD.model_dump_json())
+    wire['rows'][0]['submission']['part_replays'] = dict.fromkeys(keys, wire['rows'][0]['submission']['replay'])
+    return wire
+
+
+def test_a_leaderboard_refuses_a_part_replay_that_no_metric_names():
+    with pytest.raises(ValidationError, match='a part that no metric names'):
+        LeaderboardResponse.model_validate(_with_part_replays([PRIMARY_METRIC, 'unknown_part']))
+
+
+def test_a_leaderboard_reads_a_part_replay_that_a_metric_names():
+    response = LeaderboardResponse.model_validate(_with_part_replays([PRIMARY_METRIC]))
+    assert response.rows[0].submission is not None
+    assert list(response.rows[0].submission.part_replays) == [PRIMARY_METRIC]
+
+
+def test_a_team_row_with_no_parts_has_no_part_replays():
+    row = LeaderboardRow.model_validate_json(json.dumps(TEAM_ROW_WIRE))
+    assert row.submission is not None
+    assert row.submission.part_replays == {}
 
 
 @pytest.mark.parametrize('dropped', ['id', 'submitted_at'])

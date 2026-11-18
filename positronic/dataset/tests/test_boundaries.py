@@ -87,6 +87,13 @@ def test_dataset_has_no_application_timeline_dependencies():
                 and not (legacy_reader and node.value == RECORDED_TIME)
             ):
                 offenders.append(f'{path.relative_to(_DATASET_ROOT)}:{node.lineno}: names {node.value}')
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                # A docstring is a string constant too; a dotted clock name in prose ties it to the application.
+                offenders.extend(
+                    f'{path.relative_to(_DATASET_ROOT)}:{node.lineno}: mentions {name}'
+                    for name in sorted(clock_names)
+                    if '.' in name and name in node.value
+                )
             if isinstance(node, ast.Attribute) and node.attr == 'RECORDED_TIME' and not legacy_reader:
                 offenders.append(f'{path.relative_to(_DATASET_ROOT)}:{node.lineno}: uses the legacy timeline')
     assert not offenders, 'Dataset must receive timeline names from its callers:\n' + '\n'.join(offenders)

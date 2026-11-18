@@ -1,3 +1,7 @@
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -19,7 +23,7 @@ from positronic.dataset.vector import (
 )
 from positronic.utils.lazy import LazySequence
 
-from .utils import DummySignal
+from .utils import DummySignal, hold_parquet_writes
 
 
 def create_signal(tmp_path, data_timestamps, name='test.parquet'):
@@ -126,6 +130,28 @@ class TestSignalWriterContext:
             w.append(2, Time(**{RECORDED_TIME: 2000}))
 
 
+@pytest.fixture
+def chunk_writer():
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        yield executor
+
+
+def _changeable_values(row: int) -> dict[str, tuple[object, Callable[[], object]]]:
+    """A value of each mutable type that `pa.array` converts, with a function that changes it in place."""
+    array, inner, buffer, members = np.array([row, -row], dtype=np.float32), {'a': [row]}, bytearray([row]), {row}
+    return {
+        'ndarray': (array, lambda: array.fill(0)),
+        'object_ndarray': (np.array([inner], dtype=object), lambda: inner['a'].append(0)),
+        'list': ([inner], lambda: inner['a'].append(0)),
+        'tuple': ((inner,), lambda: inner['a'].append(0)),
+        'arrow_array': (pa.array(array), lambda: array.fill(0)),
+        'bytearray': (buffer, lambda: buffer.__setitem__(0, 255)),
+        'memoryview': (memoryview(buffer), lambda: buffer.__setitem__(0, 255)),
+        'dict': (inner, lambda: inner['a'].append(0)),
+        'set': (members, lambda: members.add(0)),
+    }
+
+
 class TestSignalWriterChunking:
     def test_large_dataset_chunked_writing(self, tmp_path):
         filepath = tmp_path / 'large_test.parquet'
@@ -156,6 +182,125 @@ class TestSignalWriterChunking:
             assert ts == Time(**{RECORDED_TIME: i * 1_000_000})
 
         assert filepath.stat().st_size > 0
+
+    @pytest.mark.parametrize('count', [2, 3, 4, 6, 7])
+    def test_rows_on_both_sides_of_a_chunk_boundary_keep_their_values_and_times(self, tmp_path, chunk_writer, count):
+        def write(path, executor):
+            with SimpleSignalWriter(path, chunk_size=3, chunk_writer=executor) as writer:
+                for i in range(count):
+                    writer.append(np.array([i, -i], dtype=np.float32), Time(world=10 * i, wall=1000 + i))
+            return path
+
+        written = write(tmp_path / 'thread.parquet', chunk_writer)
+        assert pq.read_table(written).equals(pq.read_table(write(tmp_path / 'append.parquet', None)))
+        signal = SimpleSignal(written)
+        assert len(signal) == count
+        for i, (value, ts) in enumerate(signal):
+            np.testing.assert_array_equal(value, np.array([i, -i], dtype=np.float32))
+            assert ts == Time(world=10 * i, wall=1000 + i)
+
+
+def _fail_parquet_writes(monkeypatch):
+    def fail(writer, *args, **kwargs):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(pq.ParquetWriter, 'write_table', fail)
+
+
+class TestSignalWriterChunkWrite:
+    def test_append_returns_while_the_chunk_is_written(self, tmp_path, monkeypatch, chunk_writer):
+        started, release = hold_parquet_writes(monkeypatch)
+        path = tmp_path / 'signal.parquet'
+        with SimpleSignalWriter(path, chunk_size=2, chunk_writer=chunk_writer) as writer:
+            for t in (1, 2, 3):
+                writer.append(np.array([t, -t], dtype=np.float32), Time(**{RECORDED_TIME: t}))
+            assert started.wait(timeout=5)
+            release.set()
+
+        signal = SimpleSignal(path)
+        assert [ts[RECORDED_TIME] for _, ts in signal] == [1, 2, 3]
+        np.testing.assert_array_equal(np.stack([value for value, _ in signal]), [[1, -1], [2, -2], [3, -3]])
+
+    @pytest.mark.parametrize('kind', list(_changeable_values(0)))
+    def test_a_value_changed_after_append_is_recorded_as_appended(self, tmp_path, chunk_writer, kind):
+        another_signal_written = threading.Event()
+        chunk_writer.submit(another_signal_written.wait, 5)
+        path, expected = tmp_path / 'signal.parquet', tmp_path / 'expected.parquet'
+        with SimpleSignalWriter(path, chunk_size=3, chunk_writer=chunk_writer) as writer:
+            changes = []
+            for t in (1, 2, 3, 4):
+                value, change = _changeable_values(t)[kind]
+                writer.append(value, Time(**{RECORDED_TIME: t}))
+                changes.append(change)
+            for change in changes:
+                change()
+            another_signal_written.set()
+        with SimpleSignalWriter(expected) as writer:
+            for t in (1, 2, 3, 4):
+                writer.append(_changeable_values(t)[kind][0], Time(**{RECORDED_TIME: t}))
+
+        assert pq.read_table(path)[VALUE_COLUMN].to_pylist() == pq.read_table(expected)[VALUE_COLUMN].to_pylist()
+
+    def test_close_waits_for_the_chunk_in_flight(self, tmp_path, monkeypatch, chunk_writer):
+        started, release = hold_parquet_writes(monkeypatch)
+        path = tmp_path / 'signal.parquet'
+        writer = SimpleSignalWriter(path, chunk_size=2, chunk_writer=chunk_writer)
+        for t in (1, 2):
+            writer.append(t, Time(**{RECORDED_TIME: t}))
+        assert started.wait(timeout=5)
+
+        closer = threading.Thread(target=writer.__exit__, args=(None, None, None))
+        closer.start()
+        closer.join(timeout=0.2)
+        assert closer.is_alive()
+        release.set()
+        closer.join(timeout=5)
+        assert not closer.is_alive()
+        assert [value for value, _ in SimpleSignal(path)] == [1, 2]
+
+    def test_a_failed_chunk_write_surfaces_on_close(self, tmp_path, monkeypatch, chunk_writer):
+        _fail_parquet_writes(monkeypatch)
+        writer = SimpleSignalWriter(tmp_path / 'signal.parquet', chunk_size=2, chunk_writer=chunk_writer)
+        for t in (1, 2):
+            writer.append(t, Time(**{RECORDED_TIME: t}))
+        with pytest.raises(OSError, match='disk full'):
+            writer.__exit__(None, None, None)
+
+    def test_a_writer_whose_close_failed_can_be_aborted(self, tmp_path, monkeypatch, chunk_writer):
+        _fail_parquet_writes(monkeypatch)
+        path = tmp_path / 'signal.parquet'
+        writer = SimpleSignalWriter(path, chunk_size=2, chunk_writer=chunk_writer)
+        for t in (1, 2):
+            writer.append(t, Time(**{RECORDED_TIME: t}))
+        with pytest.raises(OSError, match='disk full'):
+            writer.__exit__(None, None, None)
+        writer.abort()
+        assert not path.exists()
+
+    def test_a_failed_chunk_write_surfaces_on_append_by_the_next_chunk(self, tmp_path, monkeypatch, chunk_writer):
+        _fail_parquet_writes(monkeypatch)
+        path = tmp_path / 'signal.parquet'
+        writer = SimpleSignalWriter(path, chunk_size=2, chunk_writer=chunk_writer)
+        for t in (1, 2):
+            writer.append(t, Time(**{RECORDED_TIME: t}))
+        with pytest.raises(OSError, match='disk full'):
+            for t in (3, 4):
+                writer.append(t, Time(**{RECORDED_TIME: t}))
+        writer.abort()
+        assert not path.exists()
+
+    def test_abort_with_a_chunk_in_flight_removes_the_file(self, tmp_path, monkeypatch, chunk_writer):
+        started, release = hold_parquet_writes(monkeypatch)
+        path = tmp_path / 'signal.parquet'
+        writer = SimpleSignalWriter(path, chunk_size=2, chunk_writer=chunk_writer)
+        for t in (1, 2):
+            writer.append(t, Time(**{RECORDED_TIME: t}))
+        assert started.wait(timeout=5)
+        release.set()
+        writer.abort()
+        assert not path.exists()
+        with pytest.raises(RuntimeError, match='aborted'):
+            writer.append(3, Time(**{RECORDED_TIME: 3}))
 
 
 class TestVectorInterface:

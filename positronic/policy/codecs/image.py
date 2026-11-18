@@ -17,6 +17,7 @@ from positronic_model_server.tree import map_leaves, update_at
 
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample, ResizeMode
+from positronic.gui.video_stream import AnnexBEncoder
 from positronic.utils import check_positive_int
 
 from .base import Codec
@@ -58,6 +59,46 @@ class EncodeImages(Codec):
         args: dict[str, Any] = {'quality': self._quality}
         if self._images is not None:
             args['paths'] = [list(image.path) for image in self._images]
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
+
+
+class EncodeVideo(Codec):
+    """Inference: encode the RGB image at each path as H.264, one Annex B access unit for each image.
+
+    Each path is one video stream. It starts with a key frame and sends a key frame once each second at ``fps``.
+    Decoded results pass through unchanged.
+    """
+
+    WIRE_NAME = 'encode_video'
+
+    def __init__(self, paths: list[list[str | int]], bitrate: int, fps: int):
+        check_positive_int(bitrate, 'bitrate')
+        check_positive_int(fps, 'fps')
+        if any(type(part) not in (str, int) for path in paths for part in path):
+            raise ValueError('Image paths contain only mapping keys and list indices')
+        self._bitrate = bitrate
+        self._fps = fps
+        self._encoders = {tuple(path): AnnexBEncoder(fps, fps, bitrate) for path in paths}
+
+    def _encode_image(self, path: tuple[str | int, ...], value: Any) -> bytes:
+        if not isinstance(value, np.ndarray) or value.dtype != np.uint8 or value.ndim != 3 or value.shape[-1] != 3:
+            raise ValueError(f'Video path {list(path)!r} selects no uint8 RGB image of shape (H, W, 3)')
+        return b''.join(unit.data for unit in self._encoders[path].encode(value))
+
+    def encode(self, data: dict) -> dict:
+        for path in self._encoders:
+            data = update_at(data, path, partial(self._encode_image, path))
+        return data
+
+    def decode(self, data: Any) -> Any:
+        return data
+
+    @property
+    def ordered(self) -> bool:
+        return True
+
+    def to_spec(self) -> dict[str, Any]:
+        args = {'paths': [list(path) for path in self._encoders], 'bitrate': self._bitrate, 'fps': self._fps}
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import Generic, TypeVar, cast, overload
 
 from pimm import Message, SignalEmitter, SignalError, SignalReceiver
-from pimm.core import Clock, Command, Sleep, Yield, _message_value
+from pimm.core import Clock, Command, Sleep, Yield, message_value
 from pimm.time import Time
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ def value_updated(receiver: SignalReceiver[T]) -> T | None:
     A delivered ``None`` reads as nothing delivered; ``read_updated`` tells the two apart.
     """
     msg = read_updated(receiver)
-    return _message_value(msg) if msg is not None else None
+    return message_value(msg) if msg is not None else None
 
 
 class MapSignalReceiver(SignalReceiver[U], Generic[T, U]):

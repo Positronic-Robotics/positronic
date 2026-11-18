@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from unittest.mock import MagicMock, patch
 
-import mujoco as mj
 import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
@@ -22,11 +21,8 @@ from positronic_wire import grpc, registry, websocket, wire
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg import codecs
 from positronic.cfg import codecs as cfg_codecs
-from positronic.dataset.serializers import Serializers
-from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.drivers.roboarm.command import CartesianPosition, to_wire
-from positronic.drivers.roboarm.ik import _prepare_spec
+from positronic.drivers.roboarm.command import CartesianPosition
 from positronic.drivers.roboarm.models import (
     EE_LINK,
     FRANKA_HAND_FRAME,
@@ -36,9 +32,8 @@ from positronic.drivers.roboarm.models import (
     ee_frames_entry,
     parse_ee_frames,
 )
-from positronic.drivers.roboarm.tests.fakes import FakeRobotState
 from positronic.eval import keys as eval_keys
-from positronic.geom import Rotation, Transform3D
+from positronic.geom import Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
@@ -55,7 +50,15 @@ from positronic.offboard.client import (
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
-from positronic.policy.codecs import ChangeEEFrame, Codec, EndCommand, PolicyCommandError, ResizeMode, TransformImages
+from positronic.policy.codecs import (
+    ChangeEEFrame,
+    Codec,
+    EncodeVideo,
+    EndCommand,
+    PolicyCommandError,
+    ResizeMode,
+    TransformImages,
+)
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
@@ -71,7 +74,7 @@ from positronic.policy.processors import (
 from positronic.policy.remote import RemotePolicy, prepare_obs, round_trip
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
-from positronic.policy.tests.test_harness import legacy_point_warnings, run_robot_rollout
+from positronic.policy.tests.test_harness import run_robot_rollout
 from positronic.tests.testing_inference import post, read_status, run_attended, wait
 from positronic.utils import flatten_dict
 
@@ -145,6 +148,7 @@ _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 def _mock_session(metadata=None):
     session = MagicMock()
     session.metadata = metadata or {}
+    session.sent_alone = None
     session.max_in_flight = 1
     session.infer.return_value = {'action': 'test'}
     return session
@@ -1058,6 +1062,38 @@ def test_a_call_sent_behind_another_gives_no_one_way_times():
         assert second.result(timeout=5) == set()
 
 
+def test_each_call_says_whether_it_went_with_no_earlier_call_in_flight():
+    # The handshake and a first call settle the session; then one call waits in its receive until a second one sends.
+    replies = [_ready('s', max_in_flight=2), legacy_protocol.serialise({protocol.RESULT: []})]
+    first_waits, second_sent = threading.Event(), threading.Event()
+
+    def recv(timeout=None):
+        if replies:
+            return replies.pop(0)
+        if not second_sent.is_set():
+            first_waits.set()
+            assert second_sent.wait(timeout=5)
+        return legacy_protocol.serialise({protocol.RESULT: []})
+
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = recv
+    session = InferenceSession(conn)
+    session.infer({})
+    assert session.sent_alone is True  # a server with no timing marks still gets the mark
+    conn.send.side_effect = lambda _: first_waits.is_set() and second_sent.set()
+
+    def sent_alone() -> bool | None:
+        session.infer({})
+        return session.sent_alone
+
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(sent_alone)
+        assert first_waits.wait(timeout=5)
+        second = pool.submit(sent_alone)
+        assert first.result(timeout=5) is True  # a call sent after it does not delay its answer
+        assert second.result(timeout=5) is False
+
+
 def test_a_server_that_stamps_no_receipt_gives_no_one_way_times():
     session = InferenceSession(
         _connection(
@@ -1328,6 +1364,39 @@ def test_invalid_declaration_fails_as_a_policy_command_error_before_inference_an
         runtime.start(policy)
     session.infer.assert_not_called()
     session.close.assert_called_once()
+
+
+def test_a_stack_with_a_video_codec_keeps_one_call_in_flight_when_the_server_allows_more(runtime):
+    schedule = InferenceSchedule(
+        10,
+        request_timing=RequestTiming.every(0.1),
+        merge=TrajectoryMerge.at_observation(),
+        latency_estimate=ConstantDuration(),
+    )
+    stack = Sequential(schedule, EncodeVideo([['cam']], bitrate=500_000, fps=10))
+    policy, session = _mock_remote_policy({offboard_keys.LOCAL_STACK: stack.to_spec()})
+    session.protocol_version = protocol.ProtocolVersion.V3
+    session.max_in_flight = 3
+    started = threading.Event()
+    release = threading.Event()
+
+    def infer(obs):
+        started.set()
+        assert release.wait(timeout=5)
+
+    session.infer.side_effect = infer
+    image = np.zeros((16, 16, 3), dtype=np.uint8)
+    run = runtime.start(policy)
+    try:
+        run.send({policy_keys.OBS_TIME_NS: 0, 'cam': image})
+        assert started.wait(timeout=2)
+        run.send({policy_keys.OBS_TIME_NS: 100_000_000, 'cam': image})
+        assert runtime.metadata_snapshot()[policy_keys.SKIPPED_SAMPLES] == 1
+        assert session.infer.call_count == 1
+    finally:
+        release.set()
+        runtime.close()
+        run.close()
 
 
 @pytest.mark.parametrize('capacity', [1, 3, 20])
@@ -1614,7 +1683,7 @@ def test_a_frame_codec_around_a_server_that_states_none_states_the_frames_for_it
 
 
 @pytest.mark.parametrize('side', ['client_stack', 'server_meta'])
-def test_a_remote_server_that_states_its_frames_gets_the_pose_with_no_fallback_on_one_session(caplog, side):
+def test_a_remote_server_that_states_its_frames_gets_the_pose_on_one_session(side):
     if side == 'client_stack':
         stack = Sequential(
             ChangeEEFrame(EEFrame(site=GRIPPER_SITE), keys=(keys.EE_POSE,)),
@@ -1629,10 +1698,19 @@ def test_a_remote_server_that_states_its_frames_gets_the_pose_with_no_fallback_o
 
     assert run_robot_rollout(policy, ticks=5).result()[eval_keys.TERMINATED] is True
     np.testing.assert_allclose(session.infer.call_args_list[0].args[0][keys.EE_POSE][:3], [0.1, 0.2, 0.3])
-    assert legacy_point_warnings(caplog) == []
     client = policy._client
     assert isinstance(client, MagicMock)
     client.new_session.assert_called_once()
+
+
+def test_a_remote_server_that_states_no_frames_gets_no_pose():
+    policy, session = _mock_remote_policy(CHUNKED_STACK, infer_return=[{keys.TARGET_GRIP: 0.5}])
+    session.protocol_version = protocol.ProtocolVersion.V3
+
+    assert run_robot_rollout(policy, robot_meta=bundled_franka_model(), ticks=5).result()[eval_keys.TERMINATED] is True
+    sent = session.infer.call_args_list[0].args[0]
+    assert keys.EE_POSE not in sent
+    assert keys.JOINTS in sent
 
 
 def test_a_remote_server_that_states_another_site_is_refused_before_it_gets_an_observation():
@@ -1674,60 +1752,6 @@ def test_a_remote_server_that_repeats_its_client_stack_frame_in_its_metadata_run
     })
     session.protocol_version = protocol.ProtocolVersion.V3
     assert _recorded_frames(policy, runtime) == {keys.EE_POSE: GRIPPER_SITE}
-
-
-# The handshake of a protocol v1 server that states no frames: an unversioned client stack, and no ``ee_frames``.
-FRAMELESS_V1_HANDSHAKE = {
-    offboard_keys.LOCAL_STACK: {
-        'seq': [
-            {'name': 'stop_on_fault'},
-            {
-                'name': 'temporal_stack',
-                'args': {
-                    'keys': [keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EE_POSE, keys.GRIP],
-                    'offsets_sec': [(step - 24) / 15 for step in range(25)],
-                    'pad_start': False,
-                },
-            },
-            {'name': 'chunked_schedule'},
-            {'name': 'restrict_image_size', 'args': {'width': 1024, 'height': 288}},
-        ]
-    }
-}
-
-
-def test_a_v1_server_that_states_no_frames_observes_and_commands_the_fr3_at_its_old_end_effector(caplog):
-    model = bundled_franka_model()
-    fr3 = _prepare_spec(model[roboarm_keys.URDF], GRIPPER_SITE, EE_LINK).compile()
-    joints = np.array([0.1, -0.4, 0.2, -2.0, 0.1, 1.8, 0.6])
-    data = mj.MjData(fr3)
-    data.qpos[[fr3.joint(name).qposadr.item() for name in model[roboarm_keys.JOINT_NAMES]]] = joints
-    mj.mj_forward(fr3, data)
-    gripper, end_effector = (
-        Transform3D(data.site(site).xpos.copy(), Rotation.from_rotation_matrix(data.site(site).xmat.reshape(3, 3)))
-        for site in (GRIPPER_SITE, EE_LINK)
-    )
-    np.testing.assert_allclose((gripper * FRANKA_HAND_FRAME).as_matrix, end_effector.as_matrix, atol=1e-9)
-    target = CartesianPosition(pose=Transform3D(translation=np.array([0.4, 0.5, 0.6]), rotation=Rotation.identity))
-    rows = [{keys.ROBOT_COMMAND: to_wire(target), keys.TARGET_GRIP: 0.5, 'timestamp': step / 15} for step in range(4)]
-    replies = iter([_ready('v1', FRAMELESS_V1_HANDSHAKE, version=protocol.ProtocolVersion.V1)])
-    conn = MagicMock(spec=wire.ClientConnection)
-    conn.recv.side_effect = lambda timeout=None: next(replies, _answer(rows))
-    policy = RemotePolicy('websocket', _ADDRESS)
-    policy._client = InferenceClient(_FakeWire(conn), _ADDRESS)
-    image = np.zeros((4, 6, 3), dtype=np.uint8)
-    sensors = {keys.WRIST_IMAGE: image, keys.EXTERIOR_IMAGE: image, keys.GRIP: np.float32(0.0)}
-    state = FakeRobotState(joints, np.zeros_like(joints), gripper, RobotStatus.AVAILABLE)
-    commands = []
-
-    answer = run_robot_rollout(policy, robot_meta=model, ticks=50, commands=commands, sensors=sensors, state=state)
-
-    assert answer.result()[eval_keys.TERMINATED] is True
-    (observed,) = legacy_protocol.deserialise(conn.send.call_args_list[0].args[0])[keys.EE_POSE]
-    np.testing.assert_allclose(observed, Serializers.transform_3d(gripper * FRANKA_HAND_FRAME), atol=1e-9)
-    assert len(legacy_point_warnings(caplog)) == 1
-    assert commands and all(isinstance(command, CartesianPosition) for command in commands)
-    np.testing.assert_allclose(commands[0].pose.as_matrix, (target.pose * FRANKA_HAND_FRAME.inv).as_matrix, atol=1e-9)
 
 
 def test_policy_meta_holds_only_client_values_and_makes_no_call():
@@ -1806,6 +1830,28 @@ def test_the_inference_span_carries_the_one_way_times_and_their_sum(tmp_path, on
     )
     expected = (12.0, 3.0, 15.0) if one_way else (None, None, None)
     assert tuple(infer.attrs.get(key) for key in network_keys) == expected
+
+
+@pytest.mark.parametrize('sent_alone', [True, False])
+def test_the_inference_span_says_whether_the_call_went_alone(tmp_path, sent_alone):
+    session = _mock_session()
+    session.served_timing = session.wire_timing = {}
+    session.sent_alone = sent_alone
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-alone'):
+        round_trip(session, {}, compress_images=False)
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    [infer] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_INFER]
+    assert infer.attrs[telemetry_keys.ATTR_WIRE_SENT_ALONE] is sent_alone
+
+
+def test_an_inference_span_of_a_call_that_never_sent_carries_no_alone_mark(tmp_path):
+    session = _mock_session()
+    session.served_timing = session.wire_timing = {}
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-unsent'):
+        round_trip(session, {}, compress_images=False)
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    [infer] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_INFER]
+    assert telemetry_keys.ATTR_WIRE_SENT_ALONE not in infer.attrs
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
