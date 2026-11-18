@@ -422,8 +422,9 @@ class _Arm(DriverRun[command.CommandType]):
 
     def emit_meta(self) -> None:
         """Emit the settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which
-        it does not report. A chain with a gripper force limit runs the gripper force cap of this moment. i2rt's sim
-        chain runs no friction and no gripper force cap, and reports neither."""
+        it does not report. A chain with a gripper force limit runs the gripper force cap of this moment, and its
+        limiter holds a stalled gripper with the force of that limit. i2rt's sim chain runs no friction and no gripper
+        force limit, and reports neither."""
         self._reported_force_cap_n = self._gripper_force_cap_n()
         info = self._robot_info
         meta = {
@@ -432,6 +433,7 @@ class _Arm(DriverRun[command.CommandType]):
         }
         if _LIMIT_GRIPPER_EFFORT in info:
             meta[roboarm_keys.GRIPPER_FORCE_CAP] = self._reported_force_cap_n
+            meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] = float(info[_LIMIT_GRIPPER_EFFORT])
         if _USE_COULOMB_FRICTION in info:
             meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
             meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
@@ -916,6 +918,7 @@ class Robot(pimm.ControlSystem):
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
         :param gripper_force_cap_n: The most force in newtons that the gripper closes with. None or 0 sets no cap.
+            i2rt's own limiter still holds a stalled gripper with its force limit, which the arm meta names.
             ``set_gripper_force_cap`` changes it at run time. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.

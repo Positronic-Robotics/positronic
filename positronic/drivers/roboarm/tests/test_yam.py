@@ -2552,6 +2552,9 @@ class GripperMotors(FakeMotorChain):
         return None
 
 
+I2RT_GRIPPER_FORCE_LIMIT_N = 50.0  # the gripper force limit that i2rt's get_yam_robot opens a chain with
+
+
 def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float = GRIPPER_OPEN_RAD):
     """i2rt's hardware chain over ``GripperMotors``, with the gripper force limit of i2rt's ``get_yam_robot``. Its
     control thread is stopped, so each ``update`` runs one cycle. i2rt's limiter reads the clock of the motors."""
@@ -2566,7 +2569,7 @@ def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float 
         joint_limits=np.array([[-3.0, 3.0]] * 6),
         kp=np.array([10.0] * 6 + [20.0]),  # i2rt's kp and kd for the gripper motor
         kd=np.array([1.0] * 6 + [0.5]),
-        limit_gripper_force=50.0,
+        limit_gripper_force=I2RT_GRIPPER_FORCE_LIMIT_N,
         zero_gravity_mode=False,
     )
     chain.close()
@@ -2672,6 +2675,18 @@ def test_the_arm_meta_carries_the_gripper_force_cap_that_the_chain_runs(monkeypa
     rig.driver.set_gripper_force_cap(0.0)
     rig.tick()
     assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    rig.loop.close()
+
+
+def test_the_arm_meta_names_the_stall_force_of_i2rts_gripper_limiter_with_no_cap(monkeypatch):
+    """i2rt's limiter holds a stalled gripper with its own force whatever the cap, so a meta with no cap names it."""
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=None)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.tick()
+    meta = _last(rig.arm_metas)
+    assert meta[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    assert meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] == I2RT_GRIPPER_FORCE_LIMIT_N
     rig.loop.close()
 
 
