@@ -19,6 +19,7 @@ T = TypeVar('T')
 
 SIGNAL_VERSION_KEY = b'positronic.signal_version'
 SIGNAL_VERSION = b'2'
+DEFAULT_CHUNK_SIZE = 10_000
 
 
 def timestamp_table(columns: Mapping[str, Sequence[int]]) -> pa.Table:
@@ -185,12 +186,14 @@ class SimpleSignalWriter(SignalWriter[T]):
     Supports scalars and fixed-size vectors/arrays.
     """
 
-    def __init__(self, filepath: Path, chunk_size: int = 10000, chunk_writer: ThreadPoolExecutor | None = None):
+    def __init__(
+        self, filepath: Path, chunk_size: int = DEFAULT_CHUNK_SIZE, chunk_writer: ThreadPoolExecutor | None = None
+    ):
         """Initialize Signal writer to save data to a parquet file.
 
         Args:
             filepath: Path to the output parquet file
-            chunk_size: Number of records to accumulate before writing a chunk (default 10000)
+            chunk_size: Number of records to accumulate before writing a chunk
             chunk_writer: Writes each full chunk, so ``append`` does not wait for the disk. A failed write raises
                 on a later ``append`` or on close. None writes the chunk in ``append``.
         """

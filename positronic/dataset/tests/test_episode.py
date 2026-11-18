@@ -17,7 +17,13 @@ from positronic.dataset.tests.test_video import FakeEncoder, assert_frames_equal
 from positronic.dataset.tests.utils import hold_parquet_writes
 from positronic.dataset.time import Time
 from positronic.dataset.transforms.episode import Derive, FromValue, Get, Group, Identity
-from positronic.dataset.vector import RECORDED_TIME, SIGNAL_VERSION, SIGNAL_VERSION_KEY, VALUE_COLUMN
+from positronic.dataset.vector import (
+    DEFAULT_CHUNK_SIZE,
+    RECORDED_TIME,
+    SIGNAL_VERSION,
+    SIGNAL_VERSION_KEY,
+    VALUE_COLUMN,
+)
 from positronic.dataset.video import DEFAULT_VIDEO_ENCODER, FrameSize, LibavEncoder
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.utils.tests.test_git import WHEEL_COMMIT, git_repo, install_as, vcs_wheel
@@ -210,14 +216,11 @@ def test_episode_writer_marks_unfinished_and_clears_on_close(tmp_path):
     assert not (ep_dir / UNFINISHED_MARKER).exists()
 
 
-_DEFAULT_CHUNK_ROWS = 10_000
-
-
 def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(tmp_path, monkeypatch):
     started, release = hold_parquet_writes(monkeypatch)
     ep_dir = tmp_path / 'ep'
     writer = DiskEpisodeWriter(ep_dir)
-    for i in range(_DEFAULT_CHUNK_ROWS):
+    for i in range(DEFAULT_CHUNK_SIZE):
         writer.append('q', np.array([i, -i], dtype=np.float32), Time(**{RECORDED_TIME: i + 1}))
     assert started.wait(timeout=5)
 
@@ -231,8 +234,8 @@ def test_an_episode_finishes_only_after_the_chunk_written_at_the_chunk_boundary(
     assert not closer.is_alive()
     assert not (ep_dir / UNFINISHED_MARKER).exists()
     q = DiskEpisode(ep_dir)['q']
-    assert len(q) == _DEFAULT_CHUNK_ROWS
-    np.testing.assert_array_equal(q[-1][0], [_DEFAULT_CHUNK_ROWS - 1, 1 - _DEFAULT_CHUNK_ROWS])
+    assert len(q) == DEFAULT_CHUNK_SIZE
+    np.testing.assert_array_equal(q[-1][0], [DEFAULT_CHUNK_SIZE - 1, 1 - DEFAULT_CHUNK_SIZE])
 
 
 @pytest.fixture
@@ -244,7 +247,7 @@ def _disk_full(*args, **kwargs) -> None:
     raise OSError('disk full')
 
 
-def _append_rows(writer: DiskEpisodeWriter, rows: int = _DEFAULT_CHUNK_ROWS) -> None:
+def _append_rows(writer: DiskEpisodeWriter, rows: int = DEFAULT_CHUNK_SIZE) -> None:
     for i in range(rows):
         writer.append('q', i, Time(**{RECORDED_TIME: i + 1}))
 
@@ -254,7 +257,7 @@ def test_a_closed_episode_ends_its_chunk_thread(tmp_path, threads_before):
         _append_rows(writer)
 
     assert set(threading.enumerate()) <= threads_before
-    assert len(DiskEpisode(tmp_path / 'ep')['q']) == _DEFAULT_CHUNK_ROWS
+    assert len(DiskEpisode(tmp_path / 'ep')['q']) == DEFAULT_CHUNK_SIZE
 
 
 def test_an_aborted_episode_ends_its_chunk_thread(tmp_path, threads_before):
@@ -296,7 +299,7 @@ def test_an_episode_whose_close_failed_ends_its_chunk_thread_and_can_be_aborted(
 def test_a_failed_chunk_write_raises_on_append_and_the_episode_is_removed(tmp_path, monkeypatch, threads_before):
     monkeypatch.setattr(pq.ParquetWriter, 'write_table', _disk_full)
     with pytest.raises(OSError, match='disk full'), DiskEpisodeWriter(tmp_path / 'ep') as writer:
-        _append_rows(writer, rows=2 * _DEFAULT_CHUNK_ROWS)
+        _append_rows(writer, rows=2 * DEFAULT_CHUNK_SIZE)
 
     assert set(threading.enumerate()) <= threads_before
     assert not (tmp_path / 'ep').exists()
