@@ -879,8 +879,7 @@ class Robot(pimm.ControlSystem):
         # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
         # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
-        # Clears the fault of the arm, and answers CLEARED once the arm is at the start pose: it opens a lost chain
-        # again, and moves an arm that reads ERROR to that pose. An arm with no fault answers at once and does not move.
+        # Answers CLEARED once the arm is at the start pose; an arm with no fault answers at once and does not move.
         self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
         # On until a message says otherwise; the park on shutdown does not read it.
         self.idle_park_on = pimm.DefaultingReceiver[bool](self, default=True)
