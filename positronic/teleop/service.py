@@ -111,7 +111,7 @@ class ButtonMap:
     - The stick: Cancel while the service waits for Ready. A hold of the stick is Give up.
     - The trigger: the grip.
 
-    It reads only ``buttons``: the left controller reads only X, because the headset page uses its stick.
+    It reads only ``buttons``: the left controller reads only X, because the headset page uses its Y.
     """
 
     def __init__(
@@ -208,8 +208,8 @@ class TrialState:
     cameras: tuple[str, ...]
 
 
-# The use of the left stick, at the bottom of the view
-CAMERA_HINT = 'Left stick: next camera. Hold it: panel'
+# The use of Y on the left controller, at the bottom of the view
+CAMERA_HINT = 'Y: next camera. Hold Y: panel'
 # The width of the column of the view that shows the other cameras of the session, half the width of the main camera
 OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
