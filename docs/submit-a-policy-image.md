@@ -543,22 +543,16 @@ log cannot:
 route to an episode: a signed link covers one key, and the bucket refuses a listing. The
 client calls it with `list_artifacts`, and `positronic eval` has no command for it.
 
-- Read `result.json` first. It holds the scores, and `episode_locations` lists the folder of each
-  episode that counts, in episode order. A run can record one episode more than once, and a
-  folder that the list does not name counts nothing. Each entry starts with the run's
-  `artifact_location`; remove that start to pass the folder as `prefix`.
-- Where `result.json` has no `episode_locations`, its `attempt_location` names the attempt that
-  scored. A reprovisioned run writes one tree per attempt, and only that tree holds the episodes
-  that count. Its `scores.json` holds their scores.
+- Read `result.json` first. Its `episode_locations` lists the addresses of the episodes. Where it
+  is absent, its `attempt_location` gives the address.
 - The route's `prefix` filter is read under the submission's own prefix, so one attempt's
-  episodes are `attempts/<n>/episodes/`, and one episode is a folder of that root. The same
-  attempt holds `logs/` and `timing.jsonl`. `control/` is never listed.
+  episodes are `attempts/<n>/episodes/`. The same attempt holds `logs/` and `timing.jsonl`.
+  `control/` is never listed.
 - The route pages: pass `after` with the `next` of the page before it. These links expire after
   15 minutes, like the three above.
-- `attempts/<n>/episodes/` is a positronic dataset root, and each episode folder sits at
-  `<block>/<episode>/` under it. Download the episodes that count and keep that path under one
-  root, and positronic reads the root as a dataset, the same as one a local `positronic eval run`
-  writes ([Evaluation](evaluation.md)). The eval's privileged ground-truth is stripped from it.
+- `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic
+  reads it as a dataset, the same as one a local `positronic eval run` writes
+  ([Evaluation](evaluation.md)). The eval's privileged ground-truth is stripped from it.
 - A plan the lab rig ran is refused here: its episodes land under the prefix `submissions.get`
   names.
 
