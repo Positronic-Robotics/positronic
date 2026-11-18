@@ -12,7 +12,7 @@ from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.kinematics import Kinematics
 from positronic.drivers.roboarm.models import GRIPPER_SITE, attach_frame
-from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
+from positronic.drivers.utils import CommandReceipt, DriverRun, MoveStatus, log_failure
 
 
 class SO101State(State, pimm.shared_memory.NumpySMAdapter):
@@ -89,6 +89,8 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         self._qpos, self._grip = np.asarray(self.q_norm[:-1]), float(self.q_norm[-1])
         # Nothing has asked the arm to be anywhere, and the bus holds whatever it was left holding
         self._unsent = False
+        # The receipt of the command that asked for ``_qpos``, until the bus takes it
+        self._qpos_receipt: CommandReceipt | None = None
 
     def _norm_to_rad(self, qpos: np.ndarray) -> np.ndarray:
         """The bus's normalized 0..1 range mapped onto the joint's own travel, in radians."""
@@ -142,24 +144,26 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         if self.moves.settle(self.q_norm[:-1], self.clock.now()) is MoveStatus.GAVE_UP:
             # Holding the target the arm stopped short of would resume the move once whatever blocked
             # it goes away, long after its asker was told it failed.
-            self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
+            self._qpos, self._qpos_receipt, self._unsent = np.asarray(self.q_norm[:-1]), None, True
 
     def hold_grip(self, grip: float) -> None:
         """Hold the fingers at ``grip``."""
         self._grip, self._unsent = grip, True
 
-    def track(self, cmd: roboarm_command.CommandType) -> None:
-        """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival."""
-        self._qpos, self._unsent = self._target_qpos(cmd), True
-        self.moves.stage()
+    def track(self, cmd: roboarm_command.CommandType, receipt: CommandReceipt | None) -> None:
+        """Hold the arm at the setpoint ``cmd`` asks for, with nobody waiting on the arrival. ``receipt`` is of
+        ``cmd``."""
+        self._qpos, self._qpos_receipt, self._unsent = self._target_qpos(cmd), receipt, True
 
-    def sync_move(self, call: pimm.calls.Call[roboarm_command.CommandType, None]) -> None:
-        """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there."""
+    def sync_move(
+        self, call: pimm.calls.Call[roboarm_command.CommandType, None], receipt: CommandReceipt | None
+    ) -> None:
+        """Hold the arm where ``call`` asks; ``settle`` answers it once the bus reads back there. ``receipt`` is of
+        ``call``."""
         with pimm.calls.raise_to(call):
             target = self._target_qpos(call.request)
-            self._qpos, self._unsent = target, True
+            self._qpos, self._qpos_receipt, self._unsent = target, receipt, True
             self.moves.accept(call, target, self._ARRIVED_TOL, self.clock.now(), self._MOVE_TIMEOUT_S)
-            self.moves.stage()
 
     def write(self) -> None:
         """Put the setpoint on the bus, if anything has asked for one since it was last written.
@@ -169,9 +173,12 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         """
         if not self._unsent:
             return
-        with self.moves.sending():
-            self.bus.set_target_position(np.concatenate([self._qpos, [self._grip]]))
+        # The first write of the setpoint carries its receipt; a write that fails applies nothing
+        receipt, self._qpos_receipt = self._qpos_receipt, None
+        self.bus.set_target_position(np.concatenate([self._qpos, [self._grip]]))
         self._unsent = False
+        if receipt is not None:
+            receipt.applied()
 
     def publish(self) -> None:
         """Ship the arm as the bus reports it, arm and fingers."""
@@ -191,7 +198,7 @@ class _Arm(DriverRun[roboarm_command.CommandType]):
         """Leave the arm holding where the bus reads it, then answer whatever was waiting on the move."""
         try:
             if self.moves.active:  # the servos chase the goal they were last given, run or no run
-                self._qpos, self._unsent = np.asarray(self.q_norm[:-1]), True
+                self._qpos, self._qpos_receipt, self._unsent = np.asarray(self.q_norm[:-1]), None, True
                 self.write()
         finally:  # a bus that will not take the hold is the asker's to hear about, not a reason to go quiet
             self.moves.abandon(exc)
@@ -234,11 +241,12 @@ class Robot(pimm.ControlSystem):
                     arm.hold_grip(grip)
                 arm.settle()
                 asked = arm.moves.next_request()
+                receipt = arm.moves.take()
                 if isinstance(asked, pimm.calls.Call):
-                    arm.sync_move(asked)
+                    arm.sync_move(asked, receipt)
                 elif asked is not None:
                     with log_failure(asked):
-                        arm.track(asked)
+                        arm.track(asked, receipt)
 
                 arm.write()
                 arm.publish()

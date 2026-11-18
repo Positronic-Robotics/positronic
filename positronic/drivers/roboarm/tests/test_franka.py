@@ -3804,3 +3804,36 @@ def test_each_command_the_arm_takes_is_timed_and_a_refused_one_is_not(desk, worl
 
     spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
     assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False, True]
+
+
+def test_a_move_held_through_an_arm_error_is_timed_from_its_first_read_and_a_jog_dropped_meanwhile_is_not(
+    desk, world, tmp_path
+):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        for _ in range(3):  # init + the opening move
+            next(loop)
+        arm.error = 1
+        answer = move(command.JointPosition(PARK))
+        next(loop)  # the call is held
+        feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+        next(loop)
+        cleared_ns = time.time_ns()
+        arm.error = 0
+        for _ in range(20):
+            if answer.done():
+                break
+            next(loop)
+        answer.result()
+
+    spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [True]
+    assert spans[0].start_ns < cleared_ns <= spans[0].end_ns

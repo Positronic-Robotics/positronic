@@ -25,7 +25,15 @@ from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.gripper import aperture
-from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
+from positronic.drivers.utils import (
+    CommandReceipt,
+    DriverRun,
+    MoveAbandoned,
+    Moves,
+    MoveStatus,
+    grip_setpoint,
+    log_failure,
+)
 from positronic.utils import check_finite_positive, package_assets_path
 
 from .. import RobotStatus, State, command
@@ -388,23 +396,28 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_joints = np.array(joints, dtype=np.float64)
         self._sent_at = self.clock.now()
 
-    def command_target(self, joints: np.ndarray, grip: float) -> None:
-        """Command the joints and the grip; the vendor takes the grip as open width."""
-        with self.moves.sending():
-            self._send(joints, aperture.flip_grip(grip))
+    def command_target(self, joints: np.ndarray, grip: float, receipt: CommandReceipt | None = None) -> None:
+        """Command the joints and the grip; the vendor takes the grip as open width.
 
-    def command_step_toward(self, target: np.ndarray, grip: float) -> None:
+        ``receipt`` is of the command that the joints serve; it is applied once the chain takes them.
+        """
+        self._send(joints, aperture.flip_grip(grip))
+        if receipt is not None:
+            receipt.applied()
+
+    def command_step_toward(self, target: np.ndarray, grip: float, receipt: CommandReceipt | None = None) -> None:
         """Command the grip, and the joints toward ``target`` as far as the speed cap allows since the last joints
-        sent, counting at most one tick: a late tick does not catch up."""
+        sent, counting at most one tick: a late tick does not catch up. ``receipt`` is of the command that asked for
+        ``target``."""
         if self._sent_joints is None:
             raise RuntimeError('the chain has received no joints to step from')
         step = target - self._sent_joints
         farthest = float(np.max(np.abs(step)))
         max_step = self._MAX_STREAMED_JOINT_SPEED_RAD_S * min(self.clock.now() - self._sent_at, 1 / _CONTROL_HZ)
         if farthest <= max_step:
-            self.command_target(target, grip)
+            self.command_target(target, grip, receipt)
         else:
-            self.command_target(self._sent_joints + step * (max_step / farthest), grip)
+            self.command_target(self._sent_joints + step * (max_step / farthest), grip, receipt)
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
         """Hold the measured position, publish it, and return it as the target."""
@@ -463,14 +476,27 @@ class _Arm(DriverRun[command.CommandType]):
         )
 
     def _ramp(
-        self, start: np.ndarray, target: np.ndarray, grip: float, fraction: float, obs: dict[str, np.ndarray]
+        self,
+        start: np.ndarray,
+        target: np.ndarray,
+        grip: float,
+        fraction: float,
+        obs: dict[str, np.ndarray],
+        receipt: CommandReceipt | None,
     ) -> None:
         fraction = min(fraction, 1.0)
-        self.command_target((1 - fraction) * start + fraction * target, grip)
+        self.command_target((1 - fraction) * start + fraction * target, grip, receipt)
         self.publish(obs, RobotStatus.BUSY)
 
     def _come_to_rest(
-        self, reference: np.ndarray, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool
+        self,
+        reference: np.ndarray,
+        goal: np.ndarray,
+        grip: float,
+        tuning: SettleTuning,
+        *,
+        interrupt_on_stop: bool,
+        receipt: CommandReceipt | None,
     ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], MoveStatus] | None]:
         """Ramp to ``reference``, wait until the chain is still, and return the reading and how the pass ended:
         ARRIVED on ``goal``, or GAVE_UP still and short of it.
@@ -505,7 +531,7 @@ class _Arm(DriverRun[command.CommandType]):
                     if not window[-1][2]:
                         return obs, MoveStatus.GAVE_UP
 
-            self._ramp(start, reference, grip, elapsed / travel_s, obs)
+            self._ramp(start, reference, grip, elapsed / travel_s, obs, receipt)
             yield self.limiter.wait()
 
     @staticmethod
@@ -517,9 +543,17 @@ class _Arm(DriverRun[command.CommandType]):
         return bool(np.all(np.ptp(joints, axis=0) <= tuning.still_position_rad))
 
     def _settle_onto(
-        self, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool, within_joint_limits: bool
+        self,
+        goal: np.ndarray,
+        grip: float,
+        tuning: SettleTuning,
+        *,
+        interrupt_on_stop: bool,
+        within_joint_limits: bool,
+        receipt: CommandReceipt | None = None,
     ) -> Generator[pimm.Command, None, np.ndarray | None]:
-        """Settle onto ``goal`` and return the reference that holds the chain there, or None on a stop.
+        """Settle onto ``goal`` and return the reference that holds the chain there, or None on a stop. The first
+        command that reaches the chain applies ``receipt``, of the call that asked for ``goal``.
 
         Each pass subtracts the measured gap from the current reference. The chain gives back only part of each
         correction, so the corrections accumulate. Raise ``TimeoutError`` when the passes or the bounds run out, and
@@ -530,12 +564,14 @@ class _Arm(DriverRun[command.CommandType]):
             reachable = np.clip(goal, *self._joint_range) if within_joint_limits else goal.copy()
             reference = reachable
             for _ in range(tuning.attempts):
-                rest = yield from self._come_to_rest(reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop)
+                rest = yield from self._come_to_rest(
+                    reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop, receipt=receipt
+                )
                 if rest is None:
                     return None
                 obs, ended = rest
                 if ended is MoveStatus.ARRIVED:
-                    self.command_target(reference, grip)
+                    self.command_target(reference, grip, receipt)
                     self.moves.errored = False
                     return reference
                 bound = tuning.max_correction_rad
@@ -647,22 +683,18 @@ class _Arm(DriverRun[command.CommandType]):
             yield self.limiter.wait()
 
     def sync_move(
-        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray
+        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, receipt: CommandReceipt | None = None
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle onto the call's target with the gripper open, then answer the call. On a failure or a stop, hold
         where the arm stopped. A ``ChainFault`` answers the call and is raised. A blocking move is the episode reset, so
         each episode starts with the gripper open. A move that fails answers with an ARM ``DeviceFault``, and a
-        malformed command with its own error."""
+        malformed command with its own error. ``receipt`` is of ``call``."""
         target: np.ndarray | None = None  # stays None for a malformed command, which the arm never sees
         try:
             target = self.to_joints(call.request, q)
-            self.moves.stage()
-            try:
-                reference = yield from self._settle_onto(
-                    target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
-                )
-            finally:  # a move that ends before its first command took nothing
-                self.moves.unstage()
+            reference = yield from self._settle_onto(
+                target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True, receipt=receipt
+            )
             if reference is not None:
                 self.publish(self.observations())
                 call.set_result(None)
@@ -981,10 +1013,10 @@ class Robot(pimm.ControlSystem):
                 while not should_stop.value:
                     if ready := list(self.ready.incoming()):
                         yield from self._serve_ready(arm, serving, ready, clock)
-                    asked, q = self._take_request(arm, fingers, serving, clock)
-                    yield from self._dispatch(arm, serving, asked, q, clock)
+                    asked, receipt, q = self._take_request(arm, fingers, serving, clock)
+                    taken = yield from self._dispatch(arm, serving, asked, receipt, q, clock)
                     if (step := self._advance_parking(serving)) is None:
-                        arm.command_step_toward(serving.q_target, serving.grip_target)
+                        arm.command_step_toward(serving.q_target, serving.grip_target, taken)
                         # Synchronous moves can take seconds; publish a fresh observation.
                         arm.publish(arm.observations())
                         step = arm.limiter.wait()
@@ -1020,10 +1052,11 @@ class Robot(pimm.ControlSystem):
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
-    ) -> tuple[pimm.calls.Call | command.CommandType | None, np.ndarray]:
-        """Read the grip, the next request and ``idle_park_on``, and return the request with the joints. A grip, a
-        request or ``idle_park_on`` off stops an idle park."""
+    ) -> tuple[pimm.calls.Call | command.CommandType | None, CommandReceipt | None, np.ndarray]:
+        """Read the grip, the next request and ``idle_park_on``, and return the request with its receipt and the
+        joints. A grip, a request or ``idle_park_on`` off stops an idle park."""
         asked = arm.moves.next_request()
+        receipt = arm.moves.take()
         with self._answer_failed_setup(asked):
             grip = grip_setpoint(fingers, arm.read_grip(arm.observations()), clock.now())
             idle_park_off = not self.idle_park_on.value
@@ -1038,28 +1071,34 @@ class Robot(pimm.ControlSystem):
             # A park that ended leaves ``idle_since`` None until a command, so the arm does not park again.
             if idle_park_off and serving.idle_since is not None:
                 serving.idle_since = clock.now()
-            return asked, arm.observations()[_JOINT_POS]
+            return asked, receipt, arm.observations()[_JOINT_POS]
 
     def _dispatch(
         self,
         arm: _Arm,
         serving: _Serving,
         asked: pimm.calls.Call | command.CommandType | None,
+        receipt: CommandReceipt | None,
         q: np.ndarray,
         clock: pimm.Clock,
-    ) -> Generator[pimm.Command, None, None]:
-        """Run a blocking move, take a streamed target, or start an idle park."""
+    ) -> Generator[pimm.Command, None, CommandReceipt | None]:
+        """Run a blocking move, take a streamed target, or start an idle park. ``receipt`` is of ``asked``.
+
+        Return the receipt of the streamed target taken, for the command that steps toward it; None otherwise.
+        """
+        taken = None
         if isinstance(asked, pimm.calls.Call):
-            serving.q_target, serving.grip_target = yield from arm.sync_move(asked, q)
+            serving.q_target, serving.grip_target = yield from arm.sync_move(asked, q, receipt)
             serving.idle_since = clock.now()
         elif asked is not None:
             with log_failure(asked):
                 serving.q_target = arm.streamed_target(asked, q)
-                arm.moves.stage()
+                taken = receipt
             serving.idle_since = clock.now()
         elif self._should_park(serving.idle_since, clock.now()):
             serving.parking = arm.park(arm.read_grip(arm.observations()))
             serving.idle_since = None
+        return taken
 
     @staticmethod
     def _advance_parking(serving: _Serving) -> pimm.Command | None:

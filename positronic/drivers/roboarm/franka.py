@@ -18,6 +18,7 @@ from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault, raise_as_device_fault
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.utils import (
+    CommandReceipt,
     DriverRun,
     MoveAbandoned,
     MoveRefused,
@@ -381,8 +382,9 @@ class _Arm(DriverRun[command.CommandType]):
         self._quiet_at = 0.0
         # The error last emitted in place of the state, so that each one goes out once.
         self._emitted_error: str | None = None
-        # A sync move that arrived while the arm errors, held until the error clears or the grace runs out.
-        self._held: pimm.calls.Call[command.CommandType, None] | None = None
+        # A sync move that arrived while the arm errors, with its receipt, held until the error clears or the grace
+        # runs out.
+        self._held: tuple[pimm.calls.Call[command.CommandType, None], CommandReceipt | None] | None = None
         self._error_started = 0.0
         self._q_at_error = np.zeros(len(_PARK_JOINTS))
         self._moved_in_error = 0.0
@@ -400,7 +402,7 @@ class _Arm(DriverRun[command.CommandType]):
     def __exit__(self, exc_type, exc, tb) -> None:
         """Answer a move still held, then halt the control thread."""
         if self._held is not None:
-            self._held.set_exception(MoveAbandoned())
+            self._held[0].set_exception(MoveAbandoned())
             self._held = None
         # Before the Desk session deactivates FCI, or the thread dies mid-control with
         # "TCP connection got interrupted".
@@ -504,7 +506,7 @@ class _Arm(DriverRun[command.CommandType]):
         self.moves.drain_async()
         if self._held is None:
             asked = self.moves.next_request()
-            self._held = asked if isinstance(asked, pimm.calls.Call) else None
+            self._held = (asked, self.moves.take()) if isinstance(asked, pimm.calls.Call) else None
         if outcome is RecoveryOutcome.CLEARED:
             logger.info(f'The arm error cleared after {now - self._error_started:.1f}s')
         elif self._held is not None and now - self._error_started >= self._RECOVERY_GRACE_S:
@@ -512,15 +514,19 @@ class _Arm(DriverRun[command.CommandType]):
                 f'The arm error persists after {self._RECOVERY_GRACE_S}s; refusing the waiting move: '
                 f'{st.error_message}, moved {self._moved_in_error:.3f} rad'
             )
-            self._held.set_exception(device_fault(MoveRefused(st.error_message, self._moved_in_error), FaultKind.ARM))
+            self._held[0].set_exception(
+                device_fault(MoveRefused(st.error_message, self._moved_in_error), FaultKind.ARM)
+            )
             self._held = None
 
-    def next_request(self) -> pimm.calls.Call[command.CommandType, None] | command.CommandType | None:
-        """The sync move held through an error, before anything ``moves`` is asked for."""
+    def next_request(
+        self,
+    ) -> tuple[pimm.calls.Call[command.CommandType, None] | command.CommandType | None, CommandReceipt | None]:
+        """The sync move held through an error, before anything ``moves`` is asked for, with its receipt."""
         if self._held is not None:
             held, self._held = self._held, None
             return held
-        return self.moves.next_request()
+        return self.moves.next_request(), self.moves.take()
 
     def lose_control(self, cause: Exception) -> None:
         """Stop the control loop, and drive the arm no more, for ``cause``, until a recover call connects again."""
@@ -548,7 +554,7 @@ class _Arm(DriverRun[command.CommandType]):
 
     def refuse_moves(self) -> None:
         """Answer every waiting sync move with the failure that ended the connection, and drop a streamed one."""
-        while isinstance(asked := self.next_request(), pimm.calls.Call):
+        while isinstance(asked := self.next_request()[0], pimm.calls.Call):
             asked.set_exception(self.no_connection_fault())
 
     def _to_pf_mode(self, mode: command.ControlModeType | None) -> pf.InternalImpedance | pf.SoftwareImpedance:
@@ -573,12 +579,18 @@ class _Arm(DriverRun[command.CommandType]):
                     tool_point=_flange_to_gripper().translation.tolist(),
                 )
 
-    def command_target(self, target: np.ndarray, mode: command.ControlModeType | None) -> None:
-        """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between."""
+    def command_target(
+        self, target: np.ndarray, mode: command.ControlModeType | None, *, receipt: CommandReceipt | None = None
+    ) -> None:
+        """Put the arm under ``mode`` and publish ``target`` to it, in that order with nothing in between.
+
+        ``receipt`` is of the command that asked for ``target``; it is applied once the arm takes the target.
+        """
         with self.lose_control_on_failure():
             self.robot.set_control_mode(self._to_pf_mode(mode))  # the robot no-ops a mode already running
             self.robot.set_target_joints(target)
-        self.moves.mark_applied()
+        if receipt is not None:
+            receipt.applied()
         self._refused = False  # the goal just dispatched is not the one the last reading found refused
 
     def await_goal(
@@ -662,9 +674,14 @@ class _Arm(DriverRun[command.CommandType]):
             )
 
     def move_to(
-        self, target: np.ndarray, mode: command.ControlModeType | None, *, at_teardown: bool = False
+        self,
+        target: np.ndarray,
+        mode: command.ControlModeType | None,
+        *,
+        at_teardown: bool = False,
+        receipt: CommandReceipt | None = None,
     ) -> Generator[pimm.Command, None, MoveStatus]:
-        """Travel to ``target`` under ``mode``, yielding until it arrives.
+        """Travel to ``target`` under ``mode``, yielding until it arrives. ``receipt`` is of the call that asked for it.
 
         ``at_teardown`` is for the move the driver makes on its way out. The stop is already set by then, so
         heeding it would abandon the move before it began, and recovering from a fault cancels the goal.
@@ -687,7 +704,7 @@ class _Arm(DriverRun[command.CommandType]):
 
         try:
             self.clear_held_fault()
-            self.command_target(target, mode)
+            self.command_target(target, mode, receipt=receipt)
             for wait in self.await_goal(should_stop, self.limiter.wait):
                 with self.lose_control_on_failure():
                     st = self.robot.state()
@@ -770,8 +787,10 @@ class _Arm(DriverRun[command.CommandType]):
             raise ValueError(f'{cmd} does not name a joint target this arm can hold: {target}')
         return self._clamp(target)
 
-    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> Iterator[pimm.Command]:
-        """Put the arm where ``call`` asks and answer it once the state saying so is out.
+    def sync_move(
+        self, call: pimm.calls.Call[command.CommandType, None], receipt: CommandReceipt | None = None
+    ) -> Iterator[pimm.Command]:
+        """Put the arm where ``call`` asks and answer it once the state saying so is out. ``receipt`` is of ``call``.
 
         Answer with the release instruction, and send no target, while the emergency stop is pressed. Answer a move
         that fails with an ARM ``DeviceFault``, and a malformed command with its own error.
@@ -786,7 +805,7 @@ class _Arm(DriverRun[command.CommandType]):
             call.set_exception(exc)
             return
         try:
-            if (yield from self.move_to(target, cmd.mode)) is MoveStatus.ARRIVED:
+            if (yield from self.move_to(target, cmd.mode, receipt=receipt)) is MoveStatus.ARRIVED:
                 call.set_result(None)
             else:
                 call.set_exception(MoveAbandoned())
@@ -1375,13 +1394,13 @@ class Robot(pimm.ControlSystem):
                     yield arm.limiter.wait()
                     continue
 
-                asked = arm.next_request()
+                asked, receipt = arm.next_request()
                 if isinstance(asked, pimm.calls.Call):
                     with brakes.opened():
-                        yield from arm.sync_move(asked)
+                        yield from arm.sync_move(asked, receipt)
                 elif asked is not None:
                     with brakes.opened(), log_failure(asked):
-                        arm.command_target(arm.to_joints(asked), asked.mode)
+                        arm.command_target(arm.to_joints(asked), asked.mode, receipt=receipt)
                 else:
                     brakes.close_if_idle(goal)
 

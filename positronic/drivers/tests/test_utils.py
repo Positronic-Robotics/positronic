@@ -284,8 +284,10 @@ def test_a_streamed_setpoint_is_timed_from_its_read_to_its_apply_with_its_age_at
     with telemetry.bind(tmp_path, 'arm', 'run'):
         before = time.time_ns()
         assert moves.next_request() == 0.25
+        receipt = moves.take()
+        assert receipt is not None
         time.sleep(0.002)
-        moves.mark_applied()
+        receipt.applied()
         after = time.time_ns()
 
     (span,) = _command_spans(tmp_path)
@@ -299,94 +301,44 @@ def test_a_call_is_timed_from_its_read_to_its_apply_and_carries_no_age(asking, t
     ask(0.7)
     with telemetry.bind(tmp_path, 'arm', 'run'):
         assert isinstance(moves.next_request(), pimm.calls.Call)
-        moves.mark_applied()
+        receipt = moves.take()
+        assert receipt is not None
+        receipt.applied()
 
     (span,) = _command_spans(tmp_path)
     assert span.attrs[ATTR_COMMAND_SYNC] is True
     assert ATTR_COMMAND_AGE_MS not in span.attrs
 
 
-def test_a_request_the_driver_never_applies_records_no_span(asking, tmp_path):
-    """A driver drops a malformed setpoint before it applies it. A later apply of nothing must not time that one."""
+def test_a_read_of_nothing_hands_over_no_receipt_of_the_request_before(asking):
+    """A driver that takes a receipt after a read of nothing must not time the request it read before."""
+    _, moves, stream = asking
+    stream.push(0.25)
+    moves.next_request()
+    assert moves.next_request() is None
+
+    assert moves.take() is None
+
+
+def test_a_receipt_is_handed_over_once(asking):
+    """Two paths of one driver that each take the receipt must not each time the request."""
+    _, moves, stream = asking
+    stream.push(0.25)
+    moves.next_request()
+
+    assert moves.take() is not None
+    assert moves.take() is None
+
+
+def test_a_receipt_applied_twice_records_one_span(asking, tmp_path):
+    """A driver can write one target to the device more than once, and each write applies its receipt."""
     _, moves, stream = asking
     stream.push(0.25)
     with telemetry.bind(tmp_path, 'arm', 'run'):
         moves.next_request()
-        assert moves.next_request() is None
-        moves.mark_applied()
-
-    assert _command_spans(tmp_path) == []
-
-
-def test_a_request_applied_twice_records_one_span(asking, tmp_path):
-    """A driver can mark one request applied on more than one path."""
-    _, moves, stream = asking
-    stream.push(0.25)
-    with telemetry.bind(tmp_path, 'arm', 'run'):
-        moves.next_request()
-        moves.mark_applied()
-        moves.mark_applied()
+        receipt = moves.take()
+        assert receipt is not None
+        receipt.applied()
+        receipt.applied()
 
     assert len(_command_spans(tmp_path)) == 1
-
-
-def test_a_staged_request_is_timed_until_the_next_send_returns(asking, tmp_path):
-    _, moves, stream = asking
-    stream.push(0.25)
-    with telemetry.bind(tmp_path, 'arm', 'run'):
-        moves.next_request()
-        moves.stage()
-        with moves.sending():
-            time.sleep(0.002)
-            sent = time.time_ns()
-        with moves.sending():  # the next command carries the same target, and the request is timed once
-            pass
-
-    (span,) = _command_spans(tmp_path)
-    assert span.end_ns >= sent
-    assert span.attrs[ATTR_COMMAND_SYNC] is False
-
-
-def test_a_send_that_fails_applies_nothing_and_the_next_send_does_not_carry_the_request(asking, tmp_path):
-    _, moves, stream = asking
-    stream.push(0.25)
-    with telemetry.bind(tmp_path, 'arm', 'run'):
-        moves.next_request()
-        moves.stage()
-        with pytest.raises(OSError), moves.sending():
-            raise OSError('the bus went away')
-        with moves.sending():
-            pass
-
-    assert _command_spans(tmp_path) == []
-
-
-def test_a_send_carries_only_a_staged_request(asking, tmp_path):
-    """A request the driver read but did not take, or took and then dropped, is not timed by a send."""
-    _, moves, stream = asking
-    with telemetry.bind(tmp_path, 'arm', 'run'):
-        stream.push(0.25)
-        moves.next_request()
-        with moves.sending():
-            pass
-        stream.push(0.5)
-        moves.next_request()
-        moves.stage()
-        moves.unstage()
-        with moves.sending():
-            pass
-
-    assert _command_spans(tmp_path) == []
-
-
-def test_a_staged_request_that_no_send_carried_is_dropped_at_the_next_read(asking, tmp_path):
-    _, moves, stream = asking
-    stream.push(0.25)
-    with telemetry.bind(tmp_path, 'arm', 'run'):
-        moves.next_request()
-        moves.stage()
-        assert moves.next_request() is None
-        with moves.sending():
-            pass
-
-    assert _command_spans(tmp_path) == []

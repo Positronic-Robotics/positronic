@@ -5,8 +5,9 @@ import math
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Generic, NamedTuple, TypeVar
+from typing import Generic, TypeVar
 
 import numpy as np
 
@@ -68,12 +69,29 @@ class MoveRefused(RuntimeError):
         return (MoveRefused, (self.error_message, self.moved_rad))
 
 
-class _Receipt(NamedTuple):
-    """When a driver read a request, for the span that ends when the driver applies it."""
+@dataclass
+class CommandReceipt:
+    """When a driver read one command, for the ``driver.command`` span that ends when the device takes it."""
 
     read_ns: int  # epoch nanoseconds, the bound a span takes
     sync: bool
     age_ms: float | None  # from the emit to the read; a call carries no emit time
+    _recorded: bool = field(default=False, init=False, repr=False)
+
+    def applied(self) -> None:
+        """Record the ``driver.command`` span from the read to now: the device took the command.
+
+        Call it after the write to the device returns. A second call records nothing.
+        """
+        if self._recorded:
+            return
+        self._recorded = True
+        if not telemetry.enabled():
+            return
+        attrs: dict[str, bool | float] = {ATTR_COMMAND_SYNC: self.sync}
+        if self.age_ms is not None:
+            attrs[ATTR_COMMAND_AGE_MS] = self.age_ms
+        telemetry.record_span(SPAN_DRIVER_COMMAND, self.read_ns, time.time_ns(), **attrs)
 
 
 class Moves(Generic[T]):
@@ -95,8 +113,7 @@ class Moves(Generic[T]):
         self._settled: tuple[pimm.calls.Call[T, None], TimeoutError | None] | None = None
         # Set by a move that does not arrive, cleared by the next that does: the device is not where it was put
         self.errored = False
-        self._receipt: _Receipt | None = None  # the request read last, until the driver applies it
-        self._staged: _Receipt | None = None  # a request taken, until the next command to the device carries it
+        self._receipt: CommandReceipt | None = None  # the request read last, until the driver takes its receipt
 
     def __enter__(self) -> 'Moves[T]':
         return self
@@ -133,9 +150,14 @@ class Moves(Generic[T]):
         """
         request, age_ms = (None, None) if self.busy else self._read_request()
         sync = isinstance(request, pimm.calls.Call)
-        self._receipt = None if request is None else _Receipt(time.time_ns(), sync, age_ms)
-        self._staged = None
+        self._receipt = None if request is None else CommandReceipt(time.time_ns(), sync, age_ms)
         return request
+
+    def take(self) -> CommandReceipt | None:
+        """The receipt of the request ``next_request`` returned last, or None when it returned nothing or the receipt
+        is taken already."""
+        receipt, self._receipt = self._receipt, None
+        return receipt
 
     def _read_request(self) -> tuple[pimm.calls.Call[T, None] | T | None, float | None]:
         """The waiting call, else the new setpoint with its age in milliseconds since its emit."""
@@ -145,45 +167,6 @@ class Moves(Generic[T]):
             return None, None
         emitted = msg.time.get(EMITTED_WALL)  # every clock stamps this timeline from the host monotonic clock
         return pimm.message_value(msg), None if emitted is None else (time.monotonic_ns() - emitted) / 1e6
-
-    def mark_applied(self) -> None:
-        """Record the request ``next_request`` returned last as applied now: the driver made it the device's target.
-
-        A ``driver.command`` span runs from the read to now. A second call, or one with no request read, records
-        nothing.
-        """
-        receipt, self._receipt = self._receipt, None
-        self._record(receipt)
-
-    def stage(self) -> None:
-        """Take the request ``next_request`` returned last, for a driver that sends it to the device later.
-
-        Its ``driver.command`` span ends when the next ``sending`` block ends without an error.
-        """
-        self._staged, self._receipt = self._receipt, None
-
-    def unstage(self) -> None:
-        """Drop the staged request: no command to the device carries it."""
-        self._staged = None
-
-    @contextmanager
-    def sending(self) -> Iterator[None]:
-        """Wrap a command to the device. The staged request is applied when the command returns.
-
-        A command that raises applies nothing, and the staged request is dropped.
-        """
-        staged, self._staged = self._staged, None
-        yield
-        self._record(staged)
-
-    @staticmethod
-    def _record(receipt: _Receipt | None) -> None:
-        if receipt is None or not telemetry.enabled():
-            return
-        attrs: dict[str, bool | float] = {ATTR_COMMAND_SYNC: receipt.sync}
-        if receipt.age_ms is not None:
-            attrs[ATTR_COMMAND_AGE_MS] = receipt.age_ms
-        telemetry.record_span(SPAN_DRIVER_COMMAND, receipt.read_ns, time.time_ns(), **attrs)
 
     def drain_async(self) -> None:
         """Discard the streamed setpoint that waits, if there is one."""
