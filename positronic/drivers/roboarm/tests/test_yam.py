@@ -1933,6 +1933,21 @@ def test_a_recover_call_on_an_arm_with_no_fault_answers_cleared_and_does_not_mov
     assert not rig.vendor.released_at
 
 
+def test_a_recover_call_that_the_driver_stops_before_the_start_pose_does_not_answer_cleared(world, rig):
+    """The boundary of a move to the start pose: a stop ends it where the arm is, and the fault holds."""
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    _block_joints_2_and_3_at(rig, 0.0)
+
+    answer = _recoverer(world, rig)(None)
+    rig.tick(0.1)
+    rig.finish()
+
+    with pytest.raises(DeviceFault, match='stopped before the arm reached the start pose'):
+        answer.result()
+
+
 def test_a_recover_call_on_an_arm_whose_park_stopped_moves_it_to_the_start_pose_and_answers_cleared(world, rig):
     rig.raise_arm()
     _block_joints_2_and_3_at(rig, 0.3)

@@ -637,8 +637,8 @@ class _Arm(DriverRun[command.CommandType]):
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure
-        that stopped the settle or None. On a failure or a stop, hold where the arm stopped. A ``ChainFault`` is
-        raised."""
+        or the stop that ended the settle, or None once the arm arrives. On a failure or a stop, hold where the arm
+        stopped. A ``ChainFault`` is raised."""
         logger.info('Moving the arm to the start pose')
         # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
         try:
@@ -651,7 +651,9 @@ class _Arm(DriverRun[command.CommandType]):
             logger.error(f'The arm did not reach the start pose: {exc}')
             return *self.hold_where_it_stopped(), exc
         if reference is None:
-            return *self.hold_where_it_stopped(), None
+            return *self.hold_where_it_stopped(), InterruptedError(
+                'The driver stopped before the arm reached the start pose'
+            )
         return reference, _OPEN_GRIP, None
 
     def _report_parked(self) -> None:
@@ -980,7 +982,7 @@ class Robot(pimm.ControlSystem):
                 self.robot_meta.emit(meta)
                 arm.emit_meta()
                 joints, grip, missed = yield from arm.go_to_start()
-                self._answer_ready(asked, missed)
+                self._answer_start_calls(asked, missed)
                 asked = []
                 serving = _Serving(joints, grip, missed, idle_since=clock.now())
                 yield from self._serve(arm, serving, should_stop, clock)
@@ -1000,7 +1002,7 @@ class Robot(pimm.ControlSystem):
         return lost
 
     @staticmethod
-    def _answer_ready(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
+    def _answer_start_calls(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
         for call in asked:
             if missed is None:
                 call.set_result(None)
@@ -1069,9 +1071,11 @@ class Robot(pimm.ControlSystem):
             with Moves[float](self.sync_grip, self.target_grip) as fingers, self._answer_failed_grip_move(fingers):
                 while not should_stop.value:
                     if ready := list(self.ready.incoming()):
-                        yield from self._serve_ready(arm, serving, ready, clock, move=serving.failed_move is not None)
+                        yield from self._serve_start_calls(
+                            arm, serving, ready, clock, move=serving.failed_move is not None
+                        )
                     if recoveries := self._recoveries():
-                        yield from self._serve_ready(arm, serving, recoveries, clock, move=arm.moves.errored)
+                        yield from self._serve_start_calls(arm, serving, recoveries, clock, move=arm.moves.errored)
                     asked, receipt, q = self._take_request(arm, fingers, serving, clock)
                     taken = yield from self._dispatch(arm, serving, asked, receipt, q, clock)
                     if (step := self._advance_parking(serving)) is None:
@@ -1094,7 +1098,7 @@ class Robot(pimm.ControlSystem):
             fingers.fail(_arm_fault(exc))
             raise
 
-    def _serve_ready(
+    def _serve_start_calls(
         self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock, *, move: bool
     ) -> Generator[pimm.Command, None, None]:
         """Answer ``asked``. Where ``move`` says so, move the arm to the start pose first, and answer with its miss."""
@@ -1109,7 +1113,7 @@ class Robot(pimm.ControlSystem):
                 serving.q_target, serving.grip_target, serving.failed_move = yield from arm.go_to_start()
             serving.idle_since = clock.now()
             missed = serving.failed_move
-        self._answer_ready(asked, missed)
+        self._answer_start_calls(asked, missed)
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
