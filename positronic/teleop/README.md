@@ -134,10 +134,10 @@ Conversion for training picks its own keys from the recording.
 - The panel in the headset has the aspect of the video: 4:3 for one camera, 2:1 with the column.
 - The headset page (before Enter AR) shows the state of the cameras: each camera, a green dot on each camera whose
   images came in the last 30 s (also between trials), and the camera that the headset shows.
-- In the headset, Y on the left controller works the video panel. A press of Y makes the next camera whose images
-  come now the main camera. A hold of 1 s cycles the panel: on black with the camera, the text alone over the room
-  (the service then sends the view with no camera, and the page shows black as clear), and hidden. The bottom of the
-  view names the camera and the use of Y.
+- In the headset, Y on the left controller works the video panel. On the PlayStation VR2 it is Triangle (△). A press
+  of Y makes the next camera whose images come now the main camera. A hold of 1 s cycles the panel: on black with the
+  camera, the text alone over the room (the service then sends the view with no camera, and the page shows black as
+  clear), and hidden. The bottom of the view names the camera and the use of Y, with the Quest names as for B and A.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480, as JPEG. A camera with another aspect gets black bars.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
