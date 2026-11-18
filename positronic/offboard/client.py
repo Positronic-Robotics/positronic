@@ -89,6 +89,16 @@ class InferenceSession:
         self._pending: deque[object] = deque()
         self._timings = local()
         self.served_timing = self.wire_timing = {}
+        self.sent_alone = None
+
+    @property
+    def sent_alone(self) -> bool | None:
+        """Whether this thread's latest call went with no earlier call in flight; ``None`` before it sends."""
+        return self._timings.alone
+
+    @sent_alone.setter
+    def sent_alone(self, value: bool | None) -> None:
+        self._timings.alone = value
 
     @property
     def served_timing(self) -> Mapping[str, float]:
@@ -172,6 +182,7 @@ class InferenceSession:
         lose queued observations.
         """
         self.served_timing = self.wire_timing = {}
+        self.sent_alone = None
         with self._startup:
             if not self._answered:
                 return self._first_call(obs)
@@ -245,6 +256,7 @@ class InferenceSession:
                     with self._responses:
                         self._pending.append(token)
                         sent_alone = len(self._pending) == 1
+                    self.sent_alone = sent_alone
                     self._conn.send(serialised)
             finally:
                 # A send that raises gets timed too, so the span is recorded on the way out.

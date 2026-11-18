@@ -98,6 +98,7 @@ class RemoteStubPolicy(StubPolicy):
             infer=Mock(return_value=[{keys.ROBOT_COMMAND: self.command, keys.TARGET_GRIP: self.target_grip}]),
             served_timing={},
             wire_timing={},
+            sent_alone=True,
         )
         return Sequential(TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10)).run(
             runtime, lambda obs: cast(list[dict[str, Any]], round_trip(session, obs, compress_images=False))
