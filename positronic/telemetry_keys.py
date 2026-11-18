@@ -88,3 +88,11 @@ ATTR_WAYPOINTS_LATE_MAX_MS = 'episode.waypoints.late_max_ms'
 # The total and the longest time in milliseconds that the arm holds its last target between two chunks.
 ATTR_WAYPOINTS_HOLD_SUM_MS = 'episode.waypoints.hold_sum_ms'
 ATTR_WAYPOINTS_HOLD_MAX_MS = 'episode.waypoints.hold_max_ms'
+
+# One command that a driver takes: from the tick that reads it to the moment the driver makes it the device's target.
+SPAN_DRIVER_COMMAND = 'driver.command'
+# On `driver.command`: true for a call whose asker waits for the arrival, false for a streamed setpoint.
+ATTR_COMMAND_SYNC = 'command.sync'
+# On `driver.command` of a streamed setpoint: the milliseconds from its emit to its read, on the host's monotonic clock.
+# A call carries no emit time, so its span has no age.
+ATTR_COMMAND_AGE_MS = 'command.age_ms'
