@@ -239,6 +239,22 @@ def bind_from_env(process: str) -> Iterator[None]:
         yield
 
 
+@contextmanager
+def one_run_id() -> Iterator[None]:
+    """Hold one run id in the environment while the block runs, so this process and each process it spawns bind
+    under the same id. A non-empty run id set before the block is kept. The environment is restored on exit."""
+    previous = os.environ.get(ENV_RUN_ID)
+    if not previous:
+        os.environ[ENV_RUN_ID] = uuid.uuid4().hex
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(ENV_RUN_ID, None)
+        else:
+            os.environ[ENV_RUN_ID] = previous
+
+
 def force_flush() -> None:
     """Flush the batch processor's queue so a crash after this point loses no already-ended span; the owner of
     a long-running span flushes as it closes, so a later crash loses at most that span's tail. Inert while
