@@ -148,6 +148,7 @@ _ADDRESS = wire.HostPortAddress('localhost', 8000, wire.SESSION_PATH, '')
 def _mock_session(metadata=None):
     session = MagicMock()
     session.metadata = metadata or {}
+    session.sent_alone = None
     session.max_in_flight = 1
     session.infer.return_value = {'action': 'test'}
     return session
@@ -1061,6 +1062,38 @@ def test_a_call_sent_behind_another_gives_no_one_way_times():
         assert second.result(timeout=5) == set()
 
 
+def test_each_call_says_whether_it_went_with_no_earlier_call_in_flight():
+    # The handshake and a first call settle the session; then one call waits in its receive until a second one sends.
+    replies = [_ready('s', max_in_flight=2), legacy_protocol.serialise({protocol.RESULT: []})]
+    first_waits, second_sent = threading.Event(), threading.Event()
+
+    def recv(timeout=None):
+        if replies:
+            return replies.pop(0)
+        if not second_sent.is_set():
+            first_waits.set()
+            assert second_sent.wait(timeout=5)
+        return legacy_protocol.serialise({protocol.RESULT: []})
+
+    conn = MagicMock(spec=wire.ClientConnection)
+    conn.recv.side_effect = recv
+    session = InferenceSession(conn)
+    session.infer({})
+    assert session.sent_alone is True  # a server with no timing marks still gets the mark
+    conn.send.side_effect = lambda _: first_waits.is_set() and second_sent.set()
+
+    def sent_alone() -> bool | None:
+        session.infer({})
+        return session.sent_alone
+
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(sent_alone)
+        assert first_waits.wait(timeout=5)
+        second = pool.submit(sent_alone)
+        assert first.result(timeout=5) is True  # a call sent after it does not delay its answer
+        assert second.result(timeout=5) is False
+
+
 def test_a_server_that_stamps_no_receipt_gives_no_one_way_times():
     session = InferenceSession(
         _connection(
@@ -1797,6 +1830,28 @@ def test_the_inference_span_carries_the_one_way_times_and_their_sum(tmp_path, on
     )
     expected = (12.0, 3.0, 15.0) if one_way else (None, None, None)
     assert tuple(infer.attrs.get(key) for key in network_keys) == expected
+
+
+@pytest.mark.parametrize('sent_alone', [True, False])
+def test_the_inference_span_says_whether_the_call_went_alone(tmp_path, sent_alone):
+    session = _mock_session()
+    session.served_timing = session.wire_timing = {}
+    session.sent_alone = sent_alone
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-alone'):
+        round_trip(session, {}, compress_images=False)
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    [infer] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_INFER]
+    assert infer.attrs[telemetry_keys.ATTR_WIRE_SENT_ALONE] is sent_alone
+
+
+def test_an_inference_span_of_a_call_that_never_sent_carries_no_alone_mark(tmp_path):
+    session = _mock_session()
+    session.served_timing = session.wire_timing = {}
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-unsent'):
+        round_trip(session, {}, compress_images=False)
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    [infer] = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_INFER]
+    assert telemetry_keys.ATTR_WIRE_SENT_ALONE not in infer.attrs
 
 
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
