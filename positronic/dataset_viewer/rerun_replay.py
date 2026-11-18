@@ -911,7 +911,7 @@ def _log_numeric_signals(
     gripper = ep.static.get(roboarm_keys.GRIPPER)
     stash_keys = set(signals.poses) | set(signals.joints)
     if gripper:
-        stash_keys.add(gripper['signal'])
+        stash_keys.add(gripper[roboarm_keys.GRIPPER_SIGNAL])
     pose_data = {}
     unplotted = signals.unplotted
 
@@ -1060,12 +1060,12 @@ def _log_urdf_robot(
         # TODO: the spec names one signal, so every model grips with it. Arms that grip independently
         # need it pluralized the way `joint_signals` is.
         gripper = ep.static.get(roboarm_keys.GRIPPER)
-        if gripper and gripper['signal'] in numeric_data:
-            grip_ts, grip_vals = numeric_data[gripper['signal']]
+        if gripper and gripper[roboarm_keys.GRIPPER_SIGNAL] in numeric_data:
+            grip_ts, grip_vals = numeric_data[gripper[roboarm_keys.GRIPPER_SIGNAL]]
             grip_keep = _sample_indices(grip_ts, _URDF_ANIM_HZ)
             grip_times = {name: values[grip_keep] for name, values in grip_ts.items()}
-            finger_pos = np.clip(grip_vals[grip_keep, 0], 0.0, 1.0) * gripper['travel']
-            for name in gripper['joints']:
+            finger_pos = np.clip(grip_vals[grip_keep, 0], 0.0, 1.0) * gripper[roboarm_keys.GRIPPER_TRAVEL]
+            for name in gripper[roboarm_keys.GRIPPER_JOINTS]:
                 joint = tree.get_joint_by_name(namespace + name)
                 if joint is not None:
                     _animate_joint(rec, joint, finger_pos, grip_times, link_path(joint))

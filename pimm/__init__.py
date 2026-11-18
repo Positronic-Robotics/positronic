@@ -22,6 +22,7 @@ from .core import (
     SignalReceiver,
     Sleep,
     Yield,
+    message_value,
 )
 from .time import Time
 from .utils import RateLimiter, map, read_updated, value_updated
@@ -42,6 +43,7 @@ __all__ = [
     'calls',
     'map',
     'Message',
+    'message_value',
     'NoOpEmitter',
     'NoOpReceiver',
     'NoValueException',

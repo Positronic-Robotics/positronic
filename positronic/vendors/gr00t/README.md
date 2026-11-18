@@ -171,7 +171,10 @@ The `ready` handshake includes the client recipe and resolved session parameters
 The client performs pose conversion, image resize, optional JPEG encoding, action decoding and scheduling.
 The server deserializes the model input and runs the native processor and model directly.
 
-Session query parameters can override `fps`, `horizon_sec`, `image_mappings`, `compress_images` and `jpeg_quality`.
+Session query parameters can override `fps`, `horizon_sec`, `inference_lead`, `image_mappings`, `compress_images`
+and `jpeg_quality`.
+`inference_lead=0.25` requests the next chunk 0.25 seconds before the current chunk ends. The default `0` requests
+it at the end, and the arm holds its last target while the call runs. An RTC session refuses a lead.
 The camera mapping must keep the checkpoint's camera roles. It can select different source observations for those roles.
 These controls do not change native input dimensions, weights or model conventions.
 Set launch defaults through `--pipeline.fps=10`, for example. The default execution horizon is one second.
