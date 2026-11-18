@@ -249,6 +249,8 @@ class EnvServer:
     def _check_batch_size(self, request: _Request) -> None:
         """Raise unless ``request`` asks for a batch size this server serves, and the size the waiting slots ask for."""
         size = self._asked_batch_size(request)
+        if type(size) is not int:  # a float or a bool slices the slot list wrong and stops the whole server
+            raise ValueError(f'a batch size is a whole number, but this reset asks for {size!r}')
         if not 1 <= size <= len(self._slots):
             raise ValueError(f'a batch of {size} slots is asked for, but this env serves 1 to {len(self._slots)} slots')
         waiting = self._joining_batch_size()

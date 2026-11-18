@@ -244,8 +244,8 @@ def test_a_client_that_never_asks_for_a_reset_sits_out_after_the_join_deadline()
     assert env.stepped == [{0}]
 
 
-def _watch_resets(monkeypatch) -> Callable[[str], None]:
-    """A wait that returns once the server has taken a reset for ``token``: parked it, or run it."""
+def _watch_resets(monkeypatch) -> Callable[..., None]:
+    """A wait that returns once the server has taken ``count`` resets for ``token``: parked them, or run them."""
     taken: list[Any] = []
     changed = threading.Condition()
     take = server_module.EnvServer._take
@@ -259,9 +259,10 @@ def _watch_resets(monkeypatch) -> Callable[[str], None]:
 
     monkeypatch.setattr(server_module.EnvServer, '_take', recording_take)
 
-    def wait_for(token: str) -> None:
+    def wait_for(token: str, count: int = 1) -> None:
         with changed:
-            assert changed.wait_for(lambda: token in taken, timeout=10.0), f'the server never took the reset {token!r}'
+            took = changed.wait_for(lambda: taken.count(token) >= count, timeout=10.0)
+            assert took, f'the server never took {count} resets {token!r}'
 
     return wait_for
 
@@ -469,7 +470,7 @@ def test_a_slot_past_the_batch_size_waits_for_the_next_batch(monkeypatch):
     with _clients(env) as (first, second, third), ThreadPoolExecutor(2) as pool:
         first.reset('first batch', batch_size=1)
         joining = [pool.submit(conn.reset, 'second batch', batch_size=1) for conn in (second, third)]
-        taken('second batch')
+        taken('second batch', count=2)
         first.close()
         joining[0].result(timeout=10.0)
 
@@ -497,6 +498,15 @@ def test_a_batch_size_the_env_cannot_serve_is_refused(size):
     with _clients(_ClonedScene(ends_at=[9, 9]), count=1) as (conn,):
         with pytest.raises(RuntimeError, match=f'a batch of {size} slots is asked for, but this env serves 1 to 2'):
             conn.reset('scene', batch_size=size)
+
+
+@pytest.mark.timeout(60.0)
+@pytest.mark.parametrize('size', [1.0, True])
+def test_a_batch_size_that_is_not_an_integer_is_refused_and_the_server_keeps_serving(size):
+    with _clients(_ClonedScene(ends_at=[9, 9]), count=1) as (conn,):
+        with pytest.raises(RuntimeError, match='a batch size is a whole number'):
+            conn.reset('scene', batch_size=size)
+        conn.reset('scene', batch_size=1)
 
 
 @pytest.mark.timeout(60.0)
