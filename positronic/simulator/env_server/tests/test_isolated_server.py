@@ -29,7 +29,7 @@ from server import EnvProtocol, EnvServer
 class OneTask(EnvProtocol):
     def tasks(self, spec):
         return [{'name': 'idle', TASK_INSTRUCTION: 'wait'}]
-    def reset(self, token):
+    def reset(self, token, slots=None):
         self.steps = 0
         return {SLOTS: [{FRAME_OBS: 0}], FRAME_META: {}, FRAME_ROBOT_META: {}, FRAME_CONTROL_DT: 0.1}
     def step(self, actions):

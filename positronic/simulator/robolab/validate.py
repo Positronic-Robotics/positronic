@@ -21,14 +21,14 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
   target tracks end-to-end;
 - the episode length: a token's length rebuilds the scene with only ``episode_length_s`` changed, and a token
   without one rebuilds the scene with RoboLab's budget;
-- with ``--num-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
+- with ``--max-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
   command, a clone with no command holds, a clone still makes subtask progress after another clone ends its
   episode, and a one-scene recorded state restores into every clone;
 - a NaN command: a joint target or a pose holds the measured joints, and a grip keeps the last grip;
 - a fault: a clone whose arm state stops being finite ends alone, as a failure with ``fault``. This runs on the
   single clone and on the batch.
 
-The transform checks all drive a single clone, whatever ``--num-envs`` asks for; the batch check builds its
+The transform checks all drive a single clone, whatever ``--max-envs`` asks for; the batch check builds its
 own env, because a clone count is fixed at ``create_env``.
 
 Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLauncher flags apply)::
@@ -560,8 +560,8 @@ def main() -> None:
     _check_a_command_that_is_not_finite_holds(env)
     _check_a_clone_that_faults(env)
     env.close()
-    if args.num_envs > 1:
-        _check_batch(args.num_envs)
+    if args.max_envs > 1:
+        _check_batch(args.max_envs)
     # ``simulation_app.close()`` can end the process outright, so the verdict prints before it — and flushes,
     # because a redirected stdout is block-buffered and would otherwise lose every check line with it.
     if failures:

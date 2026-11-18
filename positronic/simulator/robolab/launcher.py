@@ -60,7 +60,7 @@ def _ensure_robolab_src() -> Path:
 
 
 def _spawn(
-    host: str, port: int, cameras: str, num_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
+    host: str, port: int, cameras: str, max_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
 ) -> subprocess.Popen:
     # Only the setup is one at a time: a concurrent checkout would reset the patched pyproject.toml from under
     # ``uv sync``. The per-eval ``env.py`` runs outside the lock, so evals still fan out.
@@ -89,8 +89,8 @@ def _spawn(
         str(port),
         '--cameras',
         cameras,
-        '--num-envs',
-        str(num_envs),
+        '--max-envs',
+        str(max_envs),
         '--join-deadline',
         str(join_deadline),
         '--headless',
@@ -116,16 +116,17 @@ def _spawn(
 
 
 def serve_robolab(
-    cameras: str, host: str = 'localhost', *, num_envs: int = 1
+    cameras: str, host: str = 'localhost', *, max_envs: int = 1
 ) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     ``cameras`` names the set in ``keys.CAMERA_SETS`` the server renders; RoboLab bakes it into the
     registered task, so one server serves one set.
 
-    ``num_envs`` is how many clones of the scene the one Isaac process steps together.
+    ``max_envs`` is the most clones of the scene the one Isaac process steps together. Each batch of evals gets as
+    many clones as the batch size its first reset carries.
     """
-    return serve_subprocess(partial(_spawn, cameras=cameras, num_envs=num_envs), host)
+    return serve_subprocess(partial(_spawn, cameras=cameras, max_envs=max_envs), host)
 
 
 def main() -> None:
@@ -133,7 +134,7 @@ def main() -> None:
         description='Serve RoboLab to several evals, one scene clone each, batch after batch until it is stopped.'
     )
     parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
-    parser.add_argument('--num-envs', type=int, required=True, help='scene clones, one per eval that connects')
+    parser.add_argument('--max-envs', type=int, required=True, help='the most scene clones, one per eval of a batch')
     parser.add_argument(
         '--join-deadline',
         type=float,
@@ -143,7 +144,7 @@ def main() -> None:
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
     args = parser.parse_args()
-    proc = _spawn(args.host, args.port, args.cameras, args.num_envs, args.join_deadline)
+    proc = _spawn(args.host, args.port, args.cameras, args.max_envs, args.join_deadline)
     try:
         sys.exit(proc.wait())
     finally:
