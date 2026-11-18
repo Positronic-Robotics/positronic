@@ -501,6 +501,9 @@ def test_the_world_stopping_while_the_camera_is_away_ends_the_loop(zed_module):
 # A rebooted camera stays on the device list for this long, then leaves it for `REBOOT_AWAY_S`.
 REBOOT_LEAVES_AFTER_S = 1.0
 REBOOT_AWAY_S = 4.0
+# The USB bus of the camera, and the device number that the kernel gives it before its first reboot
+USB_BUS = 1
+FIRST_DEVICE_NUMBER = 43
 
 
 class RebootingSdk(DroppingSdk):
@@ -527,6 +530,8 @@ class RebootingSdk(DroppingSdk):
         self.away_s = away_s
         self.lists_open_camera = lists_open_camera
         self.reboot_times: list[float] = []
+        # The time at which each reboot that runs brings the camera back to the bus with a new device number
+        self.reenumerated_at: list[float] = []
 
     def _held_open(self) -> bool:
         return any(camera.opened_at is not None and camera.closed_at is None for camera in self.cameras)
@@ -547,13 +552,22 @@ class RebootingSdk(DroppingSdk):
         if self.is_listed():
             self.lost_at = now + self.leaves_after_s
         self.listed_at = max(self.lost_at, now) + self.away_s
+        self.reenumerated_at.append(self.listed_at)
         return ErrorCode.SUCCESS
+
+    def usb_address(self, serial: int):
+        """The kernel's address of the camera: none while it is away from the bus, and a new one after each return."""
+        if serial != SERIAL or not self.is_listed():
+            return None
+        returns = sum(at <= self.clock.now() for at in self.reenumerated_at)
+        return (USB_BUS, FIRST_DEVICE_NUMBER + returns)
 
 
 def _rebooting_camera(module, sdk: RebootingSdk, frames: RecordingEmitter, mono: bool = False):
     """The driver for the camera `SERIAL` over ``sdk``, a mono one where ``mono`` says so."""
     stereo = _camera(module, sdk, frames)
     module.sl.__dict__.update(MODEL=FakeModel, CameraOne=sdk, InitParametersOne=FakeInitParameters)
+    module.usb_address = sdk.usb_address
     if not mono:
         return stereo
     camera = module.SLCamera(serial_number=SERIAL, mono=True)
@@ -612,7 +626,24 @@ def test_a_recover_call_whose_reboot_the_sdk_refuses_opens_the_camera_again_and_
     assert len(_frame_times(frames)) > sent
 
 
-def test_a_recover_call_whose_camera_never_leaves_the_device_list_answers_not_cleared(zed_module, world):
+def test_a_recover_call_answers_cleared_for_a_reboot_that_no_device_list_poll_sees(zed_module, world):
+    poll_s = zed_module.SLCamera.DEVICE_LIST_POLL_SEC
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    # The camera leaves the device list after the third poll, and is back before the fourth.
+    sdk = RebootingSdk(clock, leaves_after_s=2.2 * poll_s, away_s=0.4 * poll_s)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert len(sdk.reboot_times) == 1
+    assert not _errors(frames)
+
+
+def test_a_recover_call_whose_camera_keeps_its_usb_address_and_its_listing_answers_not_cleared(zed_module, world):
     clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
     sdk = RebootingSdk(clock, leaves_after_s=NEVER)
     camera = _rebooting_camera(zed_module, sdk, frames)
@@ -628,6 +659,22 @@ def test_a_recover_call_whose_camera_never_leaves_the_device_list_answers_not_cl
     _, reopened = sdk.cameras
     assert reopened.opened_at is not None and reopened.closed_at is None
     assert len(_frame_times(frames)) > sent
+
+
+def test_the_usb_address_of_a_camera_comes_from_the_kernel_device_with_its_serial(zed_module, tmp_path, monkeypatch):
+    def device(name: str, **files: object) -> None:
+        (tmp_path / name).mkdir()
+        for file, value in files.items():
+            (tmp_path / name / file).write_text(f'{value}\n')
+
+    device('1-2', busnum=1, devnum=25)
+    device('1-2.2', serial=SERIAL, busnum=USB_BUS, devnum=FIRST_DEVICE_NUMBER)
+    device('1-2.2:1.0')
+    device('2-3', serial='OV0001', busnum=2, devnum=39)
+    monkeypatch.setattr(zed_module, 'USB_DEVICES_DIR', tmp_path)
+
+    assert zed_module.usb_address(SERIAL) == (USB_BUS, FIRST_DEVICE_NUMBER)
+    assert zed_module.usb_address(SERIAL + 1) is None
 
 
 def test_a_recover_call_on_a_camera_that_does_not_come_back_answers_a_camera_fault_and_holds_it(zed_module, world):

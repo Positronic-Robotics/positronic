@@ -1,7 +1,8 @@
 import logging
 from collections.abc import Generator, Iterator
 from enum import Enum, auto
-from typing import Literal
+from pathlib import Path
+from typing import Literal, NamedTuple
 
 import numpy as np
 
@@ -50,6 +51,33 @@ NEAR_BLACK_MEAN_LEVEL = 16
 def is_near_black(bgra: np.ndarray) -> bool:
     """Whether the mean colour level of every 8th pixel of every 8th row is below ``NEAR_BLACK_MEAN_LEVEL``."""
     return bool(bgra[::8, ::8, :3].mean() < NEAR_BLACK_MEAN_LEVEL)
+
+
+USB_DEVICES_DIR = Path('/sys/bus/usb/devices')
+
+
+class UsbAddress(NamedTuple):
+    """The bus and the device number of a USB device. The kernel gives a new device number at each enumeration."""
+
+    bus: int
+    device: int
+
+
+def usb_address(serial: int) -> UsbAddress | None:
+    """The address of the USB device with the serial ``serial``, or None while the kernel shows no such device.
+
+    The HID half of a ZED 2 or a ZED 2i carries the camera's serial number.
+    """
+    for serial_file in USB_DEVICES_DIR.glob('*/serial'):
+        # A device that leaves the bus during the read removes its files.
+        try:
+            if serial_file.read_text().strip() != str(serial):
+                continue
+            device = serial_file.parent
+            return UsbAddress(int((device / 'busnum').read_text()), int((device / 'devnum').read_text()))
+        except OSError:
+            continue
+    return None
 
 
 class SLCamera(pimm.ControlSystem):
@@ -125,8 +153,8 @@ class SLCamera(pimm.ControlSystem):
 
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
-    # A recover call waits at most this many polls for the rebooted camera to leave the device list.
-    REBOOT_LEAVE_MAX_POLLS = 20
+    # A recover call waits at most this many polls for the rebooted camera to disconnect from the USB bus.
+    REBOOT_DISCONNECT_MAX_POLLS = 20
     # A ready call reopens a camera whose last frame is older than this.
     STALE_FRAME_SEC = 1.0
     # A ready call grabs again after a torn frame, up to this many grabs.
@@ -307,12 +335,18 @@ class SLCamera(pimm.ControlSystem):
         return self._serial_number if model is None or model in (sl.MODEL.ZED2, sl.MODEL.ZED2i) else None
 
     @staticmethod
-    def _wait_until_unlisted(serial: int, failure: str, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        for _ in range(SLCamera.REBOOT_LEAVE_MAX_POLLS):
-            if should_stop.value or not SLCamera._is_listed(serial):
+    def _wait_until_disconnected(
+        serial: int, address: UsbAddress | None, failure: str, should_stop: pimm.SignalReceiver
+    ) -> Iterator[pimm.Sleep]:
+        """Wait until the camera's USB address differs from ``address``, or the SDK does not list the camera.
+
+        A rebooted camera is off the bus for about a second, which a poll can miss. Its new address stays.
+        """
+        for _ in range(SLCamera.REBOOT_DISCONNECT_MAX_POLLS):
+            if should_stop.value or usb_address(serial) != address or not SLCamera._is_listed(serial):
                 return
             yield pimm.Sleep(SLCamera.DEVICE_LIST_POLL_SEC)
-        raise CameraOpenError(f'{failure}; camera {serial} stayed on the device list after its reboot')
+        raise CameraOpenError(f'{failure}; camera {serial} did not disconnect from the USB bus after its reboot')
 
     def _release_and_reboot(
         self, serial: int, should_stop: pimm.SignalReceiver
@@ -322,8 +356,9 @@ class SLCamera(pimm.ControlSystem):
         self._release()
         failure = f'A recover call asked to reboot camera {serial}'
         try:
+            address = usb_address(serial)
             self._reboot(serial, failure)
-            yield from self._wait_until_unlisted(serial, failure, should_stop)
+            yield from self._wait_until_disconnected(serial, address, failure, should_stop)
             yield from self._wait_until_listed(serial, failure, should_stop)
         except CameraOpenError as e:
             logger.error('%s', e)
