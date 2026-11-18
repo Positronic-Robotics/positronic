@@ -34,7 +34,7 @@ from positronic.drivers.utils import (
     grip_setpoint,
     log_failure,
 )
-from positronic.utils import check_finite_positive, package_assets_path
+from positronic.utils import check_finite_nonnegative, check_finite_positive, package_assets_path
 
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
@@ -62,6 +62,7 @@ _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the ch
 # The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
 _COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
 _COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
+_LIMIT_GRIPPER_EFFORT = 'limit_gripper_effort'  # the force limit of i2rt's gripper force limiter, in get_robot_info()
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 _LOOP_STOPPED = 'the control loop of the chain stopped, so its motors take no commands'
 _RELEASED_UNPARKED = f'Releasing the arm with no park and no hold: {_LOOP_STOPPED}'
@@ -144,6 +145,78 @@ def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> 
     if compensation.use_coulomb_friction and fade is not None and not sim:
         _fade_coulomb_friction(chain, fade)
     chain.use_coulomb_friction = compensation.use_coulomb_friction
+
+
+class _JointReadings(_JointSpeeds, Protocol):
+    pos: np.ndarray  # per motor; the gripper reads 0 closed and 1 open
+
+
+class _MotorSpace(Protocol):
+    """i2rt's ``JointMapper``: it turns the readings of the gripper into motor radians."""
+
+    def to_robot_joint_pos_space(self, command_joint_pos: np.ndarray) -> np.ndarray: ...
+
+    def to_robot_joint_vel_space(self, command_joint_vel: np.ndarray) -> np.ndarray: ...
+
+
+@runtime_checkable
+class _GripperLoop(Protocol):
+    """What the gripper force cap reads and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update`` ends in
+    ``_update_joint_state(motor_torques, joint_commands)``, which sends each motor its torque and its P-D command. The
+    gripper force limiter of i2rt sets the gripper target and ``_last_gripper_command_qpos`` before that call.
+
+    HACK: these members are private to i2rt, which takes a gripper force limit only when it opens the chain.
+    """
+
+    _joint_state: _JointReadings
+    _last_gripper_command_qpos: float
+    remapper: _MotorSpace
+    _update_joint_state: Callable[..., None]
+
+
+# The gripper of i2rt's hardware chain in get_robot_info(): its motor, its (closed, open) motor positions, and the
+# gripper and arm types that select the settings of its gripper force limiter
+_GRIPPER_INDEX, _GRIPPER_LIMITS = 'gripper_index', 'gripper_limits'
+_GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
+# The torque that i2rt's gripper force limiter adds against the friction of a stalled gripper (i2rt robots/utils.py:648)
+_GRIPPER_FRICTION_NM = 0.3
+
+
+def _cap_gripper_force(chain: Any, cap_n: Callable[[], float | None]) -> None:
+    """Cap the closing torque that the P-D loop of the gripper motor asks for, in each ``update`` of i2rt's hardware
+    ``chain``, after its gripper force limiter. The cap is the torque at which that limiter holds a stalled gripper with
+    ``cap_n()`` newtons. None sets no cap. The arm motors and an opening gripper keep the commands of i2rt.
+
+    The control thread of i2rt calls ``cap_n`` once per update. A chain that reports no gripper force limit, such as
+    i2rt's sim chain, has no limiter and gets no cap. A chain that lacks a member of ``_GripperLoop`` raises before
+    anything changes.
+    """
+    with _chain_call():
+        info = chain.get_robot_info()
+    if _LIMIT_GRIPPER_EFFORT not in info:
+        return
+    if not isinstance(chain, _GripperLoop):
+        raise TypeError(f'{type(chain).__name__} lacks a member of _GripperLoop, which the gripper force cap needs')
+    gripper, (closed, opened) = info[_GRIPPER_INDEX], info[_GRIPPER_LIMITS]
+    closing = np.sign(closed - opened)  # the sign of a closing move in motor radians
+    *_, force_to_torque = info[_GRIPPER_TYPE].get_gripper_limiter_params(info[_ARM_TYPE])
+    send = chain._update_joint_state
+
+    def capped_send(motor_torques: np.ndarray, joint_commands: Any, *args: Any) -> None:
+        newtons, kp = cap_n(), joint_commands.kp[gripper]
+        if newtons is not None and kp > 0:
+            q = chain.remapper.to_robot_joint_pos_space(chain._joint_state.pos)[gripper]
+            dq = chain.remapper.to_robot_joint_vel_space(chain._joint_state.vel)[gripper]
+            cap_nm = force_to_torque(gripper_force=newtons, current_angle=q) + _GRIPPER_FRICTION_NM
+            feedforward_and_damping = motor_torques[gripper] + joint_commands.kd[gripper] * (
+                joint_commands.vel[gripper] - dq
+            )
+            if closing * (feedforward_and_damping + kp * (joint_commands.pos[gripper] - q)) > cap_nm:
+                joint_commands.pos[gripper] = q + (closing * cap_nm - feedforward_and_damping) / kp
+                chain._last_gripper_command_qpos = joint_commands.pos[gripper]  # the limiter reads the target sent
+        send(motor_torques, joint_commands, *args)
+
+    chain._update_joint_state = capped_send
 
 
 def _connect(channel: str, sim: bool, compensation: Compensation):
@@ -312,6 +385,9 @@ class _Arm(DriverRun[command.CommandType]):
         move_tuning: SettleTuning,
         kinematics: _Kinematics,
         state: YamState,
+        meta_out: pimm.SignalEmitter[dict[str, Any]],
+        ee_mass: float | None,
+        gripper_force_cap_n: Callable[[], float | None],
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
@@ -327,6 +403,10 @@ class _Arm(DriverRun[command.CommandType]):
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
+        self.meta_out = meta_out
+        self._ee_mass = ee_mass
+        self._gripper_force_cap_n = gripper_force_cap_n
+        self._reported_force_cap_n: float | None = None  # the gripper force cap in the last arm meta
 
     @functools.cached_property
     @_chain_call()
@@ -340,20 +420,26 @@ class _Arm(DriverRun[command.CommandType]):
         margin = self._CHAIN_LIMIT_MARGIN_RAD
         return limits[:, 0] + margin, limits[:, 1] - margin
 
-    def arm_meta(self, ee_mass: float | None) -> dict[str, Any]:
-        """The settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which it
-        does not report. i2rt's sim chain runs no friction and reports none."""
+    def emit_meta(self) -> None:
+        """Emit the settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which
+        it does not report. A chain with a gripper force limit runs the gripper force cap of this moment, and its
+        limiter holds a stalled gripper with the force of that limit. i2rt's sim chain runs no friction and no gripper
+        force limit, and reports neither."""
+        self._reported_force_cap_n = self._gripper_force_cap_n()
         info = self._robot_info
         meta = {
             roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(info[_GRAVITY_COMP_FACTOR], np.float64).tolist(),
-            roboarm_keys.EE_MASS: ee_mass,
+            roboarm_keys.EE_MASS: self._ee_mass,
         }
+        if _LIMIT_GRIPPER_EFFORT in info:
+            meta[roboarm_keys.GRIPPER_FORCE_CAP] = self._reported_force_cap_n
+            meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] = float(info[_LIMIT_GRIPPER_EFFORT])
         if _USE_COULOMB_FRICTION in info:
             meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
             meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
             fade = info.get(_COULOMB_FRICTION_FADE)
             meta[roboarm_keys.COULOMB_FRICTION_FADE] = None if fade is None else asdict(fade)
-        return meta
+        self.meta_out.emit(meta)
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
@@ -371,8 +457,9 @@ class _Arm(DriverRun[command.CommandType]):
         return aperture.flip_grip(obs[_GRIPPER_POS][0])
 
     def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
-        """Publish the measured state: ERROR after a failed move, else AVAILABLE. In shutdown a failed publish is
-        logged, not raised. A shutdown that withholds readings publishes nothing."""
+        """Publish the measured state: ERROR after a failed move, else AVAILABLE, and the arm meta when the gripper
+        force cap changed. Each control step of each move publishes. In shutdown a failed publish is logged, not
+        raised. A shutdown that withholds readings publishes nothing."""
         if self._readings_withheld:
             return
         if status is None:
@@ -383,6 +470,8 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             self.out.emit(self.state)
             self.grip_out.emit(self.read_grip(obs))
+            if self._gripper_force_cap_n() != self._reported_force_cap_n:
+                self.emit_meta()
         except Exception:
             if not self._shutting_down:
                 raise
@@ -815,6 +904,7 @@ class Robot(pimm.ControlSystem):
         park_after_idle_s: float | None = 60.0,
         park_tuning: SettleTuning = PARK_SETTLE,
         move_tuning: SettleTuning = MOVE_SETTLE,
+        gripper_force_cap_n: float | None = None,
         connect: Callable = _connect,
     ) -> None:
         """
@@ -827,11 +917,15 @@ class Robot(pimm.ControlSystem):
             None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
+        :param gripper_force_cap_n: The most force in newtons that the gripper closes with. None or 0 sets no cap.
+            i2rt's own limiter still holds a stalled gripper with its force limit, which the arm meta names.
+            ``set_gripper_force_cap`` changes it at run time. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
         if park_after_idle_s is not None:
             check_finite_positive(park_after_idle_s, 'park_after_idle_s')
+        self.set_gripper_force_cap(gripper_force_cap_n)
         # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
         # it does, those checks and a check that each value is finite run here first.
         friction = compensation.coulomb_friction
@@ -866,6 +960,15 @@ class Robot(pimm.ControlSystem):
     def base_pose(self) -> geom.Transform3D:
         """The arm-base mount pose in the world frame."""
         return self._base_pose
+
+    def set_gripper_force_cap(self, cap_n: float | None) -> None:
+        """Cap the force that the gripper closes with at ``cap_n`` newtons from the next control step of the chain.
+        The arm meta names the new cap from the next control step of the driver, also in a move. None or 0 sets no
+        cap. Call it from any thread of the process that runs the driver."""
+        if cap_n is not None:
+            check_finite_nonnegative(cap_n, 'gripper_force_cap_n')
+        # One reference write: the control thread of the chain and the run loop read the old cap or the new one
+        self._gripper_force_cap_n = float(cap_n) if cap_n else None
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
         return (
@@ -938,16 +1041,21 @@ class Robot(pimm.ControlSystem):
                 self._move_tuning,
                 kinematics,
                 state,
+                self.arm_meta,
+                self._compensation.ee_mass,
+                lambda: self._gripper_force_cap_n,
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 _set_coulomb_friction(vendor, self._compensation, self._sim)
+                _cap_gripper_force(vendor, lambda: self._gripper_force_cap_n)
                 self.robot_meta.emit(meta)
-                self.arm_meta.emit(arm.arm_meta(self._compensation.ee_mass))
+                arm.emit_meta()
                 joints, grip, missed = yield from arm.go_to_start()
                 self._answer_ready(asked, missed)
                 asked = []
-                yield from self._serve(arm, _Serving(joints, grip, missed, idle_since=clock.now()), should_stop, clock)
+                serving = _Serving(joints, grip, missed, idle_since=clock.now())
+                yield from self._serve(arm, serving, should_stop, clock)
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
                 lost = self._report_lost(exc)

@@ -207,6 +207,8 @@ class Rig:
         watch=None,
         park_after_idle_s=1.0,
         compensation=I2RT_COMPENSATION,
+        gripper_force_cap_n=None,
+        driver: yam.Robot | None = None,
     ):
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
@@ -225,12 +227,13 @@ class Rig:
         ports |= {'grip': self.grips, 'robot_meta': RecordingEmitter(), 'arm_meta': self.arm_metas}
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
-        self.driver = yam.Robot(
+        self.driver = driver or yam.Robot(
             connect=lambda channel, sim, compensation: ports['vendor'],
             compensation=compensation,
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
+            gripper_force_cap_n=gripper_force_cap_n,
         )
         self.clock = MockClock()
         self.driver.commands._bind(ports['commands'])
@@ -2413,12 +2416,15 @@ def test_a_fade_that_the_chain_cannot_take_parks_and_releases_the_chain_before_i
 
 
 class FakeMotorChain:
-    """Seven motors for i2rt's ``MotorChainRobot``: they hold at 0.5 rad, report ``vel`` and keep each torque sent."""
+    """Seven motors for i2rt's ``MotorChainRobot``: they hold at ``pos``, report ``vel`` and ``eff``, and keep each
+    torque sent."""
 
     running = True
 
     def __init__(self):
+        self.pos = np.full(7, 0.5)
         self.vel = np.zeros(7)
+        self.eff = np.zeros(7)
         self.torques: list[np.ndarray] = []
 
     def __len__(self) -> int:
@@ -2426,8 +2432,8 @@ class FakeMotorChain:
 
     def read_states(self) -> list[types.SimpleNamespace]:
         return [
-            types.SimpleNamespace(pos=0.5, vel=speed, eff=0.0, temp_mos=0.0, temp_rotor=0.0, timestamp=0.0)
-            for speed in self.vel
+            types.SimpleNamespace(pos=pos, vel=speed, eff=eff, temp_mos=0.0, temp_rotor=0.0, timestamp=0.0)
+            for pos, speed, eff in zip(self.pos, self.vel, self.eff, strict=True)
         ]
 
     def set_commands(self, torques: np.ndarray, **_) -> list[types.SimpleNamespace]:
@@ -2466,6 +2472,258 @@ def test_the_friction_fade_runs_on_the_hardware_chain_of_i2rt(monkeypatch):
         chain.update()  # i2rt reads the speed of the cycle before
         chain.update()
         np.testing.assert_allclose(motors.torques[-1], share * STATION_FRICTION_TORQUE, atol=1e-12)
+
+
+GRIPPER_OPEN_RAD = 6.57  # the motor turn over the stroke of i2rt's linear 4310 gripper, which closes at 0 rad
+OBJECT_AT_RAD = 2.0  # where the fingers meet an object
+STALL_EFFORT_NM = 0.5  # i2rt's limiter finds a stall when the mean gripper effort over its window passes this
+STALL_WINDOW_S = 0.1  # the window of i2rt's limiter
+SQUEEZE_CAP_N = 20.0  # its torque is past STALL_EFFORT_NM
+ARM_TARGET = np.array([0.1, -0.2, 0.3, -0.4, 0.5, -0.6])
+CHAIN_CLOSED, CHAIN_OPEN = 0.0, 1.0  # the grip as the chain takes it
+
+
+def _gripper_torque_nm(force_n: float) -> float:
+    """The torque of i2rt's limiter for ``force_n``: 0.096 m of stroke over 6.57 rad, and 0.3 Nm against friction."""
+    return force_n * 0.096 / GRIPPER_OPEN_RAD + 0.3
+
+
+class GripperMotors(FakeMotorChain):
+    """A ``FakeMotorChain`` whose gripper motor runs the P-D law of a DM motor, one ``STEP_S`` per command.
+
+    It keeps each command and the torque that the P-D loop of the gripper asks for. The motor gives at most
+    ``MAX_TORQUE_NM``, less near ``MAX_SPEED_RAD_S``, against ``FRICTION_NM``. The fingers stop at ``stop_at``.
+    """
+
+    STEP_S = 0.001
+    INERTIA = 4e-4  # kg m^2
+    FRICTION_NM = 0.3
+    MAX_TORQUE_NM = 7.0
+    MAX_SPEED_RAD_S = 20.0
+
+    def __init__(self, stop_at: float, start_at: float):
+        super().__init__()
+        self.stop_at = stop_at
+        self.pos[6] = start_at
+        self.restart()
+
+    def restart(self) -> None:
+        """Forget the commands, and start the clock far past the zero stamps of the effort history of the limiter."""
+        self.now = 1e4
+        self.commands: list[np.ndarray] = []
+        self.asked: list[float] = []
+        self.efforts: list[float] = []
+        self.at_object: list[bool] = []
+
+    def set_commands(self, torques: np.ndarray, **commands) -> list[types.SimpleNamespace]:
+        pos, vel, kp, kd = commands['pos'], commands['vel'], commands['kp'], commands['kd']  # what i2rt passes
+        self.commands.append(np.stack([torques, pos, vel, kp, kd]))
+        q, v = self.pos[6], self.vel[6]
+        asked = torques[6] + kp[6] * (pos[6] - q) + kd[6] * (vel[6] - v)
+        self.asked.append(asked)
+        limit = self.MAX_TORQUE_NM * (1 - min(abs(v) / self.MAX_SPEED_RAD_S, 1.0) if asked * v > 0 else 1.0)
+        torque = float(np.clip(asked, -limit, limit))
+        if v == 0 and abs(torque) <= self.FRICTION_NM:
+            new_v = 0.0
+        else:
+            new_v = v + (torque - self.FRICTION_NM * np.sign(v or torque)) / self.INERTIA * self.STEP_S
+            new_v = 0.0 if v * new_v < 0 else new_v  # friction stops the motor and does not turn it back
+        self.pos[6] = max(q + new_v * self.STEP_S, self.stop_at)
+        self.vel[6] = 0.0 if self.pos[6] == self.stop_at else new_v
+        self.eff[6] = torque
+        self.efforts.append(torque)
+        self.at_object.append(self.pos[6] == self.stop_at)
+        self.now += self.STEP_S
+        return self.read_states()
+
+    def closing_torques(self) -> np.ndarray:
+        return -np.asarray(self.asked)
+
+    def first_stall_step(self) -> int | None:
+        """The first step by which i2rt's limiter has found a stall: the fingers stood at the object for a window of the
+        limiter, with a mean effort past ``STALL_EFFORT_NM``. None if no step came after such a window."""
+        window = round(STALL_WINDOW_S / self.STEP_S)
+        for end in range(window, len(self.efforts)):
+            if (
+                all(self.at_object[end - window : end])
+                and abs(np.mean(self.efforts[end - window : end])) > STALL_EFFORT_NM
+            ):
+                return end
+        return None
+
+
+I2RT_GRIPPER_FORCE_LIMIT_N = 50.0  # the gripper force limit that i2rt's get_yam_robot opens a chain with
+
+
+def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float = GRIPPER_OPEN_RAD):
+    """i2rt's hardware chain over ``GripperMotors``, with the gripper force limit of i2rt's ``get_yam_robot``. Its
+    control thread is stopped, so each ``update`` runs one cycle. i2rt's limiter reads the clock of the motors."""
+    motor_chain_robot = pytest.importorskip('i2rt.robots.motor_chain_robot')
+    motors = GripperMotors(stop_at, start_at)
+    monkeypatch.setattr('i2rt.robots.utils.time', types.SimpleNamespace(time=lambda: motors.now))
+    chain = motor_chain_robot.MotorChainRobot(
+        motor_chain=motors,
+        use_gravity_comp=False,
+        gripper_index=6,
+        gripper_limits=np.array([0.0, GRIPPER_OPEN_RAD]),
+        joint_limits=np.array([[-3.0, 3.0]] * 6),
+        kp=np.array([10.0] * 6 + [20.0]),  # i2rt's kp and kd for the gripper motor
+        kd=np.array([1.0] * 6 + [0.5]),
+        limit_gripper_force=I2RT_GRIPPER_FORCE_LIMIT_N,
+        zero_gravity_mode=False,
+    )
+    chain.close()
+    motors.restart()
+    return chain, motors
+
+
+def _opened_by_a_driver(chain, gripper_force_cap_n: float | None) -> yam.Robot:
+    """A driver with ``gripper_force_cap_n`` that opened ``chain`` and stopped before a park, which the arm of the
+    stopped chain never ends. The driver caps the chain before it yields for the first time."""
+    rig = Rig(gripper_force_cap_n=gripper_force_cap_n)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    next(rig.loop)
+    rig.loop.close()
+    return rig.driver
+
+
+def _run(chain, motors: GripperMotors, grip: float, seconds: float) -> None:
+    """Command ``ARM_TARGET`` and ``grip`` (0 closed, 1 open), and run ``seconds`` of updates."""
+    chain.command_joint_pos(np.append(ARM_TARGET, grip))
+    for _ in range(round(seconds / motors.STEP_S)):
+        chain.update()
+
+
+def _squeeze(monkeypatch, gripper_force_cap_n: float | None) -> tuple[Any, GripperMotors]:
+    """Close the gripper on an object for a second, through a driver with ``gripper_force_cap_n``."""
+    chain, motors = _gripper_chain(monkeypatch)
+    _opened_by_a_driver(chain, gripper_force_cap_n)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.0)
+    return chain, motors
+
+
+def test_the_gripper_force_cap_holds_before_and_after_i2rt_finds_a_stall(monkeypatch):
+    """i2rt's limiter replaces the gripper target once it finds a stall, so a cap on the target sent to i2rt is lost."""
+    _, motors = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    stall = motors.first_stall_step()
+    assert stall is not None, 'the squeeze did not reach the stall of i2rt'
+    closing = motors.closing_torques()
+    assert np.max(closing[:stall]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+    assert np.max(closing[stall:]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+
+
+def test_the_gripper_force_cap_leaves_the_commands_of_the_arm_motors_alone(monkeypatch):
+    _, capped = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    _, plain = _squeeze(monkeypatch, None)
+    assert np.max(plain.closing_torques()) > _gripper_torque_nm(SQUEEZE_CAP_N)
+    np.testing.assert_array_equal(np.stack(capped.commands)[:, :, :6], np.stack(plain.commands)[:, :, :6])
+
+
+def test_a_gripper_force_cap_of_zero_sends_the_commands_of_i2rt(monkeypatch):
+    _, zero = _squeeze(monkeypatch, 0.0)
+    plain, motors = _gripper_chain(monkeypatch)
+    _run(plain, motors, CHAIN_CLOSED, seconds=1.0)
+    np.testing.assert_array_equal(np.stack(zero.commands), np.stack(motors.commands))
+
+
+def test_the_gripper_force_cap_leaves_an_opening_gripper_alone(monkeypatch):
+    commands = []
+    for cap in (SQUEEZE_CAP_N, None):
+        chain, motors = _gripper_chain(monkeypatch, stop_at=0.0, start_at=0.0)
+        _opened_by_a_driver(chain, cap)
+        _run(chain, motors, CHAIN_OPEN, seconds=0.5)
+        assert np.max(-motors.closing_torques()) > _gripper_torque_nm(SQUEEZE_CAP_N)
+        commands.append(np.stack(motors.commands))
+    np.testing.assert_array_equal(*commands)
+
+
+def _free_close_s(monkeypatch, gripper_force_cap_n: float | None) -> float:
+    """How long the gripper takes from open to 0.05 rad short of closed, with nothing between the fingers."""
+    chain, motors = _gripper_chain(monkeypatch, stop_at=0.0)
+    _opened_by_a_driver(chain, gripper_force_cap_n)
+    chain.command_joint_pos(np.append(ARM_TARGET, CHAIN_CLOSED))
+    for steps in range(10_000):
+        if motors.pos[6] <= 0.05:
+            return steps * motors.STEP_S
+        chain.update()
+    raise AssertionError('the gripper did not close')
+
+
+def test_a_capped_gripper_closes_on_nothing_about_as_fast_as_an_uncapped_one(monkeypatch):
+    """The cap limits the sum of the position torque and the damping torque. A cap on the position torque alone lets
+    the damping of a fast close take most of the drive."""
+    assert _free_close_s(monkeypatch, SQUEEZE_CAP_N) <= 1.1 * _free_close_s(monkeypatch, None)
+
+
+def test_a_gripper_force_cap_set_at_run_time_holds_from_the_next_update(monkeypatch):
+    chain, motors = _gripper_chain(monkeypatch)
+    robot = _opened_by_a_driver(chain, None)
+    _run(chain, motors, CHAIN_CLOSED, seconds=0.3)
+    assert motors.closing_torques()[-1] > _gripper_torque_nm(SQUEEZE_CAP_N)
+    robot.set_gripper_force_cap(SQUEEZE_CAP_N)
+    chain.update()
+    assert motors.closing_torques()[-1] <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+
+
+def test_the_arm_meta_carries_the_gripper_force_cap_that_the_chain_runs(monkeypatch):
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=SQUEEZE_CAP_N)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.tick()
+    assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] == SQUEEZE_CAP_N
+    rig.ready()  # the arm of the stopped chain misses its start pose, and the driver serves it
+    rig.driver.set_gripper_force_cap(0.0)
+    rig.tick()
+    assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    rig.loop.close()
+
+
+def test_the_arm_meta_names_the_stall_force_of_i2rts_gripper_limiter_with_no_cap(monkeypatch):
+    """i2rt's limiter holds a stalled gripper with its own force whatever the cap, so a meta with no cap names it."""
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=None)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.tick()
+    meta = _last(rig.arm_metas)
+    assert meta[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    assert meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] == I2RT_GRIPPER_FORCE_LIMIT_N
+    rig.loop.close()
+
+
+def test_the_arm_meta_names_a_gripper_force_cap_set_during_a_blocking_move(world, monkeypatch):
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=SQUEEZE_CAP_N)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.ready()
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    rig.tick()
+    rig.driver.set_gripper_force_cap(0.0)
+    rig.tick()
+    assert not answer.done(), 'the move ended before the arm meta was read'
+    assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    rig.loop.close()
+
+
+@pytest.mark.parametrize('cap_n', [-1.0, math.nan, math.inf])
+def test_a_gripper_force_cap_that_is_not_a_finite_force_is_refused(cap_n):
+    with pytest.raises(ValueError, match='gripper_force_cap_n'):
+        yam.Robot(gripper_force_cap_n=cap_n)
+    with pytest.raises(ValueError, match='gripper_force_cap_n'):
+        yam.Robot().set_gripper_force_cap(cap_n)
+
+
+def test_the_yam_configs_give_each_gripper_its_force_cap(monkeypatch):
+    single = roboarm_cfg.yam.override(gripper_force_cap_n=15.0).instantiate()
+    bimanual = embodiment_cfg.yam_bimanual.override(cameras={}, gripper_force_cap_n=15.0).instantiate()
+    arms = [single, *(system for system in bimanual.control_systems if isinstance(system, yam.Robot))]
+    assert len(arms) == 3
+    for arm in arms:
+        chain, _ = _gripper_chain(monkeypatch)
+        rig = Rig(driver=arm)
+        rig.driver._connect = lambda channel, sim, compensation, chain=chain: chain
+        rig.tick()
+        assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] == 15.0
+        rig.loop.close()
 
 
 @pytest.mark.parametrize(
