@@ -21,10 +21,11 @@ path has no seed hook, so a recorded seed would only mislead.
 ``--cameras`` names the set in ``keys.CAMERA_SETS`` this server renders. RoboLab bakes the set into the
 registered task, so one server serves one set and the token carries no camera.
 
-``--num-envs`` clones the scene: one Isaac process steps every clone inside a single ``env.step``, and each
-clone is a slot of the env server, driven by a client of its own. RoboLab freezes a clone that terminates
-rather than re-rolling it, and zeroes its action, so a batch runs until its slowest clone ends and every clone
-reports the verdict it froze on.
+``--max-envs`` bounds the scene clones: one Isaac process steps every clone inside a single ``env.step``, and each
+clone is a slot of the env server, driven by a client of its own. A reset builds as many clones as its batch has
+slots, and rebuilds the scene when that count changes. RoboLab freezes a clone that terminates rather than
+re-rolling it, and zeroes its action, so a batch runs until its slowest clone ends and every clone reports the
+verdict it froze on.
 
 Every frame also carries the ``gt_state`` (``keys.GT_STATE``) of each slot. It holds:
 
@@ -92,7 +93,7 @@ parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server 
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
 parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
-parser.add_argument('--num-envs', type=int, default=1, help='scene clones this server steps at once')
+parser.add_argument('--max-envs', type=int, default=1, help='the most scene clones this server steps at once')
 parser.add_argument(
     '--join-deadline',
     type=float,
@@ -154,15 +155,15 @@ def _load_robot_meta() -> dict[str, Any]:
 class RobolabEnv(EnvProtocol):
     """A RoboLab task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
-    Built from the reset token's key (RoboLab env name, instruction variant, episode length) and cached;
-    ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's own reset events, or
-    restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
+    Built from the reset token's key (RoboLab env name, instruction variant, episode length) and the clone count,
+    and cached; ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's own reset
+    events, or restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
     forwarded command into its row of the 8-dim jointpos action and reports, per slot, ``done`` (episode over)
     and ``success`` (the task's success termination fired). A slot whose arm state stops being finite is
     faulted: its episode ends as a failure with ``fault``, and the other slots continue.
 
-    ``num_envs`` scene clones share one task, one sim and one ``env.step``; the whole batch reruns the same
-    task on every reset, since RoboLab clones a single registered env.
+    The scene clones, one per slot and at most ``max_envs``, share one task, one sim and one ``env.step``; the whole
+    batch reruns the same task on every reset, since RoboLab clones a single registered env.
     """
 
     # The one entry of a task's contact list that the gripper's batch contact sensor leaves out. A contact query over
@@ -170,10 +171,11 @@ class RobolabEnv(EnvProtocol):
     # (``robolab.core.sensors.contact_sensor_utils.create_contact_sensors``).
     _TABLE = 'table'
 
-    def __init__(self, num_envs: int = 1):
-        if num_envs < 1:
-            raise ValueError(f'a server steps at least one scene clone, not {num_envs}')
-        self._num_envs = num_envs
+    def __init__(self, max_envs: int = 1):
+        if max_envs < 1:
+            raise ValueError(f'a server steps at least one scene clone, not {max_envs}')
+        self._max_envs = max_envs
+        self._num_envs = 0  # the clones of the built env
         self._key = None
         # RoboLab's env, its cfg and the handles below resolve only inside RoboLab's own interpreter, so the
         # checker cannot see their types here.
@@ -198,16 +200,16 @@ class RobolabEnv(EnvProtocol):
         self._gripper = ''
         self._objects: list[str] = []
         self._subtask_recorder: Any = None
-        self._shown_chains: list[Any] = [None] * num_envs  # each slot's chain machine at the last frame
+        self._shown_chains: list[Any] = []  # each slot's chain machine at the last frame
         self._episode = 0  # the number of the current episode, counted by resets
         self._episode_task = ''  # the task of the current episode
-        self._far_past_limit_solves = [0] * num_envs  # per slot, this episode's IK solves with a joint far past a limit
+        self._far_past_limit_solves: list[int] = []  # per slot, this episode's IK solves with a joint far past a limit
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
     @property
     def num_slots(self) -> int:
-        return self._num_envs
+        return self._max_envs
 
     def _timed_phase(self, method: Callable[..., Any], name: str) -> Callable[..., Any]:
         """``method`` wrapped to record a ``name`` span (parented to the in-flight ``env.step``/``env.reset``)
@@ -269,10 +271,12 @@ class RobolabEnv(EnvProtocol):
             for name in names
         ]
 
-    def _build(self, task: str, instruction_type: str, episode_length_s: float | None) -> None:
+    def _build(self, task: str, instruction_type: str, episode_length_s: float | None, num_envs: int) -> None:
         self._key = None  # a build that raises leaves no cached env for the next reset to reuse
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
+        self._num_envs = num_envs
+        self._far_past_limit_solves = [0] * num_envs
         if task not in self._registered:
             presets = {
                 keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
@@ -361,11 +365,19 @@ class RobolabEnv(EnvProtocol):
         self._far_past_limit_solves = [0] * self._num_envs
 
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
-    def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+    def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
+        num_envs = self._max_envs if slots is None else slots
+        if not 1 <= num_envs <= self._max_envs:
+            raise ValueError(f'{num_envs} scene clones asked for, but this server steps 1 to {self._max_envs}')
         self._report_far_past_limit_solves()
         self._episode += 1
         self._episode_task = token[keys.TOKEN_TASK]
-        key = (token[keys.TOKEN_TASK], token[keys.TOKEN_INSTRUCTION_TYPE], token.get(keys.TOKEN_EPISODE_LENGTH_S))
+        key = (
+            token[keys.TOKEN_TASK],
+            token[keys.TOKEN_INSTRUCTION_TYPE],
+            token.get(keys.TOKEN_EPISODE_LENGTH_S),
+            num_envs,
+        )
         if key != self._key:
             self._build(*key)
             self._key = key
@@ -665,7 +677,7 @@ def main() -> None:
     # Under --timing the parent forwards the telemetry dir + run id via the environment; the server then
     # writes its own ``env.spans.jsonl`` sidecar. Inert otherwise.
     with telemetry.bind_from_env():
-        EnvServer(RobolabEnv(args.num_envs), args.host, args.port, join_deadline=args.join_deadline).serve_forever()
+        EnvServer(RobolabEnv(args.max_envs), args.host, args.port, join_deadline=args.join_deadline).serve_forever()
     simulation_app.close()
 
 

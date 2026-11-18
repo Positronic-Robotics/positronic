@@ -660,7 +660,7 @@ class _CountdownEnv(EnvProtocol):
             raise ValueError(f'_CountdownEnv serves {_COUNTDOWN!r}, not {names}')
         return [{'name': name, protocol.TASK_INSTRUCTION: f'count down from {name}'} for name in names]
 
-    def reset(self, token):
+    def reset(self, token, slots=None):
         self._steps = 0
         meta = {'task': _COUNTDOWN}
         return {
@@ -788,7 +788,7 @@ class _GoalPerStepEnv(_CountdownEnv):
         super().__init__()
         self.goals: list[str] = []
 
-    def reset(self, token):
+    def reset(self, token, slots=None):
         frame = super().reset(token)
         self.goals = ['reset']
         frame[protocol.SLOTS][0][protocol.FRAME_GOAL] = self.goals[-1]

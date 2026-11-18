@@ -270,7 +270,7 @@ class MolmoSpacesEnv(EnvProtocol):
                 })
         return records
 
-    def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+    def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
         self._build(
             bench,

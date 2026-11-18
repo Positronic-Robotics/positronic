@@ -38,8 +38,12 @@ class EnvTask:
 
 
 class RemoteEnvControlSystem(pimm.ControlSystem):
-    def __init__(self, adapter: EnvAdapter, serve: AbstractContextManager[tuple[str, int]]):
+    def __init__(
+        self, adapter: EnvAdapter, serve: AbstractContextManager[tuple[str, int]], batch_size: int | None = None
+    ):
         self._adapter = adapter
+        # How many proxies start each batch of a shared server; ``None`` asks for every slot of the server.
+        self._batch_size = batch_size
         # The server this proxy talks to: a context manager yielding its ``(host, port)`` and owning its lifetime
         # (a launched subprocess, or an already-running server whose address it just hands back). Entered when the
         # proxy connects, exited after the socket closes — so the server outlives every request and dies last.
@@ -100,7 +104,7 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         conn = self._connect()
         for _, receiver in self.commands.items():
             receiver.read()
-        self._frame = conn.reset(self._adapter.reset_token(params))
+        self._frame = conn.reset(self._adapter.reset_token(params), self._batch_size)
         self._active = True
         self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
         self._emit_payload(self._frame)
