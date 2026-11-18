@@ -661,20 +661,39 @@ def test_a_recover_call_whose_camera_keeps_its_usb_address_and_its_listing_answe
     assert len(_frame_times(frames)) > sent
 
 
-def test_the_usb_address_of_a_camera_comes_from_the_kernel_device_with_its_serial(zed_module, tmp_path, monkeypatch):
-    def device(name: str, **files: object) -> None:
-        (tmp_path / name).mkdir()
-        for file, value in files.items():
-            (tmp_path / name / file).write_text(f'{value}\n')
+def _sysfs_device(root: Path, name: str, **files: object) -> None:
+    """A device directory under ``root``, with one file for each of ``files``."""
+    (root / name).mkdir()
+    for file, value in files.items():
+        (root / name / file).write_text(f'{value}\n')
 
-    device('1-2', busnum=1, devnum=25)
-    device('1-2.2', serial=SERIAL, busnum=USB_BUS, devnum=FIRST_DEVICE_NUMBER)
-    device('1-2.2:1.0')
-    device('2-3', serial='OV0001', busnum=2, devnum=39)
+
+def test_the_usb_address_of_a_camera_comes_from_the_kernel_device_with_its_serial(zed_module, tmp_path, monkeypatch):
+    _sysfs_device(tmp_path, '1-2', busnum=1, devnum=25)
+    _sysfs_device(tmp_path, '1-2.2', serial=SERIAL, busnum=USB_BUS, devnum=FIRST_DEVICE_NUMBER)
+    _sysfs_device(tmp_path, '1-2.2:1.0')
+    _sysfs_device(tmp_path, '2-3', serial='OV0001', busnum=2, devnum=39)
     monkeypatch.setattr(zed_module, 'USB_DEVICES_DIR', tmp_path)
 
     assert zed_module.usb_address(SERIAL) == (USB_BUS, FIRST_DEVICE_NUMBER)
     assert zed_module.usb_address(SERIAL + 1) is None
+
+
+def test_the_usb_address_of_a_camera_whose_files_go_during_the_read_is_none(zed_module, tmp_path, monkeypatch):
+    # The kernel removed the device's busnum and devnum files after the serial file was read.
+    _sysfs_device(tmp_path, '1-2.2', serial=SERIAL)
+    monkeypatch.setattr(zed_module, 'USB_DEVICES_DIR', tmp_path)
+
+    assert zed_module.usb_address(SERIAL) is None
+
+
+def test_the_usb_address_raises_a_read_error_that_is_not_a_removed_device(zed_module, tmp_path, monkeypatch):
+    _sysfs_device(tmp_path, '1-2.2', serial=SERIAL)
+    (tmp_path / '1-2.2' / 'busnum').mkdir()
+    monkeypatch.setattr(zed_module, 'USB_DEVICES_DIR', tmp_path)
+
+    with pytest.raises(IsADirectoryError):
+        zed_module.usb_address(SERIAL)
 
 
 def test_a_recover_call_on_a_camera_that_does_not_come_back_answers_a_camera_fault_and_holds_it(zed_module, world):

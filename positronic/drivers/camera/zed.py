@@ -1,3 +1,4 @@
+import errno
 import logging
 from collections.abc import Generator, Iterator
 from enum import Enum, auto
@@ -69,14 +70,15 @@ def usb_address(serial: int) -> UsbAddress | None:
     The HID half of a ZED 2 or a ZED 2i carries the camera's serial number.
     """
     for serial_file in USB_DEVICES_DIR.glob('*/serial'):
-        # A device that leaves the bus during the read removes its files.
         try:
             if serial_file.read_text().strip() != str(serial):
                 continue
             device = serial_file.parent
             return UsbAddress(int((device / 'busnum').read_text()), int((device / 'devnum').read_text()))
-        except OSError:
-            continue
+        except OSError as e:
+            # A device that leaves the bus during the read removes its files: ENOENT at the open, ENODEV at the read.
+            if e.errno not in (errno.ENOENT, errno.ENODEV):
+                raise
     return None
 
 
