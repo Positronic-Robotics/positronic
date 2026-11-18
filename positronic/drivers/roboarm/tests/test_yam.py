@@ -159,6 +159,7 @@ class Site(Enum):
     COMMANDS_READ = ('commands', 'read')
     TARGET_GRIP_READ = ('target_grip', 'read')
     IDLE_PARK_READ = ('idle_park_on', 'read')
+    GRIPPER_FORCE_CAP_READ = ('gripper_force_cap_n', 'read')
 
 
 # Calls made after torque is released, outside the protected region.
@@ -214,12 +215,14 @@ class Rig:
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
         self.idle_park_on = ManualCommandReceiver()
+        self.gripper_force_cap = ManualCommandReceiver()
         self.states = RecordingEmitter()
         ports: dict[str, Any] = {
             'vendor': self.vendor,
             'commands': self.commands,
             'target_grip': self.grip,
             'idle_park_on': self.idle_park_on,
+            'gripper_force_cap_n': self.gripper_force_cap,
             'state': self.states,
         }
         self.grips = RecordingEmitter()
@@ -239,6 +242,7 @@ class Rig:
         self.driver.commands._bind(ports['commands'])
         self.driver.target_grip._bind(ports['target_grip'])
         self.driver.idle_park_on._bind(ports['idle_park_on'])
+        self.driver.gripper_force_cap_n._bind(ports['gripper_force_cap_n'])
         self.driver.state._bind(ports['state'], clock=self.clock)
         self.driver.grip._bind(ports['grip'], clock=self.clock)
         self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
@@ -2655,14 +2659,18 @@ def test_a_capped_gripper_closes_on_nothing_about_as_fast_as_an_uncapped_one(mon
     assert _free_close_s(monkeypatch, SQUEEZE_CAP_N) <= 1.1 * _free_close_s(monkeypatch, None)
 
 
-def test_a_gripper_force_cap_set_at_run_time_holds_from_the_next_update(monkeypatch):
+def test_a_gripper_force_cap_from_its_input_holds_from_the_next_update(monkeypatch):
     chain, motors = _gripper_chain(monkeypatch)
-    robot = _opened_by_a_driver(chain, None)
+    rig = Rig(gripper_force_cap_n=None)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    next(rig.loop)
     _run(chain, motors, CHAIN_CLOSED, seconds=0.3)
     assert motors.closing_torques()[-1] > _gripper_torque_nm(SQUEEZE_CAP_N)
-    robot.set_gripper_force_cap(SQUEEZE_CAP_N)
-    chain.update()
+    rig.gripper_force_cap.push(SQUEEZE_CAP_N)
+    next(rig.loop)  # one control step of the driver reads the input
+    _run(chain, motors, CHAIN_CLOSED, seconds=motors.STEP_S)
     assert motors.closing_torques()[-1] <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+    rig.loop.close()
 
 
 def test_the_arm_meta_carries_the_gripper_force_cap_that_the_chain_runs(monkeypatch):
@@ -2672,7 +2680,7 @@ def test_the_arm_meta_carries_the_gripper_force_cap_that_the_chain_runs(monkeypa
     rig.tick()
     assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] == SQUEEZE_CAP_N
     rig.ready()  # the arm of the stopped chain misses its start pose, and the driver serves it
-    rig.driver.set_gripper_force_cap(0.0)
+    rig.gripper_force_cap.push(0.0)
     rig.tick()
     assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
     rig.loop.close()
@@ -2690,14 +2698,14 @@ def test_the_arm_meta_names_the_stall_force_of_i2rts_gripper_limiter_with_no_cap
     rig.loop.close()
 
 
-def test_the_arm_meta_names_a_gripper_force_cap_set_during_a_blocking_move(world, monkeypatch):
+def test_the_arm_meta_names_a_gripper_force_cap_sent_during_a_blocking_move(world, monkeypatch):
     chain, _ = _gripper_chain(monkeypatch)
     rig = Rig(gripper_force_cap_n=SQUEEZE_CAP_N)
     rig.driver._connect = lambda channel, sim, compensation: chain
     rig.ready()
     answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
     rig.tick()
-    rig.driver.set_gripper_force_cap(0.0)
+    rig.gripper_force_cap.push(0.0)
     rig.tick()
     assert not answer.done(), 'the move ended before the arm meta was read'
     assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
@@ -2708,8 +2716,18 @@ def test_the_arm_meta_names_a_gripper_force_cap_set_during_a_blocking_move(world
 def test_a_gripper_force_cap_that_is_not_a_finite_force_is_refused(cap_n):
     with pytest.raises(ValueError, match='gripper_force_cap_n'):
         yam.Robot(gripper_force_cap_n=cap_n)
+
+
+@pytest.mark.parametrize('cap_n', [-1.0, math.nan, math.inf])
+def test_a_gripper_force_cap_input_that_is_not_a_finite_force_parks_releases_and_is_raised(cap_n):
+    rig = Rig()
+    rig.raise_arm()
+    rig.gripper_force_cap.push(cap_n)
+    rig.tick()  # the refusal lands in the run, before anything asks the driver to stop
     with pytest.raises(ValueError, match='gripper_force_cap_n'):
-        yam.Robot().set_gripper_force_cap(cap_n)
+        rig.finish(within_s=30)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
 
 
 def test_the_yam_configs_give_each_gripper_its_force_cap(monkeypatch):
