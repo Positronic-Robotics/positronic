@@ -387,7 +387,8 @@ class _Arm(DriverRun[command.CommandType]):
         state: YamState,
         meta_out: pimm.SignalEmitter[dict[str, Any]],
         ee_mass: float | None,
-        gripper_force_cap_n: Callable[[], float | None],
+        gripper_force_cap_n: float | None,
+        take_gripper_force_cap: Callable[[], float | None],
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
@@ -405,7 +406,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_at = 0.0
         self.meta_out = meta_out
         self._ee_mass = ee_mass
-        self._gripper_force_cap_n = gripper_force_cap_n
+        self._force_cap_n = gripper_force_cap_n  # the gripper force cap in force
+        self._take_gripper_force_cap = take_gripper_force_cap
         self._reported_force_cap_n: float | None = None  # the gripper force cap in the last arm meta
 
     @functools.cached_property
@@ -425,7 +427,7 @@ class _Arm(DriverRun[command.CommandType]):
         it does not report. A chain with a gripper force limit runs the gripper force cap of this moment, and its
         limiter holds a stalled gripper with the force of that limit. i2rt's sim chain runs no friction and no gripper
         force limit, and reports neither."""
-        self._reported_force_cap_n = self._gripper_force_cap_n()
+        self._reported_force_cap_n = self._force_cap_n
         info = self._robot_info
         meta = {
             roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(info[_GRAVITY_COMP_FACTOR], np.float64).tolist(),
@@ -470,7 +472,7 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             self.out.emit(self.state)
             self.grip_out.emit(self.read_grip(obs))
-            if self._gripper_force_cap_n() != self._reported_force_cap_n:
+            if self._force_cap_n != self._reported_force_cap_n:
                 self.emit_meta()
         except Exception:
             if not self._shutting_down:
@@ -480,6 +482,10 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.exception('Publishing the arm state failed during shutdown; the park goes on without it')
 
     def _send(self, joints: np.ndarray, open_width: float) -> None:
+        # The control thread of the chain can take a command at once, so the newest cap goes in force first. The park on
+        # shutdown keeps the cap in force.
+        if not self._shutting_down:
+            self._force_cap_n = self._take_gripper_force_cap()
         with _chain_call():
             self.vendor.command_joint_pos(np.append(joints, open_width))
         self._sent_joints = np.array(joints, dtype=np.float64)
@@ -956,7 +962,8 @@ class Robot(pimm.ControlSystem):
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # On until a message says otherwise; the park on shutdown does not read it.
         self.idle_park_on = pimm.DefaultingReceiver[bool](self, default=True)
-        # The chain runs a new cap from the next control step of the driver, also in a move. None or 0 sets no cap.
+        # The driver puts a new cap in force before its next command to the chain, also in a move. None or 0 sets no
+        # cap. The park on shutdown does not read it.
         self.gripper_force_cap_n = pimm.DefaultingReceiver[float | None](self, default=self._gripper_force_cap_n)
 
     @property
@@ -972,7 +979,7 @@ class Robot(pimm.ControlSystem):
         return float(cap_n) if cap_n else None
 
     def _take_gripper_force_cap(self) -> float | None:
-        """Read ``gripper_force_cap_n`` and return the cap that the chain runs from its next control step."""
+        """Read ``gripper_force_cap_n``, put its cap in force for the chain, and return the cap."""
         # One reference write: the control thread of the chain reads the old cap or the new one
         self._gripper_force_cap_n = self._checked_gripper_force_cap(self.gripper_force_cap_n.value)
         return self._gripper_force_cap_n
@@ -1050,6 +1057,7 @@ class Robot(pimm.ControlSystem):
                 state,
                 self.arm_meta,
                 self._compensation.ee_mass,
+                self._gripper_force_cap_n,
                 self._take_gripper_force_cap,
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown

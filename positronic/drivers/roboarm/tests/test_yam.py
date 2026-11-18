@@ -2659,16 +2659,23 @@ def test_a_capped_gripper_closes_on_nothing_about_as_fast_as_an_uncapped_one(mon
     assert _free_close_s(monkeypatch, SQUEEZE_CAP_N) <= 1.1 * _free_close_s(monkeypatch, None)
 
 
-def test_a_gripper_force_cap_from_its_input_holds_from_the_next_update(monkeypatch):
+def test_a_gripper_force_cap_from_its_input_is_in_force_before_the_next_command(monkeypatch):
+    """The control thread of i2rt can take a command before the driver goes on, so the cap goes in force first."""
     chain, motors = _gripper_chain(monkeypatch)
     rig = Rig(gripper_force_cap_n=None)
     rig.driver._connect = lambda channel, sim, compensation: chain
     next(rig.loop)
     _run(chain, motors, CHAIN_CLOSED, seconds=0.3)
     assert motors.closing_torques()[-1] > _gripper_torque_nm(SQUEEZE_CAP_N)
+    send = chain.command_joint_pos
+
+    def send_closed_and_update(joint_pos):
+        send(np.append(joint_pos[:6], CHAIN_CLOSED))
+        chain.update()
+
+    chain.command_joint_pos = send_closed_and_update
     rig.gripper_force_cap.push(SQUEEZE_CAP_N)
-    next(rig.loop)  # one control step of the driver reads the input
-    _run(chain, motors, CHAIN_CLOSED, seconds=motors.STEP_S)
+    next(rig.loop)
     assert motors.closing_torques()[-1] <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
     rig.loop.close()
 
