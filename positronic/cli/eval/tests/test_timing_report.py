@@ -4,6 +4,7 @@ import re
 import pos3
 import pyarrow as pa
 import pytest
+from positronic_model_server import protocol
 
 from positronic.cli import _internal_main
 from positronic.cli.account.gateway import CommandFailed, Fault
@@ -33,21 +34,36 @@ from positronic.telemetry import (
     TELEMETRY_SUBDIR,
 )
 from positronic.telemetry_keys import (
+    ATTR_CODEC,
     ATTR_EPISODE_VIRTUAL_S,
+    ATTR_SERVED_PREFIX,
+    ATTR_STEP_GC_GENERATION,
+    ATTR_STEP_GC_MS,
+    ATTR_STEP_LATE_MS,
+    ATTR_STEP_POLICY_MS,
     ATTR_WAYPOINTS_DROPPED,
     ATTR_WAYPOINTS_EMITTED,
     ATTR_WAYPOINTS_LATE_MAX_MS,
     ATTR_WAYPOINTS_LATE_SUM_MS,
     ATTR_WAYPOINTS_SCHEDULED,
+    ATTR_WIRE_DOWNLINK_MS,
+    ATTR_WIRE_NETWORK_MS,
+    ATTR_WIRE_SENT_ALONE,
+    ATTR_WIRE_UPLINK_MS,
     HARNESS_PROCESS,
     SPAN_ENV_STEP,
     SPAN_EPISODE,
     SPAN_EVAL_PASS,
+    SPAN_HARNESS_STEP,
     SPAN_MATERIALIZE,
+    SPAN_POLICY_ENCODE,
     SPAN_POLICY_INFER,
+    SPAN_POLICY_PREPARE,
     SPAN_POLICY_SUBMIT,
     SPAN_RECORD_IO,
     SPAN_RESET,
+    SPAN_WIRE_RECV,
+    SPAN_WIRE_SEND,
 )
 
 _S = 1_000_000_000  # seconds -> ns
@@ -60,7 +76,10 @@ def _span(name, start_s, end_s, span_id, parent_id=None, attrs=None, process=HAR
         'name': name,
         'startTimeUnixNano': str(int(start_s * _S)),
         'endTimeUnixNano': str(int(end_s * _S)),
-        'attributes': [{'key': k, 'value': {'doubleValue': v}} for k, v in (attrs or {}).items()],
+        'attributes': [
+            {'key': k, 'value': {'stringValue': v} if isinstance(v, str) else {'doubleValue': v}}
+            for k, v in (attrs or {}).items()
+        ],
     }
     if parent_id is not None:
         encoded['parentSpanId'] = parent_id
@@ -967,3 +986,226 @@ def test_an_episode_carrying_no_waypoint_account_is_left_out_and_said_so(tmp_pat
     assert report.waypoints.episodes == 2
     assert report.waypoints.scheduled == 200  # the uninstrumented episode adds no zero of its own
     assert 'waypoints:           200 scheduled, 40 emitted, 40 dropped over 2 of 3 episodes' in _render(report)
+
+
+_SERVED_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SERVED}'
+_SERVED_RECEIVED_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_RECEIVED_NS}'
+_SERVED_SENT_NS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_SENT_NS}'
+_SERVED_ENCODE_MS = f'{ATTR_SERVED_PREFIX}{protocol.TIMING_ENCODE}'
+_NETWORK_ROW = f'wire.send + wire.recv - {_SERVED_MS} - {_SERVED_ENCODE_MS}'
+
+
+def _call(prefix, start_s, served_ms, run_id='rig-run', sent_alone: bool | None = True, encode_ms: float | None = None):
+    """One policy call on a worker, 0.1 s long: two overlapping image encodes, a prepare and a round trip.
+
+    ``sent_alone`` ``None`` leaves the mark out, as a file from a client that does not write it.
+    ``encode_ms`` ``None`` leaves out the encode of the answer's images, as a server that answers with no image.
+
+    The parent of the `policy.submit` span is not in the file, as in a file that holds only the calls.
+    """
+    ms = 0.001
+    submit, transform, infer = f'{prefix}-submit', f'{prefix}-transform', f'{prefix}-infer'
+    return [
+        _span(SPAN_POLICY_SUBMIT, start_s, start_s + 100 * ms, submit, f'{prefix}-step', run_id=run_id),
+        _span('transform_images', start_s, start_s + 100 * ms, transform, submit, run_id=run_id),
+        _span(
+            SPAN_POLICY_ENCODE,
+            start_s,
+            start_s + 20 * ms,
+            f'{prefix}-a',
+            transform,
+            {ATTR_CODEC: 'Jpeg'},
+            run_id=run_id,
+        ),
+        _span(
+            SPAN_POLICY_ENCODE,
+            start_s + 10 * ms,
+            start_s + 30 * ms,
+            f'{prefix}-b',
+            transform,
+            {ATTR_CODEC: 'Jpeg'},
+            run_id=run_id,
+        ),
+        _span(SPAN_POLICY_PREPARE, start_s + 30 * ms, start_s + 40 * ms, f'{prefix}-prepare', transform, run_id=run_id),
+        _span(
+            SPAN_POLICY_INFER,
+            start_s + 40 * ms,
+            start_s + 100 * ms,
+            infer,
+            transform,
+            {_SERVED_MS: served_ms, _SERVED_RECEIVED_NS: 1e18, _SERVED_SENT_NS: 1e18}
+            | ({} if sent_alone is None else {ATTR_WIRE_SENT_ALONE: sent_alone})
+            | ({} if encode_ms is None else {_SERVED_ENCODE_MS: encode_ms}),
+            run_id=run_id,
+        ),
+        _span(SPAN_WIRE_SEND, start_s + 45 * ms, start_s + 50 * ms, f'{prefix}-send', infer, run_id=run_id),
+        _span(SPAN_WIRE_RECV, start_s + 50 * ms, start_s + 95 * ms, f'{prefix}-recv', infer, run_id=run_id),
+    ]
+
+
+def _latency_fixture(telemetry_dir):
+    """Two episodes of one run with one call each, a call between them, and one timed step in the first."""
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'),
+            _span(SPAN_EPISODE, 20, 30, 'ep1', run_id='rig-run'),
+            _span(
+                SPAN_HARNESS_STEP,
+                1,
+                1.004,
+                'step0',
+                'ep0',
+                {ATTR_STEP_LATE_MS: 0.5, ATTR_STEP_POLICY_MS: 2.0},
+                run_id='rig-run',
+            ),
+            *_call('first', 2, served_ms=10.0),
+            *_call('warm-up', 15, served_ms=500.0),
+            *_call('second', 22, served_ms=30.0),
+        ],
+    )
+
+
+def test_the_latency_of_each_segment_counts_the_spans_inside_the_episodes(tmp_path):
+    _latency_fixture(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    rows = {row.segment: row for row in report.latency}
+    assert rows[SPAN_POLICY_SUBMIT].count == 2  # the call between the episodes does not count
+    assert rows[SPAN_POLICY_SUBMIT].episodes == 2
+    assert rows[SPAN_POLICY_SUBMIT].p50_ms == pytest.approx(100.0)
+    assert rows[SPAN_POLICY_INFER].p50_ms == pytest.approx(60.0)
+    assert rows[SPAN_WIRE_RECV].p50_ms == pytest.approx(45.0)
+    assert rows[_SERVED_MS].p50_ms == pytest.approx(20.0)
+    assert rows[_SERVED_MS].p99_ms == pytest.approx(29.8)
+    assert f'{SPAN_POLICY_ENCODE}[Jpeg]' in rows
+    assert rows[f'{SPAN_POLICY_ENCODE}[Jpeg]'].count == 4
+    assert rows[f'{SPAN_POLICY_ENCODE} per call'].p50_ms == pytest.approx(30.0)  # two encodes overlap by 10 ms
+    assert rows[_NETWORK_ROW].p50_ms == pytest.approx(30.0)
+    assert not any(segment.startswith(f'{SPAN_POLICY_INFER} -') for segment in rows)
+    assert rows[SPAN_HARNESS_STEP].p50_ms == pytest.approx(4.0)
+    assert rows[ATTR_STEP_LATE_MS].count == 1
+    assert rows[ATTR_STEP_LATE_MS].episodes == 1
+    assert rows[ATTR_STEP_POLICY_MS].p90_ms == pytest.approx(2.0)
+
+
+def test_the_latency_leaves_out_the_server_instants_and_a_split_the_server_did_not_send(tmp_path):
+    _latency_fixture(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    segments = {row.segment for row in report.latency}
+    assert not segments & {_SERVED_RECEIVED_NS, _SERVED_SENT_NS, ATTR_WIRE_NETWORK_MS}
+
+
+def _latency_rows_of(telemetry_dir, *spans):
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [_span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'), *spans],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    return {row.segment: row for row in report.latency}
+
+
+def test_the_latency_leaves_out_a_step_value_that_is_not_milliseconds(tmp_path):
+    read_ms = 'step.read_ms.camera'
+    step_attrs = {ATTR_STEP_GC_GENERATION: 2, ATTR_STEP_GC_MS: 3.0, read_ms: 4.0}
+    rows = _latency_rows_of(
+        tmp_path / TELEMETRY_SUBDIR, _span(SPAN_HARNESS_STEP, 1, 1.01, 'step0', 'ep0', step_attrs, run_id='rig-run')
+    )
+
+    assert ATTR_STEP_GC_GENERATION not in rows
+    assert rows[ATTR_STEP_GC_MS].p50_ms == pytest.approx(3.0)
+    assert rows[read_ms].p50_ms == pytest.approx(4.0)
+
+
+def test_the_latency_leaves_out_the_one_way_wire_values_and_keeps_their_sum(tmp_path):
+    wire_attrs = {ATTR_WIRE_UPLINK_MS: -5.0, ATTR_WIRE_DOWNLINK_MS: 25.0, ATTR_WIRE_NETWORK_MS: 20.0}
+    rows = _latency_rows_of(
+        tmp_path / TELEMETRY_SUBDIR, _span(SPAN_POLICY_INFER, 1, 1.1, 'infer', 'ep0', wire_attrs, run_id='rig-run')
+    )
+
+    assert ATTR_WIRE_UPLINK_MS not in rows
+    assert ATTR_WIRE_DOWNLINK_MS not in rows
+    assert rows[ATTR_WIRE_NETWORK_MS].p50_ms == pytest.approx(20.0)
+
+
+def test_render_shows_the_latency_table(tmp_path):
+    _latency_fixture(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    rendered = _render(report).splitlines()
+
+    assert 'latency inside the episodes (ms):' in rendered
+    assert any(re.fullmatch(r'  policy\.submit +2 +2 +100\.00 +100\.00 +100\.00', line) for line in rendered)
+
+
+def test_a_report_with_no_timed_span_shows_no_latency_table(tmp_path):
+    _waypoint_fixture(tmp_path / TELEMETRY_SUBDIR)
+    report = _build_report(_read_spans_dir(tmp_path / TELEMETRY_SUBDIR), [], policy_gpu=None)
+
+    assert report.latency == []
+    assert not any(line.startswith('latency') for line in _render(report).splitlines())
+
+
+def test_a_retried_call_gives_no_network_value(tmp_path):
+    ms = 0.001
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [
+            _span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'),
+            _span(
+                SPAN_POLICY_INFER,
+                1,
+                1 + 100 * ms,
+                'infer',
+                'ep0',
+                {_SERVED_MS: 20.0, ATTR_WIRE_SENT_ALONE: True},
+                run_id='rig-run',
+            ),
+            # The first attempt loses its peer after the request is sent; the second attempt gets the answer.
+            _span(SPAN_WIRE_SEND, 1 + 5 * ms, 1 + 10 * ms, 'send-1', 'infer', run_id='rig-run'),
+            _span(SPAN_WIRE_RECV, 1 + 10 * ms, 1 + 30 * ms, 'recv-1', 'infer', run_id='rig-run'),
+            _span(SPAN_WIRE_SEND, 1 + 40 * ms, 1 + 45 * ms, 'send-2', 'infer', run_id='rig-run'),
+            _span(SPAN_WIRE_RECV, 1 + 45 * ms, 1 + 95 * ms, 'recv-2', 'infer', run_id='rig-run'),
+        ],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+
+    rows = {row.segment: row for row in report.latency}
+    # The 10 ms reconnect between the attempts is not network time.
+    assert _NETWORK_ROW not in rows
+    assert rows['policy.infer'].count == 1
+
+
+def _network_rows(telemetry_dir, *calls):
+    telemetry_dir.mkdir()
+    _write_lines(
+        telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}',
+        [_span(SPAN_EPISODE, 0, 10, 'ep0', run_id='rig-run'), *(span for call in calls for span in call)],
+    )
+    report = _build_report(_read_spans_dir(telemetry_dir), [], policy_gpu=None)
+    return [row for row in report.latency if row.segment == _NETWORK_ROW]
+
+
+def test_the_network_row_counts_only_the_calls_sent_with_no_earlier_call_in_flight(tmp_path):
+    [network] = _network_rows(
+        tmp_path / TELEMETRY_SUBDIR,
+        _call('alone', 1, served_ms=10.0),
+        _call('queued', 2, served_ms=5.0, sent_alone=False),
+    )
+    assert network.count == 1
+    assert network.p50_ms == pytest.approx(40.0)
+
+
+def test_the_network_row_leaves_out_the_server_encode_of_the_answer_images(tmp_path):
+    [network] = _network_rows(tmp_path / TELEMETRY_SUBDIR, _call('images', 1, served_ms=10.0, encode_ms=15.0))
+    assert network.p50_ms == pytest.approx(25.0)  # 50 ms on the wire, 10 ms served, 15 ms encoding the answer
+
+
+def test_a_file_whose_calls_carry_no_alone_mark_gives_no_network_row(tmp_path):
+    rows = _network_rows(tmp_path / TELEMETRY_SUBDIR, _call('old', 1, served_ms=10.0, sent_alone=None))
+    assert rows == []
