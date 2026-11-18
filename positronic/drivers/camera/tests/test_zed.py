@@ -511,7 +511,8 @@ class RebootingSdk(DroppingSdk):
 
     The SDK refuses the reboot while a camera object holds the device open. The device list leaves out a camera that a
     camera object holds open, as the SDK before 5.4 does, unless ``lists_open_camera``. A reboot that runs leaves a
-    listed camera on the device list for ``leaves_after_s``, then off it for ``away_s``.
+    listed camera on the bus for ``leaves_after_s``, then off it for ``away_s``. The device list shows the bus as it
+    was ``list_lag_s`` before.
     """
 
     def __init__(
@@ -523,12 +524,14 @@ class RebootingSdk(DroppingSdk):
         away_s: float = REBOOT_AWAY_S,
         images_stop_at: float = NEVER,
         lists_open_camera: bool = False,
+        list_lag_s: float = 0.0,
     ):
         super().__init__(clock, lost_at=NEVER, listed_at=NEVER, images_stop_at=images_stop_at, model=model)
         self.reboot_result = reboot_result
         self.leaves_after_s = leaves_after_s
         self.away_s = away_s
         self.lists_open_camera = lists_open_camera
+        self.list_lag_s = list_lag_s
         self.reboot_times: list[float] = []
         # The time at which each reboot that runs brings the camera back to the bus with a new device number
         self.reenumerated_at: list[float] = []
@@ -538,7 +541,8 @@ class RebootingSdk(DroppingSdk):
 
     def get_device_list(self) -> list[types.SimpleNamespace]:
         listed = types.SimpleNamespace(serial_number=SERIAL, camera_model=self.model)
-        shown = self.is_listed() and (self.lists_open_camera or not self._held_open())
+        on_bus = not self.lost_at <= self.clock.now() - self.list_lag_s < self.listed_at
+        shown = on_bus and (self.lists_open_camera or not self._held_open())
         return [listed] if shown else []
 
     def reboot(self, serial: int) -> ErrorCode:
@@ -641,6 +645,23 @@ def test_a_recover_call_answers_cleared_for_a_reboot_that_no_device_list_poll_se
     assert answer.result() is RecoveryOutcome.CLEARED
     assert len(sdk.reboot_times) == 1
     assert not _errors(frames)
+
+
+def test_a_recover_call_reopens_the_camera_only_once_it_is_back_on_the_usb_bus(zed_module, world):
+    clock, stop, frames = MockClock(), StopFlag(), RecordingEmitter()
+    # The device list still shows the camera for 2 s after it leaves the bus, and the open attempts span 2 s.
+    sdk = RebootingSdk(clock, list_lag_s=2.0)
+    camera = _rebooting_camera(zed_module, sdk, frames)
+    loop = camera.run(stop, clock)
+    _drive(loop, clock, until=2.0)
+
+    answer = _recoverer(world, camera)(None)
+    _drive_until_answered(loop, clock, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    assert len(sdk.reboot_times) == 1
+    _, reopened = sdk.cameras
+    assert reopened.opened_at is not None and reopened.opened_at >= sdk.listed_at
 
 
 def test_a_recover_call_whose_camera_keeps_its_usb_address_and_its_listing_answers_not_cleared(zed_module, world):

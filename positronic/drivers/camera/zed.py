@@ -155,8 +155,8 @@ class SLCamera(pimm.ControlSystem):
 
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
-    # A recover call waits at most this many polls for the rebooted camera to disconnect from the USB bus.
-    REBOOT_DISCONNECT_MAX_POLLS = 20
+    # A recover call waits at most this many polls for the rebooted camera to get a new USB address or leave the list.
+    REBOOT_SEEN_MAX_POLLS = 20
     # A ready call reopens a camera whose last frame is older than this.
     STALE_FRAME_SEC = 1.0
     # A ready call grabs again after a torn frame, up to this many grabs.
@@ -337,18 +337,20 @@ class SLCamera(pimm.ControlSystem):
         return self._serial_number if model is None or model in (sl.MODEL.ZED2, sl.MODEL.ZED2i) else None
 
     @staticmethod
-    def _wait_until_disconnected(
+    def _wait_until_reenumerated_or_unlisted(
         serial: int, address: UsbAddress | None, failure: str, should_stop: pimm.SignalReceiver
     ) -> Iterator[pimm.Sleep]:
-        """Wait until the camera's USB address differs from ``address``, or the SDK does not list the camera.
+        """Wait until the camera is on the USB bus at an address other than ``address``, or the SDK does not list it.
 
         A rebooted camera is off the bus for about a second, which a poll can miss. Its new address stays.
+        While it is off the bus, the SDK can still list it.
         """
-        for _ in range(SLCamera.REBOOT_DISCONNECT_MAX_POLLS):
-            if should_stop.value or usb_address(serial) != address or not SLCamera._is_listed(serial):
+        for _ in range(SLCamera.REBOOT_SEEN_MAX_POLLS):
+            current = usb_address(serial)
+            if should_stop.value or current not in (None, address) or not SLCamera._is_listed(serial):
                 return
             yield pimm.Sleep(SLCamera.DEVICE_LIST_POLL_SEC)
-        raise CameraOpenError(f'{failure}; camera {serial} did not disconnect from the USB bus after its reboot')
+        raise CameraOpenError(f'{failure}; camera {serial} got no new USB address and stayed on the device list')
 
     def _release_and_reboot(
         self, serial: int, should_stop: pimm.SignalReceiver
@@ -360,7 +362,7 @@ class SLCamera(pimm.ControlSystem):
         try:
             address = usb_address(serial)
             self._reboot(serial, failure)
-            yield from self._wait_until_disconnected(serial, address, failure, should_stop)
+            yield from self._wait_until_reenumerated_or_unlisted(serial, address, failure, should_stop)
             yield from self._wait_until_listed(serial, failure, should_stop)
         except CameraOpenError as e:
             logger.error('%s', e)
