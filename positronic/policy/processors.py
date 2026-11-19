@@ -243,7 +243,8 @@ class TrajectoryPlayer(Policy):
             It includes the command held now, followed by future commands. The last emitted
             command stays in context until replaced or recovery clears it. ``None`` omits this context.
         record_stats: Record scheduled, emitted and dropped waypoint counts, command lateness,
-            gaps between emissions, and holds between chunks in episode metadata.
+            gaps between emissions, and holds between chunks in episode metadata. Each hold also records a
+            ``waypoints.hold`` span.
         replan_on_error: Clear the plan on an arm's ``ERROR`` status and advance the inner run
             immediately with ``replan_now=True``. Pending calls from the inner run are not cancelled.
             Further resets are suppressed until commands are emitted; ``False`` leaves playback unchanged by arm errors.
