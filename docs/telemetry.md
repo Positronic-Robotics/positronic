@@ -171,8 +171,8 @@ command of the next chunk. During a hold the arm keeps its last target. The wait
 count, and a hold that the episode end cuts does not count. The hold share of a rollout is
 `hold_sum_ms / 1000 / episode.virtual_s`.
 
-Each hold longer than zero also records a `waypoints.hold` span. The span ends at the wall time of the round that
-sends the first command of the next chunk. Its length is the hold on the clock of the policy runtime, so the lengths
+When the player records its stats (`record_stats`), each hold longer than zero also records a `waypoints.hold`
+span. The span ends at the wall time of the round that sends the first command of the next chunk. Its length is the hold on the clock of the policy runtime, so the lengths
 of the spans add up to `hold_sum_ms`. On a real rig this clock is the monotonic clock of the host. In a simulation it
 is the world clock, so the span has the simulated length of the hold. When an inference schedule made the next chunk,
 the span carries the `call.id` of that call. The `policy.submit` span of the call carries the same `call.id`. The
