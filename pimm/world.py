@@ -3,6 +3,7 @@
 import contextlib
 import ctypes
 import functools
+import gc
 import heapq
 import importlib
 import logging
@@ -52,6 +53,10 @@ from .time import SystemClock, Time, VirtualClock
 from .utils import identity
 
 logger = logging.getLogger(__name__)
+
+# A scope that every background process opens around its loop, given the process's name. It is pickled into each
+# child, so it must be a module-level callable.
+ProcessScope = Callable[[str], contextlib.AbstractContextManager[object]]
 
 T = TypeVar('T')
 Req = TypeVar('Req')
@@ -510,6 +515,7 @@ def _bg_wrapper(
     parent_component_levels: Mapping[str, int],
     shutdown_policy: ShutdownPolicy,
     parent_pid: int,
+    process_scope: ProcessScope | None = None,
 ):
     if shutdown_policy is ShutdownPolicy.WAIT_FOR_COMPLETION:
         # Stop only on the parent's stop flag, so the device finishes its shutdown.
@@ -527,14 +533,17 @@ def _bg_wrapper(
             logger.info(f'{name}: the World stopped before this process started; not starting')
             return
         _stop_when_orphaned(stop_flag, name, parent_pid)
-        for command in run_func(StopFlagReceiver(stop_flag, clock), clock):
-            match command:
-                case Sleep(seconds):
-                    time.sleep(seconds)
-                case Yield():
-                    time.sleep(0)  # hand the OS scheduler a turn, like a zero-length sleep
-                case _:
-                    raise ValueError(f'Unknown command: {command}')
+        scope = process_scope(name) if process_scope is not None else contextlib.nullcontext()
+        # A spawned process imports the parent's main module again, so its heap is as large as the parent's.
+        with scope, World._heap_out_of_collections():
+            for command in run_func(StopFlagReceiver(stop_flag, clock), clock):
+                match command:
+                    case Sleep(seconds):
+                        time.sleep(seconds)
+                    case Yield():
+                        time.sleep(0)  # hand the OS scheduler a turn, like a zero-length sleep
+                    case _:
+                        raise ValueError(f'Unknown command: {command}')
     except KeyboardInterrupt:
         # Silently handle KeyboardInterrupt in background processes
         pass
@@ -596,7 +605,9 @@ class BackgroundProcessError(RuntimeError):
 class World:
     """Utility class to bind and run control loops."""
 
-    def __init__(self, *, virtual_time: bool = False):
+    def __init__(self, *, virtual_time: bool = False, process_scope: ProcessScope | None = None):
+        """``process_scope`` opens in each background process around its loop, under the process's name. No two
+        background processes of one World share a name."""
         # Enforce "spawn" multiprocessing context. This makes process boundaries explicit:
         # background control systems must be picklable, and fork-only implicit state sharing
         # is disallowed (catching many cross-process foot-guns early).
@@ -608,6 +619,8 @@ class World:
 
         self._stop_flag = _StopFlag(self._mp_ctx)
         self.background_processes = []
+        self._process_scope = process_scope
+        self._background_names: Counter[str] = Counter()
         self._shutdown_policies = {}
         self._exit_watchers: dict[BaseProcess, threading.Thread] = {}
         self._protected_foreground_loops: list[Iterator[Command]] = []
@@ -827,6 +840,32 @@ class World:
         self._foreground_cleanup.append(scheduler.close)
         return scheduler
 
+    # Worlds can run in threads of one process, and the freeze belongs to the process.
+    _heap_freeze_lock = threading.Lock()
+    _schedulers_running_in_process = 0
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _heap_out_of_collections() -> Iterator[None]:
+        """Keep the objects that exist when the first loop driver of the process starts out of each collection.
+
+        A full collection stops every loop of the process while it scans. An import heap of about 140,000 objects
+        takes about 100 ms to scan on an ARM robot computer. The last driver unfreezes the whole permanent
+        generation: a freeze has no owner, and CPython 3.12 freezes objects at startup.
+        """
+        with World._heap_freeze_lock:
+            if World._schedulers_running_in_process == 0:
+                # No collection first: it would stop the process for as long as the passes this freeze avoids.
+                gc.freeze()
+            World._schedulers_running_in_process += 1
+        try:
+            yield
+        finally:
+            with World._heap_freeze_lock:
+                World._schedulers_running_in_process -= 1
+                if World._schedulers_running_in_process == 0:
+                    gc.unfreeze()
+
     def _interleave(self, iters: list[Iterator[Command]]) -> Generator[Command, None, None]:
         with contextlib.ExitStack() as scope:
 
@@ -844,6 +883,7 @@ class World:
                     raise BaseExceptionGroup('Foreground shutdown failed', errors)
 
             self._foreground_cleanup.append(scope.close)
+            scope.enter_context(self._heap_out_of_collections())
             scope.callback(close_loops)
             scheduler = self._schedule(iters)
             scope.callback(scheduler.close)
@@ -1178,6 +1218,9 @@ class World:
                 name = f'{bg_loop.__self__.__class__.__name__}.{bg_loop.__name__}'
             else:
                 name = getattr(bg_loop, '__name__', 'anonymous')
+            self._background_names[name] += 1
+            if self._background_names[name] > 1:
+                name = f'{name}.{self._background_names[name]}'
             p = self._mp_ctx.Process(
                 target=_bg_wrapper,
                 args=(
@@ -1188,6 +1231,7 @@ class World:
                     parent_component_levels,
                     shutdown_policy,
                     os.getpid(),
+                    self._process_scope,
                 ),
                 daemon=True,
                 name=name,

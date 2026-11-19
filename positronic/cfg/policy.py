@@ -10,7 +10,7 @@ from positronic_wire.wire import SESSION_PATH, HostPortAddress, UnixSocketAddres
 from positronic import keys
 from positronic.policy import RemotePolicy
 from positronic.teleop.clutch import OperatorPosition
-from positronic.teleop.protocol import DEFAULT_PORT, default_socket_path, session_query
+from positronic.teleop.protocol import DEFAULT_PORT, Arms, default_socket_path, session_query
 from positronic.utils import nebius
 
 
@@ -66,6 +66,14 @@ teleop_molmo_query = teleop_query.override(
     operator_position=OperatorPosition.BACK.name, cameras=list(TELEOP_MOLMO_CAMERAS)
 )
 teleop_molmo = teleop.override(**{'address.query': teleop_molmo_query})
+
+# A person on the bimanual YAM, behind the arms: the left controller drives the left arm, and the right controller the
+# right arm. The cameras of `cfg.embodiment.yam_bimanual` and `cfg.eval.sim.amazon_abc`.
+TELEOP_YAM_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE)
+teleop_yam_query = teleop_query.override(
+    operator_position=OperatorPosition.BACK.name, arms=Arms.BIMANUAL.name, cameras=list(TELEOP_YAM_CAMERAS)
+)
+teleop_yam = teleop.override(**{'address.query': teleop_yam_query})
 
 
 @cfn.config()

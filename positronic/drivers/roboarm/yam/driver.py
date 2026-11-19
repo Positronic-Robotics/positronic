@@ -24,8 +24,16 @@ from positronic import geom
 from positronic.drivers import vendor_import
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.gripper import aperture
-from positronic.drivers.utils import DriverRun, MoveAbandoned, Moves, MoveStatus, grip_setpoint, log_failure
-from positronic.utils import check_finite_positive
+from positronic.drivers.utils import (
+    CommandReceipt,
+    DriverRun,
+    MoveAbandoned,
+    Moves,
+    MoveStatus,
+    grip_setpoint,
+    log_failure,
+)
+from positronic.utils import check_finite_nonnegative, check_finite_positive
 
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
@@ -49,11 +57,14 @@ _GRAVITY_COMP_FACTOR = 'gravity_comp_factor'  # the factor per motor that the ch
 # The Coulomb friction per motor that the chain adds, and whether it adds it, in get_robot_info()
 _COULOMB_FRICTION, _USE_COULOMB_FRICTION = 'coulomb_friction', 'use_coulomb_friction'
 _COULOMB_FRICTION_FADE = 'coulomb_friction_fade'  # the FrictionFade that _fade_coulomb_friction adds to that report
+_LIMIT_GRIPPER_EFFORT = 'limit_gripper_effort'  # the force limit of i2rt's gripper force limiter, in get_robot_info()
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
+_LOOP_STOPPED = 'the control loop of the chain stopped, so its motors take no commands'
+_RELEASED_UNPARKED = f'Releasing the arm with no park and no hold: {_LOOP_STOPPED}'
 
 
 class ChainFault(RuntimeError):
-    """A call into the i2rt chain that raised."""
+    """A call into the i2rt chain that raised, or a reading from a chain whose control loop stopped."""
 
 
 def _arm_fault(exc: Exception) -> DeviceFault:
@@ -131,6 +142,78 @@ def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> 
     chain.use_coulomb_friction = compensation.use_coulomb_friction
 
 
+class _JointReadings(_JointSpeeds, Protocol):
+    pos: np.ndarray  # per motor; the gripper reads 0 closed and 1 open
+
+
+class _MotorSpace(Protocol):
+    """i2rt's ``JointMapper``: it turns the readings of the gripper into motor radians."""
+
+    def to_robot_joint_pos_space(self, command_joint_pos: np.ndarray) -> np.ndarray: ...
+
+    def to_robot_joint_vel_space(self, command_joint_vel: np.ndarray) -> np.ndarray: ...
+
+
+@runtime_checkable
+class _GripperLoop(Protocol):
+    """What the gripper force cap reads and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update`` ends in
+    ``_update_joint_state(motor_torques, joint_commands)``, which sends each motor its torque and its P-D command. The
+    gripper force limiter of i2rt sets the gripper target and ``_last_gripper_command_qpos`` before that call.
+
+    HACK: these members are private to i2rt, which takes a gripper force limit only when it opens the chain.
+    """
+
+    _joint_state: _JointReadings
+    _last_gripper_command_qpos: float
+    remapper: _MotorSpace
+    _update_joint_state: Callable[..., None]
+
+
+# The gripper of i2rt's hardware chain in get_robot_info(): its motor, its (closed, open) motor positions, and the
+# gripper and arm types that select the settings of its gripper force limiter
+_GRIPPER_INDEX, _GRIPPER_LIMITS = 'gripper_index', 'gripper_limits'
+_GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
+# The torque that i2rt's gripper force limiter adds against the friction of a stalled gripper (i2rt robots/utils.py:648)
+_GRIPPER_FRICTION_NM = 0.3
+
+
+def _cap_gripper_force(chain: Any, cap_n: Callable[[], float | None]) -> None:
+    """Cap the closing torque that the P-D loop of the gripper motor asks for, in each ``update`` of i2rt's hardware
+    ``chain``, after its gripper force limiter. The cap is the torque at which that limiter holds a stalled gripper with
+    ``cap_n()`` newtons. None sets no cap. The arm motors and an opening gripper keep the commands of i2rt.
+
+    The control thread of i2rt calls ``cap_n`` once per update. A chain that reports no gripper force limit, such as
+    i2rt's sim chain, has no limiter and gets no cap. A chain that lacks a member of ``_GripperLoop`` raises before
+    anything changes.
+    """
+    with _chain_call():
+        info = chain.get_robot_info()
+    if _LIMIT_GRIPPER_EFFORT not in info:
+        return
+    if not isinstance(chain, _GripperLoop):
+        raise TypeError(f'{type(chain).__name__} lacks a member of _GripperLoop, which the gripper force cap needs')
+    gripper, (closed, opened) = info[_GRIPPER_INDEX], info[_GRIPPER_LIMITS]
+    closing = np.sign(closed - opened)  # the sign of a closing move in motor radians
+    *_, force_to_torque = info[_GRIPPER_TYPE].get_gripper_limiter_params(info[_ARM_TYPE])
+    send = chain._update_joint_state
+
+    def capped_send(motor_torques: np.ndarray, joint_commands: Any, *args: Any) -> None:
+        newtons, kp = cap_n(), joint_commands.kp[gripper]
+        if newtons is not None and kp > 0:
+            q = chain.remapper.to_robot_joint_pos_space(chain._joint_state.pos)[gripper]
+            dq = chain.remapper.to_robot_joint_vel_space(chain._joint_state.vel)[gripper]
+            cap_nm = force_to_torque(gripper_force=newtons, current_angle=q) + _GRIPPER_FRICTION_NM
+            feedforward_and_damping = motor_torques[gripper] + joint_commands.kd[gripper] * (
+                joint_commands.vel[gripper] - dq
+            )
+            if closing * (feedforward_and_damping + kp * (joint_commands.pos[gripper] - q)) > cap_nm:
+                joint_commands.pos[gripper] = q + (closing * cap_nm - feedforward_and_damping) / kp
+                chain._last_gripper_command_qpos = joint_commands.pos[gripper]  # the limiter reads the target sent
+        send(motor_torques, joint_commands, *args)
+
+    chain._update_joint_state = capped_send
+
+
 def _connect(channel: str, sim: bool, compensation: Compensation):
     """Open the i2rt chain in position-PD mode; ``sim=True`` runs i2rt's own MuJoCo sim instead of hardware."""
     # i2rt lives in the `yam` extra. Importing it here keeps the module, and `YamState` with it, loadable without it.
@@ -188,6 +271,23 @@ class YamState(State, pimm.shared_memory.NumpySMAdapter):
         self.array[YamState.STATUS_OFFSET] = status.value
 
 
+@runtime_checkable
+class _ControlLoop(Protocol):
+    """The CAN motor chain of i2rt, ``DMChainCanInterface``: when a call to a motor fails, its control loop sets
+    ``running`` false and ends."""
+
+    running: bool
+
+
+@runtime_checkable
+class _HardwareChain(Protocol):
+    """The hardware chain of i2rt, ``MotorChainRobot``; the sim chain of i2rt has no ``motor_chain``. After the control
+    loop ends, ``get_observations`` gives the last reading and ``command_joint_pos`` keeps a command that nothing
+    sends. Neither one raises."""
+
+    motor_chain: _ControlLoop
+
+
 class _Arm(DriverRun[command.CommandType]):
     """Control and report one YAM arm and its gripper for a driver run."""
 
@@ -210,6 +310,9 @@ class _Arm(DriverRun[command.CommandType]):
         move_tuning: SettleTuning,
         kinematics: YamKinematics,
         state: YamState,
+        meta_out: pimm.SignalEmitter[dict[str, Any]],
+        ee_mass: float | None,
+        gripper_force_cap_n: Callable[[], float | None],
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
@@ -225,6 +328,10 @@ class _Arm(DriverRun[command.CommandType]):
         self._publish_failure_logged = False
         self._sent_joints: np.ndarray | None = None  # None until the chain receives its first command
         self._sent_at = 0.0
+        self.meta_out = meta_out
+        self._ee_mass = ee_mass
+        self._gripper_force_cap_n = gripper_force_cap_n
+        self._reported_force_cap_n: float | None = None  # the gripper force cap in the last arm meta
 
     @functools.cached_property
     @_chain_call()
@@ -238,24 +345,36 @@ class _Arm(DriverRun[command.CommandType]):
         margin = self._CHAIN_LIMIT_MARGIN_RAD
         return limits[:, 0] + margin, limits[:, 1] - margin
 
-    def arm_meta(self, ee_mass: float | None) -> dict[str, Any]:
-        """The settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which it
-        does not report. i2rt's sim chain runs no friction and reports none."""
+    def emit_meta(self) -> None:
+        """Emit the settings that the chain reports it runs this arm with, and the ``ee_mass`` it was opened with, which
+        it does not report. A chain with a gripper force limit runs the gripper force cap of this moment, and its
+        limiter holds a stalled gripper with the force of that limit. i2rt's sim chain runs no friction and no gripper
+        force limit, and reports neither."""
+        self._reported_force_cap_n = self._gripper_force_cap_n()
         info = self._robot_info
         meta = {
             roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(info[_GRAVITY_COMP_FACTOR], np.float64).tolist(),
-            roboarm_keys.EE_MASS: ee_mass,
+            roboarm_keys.EE_MASS: self._ee_mass,
         }
+        if _LIMIT_GRIPPER_EFFORT in info:
+            meta[roboarm_keys.GRIPPER_FORCE_CAP] = self._reported_force_cap_n
+            meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] = float(info[_LIMIT_GRIPPER_EFFORT])
         if _USE_COULOMB_FRICTION in info:
             meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
             meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
             fade = info.get(_COULOMB_FRICTION_FADE)
             meta[roboarm_keys.COULOMB_FRICTION_FADE] = None if fade is None else asdict(fade)
-        return meta
+        self.meta_out.emit(meta)
 
     def observations(self) -> dict[str, np.ndarray]:
         with _chain_call():
-            return self.vendor.get_observations()
+            obs = self.vendor.get_observations()
+        if self._loop_stopped():
+            raise ChainFault(_LOOP_STOPPED)
+        return obs
+
+    def _loop_stopped(self) -> bool:
+        return isinstance(self.vendor, _HardwareChain) and not self.vendor.motor_chain.running
 
     @staticmethod
     def read_grip(obs: dict[str, np.ndarray]) -> float:
@@ -263,8 +382,9 @@ class _Arm(DriverRun[command.CommandType]):
         return aperture.flip_grip(obs[_GRIPPER_POS][0])
 
     def publish(self, obs: dict[str, np.ndarray], status: RobotStatus | None = None) -> None:
-        """Publish the measured state: ERROR after a failed move, else AVAILABLE. In shutdown a failed publish is
-        logged, not raised. A shutdown that withholds readings publishes nothing."""
+        """Publish the measured state: ERROR after a failed move, else AVAILABLE, and the arm meta when the gripper
+        force cap changed. Each control step of each move publishes. In shutdown a failed publish is logged, not
+        raised. A shutdown that withholds readings publishes nothing."""
         if self._readings_withheld:
             return
         if status is None:
@@ -275,6 +395,8 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             self.out.emit(self.state)
             self.grip_out.emit(self.read_grip(obs))
+            if self._gripper_force_cap_n() != self._reported_force_cap_n:
+                self.emit_meta()
         except Exception:
             if not self._shutting_down:
                 raise
@@ -288,22 +410,28 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_joints = np.array(joints, dtype=np.float64)
         self._sent_at = self.clock.now()
 
-    def command_target(self, joints: np.ndarray, grip: float) -> None:
-        """Command the joints and the grip; the vendor takes the grip as open width."""
-        self._send(joints, aperture.flip_grip(grip))
+    def command_target(self, joints: np.ndarray, grip: float, receipt: CommandReceipt | None = None) -> None:
+        """Command the joints and the grip; the vendor takes the grip as open width.
 
-    def command_step_toward(self, target: np.ndarray, grip: float) -> None:
+        ``receipt`` is of the command that the joints serve; it is applied once the chain takes them.
+        """
+        self._send(joints, aperture.flip_grip(grip))
+        if receipt is not None:
+            receipt.applied()
+
+    def command_step_toward(self, target: np.ndarray, grip: float, receipt: CommandReceipt | None = None) -> None:
         """Command the grip, and the joints toward ``target`` as far as the speed cap allows since the last joints
-        sent, counting at most one tick: a late tick does not catch up."""
+        sent, counting at most one tick: a late tick does not catch up. ``receipt`` is of the command that asked for
+        ``target``."""
         if self._sent_joints is None:
             raise RuntimeError('the chain has received no joints to step from')
         step = target - self._sent_joints
         farthest = float(np.max(np.abs(step)))
         max_step = self._MAX_STREAMED_JOINT_SPEED_RAD_S * min(self.clock.now() - self._sent_at, 1 / _CONTROL_HZ)
         if farthest <= max_step:
-            self.command_target(target, grip)
+            self.command_target(target, grip, receipt)
         else:
-            self.command_target(self._sent_joints + step * (max_step / farthest), grip)
+            self.command_target(self._sent_joints + step * (max_step / farthest), grip, receipt)
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
         """Hold the measured position, publish it, and return it as the target."""
@@ -362,14 +490,27 @@ class _Arm(DriverRun[command.CommandType]):
         )
 
     def _ramp(
-        self, start: np.ndarray, target: np.ndarray, grip: float, fraction: float, obs: dict[str, np.ndarray]
+        self,
+        start: np.ndarray,
+        target: np.ndarray,
+        grip: float,
+        fraction: float,
+        obs: dict[str, np.ndarray],
+        receipt: CommandReceipt | None,
     ) -> None:
         fraction = min(fraction, 1.0)
-        self.command_target((1 - fraction) * start + fraction * target, grip)
+        self.command_target((1 - fraction) * start + fraction * target, grip, receipt)
         self.publish(obs, RobotStatus.BUSY)
 
     def _come_to_rest(
-        self, reference: np.ndarray, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool
+        self,
+        reference: np.ndarray,
+        goal: np.ndarray,
+        grip: float,
+        tuning: SettleTuning,
+        *,
+        interrupt_on_stop: bool,
+        receipt: CommandReceipt | None,
     ) -> Generator[pimm.Command, None, tuple[dict[str, np.ndarray], MoveStatus] | None]:
         """Ramp to ``reference``, wait until the chain is still, and return the reading and how the pass ended:
         ARRIVED on ``goal``, or GAVE_UP still and short of it.
@@ -404,7 +545,7 @@ class _Arm(DriverRun[command.CommandType]):
                     if not window[-1][2]:
                         return obs, MoveStatus.GAVE_UP
 
-            self._ramp(start, reference, grip, elapsed / travel_s, obs)
+            self._ramp(start, reference, grip, elapsed / travel_s, obs, receipt)
             yield self.limiter.wait()
 
     @staticmethod
@@ -416,25 +557,44 @@ class _Arm(DriverRun[command.CommandType]):
         return bool(np.all(np.ptp(joints, axis=0) <= tuning.still_position_rad))
 
     def _settle_onto(
-        self, goal: np.ndarray, grip: float, tuning: SettleTuning, *, interrupt_on_stop: bool, within_joint_limits: bool
+        self,
+        goal: np.ndarray,
+        grip: float,
+        tuning: SettleTuning,
+        *,
+        interrupt_on_stop: bool,
+        within_joint_limits: bool,
+        receipt: CommandReceipt | None = None,
     ) -> Generator[pimm.Command, None, np.ndarray | None]:
-        """Settle onto ``goal`` and return the reference that holds the chain there, or None on a stop.
+        """Settle onto ``goal`` and return the reference that holds the chain there, or None on a stop. The first
+        command that reaches the chain applies ``receipt``, of the call that asked for ``goal``.
 
         Each pass subtracts the measured gap from the current reference. The chain gives back only part of each
-        correction, so the corrections accumulate. Raise ``TimeoutError`` when the passes or the bounds run out.
+        correction, so the corrections accumulate. Raise ``TimeoutError`` when the passes or the bounds run out, and
+        after the first pass that rests farther from ``goal`` than a correction can close: something blocks the arm.
+        A ``goal`` past the joint range counts from where the range clips it.
         """
         try:
-            reference = np.clip(goal, *self._joint_range) if within_joint_limits else goal.copy()
+            reachable = np.clip(goal, *self._joint_range) if within_joint_limits else goal.copy()
+            reference = reachable
             for _ in range(tuning.attempts):
-                rest = yield from self._come_to_rest(reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop)
+                rest = yield from self._come_to_rest(
+                    reference, goal, grip, tuning, interrupt_on_stop=interrupt_on_stop, receipt=receipt
+                )
                 if rest is None:
                     return None
                 obs, ended = rest
                 if ended is MoveStatus.ARRIVED:
-                    self.command_target(reference, grip)
+                    self.command_target(reference, grip, receipt)
                     self.moves.errored = False
                     return reference
                 bound = tuning.max_correction_rad
+                if np.any(np.abs(obs[_JOINT_POS] - reachable) >= bound + tuning.tolerance_rad):
+                    raise TimeoutError(
+                        f'the arm rests {np.max(np.abs(obs[_JOINT_POS] - reachable)):.4f} rad from {reachable}, '
+                        f'farther than a correction of {bound:.4f} rad can close: something blocks it; '
+                        f'measured={obs[_JOINT_POS]}'
+                    )
                 corrected = np.clip(reference - (obs[_JOINT_POS] - goal), goal - bound, goal + bound)
                 if within_joint_limits:
                     corrected = np.clip(corrected, *self._joint_range)
@@ -453,25 +613,26 @@ class _Arm(DriverRun[command.CommandType]):
 
     def park(
         self, grip: float, *, interrupt_on_stop: bool = True
-    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]]:
-        """Settle onto the parking pose; return the joints and grip to hold, and how the park ended: ARRIVED
-        parked, or GAVE_UP held where it stopped. A ``ChainFault`` is raised."""
+    ) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
+        """Settle onto the parking pose, and return the joints and grip to hold, with the failure that stopped the
+        settle or None. On a failure or a stop, hold where the arm stopped. A ``ChainFault`` is raised."""
         logger.info('Moving the arm to the parking pose')
         try:
             reference = yield from self._settle_onto(
                 _PARK_JOINTS, grip, self.park_tuning, interrupt_on_stop=interrupt_on_stop, within_joint_limits=False
             )
-            if reference is not None:
-                logger.info('Arm parked')
-                self._report_parked()
-                return reference, grip, MoveStatus.ARRIVED
         except ChainFault:
             raise
         # rules-allow: swallowed-error — an arm that will not park reads ERROR; the run goes on
         except Exception as exc:
             self.moves.errored = True
             logger.error(f'The arm did not reach the parking pose: {exc}')
-        return *self.hold_where_it_stopped(), MoveStatus.GAVE_UP
+            return *self.hold_where_it_stopped(), exc
+        if reference is None:
+            return *self.hold_where_it_stopped(), None
+        logger.info('Arm parked')
+        self._report_parked()
+        return reference, grip, None
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure
@@ -501,17 +662,21 @@ class _Arm(DriverRun[command.CommandType]):
             logger.exception('The arm is parked, but its state could not be published')
 
     def shutdown(self, *, withhold_readings: bool) -> Generator[pimm.Command, None, None]:
-        """Park and release the arm. ``withhold_readings`` keeps a fault already on the state and the grip there."""
+        """Park and release the arm, or release it with no park where the control loop of the chain stopped.
+        ``withhold_readings`` keeps a fault already on the state and the grip there."""
         self._shutting_down = True
         self._readings_withheld = withhold_readings
         hold_target = None
         try:
-            joints, grip, ended = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
-            if ended is MoveStatus.ARRIVED:
+            joints, grip, failure = yield from self.park(self.read_grip(self.observations()), interrupt_on_stop=False)
+            if failure is None:
                 return
             hold_target = joints, grip
-        # rules-allow: swallowed-error — a failure before a verified park keeps the torque on
+        # rules-allow: swallowed-error — a failure before a verified park keeps the torque on, unless the loop stopped
         except Exception:
+            if self._loop_stopped():
+                logger.error(_RELEASED_UNPARKED)
+                return
             self.moves.errored = True
             logger.exception('Could not verify parking; keeping the arm powered')
 
@@ -523,23 +688,26 @@ class _Arm(DriverRun[command.CommandType]):
                 q, grip = hold_target
                 self.command_target(q, grip)
                 self.publish(self.observations())
-            # rules-allow: swallowed-error — a failed hold keeps the shutdown blocked
+            # rules-allow: swallowed-error — a failed hold keeps the shutdown blocked, unless the loop stopped
             except Exception:
+                if self._loop_stopped():
+                    logger.error(_RELEASED_UNPARKED)
+                    return
                 logger.exception('Could not hold the arm; shutdown remains blocked')
             yield self.limiter.wait()
 
     def sync_move(
-        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray
+        self, call: pimm.calls.Call[command.CommandType, None], q: np.ndarray, receipt: CommandReceipt | None = None
     ) -> Generator[pimm.Command, None, tuple[np.ndarray, float]]:
         """Settle onto the call's target with the gripper open, then answer the call. On a failure or a stop, hold
         where the arm stopped. A ``ChainFault`` answers the call and is raised. A blocking move is the episode reset, so
         each episode starts with the gripper open. A move that fails answers with an ARM ``DeviceFault``, and a
-        malformed command with its own error."""
+        malformed command with its own error. ``receipt`` is of ``call``."""
         target: np.ndarray | None = None  # stays None for a malformed command, which the arm never sees
         try:
             target = self.to_joints(call.request, q)
             reference = yield from self._settle_onto(
-                target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True
+                target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True, receipt=receipt
             )
             if reference is not None:
                 self.publish(self.observations())
@@ -561,7 +729,8 @@ class _Arm(DriverRun[command.CommandType]):
 
 @contextlib.contextmanager
 def _opened(vendor: Any) -> Iterator[Any]:
-    """Hold the open chain. Release torque only on a normal exit, which follows a verified park."""
+    """Hold the open chain. Release torque only on a normal exit, which follows a verified park or a stopped control
+    loop."""
     try:
         yield vendor
     except BaseException:
@@ -633,9 +802,10 @@ class _Serving:
 
     q_target: np.ndarray
     grip_target: float
-    start_missed: Exception | None
+    # Why a start or idle park did not arrive; None once the arm reaches the start pose
+    failed_move: Exception | None
     idle_since: float | None = None
-    parking: Generator[pimm.Command, None, tuple[np.ndarray, float, MoveStatus]] | None = None
+    parking: Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]] | None = None
 
 
 class Robot(pimm.ControlSystem):
@@ -659,6 +829,7 @@ class Robot(pimm.ControlSystem):
         park_after_idle_s: float | None = 60.0,
         park_tuning: SettleTuning = PARK_SETTLE,
         move_tuning: SettleTuning = MOVE_SETTLE,
+        gripper_force_cap_n: float | None = None,
         connect: Callable = _connect,
     ) -> None:
         """
@@ -666,15 +837,20 @@ class Robot(pimm.ControlSystem):
         :param base_pose: Arm-base mount pose in the world frame; None keeps everything in the arm-base frame.
         :param sim: Run against i2rt's own MuJoCo sim instead of hardware.
         :param compensation: The gravity model and the Coulomb friction that i2rt adds to the PD of the chain.
-        :param park_after_idle_s: Park after this many seconds with no arm or gripper command, counted from the
-            end of a blocking move or of the start. None disables idle parking; the driver still parks on shutdown.
+        :param park_after_idle_s: Park after this many seconds with no arm or gripper command while ``idle_park_on``
+            is on, counted from the end of a blocking move, of the start, or of the moment ``idle_park_on`` turns on.
+            None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
+        :param gripper_force_cap_n: The most force in newtons that the gripper closes with. None or 0 sets no cap.
+            i2rt's own limiter still holds a stalled gripper with its force limit, which the arm meta names.
+            ``set_gripper_force_cap`` changes it at run time. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
         if park_after_idle_s is not None:
             check_finite_positive(park_after_idle_s, 'park_after_idle_s')
+        self.set_gripper_force_cap(gripper_force_cap_n)
         # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
         # it does, those checks and a check that each value is finite run here first.
         friction = compensation.coulomb_friction
@@ -702,11 +878,22 @@ class Robot(pimm.ControlSystem):
         # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
         # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
+        # On until a message says otherwise; the park on shutdown does not read it.
+        self.idle_park_on = pimm.DefaultingReceiver[bool](self, default=True)
 
     @property
     def base_pose(self) -> geom.Transform3D:
         """The arm-base mount pose in the world frame."""
         return self._base_pose
+
+    def set_gripper_force_cap(self, cap_n: float | None) -> None:
+        """Cap the force that the gripper closes with at ``cap_n`` newtons from the next control step of the chain.
+        The arm meta names the new cap from the next control step of the driver, also in a move. None or 0 sets no
+        cap. Call it from any thread of the process that runs the driver."""
+        if cap_n is not None:
+            check_finite_nonnegative(cap_n, 'gripper_force_cap_n')
+        # One reference write: the control thread of the chain and the run loop read the old cap or the new one
+        self._gripper_force_cap_n = float(cap_n) if cap_n else None
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
         return (
@@ -753,8 +940,8 @@ class Robot(pimm.ControlSystem):
         ``should_stop``. Park and release it after.
 
         A ``ChainFault`` goes on the state and the grip once, before a park that publishes no readings. It answers
-        ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked. Any other
-        fault is raised again.
+        ``asked`` if the start move has not ended, and comes back as the return value once the arm is parked, or
+        released where the control loop of the chain stopped. Any other fault is raised again.
         """
         try:
             with _chain_call():
@@ -779,16 +966,21 @@ class Robot(pimm.ControlSystem):
                 self._move_tuning,
                 kinematics,
                 state,
+                self.arm_meta,
+                self._compensation.ee_mass,
+                lambda: self._gripper_force_cap_n,
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 _set_coulomb_friction(vendor, self._compensation, self._sim)
+                _cap_gripper_force(vendor, lambda: self._gripper_force_cap_n)
                 self.robot_meta.emit(meta)
-                self.arm_meta.emit(arm.arm_meta(self._compensation.ee_mass))
+                arm.emit_meta()
                 joints, grip, missed = yield from arm.go_to_start()
                 self._answer_ready(asked, missed)
                 asked = []
-                yield from self._serve(arm, _Serving(joints, grip, missed, idle_since=clock.now()), should_stop, clock)
+                serving = _Serving(joints, grip, missed, idle_since=clock.now())
+                yield from self._serve(arm, serving, should_stop, clock)
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
                 lost = self._report_lost(exc)
@@ -854,10 +1046,10 @@ class Robot(pimm.ControlSystem):
                 while not should_stop.value:
                     if ready := list(self.ready.incoming()):
                         yield from self._serve_ready(arm, serving, ready, clock)
-                    asked, q = self._take_request(arm, fingers, serving, clock)
-                    yield from self._dispatch(arm, serving, asked, q, clock)
+                    asked, receipt, q = self._take_request(arm, fingers, serving, clock)
+                    taken = yield from self._dispatch(arm, serving, asked, receipt, q, clock)
                     if (step := self._advance_parking(serving)) is None:
-                        arm.command_step_toward(serving.q_target, serving.grip_target)
+                        arm.command_step_toward(serving.q_target, serving.grip_target, taken)
                         # Synchronous moves can take seconds; publish a fresh observation.
                         arm.publish(arm.observations())
                         step = arm.limiter.wait()
@@ -879,53 +1071,67 @@ class Robot(pimm.ControlSystem):
     def _serve_ready(
         self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
-        """Answer ``asked``. After a missed start, move the arm to the start pose again first."""
-        if serving.start_missed is not None:
+        """Answer ``asked``. After a missed start or idle park, move the arm to the start pose first."""
+        if serving.failed_move is not None:
             if serving.parking is not None:
                 serving.parking.close()
                 serving.parking = None
             with contextlib.ExitStack() as answers:
                 for call in asked:
                     answers.enter_context(self._answer_failed_setup(call))
-                serving.q_target, serving.grip_target, serving.start_missed = yield from arm.go_to_start()
+                serving.q_target, serving.grip_target, serving.failed_move = yield from arm.go_to_start()
             serving.idle_since = clock.now()
-        self._answer_ready(asked, serving.start_missed)
+        self._answer_ready(asked, serving.failed_move)
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
-    ) -> tuple[pimm.calls.Call | command.CommandType | None, np.ndarray]:
-        """Read the grip and the next request, and return the request with the joints. Either one stops an idle park."""
+    ) -> tuple[pimm.calls.Call | command.CommandType | None, CommandReceipt | None, np.ndarray]:
+        """Read the grip, the next request and ``idle_park_on``, and return the request with its receipt and the
+        joints. A grip, a request or ``idle_park_on`` off stops an idle park."""
         asked = arm.moves.next_request()
+        receipt = arm.moves.take()
         with self._answer_failed_setup(asked):
             grip = grip_setpoint(fingers, arm.read_grip(arm.observations()), clock.now())
-            if serving.parking is not None and (grip is not None or asked is not None):
+            idle_park_off = not self.idle_park_on.value
+            if serving.parking is not None and (grip is not None or asked is not None or idle_park_off):
                 serving.parking.close()
                 serving.parking = None
                 serving.q_target, serving.grip_target = arm.hold_where_it_stopped()
+                serving.idle_since = clock.now()
             if grip is not None:
                 serving.grip_target = grip
                 serving.idle_since = clock.now()
-            return asked, arm.observations()[_JOINT_POS]
+            # A park that ended leaves ``idle_since`` None until a command, so the arm does not park again.
+            if idle_park_off and serving.idle_since is not None:
+                serving.idle_since = clock.now()
+            return asked, receipt, arm.observations()[_JOINT_POS]
 
     def _dispatch(
         self,
         arm: _Arm,
         serving: _Serving,
         asked: pimm.calls.Call | command.CommandType | None,
+        receipt: CommandReceipt | None,
         q: np.ndarray,
         clock: pimm.Clock,
-    ) -> Generator[pimm.Command, None, None]:
-        """Run a blocking move, take a streamed target, or start an idle park."""
+    ) -> Generator[pimm.Command, None, CommandReceipt | None]:
+        """Run a blocking move, take a streamed target, or start an idle park. ``receipt`` is of ``asked``.
+
+        Return the receipt of the streamed target taken, for the command that steps toward it; None otherwise.
+        """
+        taken = None
         if isinstance(asked, pimm.calls.Call):
-            serving.q_target, serving.grip_target = yield from arm.sync_move(asked, q)
+            serving.q_target, serving.grip_target = yield from arm.sync_move(asked, q, receipt)
             serving.idle_since = clock.now()
         elif asked is not None:
             with log_failure(asked):
                 serving.q_target = arm.streamed_target(asked, q)
+                taken = receipt
             serving.idle_since = clock.now()
         elif self._should_park(serving.idle_since, clock.now()):
             serving.parking = arm.park(arm.read_grip(arm.observations()))
             serving.idle_since = None
+        return taken
 
     @staticmethod
     def _advance_parking(serving: _Serving) -> pimm.Command | None:
@@ -935,7 +1141,9 @@ class Robot(pimm.ControlSystem):
         try:
             return next(serving.parking)
         except StopIteration as done:
-            serving.q_target, serving.grip_target, _ = done.value
+            serving.q_target, serving.grip_target, failure = done.value
+            if failure is not None:
+                serving.failed_move = failure
             serving.parking = None
             return None
 

@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal, get_args
 import configuronic as cfn
 import numpy as np
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_ai.messages import (
     BinaryContent,
     CachePoint,
@@ -41,7 +41,7 @@ from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import check_finite_nonnegative, check_finite_positive, flatten_dict
 
 from .client import Endpoint
-from .motion import Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_approach, closest_hand_distances
+from .motion import Finite, Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_approach, closest_hand_distances
 from .reach import Box, Reach
 
 
@@ -62,6 +62,39 @@ class Finish(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     reason: Annotated[str, Field(min_length=1)]
     hindsight: Annotated[str, Field(min_length=1)]
+
+
+Vector3 = tuple[Finite, Finite, Finite]
+
+
+class CameraMount(BaseModel):
+    """A camera attached to the hand of ``arm``, in the axes of that hand: the lens position in metres, the unit view
+    direction and the unit direction of the image top."""
+
+    model_config = ConfigDict(extra='forbid', frozen=True)
+    camera: str
+    arm: str | None = None
+    position_m: Vector3
+    view: Vector3
+    image_up: Vector3
+
+    @model_validator(mode='after')
+    def _directions(self) -> 'CameraMount':
+        view, up = np.asarray(self.view), np.asarray(self.image_up)
+        # A direction written with a few decimals is a unit vector and perpendicular only approximately.
+        if not np.allclose([np.linalg.norm(view), np.linalg.norm(up)], 1, atol=1e-2):
+            raise ValueError(f'The view and image top of camera {self.camera} must be unit vectors')
+        if abs(view @ up) > 1e-2:
+            raise ValueError(f'The view and image top of camera {self.camera} must be perpendicular')
+        return self
+
+    def fact(self) -> str:
+        hand = 'the hand' if self.arm is None else f'hand {self.arm}'
+        return (
+            f'Camera {self.camera} is attached to {hand}. In the axes of {hand}, its lens is at '
+            f'{list(self.position_m)} m, it looks along {list(self.view)}, and the top of its image points along '
+            f'{list(self.image_up)}. '
+        )
 
 
 class RevealFrames(BaseModel):
@@ -190,7 +223,9 @@ class Conversation:
             if named
             else '',
             'Positions are metres; roll/pitch/yaw are radians with R=Rz(yaw)Ry(pitch)Rx(roll). '
-            'The hand frame is the same frame as the measured hand pose. Gripper 0 is open and 1 is closed. '
+            'The axes of a hand start at its measured position and turn with its measured rotation. '
+            'Hand z points along the approach direction. '
+            'Gripper 0 is open and 1 is closed. '
             'A path plays its waypoints in order before the next observation; '
             'actual arrival must be checked from the measured state. '
             'Oversized segments are clamped from the previous clamped waypoint, and the first from the latest '
@@ -200,8 +235,11 @@ class Conversation:
             'Every hand holds still during it. ' if named else '',
             'The tool result reports the clamped waypoints; check them before planning the next path. '
             'Put several waypoints in one path when the next motions do not depend on what you will see. '
-            'Camera frames remain fixed during a decision. '
+            'Camera frames remain fixed during a decision. ',
             f'{Tool.REVEAL_FRAMES.value} only reveals a frame; it does not move a camera. '
+            if self._policy.images is Images.ON_DEMAND
+            else '',
+            *(mount.fact() for mount in self._policy.camera_mounts),
             'A note should briefly describe what you see and why you chose the motion. '
             'Use done when you believe the task is complete. It ends the episode at once. '
             'It requires hindsight for inspection; no advice is carried into another episode. ',
@@ -549,7 +587,7 @@ class LLMPolicy(Policy):
 
     ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance``, ``max_tracking_error`` and
     ``min_hand_height`` are in metres. A path is rejected when a hand goes below ``min_hand_height``, into a box of
-    ``keep_out``, or where ``reach`` refuses it.
+    ``keep_out``, or where ``reach`` refuses it. ``camera_mounts`` states the cameras attached to a hand in the prompt.
     """
 
     def __init__(
@@ -565,6 +603,7 @@ class LLMPolicy(Policy):
         keep_out: tuple[Box, ...] = (),
         reach: Reach | None = None,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
+        camera_mounts: tuple[CameraMount, ...] = (),
         image_size: int = 640,
         image_horizon: int = 3,
         max_calls: int = 100,
@@ -588,6 +627,13 @@ class LLMPolicy(Policy):
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
             raise ValueError('camera_keys must name at least one camera, without duplicates')
+        mounted = [mount.camera for mount in camera_mounts]
+        if len(set(mounted)) != len(mounted) or set(mounted) - set(camera_keys):
+            raise ValueError('camera_mounts must name distinct cameras of camera_keys')
+        for mount in camera_mounts:
+            if mount.arm not in arms:
+                expected = 'no arm' if arms == keys.ONE_ARM else f'one of the arms {list(arms)}'
+                raise ValueError(f'The camera mount of {mount.camera} must name {expected}')
         if cache_ttl not in get_args(CacheTTL):
             raise ValueError(f'cache_ttl must be one of {get_args(CacheTTL)}')
         # A provider cache setting adds cache points with their own TTL, and Anthropic refuses a shorter TTL before
@@ -599,6 +645,7 @@ class LLMPolicy(Policy):
             raise ValueError(f'settings must not configure provider caching: {caching}')
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
+        self.camera_mounts = camera_mounts
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
         self.arms, self.min_hand_distance, self.max_tracking_error = arms, min_hand_distance, max_tracking_error
         self.min_hand_height, self.keep_out, self.reach = min_hand_height, keep_out, reach
@@ -639,6 +686,7 @@ class LLMPolicy(Policy):
             'timeout': self.endpoint.timeout,
             'images': self.images.value,
             'camera_keys': list(self.camera_keys),
+            'camera_mounts': [mount.model_dump(mode='json') for mount in self.camera_mounts],
             'image_size': self.image_size,
             'image_horizon': self.image_horizon,
         })
@@ -697,6 +745,7 @@ class LLMPolicy(Policy):
     keep_out=(),
     reach=None,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
+    camera_mounts=(),
     image_size=640,
     image_horizon=3,
     max_calls=100,
@@ -717,6 +766,7 @@ def llm(
     keep_out: Sequence[tuple[Sequence[float], Sequence[float]]],
     reach: Reach | None,
     camera_keys: tuple[str, ...],
+    camera_mounts: Sequence[Mapping[str, Any]],
     image_size: int,
     image_horizon: int,
     max_calls: int,
@@ -724,7 +774,8 @@ def llm(
     cache_breakpoints: bool,
     cache_ttl: CacheTTL,
 ) -> LLMPolicy:
-    """The LLM policy over a direct model API. ``keep_out`` lists boxes as their low and high corners."""
+    """The LLM policy over a direct model API. ``keep_out`` lists boxes as their low and high corners. Each of
+    ``camera_mounts`` holds the fields of a ``CameraMount``."""
     return LLMPolicy(
         Endpoint(model, timeout=timeout, settings=settings, cache_breakpoints=cache_breakpoints),
         motion,
@@ -736,6 +787,7 @@ def llm(
         keep_out=tuple(Box(tuple(map(float, low)), tuple(map(float, high))) for low, high in keep_out),
         reach=reach,
         camera_keys=tuple(camera_keys),
+        camera_mounts=tuple(CameraMount.model_validate(mount) for mount in camera_mounts),
         image_size=image_size,
         image_horizon=image_horizon,
         max_calls=max_calls,

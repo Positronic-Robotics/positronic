@@ -10,6 +10,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, suppress
 from functools import lru_cache, partial
 from importlib import metadata as importlib_metadata
@@ -127,6 +128,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         _mark_unfinished(self._path)
 
         self._writers: dict[str, SimpleSignalWriter | VideoSignalWriter] = {}
+        self._chunk_writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f'chunks:{directory.name}')
         # Video writers with an open encoder, until the first frame of their signal
         self._waiting: dict[str, VideoSignalWriter] = {}
         # Accumulated static items to be stored in a single static.json
@@ -207,7 +209,9 @@ class DiskEpisodeWriter(EpisodeWriter):
             if self._is_video_frame(data):
                 writer = self._video_writer(signal_name)
             else:
-                writer = SimpleSignalWriter(self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}')
+                writer = SimpleSignalWriter(
+                    self._path / f'{signal_name}{SIGNAL_FILE_SUFFIX}', chunk_writer=self._chunk_writer
+                )
 
         try:
             writer.append(data, timestamps)
@@ -253,15 +257,14 @@ class DiskEpisodeWriter(EpisodeWriter):
                 self.abort()
             return
 
-        self._abort_waiting()
-        # Always try to close all signal writers
-        for writer in self._writers.values():
-            try:
-                writer.__exit__(exc_type, exc, tb)
-            except Exception:
-                # Do not suppress exceptions, just ensure we attempt to close others
-                if exc is None:
-                    raise
+        with self._chunk_writer:
+            self._abort_waiting()
+            for writer in self._writers.values():
+                try:
+                    writer.__exit__(exc_type, exc, tb)
+                except Exception:
+                    if exc is None:
+                        raise
 
         if self._aborted:
             return
@@ -288,9 +291,10 @@ class DiskEpisodeWriter(EpisodeWriter):
         if self._finished:
             raise RuntimeError('Cannot abort a finished writer')
 
-        self._abort_waiting()
-        for w in list(self._writers.values()):
-            w.abort()
+        with self._chunk_writer:
+            self._abort_waiting()
+            for w in list(self._writers.values()):
+                w.abort()
 
         shutil.rmtree(self._path, ignore_errors=True)
         self._aborted = True

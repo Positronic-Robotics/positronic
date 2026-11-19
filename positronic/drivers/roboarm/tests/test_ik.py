@@ -33,6 +33,7 @@ from positronic.drivers.roboarm.models import (
     PANDA_HAND_FRAME,
     ROBOLAB_EE_FRAME,
     ROBOLAB_EEF_LINK,
+    ROBOTIQ_2F85_PADS,
     YAM_GRASP_SITE_FRAME,
     YAM_JOINT_NAMES,
     YAM_WRIST_LINK,
@@ -524,6 +525,36 @@ def test_gripper_sits_on_the_flange_approach_axis(urdf, grip_point):
     transform = frame_transform(urdf, FLANGE_LINK, GRIPPER_SITE)
     np.testing.assert_allclose(transform.translation, [0.0, 0.0, grip_point], atol=1e-9)
     np.testing.assert_allclose(transform.rotation.as_rotation_matrix, np.eye(3), atol=1e-9)
+
+
+def _franka_pads_at_grip_point(grip: float) -> np.ndarray:
+    """The two 2F-85 pad origins of the bundled franka model at ``grip``, in ``GRIPPER_SITE`` axes."""
+    model = bundled_franka_model()
+    spec = model[roboarm_keys.GRIPPER]
+    compiled = _prepare_spec(model[roboarm_keys.URDF], GRIPPER_SITE, *ROBOTIQ_2F85_PADS).compile()
+    data = mj.MjData(compiled)
+    for joint in spec[roboarm_keys.GRIPPER_JOINTS]:
+        data.qpos[compiled.joint(joint).qposadr.item()] = spec[roboarm_keys.GRIPPER_TRAVEL] * grip
+    mj.mj_kinematics(compiled, data)
+    site = data.site(GRIPPER_SITE)
+    to_site = site.xmat.reshape(3, 3).T
+    return np.array([to_site @ (data.site(pad).xpos - site.xpos) for pad in ROBOTIQ_2F85_PADS])
+
+
+def test_franka_pads_close_along_y_of_the_grip_point():
+    """The real 2F-85 coupler seats the pads on y of ``GRIPPER_SITE``, and ``grip`` moves them together along it."""
+    open_pads, closed_pads = _franka_pads_at_grip_point(0.0), _franka_pads_at_grip_point(1.0)
+    for pads in (open_pads, closed_pads):
+        np.testing.assert_allclose(pads[:, 0], 0.0, atol=1e-9)
+        assert pads[0, 1] * pads[1, 1] < 0
+    assert np.ptp(closed_pads[:, 1]) < np.ptp(open_pads[:, 1])
+
+
+@pytest.mark.parametrize('grip', [0.0, 0.5, 1.0])
+def test_franka_grip_point_sits_midway_between_the_pads(grip):
+    """The turn of the gripper about the approach axis keeps ``GRIPPER_SITE`` on the line between the pads."""
+    pads = _franka_pads_at_grip_point(grip)
+    np.testing.assert_allclose(pads.mean(axis=0)[:2], 0.0, atol=1e-9)
 
 
 def test_yam_gripper_sits_midway_between_the_fingers_at_every_pose_and_opening():

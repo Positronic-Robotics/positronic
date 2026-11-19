@@ -72,5 +72,9 @@ class Sequential(Processor[InputT, OutputT, ReturnT]):
             meta[roboarm_keys.EE_FRAMES] = frames
         return meta
 
+    @property
+    def ordered(self) -> bool:
+        return any(component.ordered for component in self._components)
+
     def to_spec(self) -> dict[str, Any]:
         return {SEQ: [component.to_spec() for component in self._components]}
