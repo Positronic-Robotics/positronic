@@ -252,6 +252,8 @@ explicit = true
 # Search roots, not a list of suites, so a new `tests/` directory is collected without being registered
 testpaths = ["client", "evals", "model_server", "pimm", "positronic", "utilities", "vocabulary", "wire"]
 python_files = ["test_*.py", "*_test.py"]
+# A test that hangs fails here and names itself, before the timeout-minutes of its CI job cancels the run.
+timeout = 300
 addopts = [
     # The suite waits on spawned processes and sockets about as much as it computes, so it scales with cores.
     # `-n0` puts it back in one process, which live logs and `--pdb` need.
