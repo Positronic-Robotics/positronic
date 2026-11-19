@@ -264,7 +264,7 @@ to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
 
-Three rules hold for each loop in `run`, and for each helper loop that `run` calls:
+Each loop in `run`, and each helper loop that `run` calls, keeps these rules:
 
 - **Wait with `yield pimm.Sleep(secs)`, not with a system call such as `time.sleep`.** In the
   main-process group `interleave` advances the peers while one loop sleeps, so a blocking call there
