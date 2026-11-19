@@ -1012,7 +1012,7 @@ class Robot(pimm.ControlSystem):
     def _report_lost(self, lost: ChainFault) -> DeviceFault:
         """Put an error for ``lost`` on the state and the grip, and return it."""
         error = _arm_fault(lost)
-        logger.error(f'{error}; it holds the error until a ready call opens the chain again')
+        logger.error(f'{error}; it holds the error until a ready or a recover call opens the chain again')
         self._emit_error(error)
         return error
 
