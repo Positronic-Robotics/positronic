@@ -30,6 +30,7 @@ from positronic.drivers.utils import (
     MoveAbandoned,
     Moves,
     MoveStatus,
+    RecoveryOutcome,
     grip_setpoint,
     log_failure,
 )
@@ -642,8 +643,8 @@ class _Arm(DriverRun[command.CommandType]):
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure
-        that stopped the settle or None. On a failure or a stop, hold where the arm stopped. A ``ChainFault`` is
-        raised."""
+        or the stop that ended the settle, or None once the arm arrives. On a failure or a stop, hold where the arm
+        stopped. A ``ChainFault`` is raised."""
         logger.info('Moving the arm to the start pose')
         # rules-allow: swallowed-error — an arm that will not reach its start pose reads ERROR; the run goes on
         try:
@@ -656,7 +657,9 @@ class _Arm(DriverRun[command.CommandType]):
             logger.error(f'The arm did not reach the start pose: {exc}')
             return *self.hold_where_it_stopped(), exc
         if reference is None:
-            return *self.hold_where_it_stopped(), None
+            return *self.hold_where_it_stopped(), InterruptedError(
+                'The driver stopped before the arm reached the start pose'
+            )
         return reference, _OPEN_GRIP, None
 
     def _report_parked(self) -> None:
@@ -885,6 +888,8 @@ class Robot(pimm.ControlSystem):
         # Answers once the arm is at the start pose, and opens a lost chain first. After a miss, each call moves the
         # arm to that pose again and fails until it arrives.
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
+        # Answers CLEARED once the arm is at the start pose; an arm with no fault answers at once and does not move.
+        self.recover = pimm.calls.ControlSystemHandler[None, RecoveryOutcome](self)
         # On until a message says otherwise; the park on shutdown does not read it.
         self.idle_park_on = pimm.DefaultingReceiver[bool](self, default=True)
         # The driver puts a new cap in force before its next command to the chain, also in a move. None or 0 sets no
@@ -992,7 +997,7 @@ class Robot(pimm.ControlSystem):
                 self.robot_meta.emit(meta)
                 arm.emit_meta()
                 joints, grip, missed = yield from arm.go_to_start()
-                self._answer_ready(asked, missed)
+                self._answer_start_calls(asked, missed)
                 asked = []
                 serving = _Serving(joints, grip, missed, idle_since=clock.now())
                 yield from self._serve(arm, serving, should_stop, clock)
@@ -1012,7 +1017,7 @@ class Robot(pimm.ControlSystem):
         return lost
 
     @staticmethod
-    def _answer_ready(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
+    def _answer_start_calls(asked: list[pimm.calls.Call[None, None]], missed: Exception | None) -> None:
         for call in asked:
             if missed is None:
                 call.set_result(None)
@@ -1022,7 +1027,7 @@ class Robot(pimm.ControlSystem):
     def _report_lost(self, lost: ChainFault) -> DeviceFault:
         """Put an error for ``lost`` on the state and the grip, and return it."""
         error = _arm_fault(lost)
-        logger.error(f'{error}; it holds the error until a ready call opens the chain again')
+        logger.error(f'{error}; it holds the error until a ready or a recover call opens the chain again')
         self._emit_error(error)
         return error
 
@@ -1031,12 +1036,33 @@ class Robot(pimm.ControlSystem):
         self.state.emit(cast(YamState, error))
         self.grip.emit(cast(float, error))
 
+    class _Recovery(pimm.calls.Call[None, None]):
+        """A recover call that the driver answers as a ready call: an answer with no error is ``CLEARED``."""
+
+        def __init__(self, call: pimm.calls.Call[None, RecoveryOutcome]):
+            self._call = call
+
+        @property
+        def request(self) -> None:
+            return None
+
+        def set_result(self, value: None) -> None:
+            self._call.set_result(RecoveryOutcome.CLEARED)
+
+        def set_exception(self, exc: BaseException) -> None:
+            self._call.set_exception(exc)
+
+    def _recoveries(self) -> list[pimm.calls.Call[None, None]]:
+        """The recover calls that wait, each to be answered as a ready call."""
+        return [self._Recovery(call) for call in self.recover.incoming()]
+
     def _hold(
         self, error: DeviceFault, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
-        """Answer every move with ``error``, which is on the state and the grip already, until a ready call.
+        """Answer every move with ``error``, which is on the state and the grip already, until a ready or a recover
+        call.
 
-        Return the ready calls, or none when the world stops first.
+        Return those calls, or none when the world stops first.
         """
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
         refused = (
@@ -1047,7 +1073,7 @@ class Robot(pimm.ControlSystem):
             for moves in refused:
                 while isinstance(move := moves.next_request(), pimm.calls.Call):
                     move.set_exception(error)
-            if asked := list(self.ready.incoming()):
+            if asked := [*self.ready.incoming(), *self._recoveries()]:
                 return asked
             yield limiter.wait()
         return []
@@ -1060,7 +1086,11 @@ class Robot(pimm.ControlSystem):
             with Moves[float](self.sync_grip, self.target_grip) as fingers, self._answer_failed_grip_move(fingers):
                 while not should_stop.value:
                     if ready := list(self.ready.incoming()):
-                        yield from self._serve_ready(arm, serving, ready, clock)
+                        yield from self._serve_start_calls(
+                            arm, serving, ready, clock, move=serving.failed_move is not None
+                        )
+                    if recoveries := self._recoveries():
+                        yield from self._serve_start_calls(arm, serving, recoveries, clock, move=arm.moves.errored)
                     asked, receipt, q = self._take_request(arm, fingers, serving, clock)
                     taken = yield from self._dispatch(arm, serving, asked, receipt, q, clock)
                     if (step := self._advance_parking(serving)) is None:
@@ -1083,11 +1113,12 @@ class Robot(pimm.ControlSystem):
             fingers.fail(_arm_fault(exc))
             raise
 
-    def _serve_ready(
-        self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock
+    def _serve_start_calls(
+        self, arm: _Arm, serving: _Serving, asked: list[pimm.calls.Call[None, None]], clock: pimm.Clock, *, move: bool
     ) -> Generator[pimm.Command, None, None]:
-        """Answer ``asked``. After a missed start or idle park, move the arm to the start pose first."""
-        if serving.failed_move is not None:
+        """Answer ``asked``. Where ``move`` says so, move the arm to the start pose first, and answer with its miss."""
+        missed = None
+        if move:
             if serving.parking is not None:
                 serving.parking.close()
                 serving.parking = None
@@ -1096,7 +1127,8 @@ class Robot(pimm.ControlSystem):
                     answers.enter_context(self._answer_failed_setup(call))
                 serving.q_target, serving.grip_target, serving.failed_move = yield from arm.go_to_start()
             serving.idle_since = clock.now()
-        self._answer_ready(asked, serving.failed_move)
+            missed = serving.failed_move
+        self._answer_start_calls(asked, missed)
 
     def _take_request(
         self, arm: _Arm, fingers: Moves[float], serving: _Serving, clock: pimm.Clock
