@@ -768,7 +768,7 @@ class InferenceSchedule(Policy):
         def _identified(
             infer: Callable[[Obs], Sequence[Commands] | None], call_id: int, obs: Obs
         ) -> Sequence[Commands] | None:
-            """Run ``infer`` with ``call_id`` on the span of the call."""
+            """Run ``infer`` with ``call_id`` on the ``policy.submit`` span that ``Runtime.submit`` makes active."""
             telemetry.set_active_attrs(**{telemetry_keys.ATTR_CALL_ID: call_id})
             return infer(obs)
 
