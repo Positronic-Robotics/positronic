@@ -164,7 +164,7 @@ class LiberoEnv(EnvProtocol):
         gripper_jids = [self._sim.model.joint_name2id(j) for j in robot.gripper.joints]
         self._grip_open_aperture = float(np.sum(np.diff(self._sim.model.jnt_range[gripper_jids], axis=1)))
 
-    def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+    def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
         key = (token['suite'], token['task_id'], token['camera_resolution'], token['control_mode'])
         if key != self._key:
             self._build(*key)

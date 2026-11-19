@@ -20,6 +20,7 @@ JPEG_QUALITY = 'jpeg_quality'
 COMPRESS_IMAGES = 'compress_images'
 FPS = 'fps'
 HORIZON_SEC = 'horizon_sec'
+INFERENCE_LEAD = 'inference_lead'
 EMBODIMENT = 'embodiment'
 
 

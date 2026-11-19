@@ -10,7 +10,7 @@ from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, State, command
 from positronic.drivers.roboarm.kinova.api import KinovaAPI
 from positronic.drivers.roboarm.kinova.base import JointCompliantController, KinematicsSolver, wrap_joint_angle
-from positronic.drivers.utils import DriverRun, MoveStatus, log_failure
+from positronic.drivers.utils import CommandReceipt, DriverRun, MoveStatus, log_failure
 from positronic.eval import NO_MODEL_ROBOT_META
 
 logger = logging.getLogger(__name__)
@@ -135,20 +135,30 @@ class _Arm(DriverRun[command.CommandType]):
         """How long the arm may take to reach ``target``, from the speed its controller is capped at."""
         return self._MOVE_GRACE_S + float(np.max(np.abs(target - self.q)) / np.min(self.controller.max_velocity))
 
-    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
-        """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there."""
+    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> bool:
+        """Put the controller where ``call`` asks; ``settle`` answers it once the arm reads back there.
+
+        Return whether the controller took the target: a malformed command answers ``call`` with its error.
+        """
         with pimm.calls.raise_to(call):
             target = self._to_joints(call.request)
             self.controller.set_target_qpos(target)
             # The branch the controller tracks: it wraps the target once, when it is set
             wrapped = wrap_joint_angle(target, self.q)
             self.moves.accept(call, wrapped, self._ARRIVED_TOL, self.clock.now(), self._travel_s(wrapped))
+            return True
+        return False
 
-    def step(self) -> None:
-        """Drive one cycle: the controller's torque as current, and what the actuators report back."""
+    def step(self, receipt: CommandReceipt | None) -> None:
+        """Drive one cycle: the controller's torque as current, and what the actuators report back.
+
+        ``receipt`` is of the command whose target the controller took this tick; the current applies it.
+        """
         torque = self.controller.compute_torque(self.q, self.dq, self.tau)
         np.divide(torque, self._TORQUE_CONSTANT, out=self._current)
         self.q, self.dq, self.tau = self.api.apply_current_command(self._current)
+        if receipt is not None:
+            receipt.applied()
 
     def publish(self) -> None:
         """Ship the arm as it reads now."""
@@ -192,13 +202,17 @@ class Robot(pimm.ControlSystem):
                 while not should_stop.value:
                     arm.settle()
                     asked = arm.moves.next_request()
+                    receipt = arm.moves.take()
+                    taken: CommandReceipt | None = None  # the receipt of a target the controller took this tick
                     if isinstance(asked, pimm.calls.Call):
-                        arm.sync_move(asked)
+                        if arm.sync_move(asked):
+                            taken = receipt
                     elif asked is not None:
                         with log_failure(asked):
                             arm.track(asked)
+                            taken = receipt
 
-                    arm.step()
+                    arm.step(taken)
                     arm.publish()
                     arm.moves.answer()  # the state a settled move is answered with is out
 

@@ -5,6 +5,7 @@ Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole I
 """
 
 import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -49,16 +50,25 @@ def test_a_run_that_names_no_clone_count_serves_one_scene(spawned):
     with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
         pass
 
-    assert _flag(spawned[0], '--num-envs') == '1'
+    assert _flag(spawned[0], '--max-envs') == '1'
 
 
 def test_the_clone_count_and_the_host_reach_the_env_server(spawned):
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, '0.0.0.0', num_envs=16):
+    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, '0.0.0.0', max_envs=16):
         pass
 
-    assert _flag(spawned[0], '--num-envs') == '16'
+    assert _flag(spawned[0], '--max-envs') == '16'
     assert _flag(spawned[0], '--host') == '0.0.0.0'
     assert _flag(spawned[0], '--cameras') == robolab_keys.WRIST_LEFT
+
+
+def test_the_join_deadline_of_a_shared_server_reaches_the_env_server(spawned, monkeypatch):
+    argv = ['launcher', '--max-envs', '8', '--port', '9000', '--join-deadline', '45']
+    monkeypatch.setattr(sys, 'argv', argv)
+    with pytest.raises(SystemExit):
+        launcher.main()
+
+    assert _flag(spawned[0], '--join-deadline') == '45.0'
 
 
 class _OneTaskEnv(EnvProtocol):
@@ -78,7 +88,7 @@ class _OneTaskEnv(EnvProtocol):
             }
         ]
 
-    def reset(self, token: Any) -> dict[str, Any]:
+    def reset(self, token: Any, slots: int | None = None) -> dict[str, Any]:
         raise AssertionError('the listing needs no reset')
 
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:

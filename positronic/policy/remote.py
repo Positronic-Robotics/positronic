@@ -20,6 +20,8 @@ from positronic.offboard.client import (
     DEFAULT_CONNECT_DEADLINE,
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    DOWNLINK_MS,
+    UPLINK_MS,
     InferenceClient,
     InferenceSession,
 )
@@ -48,6 +50,18 @@ def prepare_obs(
     return map_leaves(obs, partial(_prepare_value, jpeg_quality=jpeg_quality))
 
 
+def _network_attrs(wire_timing: cabc.Mapping[str, float]) -> dict[str, float]:
+    """The one-way times of a call, and their sum, which holds no clock offset."""
+    if UPLINK_MS not in wire_timing:
+        return {}
+    uplink_ms, downlink_ms = wire_timing[UPLINK_MS], wire_timing[DOWNLINK_MS]
+    return {
+        telemetry_keys.ATTR_WIRE_UPLINK_MS: uplink_ms,
+        telemetry_keys.ATTR_WIRE_DOWNLINK_MS: downlink_ms,
+        telemetry_keys.ATTR_WIRE_NETWORK_MS: uplink_ms + downlink_ms,
+    }
+
+
 def round_trip(
     session: InferenceSession,
     obs: cabc.Mapping[str, Any],
@@ -65,7 +79,8 @@ def round_trip(
             return session.infer(prepared)
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
-            telemetry.set_attrs(span, **served)
+            alone = {} if session.sent_alone is None else {telemetry_keys.ATTR_WIRE_SENT_ALONE: session.sent_alone}
+            telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing), **alone)
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
@@ -205,8 +220,8 @@ class RemotePolicy(Policy):
         try:
             try:
                 server_meta = dict(session.metadata)
-                execution = ExecutionRuntime(runtime, max_in_flight=session.max_in_flight)
                 stack = declared_stack(server_meta, session.protocol_version)
+                execution = ExecutionRuntime(runtime, max_in_flight=1 if stack.ordered else session.max_in_flight)
                 client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.

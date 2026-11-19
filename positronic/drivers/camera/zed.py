@@ -1,14 +1,16 @@
+import errno
 import logging
 from collections.abc import Generator, Iterator
 from enum import Enum, auto
-from typing import Literal
+from pathlib import Path
+from typing import Literal, NamedTuple
 
 import numpy as np
 
 import pimm
 from pimm.shared_memory import NumpySMAdapter
 from positronic.drivers import vendor_import
-from positronic.drivers.camera import CAPTURE_TIME
+from positronic.drivers.camera import CAPTURE_TIME, HANDOFF_TIME
 from positronic.drivers.camera.device_open_lock import device_open_lock
 from positronic.drivers.faults import DeviceFault, FaultKind, device_fault
 from positronic.drivers.utils import RecoveryOutcome
@@ -50,6 +52,34 @@ NEAR_BLACK_MEAN_LEVEL = 16
 def is_near_black(bgra: np.ndarray) -> bool:
     """Whether the mean colour level of every 8th pixel of every 8th row is below ``NEAR_BLACK_MEAN_LEVEL``."""
     return bool(bgra[::8, ::8, :3].mean() < NEAR_BLACK_MEAN_LEVEL)
+
+
+USB_DEVICES_DIR = Path('/sys/bus/usb/devices')
+
+
+class UsbAddress(NamedTuple):
+    """The bus and the device number of a USB device. The kernel gives a new device number at each enumeration."""
+
+    bus: int
+    device: int
+
+
+def usb_address(serial: int) -> UsbAddress | None:
+    """The address of the USB device with the serial ``serial``, or None while the kernel shows no such device.
+
+    The HID half of a ZED 2 or a ZED 2i carries the camera's serial number.
+    """
+    for serial_file in USB_DEVICES_DIR.glob('*/serial'):
+        try:
+            if serial_file.read_text().strip() != str(serial):
+                continue
+            device = serial_file.parent
+            return UsbAddress(int((device / 'busnum').read_text()), int((device / 'devnum').read_text()))
+        except OSError as e:
+            # A device that leaves the bus during the read removes its files: ENOENT at the open, ENODEV at the read.
+            if e.errno not in (errno.ENOENT, errno.ENODEV):
+                raise
+    return None
 
 
 class SLCamera(pimm.ControlSystem):
@@ -116,13 +146,17 @@ class SLCamera(pimm.ControlSystem):
         self._camera: sl.Camera | sl.CameraOne | None = None
         self._error: DeviceFault | None = None
         self._frame_at: float | None = None
+        # The model that a stereo camera gave at its last open. None while no stereo camera has opened.
+        self._model: sl.MODEL | None = None
         # The time of the first image of the current run of near-black images. None when the last image was not one.
         self._near_black_since: float | None = None
+        # The hand-off time of the last frame sent. A recorder refuses a time that decreases.
+        self._last_handoff_ns: int | None = None
 
     DEVICE_LIST_POLL_SEC = 0.5
     REBOOTED_CAMERA_MAX_POLLS = 60
-    # A recover call waits at most this many polls for the rebooted camera to leave the device list.
-    REBOOT_LEAVE_MAX_POLLS = 20
+    # A recover call waits at most this many polls for the rebooted camera to get a new USB address or leave the list.
+    REBOOT_SEEN_MAX_POLLS = 20
     # A ready call reopens a camera whose last frame is older than this.
     STALE_FRAME_SEC = 1.0
     # A ready call grabs again after a torn frame, up to this many grabs.
@@ -224,12 +258,16 @@ class SLCamera(pimm.ControlSystem):
         return error
 
     def _open_or_hold(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Sleep, None, None]:
-        """Open a new camera and clear the error, or hold the error that the open path raises."""
+        """Open a new camera, keep its model and clear the error, or hold the error that the open path raises."""
         try:
-            self._camera = yield from self._open_camera(should_stop)
+            camera = yield from self._open_camera(should_stop)
         except CameraOpenError as e:
             self._hold(device_fault(e, FaultKind.CAMERA, f'Camera {self._serial_number} did not open: {e}'))
             return
+        self._camera = camera
+        # `sl.CameraOne` does not implement `get_camera_information`
+        if not self._mono:
+            self._model = camera.get_camera_information().camera_model
         self._error = None
         self._near_black_since = None
 
@@ -288,19 +326,31 @@ class SLCamera(pimm.ControlSystem):
         return next((device.camera_model for device in devices if device.serial_number == serial), None)
 
     def _rebootable_serial(self) -> int | None:
-        """The serial number of a ZED 2 or a ZED 2i, or of a camera the SDK does not list. None for any other camera."""
+        """The serial number of a ZED 2 or a ZED 2i, or of a camera that has not opened and that the SDK does not list.
+
+        None for any other camera.
+        """
         if self._mono or self._serial_number is None:
             return None
-        model = self._listed_model(self._serial_number)
+        # The SDK before 5.4 leaves a camera that a process holds open out of the device list.
+        model = self._model if self._model is not None else self._listed_model(self._serial_number)
         return self._serial_number if model is None or model in (sl.MODEL.ZED2, sl.MODEL.ZED2i) else None
 
     @staticmethod
-    def _wait_until_unlisted(serial: int, failure: str, should_stop: pimm.SignalReceiver) -> Iterator[pimm.Sleep]:
-        for _ in range(SLCamera.REBOOT_LEAVE_MAX_POLLS):
-            if should_stop.value or not SLCamera._is_listed(serial):
+    def _wait_until_reenumerated_or_unlisted(
+        serial: int, address: UsbAddress | None, failure: str, should_stop: pimm.SignalReceiver
+    ) -> Iterator[pimm.Sleep]:
+        """Wait until the camera is on the USB bus at an address other than ``address``, or the SDK does not list it.
+
+        A rebooted camera is off the bus for about a second, which a poll can miss. Its new address stays.
+        While it is off the bus, the SDK can still list it.
+        """
+        for _ in range(SLCamera.REBOOT_SEEN_MAX_POLLS):
+            current = usb_address(serial)
+            if should_stop.value or current not in (None, address) or not SLCamera._is_listed(serial):
                 return
             yield pimm.Sleep(SLCamera.DEVICE_LIST_POLL_SEC)
-        raise CameraOpenError(f'{failure}; camera {serial} stayed on the device list after its reboot')
+        raise CameraOpenError(f'{failure}; camera {serial} got no new USB address and stayed on the device list')
 
     def _release_and_reboot(
         self, serial: int, should_stop: pimm.SignalReceiver
@@ -310,8 +360,9 @@ class SLCamera(pimm.ControlSystem):
         self._release()
         failure = f'A recover call asked to reboot camera {serial}'
         try:
+            address = usb_address(serial)
             self._reboot(serial, failure)
-            yield from self._wait_until_unlisted(serial, failure, should_stop)
+            yield from self._wait_until_reenumerated_or_unlisted(serial, address, failure, should_stop)
             yield from self._wait_until_listed(serial, failure, should_stop)
         except CameraOpenError as e:
             logger.error('%s', e)
@@ -354,7 +405,19 @@ class SLCamera(pimm.ControlSystem):
             init_params.enable_image_enhancement = self._image_enhancement
         return init_params
 
-    def _emit_depth(self, zed, capture_time: pimm.Time) -> None:
+    def _frame_time(self, camera, capture_ns: int) -> pimm.Time:
+        """The capture time ``capture_ns`` and the hand-off time now, both on the camera's clock.
+
+        The hand-off time reads the host clock, which a clock correction can step back. It then stays 1 ns after the
+        last hand-off until the host clock passes it again.
+        """
+        handoff_ns = camera.get_timestamp(sl.TIME_REFERENCE.CURRENT).get_nanoseconds()
+        if self._last_handoff_ns is not None:
+            handoff_ns = max(handoff_ns, self._last_handoff_ns + 1)
+        self._last_handoff_ns = handoff_ns
+        return pimm.Time(**{CAPTURE_TIME: capture_ns, HANDOFF_TIME: handoff_ns})
+
+    def _emit_depth(self, zed, capture_ns: int) -> None:
         depth = sl.Mat()
         if zed.retrieve_measure(depth, sl.MEASURE.DEPTH) != sl.ERROR_CODE.SUCCESS:
             return
@@ -368,7 +431,7 @@ class SLCamera(pimm.ControlSystem):
             self._depth_mask_adapter = NumpySMAdapter.lazy_init(
                 depth_mask.astype(np.uint8)[..., np.newaxis], self._depth_mask_adapter
             )
-            self.depth_mask.emit(self._depth_mask_adapter, time=capture_time)
+            self.depth_mask.emit(self._depth_mask_adapter, time=self._frame_time(zed, capture_ns))
 
         # Process and emit depth if connected
         if self.depth.num_bound > 0:
@@ -377,7 +440,7 @@ class SLCamera(pimm.ControlSystem):
             depth_uint8 = depth_data.astype(np.uint8)[..., np.newaxis]
 
             self._depth_adapter = NumpySMAdapter.lazy_init(depth_uint8, self._depth_adapter)
-            self.depth.emit(self._depth_adapter, time=capture_time)
+            self.depth.emit(self._depth_adapter, time=self._frame_time(zed, capture_ns))
 
     @property
     def _view(self):
@@ -405,7 +468,7 @@ class SLCamera(pimm.ControlSystem):
             if starts_with_zero_fill(image.get_data()):
                 logger.warning('Camera %s sent a torn frame; dropping it', self._serial_number)
                 return GrabOutcome.TORN
-        capture_time = pimm.Time(**{CAPTURE_TIME: camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()})
+        capture_ns = camera.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds()
         if camera.retrieve_image(image, self._view) != sl.ERROR_CODE.SUCCESS:
             return GrabOutcome.NO_IMAGE
         bgra = image.get_data()
@@ -425,12 +488,12 @@ class SLCamera(pimm.ControlSystem):
         # Note: For side-by-side, we emit the full (H, W*2, 3) image
         # Consumer is responsible for splitting if needed
         self._frame_adapter = NumpySMAdapter.lazy_init(np_image, self._frame_adapter)
-        self.frame.emit(self._frame_adapter, time=capture_time)
+        self.frame.emit(self._frame_adapter, time=self._frame_time(camera, capture_ns))
         self._frame_at = clock.now()
 
         # Only retrieve depth data if depth is enabled and at least one depth channel is connected
         if self._depth_mode != sl.DEPTH_MODE.NONE and (self.depth.num_bound > 0 or self.depth_mask.num_bound > 0):
-            self._emit_depth(camera, capture_time)
+            self._emit_depth(camera, capture_ns)
         return GrabOutcome.SENT
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:

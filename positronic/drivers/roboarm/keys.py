@@ -8,6 +8,9 @@ JOINT_NAMES = 'joint_names'
 MESHES = 'meshes'
 # The gripper spec the viewer drives: the signal it reads, the joints it moves, their travel at full closure.
 GRIPPER = 'gripper'
+GRIPPER_SIGNAL = 'signal'
+GRIPPER_JOINTS = 'joints'
+GRIPPER_TRAVEL = 'travel'
 
 # Where each pose signal sits, keyed by the signal, as dumped ``models.EEFrame`` entries. A rig, a recording and a
 # policy that reads poses state it.
@@ -23,3 +26,7 @@ USE_COULOMB_FRICTION = 'use_coulomb_friction'
 # How an arm's controller fades that friction at low speed, as a dumped ``FrictionFade``: none below one speed and
 # all of it from another, in rad/s. None adds the friction at any speed.
 COULOMB_FRICTION_FADE = 'coulomb_friction_fade'
+# The cap that an arm's driver puts on the force its gripper closes with, in newtons; None sets no cap.
+GRIPPER_FORCE_CAP = 'gripper_force_cap'
+# The force that an arm's controller holds a stalled gripper with, in newtons, as the controller reports it.
+GRIPPER_STALL_FORCE_LIMIT = 'gripper_stall_force_limit'

@@ -54,3 +54,48 @@ def cmd_velocity(
 ):
     """Per-frame command translation velocity (m/s). Spikes = tracking glitches."""
     return norm(diff(view(episode.signals[signal], components), dt_sec, timelines=timelines))
+
+
+def cmd_delay_ms(
+    episode,
+    cmd_signal=keys.TARGET_EE_POSE,
+    state_signal=keys.EE_POSE,
+    components: slice = _TRANSLATION,
+    max_delay_ms: int = 500,
+    min_travel: float = 0.01,
+    *,
+    timeline: str,
+) -> int | None:
+    """Milliseconds by which the measured pose follows the commanded pose in one episode.
+
+    The shift from 0 to ``max_delay_ms`` with the smallest mean distance between each measured pose and the command
+    that was in force that long before it. ``None`` when the commands travel less than
+    ``min_travel`` on every component, or when no measured pose is ``max_delay_ms`` past the first command. A tie
+    between shifts returns the shortest, so the pose period limits the resolution.
+
+    ``timeline`` must measure nanoseconds. The delay holds every stage between the points where it stamps a command
+    and a pose.
+    """
+    cmd = episode.signals[cmd_signal]
+    state = episode.signals[state_signal]
+    cmd_ns = np.asarray(cmd.timestamps(timeline), dtype=np.int64)
+    if len(cmd_ns) == 0:
+        return None
+    cmd_values = np.asarray(cmd.values())[:, components]
+    if np.ptp(cmd_values, axis=0).max() < min_travel:
+        return None
+    state_ns = np.asarray(state.timestamps(timeline), dtype=np.int64)
+    # Each shift compares the same measured poses: those with a command in force at the longest shift.
+    measured = state_ns >= cmd_ns[0] + max_delay_ms * 1_000_000
+    if not measured.any():
+        return None
+    state_ns = state_ns[measured]
+    state_values = np.asarray(state.values())[measured][:, components]
+    errors = [
+        np.linalg.norm(
+            cmd_values[np.searchsorted(cmd_ns, state_ns - delay_ms * 1_000_000, side='right') - 1] - state_values,
+            axis=-1,
+        ).mean()
+        for delay_ms in range(max_delay_ms + 1)
+    ]
+    return int(np.argmin(errors))

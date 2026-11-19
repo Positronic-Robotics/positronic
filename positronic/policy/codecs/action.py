@@ -306,6 +306,47 @@ class BimanualJointsAction(CommandsPathCodec):
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: args}
 
 
+class BimanualCartesianAction(CommandsPathCodec):
+    """Converts a two-arm action to and from one ``CartesianPosition`` and one grip target per arm.
+
+    Per arm, the action holds the pose as xyz and a wxyz quaternion, and then the grip, left arm first.
+    """
+
+    WIRE_NAME = 'bimanual_cartesian_action'
+    # The values of each arm: the translation, the quaternion and the grip.
+    ARM_WIDTH = 3 + RotRep.QUAT.size + 1
+
+    def __init__(self, *, commands_path: tuple[str | int, ...] | None = None):
+        super().__init__(commands_path)
+
+    def _encode_command(self, values: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        parts = []
+        for arm in keys.BIMANUAL_ARMS:
+            channel = keys.arm_channel(keys.ROBOT_COMMAND, arm)
+            target = _command(values, channel, command.CartesianPosition, 'absolute Cartesian targets')
+            parts.append(np.asarray(target.pose.as_vector(RotRep.QUAT), dtype=np.float32))
+            parts.append(np.asarray([values[keys.arm_channel(keys.TARGET_GRIP, arm)]], dtype=np.float32))
+        return {ACTION: np.concatenate(parts)}
+
+    def _decode_single(self, data: dict) -> dict:
+        if not data:
+            return {}
+        vector = np.asarray(data[ACTION], dtype=np.float64)
+        width = self.ARM_WIDTH
+        if vector.shape != (width * len(keys.BIMANUAL_ARMS),):
+            raise ValueError(f'Expected a {width * len(keys.BIMANUAL_ARMS)}-D action, got shape {vector.shape}')
+        out: dict[str, Any] = {}
+        for i, arm in enumerate(keys.BIMANUAL_ARMS):
+            arm_vector = vector[i * width : (i + 1) * width]
+            pose = geom.Transform3D.from_vector(arm_vector[:-1], RotRep.QUAT)
+            out[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.CartesianPosition(pose=pose)
+            out[keys.arm_channel(keys.TARGET_GRIP, arm)] = float(arm_vector[-1])
+        return out
+
+    def to_spec(self):
+        return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION, ARGS: self._commands_path_args()}
+
+
 class IKJointsAction(Codec):
     """Signal-level codec that replaces EE pose targets with joint targets via IK.
 

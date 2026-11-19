@@ -102,7 +102,7 @@ class AbcEnv(EnvProtocol):
         self._key = key
         self._instruction = spec.prompt
 
-    def reset(self, token: dict[str, Any]) -> dict[str, Any]:
+    def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
         self._build(token)
         self._env.forget_arm_state()  # ABC otherwise starts each episode where the last one left the arms
         obs, _info = self._env.reset(seed=token.get(mapping.TOKEN_SEED), randomize=True)

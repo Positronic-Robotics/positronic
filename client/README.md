@@ -266,6 +266,21 @@ the image, for example `horizon_sec=0.5`. It holds the grammar of an address `qu
 below), and it may not be empty. A `remote` endpoint writes its params in `address.query`, and a
 `served` endpoint states none. Only an entry that names its `image` states it.
 
+A `remote` endpoint may state `policy_spec`: the policy its server serves, by the `spec` a `served`
+endpoint would name, for example `pi05`. It names the policy that the episodes of that endpoint run.
+The platform refuses a value that names no policy it serves. With no value, the platform does not
+know which policy the server runs. Only an entry that names its `address` states it: a label on a
+task takes the value of the plan endpoint it names. A `served` endpoint names its policy in `spec`,
+and an `image` endpoint states no `policy_spec`.
+
+```yaml
+endpoints:
+  - name: baseline
+    wire: roboarena
+    address: {host: baseline.example, port: 8000}
+    policy_spec: pi05
+```
+
 Each address field holds one grammar. The wire writes each value into what it dials with no change,
 so the grammar admits only a value the wire can write as it is:
 
@@ -501,7 +516,9 @@ place it can take, and the leaderboard lists every row in score order.
 
 The `submission` of a team row carries `replay`, a page that plays back the camera video of the
 submission, with the task and outcome of each episode. The page opens without a key, and `replay` is
-absent until the platform has built it.
+absent until the platform has built it. A submission that runs in more than one simulator also carries
+`part_replays`: one such page for each part, by the metric key of the part's score. `replay` is then the
+page of the first part.
 
 `replay.data_url` names the JSON object the page renders from. `about` identifies the submission,
 and each episode carries its values and one absolute URL per camera video. A page on another origin
@@ -601,9 +618,9 @@ properties that read the first entry, and a dump of the view does not hold them.
 
 `submissions.artifacts` lists what a finished run wrote, one page at a time. It also lists a failed
 run that carries `scores`. Each entry names its `key` under the submission's own prefix, its `size`,
-and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree, so one
-attempt's episodes are `attempts/<n>/episodes/` and `result.json`'s `attempt_location` names the
-attempt that scored. Pass `after` with the `next` of the page before it to read the rest. Pass `eval`
+and a signed `url` that expires. Pass `prefix` to keep the page to one part of the tree. To find
+the episodes, read `result.json`. Its `episode_locations` lists their addresses. Where it is absent,
+`attempt_location` gives the address. Pass `after` with the `next` of the page before it to read the rest. Pass `eval`
 to list the records of one eval of a submission of several; without it, the page lists the first. The route
 refuses an `eval` that the submission does not run. A platform that sends no `evals` ignores `eval`. The route
 refuses every other run: a run still going has a part-written prefix, and a run that failed with no

@@ -83,6 +83,9 @@ things happened under the hood:
   non-zero code, or ends by a signal such as SIGSEGV. The world runs its normal teardown and then
   raises `pimm.BackgroundProcessError`, which names the process. SIGINT and SIGTERM are stop
   requests, so a process that ends by one of them causes no error.
+- `World(process_scope=...)` opens a scope in each background process around its loop, under the
+  process's name. The scope is pickled into the child, so it must be a module-level callable. No two
+  background processes of one world share a name: the second of one name gets the suffix `.2`.
 
 That is the whole workflow: build small `ControlSystem` classes, `connect` their
 signals, and `start` whichever group you want to supervise directly. Everything

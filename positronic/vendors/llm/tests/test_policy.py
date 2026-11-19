@@ -192,6 +192,79 @@ def test_on_demand_pictures_reveal_only_requested_cameras(model):
     assert [e['call'] for e in events if e['event'] == 'rejected'] == [2]
 
 
+def prompt(requests) -> str:
+    """The system prompt of the first request."""
+    return requests[0][0][0].parts[0].content
+
+
+@pytest.mark.parametrize('images', list(Images))
+def test_the_prompt_names_reveal_frames_only_when_frames_are_revealed_on_demand(model, images):
+    requests, replies = model
+    replies.append(finish())
+    with execution(LLMPolicy(Endpoint('test'), Motion(), images=images)) as (run, runtime, clock):
+        complete(run, runtime, clock, observation())
+    assert (Tool.REVEAL_FRAMES.value in prompt(requests)) == (images is Images.ON_DEMAND)
+
+
+WRIST_MOUNT = {
+    'camera': keys.WRIST_IMAGE,
+    'position_m': (-0.074, 0.031, -0.126),
+    'view': (0.313, 0.008, 0.95),
+    'image_up': (-0.95, -0.016, 0.313),
+}
+
+
+def test_a_camera_mount_is_stated_with_its_hand_position_and_directions(model):
+    requests, replies = model
+    replies.extend([finish(), finish(), finish()])
+    left = {**WRIST_MOUNT, 'camera': keys.WRIST_LEFT_IMAGE, 'arm': keys.LEFT_ARM}
+    for policy, obs in [
+        (llm(model='test', camera_mounts=[WRIST_MOUNT]), observation()),
+        (llm_bimanual(model='test', camera_mounts=[left]), bimanual_observation()),
+        (llm(model='test'), observation()),
+    ]:
+        with execution(policy) as (run, runtime, clock):
+            complete(run, runtime, clock, obs)
+    one, named, bare = (str(messages[0]) for messages, _ in requests)
+    position = 'its lens is at [-0.074, 0.031, -0.126] m, it looks along [0.313, 0.008, 0.95], and the top of its '
+    assert f'Camera {keys.WRIST_IMAGE} is attached to the hand. In the axes of the hand, {position}' in one
+    left_hand = f'hand {keys.LEFT_ARM}'
+    assert f'Camera {keys.WRIST_LEFT_IMAGE} is attached to {left_hand}. In the axes of {left_hand}, {position}' in named
+    assert 'lens' not in bare
+    assert all('The axes of a hand start at its measured position' in text for text in (one, named, bare))
+    assert not any('grip point' in text for text in (one, named, bare))
+    assert llm(model='test', camera_mounts=[WRIST_MOUNT]).meta()['camera_mounts'] == [
+        {
+            'camera': keys.WRIST_IMAGE,
+            'arm': None,
+            'position_m': [-0.074, 0.031, -0.126],
+            'view': [0.313, 0.008, 0.95],
+            'image_up': [-0.95, -0.016, 0.313],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    'change, match',
+    [
+        ({'camera_mounts': (WRIST_MOUNT, WRIST_MOUNT)}, 'distinct cameras'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'camera': 'image.side'},)}, 'distinct cameras'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'arm': keys.LEFT_ARM},)}, 'must name no arm'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'view': (0, 0, 2), 'image_up': (1, 0, 0)},)}, 'unit'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'image_up': (0.313, 0.008, 0.95)},)}, 'perpendicular'),
+        ({'camera_mounts': ({**WRIST_MOUNT, 'position_m': (np.inf, 0, 0)},)}, 'finite'),
+    ],
+)
+def test_camera_mounts_are_checked(change, match):
+    with pytest.raises(ValueError, match=match):
+        llm(model='test', **change)
+
+
+def test_a_camera_mount_of_named_arms_must_name_one_of_them():
+    with pytest.raises(ValueError, match=r"must name one of the arms \['left', 'right'\]"):
+        llm_bimanual(model='test', camera_mounts=[{**WRIST_MOUNT, 'camera': keys.WRIST_LEFT_IMAGE}])
+
+
 def without_cache_points(messages):
     """The indices of the messages that end with a cache point, and the request as the stored history holds it."""
     marked, stored = [], []
