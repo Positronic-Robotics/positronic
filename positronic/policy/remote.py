@@ -222,12 +222,13 @@ class RemotePolicy(Policy):
                 server_meta = dict(session.metadata)
                 stack = declared_stack(server_meta, session.protocol_version)
                 execution = ExecutionRuntime(runtime, max_in_flight=1 if stack.ordered else session.max_in_flight)
-                client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+                stack_meta = dict(stack.meta())
+                # The declared stack runs on this client under every protocol, so its frames count for each server.
+                stack_frames = stack_meta.pop(roboarm_keys.EE_FRAMES, {})
+                client_meta = stack_meta if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.
-                frames = _server_frames(
-                    server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
-                )
+                frames = _server_frames(server_meta.get(roboarm_keys.EE_FRAMES, {}), stack_frames)
                 server_compresses_images = bool(server_meta.get(policy_keys.COMPRESS_IMAGES))
             except PolicyCommandError:
                 raise

@@ -33,7 +33,7 @@ from positronic.drivers.roboarm.models import (
     parse_ee_frames,
 )
 from positronic.eval import keys as eval_keys
-from positronic.geom import Transform3D
+from positronic.geom import Rotation, Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
@@ -1701,6 +1701,26 @@ def test_a_remote_server_that_states_its_frames_gets_the_pose_on_one_session(sid
     client = policy._client
     assert isinstance(client, MagicMock)
     client.new_session.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'version, schedule',
+    [
+        (protocol.ProtocolVersion.V1, spec.component('chunked_schedule', version=1)),
+        (protocol.ProtocolVersion.V2, spec.component('chunked_schedule', version=2, fps=10)),
+    ],
+    ids=['v1', 'v2'],
+)
+def test_a_v1_or_v2_server_whose_client_stack_states_the_frame_gets_the_pose_in_that_frame(version, schedule):
+    frame = ChangeEEFrame(cfg_codecs.franka_hand_frame.instantiate(), keys=(keys.EE_POSE,))
+    policy, session = _mock_remote_policy(
+        {offboard_keys.LOCAL_STACK: spec.sequence(frame.to_spec(), schedule)}, infer_return=[{keys.TARGET_GRIP: 0.5}]
+    )
+    session.protocol_version = version
+
+    assert run_robot_rollout(policy, ticks=5).result()[eval_keys.TERMINATED] is True
+    expected = (Transform3D(np.array([0.1, 0.2, 0.3])) * FRANKA_HAND_FRAME).as_vector(Rotation.Representation.QUAT)
+    np.testing.assert_allclose(session.infer.call_args_list[0].args[0][keys.EE_POSE], expected, atol=1e-6)
 
 
 def test_a_remote_server_that_states_no_frames_gets_no_pose():
