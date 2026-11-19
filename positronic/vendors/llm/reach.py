@@ -20,6 +20,18 @@ class Box(NamedTuple):
     def holds(self, position: np.ndarray) -> bool:
         return bool(np.all(position >= self.low) and np.all(position <= self.high))
 
+    def crosses(self, start: np.ndarray, end: np.ndarray) -> bool:
+        """Whether the straight segment from ``start`` to ``end`` has a point in the box."""
+        low, high, step = np.asarray(self.low), np.asarray(self.high), end - start
+        moving = step != 0
+        if np.any(~moving & ((start < low) | (start > high))):
+            return False
+        near = (low[moving] - start[moving]) / step[moving]
+        far = (high[moving] - start[moving]) / step[moving]
+        enter = max(0.0, *np.minimum(near, far))
+        leave = min(1.0, *np.maximum(near, far))
+        return enter <= leave
+
 
 class Reach(Protocol):
     """Why a hand cannot follow its poses."""

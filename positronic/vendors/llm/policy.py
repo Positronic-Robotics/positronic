@@ -509,11 +509,14 @@ class Conversation:
         if policy.min_hand_height is not None:
             floor = min(policy.min_hand_height, *(start.translation[2] for start in starts))
         boxes = [box for box in policy.keep_out if not any(box.holds(start.translation) for start in starts)]
+        previous = hand.pose.translation
         for index, pose in samples:
             position = pose.translation
             if floor is not None and position[2] < floor:
                 return f'{name} goes below z {floor:.4f} m on the way to waypoint {index + 1}'
-            if (box := next((box for box in boxes if box.holds(position)), None)) is not None:
+            box = next((box for box in boxes if box.crosses(previous, position)), None)
+            previous = position
+            if box is not None:
                 return (
                     f'{name} goes into the box from {list(box.low)} to {list(box.high)} m on the way to '
                     f'waypoint {index + 1}'

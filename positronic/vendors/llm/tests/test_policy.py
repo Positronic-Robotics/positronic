@@ -906,6 +906,23 @@ def test_a_path_that_takes_a_hand_into_a_keep_out_box_that_does_not_hold_it_play
     )
 
 
+@pytest.mark.parametrize('target_x,accepted', [(0.2, False), (0.14, True)])
+def test_a_path_that_crosses_a_keep_out_wall_between_two_commanded_positions_plays_nothing(target_x, accepted):
+    metadata = {}
+    wall = [[0.1503, -0.5, 0.0], [0.1504, -0.2, 0.5]]
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, keep_out=[wall]), metadata.__setitem__)
+    outside = hands_at(bimanual_observation(), {'right': (0.1, -0.3)})
+    path = move_arms({'right': (target_x, -0.3, 0.1)})
+    free = decide(Conversation(llm_bimanual(model='test', image_size=8), {}.__setitem__), outside, path)
+    channel = keys.arm_channel(keys.ROBOT_COMMAND, 'right')
+    assert not any(Box(*map(tuple, wall)).holds(c[channel].pose.translation) for part in free for c in part)
+    assert (decide(conversation, outside, path) != [[]]) is accepted
+    if not accepted:
+        assert rejection(metadata) == (
+            'Hand right goes into the box from [0.1503, -0.5, 0.0] to [0.1504, -0.2, 0.5] m on the way to waypoint 1'
+        )
+
+
 class ScriptedReach:
     """A reach that refuses the first pose at or above ``height`` of the hand on the right (y < 0), and records the
     joints, the hand and the held target that it gets for each hand, by the side of the hand."""
