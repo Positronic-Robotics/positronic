@@ -1018,6 +1018,31 @@ def test_each_frame_reply_has_a_target_from_the_first(service, socket_path, conn
     np.testing.assert_allclose(first[ACTION], [*OBS[keys.EE_POSE], OBS[keys.GRIP]])
 
 
+def test_a_frame_answers_at_once_with_the_newest_sample(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        started = time.monotonic()
+        connection.frame(FRAME_REQUEST)
+        assert time.monotonic() - started < 1.0
+        assert served.state().control
+        connection.close()
+
+
+def test_a_frame_with_no_sample_within_the_silence_limit_has_no_pose_and_turns_control_off(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=1.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        time.sleep(served.silence_limit + 0.05)
+        connection.frame(FRAME_REQUEST)
+        assert not served.state().control
+        connection.close()
+
+
 def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
