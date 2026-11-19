@@ -38,6 +38,7 @@ from positronic.drivers.roboarm.yam import driver as yam
 from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, YamKinematics
+from positronic.drivers.utils import RecoveryOutcome
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
@@ -1886,6 +1887,116 @@ def test_a_ready_call_on_an_open_chain_is_answered_at_once(world, rig):
     assert answer.result() is None
     assert not rig.vendor.released_at
     assert len(rig.vendor.targets) > connected, 'the arm stopped taking commands'
+
+
+def _recoverer(world, rig: Rig) -> pimm.calls.Caller[None, RecoveryOutcome]:
+    caller = pimm.calls.ControlSystemCaller[None, RecoveryOutcome](rig.driver)
+    wire_call(world, caller, rig.driver.recover)
+    return caller
+
+
+def test_a_recover_call_on_a_lost_arm_opens_the_chain_again_and_answers_cleared_at_the_start_pose(world, rig):
+    reopened = _lose_the_chain(rig)
+
+    answer = _recoverer(world, rig)(None)
+    rig.tick(0.1)
+    assert not answer.done(), 'the recover call was answered before the arm reached the start pose'
+    rig.ready()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    np.testing.assert_allclose(reopened._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert _last(rig.states).status == RobotStatus.AVAILABLE
+
+
+def test_a_recover_call_whose_chain_does_not_open_answers_its_error_and_the_arm_stays_lost(world, rig):
+    _lose_the_chain(rig)
+
+    def refuse(channel, sim, compensation):
+        raise OSError('CAN interface can0 is down')
+
+    rig.driver._connect = refuse
+    answer = _recoverer(world, rig)(None)
+    rig.tick()
+
+    with pytest.raises(DeviceFault, match='can0 is down') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(_last(rig.states), pimm.SignalError)
+
+
+def test_a_recover_call_on_an_arm_with_no_fault_answers_cleared_and_does_not_move_it(world, rig):
+    rig.raise_arm()
+    sent = len(rig.vendor.targets)
+
+    answer = _recoverer(world, rig)(None)
+    rig.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    held = _asked(rig)[sent:]
+    np.testing.assert_allclose(held, np.tile(RAISED, (len(held), 1)), atol=0.005)
+    assert not rig.vendor.released_at
+
+
+def test_a_recover_call_that_the_driver_stops_before_the_start_pose_does_not_answer_cleared(world, rig):
+    """The boundary of a move to the start pose: a stop ends it where the arm is, and the fault holds."""
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    _block_joints_2_and_3_at(rig, 0.0)
+
+    answer = _recoverer(world, rig)(None)
+    rig.tick(0.1)
+    rig.finish()
+
+    with pytest.raises(DeviceFault, match='stopped before the arm reached the start pose'):
+        answer.result()
+
+
+def test_a_recover_call_on_an_arm_whose_park_stopped_moves_it_to_the_start_pose_and_answers_cleared(world, rig):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    assert _last(rig.states).status == RobotStatus.ERROR
+    _block_joints_2_and_3_at(rig, 0.0)  # the operator takes the object away
+
+    answer = _recoverer(world, rig)(None)
+    _until_answered(rig, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert _last(rig.states).status == RobotStatus.AVAILABLE
+
+
+def test_a_recover_call_on_an_arm_that_reads_error_after_a_missed_blocking_move_moves_it_to_the_start_pose(world, rig):
+    rig.rest()
+    rig.vendor.stuck = True
+    missed = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    _until_answered(rig, missed, within_s=120)
+    assert _last(rig.states).status == RobotStatus.ERROR
+    rig.vendor.stuck = False
+
+    answer = _recoverer(world, rig)(None)
+    _until_answered(rig, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert _last(rig.states).status == RobotStatus.AVAILABLE
+
+
+def test_a_recover_call_whose_start_move_misses_answers_the_miss(world, rig):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    rig.vendor.stuck = True
+
+    answer = _recoverer(world, rig)(None)
+    _until_answered(rig, answer, within_s=120)
+
+    with pytest.raises(DeviceFault) as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
+    assert _last(rig.states).status == RobotStatus.ERROR
 
 
 _START_MOVE_LOG = 'Moving the arm to the start pose'
