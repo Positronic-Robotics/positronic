@@ -257,7 +257,7 @@ class Conversation:
             else '',
             *(
                 f'A path that takes a hand into the box from {list(box.low)} to {list(box.high)} m is rejected and '
-                'does not move. A hand that is in the box can move. '
+                'does not move. A hand that is in the box can move in it and out of it, but not back in. '
                 for box in self._policy.keep_out
             ),
             'A path that a hand cannot follow with its arm is rejected and does not move. The rejection names the '
@@ -491,6 +491,23 @@ class Conversation:
                 return error
         return None
 
+    def _entered_box(
+        self, previous: np.ndarray, position: np.ndarray, starts: list[np.ndarray], inside: list[bool]
+    ) -> Box | None:
+        """The keep-out box that the hand enters from ``previous`` to ``position``, or ``None``. ``inside`` marks each
+        box that holds a start of the hand and that the hand has not left, and is updated: the hand leaves a box when
+        it is out of the box and farther than ``max_tracking_error`` from each start."""
+        policy = self._policy
+        for i, box in enumerate(policy.keep_out):
+            if inside[i]:
+                near = any(np.linalg.norm(position - start) <= policy.max_tracking_error for start in starts)
+                inside[i] = near or box.holds(position)
+                if inside[i] or box.holds(previous):
+                    continue
+            if box.crosses(previous, position):
+                return box
+        return None
+
     def _arm_path_error(
         self,
         obs: Mapping[str, Any],
@@ -508,13 +525,13 @@ class Conversation:
         floor = None
         if policy.min_hand_height is not None:
             floor = min(policy.min_hand_height, *(start.translation[2] for start in starts))
-        boxes = [box for box in policy.keep_out if not any(box.holds(start.translation) for start in starts)]
+        inside = [any(box.holds(start.translation) for start in starts) for box in policy.keep_out]
         previous = hand.pose.translation
         for index, pose in samples:
             position = pose.translation
             if floor is not None and position[2] < floor:
                 return f'{name} goes below z {floor:.4f} m on the way to waypoint {index + 1}'
-            box = next((box for box in boxes if box.crosses(previous, position)), None)
+            box = self._entered_box(previous, position, [start.translation for start in starts], inside)
             previous = position
             if box is not None:
                 return (

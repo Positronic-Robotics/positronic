@@ -906,6 +906,19 @@ def test_a_path_that_takes_a_hand_into_a_keep_out_box_that_does_not_hold_it_play
     )
 
 
+@pytest.mark.parametrize('path,accepted', [(((0.03, -0.3), (0.2, -0.3)), True), (((0.2, -0.3), (0.0, -0.3)), False)])
+def test_a_hand_that_leaves_a_keep_out_box_that_held_it_cannot_go_back_in(path, accepted):
+    metadata = {}
+    box = [[-0.1, -0.5, 0.0], [0.05, -0.2, 0.5]]
+    conversation = Conversation(llm_bimanual(model='test', image_size=8, keep_out=[box]), metadata.__setitem__)
+    parts = decide(conversation, bimanual_observation(), move_arms(*({'right': position} for position in path)))
+    assert (parts != [[]]) is accepted
+    if not accepted:
+        assert rejection(metadata) == (
+            'Hand right goes into the box from [-0.1, -0.5, 0.0] to [0.05, -0.2, 0.5] m on the way to waypoint 2'
+        )
+
+
 @pytest.mark.parametrize('target_x,accepted', [(0.2, False), (0.14, True)])
 def test_a_path_that_crosses_a_keep_out_wall_between_two_commanded_positions_plays_nothing(target_x, accepted):
     metadata = {}
