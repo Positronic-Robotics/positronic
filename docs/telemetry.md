@@ -187,7 +187,7 @@ An inference schedule states its settings in its metadata, so the `episode` span
 - `latency_estimate`: the lead of `before_end`. A number is a constant lead in seconds. Zero requests at the end of
   the plan, so the arm holds for the whole call. `latency_estimate.statistic`, `latency_estimate.last` and
   `latency_estimate.max_sec` state a lead that follows the delays of the recent calls. The other references do not
-  use the estimate.
+  use the estimate. A local estimate with no wire spec records no `latency_estimate`.
 
 A remote policy records the metadata of its client stack only on protocol version 3.
 
