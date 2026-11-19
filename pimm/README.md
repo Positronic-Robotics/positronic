@@ -264,9 +264,15 @@ to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
 
-**Don't use system libs for sleeping — `yield pimm.Sleep(secs)` instead.** In the main-process
-group `interleave` advances the peers while one loop sleeps, so a blocking call there stalls them
-all.
+Three rules hold for each loop in `run`, and for each helper loop that `run` calls:
+
+- **Wait with `yield pimm.Sleep(secs)`, not with a system call such as `time.sleep`.** In the
+  main-process group `interleave` advances the peers while one loop sleeps, so a blocking call there
+  stalls them all.
+- **Yield on each pass.** Yield `pimm.Sleep(secs)` to wait, or `pimm.Yield()` to run again at the next
+  instant. A helper that loops is a generator, and `run` yields each command that the helper yields.
+- **Check `should_stop` on each pass.** Give the stop condition to the helper as an argument, so that
+  its wait ends when the world stops.
 
 The `World` runtime plays three roles:
 
