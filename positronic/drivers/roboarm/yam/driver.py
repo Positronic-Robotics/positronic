@@ -312,7 +312,8 @@ class _Arm(DriverRun[command.CommandType]):
         state: YamState,
         meta_out: pimm.SignalEmitter[dict[str, Any]],
         ee_mass: float | None,
-        gripper_force_cap_n: Callable[[], float | None],
+        gripper_force_cap_n: float | None,
+        take_gripper_force_cap: Callable[[], float | None],
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
@@ -330,7 +331,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._sent_at = 0.0
         self.meta_out = meta_out
         self._ee_mass = ee_mass
-        self._gripper_force_cap_n = gripper_force_cap_n
+        self._force_cap_n = gripper_force_cap_n  # the gripper force cap in force
+        self._take_gripper_force_cap = take_gripper_force_cap
         self._reported_force_cap_n: float | None = None  # the gripper force cap in the last arm meta
 
     @functools.cached_property
@@ -350,7 +352,7 @@ class _Arm(DriverRun[command.CommandType]):
         it does not report. A chain with a gripper force limit runs the gripper force cap of this moment, and its
         limiter holds a stalled gripper with the force of that limit. i2rt's sim chain runs no friction and no gripper
         force limit, and reports neither."""
-        self._reported_force_cap_n = self._gripper_force_cap_n()
+        self._reported_force_cap_n = self._force_cap_n
         info = self._robot_info
         meta = {
             roboarm_keys.GRAVITY_COMP_FACTOR: np.asarray(info[_GRAVITY_COMP_FACTOR], np.float64).tolist(),
@@ -395,7 +397,7 @@ class _Arm(DriverRun[command.CommandType]):
         try:
             self.out.emit(self.state)
             self.grip_out.emit(self.read_grip(obs))
-            if self._gripper_force_cap_n() != self._reported_force_cap_n:
+            if self._force_cap_n != self._reported_force_cap_n:
                 self.emit_meta()
         except Exception:
             if not self._shutting_down:
@@ -405,6 +407,10 @@ class _Arm(DriverRun[command.CommandType]):
                 logger.exception('Publishing the arm state failed during shutdown; the park goes on without it')
 
     def _send(self, joints: np.ndarray, open_width: float) -> None:
+        # The control thread of the chain can take a command at once, so the newest cap goes in force first. The park on
+        # shutdown keeps the cap in force.
+        if not self._shutting_down:
+            self._force_cap_n = self._take_gripper_force_cap()
         with _chain_call():
             self.vendor.command_joint_pos(np.append(joints, open_width))
         self._sent_joints = np.array(joints, dtype=np.float64)
@@ -842,15 +848,16 @@ class Robot(pimm.ControlSystem):
             None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
-        :param gripper_force_cap_n: The most force in newtons that the gripper closes with. None or 0 sets no cap.
-            i2rt's own limiter still holds a stalled gripper with its force limit, which the arm meta names.
-            ``set_gripper_force_cap`` changes it at run time. i2rt's sim chain runs no cap.
+        :param gripper_force_cap_n: The most force in newtons that the gripper closes with, until the
+            ``gripper_force_cap_n`` input carries another cap. None or 0 sets no cap. i2rt's own limiter still holds a
+            stalled gripper with its force limit, which the arm meta names. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
         if park_after_idle_s is not None:
             check_finite_positive(park_after_idle_s, 'park_after_idle_s')
-        self.set_gripper_force_cap(gripper_force_cap_n)
+        # The cap that the control thread of the chain reads. The driver loop writes it from ``gripper_force_cap_n``.
+        self._gripper_force_cap_n = self._checked_gripper_force_cap(gripper_force_cap_n)
         # The setter writes the friction on an open chain, past the length and sign checks of i2rt. So the conversion
         # it does, those checks and a check that each value is finite run here first.
         friction = compensation.coulomb_friction
@@ -880,20 +887,27 @@ class Robot(pimm.ControlSystem):
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # On until a message says otherwise; the park on shutdown does not read it.
         self.idle_park_on = pimm.DefaultingReceiver[bool](self, default=True)
+        # The driver puts a new cap in force before its next command to the chain, also in a move. None or 0 sets no
+        # cap. The park on shutdown does not read it.
+        self.gripper_force_cap_n = pimm.DefaultingReceiver[float | None](self, default=self._gripper_force_cap_n)
 
     @property
     def base_pose(self) -> geom.Transform3D:
         """The arm-base mount pose in the world frame."""
         return self._base_pose
 
-    def set_gripper_force_cap(self, cap_n: float | None) -> None:
-        """Cap the force that the gripper closes with at ``cap_n`` newtons from the next control step of the chain.
-        The arm meta names the new cap from the next control step of the driver, also in a move. None or 0 sets no
-        cap. Call it from any thread of the process that runs the driver."""
+    @staticmethod
+    def _checked_gripper_force_cap(cap_n: float | None) -> float | None:
+        """``cap_n`` as the cap that the chain runs: None for no cap. Raises ValueError where it is no finite force."""
         if cap_n is not None:
             check_finite_nonnegative(cap_n, 'gripper_force_cap_n')
-        # One reference write: the control thread of the chain and the run loop read the old cap or the new one
-        self._gripper_force_cap_n = float(cap_n) if cap_n else None
+        return float(cap_n) if cap_n else None
+
+    def _take_gripper_force_cap(self) -> float | None:
+        """Read ``gripper_force_cap_n``, put its cap in force for the chain, and return the cap."""
+        # One reference write: the control thread of the chain reads the old cap or the new one
+        self._gripper_force_cap_n = self._checked_gripper_force_cap(self.gripper_force_cap_n.value)
+        return self._gripper_force_cap_n
 
     def _should_park(self, idle_since: float | None, now: float) -> bool:
         return (
@@ -968,7 +982,8 @@ class Robot(pimm.ControlSystem):
                 state,
                 self.arm_meta,
                 self._compensation.ee_mass,
-                lambda: self._gripper_force_cap_n,
+                self._gripper_force_cap_n,
+                self._take_gripper_force_cap,
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
