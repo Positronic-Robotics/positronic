@@ -16,6 +16,7 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
+import time
 from abc import ABC, abstractmethod
 from bisect import bisect_right, insort
 from collections import deque
@@ -33,7 +34,7 @@ from attr import asdict, dataclass, evolve
 from positronic_model_server.serialization import check_int_range
 from positronic_model_server.spec import ARGS, NAME, VERSION
 
-from positronic import keys
+from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.eval import keys as eval_keys
 from positronic.keys import IMAGE_PREFIX
@@ -197,12 +198,14 @@ class Trajectory:
     ``end_ns`` can shorten the final command's period: at 10 Hz, commands at 0 and 100 ms
     can cover a 150 ms horizon, rather than the 200 ms implied by their count and rate.
     The robot keeps holding its last issued command after this scheduling boundary.
+    ``call_id`` is the per-run id of the policy call that predicted the commands, or ``None``.
     """
 
     commands: Sequence[Commands]
     start_ns: int
     fps: float
     end_ns: int
+    call_id: int | None = None
 
     @property
     def period_ns(self) -> float:
@@ -262,11 +265,14 @@ class TrajectoryPlayer(Policy):
 
         starts_chunk: bool
         chunk_end_ns: int
+        call_id: int | None
 
     @classmethod
     def _update_plan(cls, plan: deque[_Waypoint], update: Trajectory, now_ns: int) -> int:
         incoming = [
-            cls._Waypoint(command, update.due_ns(i), starts_chunk=i == 0, chunk_end_ns=update.end_ns)
+            cls._Waypoint(
+                command, update.due_ns(i), starts_chunk=i == 0, chunk_end_ns=update.end_ns, call_id=update.call_id
+            )
             for i, command in enumerate(update.commands)
         ]
         planned = len(incoming)
@@ -275,10 +281,7 @@ class TrajectoryPlayer(Policy):
             running = max(0, bisect_right(incoming, now_ns, key=lambda point: point.due_ns) - 1)
             incoming = incoming[running:]
             if incoming:
-                first = incoming[0]
-                incoming[0] = cls._Waypoint(
-                    first.commands, first.due_ns, starts_chunk=True, chunk_end_ns=first.chunk_end_ns
-                )
+                incoming[0] = evolve(incoming[0], starts_chunk=True)
         while plan and plan[-1].due_ns >= update.start_ns:
             plan.pop()
         # A retained chunk now ends where the new one starts.
@@ -307,7 +310,8 @@ class TrajectoryPlayer(Policy):
 
         A hold is the time from the end of the plan to the first command of the next chunk. The arm keeps its last
         target during a hold, also through a waypoint with no commands. The wait for the first chunk and a hold that
-        the episode end cuts do not count.
+        the episode end cuts do not count. Each hold longer than zero records a span that ends on the wall clock when
+        the next chunk sends its first command.
         """
 
         def __init__(self, runtime: Runtime) -> None:
@@ -320,6 +324,7 @@ class TrajectoryPlayer(Policy):
             # The end of the chunk that plays now, and of the chunk whose first round comes next.
             self._played_end_ns: int | None = None
             self._starting_chunk_end_ns: int | None = None
+            self._starting_call_id: int | None = None
             self._hold_sum_ns = 0
             self._hold_max_ns = 0
 
@@ -336,6 +341,7 @@ class TrajectoryPlayer(Policy):
             if point.starts_chunk:
                 self._last_emit_ns = None
                 self._starting_chunk_end_ns = point.chunk_end_ns
+                self._starting_call_id = point.call_id
 
         def count_round(self, planned: int | None, now_ns: int, queued: int, *, sent: bool) -> None:
             """Count new waypoints and the due commands emitted together at ``now_ns``; ``sent`` if any went out."""
@@ -361,6 +367,11 @@ class TrajectoryPlayer(Policy):
                 hold_ns = max(0, now_ns - self._played_end_ns)
                 self._hold_sum_ns += hold_ns
                 self._hold_max_ns = max(self._hold_max_ns, hold_ns)
+                if hold_ns > 0:
+                    call_id = self._starting_call_id
+                    attrs = {} if call_id is None else {telemetry_keys.ATTR_CALL_ID: call_id}
+                    end_ns = time.time_ns()
+                    telemetry.record_span(telemetry_keys.SPAN_WAYPOINTS_HOLD, end_ns - hold_ns, end_ns, **attrs)
             self._played_end_ns = max(self._starting_chunk_end_ns, now_ns)
             self._starting_chunk_end_ns = None
 
@@ -744,13 +755,21 @@ class InferenceSchedule(Policy):
             )
             self._pending.append(
                 self._PendingCall(
-                    answer=self._runtime.submit(infer, obs),
+                    answer=self._runtime.submit(partial(self._identified, infer, self.next_call_id), obs),
                     observation_time_ns=observation_time_ns,
                     call_id=self.next_call_id,
                 )
             )
             self.next_call_id += 1
             self._timings = []
+
+        @staticmethod
+        def _identified(
+            infer: Callable[[Obs], Sequence[Commands] | None], call_id: int, obs: Obs
+        ) -> Sequence[Commands] | None:
+            """Run ``infer`` with ``call_id`` on the span of the call."""
+            telemetry.set_active_attrs(**{telemetry_keys.ATTR_CALL_ID: call_id})
+            return infer(obs)
 
         def pop_ready(self) -> _PendingCall | None:
             if not self._pending or not self._pending[0].answer.done():
@@ -788,7 +807,8 @@ class InferenceSchedule(Policy):
                     check_finite_nonnegative(estimated_latency_sec, 'duration estimate')
                     chunk = call.answer.result()
                     if chunk is not None and call.call_id >= first_valid_call_id:
-                        update = self._merge.plan(chunk, self._fps, previous, now_ns, call.observation_time_ns)
+                        planned = self._merge.plan(chunk, self._fps, previous, now_ns, call.observation_time_ns)
+                        update = evolve(planned, call_id=call.call_id)
                         previous = update
                     timing.update_after_answer(update, estimated_latency_sec, now_ns)
 
@@ -812,7 +832,11 @@ class InferenceSchedule(Policy):
             calls.close()
 
     def meta(self) -> dict[str, Any]:
-        meta = {ACTION_FPS: self._fps}
+        meta = {
+            ACTION_FPS: self._fps,
+            policy_keys.REQUEST_TIMING: self._request_timing.to_spec(),
+            policy_keys.LATENCY_ESTIMATE: self._latency_estimate.to_spec(),
+        }
         if self._merge.horizon_sec is not None:
             meta[policy_keys.ACTION_HORIZON_SEC] = self._merge.horizon_sec
         return meta
