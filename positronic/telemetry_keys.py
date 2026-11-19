@@ -43,6 +43,9 @@ ATTR_PASS_FAILED = 'pass.failed'
 # durations and the instants `served.received_ns` and `served.sent_ns`, straight from the answer's own `timing` block.
 ATTR_SERVED_PREFIX = 'served.'
 
+# On `policy.submit` of a scheduled call and on `waypoints.hold`: the per-run id of the call.
+ATTR_CALL_ID = 'call.id'
+
 # On `policy.submit`: the age in milliseconds of the newest frame of each camera that the harness reads, the oldest
 # of them, when the call starts. The history frames of a temporal stack do not count.
 ATTR_OBS_AGE_MS = 'obs.age_ms'
@@ -95,6 +98,8 @@ ATTR_WAYPOINTS_LATE_MAX_MS = 'episode.waypoints.late_max_ms'
 # The total and the longest time in milliseconds that the arm holds its last target between two chunks.
 ATTR_WAYPOINTS_HOLD_SUM_MS = 'episode.waypoints.hold_sum_ms'
 ATTR_WAYPOINTS_HOLD_MAX_MS = 'episode.waypoints.hold_max_ms'
+# One hold of the arm between two chunks; docs/telemetry.md defines its bounds.
+SPAN_WAYPOINTS_HOLD = 'waypoints.hold'
 
 # One command that a driver takes: from the tick that reads it to the moment the driver makes it the device's target.
 SPAN_DRIVER_COMMAND = 'driver.command'

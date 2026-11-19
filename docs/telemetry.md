@@ -95,7 +95,8 @@ The span names are the contract:
 | `record.io` | `episode` | — | the recorder's serialize + append |
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
-| `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
+| `policy.submit` | the processor span that submits the call | `obs.age_ms`; `call.id` on a call of an inference schedule | one call on a worker thread |
+| `waypoints.hold` | the `trajectory_player` span of the round that ends the hold | `call.id` when a call made the next chunk | one hold of the arm between two chunks |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
 | `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
@@ -169,6 +170,28 @@ The `episode` span carries `episode.waypoints.hold_sum_ms` and `episode.waypoint
 command of the next chunk. During a hold the arm keeps its last target. The wait for the first chunk does not
 count, and a hold that the episode end cuts does not count. The hold share of a rollout is
 `hold_sum_ms / 1000 / episode.virtual_s`.
+
+Each hold longer than zero also records a `waypoints.hold` span. The span ends at the wall time of the round that
+sends the first command of the next chunk. Its length is the hold on the clock of the policy runtime, so the lengths
+of the spans add up to `hold_sum_ms`. On a real rig this clock is the monotonic clock of the host. In a simulation it
+is the world clock, so the span has the simulated length of the hold. When an inference schedule made the next chunk,
+the span carries the `call.id` of that call. The `policy.submit` span of the call carries the same `call.id`. The
+schedule counts the calls of each episode from zero.
+
+An inference schedule states its settings in its metadata, so the `episode` span carries them under
+`inference.policy.`:
+
+- `action_fps`: the rate of the commands in a chunk.
+- `action_horizon_sec`: the longest time that one chunk plays. It is absent when each chunk plays all its commands.
+- `request_timing.reference` and `request_timing.seconds`: when the schedule requests the next chunk. `before_end`
+  requests before the plan ends, by the latency estimate. `after_start` requests `seconds` after a chunk starts.
+  `every` requests each `seconds`.
+- `latency_estimate`: the lead of `before_end`. A number is a constant lead in seconds. Zero requests at the end of
+  the plan, so the arm holds for the whole call. `latency_estimate.statistic`, `latency_estimate.last` and
+  `latency_estimate.max_sec` state a lead that follows the delays of the recent calls. The other references do not
+  use the estimate.
+
+A remote policy records the metadata of its client stack only on protocol version 3.
 
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of a camera frame to the start of the
 call. The frame is the newest frame of each camera that the harness reads, and with several cameras the oldest of
