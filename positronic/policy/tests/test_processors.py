@@ -1114,6 +1114,14 @@ def test_a_schedule_states_when_it_requests_and_how_long_its_chunks_play(schedul
     assert schedule.meta() == {policy_keys.ACTION_FPS: 10, **expected}
 
 
+def test_a_schedule_with_a_local_latency_estimate_states_its_timing_without_the_estimate():
+    schedule = ChunkedSchedule(fps=10, inference_lead=PeakDuration())
+    assert schedule.meta() == {
+        policy_keys.ACTION_FPS: 10,
+        policy_keys.REQUEST_TIMING: {'reference': 'before_end', 'seconds': 0.0},
+    }
+
+
 @pytest.mark.parametrize('late_ms', [[0], [0, 10], [0, 5, 30, 10, 20], list(range(0, 1000, 7))])
 def test_late_percentiles_match_numpy(execution, late_ms):
     runtime, clock = execution

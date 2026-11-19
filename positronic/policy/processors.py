@@ -832,11 +832,11 @@ class InferenceSchedule(Policy):
             calls.close()
 
     def meta(self) -> dict[str, Any]:
-        meta = {
-            ACTION_FPS: self._fps,
-            policy_keys.REQUEST_TIMING: self._request_timing.to_spec(),
-            policy_keys.LATENCY_ESTIMATE: self._latency_estimate.to_spec(),
-        }
+        meta: dict[str, Any] = {ACTION_FPS: self._fps, policy_keys.REQUEST_TIMING: self._request_timing.to_spec()}
+        try:
+            meta[policy_keys.LATENCY_ESTIMATE] = self._latency_estimate.to_spec()
+        except NotImplementedError:
+            pass  # A local estimate has no spec; the episode still runs and records.
         if self._merge.horizon_sec is not None:
             meta[policy_keys.ACTION_HORIZON_SEC] = self._merge.horizon_sec
         return meta
