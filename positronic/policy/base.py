@@ -157,7 +157,11 @@ class Runtime(ABC):
 
     @abstractmethod
     def submit(self, function: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Answer[T]:
-        """Submit without waiting; raise ``QueueFull`` if the runtime's admission capacity is exhausted."""
+        """Submit without waiting; raise ``QueueFull`` if the runtime's admission capacity is exhausted.
+
+        When telemetry is enabled, run ``function`` in a ``policy.submit`` span that it can stamp with
+        ``telemetry.set_active_attrs``; a schedule puts its ``call.id`` there.
+        """
 
     @abstractmethod
     def _submit_on(
