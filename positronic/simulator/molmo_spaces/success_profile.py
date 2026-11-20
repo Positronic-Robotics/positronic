@@ -113,16 +113,6 @@ def _touches(data: mujoco.MjData, body: int, other: int) -> bool:
     return any(root == other for root, _ in _contact_forces(data, body))
 
 
-def _aabb(data: mujoco.MjData, body: int) -> tuple[np.ndarray, np.ndarray]:
-    """The low and high corners of the world box around every geom in the tree of root body ``body``."""
-    model = data.model
-    geoms = np.flatnonzero(model.body_rootid[model.geom_bodyid] == body)
-    rotations = data.geom_xmat[geoms].reshape(-1, 3, 3)
-    centers = data.geom_xpos[geoms] + np.einsum('gij,gj->gi', rotations, model.geom_aabb[geoms, :3])
-    halves = np.einsum('gij,gj->gi', np.abs(rotations), model.geom_aabb[geoms, 3:])
-    return (centers - halves).min(axis=0), (centers + halves).max(axis=0)
-
-
 def _opening(data: mujoco.MjData, joint: int) -> float:
     """How far ``joint`` is open, from 0 at its closed position 0 to 1 at the full width of its range."""
     low, high = data.model.jnt_range[joint]
@@ -199,6 +189,16 @@ class PlaceFacts:
     receptacle_tilt_rad: float
     object_pose: np.ndarray
     receptacle_pose: np.ndarray
+
+
+def _aabb(data: mujoco.MjData, body: int) -> tuple[np.ndarray, np.ndarray]:
+    """The low and high corners of the world box around every geom in the tree of root body ``body``."""
+    model = data.model
+    geoms = np.flatnonzero(model.body_rootid[model.geom_bodyid] == body)
+    rotations = data.geom_xmat[geoms].reshape(-1, 3, 3)
+    centers = data.geom_xpos[geoms] + np.einsum('gij,gj->gi', rotations, model.geom_aabb[geoms, :3])
+    halves = np.einsum('gij,gj->gi', np.abs(rotations), model.geom_aabb[geoms, 3:])
+    return (centers - halves).min(axis=0), (centers + halves).max(axis=0)
 
 
 class Place:

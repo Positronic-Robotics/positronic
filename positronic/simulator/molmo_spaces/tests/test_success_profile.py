@@ -104,7 +104,9 @@ class _Scene:
         self.hand((x - _CUBE_HALF - _PALM_HALF_THICKNESS - 0.001, y, z + 0.015), _UPRIGHT)
 
     def touching(self, name: str, other: str) -> bool:
-        return any(root == self.body(other) for root, _ in sp._contact_forces(self.data, self.body(name)))
+        pair = {self.body(name), self.body(other)}
+        roots = self.model.body_rootid[self.model.geom_bodyid]
+        return any({roots[c.geom1], roots[c.geom2]} == pair for c in self.data.contact)
 
 
 @pytest.fixture
@@ -335,6 +337,7 @@ class _Task:
     ],
 )
 def test_the_native_profile_takes_the_task_verdict_and_ends_at_the_first_success(success, done, judged, calls):
+    # A MolmoSpaces task changes its own state when asked, so the native profile keeps MolmoSpaces' call sequence.
     task = _Task(success, done)
     judge = sp.MolmoNativeJudge()
     assert judge.observe({sp.MOLMO_INFO_SUCCESS: success}) == {}

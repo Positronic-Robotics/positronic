@@ -246,14 +246,12 @@ class MolmoSpacesEnv(EnvProtocol):
             self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
         self._robot_view = self._task.env.current_robot.robot_view
         self._assert_bundled_arm()
-        control_dt = cfg.policy_dt_ms / 1000.0
-        self._control_dt = control_dt
         self._meta = {
             # Generated task descriptions can mislabel close episodes as "Open ...".
             mapping.META_TASK: episode.language.task_description,
             mapping.META_HOUSE_INDEX: episode.house_index,
         }
-        return control_dt
+        return cfg.policy_dt_ms / 1000.0
 
     def _strict_check(self) -> success_profile.Check:
         """The ``strict_v1`` check of the sampled task, which must be of a family that the profile judges."""
@@ -320,7 +318,7 @@ class MolmoSpacesEnv(EnvProtocol):
         profile = success_profile.SuccessProfile(
             token.get(mapping.TOKEN_SUCCESS_PROFILE, success_profile.SuccessProfile.MOLMO_NATIVE)
         )
-        control_dt = self._build(
+        self._control_dt = control_dt = self._build(
             bench,
             token[mapping.TOKEN_EPISODE_INDEX],
             token.get(mapping.TOKEN_SEED),
