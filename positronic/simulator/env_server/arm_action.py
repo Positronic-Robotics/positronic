@@ -5,7 +5,7 @@ This module must work in an isolated interpreter without Positronic installed.
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -34,67 +34,69 @@ def compose_reference_delta(
     )
 
 
-def wire_command_to_arm_action(
-    command: dict[str, Any],
-    current_q: Any,
-    *,
-    ik: Callable[[np.ndarray, np.ndarray], Any],
-    current_eef: Callable[[], tuple[Any, Any]],
-) -> np.ndarray | None:
-    """Absolute arm joint targets, or None where ``ik`` finds no solution.
+class ArmTargets(NamedTuple):
+    """The absolute joint targets of one arm, and why the env refused its command; ``refusal`` is None for an applied
+    command."""
 
-    ``ik`` and ``current_eef`` use poses in the frame the env measures. Only a Cartesian delta reads ``current_eef``.
-    """
-    current = np.asarray(current_q, dtype=np.float32).reshape(-1)
-    match command[protocol.COMMAND_TYPE]:
-        case protocol.JOINT_POS:
-            target = command[protocol.COMMAND_JOINT_POS]
-        case protocol.JOINT_DELTA:
-            dq = np.asarray(command[protocol.COMMAND_JOINT_DELTA], dtype=np.float32).reshape(-1)
-            if dq.shape[0] != current.shape[0]:
-                raise ValueError(f'joint delta {dq.shape[0]} vs measured joints {current.shape[0]}')
-            target = current + dq
-        case protocol.HOLD:
-            target = current
-        case protocol.CARTESIAN:
-            target = ik(*unpack_wire_pose(command[protocol.COMMAND_POSE]))
-        case protocol.CARTESIAN_DELTA:
-            delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target = ik(*compose_reference_delta(*current_eef(), delta_pos, delta_rot))
-        case other:
-            raise ValueError(
-                f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
-            )
-    return None if target is None else np.asarray(target, dtype=np.float32).reshape(-1)
+    q: np.ndarray
+    refusal: str | None
 
 
-def arm_targets_or_hold(
+class _Refused(Exception):
+    """A command that the env does not apply; the message is the reason."""
+
+
+def _joint_values(values: Any, joints: int) -> np.ndarray:
+    q = np.asarray(values, dtype=np.float32).reshape(-1)
+    if q.size != joints:
+        raise _Refused(f'width {q.size} for {joints} joints')
+    if not np.isfinite(q).all():
+        raise _Refused('a value is not finite')
+    return q
+
+
+def _solved(q: Any, joints: int) -> np.ndarray:
+    if q is None:
+        raise _Refused('no IK solution')
+    return _joint_values(q, joints)
+
+
+def arm_targets(
     command: dict[str, Any],
     measured_q: Any,
     *,
     ik: Callable[[np.ndarray, np.ndarray], Any],
-    current_eef: Callable[[], tuple[Any, Any]],
-) -> np.ndarray:
-    """Absolute arm joint targets, or the measured joints and an error log for a command that the env refuses.
+    read_eef: Callable[[], tuple[Any, Any]],
+    arm: str | None = None,
+) -> ArmTargets:
+    """The absolute joint targets of one arm's wire command, or the measured joints for a command that the env refuses.
 
-    The env refuses a joint delta or a target of the wrong width, a target that is not finite, and a pose that ``ik``
-    cannot solve. The arm holds, so a bad command fails the task and not the run.
+    The env refuses a target or a joint delta of the wrong width, a value that is not finite, and a pose that ``ik``
+    cannot solve, with one warning that names ``arm``. A command type that is not canonical and a pose that is not 12
+    values raise ``ValueError``. ``ik`` and ``read_eef`` use poses in the frame the env measures; only a Cartesian delta
+    calls ``read_eef``.
     """
     measured = np.asarray(measured_q, dtype=np.float32).reshape(-1)
     kind = command[protocol.COMMAND_TYPE]
-    deltas = np.asarray(command[protocol.COMMAND_JOINT_DELTA]).size if kind == protocol.JOINT_DELTA else measured.size
-    target = (
-        None
-        if deltas != measured.size
-        else wire_command_to_arm_action(command, measured, ik=ik, current_eef=current_eef)
-    )
-    if target is None:
-        refusal = 'no IK solution' if deltas == measured.size else f'{deltas} joint deltas for {measured.size} joints'
-    elif target.shape != measured.shape:
-        refusal = f'{target.size} joint targets for {measured.size} joints'
-    elif not np.isfinite(target).all():
-        refusal = 'a joint target is not finite'
-    else:
-        return target
-    logger.error('%s command not applied, the arm holds: %s', kind, refusal)
-    return measured
+    try:
+        match kind:
+            case protocol.JOINT_POS:
+                q = _joint_values(command[protocol.COMMAND_JOINT_POS], measured.size)
+            case protocol.JOINT_DELTA:
+                q = measured + _joint_values(command[protocol.COMMAND_JOINT_DELTA], measured.size)
+            case protocol.HOLD:
+                q = measured
+            case protocol.CARTESIAN:
+                q = _solved(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), measured.size)
+            case protocol.CARTESIAN_DELTA:
+                delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
+                q = _solved(ik(*compose_reference_delta(*read_eef(), delta_pos, delta_rot)), measured.size)
+            case other:
+                raise ValueError(
+                    f'{other!r} is not a canonical command type; the contract is '
+                    f'{list(protocol.CANONICAL_COMMAND_TYPES)}'
+                )
+    except _Refused as refusal:
+        logger.warning('%s command not applied, the %s holds: %s', kind, f'{arm} arm' if arm else 'arm', refusal)
+        return ArmTargets(measured, str(refusal))
+    return ArmTargets(q, None)

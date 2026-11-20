@@ -14,8 +14,7 @@ def arm_observations(
 ) -> dict[str, Any]:
     """The robot state and the grip of each arm in ``arms``.
 
-    ``measure`` takes the env's pose of an arm and gives it at the embodiment's grip site, as
-    ``WireCommandAdapter._measure`` does.
+    ``measure`` takes the env's pose of an arm and gives it at the embodiment's grip site.
     """
     obs: dict[str, Any] = {}
     for arm in arms:

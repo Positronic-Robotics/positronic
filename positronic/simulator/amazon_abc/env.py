@@ -195,12 +195,13 @@ class AbcEnv(EnvProtocol):
         for index, arm in enumerate(self._arms):
             command = action[protocol.arm_channel(protocol.ROBOT_COMMAND, arm.name)]
             measured = self._measured_q(arm)
-            joints = arm_action.arm_targets_or_hold(
+            joints = arm_action.arm_targets(
                 command,
                 measured,
                 ik=functools.partial(self._ik, arm),
-                current_eef=functools.partial(self._measured_eef, arm),
-            )
+                read_eef=functools.partial(self._measured_eef, arm),
+                arm=arm.name,
+            ).q
             grip = action[protocol.arm_channel(protocol.TARGET_GRIP, arm.name)]
             opening = aperture.flip_grip(grip) if np.isfinite(grip) else self._last_reported_apertures[index]
             per_arm.append(np.append(joints, opening))
@@ -259,10 +260,10 @@ class AbcEnv(EnvProtocol):
         )
         if solution.converged:
             return solution.q
-        logger.warning(
+        logger.debug(
             f'IK for the {arm.name} arm did not converge in {mujoco_ik.IK_ITERATIONS} iterations: '
             f'{np.linalg.norm(solution.residual[:3]):.2e} m and {np.linalg.norm(solution.residual[3:]):.2e} rad '
-            f'short of {target_pos.tolist()}; the arm holds'
+            f'short of {target_pos.tolist()}'
         )
         return None
 
