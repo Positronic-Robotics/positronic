@@ -123,7 +123,6 @@ def _robot_cfg(robot_usd: Path, stand_usd: Path) -> type:
     Gravity is off on the robot, as the real arms compensate it.
     """
 
-    @configclass
     class YamCfg:
         robot = ArticulationCfg(
             prim_path='{ENV_REGEX_NS}/robot',
@@ -171,23 +170,19 @@ def _robot_cfg(robot_usd: Path, stand_usd: Path) -> type:
                 ),
             },
         )
-        top_cam = _CAMERAS['top_cam']
-        left_wrist_cam = _CAMERAS['left_wrist_cam']
-        right_wrist_cam = _CAMERAS['right_wrist_cam']
 
-    # Labels go on after the class body, so that configclass does not make them fields.
+    # The cameras go on before configclass, as fields named for their image obs keys. The labels go on after it, so
+    # that configclass does not make them fields.
+    for name, camera in _CAMERAS.items():
+        setattr(YamCfg, name, camera)
+    YamCfg = configclass(YamCfg)
     YamCfg.table_fixture = TableFixtureCfg(usd_path=str(stand_usd), frame='robot')  # pyright: ignore[reportAttributeAccessIssue]
     YamCfg.ee_recorder_bodies = dict(spec.EE_RECORDER_BODIES)  # pyright: ignore[reportAttributeAccessIssue]
     return YamCfg
 
 
-@configclass
-class _YamCameraCfg:
-    """Names the three robot cameras for ``generate_image_obs_from_cameras``. The robot cfg spawns them."""
-
-    top_cam = _CAMERAS['top_cam']
-    left_wrist_cam = _CAMERAS['left_wrist_cam']
-    right_wrist_cam = _CAMERAS['right_wrist_cam']
+# Names the three robot cameras for ``generate_image_obs_from_cameras``. The robot cfg spawns them.
+_YamCameraCfg = configclass(type('_YamCameraCfg', (), dict(_CAMERAS)))
 
 
 def _joint_ids(robot: Any, names: list[str]) -> list[int]:
@@ -227,20 +222,32 @@ def ee_quat(env: ManagerBasedRLEnv, side: str) -> Any:
     return quat_isaaclab_to_wxyz(_ee_in_root(env, side)[1])
 
 
-@configclass
-class YamProprioceptionObservationCfg(ObsGroup):
-    left_arm_joint_pos = ObsTerm(func=arm_joint_pos, params={'side': 'left'})
-    left_gripper_pos = ObsTerm(func=gripper_pos, params={'side': 'left'}, clip=(0.0, 1.0))
-    left_ee_pos = ObsTerm(func=ee_pos, params={'side': 'left'})
-    left_ee_quat = ObsTerm(func=ee_quat, params={'side': 'left'})
-    right_arm_joint_pos = ObsTerm(func=arm_joint_pos, params={'side': 'right'})
-    right_gripper_pos = ObsTerm(func=gripper_pos, params={'side': 'right'}, clip=(0.0, 1.0))
-    right_ee_pos = ObsTerm(func=ee_pos, params={'side': 'right'})
-    right_ee_quat = ObsTerm(func=ee_quat, params={'side': 'right'})
+def _proprio_post_init(self: Any) -> None:
+    self.enable_corruption = False
+    self.concatenate_terms = False
 
-    def __post_init__(self) -> None:
-        self.enable_corruption = False
-        self.concatenate_terms = False
+
+# The terms of each arm, named by ``yam_spec.proprio_term``.
+_PROPRIO_TERMS = {
+    spec.PROPRIO_JOINT_POS: (arm_joint_pos, None),
+    spec.PROPRIO_GRIP: (gripper_pos, (0.0, 1.0)),
+    spec.PROPRIO_EE_POS: (ee_pos, None),
+    spec.PROPRIO_EE_QUAT: (ee_quat, None),
+}
+YamProprioceptionObservationCfg = configclass(
+    type(
+        'YamProprioceptionObservationCfg',
+        (ObsGroup,),
+        {
+            **{
+                spec.proprio_term(side, term): ObsTerm(func=func, params={'side': side}, clip=clip)
+                for side in spec.SIDES
+                for term, (func, clip) in _PROPRIO_TERMS.items()
+            },
+            '__post_init__': _proprio_post_init,
+        },
+    )
+)
 
 
 def _gripper_action(side: str) -> BinaryJointPositionZeroToOneActionCfg:

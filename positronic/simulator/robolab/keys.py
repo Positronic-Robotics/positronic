@@ -49,7 +49,7 @@ GT_STATE_GRIPPER_CONTACT = 'gripper_contact'
 GT_STATE_PROGRESS = 'progress'
 
 # The robots an env server can put in the RoboLab scenes: the DROID rig (a Franka arm with a Robotiq 2F-85), or the
-# two-arm i2rt YAM.
+# two-arm i2rt YAM. A keys module imports nothing, so the names are strings and ``ROBOTS`` lists them.
 DROID = 'droid'
 YAM = 'yam'
 

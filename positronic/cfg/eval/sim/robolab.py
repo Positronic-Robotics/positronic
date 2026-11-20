@@ -46,8 +46,7 @@ def _embodiment(robot: str, proxy: RemoteEnvControlSystem, camera_dict: dict[str
             arms=keys.BIMANUAL_ARMS,
             static_meta=bundled_yam_model(),
         )
-    # The DROID rig's model (Franka arm + Robotiq 2F-85) rides the env's ``robot_meta`` — the launcher
-    # serializes it for the Isaac Lab server, which cannot build it — so nothing model-specific lives here.
+    # The env's ``robot_meta`` carries the DROID rig's model (Franka arm + Robotiq 2F-85).
     return remote_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
 
 

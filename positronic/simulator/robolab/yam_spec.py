@@ -23,7 +23,9 @@ import numpy as np
 
 if __package__:
     from positronic.simulator.env_server import protocol
+    from positronic.simulator.robolab import keys
 else:
+    import keys  # pyright: ignore[reportMissingImports]
     import protocol  # pyright: ignore[reportMissingImports]
 
 SIDES = ('left', 'right')
@@ -94,6 +96,18 @@ ACTION_TERMS = (
 )
 ACTION_DIM = sum(len(joints) for _, joints in ACTION_TERMS)
 
+# The proprioception terms of an arm: the joints, the grip (0 open, 1 closed), and the ``<side>_gripper`` link pose in
+# the robot root frame. ``proprio_term`` names a term of one arm.
+PROPRIO_JOINT_POS = 'arm_joint_pos'
+PROPRIO_GRIP = 'gripper_pos'
+PROPRIO_EE_POS = 'ee_pos'
+PROPRIO_EE_QUAT = 'ee_quat'
+
+
+def proprio_term(side: str, term: str) -> str:
+    return f'{side}_{term}'
+
+
 # The RoboLab labels. A contact sensor label must match one prim per env, so each hand names one finger. The group
 # ``CONTACT_GRIPPERS`` covers both hands.
 CONTACT_GRIPPERS = 'gripper'
@@ -137,16 +151,15 @@ class CameraSpec:
 # The rig records the cameras at SVGA (960 x 600). The aperture gives the field of view at this focal length.
 CAMERA_WIDTH, CAMERA_HEIGHT = 960, 600
 CAMERA_FOCAL_LENGTH = 2.8
-# TODO: fit the poses to the YAM rig. These are the ZED X fit of the ABC sim (``amazon_abc.camera_fit.ZED_X_FIT``),
-# moved from the YAM model of the ABC scene to this one.
+# TODO: fit the poses to the YAM rig. These are the ZED X fit of the ABC sim (``amazon_abc.camera_fit.ZED_X_FIT``).
 CAMERAS = {
-    'top_cam': CameraSpec(
+    keys.TOP_CAMERA: CameraSpec(
         'base_plate', (-0.12, 0.053, 0.9095), (0.653638, 0.256589, -0.244304, -0.668756), 7.354309, 4.596443
     ),
-    'left_wrist_cam': CameraSpec(
+    keys.LEFT_WRIST_CAMERA: CameraSpec(
         'left_link6', (-0.060433, 0.0017, -0.115432), (0.648406, -0.298832, -0.284007, 0.640007), 8.011923, 4.673157
     ),
-    'right_wrist_cam': CameraSpec(
+    keys.RIGHT_WRIST_CAMERA: CameraSpec(
         'right_link6', (-0.0612, -0.0033, -0.11479), (0.632319, -0.277308, -0.316501, 0.650461), 8.011923, 4.673157
     ),
 }
@@ -167,15 +180,6 @@ def rpy_matrix(rpy: Any) -> np.ndarray:
     """The rotation of a URDF ``rpy``: Rz(yaw) Ry(pitch) Rx(roll)."""
     roll, pitch, yaw = rpy
     return _axis_rotation(2, yaw) @ _axis_rotation(1, pitch) @ _axis_rotation(0, roll)
-
-
-def _matrix_rpy(r: np.ndarray) -> tuple[float, float, float]:
-    pitch = np.arcsin(-np.clip(r[2, 0], -1.0, 1.0))
-    if abs(np.cos(pitch)) > 1e-9:
-        roll, yaw = np.arctan2(r[2, 1], r[2, 2]), np.arctan2(r[1, 0], r[0, 0])
-    else:
-        roll, yaw = np.arctan2(-r[1, 2], r[1, 1]), 0.0
-    return float(roll), float(pitch), float(yaw)
 
 
 def _fmt(values: Any) -> str:
@@ -201,13 +205,13 @@ def _box(parent: ET.Element, tag: str, xyz: Any, rpy: Any, size: Any, name: str 
     return element
 
 
-def _joint_frame(joint: ET.Element) -> np.ndarray:
-    origin = joint.find('origin')
-    assert origin is not None  # every joint of the i2rt URDF states its origin
-    frame = np.eye(4)
-    frame[:3, :3] = rpy_matrix([float(v) for v in origin.attrib['rpy'].split()])
-    frame[:3, 3] = [float(v) for v in origin.attrib['xyz'].split()]
-    return frame
+def _matrix_rpy(r: np.ndarray) -> tuple[float, float, float]:
+    pitch = np.arcsin(-np.clip(r[2, 0], -1.0, 1.0))
+    if abs(np.cos(pitch)) > 1e-9:
+        roll, yaw = np.arctan2(r[2, 1], r[2, 2]), np.arctan2(r[1, 0], r[0, 0])
+    else:
+        roll, yaw = np.arctan2(-r[1, 2], r[1, 1]), 0.0
+    return float(roll), float(pitch), float(yaw)
 
 
 def _finger_collisions(link: ET.Element, side: str, finger: str, joint_in_wrist: np.ndarray) -> None:
@@ -233,6 +237,15 @@ def _prefixed(element: ET.Element, side: str) -> ET.Element:
     new = copy.deepcopy(element)
     new.set('name', f'{side}_{element.attrib["name"]}')
     return new
+
+
+def _joint_frame(joint: ET.Element) -> np.ndarray:
+    origin = joint.find('origin')
+    assert origin is not None  # every joint of the i2rt URDF states its origin
+    frame = np.eye(4)
+    frame[:3, :3] = rpy_matrix([float(v) for v in origin.attrib['rpy'].split()])
+    frame[:3, 3] = [float(v) for v in origin.attrib['xyz'].split()]
+    return frame
 
 
 def _prefixed_arm(source: ET.Element, mesh_dir: Path, side: str) -> list[ET.Element]:

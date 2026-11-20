@@ -12,8 +12,6 @@ from positronic.cfg import embodiment
 from positronic.simulator.env_server import protocol
 from positronic.simulator.robolab import yam_spec as spec
 
-_ARMS = len(spec.SIDES)
-
 
 @pytest.fixture(scope='module')
 def urdf() -> ET.Element:
@@ -159,7 +157,7 @@ def _wire(left: dict, right: dict, grips=(0.0, 0.0)) -> dict:
     return wire
 
 
-_MEASURED = np.arange(12, dtype=np.float32).reshape(_ARMS, 6) / 10
+_MEASURED = np.arange(12, dtype=np.float32).reshape(len(spec.SIDES), 6) / 10
 _HOLD = {protocol.COMMAND_TYPE: protocol.HOLD}
 
 

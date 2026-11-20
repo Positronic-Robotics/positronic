@@ -5,8 +5,8 @@ shares positronic's venv: the launcher runs ``uv run --project <robolab clone> e
 --headless`` with the positronic-free ``server``/``protocol`` modules on ``PYTHONPATH``. It imports only robolab,
 isaaclab and the modules beside it, never ``positronic``.
 
-``--robot`` names the robot that the server puts in the task scenes, ``keys.DROID`` or ``keys.YAM``. One server
-serves one robot.
+``--robot`` names the robot that the server puts in the task scenes, ``keys.DROID`` or ``keys.YAM``. One
+server serves one robot.
 
 For the DROID rig, one jointpos-substrate env serves every wire command: RoboLab's leaderboard stack drives
 ``DroidJointPositionActionCfg`` (8-dim ``[q1..q7 absolute rad, gripper]`` at 15 Hz), so ``joint_pos`` passes
@@ -780,12 +780,9 @@ class YamEnv(RobolabEnv):
             }
         }
 
-    def _arms_measured_q(self) -> np.ndarray:
-        """Every slot's measured joints per arm, ``(num_envs, arms, 6)``."""
-        return self._measured_q().cpu().numpy().reshape(self._num_envs, len(yam_spec.SIDES), -1)
-
     def _action(self, actions: dict[int, dict[str, Any]]) -> torch.Tensor:
-        measured = self._arms_measured_q()
+        # Every slot's measured joints per arm, (num_envs, arms, 6).
+        measured = self._measured_q().cpu().numpy().reshape(self._num_envs, len(yam_spec.SIDES), -1)
         # A slot with no wire action holds its measured joints and its grips.
         rows = np.concatenate([measured, self._grip.cpu().numpy()[:, :, None]], axis=2).reshape(self._num_envs, -1)
         for slot, wire in actions.items():
@@ -799,10 +796,14 @@ class YamEnv(RobolabEnv):
         joint_vel = joint_vel.reshape(self._num_envs, len(yam_spec.SIDES), -1)
         observations: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
         for arm, side in enumerate(yam_spec.SIDES):
-            joint_pos = proprio[f'{side}_arm_joint_pos'].cpu().numpy()
-            ee_pos = proprio[f'{side}_ee_pos'].cpu().numpy() + self._ENV_IN_WORLD
-            ee_quat = proprio[f'{side}_ee_quat'].cpu().numpy()
-            grip = proprio[f'{side}_gripper_pos'].cpu().numpy()
+            terms = (
+                yam_spec.PROPRIO_JOINT_POS,
+                yam_spec.PROPRIO_GRIP,
+                yam_spec.PROPRIO_EE_POS,
+                yam_spec.PROPRIO_EE_QUAT,
+            )
+            joint_pos, grip, ee_pos, ee_quat = (proprio[yam_spec.proprio_term(side, t)].cpu().numpy() for t in terms)
+            ee_pos = ee_pos + self._ENV_IN_WORLD
             for slot, observation in enumerate(observations):
                 observation.update({
                     protocol.arm_channel(protocol.OBS_JOINT_POS, side): joint_pos[slot],
