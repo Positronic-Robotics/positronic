@@ -476,6 +476,13 @@ def test_an_image_endpoint_without_a_query_omits_it_from_its_dump(mode: str):
     assert stated['query'] == 'horizon_sec=0.5'
 
 
+def test_a_private_plan_of_an_image_carries_its_memory_need():
+    plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), org=OrgSlug('acme'), min_vram_gb=48)
+    assert isinstance(plan.request_type, PrivateEval)
+    assert [entry.min_vram_gb for entry in plan.endpoints] == [48]
+    assert plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x')).endpoints[0].min_vram_gb is None
+
+
 def test_a_competition_plan_of_an_image_carries_its_query():
     plan = plan_of_image(PolicyImage('org/policy:v1'), EvalRef('molmo.x'), query='horizon_sec=0.5')
     assert isinstance(plan.request_type, NebiusCompetition)
