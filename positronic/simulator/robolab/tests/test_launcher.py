@@ -4,6 +4,7 @@ that shares a server some other process runs.
 Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole Isaac Lab stack.
 """
 
+import contextlib
 import subprocess
 import sys
 from typing import Any
@@ -34,7 +35,7 @@ class _StubProcess:
 def spawned(monkeypatch) -> list[list[str]]:
     """The command lines ``serve_robolab`` would have spawned, with the checkout and the sync stubbed out."""
     commands: list[list[str]] = []
-    monkeypatch.setattr(launcher, '_ensure_robolab_src', lambda: launcher._ROBOLAB_SRC)
+    monkeypatch.setattr(launcher, 'ensure_pinned_checkout', lambda *args, **kwargs: launcher._ROBOLAB_SRC)
     monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: None)
     # Nothing binds the port here, so the wait for it is stubbed out.
     monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
@@ -69,6 +70,28 @@ def test_the_join_deadline_of_a_shared_server_reaches_the_env_server(spawned, mo
         launcher.main()
 
     assert _flag(spawned[0], '--join-deadline') == '45.0'
+
+
+def test_the_setup_installs_the_shipped_lock_and_leaves_the_checkout_as_pinned(monkeypatch, tmp_path):
+    src = tmp_path / 'robolab'
+    src.mkdir()
+    pristine = '[tool.uv]\nconstraint-dependencies = ["warp-lang != 1.13.0.dev20260418"]\n'
+    (src / 'pyproject.toml').write_text(pristine)
+    (src / 'uv.lock').write_text('version = 1\n')
+    commands: list[list[str]] = []
+    monkeypatch.setattr(launcher, 'ensure_pinned_checkout', lambda *args, **kwargs: src)
+    monkeypatch.setattr(launcher, 'setup_lock', lambda cache: contextlib.nullcontext())
+    monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: commands.append(command))
+    monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
+    monkeypatch.setattr(subprocess, 'Popen', lambda command, **kwargs: _StubProcess())
+
+    with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+        pass
+
+    assert (src / 'pyproject.toml').read_text() == pristine
+    (sync,) = [command for command in commands if command[:2] == ['uv', 'sync']]
+    assert '--frozen' in sync
+    assert _flag(sync, '--project') == str(src)
 
 
 class _OneTaskEnv(EnvProtocol):

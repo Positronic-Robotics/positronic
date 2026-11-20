@@ -315,10 +315,10 @@ class RobolabEnv(EnvProtocol):
         if telemetry.active():
             self._env.sim.step = self._timed_phase(self._env.sim.step, 'physics')
             self._env.sim.render = self._timed_phase(self._env.sim.render, 'render')
-        # ``instruction`` is the resolved language goal (``create_env`` picks the variant); the rest is the
-        # task identity the episode records.
+        # ``instruction`` is the language goal in the phrasing of the reset (``create_env`` keeps the selected
+        # phrasings as a ``{phrasing: text}`` dict); the rest is the task identity the episode records.
         self._meta = {
-            keys.META_INSTRUCTION: self._env_cfg.instruction,
+            keys.META_INSTRUCTION: resolve_instruction(self._env_cfg.instruction, instruction_type),
             'env_name': env_name,
             'task_name': self._env_cfg._task_name,
             'attributes': list(self._env_cfg._task_attributes),
