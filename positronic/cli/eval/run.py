@@ -379,8 +379,8 @@ def run(
     ``--sample-seed`` picks the draw: the same seed draws the same trials. ``--policy-query`` holds the
     params the platform puts on each session URL of ``--policy-image``, for example ``horizon_sec=0.5``.
     ``--min-vram-gb`` is the least GPU memory ``--policy-image`` needs, in GB of 10^9 bytes. With no
-    value the image gets a 24 GB slice. A private run gets the smallest slice that holds the value, and
-    a competition run keeps the 24 GB slice.
+    value the image gets a 24 GB slice. A private run (``--org``) gets the smallest slice that holds the
+    value. Without ``--org``, a value above 25 is refused.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
