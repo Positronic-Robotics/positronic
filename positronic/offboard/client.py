@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
 from threading import Condition, Lock, local
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 from positronic_model_server import protocol, serialization
 from positronic_wire import wire
@@ -52,12 +52,20 @@ UPLINK_MS = 'uplink_ms'
 DOWNLINK_MS = 'downlink_ms'
 
 
+class Dial(NamedTuple):
+    """The dial that opened a connection: the URL it dialed, and its milliseconds."""
+
+    endpoint: str
+    connect_ms: float
+
+
 class InferenceSession:
     """One connection using the protocol declared by its server. Finish inference before closing it.
 
     ``reopen`` returns a new session on the same server. A connection that drops before the server's first
     answer reconnects through it, once, and sends the observation again. ``ready_by`` is the
-    ``time.monotonic()`` instant past which the status handshake waits for no further update.
+    ``time.monotonic()`` instant past which the status handshake waits for no further update. ``dial`` is the
+    dial that opened ``conn``, which the first send records.
     """
 
     def __init__(
@@ -67,8 +75,11 @@ class InferenceSession:
         *,
         ready_by: float = math.inf,
         reopen: Callable[[], 'InferenceSession'] | None = None,
+        dial: Dial | None = None,
     ):
         self._conn = conn
+        self._dial = dial
+        self._sent_on_conn = False
         self._infer_timeout = infer_timeout
         self._reopen = reopen
         ready = self._handshake(ready_by)
@@ -228,6 +239,7 @@ class InferenceSession:
         with self._send_lock:
             if not self._closing:
                 self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+                self._dial, self._sent_on_conn = reopened._dial, False
                 return
         reopened.close()
         raise RuntimeError('The inference session is closing')
@@ -243,7 +255,7 @@ class InferenceSession:
             serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
         )
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
-        wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        send_attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
         token = object()
         try:
@@ -257,11 +269,12 @@ class InferenceSession:
                         self._pending.append(token)
                         sent_alone = len(self._pending) == 1
                     self.sent_alone = sent_alone
+                    send_attrs.update(self._connection_attrs())
                     self._conn.send(serialised)
             finally:
                 # A send that raises gets timed too, so the span is recorded on the way out.
                 sent = time.time_ns()
-                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **send_attrs)
             try:
                 deadline = time.monotonic() + self._infer_timeout
                 with self._responses:
@@ -302,6 +315,17 @@ class InferenceSession:
                 if token in self._pending:
                     self._pending.remove(token)
                 self._responses.notify_all()
+
+    def _connection_attrs(self) -> dict[str, Any]:
+        """The connection's attributes of the send about to go out on it. Call it under the send lock."""
+        if self._sent_on_conn:
+            return {telemetry_keys.ATTR_WIRE_NEW_CONNECTION: False}
+        self._sent_on_conn = True
+        attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_NEW_CONNECTION: True}
+        if self._dial is not None:
+            attrs[telemetry_keys.ATTR_WIRE_ENDPOINT] = self._dial.endpoint
+            attrs[telemetry_keys.ATTR_WIRE_CONNECT_MS] = self._dial.connect_ms
+        return attrs
 
     def _decode_answer(self, received: bytes) -> Any:
         self._answered = True
@@ -434,9 +458,11 @@ class InferenceClient:
         A refusal sent as a protocol frame (a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
+        dial_started = time.monotonic()
         conn = self._wire.dial(self._address, self.headers, open_timeout)
+        dial = Dial(self.session_url, (time.monotonic() - dial_started) * 1000.0)
         try:
-            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen)
+            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen, dial=dial)
         except BaseException:
             conn.close(timeout=time_left(ready_by))
             raise

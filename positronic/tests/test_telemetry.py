@@ -467,6 +467,51 @@ def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
     sampler._nvml.shutdown()
 
 
+def _refuse_nvml_utilisation(monkeypatch):
+    """NVML as a Jetson's: it opens the GPU and refuses every utilisation and memory query."""
+    _install_fake_nvml(monkeypatch)
+
+    def _refuse(handle):
+        raise pynvml.NVMLError(pynvml.NVML_ERROR_NOT_SUPPORTED)
+
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetUtilizationRates', _refuse)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetMemoryInfo', _refuse)
+
+
+def test_a_jetson_gpu_sample_takes_its_load_from_sysfs_when_nvml_refuses(tmp_path, monkeypatch):
+    _refuse_nvml_utilisation(monkeypatch)
+    load = tmp_path / 'load'
+    load.write_text('204\n')
+    monkeypatch.setattr(telemetry, 'TEGRA_GPU_LOAD_PATH', load)
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert sample[telemetry.STAT_GPU_COUNT] == 1
+    [gpu] = sample[telemetry.STAT_GPUS]
+    assert gpu[telemetry.GPU_UTIL_PCT] == pytest.approx(20.4)
+    assert gpu[telemetry.GPU_MEM_USED_B] is None
+
+
+def test_an_nvml_gpu_that_answers_ignores_the_sysfs_load(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    load = tmp_path / 'load'
+    load.write_text('999\n')
+    monkeypatch.setattr(telemetry, 'TEGRA_GPU_LOAD_PATH', load)
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert [gpu[telemetry.GPU_UTIL_PCT] for gpu in sample[telemetry.STAT_GPUS]] == [_FakeUtil.gpu]
+
+
+def test_a_box_with_no_sysfs_gpu_load_keeps_an_empty_gpu_list(tmp_path, monkeypatch):
+    _refuse_nvml_utilisation(monkeypatch)
+    monkeypatch.setattr(telemetry, 'TEGRA_GPU_LOAD_PATH', tmp_path / 'absent')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert sample[telemetry.STAT_GPUS] == []
+
+
 class _UnreadableProc:
     """A child whose every read raises ``error``."""
 
