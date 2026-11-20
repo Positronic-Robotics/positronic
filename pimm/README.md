@@ -259,7 +259,8 @@ sleeps, and `result()` on an unanswered call raises. The full contract is the do
 ## Control Systems and the World
 
 A control system is any class that subclasses `pimm.ControlSystem` and implements
-`run(should_stop, clock) -> Iterator[pimm.Sleep]`. Inside that method you are free
+`run(should_stop, clock) -> Iterator[pimm.Command]`, where a command is `pimm.Sleep` or
+`pimm.Yield`. Inside that method you are free
 to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
@@ -286,7 +287,7 @@ The `World` runtime plays three roles:
    transforms) at bind time.
 2. **Scheduler.** `world.start(main, background=None)` starts the chosen control
    systems, spawns background ones in daemon processes (via the **spawn**
-   multiprocessing context), and returns an iterator of `Sleep` commands for the
+   multiprocessing context), and returns an iterator of `pimm.Command` values for the
    main-process group. If you prefer a convenience wrapper you can call
    `world.run(*main_loops)` instead.
 3. **Lifecycle manager.** Entering the `with pimm.World()` block creates shared
