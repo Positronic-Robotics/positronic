@@ -328,7 +328,10 @@ class _MolmoObservationEnv(EnvProtocol):
         self.actions.clear()
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self.observation}],
-            protocol.FRAME_META: {mapping.META_TASK: self.RESET_TASK},
+            protocol.FRAME_META: {
+                mapping.META_TASK: self.RESET_TASK,
+                mapping.META_SUCCESS_PROFILE: token[mapping.TOKEN_SUCCESS_PROFILE],
+            },
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self.CONTROL_DT,
         }

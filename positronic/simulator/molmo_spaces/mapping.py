@@ -136,6 +136,8 @@ TASK_ENV_HOOK = 'env_hook'
 
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'
+# The ``success_profile.SuccessProfile`` value that judges the episode. A server that predates profiles states none.
+META_SUCCESS_PROFILE = 'success_profile'
 
 MOLMO_OBS_QPOS = 'qpos'  # MolmoSpaces joint positions, grouped by robot move group.
 

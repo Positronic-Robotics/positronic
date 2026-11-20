@@ -768,6 +768,23 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
         assert obs_rx.read().data[0] >= 1
 
 
+class _RefusingAdapter(_CountdownAdapter):
+    def check_reset(self, params, frame):
+        raise ValueError(f'the env answered seed {params.get(eval_keys.SEED)} with another judge')
+
+
+@pytest.mark.timeout(60.0)
+def test_a_reset_answer_that_the_adapter_refuses_fails_the_reset_and_publishes_nothing():
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_RefusingAdapter(), nullcontext((host, port)))
+        obs_rx = world.pair(proxy.observations['value'])
+        world.start([proxy])
+
+        with pytest.raises(ValueError, match='another judge'):
+            proxy.reset({eval_keys.SEED: 0})
+        assert obs_rx.read() is None
+
+
 @pytest.mark.timeout(60.0)
 def test_an_env_that_keeps_the_listed_instruction_publishes_no_goal():
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:

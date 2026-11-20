@@ -141,7 +141,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._robot_view: Any = None
         self._control_dt: float | None = None
         self._judge: success_profile.Judge | None = None
-        self._meta: dict[str, Any] | None = None
+        self._meta: dict[str, Any] = {}
         self._camera_names: list[str] = []
 
     def _episodes_of(self, bench: mapping.BenchmarkPath) -> list[Any]:
@@ -337,7 +337,7 @@ class MolmoSpacesEnv(EnvProtocol):
         metrics = self._task_metrics(self._task.get_reward(), infos, self._judge.observe(infos[0]))
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs, metrics, arm_error=False)}],
-            protocol.FRAME_META: self._meta,
+            protocol.FRAME_META: {**self._meta, mapping.META_SUCCESS_PROFILE: profile.value},
             protocol.FRAME_ROBOT_META: {},  # The client supplies the robot model through static_meta.
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }

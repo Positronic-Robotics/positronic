@@ -229,6 +229,31 @@ def test_reset_token_carries_the_success_profile_of_the_trial():
     assert _adapter().reset_token(params)[mapping.TOKEN_SUCCESS_PROFILE] == SuccessProfile.STRICT_V1.value
 
 
+def _reset_frame(meta: dict) -> dict:
+    return {protocol.FRAME_META: {mapping.META_TASK: 'open the drawer', **meta}}
+
+
+@pytest.mark.parametrize(
+    ('asked', 'stated'),
+    [
+        (SuccessProfile.STRICT_V1, {mapping.META_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value}),
+        (SuccessProfile.MOLMO_NATIVE, {mapping.META_SUCCESS_PROFILE: SuccessProfile.STRICT_V1.value}),
+        # A server that predates success profiles states none.
+        (SuccessProfile.STRICT_V1, {}),
+        (SuccessProfile.MOLMO_NATIVE, {}),
+    ],
+)
+def test_a_reset_that_states_another_profile_or_none_is_refused(asked, stated):
+    with pytest.raises(RuntimeError, match=asked.value):
+        _adapter().check_reset({molmo_keys.SUCCESS_PROFILE: asked.value}, _reset_frame(stated))
+
+
+@pytest.mark.parametrize('profile', list(SuccessProfile))
+def test_a_reset_that_states_the_profile_of_the_trial_is_accepted_beside_fields_it_does_not_know(profile):
+    frame = _reset_frame({mapping.META_SUCCESS_PROFILE: profile.value, 'a_later_field': 1})
+    _adapter().check_reset({molmo_keys.SUCCESS_PROFILE: profile.value}, frame)
+
+
 @pytest.mark.parametrize('exterior_sides', [[ShoulderSide.LEFT], list(ShoulderSide)])
 @pytest.mark.parametrize('with_right_shoulder', [False, True])
 def test_reset_token_asks_for_the_right_shoulder_as_the_adapter_is_told_whatever_its_cameras(

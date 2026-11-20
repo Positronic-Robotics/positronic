@@ -32,6 +32,10 @@ class EnvAdapter(ABC):
         Called at each trial start; clear any per-trial command state here.
         """
 
+    def check_reset(self, params: dict[str, Any], frame: dict[str, Any]) -> None:
+        """Raise when the env's reset answer ``frame`` does not serve the trial ``params``. Any answer serves here."""
+        return None
+
     @abstractmethod
     def action(self, commands: dict[str, pimm.Message | None]) -> dict[str, Any]:
         """The latest command per channel -> the raw action the env steps; ``None`` where nothing is new.
