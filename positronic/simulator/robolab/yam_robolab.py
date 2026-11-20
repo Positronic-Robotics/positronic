@@ -5,8 +5,8 @@ It runs in RoboLab's own interpreter, after the Isaac app starts, and imports no
 - ``convert``: writes the URDF and the stand of ``yam_spec`` and converts the URDF to USD.
 - ``register_envs``: registers the RoboLab task envs with this robot. The robot cfg spawns the articulation and the
   three cameras, and carries the ``table_fixture`` and ``ee_recorder_bodies`` labels. The action has 14 values: per
-  arm six joint targets (rad) and a binary gripper (above 0.5 closes). The proprioception holds per arm the joint
-  positions, the grip (0 open, 1 closed) and the pose of the ``gripper`` link in the robot root frame (wxyz).
+  arm six joint targets (rad) and the grip (0 open, 1 closed, linear between). The proprioception holds per arm the
+  joint positions, the grip (0 open, 1 closed) and the pose of the ``gripper`` link in the robot root frame (wxyz).
 """
 
 import copy
@@ -37,7 +37,6 @@ from robolab.core.observations.observation_utils import (  # pyright: ignore[rep
     generate_obs_cfg,
 )
 from robolab.core.utils.isaaclab_compat import as_torch, quat_isaaclab_to_wxyz  # pyright: ignore[reportMissingImports]
-from robolab.robots.droid import BinaryJointPositionZeroToOneActionCfg  # pyright: ignore[reportMissingImports]
 from robolab.variations.backgrounds import HomeOfficeBackgroundCfg  # pyright: ignore[reportMissingImports]
 from robolab.variations.camera import EgocentricMirroredWideAngleHighCameraCfg  # pyright: ignore[reportMissingImports]
 from robolab.variations.lighting import SphereLightCfg  # pyright: ignore[reportMissingImports]
@@ -251,17 +250,15 @@ YamProprioceptionObservationCfg = configclass(
 
 
 def _action_term(joints: tuple[str, ...]) -> Any:
-    """The action term of ``joints``: a binary grip (above 0.5 closes) for a finger joint, else joint targets."""
-    if joints[0].endswith(spec.FINGER_JOINT):
-        (joint,) = joints
-        return BinaryJointPositionZeroToOneActionCfg(
-            asset_name='robot',
-            joint_names=[joint],
-            open_command_expr={joint: spec.FINGER_OPEN},
-            close_command_expr={joint: spec.FINGER_CLOSED},
-        )
+    """The joint targets of ``joints``. A grip in [0, 1] maps linearly from the open finger to the closed finger."""
+    grip = joints[0].endswith(spec.FINGER_JOINT)
     return mdp.JointPositionActionCfg(
-        asset_name='robot', joint_names=list(joints), preserve_order=True, use_default_offset=False
+        asset_name='robot',
+        joint_names=list(joints),
+        preserve_order=True,
+        use_default_offset=False,
+        scale=spec.FINGER_CLOSED - spec.FINGER_OPEN if grip else 1.0,
+        offset=spec.FINGER_OPEN if grip else 0.0,
     )
 
 
