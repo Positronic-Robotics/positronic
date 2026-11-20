@@ -14,11 +14,9 @@ import numpy as np
 
 import pimm
 from positronic import geom, keys
-from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.models import ROBOLAB_EE_FRAME
-from positronic.drivers.roboarm.yam import YamState
 from positronic.eval import keys as eval_keys
-from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server import protocol, yam_observations
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.mujoco.sim import MujocoFrankaState
 from positronic.simulator.robolab import keys as robolab_keys
@@ -109,22 +107,4 @@ class RobolabYamAdapter(RobolabAdapter):
     """The two-arm YAM: per arm, the env measures at ``GRIPPER_SITE``, so the control frame is the identity."""
 
     def _arm_observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        obs: dict[str, Any] = {}
-        for arm in keys.BIMANUAL_ARMS:
-            pose = self._measure(
-                geom.Transform3D(
-                    raw_obs[protocol.arm_channel(protocol.OBS_EEF_POS, arm)],
-                    geom.Rotation.from_quat(raw_obs[protocol.arm_channel(protocol.OBS_EEF_QUAT, arm)]),
-                ),
-                arm,
-            )
-            state = YamState()
-            state.encode(
-                raw_obs[protocol.arm_channel(protocol.OBS_JOINT_POS, arm)],
-                raw_obs[protocol.arm_channel(protocol.OBS_JOINT_VEL, arm)],
-                pose,
-                RobotStatus.AVAILABLE,
-            )
-            obs[keys.arm_channel(keys.ROBOT_STATE, arm)] = state
-            obs[keys.arm_channel(keys.GRIP, arm)] = float(raw_obs[protocol.arm_channel(protocol.OBS_GRIP, arm)])
-        return obs
+        return yam_observations.arm_observations(raw_obs, keys.BIMANUAL_ARMS, self._measure)
