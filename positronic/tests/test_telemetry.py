@@ -482,8 +482,7 @@ def test_a_jetson_gpu_sample_takes_its_load_from_sysfs_when_nvml_refuses(tmp_pat
     _refuse_nvml_utilisation(monkeypatch)
     load = tmp_path / 'load'
     load.write_text('204\n')
-    monkeypatch.setattr(telemetry, 'TEGRA_GPU_LOAD_PATH', load)
-    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=load)
     sample = sampler._sample()
     sampler._nvml.shutdown()
     assert sample[telemetry.STAT_GPU_COUNT] == 1
@@ -492,12 +491,23 @@ def test_a_jetson_gpu_sample_takes_its_load_from_sysfs_when_nvml_refuses(tmp_pat
     assert gpu[telemetry.GPU_MEM_USED_B] is None
 
 
-def test_an_nvml_gpu_that_answers_ignores_the_sysfs_load(tmp_path, monkeypatch):
+def test_a_jetson_whose_nvml_sample_comes_back_empty_still_reads_one_sysfs_gpu(tmp_path, monkeypatch):
     _install_fake_nvml(monkeypatch)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetCount', lambda: 3)
     load = tmp_path / 'load'
-    load.write_text('999\n')
-    monkeypatch.setattr(telemetry, 'TEGRA_GPU_LOAD_PATH', load)
-    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    load.write_text('500\n')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=load)
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert sample[telemetry.STAT_GPU_COUNT] == 1
+    assert [gpu[telemetry.GPU_UTIL_PCT] for gpu in sample[telemetry.STAT_GPUS]] == [pytest.approx(50.0)]
+
+
+def test_a_box_with_no_sysfs_gpu_load_reads_its_gpus_through_nvml(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    sampler = telemetry.StatsSampler(
+        tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=tmp_path / 'absent'
+    )
     sample = sampler._sample()
     sampler._nvml.shutdown()
     assert [gpu[telemetry.GPU_UTIL_PCT] for gpu in sample[telemetry.STAT_GPUS]] == [_FakeUtil.gpu]
@@ -505,8 +515,9 @@ def test_an_nvml_gpu_that_answers_ignores_the_sysfs_load(tmp_path, monkeypatch):
 
 def test_a_box_with_no_sysfs_gpu_load_keeps_an_empty_gpu_list(tmp_path, monkeypatch):
     _refuse_nvml_utilisation(monkeypatch)
-    monkeypatch.setattr(telemetry, 'TEGRA_GPU_LOAD_PATH', tmp_path / 'absent')
-    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}')
+    sampler = telemetry.StatsSampler(
+        tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=tmp_path / 'absent'
+    )
     sample = sampler._sample()
     sampler._nvml.shutdown()
     assert sample[telemetry.STAT_GPUS] == []

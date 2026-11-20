@@ -220,9 +220,9 @@ and `PROC_*` constants in `positronic/telemetry.py`
 The process readings cover this eval's whole process tree (harness + env server + Isaac children): the tree sums
 (`STAT_CPU_PROC_PCT`, `STAT_RSS_PROC_B`), and a list with one `PROC_*` entry (name, pid, CPU percent, RSS) per
 process. The caller names a pid through `process_names`; a pid it does not name takes the OS process name. A
-process's CPU percent in its first sample covers no interval, so it is not a reading. On a Jetson, NVML refuses
-every utilisation query, so the one GPU entry takes its load from `/sys/devices/platform/gpu.0/load` and carries no
-memory or power reading. The GPU list is empty on a box with no NVML and no Jetson GPU, and shorter than the
+process's CPU percent in its first sample covers no interval, so it is not a reading. On a Jetson, the one GPU
+entry takes its load from sysfs (an Orin's path by default, `tegra_gpu_load_path` elsewhere) and carries no memory or
+power reading. The GPU list is empty on a box with no NVML and no Jetson GPU, and shorter than the
 recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that count tells a
 reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot be attributed (a PID
 namespace without `--pid=host`, or a driver that will not report it), and per-process GPU utilisation is always

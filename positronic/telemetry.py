@@ -125,8 +125,8 @@ _active_span: ContextVar[Span | None] = ContextVar('positronic_active_span', def
 # may have configured OTel's global provider, and an untimed run must not export spans through it.
 _NOOP_TRACER = trace.NoOpTracer()
 
-# The load of a Tegra integrated GPU (a Jetson), in tenths of a percent. NVML on a Jetson opens the device and refuses
-# its utilisation query.
+# The load of a Tegra integrated GPU (a Jetson), in tenths of a percent, at its path on an Orin. Other Jetson models
+# put the file elsewhere, so `StatsSampler` takes the path as an argument.
 TEGRA_GPU_LOAD_PATH = Path('/sys/devices/platform/gpu.0/load')
 
 # NVML's uint64 "value not available" sentinel. On a driver that cannot attribute a process's GPU memory, the
@@ -597,8 +597,8 @@ class _TegraGpu:
     """The load of a Jetson's integrated GPU, from sysfs. Absent on any other box. The GPU shares the host's memory and
     has no power sensor of its own, so only its load is a reading."""
 
-    def __init__(self) -> None:
-        self._path: Path | None = TEGRA_GPU_LOAD_PATH if os.access(TEGRA_GPU_LOAD_PATH, os.R_OK) else None
+    def __init__(self, path: Path) -> None:
+        self._path: Path | None = path if os.access(path, os.R_OK) else None
         self._warned = False
 
     @property
@@ -641,10 +641,17 @@ class StatsSampler:
 
     Each sample also lists every process of the tree by name. ``process_names`` maps a pid to a name for it; a pid
     it omits takes the OS process name. It is called from the sampler thread, so it reads only state that is safe
-    to read from another thread."""
+    to read from another thread.
+
+    A box with a readable ``tegra_gpu_load_path`` is a Jetson: its GPU sample comes from that file, because a
+    Jetson's NVML refuses every utilisation query. Every other box samples its GPUs through NVML."""
 
     def __init__(
-        self, out_path: Path | str, hz: float = 1.0, process_names: Callable[[], Mapping[int, str]] | None = None
+        self,
+        out_path: Path | str,
+        hz: float = 1.0,
+        process_names: Callable[[], Mapping[int, str]] | None = None,
+        tegra_gpu_load_path: Path = TEGRA_GPU_LOAD_PATH,
     ) -> None:
         global psutil, pynvml
         try:  # the sampler's probes ship in the optional `telemetry` extra
@@ -657,7 +664,7 @@ class StatsSampler:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name='telemetry-stats', daemon=True)
         self._nvml = _Nvml()
-        self._tegra = _TegraGpu()
+        self._tegra = _TegraGpu(tegra_gpu_load_path)
         self._self = psutil.Process(os.getpid())
         self._proc_cache: dict[int, psutil.Process] = {}
         self._process_names = process_names
@@ -714,9 +721,8 @@ class StatsSampler:
             STAT_MEM_SYS_USED_B: int(psutil.virtual_memory().used),
             STAT_CPU_PROC_PCT: sum(proc[PROC_CPU_PCT] for proc in procs),
             STAT_RSS_PROC_B: sum(proc[PROC_RSS_B] for proc in procs),
-            STAT_GPU_COUNT: max(self._nvml.device_count, self._tegra.device_count),
-            # A Jetson's NVML refuses every utilisation query, so its sysfs load stands in.
-            STAT_GPUS: self._nvml.sample(tree_pids) or self._tegra.sample(),
+            STAT_GPU_COUNT: self._tegra.device_count or self._nvml.device_count,
+            STAT_GPUS: self._tegra.sample() if self._tegra.device_count else self._nvml.sample(tree_pids),
             STAT_PROCS: procs,
         }
 
