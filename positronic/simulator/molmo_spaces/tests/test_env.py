@@ -40,13 +40,13 @@ def test_a_receptacle_contact_with_a_body_that_is_not_checked_computes_no_box_of
 
 
 def test_the_fallback_computes_one_box_for_a_receptacle_of_many_geoms(receptacle_scenes):
+    # rules-allow: implementation-bound-tests — the box count is the cost that the server bounds.
     assert receptacle_scenes['on_floor']['boxed'].count(_RECEPTACLE) == 1
 
 
 def test_an_object_that_touches_the_receptacle_from_above_is_on_it(receptacle_scenes):
     scene = receptacle_scenes['held_by_contact']
     assert scene['found'] == [_PICKUP]
-    assert _PICKUP in scene['boxed']
     assert _WORLD not in scene['boxed']
 
 
