@@ -22,9 +22,10 @@ from typing import Any
 import numpy as np
 
 if __package__:
-    from positronic.simulator.env_server import protocol
+    from positronic.simulator.env_server import arm_action, protocol
     from positronic.simulator.robolab import keys
 else:
+    import arm_action  # pyright: ignore[reportMissingImports]
     import keys  # pyright: ignore[reportMissingImports]
     import protocol  # pyright: ignore[reportMissingImports]
 
@@ -89,7 +90,7 @@ FINGER_BOXES = {
     'carriage': {'center': (0.0, -0.0125, -0.078), 'size': (0.068, 0.021, 0.024)},
 }
 
-# The 14 action values: per arm the six joint targets in rad, then the gripper (above 0.5 closes, else opens).
+# The 14 action values: per arm the six joint targets in rad, then the grip (0 open, 1 closed, linear between).
 ACTION_TERMS = tuple(
     term
     for side in SIDES
@@ -361,32 +362,17 @@ def Xform "yam_stand"
 # ---- the action ----
 
 
-def _arm_targets(command: dict[str, Any], measured: np.ndarray) -> np.ndarray:
-    """The six joint targets of one arm's wire command. A command that the rig's driver refuses holds the measured
-    joints: a command of the wrong width, or one with a target that is not finite."""
-    match command[protocol.COMMAND_TYPE]:
-        case protocol.JOINT_POS:
-            target = np.asarray(command[protocol.COMMAND_JOINT_POS], dtype=np.float32).reshape(-1)
-        case protocol.JOINT_DELTA:
-            target = measured + np.asarray(command[protocol.COMMAND_JOINT_DELTA], dtype=np.float32).reshape(-1)
-        case protocol.HOLD:
-            return measured
-        case protocol.CARTESIAN | protocol.CARTESIAN_DELTA as kind:
-            # TODO: a numpy IK of the YAM arm beside ``pose_ik``, tested against ``YamKinematics``, solves these.
-            raise ValueError(f'the RoboLab YAM robot takes joint commands only, not {kind!r}')
-        case other:
-            raise ValueError(f'unknown command type {other!r}')
-    if target.shape != measured.shape or not np.isfinite(target).all():
-        return measured
-    return target
+def _joint_commands_only(*_pose: Any) -> Any:
+    # TODO: a numpy IK of the YAM arm beside ``pose_ik``, tested against ``YamKinematics``, solves pose commands.
+    raise ValueError('the RoboLab YAM robot takes joint commands only, not a pose command')
 
 
 def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """One clone's 14 action values in ``ACTION_TERMS`` order, and the grip of each arm, from the clone's wire action.
 
     ``measured`` holds the measured joints of each arm in ``SIDES`` order, ``(2, 6)``. ``grips`` holds the last grip
-    of each arm, which an arm keeps when its wire grip is not finite. A wire grip is in [0, 1], 1 closed, and the
-    gripper term closes above 0.5, so it goes in as it is.
+    of each arm, which an arm keeps when its wire grip is not finite. A wire grip is in [0, 1], 1 closed, and goes in as
+    it is.
     """
     channels = {
         protocol.arm_channel(name, side) for side in SIDES for name in (protocol.ROBOT_COMMAND, protocol.TARGET_GRIP)
@@ -398,6 +384,10 @@ def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> tup
     for i, side in enumerate(SIDES):
         grip = float(wire[protocol.arm_channel(protocol.TARGET_GRIP, side)])
         grip = grip if math.isfinite(grip) else float(grips[i])
-        values += [_arm_targets(wire[protocol.arm_channel(protocol.ROBOT_COMMAND, side)], measured[i]), [grip]]
+        command = wire[protocol.arm_channel(protocol.ROBOT_COMMAND, side)]
+        targets = arm_action.arm_targets(
+            command, measured[i], ik=_joint_commands_only, read_eef=_joint_commands_only, arm=side
+        )
+        values += [targets.q, [grip]]
         new_grips.append(grip)
     return np.concatenate(values).astype(np.float32), np.asarray(new_grips, dtype=np.float32)

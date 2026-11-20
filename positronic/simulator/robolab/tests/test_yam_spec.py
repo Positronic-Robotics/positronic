@@ -182,11 +182,21 @@ def test_a_joint_delta_moves_from_the_measured_joints_and_a_hold_keeps_them():
     np.testing.assert_array_equal(action[7:13], _MEASURED[1])
 
 
-@pytest.mark.parametrize('target', [np.full(6, np.nan), np.zeros(7)], ids=['not finite', 'wrong width'])
-def test_an_arm_holds_its_measured_joints_on_a_command_the_rig_refuses(target):
-    action, _ = spec.action(_wire(_joint_command(target), _HOLD), _MEASURED, np.zeros(2))
+def _joint_delta(dq) -> dict:
+    return {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: dq}
+
+
+@pytest.mark.parametrize(
+    'command',
+    [_joint_command(np.full(6, np.nan)), _joint_command(np.zeros(7)), _joint_delta(np.zeros(7)), _joint_delta([0.1])],
+    ids=['not finite', 'wrong width', 'delta too wide', 'delta too narrow'],
+)
+def test_an_arm_holds_its_measured_joints_on_a_command_the_rig_refuses_and_a_warning_names_it(command, caplog):
+    action, _ = spec.action(_wire(command, _HOLD), _MEASURED, np.zeros(2))
 
     np.testing.assert_array_equal(action[:6], _MEASURED[0])
+    (record,) = caplog.records
+    assert f'the {spec.LEFT} arm holds' in record.getMessage()
 
 
 def test_an_arm_keeps_its_last_grip_when_the_wire_grip_is_not_finite():
@@ -198,8 +208,11 @@ def test_an_arm_keeps_its_last_grip_when_the_wire_grip_is_not_finite():
 
 @pytest.mark.parametrize('kind', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
 def test_a_pose_command_is_refused(kind):
+    field = protocol.COMMAND_POSE if kind == protocol.CARTESIAN else protocol.COMMAND_DELTA
+    command = {protocol.COMMAND_TYPE: kind, field: np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])}
+
     with pytest.raises(ValueError, match='joint commands only'):
-        spec.action(_wire({protocol.COMMAND_TYPE: kind}, _HOLD), _MEASURED, np.zeros(2))
+        spec.action(_wire(command, _HOLD), _MEASURED, np.zeros(2))
 
 
 def test_a_channel_of_no_arm_is_refused():
