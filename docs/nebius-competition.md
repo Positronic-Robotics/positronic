@@ -328,8 +328,9 @@ plays the competition eval against the server in the image over the network.
   for CUDA 12.8 or newer (`cu128`): the PyPI build of torch 2.7.1 stops at `sm_90`. To check, run
   `python -c "import torch; print(torch.cuda.get_arch_list())"` in the image on a machine with a GPU. The
   list must contain `sm_120`.
-- The platform runs the image digest that it found when you submitted. It pulls that digest from your
-  registry when the run starts, and it keeps no copy of the image.
+- The platform runs the image digest that it found when you submitted. It pulls a public image from your
+  registry when the run starts. It copies a private image when you submit, and the run pulls that copy
+  ([A private image](#a-private-image)).
 - The [rules](https://competition.phail.ai/rules#limits) give the other limits on
   the image.
 
@@ -377,17 +378,23 @@ What the platform does with your credential:
 
 - When you submit, the platform reads your image with the credential. If your registry refuses it, the
   submission fails with `image_unpullable`, and the submission counts.
-- The platform keeps the credential as a secret for that one submission. No API response and no log
-  shows the password.
-- When the run starts, the machine that runs your image logs in to your registry with the credential. It
-  pulls the image, and then it logs out. Your container never gets the credential.
-- The platform deletes the credential when the submission ends. The secret store keeps a deleted secret
-  until it purges it.
-- Only the services that start the run, the machine that runs your image and the platform administrators
-  can read the credential.
-- Keep the image and the credential valid until the submission ends. Then you can revoke the token.
+- After that read, the platform copies the image into a private registry of its own, with the same
+  credential. The submission stays `pending` while the copy runs. If your registry refuses the copy, the
+  submission ends `errored` with `image_unpullable`, and the submission counts.
+- The platform keeps the password in memory only, and discards it when the copy ends. No API response and
+  no log shows the password.
+- The run pulls the copy. It does not use your registry or your credential. Your container never gets a
+  registry credential.
+- The platform deletes the copy after the submission ends. Only the services that start the run, the
+  machine that runs your image and the platform administrators can read the copy.
+- Keep the credential valid until the copy ends. A submission is `running` only after its copy ends. Then
+  you can revoke the token or let it expire.
+- If the copy fails on the platform's side, the submission ends `errored`, and it does not count. Submit
+  again with a new transaction key.
 - A retry with the same `--transaction-key` returns the first submission, also with a new credential. To
   use a new credential, use a new transaction key.
+- For an image in Amazon ECR, use the user name `AWS` and a password from `aws ecr get-login-password`:
+  [An image in Amazon ECR](https://github.com/Positronic-Robotics/positronic/blob/main/docs/submit-a-policy-image.md#an-image-in-amazon-ecr).
 
 ## Build and test on a Nebius VM
 
