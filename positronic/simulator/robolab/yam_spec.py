@@ -151,27 +151,29 @@ class CameraSpec:
     vertical_aperture: float
 
 
-# The rig records the cameras at SVGA (960 x 600). The aperture gives the field of view at this focal length.
+# The rig records the cameras at SVGA (960 x 600), rectified, with square pixels.
 CAMERA_WIDTH, CAMERA_HEIGHT = 960, 600
 CAMERA_FOCAL_LENGTH = 2.8
-# TODO: fit the poses to the YAM rig. These are the ZED X fit of the ABC sim (``amazon_abc.camera_fit.ZED_X_FIT``).
+
+
+def _apertures(focal_px: float) -> tuple[float, float]:
+    """The horizontal and vertical apertures that give a focal length of ``focal_px`` pixels."""
+    return CAMERA_FOCAL_LENGTH * CAMERA_WIDTH / focal_px, CAMERA_FOCAL_LENGTH * CAMERA_HEIGHT / focal_px
+
+
+# Fitted to recordings of the YAM rig: the top camera to the arm outlines, each wrist camera to its finger outlines.
 CAMERAS = {
     keys.TOP_CAMERA: CameraSpec(
-        'base_plate', (-0.12, 0.053, 0.9095), (0.653638, 0.256589, -0.244304, -0.668756), 7.354309, 4.596443
+        'base_plate', (-0.1274, 0.049, 0.915), (0.658569, 0.25417, -0.22937, -0.670129), *_apertures(364.8)
     ),
     keys.LEFT_WRIST_CAMERA: CameraSpec(
-        f'{LEFT}_{WRIST_LINK}',
-        (-0.060433, 0.0017, -0.115432),
-        (0.648406, -0.298832, -0.284007, 0.640007),
-        8.011923,
-        4.673157,
+        f'{LEFT}_{WRIST_LINK}', (-0.0624, 0.0035, -0.1163), (0.680659, -0.2334, -0.21422, 0.660559), *_apertures(322.5)
     ),
     keys.RIGHT_WRIST_CAMERA: CameraSpec(
         f'{RIGHT}_{WRIST_LINK}',
-        (-0.0612, -0.0033, -0.11479),
-        (0.632319, -0.277308, -0.316501, 0.650461),
-        8.011923,
-        4.673157,
+        (-0.0636, -0.0044, -0.1153),
+        (0.662851, -0.20269, -0.23956, 0.679821),
+        *_apertures(323.5),
     ),
 }
 

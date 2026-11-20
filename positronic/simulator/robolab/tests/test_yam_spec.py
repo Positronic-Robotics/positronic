@@ -10,6 +10,7 @@ import pytest
 from positronic import keys
 from positronic.cfg import embodiment
 from positronic.simulator.env_server import protocol
+from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab import yam_spec as spec
 
 
@@ -206,3 +207,14 @@ def test_a_channel_of_no_arm_is_refused():
 
     with pytest.raises(ValueError, match='cannot act on channels'):
         spec.action(wire, _MEASURED, np.zeros(2))
+
+
+@pytest.mark.parametrize(
+    ('camera', 'fov_y_deg'),
+    [(robolab_keys.TOP_CAMERA, 78.9), (robolab_keys.LEFT_WRIST_CAMERA, 85.9), (robolab_keys.RIGHT_WRIST_CAMERA, 85.7)],
+)
+def test_each_camera_has_square_pixels_and_the_fitted_field_of_view(camera, fov_y_deg):
+    cam = spec.CAMERAS[camera]
+    assert cam.horizontal_aperture / cam.vertical_aperture == pytest.approx(spec.CAMERA_WIDTH / spec.CAMERA_HEIGHT)
+    fov_y = np.degrees(2 * np.arctan(cam.vertical_aperture / 2 / spec.CAMERA_FOCAL_LENGTH))
+    assert fov_y == pytest.approx(fov_y_deg, abs=0.1)
