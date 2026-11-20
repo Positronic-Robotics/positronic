@@ -359,7 +359,7 @@ def _arm_targets(command: dict[str, Any], measured: np.ndarray) -> np.ndarray:
         case protocol.HOLD:
             return measured
         case protocol.CARTESIAN | protocol.CARTESIAN_DELTA as kind:
-            # TODO: solve a pose command with an IK of the YAM arm.
+            # TODO: a numpy IK of the YAM arm beside ``pose_ik``, tested against ``YamKinematics``, solves these.
             raise ValueError(f'the RoboLab YAM robot takes joint commands only, not {kind!r}')
         case other:
             raise ValueError(f'unknown command type {other!r}')

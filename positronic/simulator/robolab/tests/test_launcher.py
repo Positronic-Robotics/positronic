@@ -194,6 +194,18 @@ def test_a_yam_run_serves_the_yam_from_the_same_checkout(spawned):
     assert _flag(spawned[0], '--project') == str(launcher._ROBOLAB_SRC)
 
 
+@pytest.mark.parametrize(
+    ('robot', 'cameras'),
+    [(robolab_keys.DROID, robolab_keys.WRIST_LEFT_RIGHT), (robolab_keys.YAM, robolab_keys.TOP_AND_WRISTS)],
+)
+def test_a_launch_that_names_no_camera_set_serves_the_default_set_of_its_robot(spawned, monkeypatch, robot, cameras):
+    monkeypatch.setattr(sys, 'argv', ['launcher', '--robot', robot, '--max-envs', '1', '--port', '9000'])
+    with pytest.raises(SystemExit):
+        launcher.main()
+
+    assert _flag(spawned[0], '--cameras') == cameras
+
+
 def test_a_camera_set_of_another_robot_fails_before_any_spawn(spawned):
     with (
         pytest.raises(ValueError, match='camera sets'),

@@ -76,6 +76,8 @@ TOP_AND_WRISTS = 'top_and_wrists'
 YAM_CAMERA_SETS = {TOP_AND_WRISTS: (TOP_CAMERA, LEFT_WRIST_CAMERA, RIGHT_WRIST_CAMERA)}
 ROBOT_CAMERA_SETS = {DROID: CAMERA_SETS, YAM: YAM_CAMERA_SETS}
 ROBOTS = tuple(ROBOT_CAMERA_SETS)
+# The camera set a server of each robot renders when the launch names none.
+DEFAULT_CAMERA_SETS = {DROID: WRIST_LEFT_RIGHT, YAM: TOP_AND_WRISTS}
 
 
 def camera_set(robot: str, name: str) -> tuple[str, ...]:

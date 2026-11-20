@@ -250,33 +250,25 @@ YamProprioceptionObservationCfg = configclass(
 )
 
 
-def _gripper_action(side: str) -> BinaryJointPositionZeroToOneActionCfg:
-    joint = f'{side}_{spec.FINGER_JOINT}'
-    return BinaryJointPositionZeroToOneActionCfg(
-        asset_name='robot',
-        joint_names=[joint],
-        open_command_expr={joint: spec.FINGER_OPEN},
-        close_command_expr={joint: spec.FINGER_CLOSED},
-    )
-
-
-def _arm_action(side: str) -> mdp.JointPositionActionCfg:
+def _action_term(joints: tuple[str, ...]) -> Any:
+    """The action term of ``joints``: a binary grip (above 0.5 closes) for a finger joint, else joint targets."""
+    if joints[0].endswith(spec.FINGER_JOINT):
+        (joint,) = joints
+        return BinaryJointPositionZeroToOneActionCfg(
+            asset_name='robot',
+            joint_names=[joint],
+            open_command_expr={joint: spec.FINGER_OPEN},
+            close_command_expr={joint: spec.FINGER_CLOSED},
+        )
     return mdp.JointPositionActionCfg(
-        asset_name='robot',
-        joint_names=[f'{side}_{j}' for j in spec.ARM_JOINTS],
-        preserve_order=True,
-        use_default_offset=False,
+        asset_name='robot', joint_names=list(joints), preserve_order=True, use_default_offset=False
     )
 
 
-@configclass
-class YamJointPositionActionCfg:
-    """The 14 action values in ``yam_spec.ACTION_TERMS`` order."""
-
-    left_arm = _arm_action('left')
-    left_gripper = _gripper_action('left')
-    right_arm = _arm_action('right')
-    right_gripper = _gripper_action('right')
+# The 14 action values, one term per ``yam_spec.ACTION_TERMS`` entry, in its order.
+YamJointPositionActionCfg = configclass(
+    type('YamJointPositionActionCfg', (), {name: _action_term(joints) for name, joints in spec.ACTION_TERMS})
+)
 
 
 def register_envs(task: list[str], robot_usd: Path, stand_usd: Path) -> Any:

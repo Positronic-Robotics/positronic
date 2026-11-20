@@ -133,7 +133,7 @@ def main() -> None:
     )
     parser.add_argument('--robot', default=keys.DROID, choices=keys.ROBOTS)
     parser.add_argument(
-        '--cameras', default=keys.WRIST_LEFT_RIGHT, help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS'
+        '--cameras', help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; keys.DEFAULT_CAMERA_SETS without it'
     )
     parser.add_argument('--max-envs', type=int, required=True, help='the most scene clones, one per eval of a batch')
     parser.add_argument(
@@ -145,7 +145,8 @@ def main() -> None:
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
     args = parser.parse_args()
-    proc = _spawn(args.host, args.port, args.robot, args.cameras, args.max_envs, args.join_deadline)
+    cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
+    proc = _spawn(args.host, args.port, args.robot, cameras, args.max_envs, args.join_deadline)
     try:
         sys.exit(proc.wait())
     finally:
