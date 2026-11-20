@@ -214,13 +214,16 @@ policy_preset: production
 tote_placement: random                   # left | right | random | none
 external_cameras: {side: random}         # per mount, by the task's name for it
 scene_seed: spoons-scene-a               # the organization's later plans with this seed replay the recorded parts
-start_pose: droid_reset                  # nominal | droid_reset | abc_init
+start_pose: droid_reset                  # nominal | droid_reset | abc_init | abc_<task>
 ```
 
 `start_pose` names where the arm starts each episode: `nominal`, the rig's own pose;
-`droid_reset`, the reset pose of the DROID data collection; or `abc_init`, the start pose of the
-ABC sim. `droid_reset` is a `franka` pose and `abc_init` is a `yam` pose, one per arm. A plan that
-names none takes the pose of each task's catalogue entry.
+`droid_reset`, the reset pose of the DROID data collection; `abc_init`, the start pose of the
+ABC sim; or an `abc_<task>` pose. An `abc_<task>` pose is the median first pose of ABC's real
+demos of that task: `abc_put_plastic_bottles_in_bin`, `abc_put_screwdriver_in_bin`,
+`abc_unload_plates_from_dish_rack`, `abc_sweep_away_paper_scraps` and `abc_turn_mug_right_side_up`.
+`droid_reset` is a `franka` pose. `abc_init` and each `abc_<task>` pose are `yam` poses, one per
+arm. A plan that names none takes the pose of each task's catalogue entry.
 
 An endpoint states where its policy comes from (`kind`) and the wire a session runs over (`wire`).
 Every kind names its wire. There is no default.
