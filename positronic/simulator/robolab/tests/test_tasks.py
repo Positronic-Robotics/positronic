@@ -257,6 +257,13 @@ def test_a_yam_eval_drives_both_arms_and_reads_the_three_yam_cameras(listing):
     assert set(ev.embodiment.commands) == commands
 
 
+def test_an_eval_that_names_only_the_yam_renders_the_three_yam_cameras(listing):
+    ev = robolab_cfg.banana_in_bowl.override(robot=robolab_keys.YAM).instantiate()
+
+    cameras = {keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE}
+    assert cameras <= set(ev.embodiment.observations)
+
+
 def test_a_yam_eval_with_a_droid_camera_set_fails():
     with pytest.raises(ValueError, match='camera sets'):
         robolab_cfg.yam_banana_in_bowl.override(cameras=robolab_keys.WRIST_LEFT).instantiate()

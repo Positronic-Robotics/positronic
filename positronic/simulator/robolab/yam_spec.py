@@ -28,7 +28,9 @@ else:
     import keys  # pyright: ignore[reportMissingImports]
     import protocol  # pyright: ignore[reportMissingImports]
 
-SIDES = ('left', 'right')
+# The arm sides, as the wire channels and ``positronic.keys.BIMANUAL_ARMS`` name them. A test keeps them the same.
+LEFT, RIGHT = 'left', 'right'
+SIDES = (LEFT, RIGHT)
 ARM_JOINTS = tuple(f'joint{i}' for i in range(1, 7))
 # joint7 moves tip_left and joint8 moves tip_right. joint8 is a URDF mimic of joint7 (the rack couples them).
 FINGER_JOINT = 'joint7'
@@ -88,11 +90,13 @@ FINGER_BOXES = {
 }
 
 # The 14 action values: per arm the six joint targets in rad, then the gripper (above 0.5 closes, else opens).
-ACTION_TERMS = (
-    ('left_arm', tuple(f'left_{j}' for j in ARM_JOINTS)),
-    ('left_gripper', (f'left_{FINGER_JOINT}',)),
-    ('right_arm', tuple(f'right_{j}' for j in ARM_JOINTS)),
-    ('right_gripper', (f'right_{FINGER_JOINT}',)),
+ACTION_TERMS = tuple(
+    term
+    for side in SIDES
+    for term in (
+        (f'{side}_arm', tuple(f'{side}_{j}' for j in ARM_JOINTS)),
+        (f'{side}_gripper', (f'{side}_{FINGER_JOINT}',)),
+    )
 )
 ACTION_DIM = sum(len(joints) for _, joints in ACTION_TERMS)
 
@@ -112,8 +116,7 @@ def proprio_term(side: str, term: str) -> str:
 # ``CONTACT_GRIPPERS`` covers both hands.
 CONTACT_GRIPPERS = 'gripper'
 CONTACT_GRIPPER = {
-    'left': '{ENV_REGEX_NS}/robot/left_tip_left',
-    'right': '{ENV_REGEX_NS}/robot/right_tip_left',
+    **{side: f'{{ENV_REGEX_NS}}/robot/{side}_{FINGER_LINKS[0]}' for side in SIDES},
     CONTACT_GRIPPERS: list(SIDES),
 }
 EE_RECORDER_BODIES = {f'{side}_ee_pose': f'{side}_{GRIPPER_SITE}' for side in SIDES}
@@ -133,7 +136,7 @@ I2RT_URDF = Path(__file__).resolve().parents[2] / 'assets' / 'i2rt_yam' / 'yam.u
 
 def mount_xyz(side: str) -> tuple[float, float, float]:
     """The arm base frame of ``side`` in the robot root frame."""
-    return (0.0, MOUNT_Y if side == 'left' else -MOUNT_Y, PLATE_THICKNESS)
+    return (0.0, MOUNT_Y if side == LEFT else -MOUNT_Y, PLATE_THICKNESS)
 
 
 @dataclass(frozen=True)
@@ -157,10 +160,18 @@ CAMERAS = {
         'base_plate', (-0.12, 0.053, 0.9095), (0.653638, 0.256589, -0.244304, -0.668756), 7.354309, 4.596443
     ),
     keys.LEFT_WRIST_CAMERA: CameraSpec(
-        'left_link6', (-0.060433, 0.0017, -0.115432), (0.648406, -0.298832, -0.284007, 0.640007), 8.011923, 4.673157
+        f'{LEFT}_{WRIST_LINK}',
+        (-0.060433, 0.0017, -0.115432),
+        (0.648406, -0.298832, -0.284007, 0.640007),
+        8.011923,
+        4.673157,
     ),
     keys.RIGHT_WRIST_CAMERA: CameraSpec(
-        'right_link6', (-0.0612, -0.0033, -0.11479), (0.632319, -0.277308, -0.316501, 0.650461), 8.011923, 4.673157
+        f'{RIGHT}_{WRIST_LINK}',
+        (-0.0612, -0.0033, -0.11479),
+        (0.632319, -0.277308, -0.316501, 0.650461),
+        8.011923,
+        4.673157,
     ),
 }
 

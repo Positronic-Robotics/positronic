@@ -52,7 +52,7 @@ def _embodiment(robot: str, proxy: RemoteEnvControlSystem, camera_dict: dict[str
 
 @cfn.config(
     robot=robolab_keys.DROID,
-    cameras=robolab_keys.WRIST_LEFT_RIGHT,
+    cameras=None,
     instruction_type='default',
     trial_count=1,
     timeout=None,
@@ -77,8 +77,9 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
     takes joint commands only, and its env reports every pose in the world frame of the YAM rig.
 
     ``cameras`` names the set the run renders, one of ``keys.ROBOT_CAMERA_SETS[robot]``. For the DROID rig: both
-    exteriors and the wrist, or one exterior and the wrist. For the YAM: the top camera and both wrists. RoboLab bakes
-    the set into the registered task, so a run holds one set.
+    exteriors and the wrist, or one exterior and the wrist. For the YAM: the top camera and both wrists. Without it,
+    the run renders ``keys.DEFAULT_CAMERA_SETS[robot]``. RoboLab bakes the set into the registered task, so a run
+    holds one set.
 
     ``horizon_sec`` replaces the episode length of every task of the run, and the default deadline follows it. A
     run with it is not comparable with RoboLab's own scores.
@@ -99,6 +100,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
     """
     require_finite_positive('timeout', timeout)
     require_finite_positive('horizon_sec', horizon_sec)
+    cameras = cameras or robolab_keys.DEFAULT_CAMERA_SETS[robot]
     camera_dict = _camera_dict(robot, cameras)
     if env_server is None:
         serve = serve_robolab(cameras, robot=robot)
@@ -142,5 +144,5 @@ banana_in_bowl = _robolab_eval.override(task='BananaInBowlTask')
 rubiks_cube_and_banana = _robolab_eval.override(task='RubiksCubeAndBananaTask')
 
 # The two-arm YAM in the RoboLab task scenes: every task, and the simplest pick-and-place.
-yam_benchmark = _robolab_eval.override(task=None, robot=robolab_keys.YAM, cameras=robolab_keys.TOP_AND_WRISTS)
+yam_benchmark = _robolab_eval.override(task=None, robot=robolab_keys.YAM)
 yam_banana_in_bowl = yam_benchmark.override(task='BananaInBowlTask')
