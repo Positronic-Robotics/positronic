@@ -70,6 +70,7 @@ from molmo_spaces.configs.robot_configs import (  # noqa: E402  # pyright: ignor
     ActionNoiseConfig,
     FrankaRobotConfig,
 )
+from molmo_spaces.env.object_manager import ObjectManager  # noqa: E402  # pyright: ignore[reportMissingImports]
 from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     RobotMountedCameraSpec,
     load_all_episodes,
@@ -91,7 +92,7 @@ from molmo_spaces.tasks.pick_and_place_task import (  # noqa: E402  # pyright: i
     PickAndPlaceTask,
 )
 from molmo_spaces.tasks.pick_task import PickTask  # noqa: E402  # pyright: ignore[reportMissingImports]
-from molmo_spaces.utils import grasps  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.utils import grasps, mujoco_scene_utils  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
 class _DroidEvalConfig(JsonBenchmarkEvalConfig):
@@ -116,6 +117,61 @@ class _JointGraspSampler(JsonEvalTaskSampler):
     )
     def set_joint_values(self, env: Any) -> None:
         super().set_joint_values(env)
+
+
+def _names_on_top_by_contact(data: mujoco.MjData, receptacle: set[int], names: set[str], min_cos: float) -> set[str]:
+    """The ``names`` of the root bodies that touch a ``receptacle`` geom from above, as MolmoSpaces tests a contact."""
+    model = data.model
+    found: set[str] = set()
+    for contact in data.contact:
+        first, second = (int(geom) in receptacle for geom in contact.geom)
+        if first == second:
+            continue
+        other = int(model.body_rootid[model.geom_bodyid[contact.geom[1 if first else 0]]])
+        name = model.body(other).name
+        if name not in names:
+            continue
+        normal = contact.frame[:3] / np.linalg.norm(contact.frame[:3])
+        if second:
+            normal = -normal
+        center, _ = mujoco_scene_utils.body_aabb(model, data, other)
+        if contact.pos[2] < center[2] and normal[2] >= min_cos:
+            found.add(name)
+    return found
+
+
+_upstream_objects_on_receptacle = ObjectManager.objects_on_receptacle
+
+
+def _objects_on_receptacle(
+    self: Any,
+    objs_to_check: list[Any],
+    bench_geom_ids: list[int],
+    angle_threshold: float = np.radians(30),
+    fallback_thres: float = 0.01,
+    attempt_contact: bool = True,
+) -> list[Any]:
+    """``ObjectManager.objects_on_receptacle`` that computes a box only for a body it can find and the receptacle."""
+    data = self.data
+    model = data.model
+    on_top: set[str] = set()
+    if attempt_contact:
+        names = {obj.name for obj in objs_to_check}
+        on_top = _names_on_top_by_contact(data, {int(g) for g in bench_geom_ids}, names, np.cos(angle_threshold))
+    # The fallback stage reads only the root body of each receptacle geom.
+    geom_of_root = {int(model.body_rootid[model.geom_bodyid[g]]): g for g in bench_geom_ids}
+    rest = [obj for obj in objs_to_check if obj.name not in on_top]
+    fallback = _upstream_objects_on_receptacle(
+        self, rest, list(geom_of_root.values()), angle_threshold, fallback_thres, attempt_contact=False
+    )
+    found = on_top | {obj.name for obj in fallback}
+    return [obj for name in sorted(found) if (obj := self.get_object_by_name(name))]
+
+
+# HACK: upstream computes the box of the root body across each receptacle contact, then drops the body by its name.
+# Across a contact with a static geom that root is ``world``, whose box reads every mesh vertex of the scene. Then
+# one pick-and-place ``get_info`` takes seconds while the object is off the receptacle.
+ObjectManager.objects_on_receptacle = _objects_on_receptacle
 
 
 # The arm joints of the robot model that the client records.
