@@ -1,10 +1,9 @@
 """Launches the RoboLab env server as a subprocess and owns its lifetime.
 
 positronic starts the server: the env runs in RoboLab's own interpreter via ``uv run --project <checkout>``,
-which installs the Isaac Lab / Isaac Sim dependency stack from the lock of the pinned RoboLab checkout (far too
-heavy for a PEP 723 script header). The positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py``
-imports the dumb ``server``/``protocol`` without dragging in positronic; ``robolab`` itself resolves from the uv
-project.
+which installs the Isaac Lab / Isaac Sim dependency stack from the lock of the pinned RoboLab checkout. The
+positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol``
+without dragging in positronic; ``robolab`` itself resolves from the uv project.
 """
 
 import argparse
@@ -39,17 +38,12 @@ _ROBOLAB_ISAAC_EXTRA = 'isaac50'
 def _spawn(
     host: str, port: int, cameras: str, max_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
 ) -> subprocess.Popen:
-    # Only the setup is one at a time: a concurrent checkout would reset files from under ``uv sync``. A waiter needs
-    # the same checkout and install, so it waits no longer than its own setup would take. The per-eval ``env.py``
-    # runs outside the lock, so evals still fan out.
+    # One setup at a time, so no checkout resets files under ``uv sync``; the hold is one install, which a waiter needs.
     with setup_lock(_ROBOLAB_SRC.parent):
-        # The pinned checkout with its LFS assets: Isaac Lab cannot load a USD from a pointer stub.
+        # With its LFS assets: Isaac Lab cannot load a USD from a pointer stub.
         src = ensure_pinned_checkout(_ROBOLAB_REPO, _ROBOLAB_COMMIT, _ROBOLAB_SRC, lfs=True)
-        # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
-        # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
-        # when warm. ``--frozen`` installs the uv.lock that RoboLab ships and resolves nothing, so a box with no
-        # index access installs from its cache, and a new release on an index cannot change the install. The
-        # spawn below passes ``--no-sync`` (``uv run`` re-syncs by default), so no install runs outside this lock.
+        # Before the spawn: a cold install (~15 GB) far exceeds the connect deadline. ``--frozen`` installs the
+        # shipped uv.lock and resolves nothing; the spawn passes ``--no-sync``, so no install runs outside the lock.
         subprocess.run(
             [
                 'uv',
