@@ -104,7 +104,17 @@ REQUEST_TYPE_VALUES = {'INVALID': 0, 'nebius_competition': 1, 'private_eval': 2}
 
 RIG_SHAPE_VALUES = {'INVALID': 0, 'franka': 1, 'yam': 2, 'molmospaces': 4, 'robolab': 5, 'abc': 6}
 
-START_POSE_VALUES = {'INVALID': 0, 'nominal': 1, 'droid_reset': 2, 'abc_init': 3}
+START_POSE_VALUES = {
+    'INVALID': 0,
+    'nominal': 1,
+    'droid_reset': 2,
+    'abc_init': 3,
+    'abc_put_plastic_bottles_in_bin': 4,
+    'abc_put_screwdriver_in_bin': 5,
+    'abc_unload_plates_from_dish_rack': 6,
+    'abc_sweep_away_paper_scraps': 7,
+    'abc_turn_mug_right_side_up': 8,
+}
 
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
     (BillingMode, {'INVALID': 0, 'packaged': 1, 'pay_as_you_go': 2}),
