@@ -3,11 +3,11 @@
 Ports ``solve_pose_ik`` of positronic-franka ``src/pose_ik.hpp``, the IK of the FR3 driver: each joint stays within
 its limits and within ``MAX_JOINT_STEP`` of the measured joints, the move is damped near a singularity, and the null
 space pulls the joints towards ``POSTURE_JOINTS``. The arm links stay apart by the FR3 capsule model of
-``src/self_collision.hpp``. At each checked point of the move, no checked pair is closer than the floor:
-``SELF_COLLISION_CLEARANCE``, or the least clearance at the start of the move when that is less. Between two checked
-points the clearance stays within ``SELF_COLLISION_PATH_TOLERANCE`` of the floor. Poses are in the ``panda_link0``
-frame. Each Gauss-Newton step backtracks until it lowers the cost: without that, the steps near the stretched-arm
-singularity alternate between two poses, and so do the joint targets of successive control steps.
+``src/self_collision.hpp``. At each checked point of the move, each checked pair keeps its floor:
+``SELF_COLLISION_CLEARANCE``, or its own clearance at the start of the move when that is less. Between two checked
+points a pair's clearance stays within ``SELF_COLLISION_PATH_TOLERANCE`` of its floor. Poses are in the
+``panda_link0`` frame. Each Gauss-Newton step backtracks until it lowers the cost: without that, the steps near the
+stretched-arm singularity alternate between two poses, and so do the joint targets of successive control steps.
 
 Two parts are not in the driver. A joint that the physics pushed past a limit gets a target at that limit. The solve
 keeps j4 at or below ``ELBOW_STRETCHED``.
@@ -245,9 +245,10 @@ def self_collision_clearances(q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return clearance[closest], speed_a - speed_b
 
 
-def least_self_collision_clearance(q: np.ndarray) -> np.ndarray:
-    """The least clearance of the pairs in ``SELF_COLLISION_PAIRS`` at the ``... x 7`` joints ``q``."""
-    return _capsule_pair_points(link_frames(q))[2].min(axis=-1)
+def pair_clearances(q: np.ndarray) -> np.ndarray:
+    """The ``... x 8`` clearance of each pair in ``SELF_COLLISION_PAIRS`` at the ``... x 7`` joints ``q``."""
+    clearance = _capsule_pair_points(link_frames(q))[2]
+    return np.stack([clearance[..., rows].min(axis=-1) for rows in _ROWS_OF_PAIR], axis=-1)
 
 
 def _clearance_rate_bounds() -> np.ndarray:
@@ -276,27 +277,27 @@ _PATH_BISECTIONS = 8
 
 
 def stop_before_self_collision(start: np.ndarray, end: np.ndarray) -> np.ndarray:
-    """The point of the move from ``start`` to ``end`` farthest along it up to which each checked point keeps the floor.
+    """The point of the move from ``start`` to ``end`` farthest along it up to which each checked pair keeps its floor.
 
-    The floor is ``SELF_COLLISION_CLEARANCE``, or the least clearance at ``start`` when that is less. Between two
-    checked points the clearance stays within ``SELF_COLLISION_PATH_TOLERANCE`` of the floor: the points are close
-    enough for the rate bound of each joint (``CLEARANCE_RATE_BOUNDS``).
+    The floor of a pair is ``SELF_COLLISION_CLEARANCE``, or its own clearance at ``start`` when that is less. Between
+    two checked points a pair's clearance stays within ``SELF_COLLISION_PATH_TOLERANCE`` of its floor: the points are
+    close enough for the rate bound of each joint (``CLEARANCE_RATE_BOUNDS``).
     """
     move = end - start
-    # The most the clearance changes over the whole move. Between two points 1 / samples apart that both keep the
-    # floor, the clearance falls at most change_over_move / (2 * samples) below the floor.
+    # The most a pair's clearance changes over the whole move. Between two points 1 / samples apart that both keep its
+    # floor, the clearance falls at most change_over_move / (2 * samples) below that floor.
     change_over_move = CLEARANCE_RATE_BOUNDS @ np.abs(move)
     samples = max(_LEAST_PATH_SAMPLES, int(np.ceil(change_over_move / (2 * SELF_COLLISION_PATH_TOLERANCE))))
-    floor = min(SELF_COLLISION_CLEARANCE, float(least_self_collision_clearance(start)))
+    floors = np.minimum(SELF_COLLISION_CLEARANCE, pair_clearances(start))
     parts = np.arange(1, samples + 1) / samples
-    clear = least_self_collision_clearance(start + parts[:, None] * move) >= floor
+    clear = np.all(pair_clearances(start + parts[:, None] * move) >= floors, axis=-1)
     if clear.all():
         return end
     first_blocked = int(np.argmin(clear))
     safe, blocked = (parts[first_blocked - 1] if first_blocked else 0.0), parts[first_blocked]
     for _ in range(_PATH_BISECTIONS):
         mid = 0.5 * (safe + blocked)
-        if least_self_collision_clearance(start + mid * move) >= floor:
+        if np.all(pair_clearances(start + mid * move) >= floors):
             safe = mid
         else:
             blocked = mid

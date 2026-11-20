@@ -200,13 +200,13 @@ def test_no_joint_changes_a_clearance_faster_than_its_rate_bound():
 
 
 def _clearance(q: np.ndarray) -> float:
-    return float(pose_ik.least_self_collision_clearance(q))
+    return float(pose_ik.pair_clearances(q).min())
 
 
 def _least_clearance_on_the_move(start: np.ndarray, end: np.ndarray) -> float:
     """The least clearance at ``start`` and at 2000 points of the straight joint move from it to ``end``."""
     parts = np.arange(2001) / 2000
-    return float(pose_ik.least_self_collision_clearance(start + parts[:, None] * (end - start)).min())
+    return float(pose_ik.pair_clearances(start + parts[:, None] * (end - start)).min())
 
 
 def test_a_move_that_dips_between_two_of_sixteen_points_stops_before_the_dip():
@@ -214,7 +214,7 @@ def test_a_move_that_dips_between_two_of_sixteen_points_stops_before_the_dip():
     start = np.array([-2.025573, 1.055818, 2.246552, -2.790485, 2.673202, 2.095729, -1.071398])
     end = np.array([1.167132, 0.990198, -2.123749, -2.129653, 0.255810, 1.355959, 2.292034])
     sixteenths = start + np.arange(17)[:, None] / 16 * (end - start)
-    assert np.all(pose_ik.least_self_collision_clearance(sixteenths) >= pose_ik.SELF_COLLISION_CLEARANCE)
+    assert np.all(pose_ik.pair_clearances(sixteenths) >= pose_ik.SELF_COLLISION_CLEARANCE)
     assert _least_clearance_on_the_move(start, end) < pose_ik.SELF_COLLISION_CLEARANCE - 0.005
 
     stop = pose_ik.stop_before_self_collision(start, end)
@@ -294,3 +294,52 @@ def test_a_start_inside_the_clearance_moves_out_and_towards_the_target():
 
     assert _clearance(q) >= pose_ik.SELF_COLLISION_CLEARANCE
     assert _flange_miss(q, target)[0] < _flange_miss(_SHOULDER_BACK_ELBOW_FOLDED, target)[0]
+
+
+def _pair(link_a: int, link_b: int) -> int:
+    return pose_ik.SELF_COLLISION_PAIRS.index((link_a, link_b))
+
+
+def _least_pair_clearances_on_the_move(start: np.ndarray, end: np.ndarray) -> np.ndarray:
+    """Per checked pair, the least clearance at ``start`` and at 2000 points of the straight joint move to ``end``."""
+    parts = np.arange(2001) / 2000
+    return pose_ik.pair_clearances(start + parts[:, None] * (end - start)).min(axis=0)
+
+
+def test_a_move_that_escapes_one_close_pair_does_not_take_another_pair_below_the_floor():
+    # Link 5 starts 0.051 m from link 2 and ends 0.078 m from it. Link 7 starts 0.155 m from link 2 and ends 0.073 m
+    # from it. No pair comes closer than link 5 starts.
+    start = _SHOULDER_BACK_ELBOW_FOLDED
+    end = np.array([1.384, -1.477, -0.791, -3.032, -0.499, 1.563, 1.542])
+    close, other = _pair(2, 5), _pair(2, 7)
+    at_start = pose_ik.pair_clearances(start)
+    assert at_start[close] < pose_ik.SELF_COLLISION_CLEARANCE
+    assert at_start[other] > pose_ik.SELF_COLLISION_PUSH_CLEARANCE
+    assert pose_ik.pair_clearances(end)[close] > at_start[close]
+    assert _least_clearance_on_the_move(start, end) >= at_start[close]
+    assert _least_pair_clearances_on_the_move(start, end)[other] < pose_ik.SELF_COLLISION_CLEARANCE - 0.01
+
+    stop = pose_ik.stop_before_self_collision(start, end)
+
+    floor = np.minimum(pose_ik.SELF_COLLISION_CLEARANCE, at_start) - pose_ik.SELF_COLLISION_PATH_TOLERANCE
+    assert np.all(_least_pair_clearances_on_the_move(start, stop) >= floor), 'a pair goes below its floor'
+    assert pose_ik.pair_clearances(stop)[close] > at_start[close]
+
+
+def test_a_pair_that_starts_inside_the_clearance_keeps_its_start_clearance():
+    # A move that takes link 5 away from link 2 plays to its end at 0.087 m. The reverse move brings link 5 closer and
+    # stops.
+    start = _SHOULDER_BACK_ELBOW_FOLDED
+    out = np.array([1.173, -1.186, -1.034, -2.834, -0.818, 2.141, 1.153])
+    close = _pair(2, 5)
+    at_start = pose_ik.pair_clearances(start)[close]
+    on_the_way_out = _least_pair_clearances_on_the_move(start, out)
+    assert pose_ik.pair_clearances(out)[close] < pose_ik.SELF_COLLISION_CLEARANCE
+    assert on_the_way_out[close] >= at_start
+    assert np.all(np.delete(on_the_way_out, close) > pose_ik.SELF_COLLISION_CLEARANCE)
+    assert np.array_equal(pose_ik.stop_before_self_collision(start, out), out)
+
+    into = start - (out - start)
+    assert pose_ik.pair_clearances(into)[close] < at_start
+    stop = pose_ik.stop_before_self_collision(start, into)
+    assert _least_pair_clearances_on_the_move(start, stop)[close] >= at_start - pose_ik.SELF_COLLISION_PATH_TOLERANCE
