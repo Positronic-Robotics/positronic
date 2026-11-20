@@ -124,6 +124,9 @@ WITH_RIGHT_SHOULDER = 'with_right_shoulder'
 # keeps it.
 WITH_OBJECT_IMAGE_POINTS = 'with_object_image_points'
 MOLMO_OBJECT_IMAGE_POINTS_SENSOR = 'object_image_points'
+# In a reset token: the ``success_profile.SuccessProfile`` value that judges the episode. A token without the key
+# judges it by ``molmo_native``.
+TOKEN_SUCCESS_PROFILE = 'success_profile'
 TASK_NAME = 'name'
 TASK_HORIZON_SEC = 'task_horizon_sec'
 # The horizon override of a task in seconds, or None when the benchmark sets the horizon.

@@ -44,6 +44,7 @@ import mujoco  # noqa: E402
 import mujoco_state  # noqa: E402 -- positronic-free, on PYTHONPATH
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
+import success_profile  # noqa: E402 -- positronic-free, on PYTHONPATH
 from server import EnvProtocol, EnvServer  # noqa: E402
 
 _DESCRIPTION = 'Serve MolmoSpaces over the env-server protocol.'
@@ -82,6 +83,14 @@ from molmo_spaces.evaluation.eval_main import (  # noqa: E402  # pyright: ignore
 from molmo_spaces.tasks.json_eval_task_sampler import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     JsonEvalTaskSampler,
 )
+from molmo_spaces.tasks.opening_tasks import OpeningTask  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.tasks.pick_and_place_next_to_task import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    PickAndPlaceNextToTask,
+)
+from molmo_spaces.tasks.pick_and_place_task import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    PickAndPlaceTask,
+)
+from molmo_spaces.tasks.pick_task import PickTask  # noqa: E402  # pyright: ignore[reportMissingImports]
 from molmo_spaces.utils import grasps  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
@@ -131,6 +140,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._task: Any = None
         self._robot_view: Any = None
         self._control_dt: float | None = None
+        self._judge: success_profile.Judge | None = None
         self._meta: dict[str, Any] | None = None
         self._camera_names: list[str] = []
 
@@ -215,7 +225,8 @@ class MolmoSpacesEnv(EnvProtocol):
         horizon_sec: float | None,
         with_right_shoulder: bool,
         with_object_image_points: bool = True,
-    ) -> None:
+    ) -> float:
+        """Sample the episode's task, and return its control period in seconds."""
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
@@ -235,12 +246,46 @@ class MolmoSpacesEnv(EnvProtocol):
             self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
         self._robot_view = self._task.env.current_robot.robot_view
         self._assert_bundled_arm()
-        self._control_dt = cfg.policy_dt_ms / 1000.0
+        control_dt = cfg.policy_dt_ms / 1000.0
+        self._control_dt = control_dt
         self._meta = {
             # Generated task descriptions can mislabel close episodes as "Open ...".
             mapping.META_TASK: episode.language.task_description,
             mapping.META_HOUSE_INDEX: episode.house_index,
         }
+        return control_dt
+
+    def _strict_check(self) -> success_profile.Check:
+        """The ``strict_v1`` check of the sampled task, which must be of a family that the profile judges."""
+        cfg = self._task.config.task_config
+        data = self._robot_view.mj_data
+        robot = self._robot_view.root_body_id
+
+        def body(name: str) -> int:
+            return data.model.body(name).id
+
+        # A subclass of a family's task is of that family, so the more derived classes come first.
+        if isinstance(self._task, OpeningTask):
+            if cfg.joint_index is None:
+                raise ValueError(f'{success_profile.SuccessProfile.STRICT_V1} needs the joint that the task names')
+            target = self._task.env.object_managers[0].get_object_by_name(cfg.pickup_obj_name)
+            joint = target.joint_ids[cfg.joint_index]
+            if self._task.config.task_type == 'close':
+                return success_profile.Close(data, joint)
+            return success_profile.Open(data, joint)
+        if isinstance(self._task, PickAndPlaceNextToTask):
+            return success_profile.PlaceNextTo(data, body(cfg.pickup_obj_name), body(cfg.place_receptacle_name), robot)
+        if isinstance(self._task, PickAndPlaceTask):
+            return success_profile.Place(
+                data,
+                body(cfg.pickup_obj_name),
+                body(cfg.place_receptacle_name),
+                robot,
+                cfg.max_place_receptacle_rot_displacement,
+            )
+        if isinstance(self._task, PickTask):
+            return success_profile.Pick(data, body(cfg.pickup_obj_name), robot)
+        raise ValueError(f'{success_profile.SuccessProfile.STRICT_V1} judges no {type(self._task).__name__}')
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """Selected episode records, with names, reset parameters and horizons in seconds."""
@@ -272,7 +317,10 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
-        self._build(
+        profile = success_profile.SuccessProfile(
+            token.get(mapping.TOKEN_SUCCESS_PROFILE, success_profile.SuccessProfile.MOLMO_NATIVE)
+        )
+        control_dt = self._build(
             bench,
             token[mapping.TOKEN_EPISODE_INDEX],
             token.get(mapping.TOKEN_SEED),
@@ -281,9 +329,14 @@ class MolmoSpacesEnv(EnvProtocol):
             token.get(mapping.WITH_OBJECT_IMAGE_POINTS, True),
         )
         obs, infos = self._task.reset()  # One observation dict and one info dict per environment.
+        # The checks of a strict judge take the start poses of the task's bodies, so they come after the task reset.
+        if profile is success_profile.SuccessProfile.STRICT_V1:
+            self._judge = success_profile.StrictJudge(self._strict_check(), control_dt)
+        else:
+            self._judge = success_profile.MolmoNativeJudge()
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
-        metrics = self._task_metrics(self._task.get_reward(), infos)
+        metrics = self._task_metrics(self._task.get_reward(), infos, self._judge.observe(infos[0]))
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs, metrics, arm_error=False)}],
             protocol.FRAME_META: self._meta,
@@ -303,15 +356,16 @@ class MolmoSpacesEnv(EnvProtocol):
             mapping.MOLMO_ARM_GROUP: measured if arm is None else arm,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
         })
-        metrics = self._task_metrics(rewards, infos)
-        success = bool(self._task.judge_success())
-        done = success or bool(self._task.is_done())
+        if self._judge is None:
+            raise RuntimeError('a MolmoSpaces env steps only after a reset')
+        judged = self._judge.step(self._task, infos[0])
+        metrics = self._task_metrics(rewards, infos, judged.metrics)
         return {
             protocol.SLOTS: [
                 {
                     protocol.FRAME_OBS: self._observe(obs[0], metrics, arm_error=arm is None),
-                    protocol.FRAME_DONE: done,
-                    protocol.FRAME_SUCCESS: success,
+                    protocol.FRAME_DONE: judged.done,
+                    protocol.FRAME_SUCCESS: judged.success,
                 }
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt,
@@ -342,9 +396,9 @@ class MolmoSpacesEnv(EnvProtocol):
         return None if solution is None else solution[mapping.MOLMO_ARM_GROUP]
 
     @staticmethod
-    def _task_metrics(rewards: np.ndarray, infos: list[dict[str, Any]]) -> dict[str, Any]:
-        """The first environment's reward and info entries, as signals."""
-        return protocol.numeric_signals({**infos[0], mapping.TASK_METRIC_REWARD: rewards[0]})
+    def _task_metrics(rewards: np.ndarray, infos: list[dict[str, Any]], judged: dict[str, Any]) -> dict[str, Any]:
+        """The first environment's reward and info entries, and the metrics of the success profile, as signals."""
+        return protocol.numeric_signals({**infos[0], mapping.TASK_METRIC_REWARD: rewards[0], **judged})
 
     def _observe(self, env_obs: dict[str, Any], metrics: dict[str, Any], *, arm_error: bool) -> dict[str, Any]:
         """Raw observations, including the grasp-site pose in the arm base frame."""

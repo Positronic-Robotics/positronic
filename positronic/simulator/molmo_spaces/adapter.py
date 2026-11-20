@@ -80,6 +80,7 @@ class MolmoAdapter(WireCommandAdapter):
             ),
             mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
             mapping.WITH_OBJECT_IMAGE_POINTS: self._with_object_image_points,
+            mapping.TOKEN_SUCCESS_PROFILE: params[molmo_keys.SUCCESS_PROFILE],
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
