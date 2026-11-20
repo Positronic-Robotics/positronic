@@ -1,6 +1,7 @@
 """The success profiles of MolmoSpaces episodes, on small MuJoCo scenes."""
 
 import math
+import types
 
 import mujoco
 import numpy as np
@@ -207,16 +208,16 @@ def test_a_place_with_the_object_leaning_on_the_rim_from_outside_does_not_hold(s
 
 def test_a_place_released_over_the_edge_of_the_rim_never_succeeds(scene):
     # The cube is let go with its center 1.5 cm past the rim and its bottom 0.2 mm into the rim's top.
-    judge = sp.StrictJudge(_place(scene), _CONTROL_DT)
+    judge = sp.StrictJudge(_Task(), _place(scene), _CONTROL_DT)
     rim_top = scene.data.xpos[scene.body('tray')][2] + 0.035
     scene.place('cube', (0.595, 0.0, rim_top + _CUBE_HALF - 0.0002))
-    first = judge.step(_Task(), {})
+    first = judge.step({})
     assert scene.touching('cube', 'tray')
     assert first.metrics['strict_v1.in_footprint'] is False
     judged = [first]
     for _ in range(40):
         scene.settle(_CONTROL_DT)
-        judged.append(judge.step(_Task(), {}))
+        judged.append(judge.step({}))
     assert not any(j.success for j in judged)
     assert not scene.touching('cube', 'tray') or not judged[-1].metrics['strict_v1.receptacle_supports']
 
@@ -315,8 +316,9 @@ def test_a_close_holds_from_ninety_five_percent_closed(scene, opening, holds):
 class _Task:
     """A MolmoSpaces task stand-in that answers its verdict and its end, and records each call."""
 
-    def __init__(self, success: bool = False, done: bool = False):
+    def __init__(self, success: bool = False, done: bool = False, terminate_upon_success: bool = False):
         self.success, self.done = success, done
+        self.config = types.SimpleNamespace(terminate_upon_success=terminate_upon_success)
         self.calls: list[str] = []
 
     def judge_success(self) -> bool:
@@ -339,9 +341,9 @@ class _Task:
 def test_the_native_profile_takes_the_task_verdict_and_ends_at_the_first_success(success, done, judged, calls):
     # A MolmoSpaces task changes its own state when asked, so the native profile keeps MolmoSpaces' call sequence.
     task = _Task(success, done)
-    judge = sp.MolmoNativeJudge()
+    judge = sp.MolmoNativeJudge(task)
     assert judge.observe({sp.MOLMO_INFO_SUCCESS: success}) == {}
-    assert judge.step(task, {sp.MOLMO_INFO_SUCCESS: not success}) == sp.Judged(judged[0], judged[1], {})
+    assert judge.step({sp.MOLMO_INFO_SUCCESS: not success}) == sp.Judged(judged[0], judged[1], {})
     assert task.calls == calls
 
 
@@ -360,9 +362,8 @@ _AFTER_STEPS = 16
 
 
 def _run(holds: list[bool], task: _Task | None = None) -> list[sp.Judged]:
-    judge = sp.StrictJudge(_Scripted(holds), _CONTROL_DT)
-    task = task or _Task()
-    return [judge.step(task, {}) for _ in holds]
+    judge = sp.StrictJudge(task or _Task(), _Scripted(holds), _CONTROL_DT)
+    return [judge.step({}) for _ in holds]
 
 
 def test_a_predicate_held_one_step_short_of_a_second_is_no_success():
@@ -399,7 +400,7 @@ def test_the_task_end_ends_the_episode_before_and_after_a_success():
 
 
 def test_a_strict_episode_records_each_fact_with_its_hold_count_and_verdict():
-    judge = sp.StrictJudge(_Scripted([True, True]), _CONTROL_DT)
+    judge = sp.StrictJudge(_Task(), _Scripted([True, True]), _CONTROL_DT)
     assert judge.observe({}) == {
         'strict_v1.holds': True,
         'strict_v1.joint': 3,
@@ -407,10 +408,15 @@ def test_a_strict_episode_records_each_fact_with_its_hold_count_and_verdict():
         'strict_v1.held_steps': 0,
         'strict_v1.success': False,
     }
-    assert judge.step(_Task(), {}).metrics['strict_v1.held_steps'] == 1
+    assert judge.step({}).metrics['strict_v1.held_steps'] == 1
 
 
 def test_the_native_task_verdict_is_not_asked_by_a_strict_episode():
     task = _Task(success=True)
-    sp.StrictJudge(_Scripted([True]), _CONTROL_DT).step(task, {})
+    sp.StrictJudge(task, _Scripted([True]), _CONTROL_DT).step({})
     assert task.calls == ['is_done']
+
+
+def test_a_strict_episode_refuses_a_task_that_ends_at_its_own_native_success():
+    with pytest.raises(ValueError, match='terminate_upon_success'):
+        sp.StrictJudge(_Task(terminate_upon_success=True), _Scripted([]), _CONTROL_DT)

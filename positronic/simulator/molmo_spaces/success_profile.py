@@ -49,20 +49,23 @@ class Judge(Protocol):
         """The metrics of the current state, with no change to the verdict."""
         ...
 
-    def step(self, task: Any, info: dict[str, Any]) -> Judged:
-        """The verdict after one step of ``task``, whose info at that step is ``info``."""
+    def step(self, info: dict[str, Any]) -> Judged:
+        """The verdict after one step of the task, whose info at that step is ``info``."""
         ...
 
 
 class MolmoNativeJudge:
     """MolmoSpaces' own verdict: ``judge_success`` at each step, and the episode ends at the first success."""
 
+    def __init__(self, task: Any):
+        self._task = task
+
     def observe(self, info: dict[str, Any]) -> dict[str, Any]:
         return {}
 
-    def step(self, task: Any, info: dict[str, Any]) -> Judged:
-        success = bool(task.judge_success())
-        return Judged(success, success or bool(task.is_done()), {})
+    def step(self, info: dict[str, Any]) -> Judged:
+        success = bool(self._task.judge_success())
+        return Judged(success, success or bool(self._task.is_done()), {})
 
 
 def _pose(data: mujoco.MjData, body: int) -> np.ndarray:
@@ -308,10 +311,14 @@ class StrictJudge:
     """The ``strict_v1`` verdict of one episode.
 
     The episode succeeds at the step where ``check`` held for ``HOLD_SEC`` of consecutive steps, and the success
-    stays. It ends ``RECORD_AFTER_SEC`` after that step, or when the task is done.
+    stays. It ends ``RECORD_AFTER_SEC`` after that step, or when ``task`` is done.
     """
 
-    def __init__(self, check: Check, control_dt: float):
+    def __init__(self, task: Any, check: Check, control_dt: float):
+        # The task's ``is_done`` must not include its native success, or that would end the episode first.
+        if task.config.terminate_upon_success:
+            raise ValueError(f'{SuccessProfile.STRICT_V1} needs a task config with terminate_upon_success off')
+        self._task = task
         self._check = check
         self._hold_steps = _steps(HOLD_SEC, control_dt)
         self._after_steps = _steps(RECORD_AFTER_SEC, control_dt)
@@ -330,7 +337,7 @@ class StrictJudge:
         """The metrics of the current state, with no step of the hold window."""
         return self._metrics(self._check.facts(info))
 
-    def step(self, task: Any, info: dict[str, Any]) -> Judged:
+    def step(self, info: dict[str, Any]) -> Judged:
         facts = self._check.facts(info)
         self._held_steps = self._held_steps + 1 if facts.holds else 0
         if self._steps_since_success is not None:
@@ -339,4 +346,4 @@ class StrictJudge:
             self._steps_since_success = 0
         since = self._steps_since_success
         recorded_after = since is not None and since >= self._after_steps
-        return Judged(since is not None, recorded_after or bool(task.is_done()), self._metrics(facts))
+        return Judged(since is not None, recorded_after or bool(self._task.is_done()), self._metrics(facts))
