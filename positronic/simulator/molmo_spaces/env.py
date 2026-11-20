@@ -168,9 +168,8 @@ def _objects_on_receptacle(
     return [obj for name in sorted(found) if (obj := self.get_object_by_name(name))]
 
 
-# HACK: upstream computes the box of the root body across each receptacle contact, then drops the body by its name.
-# Across a contact with a static geom that root is ``world``, whose box reads every mesh vertex of the scene. Then
-# one pick-and-place ``get_info`` takes seconds while the object is off the receptacle.
+# HACK: upstream computes the box of the root body across each receptacle contact before it checks the body name.
+# For a static geom that root is ``world``, whose box reads every mesh vertex, so ``get_info`` takes seconds.
 ObjectManager.objects_on_receptacle = _objects_on_receptacle
 
 
