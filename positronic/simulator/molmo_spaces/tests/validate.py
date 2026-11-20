@@ -71,7 +71,7 @@ def _check_cartesian_command_is_a_noop_at_the_measured_pose(sim_env) -> None:
     pos, rot = sim_env._measured_eef_pose()
     command = {protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: np.concatenate([pos, rot.reshape(-1)])}
     target = env.arm_action.wire_command_to_arm_action(
-        command, sim_env._measured_arm_q(), ik=sim_env._ik, current_eef=(pos, rot)
+        command, sim_env._measured_arm_q(), ik=sim_env._ik, current_eef=lambda: (pos, rot)
     )
     drift = np.abs(np.asarray(target, dtype=np.float64) - np.asarray(sim_env._measured_arm_q(), dtype=np.float64))
     assert drift.max() < 1e-3, f'holding the measured pose moved the joints by {drift.max()} rad'
@@ -95,7 +95,7 @@ def _check_every_canonical_command_converts(sim_env) -> None:
     for kind in protocol.CANONICAL_COMMAND_TYPES:
         command = {protocol.COMMAND_TYPE: kind, **payloads[kind]}
         target = env.arm_action.wire_command_to_arm_action(
-            command, measured, ik=sim_env._ik, current_eef=sim_env._measured_eef_pose()
+            command, measured, ik=sim_env._ik, current_eef=sim_env._measured_eef_pose
         )
         target = np.asarray(target, dtype=np.float64)
         assert target.shape == measured.shape, f'{kind}: joint targets {target.shape} vs measured {measured.shape}'

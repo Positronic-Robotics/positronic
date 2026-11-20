@@ -347,7 +347,7 @@ class MolmoSpacesEnv(EnvProtocol):
         wire = protocol.single_arm(action)
         measured = self._measured_arm_q()
         arm = arm_action.wire_command_to_arm_action(
-            wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
+            wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
         obs, rewards, _term, _trunc, infos = self._task.step({
