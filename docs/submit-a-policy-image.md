@@ -169,7 +169,7 @@ published image as a submission.
 
 Push to a private repository and hand the platform a read-only credential for it. At submission,
 the platform copies the image into a private registry of its own, and the run pulls that copy. The
-platform uses the credential only for that copy, so a short-lived password works.
+platform uses the credential only at submission and for the copy, so a short-lived password works.
 
 Write the password into a file of its own and name the file:
 
@@ -196,31 +196,36 @@ What the platform does with the credential:
 
 1. At submission, the platform reads the image with it. A credential your registry refuses fails
    the submission with `image_unpullable`, charged.
-2. After that read, the platform copies the digest from your registry into its own, with the same
-   credential. The submission is `pending` while the copy runs. A registry that refuses the copy
-   ends the submission `errored` with `image_unpullable`, charged.
-3. The platform keeps the password in memory only, and discards it when the copy ends. No secret,
-   no record, no response and no log holds the password.
-4. The run pulls the copy with a credential of the platform. It does not use your registry or
+2. The platform answers the submission after that read. Then it copies the image from your
+   registry into its own, with the same credential. The submission is `pending` while the copy
+   runs, and the run starts after the copy.
+3. The copy keeps the digest you pinned. For a multi-platform image, the platform copies every
+   platform.
+4. The platform uses the password only at submission and during the copy. It keeps the password
+   in memory only, and discards it when the copy ends. No secret, no record, no response and no
+   log holds the password.
+5. The run pulls the copy with a credential of the platform. It does not use your registry or
    your password. The policy container never gets a registry credential.
-5. After the submission ends, the platform deletes the copy.
+6. After the submission ends, the platform deletes the copy.
 
-- Keep the password valid until the copy ends. A submission is `running` only after its copy
-  ends. Then you can revoke the token or let it expire.
-- A copy that fails on the platform's side ends the submission `errored` with a platform fault,
-  not charged. Submit again with a new transaction key.
+- Keep the password valid until the copy ends, not only at submission. A large image takes
+  longer to copy. A submission is `running` only after its copy ends. Then you can revoke the
+  token or let it expire.
+- A copy that fails, for any reason, ends the submission `errored` with `internal_error`, not
+  charged. Submit again with a new transaction key.
 - Only the platform can read the copy: its run services, the VMs that run your image and a
   platform administrator.
 - A retry with the same transaction key returns the first submission, also with a changed
   credential. To submit with a new credential, use a new transaction key.
 - An `image` endpoint of an [eval plan](../client/README.md#eval-plans) that states
-  `image_credential` gets the same copy when you file the plan.
+  `image_credential` gets the same copy when you file the plan. The plan is `pending` while the
+  copy runs, and a copy that fails ends the plan the same way.
 
 #### An image in Amazon ECR
 
 Amazon ECR takes the user name `AWS` and a password from `aws ecr get-login-password`. The password
-is valid for 12 hours, and only in the region that issued it. Make a new one just before you
-submit:
+is valid for 12 hours, and only in the region that issued it. The copy must end inside those 12
+hours, so make a new password just before you submit:
 
 ```bash
 mkdir -p ~/.config/positronic

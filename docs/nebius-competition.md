@@ -378,19 +378,20 @@ What the platform does with your credential:
 
 - When you submit, the platform reads your image with the credential. If your registry refuses it, the
   submission fails with `image_unpullable`, and the submission counts.
-- After that read, the platform copies the image into a private registry of its own, with the same
-  credential. The submission stays `pending` while the copy runs. If your registry refuses the copy, the
-  submission ends `errored` with `image_unpullable`, and the submission counts.
-- The platform keeps the password in memory only, and discards it when the copy ends. No API response and
-  no log shows the password.
+- The platform answers the submission after that read. Then it copies the image into a private registry
+  of its own, with the same credential. The submission stays `pending` while the copy runs, and the run
+  starts after the copy.
+- The copy keeps the digest you pinned. For a multi-platform image, the platform copies every platform.
+- The platform uses the password only at submission and during the copy. It keeps the password in memory
+  only, and discards it when the copy ends. No API response and no log shows the password.
 - The run pulls the copy. It does not use your registry or your credential. Your container never gets a
   registry credential.
 - The platform deletes the copy after the submission ends. Only the services that start the run, the
   machine that runs your image and the platform administrators can read the copy.
-- Keep the credential valid until the copy ends. A submission is `running` only after its copy ends. Then
-  you can revoke the token or let it expire.
-- If the copy fails on the platform's side, the submission ends `errored`, and it does not count. Submit
-  again with a new transaction key.
+- Keep the credential valid until the copy ends, not only at submission. A large image takes longer to
+  copy. A submission is `running` only after its copy ends. Then you can revoke the token or let it expire.
+- If the copy fails, for any reason, the submission ends `errored` with `internal_error`, and it does not
+  count. Submit again with a new transaction key.
 - A retry with the same `--transaction-key` returns the first submission, also with a new credential. To
   use a new credential, use a new transaction key.
 - For an image in Amazon ECR, use the user name `AWS` and a password from `aws ecr get-login-password`:
