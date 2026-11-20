@@ -4,6 +4,7 @@ that shares a server some other process runs.
 Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole Isaac Lab stack.
 """
 
+import os
 import subprocess
 import sys
 from typing import Any
@@ -35,7 +36,9 @@ def spawned(monkeypatch) -> list[list[str]]:
     """The command lines ``serve_robolab`` would have spawned, with the checkout and the sync stubbed out."""
     commands: list[list[str]] = []
     monkeypatch.setattr(launcher, 'ensure_pinned_checkout', lambda *args, **kwargs: launcher._ROBOLAB_SRC)
-    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        subprocess, 'run', lambda command, **kwargs: subprocess.CompletedProcess(command, 0, 'uv 0.13.7\n')
+    )
     # Nothing binds the port here, so the wait for it is stubbed out.
     monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
     monkeypatch.setattr(subprocess, 'Popen', lambda command, **kwargs: commands.append(command) or _StubProcess())
@@ -116,6 +119,23 @@ def test_the_setup_installs_the_shipped_lock_and_leaves_the_checkout_as_pinned(m
     assert (src / '.venv' / 'pyvenv.cfg').is_file()
     assert (src / 'uv.lock').read_text() == shipped_lock
     assert (src / 'pyproject.toml').read_text() == pyproject
+
+
+def test_the_setup_refuses_a_uv_too_old_for_the_robolab_build_config(monkeypatch, tmp_path):
+    calls = tmp_path / 'uv-calls'
+    uv = tmp_path / 'bin' / 'uv'
+    uv.parent.mkdir()
+    uv.write_text(f'#!/bin/sh\necho "$@" >> {calls}\necho "uv 0.8.3"\n')
+    uv.chmod(0o755)
+    monkeypatch.setenv('PATH', f'{uv.parent}{os.pathsep}{os.environ["PATH"]}')
+    monkeypatch.setattr(launcher, 'ensure_pinned_checkout', lambda *args, **kwargs: tmp_path)
+    monkeypatch.setattr(launcher, '_ROBOLAB_SRC', tmp_path / 'robolab')
+    monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match=r'uv 0\.8\.4 or newer'), launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+        pass
+
+    assert 'sync' not in calls.read_text()
 
 
 class _OneTaskEnv(EnvProtocol):

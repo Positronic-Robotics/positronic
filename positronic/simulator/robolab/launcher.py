@@ -8,6 +8,7 @@ without dragging in positronic; ``robolab`` itself resolves from the uv project.
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -34,10 +35,22 @@ _ROBOLAB_PYTHON = '3.11'
 # RoboLab installs Isaac only through an extra; ``isaac50`` is the IsaacSim 5.0 / IsaacLab 2.2 stack env.py drives.
 _ROBOLAB_ISAAC_EXTRA = 'isaac50'
 
+# The oldest uv that reads ``[tool.uv.extra-build-dependencies]``, which RoboLab needs to build ``flatdict``.
+_UV_MIN_VERSION = (0, 8, 4)
+
+
+def _require_uv_version() -> None:
+    found = subprocess.run(['uv', '--version'], check=True, capture_output=True, text=True).stdout.strip()
+    match = re.match(r'uv (\d+)\.(\d+)\.(\d+)', found)
+    if match is None or tuple(int(part) for part in match.groups()) < _UV_MIN_VERSION:
+        minimum = '.'.join(str(part) for part in _UV_MIN_VERSION)
+        raise RuntimeError(f'the RoboLab setup needs uv {minimum} or newer, and found {found!r}')
+
 
 def _spawn(
     host: str, port: int, cameras: str, max_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
 ) -> subprocess.Popen:
+    _require_uv_version()
     # One setup at a time, so no checkout resets files under ``uv sync``; the hold is one install, which a waiter needs.
     with setup_lock(_ROBOLAB_SRC.parent):
         # With its LFS assets: Isaac Lab cannot load a USD from a pointer stub.
