@@ -143,11 +143,13 @@ def test_a_pick_holds_with_the_object_in_the_hand_well_above_its_start(scene):
     assert facts.holds
 
 
-def test_a_pick_lifted_by_one_and_a_half_centimetres_does_not_hold(scene):
+# A lift of 2.4 cm passes MolmoSpaces' own pick check, which needs 1 cm.
+@pytest.mark.parametrize('lift', [0.015, 0.024])
+def test_a_pick_lifted_less_than_three_centimetres_does_not_hold(scene, lift):
     check = _pick(scene)
-    _carry_cube(scene, (0.0, -2.0, 0.035))
+    _carry_cube(scene, (0.0, -2.0, _CUBE_HALF + lift))
     facts = check.facts({})
-    assert facts.lift_m == pytest.approx(0.015, abs=0.003)
+    assert facts.lift_m == pytest.approx(lift, abs=0.003)
     assert facts.robot_contact and not facts.holds
 
 
@@ -304,6 +306,21 @@ def test_an_open_of_another_door_of_the_same_cabinet_does_not_hold(scene):
     scene.open_joint('hinge_b', 0.8)
     facts = check.facts({})
     assert facts.opening == 0.0 and not facts.holds
+
+
+# The open fraction, per step, of a door beside the named one, whose joint stays shut. MolmoSpaces' open reward
+# takes the largest open fraction over every joint of the object, so it passes on this door at the last step.
+_KNOCKED_DOOR = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0035, 0.0479, 0.1317, 0.1437, 0.124, 0.1219, 0.1842]
+
+
+def test_a_door_knocked_open_beside_the_named_one_never_succeeds(scene):
+    judge = sp.StrictJudge(_Task(), sp.Open(scene.data, scene.joint('hinge_a')), _CONTROL_DT)
+    judged = []
+    for opening in _KNOCKED_DOOR + [_KNOCKED_DOOR[-1]] * 40:
+        scene.open_joint('hinge_b', opening)
+        judged.append(judge.step({}))
+    assert not any(j.success for j in judged)
+    assert {j.metrics['strict_v1.opening'] for j in judged} == {0.0}
 
 
 @pytest.mark.parametrize(('opening', 'holds'), [(0.10, False), (0.06, False), (0.04, True), (0.0, True)])
