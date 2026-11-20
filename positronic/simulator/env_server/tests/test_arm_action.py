@@ -99,15 +99,17 @@ def test_unknown_command_names_the_canonical_contract():
         _action({protocol.COMMAND_TYPE: 'wrench'}, np.zeros(_JOINTS))
 
 
+_POSE = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
+
+
 @pytest.mark.parametrize('command_type', protocol.CANONICAL_COMMAND_TYPES)
 def test_every_canonical_command_type_converts_to_joint_targets(command_type):
-    pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
     payload = {
         protocol.JOINT_POS: {protocol.COMMAND_JOINT_POS: np.zeros(_JOINTS)},
         protocol.JOINT_DELTA: {protocol.COMMAND_JOINT_DELTA: np.zeros(_JOINTS)},
         protocol.HOLD: {},
-        protocol.CARTESIAN: {protocol.COMMAND_POSE: pose},
-        protocol.CARTESIAN_DELTA: {protocol.COMMAND_DELTA: pose},
+        protocol.CARTESIAN: {protocol.COMMAND_POSE: _POSE},
+        protocol.CARTESIAN_DELTA: {protocol.COMMAND_DELTA: _POSE},
     }[command_type]
 
     target = _action(
@@ -118,9 +120,6 @@ def test_every_canonical_command_type_converts_to_joint_targets(command_type):
     )
 
     assert target.shape == (_JOINTS,)
-
-
-_POSE = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
 
 
 @pytest.mark.parametrize(
