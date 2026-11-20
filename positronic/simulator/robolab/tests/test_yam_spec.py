@@ -207,12 +207,17 @@ def test_an_arm_keeps_its_last_grip_when_the_wire_grip_is_not_finite():
 
 
 @pytest.mark.parametrize('kind', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
-def test_a_pose_command_is_refused(kind):
+def test_a_pose_command_holds_the_arm_with_a_warning_and_the_other_arm_moves(kind, caplog):
     field = protocol.COMMAND_POSE if kind == protocol.CARTESIAN else protocol.COMMAND_DELTA
-    command = {protocol.COMMAND_TYPE: kind, field: np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])}
+    command = {protocol.COMMAND_TYPE: kind, field: np.concatenate([np.full(3, 0.1), np.eye(3).reshape(-1)])}
+    target = np.full(6, 0.3, dtype=np.float32)
 
-    with pytest.raises(ValueError, match='joint commands only'):
-        spec.action(_wire(command, _HOLD), _MEASURED, np.zeros(2))
+    action, _ = spec.action(_wire(command, _joint_command(target)), _MEASURED, np.zeros(2))
+
+    np.testing.assert_array_equal(action[:6], _MEASURED[0])
+    np.testing.assert_array_equal(action[7:13], target)
+    (record,) = caplog.records
+    assert f'{kind} command not applied, the {spec.LEFT} arm holds' in record.getMessage()
 
 
 def test_a_channel_of_no_arm_is_refused():

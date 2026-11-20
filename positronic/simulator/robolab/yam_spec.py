@@ -362,9 +362,14 @@ def Xform "yam_stand"
 # ---- the action ----
 
 
-def _joint_commands_only(*_pose: Any) -> Any:
+def _no_ik(*_pose: Any) -> None:
     # TODO: a numpy IK of the YAM arm beside ``pose_ik``, tested against ``YamKinematics``, solves pose commands.
-    raise ValueError('the RoboLab YAM robot takes joint commands only, not a pose command')
+    return None
+
+
+def _no_eef() -> tuple[np.ndarray, np.ndarray]:
+    # A Cartesian delta composes onto this pose, and ``_no_ik`` solves no pose.
+    return np.zeros(3), np.eye(3)
 
 
 def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -385,9 +390,7 @@ def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> tup
         grip = float(wire[protocol.arm_channel(protocol.TARGET_GRIP, side)])
         grip = grip if math.isfinite(grip) else float(grips[i])
         command = wire[protocol.arm_channel(protocol.ROBOT_COMMAND, side)]
-        targets = arm_action.arm_targets(
-            command, measured[i], ik=_joint_commands_only, read_eef=_joint_commands_only, arm=side
-        )
+        targets = arm_action.arm_targets(command, measured[i], ik=_no_ik, read_eef=_no_eef, arm=side)
         values += [targets.q, [grip]]
         new_grips.append(grip)
     return np.concatenate(values).astype(np.float32), np.asarray(new_grips, dtype=np.float32)

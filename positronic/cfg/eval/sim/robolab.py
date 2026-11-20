@@ -74,7 +74,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
     when the run starts, and lists each task's instruction in the ``instruction_type`` phrasing.
 
     ``robot`` names the robot in the task scenes, one of ``keys.ROBOTS``: the DROID rig, or the two-arm YAM. The YAM
-    takes joint commands only, and its env reports every pose in the world frame of the YAM rig.
+    holds an arm on a pose command, and its env reports every pose in the world frame of the YAM rig.
 
     ``cameras`` names the set the run renders, one of ``keys.ROBOT_CAMERA_SETS[robot]``. For the DROID rig: both
     exteriors and the wrist, or one exterior and the wrist. For the YAM: the top camera and both wrists. Without it,
