@@ -582,8 +582,6 @@ _YAM_ARM_SPECS = {
     protocol.OBS_EEF_POS: (3,),
     protocol.OBS_EEF_QUAT: (4,),
 }
-_YAM_JOINT_OFFSET = np.array([0.15, 0.10, -0.10, 0.05, 0.10, 0.15], dtype=np.float32)
-_FINGER_TOL = 2e-3  # m
 
 
 def _yam_action(left: dict, right: dict, grips: tuple[float, float] = (0.0, 0.0)) -> dict:
@@ -596,10 +594,6 @@ def _yam_action(left: dict, right: dict, grips: tuple[float, float] = (0.0, 0.0)
 
 _ARM_HOLD = {protocol.COMMAND_TYPE: protocol.HOLD}
 _YAM_HOLD = _yam_action(_ARM_HOLD, _ARM_HOLD)
-
-
-def _joint_pos(q: np.ndarray) -> dict:
-    return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}
 
 
 def _check_yam_obs_contract(env: YamEnv) -> None:
@@ -630,13 +624,19 @@ def _check_yam_obs_contract(env: YamEnv) -> None:
     print(f'  obs contract: OK (per arm joints, velocities, eef pose and grip; {len(cameras)} cameras)')
 
 
+_YAM_JOINT_OFFSET = np.array([0.15, 0.10, -0.10, 0.05, 0.10, 0.15], dtype=np.float32)
+
+
 def _check_yam_joint_pos_passthrough(env: YamEnv) -> None:
     _reset(env, _TOKEN)
     terms = list(env._env.action_manager.active_terms)
     assert terms == [name for name, _ in yam_spec.ACTION_TERMS], f'the action terms are {terms}'
     measured = env._measured_q()[0].cpu().numpy().reshape(len(yam_spec.SIDES), -1)
     left, right = measured[0] + _YAM_JOINT_OFFSET, measured[1] - _YAM_JOINT_OFFSET
-    action = _yam_action(_joint_pos(left), _joint_pos(right))
+    left_command, right_command = (
+        {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q} for q in (left, right)
+    )
+    action = _yam_action(left_command, right_command)
     out = _step(env, action)
     applied = env._env.action_manager.action[0].cpu().numpy()
     expected = np.concatenate([left, [0.0], right, [0.0]]).astype(np.float32)
@@ -665,6 +665,9 @@ def _finger_joints(env: YamEnv, side: str) -> tuple[float, float]:
     names, q = env._robot.data.joint_names, env._robot.data.joint_pos[0]
     finger = float(q[names.index(f'{side}_{yam_spec.FINGER_JOINT}')])
     return finger, float(q[names.index(f'{side}_{yam_spec.FINGER_MIMIC_JOINT}')])
+
+
+_FINGER_TOL = 2e-3  # m
 
 
 def _check_yam_grip(env: YamEnv) -> None:
