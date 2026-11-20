@@ -227,8 +227,8 @@ def test_a_move_that_dips_between_two_of_sixteen_points_stops_before_the_dip():
     assert np.array_equal(pose_ik.stop_before_self_collision(after_the_dip, end), end)
 
 
-# An FR3 posture of a recorded episode: the shoulder back and the elbow folded, link 5 5.1 cm from link 2. The FR3
-# self-collision reflex stopped the arm here again and again.
+# An FR3 posture with the shoulder back and the elbow folded: link 5 is 5.1 cm from link 2, closer than the 6.4 cm at
+# which the FR3 self-collision reflex stops the arm.
 _SHOULDER_BACK_ELBOW_FOLDED = np.array([
     0.98877418,
     -1.15661502,
@@ -279,8 +279,8 @@ def test_a_pose_whose_joints_are_just_outside_the_push_clearance_is_reached_with
 
 
 def test_a_start_inside_the_clearance_moves_out_and_towards_the_target():
-    # The flange command of that episode at the folded elbow, 20 cm in front of the base and 30 cm lower. The line
-    # search takes the arm to a stop at the j3 lower limit, 7 cm from the target.
+    # A flange target 20 cm in front of the base and 30 cm below the flange at this start. The solve from this start
+    # stops at the j3 lower limit 7 cm short of it, so the test asserts progress and not arrival.
     xyzw = [0.993636106, -0.065788185, -0.091428419, 0.000218116]
     target = _pose([0.202441812, -0.005892748, 0.048565254], Rotation.from_quat(xyzw).as_matrix())
     q = _SHOULDER_BACK_ELBOW_FOLDED

@@ -30,16 +30,7 @@ SELF_COLLISION_CLEARANCE = 0.09
 SELF_COLLISION_PUSH_CLEARANCE = 0.10
 # How far below its floor the clearance may fall between two checked points of a move.
 SELF_COLLISION_PATH_TOLERANCE = 0.001
-_POSTURE_WEIGHT = 0.1
-# 1 cm inside SELF_COLLISION_PUSH_CLEARANCE costs as much as 20 cm of tool error.
-_COLLISION_WEIGHT = 20.0
-_ITERATIONS = 60
-_STEP_TOLERANCE = 1e-9
-_LEVENBERG = 1e-4
-_LINE_SEARCH_STEPS = 20
 _ACTIVE_SET_PASSES = 64
-_LEAST_PATH_SAMPLES = 16
-_PATH_BISECTIONS = 8
 # The j4 of the longest shoulder-wrist distance: the a = 0.0825 offsets of joints 4 and 5 bend the stretched arm.
 ELBOW_STRETCHED = -(np.arctan(0.0825 / 0.316) + np.arctan(0.0825 / 0.384))
 
@@ -280,6 +271,10 @@ def _clearance_rate_bounds() -> np.ndarray:
 CLEARANCE_RATE_BOUNDS = _clearance_rate_bounds()
 
 
+_LEAST_PATH_SAMPLES = 16
+_PATH_BISECTIONS = 8
+
+
 def stop_before_self_collision(start: np.ndarray, end: np.ndarray) -> np.ndarray:
     """The point of the move from ``start`` to ``end`` farthest along it up to which each checked point keeps the floor.
 
@@ -306,6 +301,15 @@ def stop_before_self_collision(start: np.ndarray, end: np.ndarray) -> np.ndarray
         else:
             blocked = mid
     return start + safe * move
+
+
+_POSTURE_WEIGHT = 0.1
+# 1 cm inside SELF_COLLISION_PUSH_CLEARANCE costs as much as 20 cm of tool error.
+_COLLISION_WEIGHT = 20.0
+_ITERATIONS = 60
+_STEP_TOLERANCE = 1e-9
+_LEVENBERG = 1e-4
+_LINE_SEARCH_STEPS = 20
 
 
 def joint_targets(
