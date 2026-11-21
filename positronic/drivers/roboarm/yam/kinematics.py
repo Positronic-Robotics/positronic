@@ -16,6 +16,14 @@ IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit
 IK_ROT_TOL = 1e-2  # radians
 
 
+def within_ik_tolerance(reached: geom.Transform3D, target: geom.Transform3D) -> bool:
+    """Whether ``reached`` meets ``target`` within the tolerance at which the IK accepts a solution."""
+    return bool(
+        np.linalg.norm(reached.translation - target.translation) < IK_POS_TOL
+        and (reached.rotation.inv * target.rotation).angle < IK_ROT_TOL
+    )
+
+
 # TODO(#517): move this MJCF FK/IK beside `drivers/roboarm/kinematics.py`, in its vocabulary, so the MuJoCo sim
 # (`simulator/mujoco/sim.py`) solves IK through it too.
 class YamKinematics:
@@ -77,9 +85,6 @@ class YamKinematics:
             q = np.where((q > upper) & (q - 2 * np.pi >= lower), q - 2 * np.pi, q)
             q = np.where((q < lower) & (q + 2 * np.pi <= upper), q + 2 * np.pi, q)
             q = np.clip(q, lower, upper)
-            reached = self.fk(q)
-            rot_err = (reached.rotation.inv * target.rotation).angle
-            rot_err = min(rot_err, 2 * np.pi - rot_err)
-            if np.linalg.norm(reached.translation - target.translation) < IK_POS_TOL and rot_err < IK_ROT_TOL:
+            if within_ik_tolerance(self.fk(q), target):
                 return q
         return None

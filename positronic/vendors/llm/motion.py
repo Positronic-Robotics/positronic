@@ -61,11 +61,12 @@ Targets = Mapping[str | None, Waypoint]
 
 
 class Trajectory(NamedTuple):
-    """The clamped targets of every arm at each waypoint, the commands of each segment and gripper hold, and
-    whether a clamp changed a requested target."""
+    """The clamped targets of every arm at each waypoint, the commands of each segment and gripper hold, the index of
+    the waypoint that each part moves to or holds at, and whether a clamp changed a requested target."""
 
     bounded: list[Targets]
     parts: list[list[dict]]
+    part_waypoints: list[int]
     clamped: bool
 
 
@@ -133,19 +134,21 @@ class Motion:
         ``held`` is the target of each arm of ``starts`` before the path. An arm that a waypoint of ``path`` leaves
         out holds its previous clamped target. All arms reach a waypoint together.
         """
-        bounded, parts, clamped = [], [], False
-        for waypoint in path:
+        bounded, parts, part_waypoints, clamped = [], [], [], False
+        for index, waypoint in enumerate(path):
             requested = {arm: waypoint.get(arm, held[arm]) for arm in starts}
             targets = {arm: self._clamp(start, requested[arm]) for arm, start in starts.items()}
             clamped = clamped or targets != requested
             parts.append(self._segment(starts, targets))
+            part_waypoints.append(index)
             if any(target.gripper != held[arm].gripper for arm, target in targets.items()):
                 hold = self._commands({arm: target.pose for arm, target in targets.items()}, targets)
                 parts.append([hold] * math.ceil(self.grip_hold * self.fps))
+                part_waypoints.append(index)
             bounded.append(targets)
             starts = {arm: target.pose for arm, target in targets.items()}
             held = targets
-        return Trajectory(bounded, parts, clamped)
+        return Trajectory(bounded, parts, part_waypoints, clamped)
 
 
 def closest_approach(start: np.ndarray, end: np.ndarray) -> float:

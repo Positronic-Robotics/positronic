@@ -1,4 +1,5 @@
 import dataclasses
+import importlib
 import logging
 import math
 import subprocess
@@ -32,12 +33,13 @@ from positronic.drivers.roboarm.models import (
     YAM_JOINT_NAMES,
     bundled_yam_model,
 )
+from positronic.drivers.roboarm.tests.conftest import I2RT_INSTALLED
 from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
-from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, YamKinematics
+from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, IK_ROT_TOL, YamKinematics, within_ik_tolerance
 from positronic.drivers.utils import RecoveryOutcome
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
@@ -1009,6 +1011,18 @@ def test_the_joint_range_is_the_range_of_the_i2rt_arm_model():
     rig.loop.close()
 
 
+@pytest.mark.skipif(not I2RT_INSTALLED, reason='needs the arm models of the real i2rt package (the yam extra)')
+def test_the_vendored_model_has_the_joint_ranges_of_the_i2rt_arm_model():
+    get_robot = importlib.import_module('i2rt.robots.get_robot')
+    utils = importlib.import_module('i2rt.robots.utils')
+    # i2rt reads the arm's joints from the arm model and the last wrist joint from the gripper model.
+    xmls = (utils.ArmType.YAM.get_xml_path(), utils.GripperType.LINEAR_4310.get_xml_path())
+    ranges = get_robot._load_joint_limits_from_xml(*xmls)[:6]
+    kinematics = YamKinematics()
+    np.testing.assert_array_equal(ranges, np.column_stack([kinematics.lower, kinematics.upper]))
+    np.testing.assert_array_equal(ranges, I2RT_YAM_RANGES)
+
+
 def test_a_cartesian_target_that_needs_joint_4_below_minus_half_pi_reaches_the_chain(rig):
     rig.raise_arm()
     wrist_down = RAISED.copy()
@@ -1119,6 +1133,24 @@ def test_ik_refuses_a_target_farther_past_full_stretch_than_the_tolerance():
     kinematics = YamKinematics()
     target = past_full_stretch(kinematics, 5 * IK_POS_TOL)
     assert kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper) is None
+
+
+@pytest.mark.parametrize(
+    'offset_m,turn_rad,within',
+    [
+        (0.9 * IK_POS_TOL, 0.0, True),
+        (1.1 * IK_POS_TOL, 0.0, False),
+        (0.0, 0.9 * IK_ROT_TOL, True),
+        (0.0, 1.1 * IK_ROT_TOL, False),
+    ],
+)
+def test_a_pose_meets_its_target_only_within_the_ik_tolerance(offset_m, turn_rad, within):
+    target = geom.Transform3D(np.array([0.3, 0.0, 0.2]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
+    reached = geom.Transform3D(
+        target.translation + [0.0, offset_m, 0.0],
+        target.rotation * geom.Rotation.from_rotvec(np.array([turn_rad, 0.0, 0.0])),
+    )
+    assert within_ik_tolerance(reached, target) is within
 
 
 def test_ik_clamps_a_joint_just_below_its_range_to_its_lower_limit(monkeypatch):

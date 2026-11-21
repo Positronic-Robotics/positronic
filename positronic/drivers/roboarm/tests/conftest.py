@@ -22,6 +22,8 @@ VENDOR = f'{PACKAGE}._franka'
 DESK = f'{PACKAGE}.desk'
 I2RT = 'i2rt'
 RCTLSTD = 'rctlstd'
+# A test that reads i2rt's own arm models needs the real package, not the stub below.
+I2RT_INSTALLED = importlib.util.find_spec(I2RT) is not None
 
 
 def _install_vendor_stub() -> None:
@@ -131,7 +133,7 @@ _EMPTY_STUBS = ('scservo_sdk', 'placo')
 if importlib.util.find_spec(PACKAGE) is None:
     _install_vendor_stub()
 
-if importlib.util.find_spec(I2RT) is None:
+if not I2RT_INSTALLED:
     _install_i2rt_stub()
 
 if importlib.util.find_spec(RCTLSTD) is None:
