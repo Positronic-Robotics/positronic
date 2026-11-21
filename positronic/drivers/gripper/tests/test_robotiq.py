@@ -759,24 +759,40 @@ def test_a_stop_at_the_prompt_ends_the_grip_probe_with_the_fingers_open(monkeypa
     assert bus.writes[-1][1] == 0
 
 
-def test_a_stop_during_the_activation_ends_the_grip_probe_without_an_activation_error(monkeypatch, tmp_path):
-    """A Ctrl-C while the gripper activates ends the probe as a stop, not as a gripper that did not activate."""
-    bus = FakeBus()
-    bus.completes = False
+def _stopped_during_the_activation(monkeypatch, bus: FakeBus, out, stop_after_s: float) -> GripRecord:
+    """Run the grip probe over ``bus``, and stop it once the clock passes ``stop_after_s``."""
     monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
     record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
     read_fd, write_fd = os.pipe()
     stop, clock = StopFlag(), MockClock()
+    stop.stopped = stop_after_s < 0
     try:
-        for command in RobotiqGripProbe('/dev/null', record, 3, tmp_path, read_fd).run(stop, clock):
+        for command in RobotiqGripProbe('/dev/null', record, 3, out, read_fd).run(stop, clock):
             clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
-            stop.stopped = clock.now() > 1.0
+            stop.stopped = clock.now() > stop_after_s
     finally:
         os.close(read_fd)
         os.close(write_fd)
+    return record
+
+
+def test_a_stop_during_the_activation_ends_the_grip_probe_without_an_activation_error(monkeypatch, tmp_path):
+    """A Ctrl-C while the gripper activates ends the probe as a stop, not as a gripper that did not activate."""
+    bus = FakeBus()
+    bus.completes = False
+    record = _stopped_during_the_activation(monkeypatch, bus, tmp_path, stop_after_s=1.0)
 
     assert record.closes == []
-    assert bus.writes[-1][1] == 0
+    assert bus.writes[-1] == [0x0100, 0, 0], 'the probe asked a move of a gripper that did not complete its activation'
+
+
+def test_a_stop_before_the_gripper_reports_its_reset_keeps_the_gripper_reset(monkeypatch, tmp_path):
+    """A move command raises ``rACT``, so a move after a stop before the reset would start an activation stroke."""
+    bus = FakeBus()
+    record = _stopped_during_the_activation(monkeypatch, bus, tmp_path, stop_after_s=-1.0)
+
+    assert record.closes == []
+    assert bus.writes == [[0, 0, 0]]
 
 
 @pytest.mark.parametrize(

@@ -189,7 +189,6 @@ class RobotiqGripProbe(pimm.ControlSystem):
         try:
             yield from self._probe(gripper, clock)
         finally:
-            self._release(gripper)
             client.close()
 
     def _probe(self, gripper: _Gripper, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
@@ -199,6 +198,14 @@ class RobotiqGripProbe(pimm.ControlSystem):
             return
         if outcome is not RecoveryOutcome.CLEARED:
             raise SystemExit(f'The gripper on {self._port} did not activate: {gripper.observe()}')
+        # A move command sets rACT, so a move before the activation completes starts an activation stroke.
+        try:
+            yield from self._repeat(gripper, clock)
+        finally:
+            self._release(gripper)
+
+    def _repeat(self, gripper: _Gripper, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
+        """Prompt, close, record and open once for each repeat, until the world stops."""
         yield from self._move(gripper, OPEN, clock)
         print(HEADER)
         for repeat in range(1, self._repeats + 1):
