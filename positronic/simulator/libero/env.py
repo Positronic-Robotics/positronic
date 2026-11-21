@@ -49,6 +49,7 @@ from typing import Any
 import arm_action  # pyright: ignore[reportMissingImports] -- a flat module on the env server's PYTHONPATH
 import keys
 import mujoco
+import mujoco_ik  # pyright: ignore[reportMissingImports] -- a flat module on the env server's PYTHONPATH
 import numpy as np
 import protocol  # pyright: ignore[reportMissingImports] -- a flat module on the env server's PYTHONPATH
 from robosuite.utils.transform_utils import get_pose_error, make_pose, mat2quat, quat2axisangle
@@ -305,7 +306,7 @@ class LiberoEnv(EnvProtocol):
         # it does not converge. ``get_pose_error`` returns the world-frame error that matches the world-frame site
         # Jacobian; ``validate.py`` checks the ``_fk(_ik(pose))`` round-trip.
         target_pose = make_pose(target_pos, target_rot)
-        return arm_action.damped_least_squares_ik(
+        return mujoco_ik.damped_least_squares_ik(
             self._model,
             live_qpos=self._sim.data.qpos,
             site_id=self._eef_site_id,

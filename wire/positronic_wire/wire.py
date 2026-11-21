@@ -104,6 +104,8 @@ class Refusal(Enum):
     FINAL = 'final'  # a permanent refusal; surface at once
     # Nothing answered: no connection, or none before the timeout or the close. Retry to the deadline.
     SILENT = 'silent'
+    # The resolver had no answer for the host name yet. Retry for a limited time, then surface.
+    UNRESOLVED = 'unresolved'
 
 
 def retry_pauses() -> Iterator[float]:
