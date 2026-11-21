@@ -12,6 +12,7 @@ positronic or Isaac Lab. A task library directory holds:
 import ast
 import importlib.util
 import json
+import sys
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,7 +143,13 @@ def camera_sets(
         spec = importlib.util.spec_from_file_location(f'task_lib_cameras_{index}', path)
         assert spec is not None and spec.loader is not None  # a file that exists always yields a spec
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # A dataclass with postponed annotations resolves its module through ``sys.modules`` while it is defined.
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[spec.name]
+            raise
         for name, cameras in module.camera_sets().items():
             if name not in selectable:
                 raise ValueError(

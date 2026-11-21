@@ -1,6 +1,7 @@
 """Which tasks and camera sets a RoboLab env server holds once it has task libraries: a library adds them by name."""
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -206,3 +207,32 @@ def test_a_task_file_that_binds_the_task_name_only_below_module_level_fails_at_l
 
     with pytest.raises(ValueError, match="'LabTask'"):
         TaskCatalog.load(benchmark, [lib], CATEGORIES)
+
+
+def test_a_camera_module_with_a_dataclass_of_postponed_annotations_loads(tmp_path):
+    lib = tmp_path / 'lib'
+    lib.mkdir()
+    (lib / 'cameras.py').write_text(
+        'from __future__ import annotations\n'
+        'from dataclasses import dataclass\n\n\n'
+        '@dataclass\n'
+        'class Camera:\n'
+        '    name: str\n\n\n'
+        'def camera_sets():\n'
+        "    return {'exterior_pair_wrist': [Camera('ext')]}\n"
+    )
+
+    sets = camera_sets([lib], {}, SELECTABLE)
+
+    assert [camera.name for camera in sets['exterior_pair_wrist']] == ['ext']
+
+
+def test_a_camera_module_that_fails_to_load_leaves_no_module_behind(tmp_path):
+    lib = tmp_path / 'lib'
+    lib.mkdir()
+    (lib / 'cameras.py').write_text("raise RuntimeError('broken camera module')\n")
+
+    with pytest.raises(RuntimeError, match='broken camera module'):
+        camera_sets([lib], {}, SELECTABLE)
+
+    assert [m for m in list(sys.modules.values()) if getattr(m, '__file__', None) == str(lib / 'cameras.py')] == []
