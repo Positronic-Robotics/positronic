@@ -33,9 +33,6 @@ MAX_RECEPTACLE_LIFT_M = 0.01
 MIN_OPEN_FRAC = 0.30
 MIN_CLOSED_FRAC = 0.95
 
-# The entry of a MolmoSpaces task's info that holds the task's own verdict at that step.
-MOLMO_INFO_SUCCESS = 'success'
-
 
 class Judged(NamedTuple):
     success: bool
@@ -66,11 +63,6 @@ class MolmoNativeJudge:
     def step(self, info: dict[str, Any]) -> Judged:
         success = bool(self._task.judge_success())
         return Judged(success, success or bool(self._task.is_done()), {})
-
-
-def _pose(data: mujoco.MjData, body: int) -> np.ndarray:
-    """The world position and wxyz quaternion of ``body``."""
-    return np.concatenate([data.xpos[body], data.xquat[body]])
 
 
 def _root(model: mujoco.MjModel, geom: int) -> int:
@@ -116,13 +108,9 @@ def _touches(data: mujoco.MjData, body: int, other: int) -> bool:
     return any(root == other for root, _ in _contact_forces(data, body))
 
 
-class Facts(Protocol):
-    """The facts of one family's predicate at one step: a dataclass with the verdict in ``holds``."""
-
-    __dataclass_fields__: ClassVar[dict[str, dataclasses.Field[Any]]]
-
-    @property
-    def holds(self) -> bool: ...
+def _pose(data: mujoco.MjData, body: int) -> np.ndarray:
+    """The world position and wxyz quaternion of ``body``."""
+    return np.concatenate([data.xpos[body], data.xquat[body]])
 
 
 @dataclasses.dataclass(frozen=True)
@@ -236,6 +224,10 @@ class Place:
         )
 
 
+# The entry of a MolmoSpaces task's info that holds the task's own verdict at that step.
+MOLMO_INFO_SUCCESS = 'success'
+
+
 @dataclasses.dataclass(frozen=True)
 class PlaceNextToFacts:
     holds: bool
@@ -296,6 +288,15 @@ class Close:
     def facts(self, info: dict[str, Any]) -> JointFacts:
         opening = _opening(self._data, self._joint)
         return JointFacts(holds=1.0 - opening >= MIN_CLOSED_FRAC, joint=self._joint, opening=opening)
+
+
+class Facts(Protocol):
+    """The facts of one family's predicate at one step: a dataclass with the verdict in ``holds``."""
+
+    __dataclass_fields__: ClassVar[dict[str, dataclasses.Field[Any]]]
+
+    @property
+    def holds(self) -> bool: ...
 
 
 class Check(Protocol):

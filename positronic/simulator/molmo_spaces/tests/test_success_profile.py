@@ -57,8 +57,6 @@ _SCENE = """
 _UPRIGHT = (math.cos(math.pi / 4), 0.0, math.sin(math.pi / 4), 0.0)  # the palm turned to a plate, thin along x
 _PALM_HALF_THICKNESS = 0.005
 _CUBE_HALF = 0.02
-_TRAY = (0.5, 0.0, 0.005)
-_CONTROL_DT = 0.066  # MolmoSpaces' DROID policy period
 
 
 class _Scene:
@@ -121,17 +119,17 @@ def _pick(scene: _Scene) -> sp.Pick:
     return sp.Pick(scene.data, scene.body('cube'), scene.body('robot'))
 
 
+def test_a_floor_resting_object_rests_with_its_full_weight_on_the_floor(scene):
+    facts = _pick(scene).facts({})
+    assert facts.scene_support_frac == pytest.approx(1.0, abs=0.02)
+    assert facts.scene_supports and not facts.holds
+
+
 def _carry_cube(scene: _Scene, at) -> None:
     """Rest the cube on the palm with its center at ``at``, and let it settle."""
     scene.hand((at[0], at[1], at[2] - _CUBE_HALF - _PALM_HALF_THICKNESS))
     scene.place('cube', at)
     scene.settle()
-
-
-def test_a_floor_resting_object_rests_with_its_full_weight_on_the_floor(scene):
-    facts = _pick(scene).facts({})
-    assert facts.scene_support_frac == pytest.approx(1.0, abs=0.02)
-    assert facts.scene_supports and not facts.holds
 
 
 def test_a_pick_holds_with_the_object_in_the_hand_well_above_its_start(scene):
@@ -179,6 +177,9 @@ def _place(scene: _Scene, obj: str = 'cube', max_tilt_rad: float = math.radians(
     return sp.Place(scene.data, scene.body(obj), scene.body('tray'), scene.body('robot'), max_tilt_rad)
 
 
+_TRAY = (0.5, 0.0, 0.005)
+
+
 def _cube_in_tray(scene: _Scene, tray=_TRAY) -> None:
     scene.place('tray', tray)
     scene.place('cube', (tray[0], tray[1], tray[2] + 0.005 + _CUBE_HALF + 0.001))
@@ -206,6 +207,26 @@ def test_a_place_with_the_object_leaning_on_the_rim_from_outside_does_not_hold(s
     assert scene.touching('rod', 'tray')
     assert not facts.in_footprint
     assert not facts.holds
+
+
+_CONTROL_DT = 0.066  # MolmoSpaces' DROID policy period
+
+
+class _Task:
+    """A MolmoSpaces task stand-in that answers its verdict and its end, and records each call."""
+
+    def __init__(self, success: bool = False, done: bool = False, terminate_upon_success: bool = False):
+        self.success, self.done = success, done
+        self.config = types.SimpleNamespace(terminate_upon_success=terminate_upon_success)
+        self.calls: list[str] = []
+
+    def judge_success(self) -> bool:
+        self.calls.append('judge_success')
+        return self.success
+
+    def is_done(self) -> bool:
+        self.calls.append('is_done')
+        return self.done
 
 
 def test_a_place_released_over_the_edge_of_the_rim_never_succeeds(scene):
@@ -330,23 +351,6 @@ def test_a_close_holds_from_ninety_five_percent_closed(scene, opening, holds):
     assert check.facts({}).holds is holds
 
 
-class _Task:
-    """A MolmoSpaces task stand-in that answers its verdict and its end, and records each call."""
-
-    def __init__(self, success: bool = False, done: bool = False, terminate_upon_success: bool = False):
-        self.success, self.done = success, done
-        self.config = types.SimpleNamespace(terminate_upon_success=terminate_upon_success)
-        self.calls: list[str] = []
-
-    def judge_success(self) -> bool:
-        self.calls.append('judge_success')
-        return self.success
-
-    def is_done(self) -> bool:
-        self.calls.append('is_done')
-        return self.done
-
-
 @pytest.mark.parametrize(
     ('success', 'done', 'judged', 'calls'),
     [
@@ -374,18 +378,20 @@ class _Scripted:
         return sp.JointFacts(holds=next(self._holds), joint=3, opening=0.5)
 
 
-_HOLD_STEPS = 16  # 1 s at 66 ms
-_AFTER_STEPS = 16
-
-
 def _run(holds: list[bool], task: _Task | None = None) -> list[sp.Judged]:
     judge = sp.StrictJudge(task or _Task(), _Scripted(holds), _CONTROL_DT)
     return [judge.step({}) for _ in holds]
 
 
+_HOLD_STEPS = 16  # 1 s at 66 ms
+
+
 def test_a_predicate_held_one_step_short_of_a_second_is_no_success():
     judged = _run([True] * (_HOLD_STEPS - 1) + [False] * 40)
     assert not any(j.success or j.done for j in judged)
+
+
+_AFTER_STEPS = 16
 
 
 def test_a_predicate_held_for_a_second_succeeds_and_the_episode_records_a_second_more():
