@@ -40,6 +40,8 @@ class PageState:
     live: tuple[str, ...] = ()
     shown: str | None = None
     chosen: str | None = None
+    # A sample of the controllers came within the silence limit of the service
+    tracked: bool = False
 
 
 # The field of a page input that chooses the camera of the headset: a camera name, or null for the camera of the
@@ -86,11 +88,10 @@ class _Headset(pimm.ControlSystem):
                 self._text_only = page_input.data[TEXT_ONLY] is True
             self.view.emit(self._service.view(camera=not self._text_only))
             state, cameras = self._service.state(), self._service.cameras()
-            self.page_state.emit(
-                asdict(
-                    PageState(state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen)
-                )
+            page_state = PageState(
+                state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen, state.tracked
             )
+            self.page_state.emit(asdict(page_state))
             yield pimm.Sleep(self._view_period_sec)
 
 
