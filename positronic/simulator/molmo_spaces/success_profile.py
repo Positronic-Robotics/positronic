@@ -116,12 +116,6 @@ def _touches(data: mujoco.MjData, body: int, other: int) -> bool:
     return any(root == other for root, _ in _contact_forces(data, body))
 
 
-def _opening(data: mujoco.MjData, joint: int) -> float:
-    """How far ``joint`` is open, from 0 at its closed position 0 to 1 at the full width of its range."""
-    low, high = data.model.jnt_range[joint]
-    return float(abs(data.qpos[data.model.jnt_qposadr[joint]]) / abs(high - low))
-
-
 class Facts(Protocol):
     """The facts of one family's predicate at one step: a dataclass with the verdict in ``holds``."""
 
@@ -274,6 +268,12 @@ class JointFacts:
     holds: bool
     joint: int  # the MuJoCo id of the joint that the task names
     opening: float
+
+
+def _opening(data: mujoco.MjData, joint: int) -> float:
+    """How far ``joint`` is open, from 0 at its closed position 0 to 1 at the full width of its range."""
+    low, high = data.model.jnt_range[joint]
+    return float(abs(data.qpos[data.model.jnt_qposadr[joint]]) / abs(high - low))
 
 
 class Open:
