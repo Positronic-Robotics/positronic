@@ -259,14 +259,24 @@ sleeps, and `result()` on an unanswered call raises. The full contract is the do
 ## Control Systems and the World
 
 A control system is any class that subclasses `pimm.ControlSystem` and implements
-`run(should_stop, clock) -> Iterator[pimm.Sleep]`. Inside that method you are free
+`run(should_stop, clock) -> Iterator[pimm.Command]`, where a command is `pimm.Sleep` or
+`pimm.Yield`. Inside that method you are free
 to use regular Python. Emitters (`ControlSystemEmitter`) and receivers
 (`ControlSystemReceiver`) are just fields on the object; they keep track of their
 owner so the world can wire them correctly.
 
-**Don't use system libs for sleeping — `yield pimm.Sleep(secs)` instead.** In the main-process
-group `interleave` advances the peers while one loop sleeps, so a blocking call there stalls them
-all.
+Each loop in `run`, and each helper loop that `run` calls, keeps these rules:
+
+- **Wait with `yield pimm.Sleep(secs)`, not with a system call such as `time.sleep`.** In the
+  main-process group `interleave` advances the peers while one loop sleeps, so a blocking call there
+  stalls them all.
+- **Yield on each pass.** Yield `pimm.Sleep(secs)` to wait. `pimm.Yield()` runs the loop again at the
+  next instant, which is the nearest wake of a sleeping loop. So yield it only when another loop in the
+  group sleeps to move the clock. A helper that
+  loops is a generator, and `run` yields each command that the helper yields.
+- **Give a helper loop its stop condition as an argument, and check it on each pass.** A wait in the
+  active phase stops on `should_stop`, so it ends when the world stops. A shutdown wait starts after
+  `should_stop` is set, so it stops on its own deadline.
 
 The `World` runtime plays three roles:
 
@@ -278,7 +288,7 @@ The `World` runtime plays three roles:
    transforms) at bind time.
 2. **Scheduler.** `world.start(main, background=None)` starts the chosen control
    systems, spawns background ones in daemon processes (via the **spawn**
-   multiprocessing context), and returns an iterator of `Sleep` commands for the
+   multiprocessing context), and returns an iterator of `pimm.Command` values for the
    main-process group. If you prefer a convenience wrapper you can call
    `world.run(*main_loops)` instead.
 3. **Lifecycle manager.** Entering the `with pimm.World()` block creates shared
