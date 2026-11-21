@@ -1,0 +1,232 @@
+"""Record how a Robotiq 2F gripper reports a close on an object that an operator holds between the fingers.
+
+The probe moves only the gripper. It sends no command to an arm.
+
+Usage
+  uv run --locked --extra hardware python -m positronic.drivers.gripper.robotiq_grip_probe \\
+      --port /dev/ttyUSB0 --label pen-middle --repeats 5 --out <dir>
+  ... --speed 255 --force 128   # the speed and the force of the fingers, 0..255
+  ... --label nothing           # a close with no object between the fingers
+
+Stop each program that holds the port before you start the probe, for example a station or a console. At the start,
+the probe activates the gripper: the fingers open and close fully. Hold nothing between them then. Before each close,
+the probe asks for Enter. Hold the object between the fingers, push Enter, and keep the object still. The probe
+records each read for ``--record-s`` seconds, then opens the fingers.
+
+The probe writes ``<out>/<label>.json`` (the outcome and the reads of each close), ``<out>/<label>.csv`` (one row
+for each read) and ``<out>/<label>.txt`` (the table that it prints). It writes them again after each close. In these
+files, ``fingers`` is ``gOBJ`` (0..3, as in the manual), ``requested`` is ``gPR``, ``position`` is ``gPO`` and
+``current`` is ``gCU``.
+"""
+
+import argparse
+import csv
+from collections.abc import Callable, Generator, Iterator
+from pathlib import Path
+
+from pydantic import BaseModel
+
+import pimm
+from positronic.drivers.gripper.robotiq import TUNING_2F85, Fingers, Reading, _Gripper, _serial_client
+from positronic.drivers.utils import RecoveryOutcome
+
+CLOSED = 1.0
+OPEN = 0.0
+
+
+class Sample(BaseModel, frozen=True):
+    """One read of the gripper after a command."""
+
+    t_s: float  # from the command
+    fingers: Fingers
+    requested: int
+    position: int
+    current: int
+
+    @classmethod
+    def of(cls, t_s: float, reading: Reading) -> 'Sample':
+        return cls(
+            t_s=t_s,
+            fingers=reading.status.fingers,
+            requested=reading.requested,
+            position=reading.position,
+            current=reading.current,
+        )
+
+
+class Outcome(BaseModel, frozen=True):
+    """How one close ended."""
+
+    stopped_s: float | None  # the first read with the close request taken and the fingers not MOVING
+    still_s: float  # the first read from which the position does not change
+    fingers: Fingers
+    position: int
+    current: int
+    fingers_seen: list[Fingers]  # each change of gOBJ, in order
+
+    @property
+    def detected(self) -> bool:
+        """The gripper reports an object at the end of the close."""
+        return self.fingers is Fingers.CONTACT_CLOSING
+
+    @classmethod
+    def of(cls, samples: list[Sample]) -> 'Outcome':
+        request = int(CLOSED * 255)
+        stopped = next((s for s in samples if s.requested == request and s.fingers is not Fingers.MOVING), None)
+        final = samples[-1]
+        still = samples[-1]
+        for s in reversed(samples):
+            if s.position != final.position:
+                break
+            still = s
+        seen = [s.fingers for i, s in enumerate(samples) if i == 0 or s.fingers is not samples[i - 1].fingers]
+        return cls(
+            stopped_s=None if stopped is None else stopped.t_s,
+            still_s=still.t_s,
+            fingers=final.fingers,
+            position=final.position,
+            current=final.current,
+            fingers_seen=seen,
+        )
+
+
+class Close(BaseModel, frozen=True):
+    """One close: how it ended, and each read of it."""
+
+    repeat: int  # from 1
+    outcome: Outcome
+    samples: list[Sample]
+
+
+class GripRecord(BaseModel):
+    """What the probe recorded for one label."""
+
+    label: str
+    speed: int
+    force: int
+    record_s: float
+    closes: list[Close] = []
+
+
+HEADER = f'{"label":<20} {"repeat":>6} {"stopped_s":>9} {"still_s":>7} {"gOBJ":<15} {"gPO":>3} {"gCU":>3}  gOBJ seen'
+
+
+def row(label: str, close: Close) -> str:
+    """The line of ``close`` in the table."""
+    o = close.outcome
+    stopped = '-' if o.stopped_s is None else f'{o.stopped_s:.3f}'
+    seen = '>'.join(f.name for f in o.fingers_seen)
+    return (
+        f'{label:<20} {close.repeat:>6} {stopped:>9} {o.still_s:>7.3f} {o.fingers.name:<15} '
+        f'{o.position:>3} {o.current:>3}  {seen}'
+    )
+
+
+def table(record: GripRecord) -> str:
+    """A line for each close, and a line that counts the closes with an object detected."""
+    detected = sum(close.outcome.detected for close in record.closes)
+    total = f'{record.label}: gOBJ is CONTACT_CLOSING at the end of {detected} of {len(record.closes)} closes'
+    return '\n'.join([HEADER, *(row(record.label, close) for close in record.closes), total]) + '\n'
+
+
+def write(record: GripRecord, out: Path) -> None:
+    """Write the JSON, the CSV and the table of ``record`` to ``out``."""
+    (out / f'{record.label}.json').write_text(record.model_dump_json(indent=1))
+    with (out / f'{record.label}.csv').open('w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['repeat', *Sample.model_fields])
+        for close in record.closes:
+            for sample in close.samples:
+                writer.writerow([close.repeat, *sample.model_dump(mode='json').values()])
+    (out / f'{record.label}.txt').write_text(table(record))
+
+
+class RobotiqGripProbe(pimm.ControlSystem):
+    """Closes the gripper ``repeats`` times on what the operator holds, and records each close to ``out``.
+
+    ``ask`` shows the operator a prompt and returns when the operator answers it.
+    """
+
+    def __init__(self, port: str, record: GripRecord, repeats: int, out: Path, ask: Callable[[str], object] = input):
+        self._port = port
+        self.record = record
+        self._repeats = repeats
+        self._out = out
+        self._ask = ask
+        # _Gripper serves the moves of a driver. The probe sends it no move.
+        self._moves = pimm.calls.ControlSystemHandler[float, None](self)
+
+    def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
+        client = _serial_client(self._port)
+        if not client.connect():
+            raise SystemExit(f'Cannot open {self._port}. A station or a console can hold the port: stop it first.')
+        try:
+            gripper = _Gripper(
+                client,
+                self._port,
+                self._moves,
+                pimm.NoOpReceiver(),
+                pimm.NoOpEmitter(),
+                TUNING_2F85,
+                should_stop,
+                clock,
+            )
+            yield from self._probe(gripper, clock)
+        finally:
+            client.close()
+
+    def _probe(self, gripper: _Gripper, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
+        """Activate the gripper, then prompt, close, record and open once for each repeat."""
+        if (yield from gripper.activate()) is not RecoveryOutcome.CLEARED:
+            raise SystemExit(f'The gripper on {self._port} did not activate: {gripper.observe()}')
+        yield from self._move(gripper, OPEN, clock)
+        print(HEADER)
+        for repeat in range(1, self._repeats + 1):
+            self._ask(f'[{self.record.label} {repeat}/{self._repeats}] Hold the object, then push Enter to close: ')
+            samples = yield from self._move(gripper, CLOSED, clock)
+            close = Close(repeat=repeat, outcome=Outcome.of(samples), samples=samples)
+            self.record.closes.append(close)
+            write(self.record, self._out)
+            print(row(self.record.label, close))
+            yield from self._move(gripper, OPEN, clock)
+
+    def _move(self, gripper: _Gripper, grip: float, clock: pimm.Clock) -> Generator[pimm.Command, None, list[Sample]]:
+        """Put the fingers at ``grip`` and read the gripper for ``record_s`` seconds."""
+        r = self.record
+        gripper.go_to(grip, r.speed, r.force)
+        start = clock.now()
+        samples: list[Sample] = []
+        while clock.now() - start < r.record_s and not gripper.should_stop.value:
+            yield gripper.limiter.wait()
+            samples.append(Sample.of(clock.now() - start, gripper.observe()))
+        return samples
+
+
+def _byte(text: str) -> int:
+    value = int(text)
+    if not 0 <= value <= 255:
+        raise argparse.ArgumentTypeError(f'{value} is not in 0..255')
+    return value
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--port', required=True, help='the serial port of the gripper, for example /dev/ttyUSB0')
+    parser.add_argument('--label', required=True, help='the object and the grip, for example pen-fingertip')
+    parser.add_argument('--repeats', type=int, default=5)
+    parser.add_argument('--speed', type=_byte, default=255)
+    parser.add_argument('--force', type=_byte, default=255)
+    parser.add_argument('--record-s', type=float, default=3.0, help='how long to read the gripper after a command')
+    parser.add_argument('--out', type=Path, required=True, help='the directory for the files')
+    args = parser.parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
+    if (args.out / f'{args.label}.json').exists():
+        raise SystemExit(f'{args.out / args.label}.json exists. Give a different --label or --out.')
+    record = GripRecord(label=args.label, speed=args.speed, force=args.force, record_s=args.record_s)
+    with pimm.World() as world:
+        world.run(RobotiqGripProbe(args.port, record, args.repeats, args.out))
+    print(table(record), end='')
+
+
+if __name__ == '__main__':
+    main()

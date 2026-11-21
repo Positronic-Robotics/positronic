@@ -12,6 +12,7 @@ from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.gripper import robotiq
 from positronic.drivers.gripper.robotiq import Activation, Fingers
+from positronic.drivers.gripper.robotiq_grip_probe import GripRecord, RobotiqGripProbe
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import RecoveryOutcome
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
@@ -33,7 +34,7 @@ class FakeBus:
     to no more than ``SHUT``, and closing stops at ``object_at``. With ``obeying`` off the fingers stay where
     they stand, and the gripper reports them at the request. A read raises ``raises`` once it is set, and
     answers with an exception response while ``refuses`` is on, and a write while ``refuses_writes`` is on.
-    ``connect`` answers ``answers``.
+    ``connect`` answers ``answers``. Each read reports ``current`` as ``gCU``.
     """
 
     def __init__(self, object_at: int | None = None):
@@ -45,6 +46,7 @@ class FakeBus:
         self.fault_after_activation = 0
         self.fault = 0
         self.position = 0
+        self.current = 0
         self.raises: Exception | None = None
         self.refuses = False
         self.refuses_writes = False
@@ -87,7 +89,7 @@ class FakeBus:
             return SimpleNamespace(registers=[], isError=lambda: True)
         self._step()
         status = self._fingers.value << 6 | self._activation.value << 4 | self._go << 3 | self._act
-        registers = [status << 8, self.fault << 8 | self._requested, self.position << 8]
+        registers = [status << 8, self.fault << 8 | self._requested, self.position << 8 | self.current]
         return SimpleNamespace(registers=registers, isError=lambda: False)
 
     def _step(self) -> None:
@@ -660,3 +662,60 @@ def test_an_error_that_is_not_the_bus_ends_the_run(monkeypatch):
 
     with pytest.raises(ValueError, match='a bug in the driver'):
         _pump(loop, clock, 1)
+
+
+PROBE_RECORD_S = 0.5
+
+
+def _probed(monkeypatch, bus: FakeBus, out, repeats: int) -> tuple[GripRecord, list[str]]:
+    """Run the grip probe over ``bus`` to its end. The record, and each prompt the operator answered."""
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
+    prompts: list[str] = []
+    probe = RobotiqGripProbe('/dev/null', record, repeats, out, ask=prompts.append)
+    clock = MockClock()
+    for command in probe.run(StopFlag(), clock):
+        clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
+    return record, prompts
+
+
+def test_the_grip_probe_records_each_close_on_an_object_and_writes_its_files(monkeypatch, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+    bus.current = 40
+    record, prompts = _probed(monkeypatch, bus, tmp_path, repeats=3)
+
+    assert len(prompts) == 3 and prompts[0].startswith('[pen 1/3]')
+    assert [close.repeat for close in record.closes] == [1, 2, 3]
+    for close in record.closes:
+        o = close.outcome
+        assert (o.fingers, o.position, o.current, o.detected) == (Fingers.CONTACT_CLOSING, OBJECT, 40, True)
+        assert o.fingers_seen == [Fingers.MOVING, Fingers.CONTACT_CLOSING]
+        assert o.stopped_s is not None and 0 < o.stopped_s == o.still_s < PROBE_RECORD_S
+    assert bus.writes[-1][1] == 0, 'the probe left the fingers closed'
+
+    assert GripRecord.model_validate_json((tmp_path / 'pen.json').read_text()) == record
+    csv_lines = (tmp_path / 'pen.csv').read_text().splitlines()
+    assert csv_lines[0] == 'repeat,t_s,fingers,requested,position,current'
+    assert len(csv_lines) == 1 + sum(len(close.samples) for close in record.closes)
+    assert csv_lines[-1].endswith(f',{Fingers.CONTACT_CLOSING.value},255,{OBJECT},40')
+    table = (tmp_path / 'pen.txt').read_text().splitlines()
+    assert len(table) == 1 + 3 + 1
+    assert table[-1] == 'pen: gOBJ is CONTACT_CLOSING at the end of 3 of 3 closes'
+
+
+def test_the_grip_probe_reports_no_object_for_a_close_on_nothing(monkeypatch, tmp_path):
+    record, _ = _probed(monkeypatch, FakeBus(), tmp_path, repeats=2)
+
+    for close in record.closes:
+        o = close.outcome
+        assert (o.fingers, o.position, o.detected) == (Fingers.AT_REQUEST, SHUT, False)
+    assert (tmp_path / 'pen.txt').read_text().splitlines()[-1].endswith('at the end of 0 of 2 closes')
+
+
+def test_the_grip_probe_refuses_a_port_that_does_not_open(monkeypatch, tmp_path):
+    bus = FakeBus()
+    bus.answers = False
+
+    with pytest.raises(SystemExit, match='A station or a console can hold the port'):
+        _probed(monkeypatch, bus, tmp_path, repeats=1)
+    assert bus.writes == []
