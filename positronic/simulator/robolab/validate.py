@@ -40,7 +40,12 @@ With ``--robot yam`` it builds ``YamEnv`` and checks:
   through bit-identically, then reached;
 - a joint delta of the wrong width holds the measured joints;
 - the grip readings at grips 1, 0.5 and 0, and joint8 following joint7 as the fingers move;
-- the eef pose of each arm: its ``<side>_gripper`` link in the env, plus ``ROOT_IN_RIG_WORLD``.
+- the eef pose of each arm: its ``<side>_gripper`` link in the env, plus ``ROOT_IN_RIG_WORLD``;
+- the gripper contact: each finger has a contact sensor, and a hand that closes on the banana makes ``gt_state``
+  read a contact, which the fingers of that hand sense and the fingers of the other hand do not;
+- with ``--max-envs`` above one, the batch: each clone but the last moves both arms to targets of its own and
+  sets grips of its own, the last clone gets no command and holds, and each slot reads its own joints, grips and
+  ``gt_state``.
 
 Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLauncher flags apply)::
 
@@ -179,7 +184,7 @@ def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
         assert not (reset and done), f'{key} is done on a reset frame, so it holds the prior trial'
 
 
-def _check_gt_state_is_the_clones_own(env: DroidEnv, obs: dict, slot: int) -> None:
+def _check_gt_state_is_the_clones_own(env: RobolabEnv, obs: dict, slot: int) -> None:
     """Each object's ``gt_state`` pose is the pose that RoboLab reads for this clone alone.
 
     A slot that reports another clone's poses fails this only where the clones' scenes differ.
@@ -187,6 +192,7 @@ def _check_gt_state_is_the_clones_own(env: DroidEnv, obs: dict, slot: int) -> No
     for name in env._objects:
         pos, quat = env._world.get_pose(name, is_relative=True, env_id=slot)
         own = torch.cat([pos, quat]).cpu().numpy()
+        own[:3] += env._ENV_IN_WORLD
         recorded = obs[keys.GT_STATE][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}']
         assert np.allclose(recorded, own, atol=1e-5), f'clone {slot} reports {recorded} for {name}, not its own {own}'
 
@@ -592,6 +598,10 @@ def _yam_action(left: dict, right: dict, grips: tuple[float, float] = (0.0, 0.0)
     return action
 
 
+def _joint_pos(q: np.ndarray) -> dict:
+    return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}
+
+
 _ARM_HOLD = {protocol.COMMAND_TYPE: protocol.HOLD}
 _YAM_HOLD = _yam_action(_ARM_HOLD, _ARM_HOLD)
 
@@ -708,6 +718,135 @@ def _check_yam_eef_pose(env: YamEnv) -> None:
     print('  eef pose: OK (each <side>_gripper link plus ROOT_IN_RIG_WORLD)')
 
 
+# The object that the contact check puts between the fingers of a hand.
+_CONTACT_OBJECT = 'banana'
+
+
+def _grasp_point(env: YamEnv, side: str) -> torch.Tensor:
+    """The world point between the pads of ``side``'s hand, at the middle of the pads."""
+    data = env._robot.data
+    body = data.body_names.index(f'{side}_{yam_spec.WRIST_LINK}')
+    x, _y, z = yam_spec.FINGER_BOXES['pad']['center']
+    in_wrist = torch.tensor([[x, 0.0, z]], dtype=torch.float32, device=data.body_pos_w.device)
+    return data.body_pos_w[0, body] + quat_apply(data.body_quat_w[0:1, body], in_wrist)[0]
+
+
+def _put_at_rest(env: YamEnv, name: str, point: torch.Tensor) -> None:
+    """Moves the centre of the bounding box of object ``name`` in clone 0 to the world point ``point``, at rest."""
+    rl_env = env._env
+    obj = rl_env.scene[name]
+    pos, _quat = env._world.get_pose(name, is_relative=True, env_id=0)
+    centre = torch.as_tensor(env._world.get_centroid(name, env_id=0), dtype=torch.float32, device=rl_env.device)
+    pose = obj.data.root_state_w[0:1, :7].clone()
+    pose[0, :3] = point - (centre - pos.to(rl_env.device))
+    clone_0 = torch.tensor([0], device=rl_env.device)
+    obj.write_root_pose_to_sim(pose, env_ids=clone_0)
+    obj.write_root_velocity_to_sim(torch.zeros(1, 6, device=rl_env.device), env_ids=clone_0)
+
+
+def _fingers_in_contact(env: YamEnv, name: str) -> set[str]:
+    """The finger labels whose contact sensors sense object ``name`` in clone 0."""
+    return {
+        label
+        for side in yam_spec.SIDES
+        for label in yam_spec.CONTACT_GRIPPER[side]
+        if name in env._world.get_objects_in_contact_with(label, env._objects, env_id=0)
+    }
+
+
+def _check_yam_finger_contact(env: YamEnv) -> None:
+    """Each hand closes on the banana; ``gt_state`` reads the contact, and only fingers of that hand sense it.
+
+    Before each step the banana goes back between the pads of the hand at rest, so gravity does not take it away
+    before the fingers close.
+    """
+    every_finger = set(yam_spec.CONTACT_GRIPPER[yam_spec.CONTACT_GRIPPERS])
+    missing = sorted(f for f in every_finger if get_batch_contact_sensor(env._env.scene, f) is None)
+    assert not missing, f'the scene has no batch contact sensor for the fingers {missing}'
+    contact_key = f'.{keys.GT_STATE_OBJECTS}.{_CONTACT_OBJECT}.{keys.GT_STATE_GRIPPER_CONTACT}'
+    sensed = {}
+    for side, grips in zip(yam_spec.SIDES, ((1.0, 0.0), (0.0, 1.0)), strict=True):
+        _reset(env, _TOKEN)
+        for _ in range(_HOLD_STEPS):
+            _step(env, _YAM_HOLD)
+        other = every_finger - set(yam_spec.CONTACT_GRIPPER[side])
+        contact_steps, fingers_seen = 0, set()
+        for _ in range(_HOLD_STEPS):
+            _put_at_rest(env, _CONTACT_OBJECT, _grasp_point(env, side))
+            out = _step(env, _yam_action(_ARM_HOLD, _ARM_HOLD, grips))
+            assert not out[protocol.FRAME_DONE], f'the episode ended while the {side} hand closed on the banana'
+            obs = out[protocol.FRAME_OBS]
+            _check_gt_state(env, obs, reset=False)
+            fingers = _fingers_in_contact(env, _CONTACT_OBJECT)
+            assert not fingers & other, f'the {side} hand holds the banana, but the fingers {fingers & other} sense it'
+            assert obs[keys.GT_STATE][contact_key] == bool(fingers), (
+                f'gt_state reads contact {obs[keys.GT_STATE][contact_key]}, but the fingers {fingers} sense the banana'
+            )
+            contact_steps += bool(fingers)
+            fingers_seen |= fingers
+        assert contact_steps > 0, f'the {side} hand closed on the banana, but no step read a contact'
+        sensed[side] = (contact_steps, sorted(fingers_seen))
+    print(f'  gripper contact: OK (per hand, the steps with a contact and the fingers that sensed it: {sensed})')
+
+
+def _check_yam_batch(num_envs: int) -> None:
+    """Every clone answers its own frame and takes the command addressed to it.
+
+    Each clone but the last moves both arms to targets of its own and sets grips of its own, and the last gets no
+    command, so it holds its joints and its grips. Builds its own env, because the clone count is fixed at
+    ``create_env``.
+    """
+    env = YamEnv(num_envs)
+    out = env.reset(_TOKEN)
+    assert len(out[protocol.SLOTS]) == num_envs, f'{num_envs} clones asked for, {len(out[protocol.SLOTS])} answered'
+    arms = len(yam_spec.SIDES)
+    held = num_envs - 1
+    start = env._measured_q().cpu().numpy().reshape(num_envs, arms, -1)
+    signs = np.array([[1.0], [-1.0]], dtype=np.float32)
+    targets = {slot: start[slot] + (1 + slot / num_envs) * signs * _YAM_JOINT_OFFSET for slot in range(held)}
+    grips = {slot: (1.0, 0.0) if slot % 2 == 0 else (0.0, 1.0) for slot in range(held)}
+
+    actions = {
+        slot: _yam_action(_joint_pos(targets[slot][0]), _joint_pos(targets[slot][1]), grips[slot])
+        for slot in range(held)
+    }
+    before = start
+    for _ in range(_HOLD_STEPS):
+        before = env._measured_q().cpu().numpy().reshape(num_envs, arms, -1)
+        out = env.step(actions)
+    applied = env._env.action_manager.action.cpu().numpy()
+    for slot in range(held):
+        (left, right), (left_grip, right_grip) = targets[slot], grips[slot]
+        expected = np.concatenate([left, [left_grip], right, [right_grip]]).astype(np.float32)
+        assert np.array_equal(applied[slot], expected), (
+            f'clone {slot} took {applied[slot].tolist()}, not its own command'
+        )
+    held_expected = np.concatenate([before[held][0], [0.0], before[held][1], [0.0]]).astype(np.float32)
+    hold_err = float(np.max(np.abs(applied[held] - held_expected)))
+    assert hold_err < 1e-6, f'clone {held} had no command and was commanded {hold_err:.6f} off its joints and grips'
+    measured = env._measured_q().cpu().numpy().reshape(num_envs, -1)
+    assert len(out[protocol.SLOTS]) == num_envs, f'the step answered {len(out[protocol.SLOTS])} of {num_envs} clones'
+    for slot, frame in enumerate(out[protocol.SLOTS]):
+        assert frame.keys() == {protocol.FRAME_OBS, protocol.FRAME_DONE, protocol.FRAME_SUCCESS}, sorted(frame)
+        obs = frame[protocol.FRAME_OBS]
+        observed = np.concatenate([obs[protocol.arm_channel(protocol.OBS_JOINT_POS, side)] for side in yam_spec.SIDES])
+        nearest = int(np.argmin(np.abs(measured - observed).max(axis=1)))
+        assert nearest == slot, f'slot {slot} answered the joints of clone {nearest}'
+        commanded = grips.get(slot, (0.0, 0.0))
+        for side, grip in zip(yam_spec.SIDES, commanded, strict=True):
+            reading = obs[protocol.arm_channel(protocol.OBS_GRIP, side)]
+            assert abs(reading - grip) < 0.1, f'slot {slot} reads grip {reading} on the {side} arm, not its own {grip}'
+        _check_gt_state(env, obs, reset=False)
+        _check_gt_state_is_the_clones_own(env, obs, slot)
+    for slot in range(held):
+        err = float(np.max(np.abs(measured[slot] - targets[slot].reshape(-1))))
+        assert err < 0.05, f'clone {slot} is {err:.4f} rad from its own targets'
+    drift = float(np.max(np.abs(measured[held] - start[held].reshape(-1))))
+    assert drift < 0.02, f'clone {held} had no command and moved {drift:.4f} rad'
+    env.close()
+    print(f'  batch: OK ({num_envs} clones read their own joints, grips and gt_state; clone {held} held)')
+
+
 def _validate_yam() -> None:
     env = YamEnv()
     _check_yam_obs_contract(env)
@@ -715,7 +854,10 @@ def _validate_yam() -> None:
     _check_yam_refused_delta_holds(env)
     _check_yam_grip(env)
     _check_yam_eef_pose(env)
+    _check_yam_finger_contact(env)
     env.close()
+    if args.max_envs > 1:
+        _check_yam_batch(args.max_envs)
     print('ALL CHECKS PASSED', flush=True)
     simulation_app.close()
 
