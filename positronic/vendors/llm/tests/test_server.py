@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
@@ -22,6 +23,7 @@ from positronic.vendors.llm.client import ANTHROPIC_API_KEYS_ENV, Endpoint
 from positronic.vendors.llm.motion import Motion
 from positronic.vendors.llm.policy import Images, LLMPolicy, Tool
 from positronic.vendors.llm.server import LLMModel, deployment, serve
+from positronic.vendors.llm.tests import test_client
 from positronic.vendors.llm.tests.test_policy import (
     bimanual_observation,
     complete,
@@ -293,8 +295,21 @@ def test_each_session_draws_a_key_from_the_pool_and_records_only_its_fingerprint
         llm_model(observation(), session_id=session_id)
     for session_id, key in zip(('a', 'b'), (pool[1], pool[0]), strict=True):
         record = session_record(tmp_path, session_id)
-        assert record[policy_keys.API_KEY_FINGERPRINT] == hashlib.sha256(key.encode()).hexdigest()[:8]
+        assert record[policy_keys.API_KEY_FINGERPRINTS] == [hashlib.sha256(key.encode()).hexdigest()[:8]]
         assert 'test-secret' not in json.dumps(record)
+
+
+def test_a_session_that_finds_no_credit_on_any_pool_key_fails_and_records_each_key_it_used(
+    anthropic_pool, make_model, monkeypatch, tmp_path
+):
+    no_credit = httpx.Response(400, json=test_client.NO_CREDIT)
+    test_client.serve(monkeypatch, [no_credit, no_credit])
+    llm_model = make_model(model_id='anthropic:test-model')
+    with pytest.raises(RuntimeError, match='no credit'):
+        llm_model(observation(), session_id='a')
+    record = session_record(tmp_path, 'a')
+    assert record[policy_keys.API_KEY_FINGERPRINTS] == list(map(test_client.fingerprint, anthropic_pool))
+    assert 'test-secret' not in json.dumps(record)
 
 
 @pytest.mark.parametrize('error', [TimeoutError(), RuntimeError('API unavailable')])
