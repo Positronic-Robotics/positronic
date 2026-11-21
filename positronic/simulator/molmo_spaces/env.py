@@ -346,12 +346,12 @@ class MolmoSpacesEnv(EnvProtocol):
         (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
         measured = self._measured_arm_q()
-        arm = arm_action.wire_command_to_arm_action(
-            wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
+        arm = arm_action.arm_targets(
+            wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, read_eef=self._measured_eef_pose
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
         obs, rewards, _term, _trunc, infos = self._task.step({
-            mapping.MOLMO_ARM_GROUP: measured if arm is None else arm,
+            mapping.MOLMO_ARM_GROUP: arm.q,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
         })
         if self._judge is None:
@@ -361,7 +361,7 @@ class MolmoSpacesEnv(EnvProtocol):
         return {
             protocol.SLOTS: [
                 {
-                    protocol.FRAME_OBS: self._observe(obs[0], metrics, arm_error=arm is None),
+                    protocol.FRAME_OBS: self._observe(obs[0], metrics, arm_error=arm.refusal is not None),
                     protocol.FRAME_DONE: judged.done,
                     protocol.FRAME_SUCCESS: judged.success,
                 }

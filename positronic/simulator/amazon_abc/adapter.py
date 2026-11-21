@@ -5,14 +5,12 @@ from typing import Any
 import numpy as np
 
 import pimm
-from positronic import geom, keys
-from positronic.drivers.roboarm import RobotStatus
+from positronic import keys
 from positronic.drivers.roboarm.models import YAM_GRASP_SITE_FRAME
-from positronic.drivers.roboarm.yam import YamState
 from positronic.eval import keys as eval_keys
 from positronic.simulator.amazon_abc import keys as abc_keys
 from positronic.simulator.amazon_abc import mapping
-from positronic.simulator.env_server import protocol
+from positronic.simulator.env_server import protocol, yam_observations
 from positronic.simulator.env_server.adapter import WireCommandAdapter
 
 _LEFT, _RIGHT = mapping.ARMS
@@ -42,24 +40,7 @@ class AbcAdapter(WireCommandAdapter):
         }
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
-        obs: dict[str, Any] = {}
-        for arm in mapping.ARMS:
-            pose = self._measure(
-                geom.Transform3D(
-                    raw_obs[protocol.arm_channel(protocol.OBS_EEF_POS, arm)],
-                    geom.Rotation.from_quat(raw_obs[protocol.arm_channel(protocol.OBS_EEF_QUAT, arm)]),
-                ),
-                arm,
-            )
-            state = YamState()
-            state.encode(
-                raw_obs[protocol.arm_channel(protocol.OBS_JOINT_POS, arm)],
-                raw_obs[protocol.arm_channel(protocol.OBS_JOINT_VEL, arm)],
-                pose,
-                RobotStatus.AVAILABLE,
-            )
-            obs[keys.arm_channel(keys.ROBOT_STATE, arm)] = state
-            obs[keys.arm_channel(keys.GRIP, arm)] = float(raw_obs[protocol.arm_channel(protocol.OBS_GRIP, arm)])
+        obs = yam_observations.arm_observations(raw_obs, mapping.ARMS, self._measure)
         for logical, camera in self._camera_dict.items():
             # ABC renders channels-first; the wire carries images as height, width, channels.
             frame = np.ascontiguousarray(raw_obs[camera].transpose(1, 2, 0))
