@@ -10,6 +10,7 @@ code is the fork [yam-abc-reproduce](https://github.com/ninghaolu/yam-abc-reprod
 | `bottles_16k` | [MikhailBird/pi05-abc-130k-task-finetune](https://huggingface.co/MikhailBird/pi05-abc-130k-task-finetune), step 16000 | put the plastic bottles in the bin | `assets/put_the_plastic_bottles_in_the_bin/norm_stats.json` |
 | `abc4_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of four tasks, step 29999 (a local directory) | put the plastic bottles in the bin, sweep away the paper scraps from the table, turn the mug right side up, load the plates into the dish rack | `assets/abc4_yam/norm_stats.json` |
 | `abc11_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of eleven tasks, step 29999 (a local directory) | the four tasks of `abc4_30k`, unload the plates from the dish rack, load the cups into the dish rack, put the screwdriver in the bin, place and organize the fake fruits in the fruit bowl, build the wood block tower, place the snacks into the paper bag, take the snacks out of the paper bag | `assets/abc11_yam/norm_stats.json` |
+| `abc15_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of fifteen tasks, step 29999 (a local directory) | the eleven tasks of `abc11_30k`, unload the cups from the dish rack, set the dinner table for one person, turn the large container upside down, unscrew the bottle caps | `assets/abc15_yam/norm_stats.json` |
 
 ## Licences
 
@@ -80,8 +81,8 @@ uv run --locked python -m positronic.vendors.pi05_abc.server bottles_16k \
     --model.checkpoint=<dir>/pi05-abc-130k-task-finetune-16000 --model.fork=<yam-abc-reproduce>
 ```
 
-`abc4_30k` and `abc11_30k` need these files of their checkpoint directory: `params/`, the norm stats of the table
-above and `_CHECKPOINT_METADATA`. The training state is not necessary.
+`abc4_30k`, `abc11_30k` and `abc15_30k` need these files of their checkpoint directory: `params/`, the norm stats of
+the table above and `_CHECKPOINT_METADATA`. The training state is not necessary.
 
 ## Docker image
 

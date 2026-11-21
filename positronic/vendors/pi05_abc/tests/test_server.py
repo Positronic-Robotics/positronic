@@ -169,6 +169,14 @@ ABC11_INSTRUCTION_PROMPTS = [
     ('place the snacks into the paper bag', 'place the snacks into the paper bag'),
     ('take the snacks out of the paper bag', 'take the snacks out of the paper bag'),
 ]
+# rules-allow: hardcoded-keys — pinned apart from the package constants, as above.
+ABC15_INSTRUCTION_PROMPTS = [
+    *ABC11_INSTRUCTION_PROMPTS,
+    ('unload the cups from the dish rack', 'unload the cups from the dish rack'),
+    ('set the dinner table for one person', 'set the dinner table for one person'),
+    ('turn the large container upside down', 'turn the large container upside down'),
+    ('unscrew the bottle caps', 'unscrew the bottle caps'),
+]
 
 
 @dataclass(frozen=True)
@@ -189,6 +197,7 @@ def _multi_task_command(name: str, prompts: list[tuple[str, str]], norm_stats: s
 MULTI_TASK_COMMANDS = {
     'abc4_30k': _multi_task_command('abc4_30k', ABC4_INSTRUCTION_PROMPTS, 'assets/abc4_yam/norm_stats.json'),
     'abc11_30k': _multi_task_command('abc11_30k', ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam/norm_stats.json'),
+    'abc15_30k': _multi_task_command('abc15_30k', ABC15_INSTRUCTION_PROMPTS, 'assets/abc15_yam/norm_stats.json'),
 }
 COMMAND_PROMPTS = [
     (name, instruction, prompt)
