@@ -5,6 +5,7 @@ import logging
 import math
 import pathlib
 import re
+import socket
 import threading
 import time
 from collections.abc import Mapping
@@ -39,10 +40,12 @@ from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
     CANCEL_POLL_S,
+    DEFAULT_CONNECT_DEADLINE,
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
     DOWNLINK_MS,
     STATUS_UPDATE_TIMEOUT_S,
+    UNRESOLVED_HOST_RETRY_S,
     UPLINK_MS,
     ConnectRetries,
     InferenceClient,
@@ -382,6 +385,48 @@ class TestNewSessionRetriesRefusedConnects:
             InferenceClient(fake, _ADDRESS, open_timeout=900.0, connect_deadline=60.0).new_session()
 
         assert fake_clock.now <= 60.0
+
+
+class TestAHostNameThatDoesNotResolve:
+    """A resolver with no answer for the host name gets ``UNRESOLVED_HOST_RETRY_S`` of retries, not the deadline."""
+
+    def test_a_name_that_never_resolves_fails_at_the_limit_not_at_the_deadline(self, fake_clock):
+        fake = _SlowWire(fake_clock, *[(0.0, _refused(wire.Refusal.UNRESOLVED))] * 40)
+        with pytest.raises(wire.ConnectRefused) as refused:
+            InferenceClient(fake, _ADDRESS).new_session()
+
+        assert refused.value.refusal is wire.Refusal.UNRESOLVED
+        assert fake_clock.now == UNRESOLVED_HOST_RETRY_S < DEFAULT_CONNECT_DEADLINE
+
+    def test_a_name_that_resolves_inside_the_limit_still_connects(self, fake_clock):
+        """The name resolves on the attempt at 271 s, the last one before the limit, and the server answers."""
+        refusals = [(0.0, _refused(wire.Refusal.UNRESOLVED))] * 13
+        fake = _SlowWire(fake_clock, *refusals, (0.0, fake_clock.connection((0.0, _ready('resolved')))))
+
+        assert InferenceClient(fake, _ADDRESS).new_session().session_id == 'resolved'
+        assert fake_clock.now == 271.0
+
+    def test_a_name_that_resolved_between_failures_starts_a_new_limit(self, fake_clock):
+        """The name resolves at 241 s to a server still starting, and stops resolving again at 271 s."""
+        answers = [(0.0, _refused(wire.Refusal.UNRESOLVED))] * 12 + [(0.0, _refused(wire.Refusal.COLD))]
+        answers += [(0.0, _refused(wire.Refusal.UNRESOLVED))] * 40
+        fake = _SlowWire(fake_clock, *answers)
+        with pytest.raises(wire.ConnectRefused):
+            InferenceClient(fake, _ADDRESS).new_session()
+
+        assert fake_clock.now == 271.0 + UNRESOLVED_HOST_RETRY_S
+
+    def test_a_websocket_dial_to_a_name_that_never_resolves_names_the_host(self, fake_clock, monkeypatch):
+        def no_answer_yet(*_args, **_kwargs):
+            raise socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution')
+
+        monkeypatch.setattr(socket, 'getaddrinfo', no_answer_yet)
+        address = _address('policy.example', 8000)
+        with pytest.raises(wire.ConnectRefused, match='policy.example') as refused:
+            InferenceClient(websocket.WebsocketClientWire(), address).new_session()
+
+        assert refused.value.refusal is wire.Refusal.UNRESOLVED
+        assert fake_clock.now == UNRESOLVED_HOST_RETRY_S
 
 
 class TestACancelledSessionOpening:

@@ -28,6 +28,8 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
+# How long one session opening retries a host name the resolver has no answer for, inside the connect deadline.
+UNRESOLVED_HOST_RETRY_S = 300.0
 # How often a pause between connect attempts asks the caller's cancel.
 CANCEL_POLL_S = 0.1
 # How long ``infer`` retries to rebuild a connection that dropped before its first answer.
@@ -370,22 +372,35 @@ class ConnectRetries:
     """The retry policy over one run of refused connect attempts.
 
     ``COLD`` and ``SILENT`` retry to the deadline. A ``FORBIDDEN`` refusal means a cold backend or a refused
-    credential, and gets ``MAX_FORBIDDEN_ATTEMPTS`` attempts.
+    credential, and gets ``MAX_FORBIDDEN_ATTEMPTS`` attempts. An ``UNRESOLVED`` host name retries for
+    ``UNRESOLVED_HOST_RETRY_S`` from the first of an unbroken run of them, and an attempt at that limit is its last.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
 
     def __init__(self) -> None:
         self._forbidden_attempts = 0
+        # The ``time.monotonic()`` instant the current run of ``UNRESOLVED`` refusals surfaces at.
+        self._unresolved_until: float | None = None
 
     def take(self, refusal: wire.Refusal) -> ConnectOutcome:
         """Spend a refused connect against the budget."""
+        if refusal is not wire.Refusal.UNRESOLVED:
+            self._unresolved_until = None
         if refusal is wire.Refusal.FORBIDDEN:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
+        elif refusal is wire.Refusal.UNRESOLVED:
+            if self._unresolved_until is None:
+                self._unresolved_until = time.monotonic() + UNRESOLVED_HOST_RETRY_S
+            again = time_left(self._unresolved_until) > 0
         else:
             again = refusal in (wire.Refusal.COLD, wire.Refusal.SILENT)
         return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
+
+    def longest_pause(self) -> float:
+        """The longest pause before the next attempt that lets it begin by the limit of a refusal run."""
+        return math.inf if self._unresolved_until is None else time_left(self._unresolved_until)
 
 
 T = TypeVar('T')
@@ -528,7 +543,7 @@ class InferenceClient:
                 raise not_ready
             pause = next(pauses)
             logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, pause)
-            self._pause(min(pause, time_left(deadline)), cancelled)
+            self._pause(min(pause, retries.longest_pause(), time_left(deadline)), cancelled)
 
     def _naming_the_url(self, failure: Exception | None) -> str:
         """What ``failure`` says, with the session URL where it does not name the URL itself."""

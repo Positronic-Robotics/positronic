@@ -63,7 +63,7 @@ def _status_refusal(status_code: int) -> wire.Refusal:
 
 
 # The resolver's authoritative answers that the host has no address. A resolver that timed out answers
-# ``EAI_AGAIN``, which reads as no answer: a name can start resolving, where a misspelt one never does.
+# ``EAI_AGAIN``, which a later lookup can clear: a name can start resolving, where a misspelt one never does.
 _NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
 
 
@@ -75,6 +75,8 @@ def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Re
         return wire.Refusal.FINAL
     if isinstance(raised, socket.gaierror) and raised.errno in _NO_SUCH_HOST_ERRNOS:
         return wire.Refusal.FINAL
+    if isinstance(raised, socket.gaierror) and raised.errno == socket.EAI_AGAIN:
+        return wire.Refusal.UNRESOLVED
     if isinstance(raised, InvalidHandshake) and not isinstance(raised, InvalidMessage):
         # An answer that is not a valid upgrade: a backend that is not ready.
         return wire.Refusal.COLD
