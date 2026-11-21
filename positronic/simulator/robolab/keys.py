@@ -35,7 +35,7 @@ TOKEN_INSTRUCTION_TYPE = 'instruction_type'
 TOKEN_EPISODE_LENGTH_S = 'episode_length_s'
 TOKEN_STATE = 'state'
 
-# The instruction that ``create_env`` resolved, in the scene meta of a reset.
+# The instruction text in the phrasing of the reset, in the scene meta of a reset frame.
 META_INSTRUCTION = 'task'
 
 # [status, completed, total, score] for the task's subtask chain, beside the arm fields of ``protocol``.

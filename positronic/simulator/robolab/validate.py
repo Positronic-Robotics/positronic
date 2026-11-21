@@ -4,6 +4,7 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
 ``env.py`` cannot be unit-tested in positronic's suite. This script builds the real env, drives it directly
 (no sockets), and checks:
 
+- the task listing: a phrasing that the task does not have fails before any scene is built;
 - the wire observation contract: keys, shapes, dtypes, quat normalization, grip range;
 - ``gt_state``: a pose and a contact flag for every object, and bool progress. On a reset frame, no contact and
   no condition done;
@@ -436,6 +437,21 @@ def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
     print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
+def _check_the_listing_refuses_an_unknown_phrasing(env: RobolabEnv) -> None:
+    """A phrasing that the task does not have fails at the task listing, before any scene is built, and a phrasing
+    that the task has still lists."""
+    task = _TOKEN[keys.TOKEN_TASK]
+    for phrasing in ('default', 'vague', 'specific'):
+        (record,) = env.tasks({'task': task, keys.SELECT_INSTRUCTION_TYPE: phrasing})
+        assert record[keys.RECORD_INSTRUCTION_TYPE] == phrasing and record[protocol.TASK_INSTRUCTION]
+    try:
+        env.tasks({'task': task, keys.SELECT_INSTRUCTION_TYPE: 'vauge'})
+    except ValueError as e:
+        print(f'  listing: OK (default, vague and specific list; a typo is refused: {e})')
+        return
+    raise AssertionError('the listing accepted the phrasing vauge')
+
+
 def _check_a_clone_that_faults(env: RobolabEnv) -> None:
     """The arm state of the last clone stops being finite in a step. That frame ends the clone alone, as a failure
     with ``fault``. The other clones go on with finite state through a stretch of pose solves that include the faulted
@@ -547,6 +563,7 @@ def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
 
 def main() -> None:
     env = RobolabEnv()
+    _check_the_listing_refuses_an_unknown_phrasing(env)
     _check_obs_contract(env)
     _check_gt_state_contract(env)
     _check_grip(env)

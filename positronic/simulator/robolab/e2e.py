@@ -8,9 +8,9 @@ asserts the boundary mechanics. The server answers its own task list. The exact-
 the demo's opening joints and resolves the instruction that the task list states. Every recorded action
 round-trips the socket without a wire error. The demos' grasps show in ``gt_state`` as a gripper contact and a
 done ``object_grabbed`` condition, and a reset frame shows neither.
-Task success is reported but not asserted: the recording RoboLab ships at the pinned commit no longer reaches
-success under replay — its own ``examples/run_recorded.py`` reproduces the failure on the same box — so a
-success oracle needs a policy-driven differential, not a demo log.
+Task success is reported but not asserted. At the pinned commit the demo does not reach success here, and
+RoboLab's own faithful replay of it (``examples/run_recorded.py``, with the recorded env config and initial state)
+does not reach success either. So a success oracle needs a policy-driven differential, not a demo log.
 
 The demos come from a tiny committed ``.npz`` fixture — each demo's action log + initial scene state, not the
 multi-GB recording; ``make_fixture.py`` extracts it once from a RoboLab ``data.hdf5``. Run on a RoboLab-capable
