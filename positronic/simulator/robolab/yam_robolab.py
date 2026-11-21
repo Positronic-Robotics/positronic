@@ -21,7 +21,7 @@ from isaaclab.sensors import TiledCameraCfg  # pyright: ignore[reportMissingImpo
 from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # pyright: ignore[reportMissingImports]
 from isaaclab.utils import configclass  # pyright: ignore[reportMissingImports]
 from isaaclab.utils.math import subtract_frame_transforms  # pyright: ignore[reportMissingImports]
-from pxr import Sdf, Usd, UsdPhysics  # pyright: ignore[reportMissingImports]
+from pxr import PhysxSchema, Sdf, Usd, UsdPhysics, UsdShade  # pyright: ignore[reportMissingImports]
 
 from robolab.constants import DEFAULT_TASK_SUBFOLDERS, TASK_DIR  # pyright: ignore[reportMissingImports]
 from robolab.core.environments.factory import auto_discover_and_create_cfgs  # pyright: ignore[reportMissingImports]
@@ -54,10 +54,38 @@ def _make_mimic_rigid(stage: Any) -> None:
     stage.GetRootLayer().Save()
 
 
+def _bind_finger_material(stage: Any) -> None:
+    """Bind the finger material of ``yam_spec`` to every collider of the four finger links.
+
+    The importer writes the colliders of a link as an instance, so each finger instance becomes a plain prim first.
+    """
+    root = stage.GetDefaultPrim().GetPath()
+    material = UsdShade.Material.Define(stage, root.AppendPath('PhysicsMaterials/finger'))
+    physics = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+    physics.CreateStaticFrictionAttr(spec.FINGER_FRICTION)
+    physics.CreateDynamicFrictionAttr(spec.FINGER_FRICTION)
+    PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim()).CreateFrictionCombineModeAttr(spec.FINGER_FRICTION_COMBINE)
+    links = {spec.finger_label(side, finger) for side in spec.SIDES for finger in spec.FINGER_LINKS}
+    fingers = [prim for prim in stage.Traverse() if prim.GetName() in links]
+    for instance in [part for prim in fingers for part in Usd.PrimRange(prim) if part.IsInstance()]:
+        instance.SetInstanceable(False)
+    bound = set()
+    for prim in fingers:
+        for part in Usd.PrimRange(prim):
+            if part.HasAPI(UsdPhysics.CollisionAPI):
+                binding = UsdShade.MaterialBindingAPI.Apply(part)
+                binding.Bind(material, UsdShade.Tokens.weakerThanDescendants, 'physics')
+                bound.add(prim.GetName())
+    if bound != links:
+        raise RuntimeError(f'no collider found under the finger links {sorted(links - bound)}')
+    stage.GetRootLayer().Save()
+
+
 def convert(out_dir: Path) -> tuple[Path, Path]:
     """The robot USD and the stand USD, written into ``out_dir``.
 
     The fixed joints stay, so the ``gripper`` links keep prims of their own. The mesh colliders become convex hulls.
+    The finger colliders get the finger material.
     """
     urdf = out_dir / 'yam_bimanual.urdf'
     urdf.write_text(spec.bimanual_urdf())
@@ -81,7 +109,9 @@ def convert(out_dir: Path) -> tuple[Path, Path]:
             ),
         )
     )
-    _make_mimic_rigid(Usd.Stage.Open(converter.usd_path))
+    stage = Usd.Stage.Open(converter.usd_path)
+    _make_mimic_rigid(stage)
+    _bind_finger_material(stage)
     return Path(converter.usd_path), stand
 
 

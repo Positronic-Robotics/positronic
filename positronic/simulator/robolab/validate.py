@@ -24,7 +24,9 @@ import yam_spec
 
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.
 from env import DroidEnv, RobolabEnv, YamEnv, args, simulation_app
+from isaaclab.sim.utils import find_first_matching_prim  # pyright: ignore[reportMissingImports]
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
+from pxr import PhysxSchema, Usd, UsdPhysics, UsdShade  # pyright: ignore[reportMissingImports]
 
 from robolab.core.sensors.contact_sensor_utils import (  # pyright: ignore[reportMissingImports]
     get_batch_contact_sensor,
@@ -741,6 +743,33 @@ def _check_yam_finger_contact(env: YamEnv) -> None:
     print(f'  gripper contact: OK (per hand, the steps with a contact and the fingers that sensed it: {sensed})')
 
 
+def _check_yam_finger_material(env: YamEnv) -> None:
+    """Every collider of the four finger links of clone 0 has the finger friction of ``yam_spec``."""
+    stage = env._env.sim.stage
+    root = find_first_matching_prim(env._robot.cfg.prim_path, stage)
+    assert root, f'no robot prim matches {env._robot.cfg.prim_path}'
+    checked = {}
+    for side in yam_spec.SIDES:
+        for finger in yam_spec.FINGER_LINKS:
+            link = root.GetChild(yam_spec.finger_label(side, finger))
+            colliders = [p for p in Usd.PrimRange(link) if p.HasAPI(UsdPhysics.CollisionAPI)]
+            assert colliders, f'the finger link {link.GetPath()} has no collider'
+            for collider in colliders:
+                material, _ = UsdShade.MaterialBindingAPI(collider).ComputeBoundMaterial('physics')
+                assert material, f'{collider.GetPath()} has no physics material'
+                prim = material.GetPrim()
+                friction = UsdPhysics.MaterialAPI(prim)
+                found = (friction.GetStaticFrictionAttr().Get(), friction.GetDynamicFrictionAttr().Get())
+                assert np.allclose(found, yam_spec.FINGER_FRICTION), f'{collider.GetPath()} has the friction {found}'
+                mode = PhysxSchema.PhysxMaterialAPI(prim).GetFrictionCombineModeAttr().Get()
+                assert mode == yam_spec.FINGER_FRICTION_COMBINE, f'{collider.GetPath()} combines friction by {mode}'
+            checked[link.GetName()] = len(colliders)
+    print(
+        f'  finger material: OK (friction {yam_spec.FINGER_FRICTION}, combine {yam_spec.FINGER_FRICTION_COMBINE}, '
+        f'colliders per link {checked})'
+    )
+
+
 def _joint_pos(q: np.ndarray) -> dict:
     return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}
 
@@ -811,6 +840,7 @@ def _validate_yam() -> None:
     _check_yam_grip(env)
     _check_yam_eef_pose(env)
     _check_yam_finger_contact(env)
+    _check_yam_finger_material(env)
     env.close()
     if args.max_envs > 1:
         _check_yam_batch(args.max_envs)

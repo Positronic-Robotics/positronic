@@ -64,6 +64,10 @@ FINGER_STIFFNESS = 10000.0
 FINGER_DAMPING = 50.0
 FINGER_EFFORT = 40.0
 FINGER_VELOCITY = 0.2
+# The friction of the finger links. PhysX takes the larger friction of a finger and the part it touches ('max'). With
+# no material, a finger gets the 0.5 scene default and the mean with the part: replayed grasps then slip.
+FINGER_FRICTION = 1.0
+FINGER_FRICTION_COMBINE = 'max'
 # The i2rt joint limits.
 ARM_LIMITS = (
     (-2.61799, 3.14159),
