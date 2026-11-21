@@ -1,4 +1,6 @@
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
+from dataclasses import dataclass
 
 import configuronic as cfn
 from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
@@ -6,7 +8,8 @@ from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
 from positronic import keys
 from positronic.cfg.eval import env_server_address, number_trials, require_finite_positive, spec
 from positronic.drivers.roboarm.models import bundled_yam_model
-from positronic.eval import Eval, Task
+from positronic.eval import Embodiment, Eval, Task
+from positronic.simulator.env_server.adapter import WireCommandAdapter
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem, remote_embodiment
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabDroidAdapter, RobolabYamAdapter
@@ -20,34 +23,49 @@ _YAM_CAMERAS = {
 }
 
 
-def _camera_dict(robot: str, cameras: str) -> dict[str, str]:
-    """The wire name each camera of the set takes, keyed as ``camera_dict``.
-
-    A DROID set with one exterior binds it to ``EXTERIOR_IMAGE``, so a two-camera policy reads the same key
-    whichever exterior the run renders.
-    """
-    names = robolab_keys.camera_set(robot, cameras)
-    if robot == robolab_keys.YAM:
-        return {_YAM_CAMERAS[name]: name for name in names}
+def _droid_camera_dict(names: Sequence[str]) -> dict[str, str]:
+    """A set with one exterior binds it to ``EXTERIOR_IMAGE``, so a two-camera policy reads the same key whichever
+    exterior the run renders."""
     exteriors = [keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2]
-    wire = {}
-    for name in names:
-        wire[keys.WRIST_IMAGE if name == robolab_keys.WRIST_CAMERA else exteriors.pop(0)] = name
-    return wire
+    return {keys.WRIST_IMAGE if name == robolab_keys.WRIST_CAMERA else exteriors.pop(0): name for name in names}
 
 
-def _embodiment(robot: str, proxy: RemoteEnvControlSystem, camera_dict: dict[str, str]):
-    if robot == robolab_keys.YAM:
-        # The env server holds no positronic, so the client carries the arm model, as the rig records it.
-        return remote_embodiment(
-            proxy,
-            camera_dict,
-            descriptor='remote.robolab.yam_bimanual',
-            arms=keys.BIMANUAL_ARMS,
-            static_meta=bundled_yam_model(),
-        )
+def _yam_camera_dict(names: Sequence[str]) -> dict[str, str]:
+    return {_YAM_CAMERAS[name]: name for name in names}
+
+
+def _droid_embodiment(proxy: RemoteEnvControlSystem, camera_dict: dict[str, str]) -> Embodiment:
     # The env's ``robot_meta`` carries the DROID rig's model (Franka arm + Robotiq 2F-85).
     return remote_embodiment(proxy, camera_dict, descriptor='remote.robolab.droid')
+
+
+def _yam_embodiment(proxy: RemoteEnvControlSystem, camera_dict: dict[str, str]) -> Embodiment:
+    # The env server holds no positronic, so the client carries the arm model, as the rig records it.
+    return remote_embodiment(
+        proxy,
+        camera_dict,
+        descriptor='remote.robolab.yam_bimanual',
+        arms=keys.BIMANUAL_ARMS,
+        static_meta=bundled_yam_model(),
+    )
+
+
+@dataclass(frozen=True)
+class _RobotEval:
+    """How an eval meets one robot of the RoboLab env server.
+
+    ``camera_dict`` maps the camera names of a set to the wire name each camera takes, keyed as ``camera_dict``.
+    """
+
+    camera_dict: Callable[[Sequence[str]], dict[str, str]]
+    adapter: Callable[[dict[str, str]], WireCommandAdapter]
+    embodiment: Callable[[RemoteEnvControlSystem, dict[str, str]], Embodiment]
+
+
+_ROBOT_EVALS = {
+    robolab_keys.DROID: _RobotEval(_droid_camera_dict, RobolabDroidAdapter, _droid_embodiment),
+    robolab_keys.YAM: _RobotEval(_yam_camera_dict, RobolabYamAdapter, _yam_embodiment),
+}
 
 
 @cfn.config(
@@ -101,14 +119,14 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
     require_finite_positive('timeout', timeout)
     require_finite_positive('horizon_sec', horizon_sec)
     cameras = cameras or robolab_keys.DEFAULT_CAMERA_SETS[robot]
-    camera_dict = _camera_dict(robot, cameras)
+    robot_eval = _ROBOT_EVALS[robot]
+    camera_dict = robot_eval.camera_dict(robolab_keys.camera_set(robot, cameras))
     if env_server is None:
         serve = serve_robolab(cameras, robot=robot)
     else:
         serve = nullcontext(env_server_address(env_server))
-    adapter = RobolabYamAdapter(camera_dict) if robot == robolab_keys.YAM else RobolabDroidAdapter(camera_dict)
-    proxy = RemoteEnvControlSystem(adapter, serve, batch_size)
-    embodiment = _embodiment(robot, proxy, camera_dict)
+    proxy = RemoteEnvControlSystem(robot_eval.adapter(camera_dict), serve, batch_size)
+    embodiment = robot_eval.embodiment(proxy, camera_dict)
 
     def tasks() -> list[Task]:
         trials = []
