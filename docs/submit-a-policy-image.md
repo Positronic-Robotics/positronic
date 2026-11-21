@@ -131,6 +131,11 @@ submission.
   and must fit the checkpoint's prefix capacity. A measured delay beyond that bound fails explicitly.
   RTC sessions require `horizon_sec=None` and return the full chunk; the client schedules it from
   the observation time, skipping commands whose times have passed.
+- `droid_ee` serves an EE-50 package, a checkpoint of the base's `action_prediction_ee50` heads. It sends the
+  flange pose (`robot_state.ee_pose` moved from the `gripper` site to the flange), the grip and three views:
+  the wrist, `image.exterior` and `image.exterior_2`. The server decodes the predicted chunk from the observed
+  pose to absolute flange targets. The client moves them back to the `gripper` site as `CartesianPosition` commands. The package holds the
+  `ee50_stats.json` it trained with. `droid_ee` has no RTC.
 - `black-forest-labs/flux-3-action-droid` and `black-forest-labs/flux-3-action-base` are gated. Accept
   BFL's terms on the Hub page of each, then put a read token in `$HOME/.hf_token`, or in `HF_TOKEN` for
   `make -C docker build-serve-flux3-action`. The build reads the token through a secret mount, and it
