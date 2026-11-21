@@ -34,6 +34,7 @@ from positronic.dataset_viewer import rerun_replay
 from positronic.dataset_viewer.rerun_replay import (
     _MAX_PLOTTED_WIDTH,
     ARM_CHARTS,
+    ReplayAxes,
     ReplayLayout,
     _build_blueprint,
     _collect_signal_groups,
@@ -425,6 +426,10 @@ def rec() -> rerun_replay.rr.RecordingStream:
     return rerun_replay.rr.RecordingStream('test')
 
 
+# Axes that keep each clock as recorded.
+_RAW_AXES = ReplayAxes(recorded_also_on=None, starts={})
+
+
 def _null_drainer(rec: rerun_replay.rr.RecordingStream) -> rerun_replay._BinaryStreamDrainer:
     return rerun_replay._BinaryStreamDrainer(rec.binary_stream(), min_bytes=1)
 
@@ -450,12 +455,13 @@ def test_numeric_and_pose_samples_keep_their_coordinates_after_thinning(tmp_path
     rrd = tmp_path / 'ep.rrd'
     rrd.write_bytes(b''.join(stream_episode_rrd(LocalDataset(root), 0, max_hz=30, timeline=selected)))
 
-    kept = {RECEIVED_WORLD: [0, 40_000_000], RECEIVED_WALL: [2**53 + 1, 2**53 + 5], 'tick': [0, 4]}
+    # Each clock counts from its first sample; `tick` is not a clock.
+    kept = {RECEIVED_WORLD: [0, 40_000_000], RECEIVED_WALL: [0, 4], 'tick': [0, 4]}
     assert sent['/signals/pose/0'] == kept
     assert sent['/3d/pose'] == kept
     assert sent['camera'] == {
         RECEIVED_WORLD: [i * 10_000_000 for i in range(6)],
-        RECEIVED_WALL: [2**53 + i + 1 for i in range(6)],
+        RECEIVED_WALL: list(range(6)),
         'tick': list(range(6)),
     }
     assert sent['/signals/other'] == {'device': list(range(6))}
@@ -511,7 +517,7 @@ def test_a_text_signal_is_logged_where_its_value_changes(rec, tmp_path, monkeypa
     monkeypatch.setattr(rerun_replay.rr, 'log', lambda path, value, **kwargs: styles.__setitem__(path, value))
     ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: _STATES})
 
-    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), _RAW_AXES))
 
     second = 1_000_000_000
     changes = [second, 3 * second, 4 * second, 5 * second, 7 * second]
@@ -539,7 +545,7 @@ def test_a_text_log_entry_keeps_all_its_coordinates(rec, tmp_path, monkeypatch):
         )
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), _RAW_AXES))
 
     assert sent[f'/text/{STATE_SIGNAL}'] == {
         RECEIVED_WALL: [machine_clock, machine_clock + 1000],
@@ -561,7 +567,7 @@ def test_disjoint_text_timelines_are_exported(rec, tmp_path, monkeypatch):
         writer.append('device.state', 'ready', Time(device=7))
     ep = DiskEpisode(tmp_path / 'ep')
 
-    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), _RAW_AXES))
 
     assert sent[f'/text/{STATE_SIGNAL}'] == {RECORDED_TIME: [4_000_000_000]}
     assert sent['/text/device.state'] == {'device': [7]}
@@ -598,12 +604,13 @@ def test_a_legacy_signal_is_on_the_timeline_the_replay_opens_on(tmp_path, monkey
 
     b''.join(stream_episode_rrd(LocalDataset(root), 0))
 
-    both = {RECORDED_TIME: times, world[0]: times}
+    from_start = [0, 1_000_000_000]
+    both = {RECORDED_TIME: from_start, world[0]: from_start}
     assert sent[f'/text/{STATE_SIGNAL}'] == both
     assert sent[f'/signals/{STATE_SIGNAL}'] == both
     assert sent['/signals/progress.delivered'] == both
     assert sent['camera'] == both
-    assert sent['/signals/robot.q/0'] == dict.fromkeys(world, times)
+    assert sent['/signals/robot.q/0'] == dict.fromkeys(world, from_start)
 
 
 @pytest.mark.parametrize(
@@ -623,7 +630,8 @@ def test_a_legacy_signal_is_copied_to_a_selected_timeline_only_on_the_world_cloc
 
     b''.join(stream_episode_rrd(LocalDataset(root), 0, timeline=selected))
 
-    expected = {RECORDED_TIME: times} if copied_to is None else {RECORDED_TIME: times, copied_to: times}
+    from_start = [0, 1_000_000_000]
+    expected = {RECORDED_TIME: from_start} if copied_to is None else {RECORDED_TIME: from_start, copied_to: from_start}
     assert sent[f'/text/{STATE_SIGNAL}'] == expected
 
 
@@ -637,7 +645,55 @@ def test_a_signal_on_the_replay_timeline_and_recorded_keeps_its_own_coordinates(
 
     b''.join(stream_episode_rrd(LocalDataset(root), 0))
 
-    assert sent[f'/text/{STATE_SIGNAL}'] == {RECORDED_TIME: [5, 6], world: [7, 9]}
+    assert sent[f'/text/{STATE_SIGNAL}'] == {RECORDED_TIME: [0, 1], world: [0, 2]}
+
+
+# A clock that counts from the machine's boot, as on a computer that has run for 55 days.
+_BOOT_CLOCK_NS = 55 * 24 * 3600 * 1_000_000_000
+
+
+def test_a_replay_of_a_clock_far_from_zero_opens_at_the_episode_start(tmp_path, monkeypatch):
+    sent = _capture_indexes(monkeypatch)
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
+        for i in range(3):
+            ts = Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS + i * 100_000_000, RECORDED_TIME: _BOOT_CLOCK_NS + i})
+            writer.append('robot.q', np.zeros(2), ts)
+            writer.append('camera', np.zeros((16, 16, 3), dtype=np.uint8), ts)
+
+    b''.join(stream_episode_rrd(LocalDataset(root), 0, max_hz=0))
+
+    from_start = {RECEIVED_WORLD: [0, 100_000_000, 200_000_000], RECORDED_TIME: [0, 1, 2]}
+    assert sent['/signals/robot.q/0'] == from_start
+    assert sent['camera'] == from_start
+
+
+def test_each_clock_counts_from_its_earliest_sample_in_the_episode_and_a_sequence_keeps_its_values(
+    tmp_path, monkeypatch
+):
+    sent = _capture_indexes(monkeypatch)
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
+        writer.append('early', np.zeros(1), Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS, 'tick': 7}))
+        writer.append('late', np.zeros(1), Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS + 500, 'tick': 9}))
+
+    b''.join(stream_episode_rrd(LocalDataset(root), 0, max_hz=0))
+
+    assert sent['/signals/early'] == {RECEIVED_WORLD: [0], 'tick': [7]}
+    assert sent['/signals/late'] == {RECEIVED_WORLD: [500], 'tick': [9]}
+
+
+def test_a_recorded_signal_copied_to_the_world_clock_can_set_its_start(tmp_path, monkeypatch):
+    sent = _capture_indexes(monkeypatch)
+    root = tmp_path / 'ds'
+    with LocalDatasetWriter(root) as ds, ds.new_episode() as writer:
+        writer.append(STATE_SIGNAL, 'floating', Time(**{RECORDED_TIME: _BOOT_CLOCK_NS}))
+        writer.append('robot.q', np.zeros(2), Time(**{RECEIVED_WORLD: _BOOT_CLOCK_NS + 300}))
+
+    b''.join(stream_episode_rrd(LocalDataset(root), 0, max_hz=0))
+
+    assert sent[f'/text/{STATE_SIGNAL}'] == {RECORDED_TIME: [0], RECEIVED_WORLD: [0]}
+    assert sent['/signals/robot.q/0'] == {RECEIVED_WORLD: [300]}
 
 
 def test_a_text_log_displays_all_timelines():
@@ -1026,7 +1082,7 @@ def test_a_text_signal_holds_its_last_value_to_the_last_sample(rec, tmp_path, mo
     monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
     ep = _text_episode(tmp_path / 'ep', {STATE_SIGNAL: ['floating', 'reaching', 'reaching']})
 
-    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), None))
+    list(rerun_replay._log_text_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), _RAW_AXES))
 
     assert sent[f'/text/{STATE_SIGNAL}'] == [1_000_000_000, 2_000_000_000]
     assert sent[f'/signals/{STATE_SIGNAL}'] == [1_000_000_000, 2_000_000_000, 3_000_000_000]
@@ -1096,9 +1152,9 @@ def test_every_encoded_frame_keeps_its_own_episode_time(rec, monkeypatch):
     monkeypatch.setattr(rerun_replay.rr, 'send_columns', send_columns)
     monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
     signal = DummySignal(list(zip(times, range(12), strict=True)), frames, timelines=(RECORDED_TIME, 'tick'))
-    rerun_replay._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=0)
+    rerun_replay._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, _RAW_AXES), 640, max_hz=0)
     other = DummySignal([7], frames[:1], timelines=('device',))
-    rerun_replay._encode_frames_as_video(rec, '/other', other, _timestamp_columns(other, None), 640, max_hz=0)
+    rerun_replay._encode_frames_as_video(rec, '/other', other, _timestamp_columns(other, _RAW_AXES), 640, max_hz=0)
 
     assert logged == [{RECORDED_TIME: [ts], 'tick': [i]} for i, ts in enumerate(times)] + [{'device': [7]}]
 
@@ -1117,7 +1173,7 @@ def test_frames_past_the_rate_cap_are_left_out_of_the_encoding(rec, monkeypatch)
     monkeypatch.setattr(rerun_replay.rr, 'log', lambda *args, **kwargs: None)
 
     signal = DummySignal(times, frames)
-    rerun_replay._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, None), 640, max_hz=30)
+    rerun_replay._encode_frames_as_video(rec, '/video', signal, _timestamp_columns(signal, _RAW_AXES), 640, max_hz=30)
 
     kept = _decimation_indices(np.asarray(times, dtype='datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(times)
@@ -1209,7 +1265,7 @@ def _logged_video(rec: rerun_replay.rr.RecordingStream, monkeypatch, ep: DiskEpi
     monkeypatch.setattr(rerun_replay.rr, 'AssetVideo', keep_contents)
     sent = _capture_indexes(monkeypatch)
     signals = _collect_signal_groups(ep)
-    list(rerun_replay._log_video_signals(rec, ep, signals, _null_drainer(rec), 640, 30, None))
+    list(rerun_replay._log_video_signals(rec, ep, signals, _null_drainer(rec), 640, 30, _RAW_AXES))
     return embedded[0], sent['camera'][RECEIVED_WORLD]
 
 
@@ -1234,7 +1290,7 @@ def test_a_numeric_signal_on_the_same_jittery_timeline_is_still_thinned(rec, tmp
     ep = _jittery_episode(tmp_path / 'ds')
     sent = _capture_indexes(monkeypatch)
 
-    list(rerun_replay._log_numeric_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), 30, None))
+    list(rerun_replay._log_numeric_signals(rec, ep, _collect_signal_groups(ep), _null_drainer(rec), 30, _RAW_AXES))
 
     kept = _decimation_indices(_JITTERY_30HZ_NS.astype('datetime64[ns]'), max_hz=30)
     assert 1 < len(kept) < len(_JITTERY_30HZ_NS)

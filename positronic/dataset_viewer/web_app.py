@@ -51,6 +51,7 @@ from positronic.dataset_viewer.rerun_replay import (
     ReplayLayout,
     get_dataset_root,
     get_episodes_list,
+    replay_axes,
     sampled_duration_timeline,
     stream_episode_rrd,
 )
@@ -157,7 +158,7 @@ def _get_rrd_cache_path(episode_id: int, max_hz: float, max_resolution: int, lay
     # The uid, because an episode's position is view-dependent.
     uid = _path_component(str(cast(Episode, ds[episode_id]).meta[META_UID]))
     layout_suffix = '' if layout is None else '-' + hashlib.sha256(json.dumps(asdict(layout)).encode()).hexdigest()[:16]
-    return episode_cache_dir / f'v4-{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
+    return episode_cache_dir / f'v5-{uid}-{max_hz!r}hz-{max_resolution}px{layout_suffix}.rrd'
 
 
 @asynccontextmanager
@@ -571,6 +572,9 @@ async def episode_viewer(request: Request, episode_id: int):
     meta = episode.meta
     size_mb = meta.get('size_mb')
     size_mb_display = f'{size_mb:.2f}' if isinstance(size_mb, int | float) else None
+    seek_timeline = sampled_duration_timeline(episode)
+    # A string: a clock reading can pass 2**53, where a JavaScript number loses nanoseconds.
+    seek_start_ns = None if seek_timeline is None else str(replay_axes(episode).starts[seek_timeline])
 
     def _make_serializable(obj, key_path=()):
         if is_download(obj):
@@ -592,7 +596,8 @@ async def episode_viewer(request: Request, episode_id: int):
             'prev_link': episode_link((episode_id - 1) % len(ds)),
             'next_link': episode_link((episode_id + 1) % len(ds)),
             'viewer_path': asset_link(f'{VIEWER_DIR}/{rr.__version__}/index.html') + '?v=2',
-            'seek_timeline': sampled_duration_timeline(episode),
+            'seek_timeline': seek_timeline,
+            'seek_start_ns': seek_start_ns,
             'task': episode.static.get(keys.TASK, None),
             'rrd_path': episode_rrd_link(episode_id),
             'episode_path': meta.get(META_PATH),
@@ -1248,13 +1253,14 @@ def main(
 ):
     """Visualize a Dataset with Rerun.
 
-    Each signal retains its timeline names. Known nanosecond clocks use durations; other names use integer sequences.
+    Each signal retains its timeline names. Known nanosecond clocks use durations from their first sample in the
+    episode; other names use integer sequences.
     The initial timeline is `harness.world`, `received.world`, `recorded`, another known clock, or the first available
     name. A signal on `recorded` alone is also put on the initial timeline.
 
     Episode viewer URL params (require a known nanosecond clock):
         /episode/<id>?t=<seconds>      — open paused at seconds from episode start
-        /episode/<id>?ts_ns=<nanos>    — open paused at absolute nanosecond timestamp
+        /episode/<id>?ts_ns=<nanos>    — open paused at a nanosecond timestamp of the clock as recorded
 
     Args:
         dataset: Dataset to visualize

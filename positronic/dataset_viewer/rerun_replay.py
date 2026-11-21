@@ -633,6 +633,31 @@ def _opening_timeline(ep: Episode, timeline: str | None) -> str | None:
     return timeline
 
 
+@dataclass(frozen=True)
+class ReplayAxes:
+    """Where a replay puts each sample: `recorded` is also put on `recorded_also_on`, and each clock in `starts`
+    counts from its start, so the replay opens at +0 s."""
+
+    recorded_also_on: str | None
+    starts: dict[str, int]
+
+
+def replay_axes(ep: Episode, timeline: str | None = None) -> ReplayAxes:
+    """The axes of the replay of `ep` that opens on `timeline`. A clock starts at its first sample in `ep`."""
+    opening = _opening_timeline(ep, timeline)
+    recorded_also_on = opening if opening in _RECORDED_CLOCK_TIMELINES else None
+    starts: dict[str, int] = {}
+    for sig in ep.signals.values():
+        if not len(sig):
+            continue
+        firsts = {name: sig.bounds(name).start for name in sig.timelines if name in _DURATION_TIMELINES}
+        if recorded_also_on is not None and RECORDED_TIME in firsts and recorded_also_on not in firsts:
+            firsts[recorded_also_on] = firsts[RECORDED_TIME]
+        for name, first in firsts.items():
+            starts[name] = min(first, starts.get(name, first))
+    return ReplayAxes(recorded_also_on, starts)
+
+
 def _build_blueprint(
     signals: EpisodeSignals, ep: Episode, layout: ReplayLayout | None, timeline: str | None = None
 ) -> rrb.Blueprint:
@@ -696,12 +721,14 @@ def _size_capped_to(width: int, height: int, max_resolution: int) -> tuple[int, 
     return max(_MIN_ENCODED_SIDE, int(width * scale) // 2 * 2), max(_MIN_ENCODED_SIDE, int(height * scale) // 2 * 2)
 
 
-def _timestamp_columns(sig: Signal, recorded_also_on: str | None) -> dict[str, np.ndarray]:
-    """Each timeline of `sig`. A signal on `recorded` and not on `recorded_also_on` is put on it too."""
+def _timestamp_columns(sig: Signal, axes: ReplayAxes) -> dict[str, np.ndarray]:
+    """Each timeline of `sig`, counted from its start in `axes`. A signal on `recorded` and not on
+    `axes.recorded_also_on` is put on it too."""
     columns = {name: np.asarray(sig.timestamps(name), dtype=np.int64) for name in sig.timelines}
-    if recorded_also_on is not None and RECORDED_TIME in columns and recorded_also_on not in columns:
-        columns[recorded_also_on] = columns[RECORDED_TIME]
-    return columns
+    also_on = axes.recorded_also_on
+    if also_on is not None and RECORDED_TIME in columns and also_on not in columns:
+        columns[also_on] = columns[RECORDED_TIME]
+    return {name: values - axes.starts.get(name, 0) for name, values in columns.items()}
 
 
 def _rerun_indexes(timestamps: dict[str, np.ndarray]) -> list[rr.TimeColumn]:
@@ -810,7 +837,7 @@ def _log_video_signals(
     drainer: _BinaryStreamDrainer,
     max_resolution: int,
     max_hz: float,
-    recorded_also_on: str | None,
+    axes: ReplayAxes,
 ) -> Iterator[bytes]:
     """Log stored videos as frame references, every frame kept, and raw images as a video stream thinned to
     ``max_hz``."""
@@ -818,7 +845,7 @@ def _log_video_signals(
         sig = ep.signals[name]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, recorded_also_on)
+        timestamps = _timestamp_columns(sig, axes)
         if isinstance(sig, VideoSignal):
             video_bytes = _mp4_reduced_to(sig.video_path, max_resolution)
             asset = rr.AssetVideo(contents=video_bytes, media_type='video/mp4')
@@ -874,7 +901,7 @@ def _log_numeric_signals(
     signals: EpisodeSignals,
     drainer: _BinaryStreamDrainer,
     max_hz: float,
-    recorded_also_on: str | None,
+    axes: ReplayAxes,
 ) -> Generator[bytes, None, dict[str, tuple[dict[str, np.ndarray], np.ndarray]]]:
     """Log numeric time-series via send_columns. Returns pose/joint data for 3D logging.
 
@@ -894,7 +921,7 @@ def _log_numeric_signals(
         sig = ep.signals[key]
         if len(sig) == 0:
             continue
-        timestamps = _timestamp_columns(sig, recorded_also_on)
+        timestamps = _timestamp_columns(sig, axes)
         try:
             vals = np.asarray(sig.values(), dtype=np.float64)
         except (TypeError, ValueError):
@@ -1087,11 +1114,7 @@ def _changes(values: np.ndarray) -> np.ndarray:
 
 
 def _log_text_signals(
-    rec: rr.RecordingStream,
-    ep: Episode,
-    signals: EpisodeSignals,
-    drainer: _BinaryStreamDrainer,
-    recorded_also_on: str | None,
+    rec: rr.RecordingStream, ep: Episode, signals: EpisodeSignals, drainer: _BinaryStreamDrainer, axes: ReplayAxes
 ) -> Iterator[bytes]:
     """Log each text value to the text log, and a plotted text signal as a step plot of its value indices.
 
@@ -1103,7 +1126,7 @@ def _log_text_signals(
         sig = ep_signals[key]
         if not len(sig):
             continue
-        timestamps = _timestamp_columns(sig, recorded_also_on)
+        timestamps = _timestamp_columns(sig, axes)
         texts = np.asarray([str(value) for value in sig.values()], dtype=object)
         changes = _changes(texts)
         time_idx = _rerun_indexes({name: values[changes] for name, values in timestamps.items()})
@@ -1180,9 +1203,8 @@ def _log_episode(
     # the swap returns runs an orphan sweep when it dies, outside the lock.
     drainer = _BinaryStreamDrainer(rec.binary_stream(), min_bytes=2**20)
     signals = _collect_signal_groups(ep)
-    opening = _opening_timeline(ep, timeline)
-    recorded_also_on = opening if opening in _RECORDED_CLOCK_TIMELINES else None
-    blueprint = _build_blueprint(signals, ep, layout, opening)
+    axes = replay_axes(ep, timeline)
+    blueprint = _build_blueprint(signals, ep, layout, timeline)
     with _RERUN_RECORDING_LIST_LOCK:
         _send_blueprint(rec, blueprint)
     if signals.unplotted:
@@ -1195,9 +1217,9 @@ def _log_episode(
     _setup_series_names(rec, signals, ep)
     yield from drainer.drain()
 
-    yield from _log_video_signals(rec, ep, signals, drainer, max_resolution, max_hz, recorded_also_on)
-    pose_data = yield from _log_numeric_signals(rec, ep, signals, drainer, max_hz, recorded_also_on)
-    yield from _log_text_signals(rec, ep, signals, drainer, recorded_also_on)
+    yield from _log_video_signals(rec, ep, signals, drainer, max_resolution, max_hz, axes)
+    pose_data = yield from _log_numeric_signals(rec, ep, signals, drainer, max_hz, axes)
+    yield from _log_text_signals(rec, ep, signals, drainer, axes)
     yield from drainer.drain(force=True)  # flush numerics to client before slow pose trails
     yield from _log_pose_signals(rec, ep, signals, pose_data, drainer)
     yield from drainer.drain(force=True)
