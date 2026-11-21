@@ -40,6 +40,14 @@ ABC11_PROMPTS = {
     'place the snacks into the paper bag': 'place the snacks into the paper bag',
     'take the snacks out of the paper bag': 'take the snacks out of the paper bag',
 }
+# Four more tasks, whose instruction is the task folder name.
+ABC15_PROMPTS = {
+    **ABC11_PROMPTS,
+    'unload the cups from the dish rack': 'unload the cups from the dish rack',
+    'set the dinner table for one person': 'set the dinner table for one person',
+    'turn the large container upside down': 'turn the large container upside down',
+    'unscrew the bottle caps': 'unscrew the bottle caps',
+}
 ABC4_PROMPTS = {
     instruction: ABC11_PROMPTS[instruction]
     for instruction in (
