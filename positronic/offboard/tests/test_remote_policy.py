@@ -43,9 +43,9 @@ from positronic.offboard.client import (
     DEFAULT_CONNECT_DEADLINE,
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    DEFAULT_UNRESOLVED_HOST_DEADLINE,
     DOWNLINK_MS,
     STATUS_UPDATE_TIMEOUT_S,
-    UNRESOLVED_HOST_RETRY_S,
     UPLINK_MS,
     ConnectRetries,
     InferenceClient,
@@ -388,7 +388,7 @@ class TestNewSessionRetriesRefusedConnects:
 
 
 class TestAHostNameThatDoesNotResolve:
-    """A resolver with no answer for the host name gets ``UNRESOLVED_HOST_RETRY_S`` of retries, not the deadline."""
+    """A resolver with no answer for the host name gets a limit of its own on the retries, not the deadline."""
 
     def test_a_name_that_never_resolves_fails_at_the_limit_not_at_the_deadline(self, fake_clock):
         fake = _SlowWire(fake_clock, *[(0.0, _refused(wire.Refusal.UNRESOLVED))] * 40)
@@ -396,7 +396,7 @@ class TestAHostNameThatDoesNotResolve:
             InferenceClient(fake, _ADDRESS).new_session()
 
         assert refused.value.refusal is wire.Refusal.UNRESOLVED
-        assert fake_clock.now == UNRESOLVED_HOST_RETRY_S < DEFAULT_CONNECT_DEADLINE
+        assert fake_clock.now == DEFAULT_UNRESOLVED_HOST_DEADLINE < DEFAULT_CONNECT_DEADLINE
 
     def test_a_name_that_resolves_inside_the_limit_still_connects(self, fake_clock):
         """The name resolves on the attempt at 271 s, the last one before the limit, and the server answers."""
@@ -414,7 +414,7 @@ class TestAHostNameThatDoesNotResolve:
         with pytest.raises(wire.ConnectRefused):
             InferenceClient(fake, _ADDRESS).new_session()
 
-        assert fake_clock.now == 271.0 + UNRESOLVED_HOST_RETRY_S
+        assert fake_clock.now == 271.0 + DEFAULT_UNRESOLVED_HOST_DEADLINE
 
     def test_a_websocket_dial_to_a_name_that_never_resolves_names_the_host(self, fake_clock, monkeypatch):
         def no_answer_yet(*_args, **_kwargs):
@@ -426,7 +426,22 @@ class TestAHostNameThatDoesNotResolve:
             InferenceClient(websocket.WebsocketClientWire(), address).new_session()
 
         assert refused.value.refusal is wire.Refusal.UNRESOLVED
-        assert fake_clock.now == UNRESOLVED_HOST_RETRY_S
+        assert fake_clock.now == DEFAULT_UNRESOLVED_HOST_DEADLINE
+
+    def test_a_remote_policy_retries_a_name_for_the_limit_it_was_given(self, fake_clock, monkeypatch):
+        """Attempts at 0, 1, 3, 7, 15 and 31 s are refused, and the pause after the last ends at the 60 s limit."""
+
+        def no_answer_yet(*_args, **_kwargs):
+            raise socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution')
+
+        monkeypatch.setattr(socket, 'getaddrinfo', no_answer_yet)
+        policy = RemotePolicy('websocket', _address('policy.example', 8000), unresolved_host_deadline=60.0)
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        with pytest.raises(wire.ConnectRefused) as refused:
+            runtime.start(policy)
+
+        assert refused.value.refusal is wire.Refusal.UNRESOLVED
+        assert fake_clock.now == 60.0
 
 
 class TestACancelledSessionOpening:

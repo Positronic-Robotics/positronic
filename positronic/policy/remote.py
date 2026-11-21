@@ -20,6 +20,7 @@ from positronic.offboard.client import (
     DEFAULT_CONNECT_DEADLINE,
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    DEFAULT_UNRESOLVED_HOST_DEADLINE,
     DOWNLINK_MS,
     UPLINK_MS,
     InferenceClient,
@@ -153,9 +154,9 @@ def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
-    ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout`` and ``connect_deadline``
-    bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality of images sent to a server
-    that asks for compressed images.
+    ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout``, ``connect_deadline`` and
+    ``unresolved_host_deadline`` bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality
+    of images sent to a server that asks for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -175,6 +176,7 @@ class RemotePolicy(Policy):
         headers: dict[str, str] | None = None,
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
+        unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     ):
@@ -184,6 +186,7 @@ class RemotePolicy(Policy):
             headers=headers,
             open_timeout=open_timeout,
             connect_deadline=connect_deadline,
+            unresolved_host_deadline=unresolved_host_deadline,
             infer_timeout=infer_timeout,
         )
         self._jpeg_quality = jpeg_quality
