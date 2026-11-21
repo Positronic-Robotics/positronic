@@ -1,51 +1,8 @@
-"""On-box validation for ``DroidEnv``'s command transform, and with ``--robot yam`` for ``YamEnv`` — runs inside
-RoboLab's own venv.
+"""On-box checks of ``DroidEnv``, and with ``--robot yam`` of ``YamEnv``, in RoboLab's own venv.
 
-positronic cannot import isaaclab/robolab, so the joint-target mapping and the differential-IK path in
-``env.py`` cannot be unit-tested in positronic's suite. This script builds the real env, drives it directly
-(no sockets), and checks:
-
-- the task listing: a phrasing that the task does not have fails before any scene is built;
-- the wire observation contract: keys, shapes, dtypes, quat normalization, grip range;
-- ``gt_state``: a pose and a contact flag for every object, and bool progress. On a reset frame, no contact and
-  no condition done;
-- grip: the binary gripper term reaches both closure extremes;
-- ``joint_pos`` pass-through: the applied action is bit-identical to the commanded joints (the leaderboard
-  equivalence claim) and the arm converges onto the target;
-- ``joint_vel``: the joint targets anchor on the measured joints (``q + dq``), exactly;
-- the eef_frame <-> base_link offset: un-offsetting the observed eef quat recovers the base_link body quat;
-- eef_frame against ``models.ROBOLAB_EE_FRAME``: RoboLab's own scene puts eef_frame where the constant
-  ``RobolabDroidAdapter`` converts with says it is;
-- Cartesian tracking, the ``examples/run_abs_ik_demo.py`` protocol: ±5 cm translations and ±20° world-axis
-  rotations held 30 steps each, pass at 5 mm / 2°; the demo's own known-divergent ``translate +x`` case is
-  reported but not fatal;
-- ``cartesian_delta``: solves to the same joint targets as the equivalent absolute command, and the composed
-  target tracks end-to-end;
-- the episode length: a token's length rebuilds the scene with only ``episode_length_s`` changed, and a token
-  without one rebuilds the scene with RoboLab's budget;
-- with ``--max-envs`` above one, the batch: every clone answers its own frame and ``gt_state`` and takes its own
-  command, a clone with no command holds, a clone still makes subtask progress after another clone ends its
-  episode, and a one-scene recorded state restores into every clone;
-- a NaN command: a joint target or a pose holds the measured joints, and a grip keeps the last grip;
-- a fault: a clone whose arm state stops being finite ends alone, as a failure with ``fault``. This runs on the
-  single clone and on the batch.
-
-The transform checks all drive a single clone, whatever ``--max-envs`` asks for; the batch check builds its
-own env, because a clone count is fixed at ``create_env``.
-
-With ``--robot yam`` it builds ``YamEnv`` and checks:
-
-- the wire observation contract per arm, the cameras, and the ``gt_state`` of a reset frame;
-- the 14 action values: the terms in ``yam_spec.ACTION_TERMS`` order, and ``joint_pos`` of each arm passed
-  through bit-identically, then reached;
-- a joint delta of the wrong width holds the measured joints;
-- the grip readings at grips 1, 0.5 and 0, and joint8 following joint7 as the fingers move;
-- the eef pose of each arm: its ``<side>_gripper`` link in the env, plus ``ROOT_IN_RIG_WORLD``;
-- the gripper contact: each finger has a contact sensor, and a hand that closes on the banana makes ``gt_state``
-  read a contact, which the fingers of that hand sense and the fingers of the other hand do not;
-- with ``--max-envs`` above one, the batch: each clone but the last moves both arms to targets of its own and
-  sets grips of its own, the last clone gets no command and holds, and each slot reads its own joints, grips and
-  ``gt_state``.
+positronic's suite cannot import Isaac Lab, so this script builds the real env and drives it with no sockets. It
+prints one line per check, and ``ALL CHECKS PASSED`` only when every check passes. With ``--max-envs`` above one it
+also checks a batch of clones, in an env of its own.
 
 Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLauncher flags apply)::
 
@@ -598,10 +555,6 @@ def _yam_action(left: dict, right: dict, grips: tuple[float, float] = (0.0, 0.0)
     return action
 
 
-def _joint_pos(q: np.ndarray) -> dict:
-    return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}
-
-
 _ARM_HOLD = {protocol.COMMAND_TYPE: protocol.HOLD}
 _YAM_HOLD = _yam_action(_ARM_HOLD, _ARM_HOLD)
 
@@ -786,6 +739,10 @@ def _check_yam_finger_contact(env: YamEnv) -> None:
         assert contact_steps > 0, f'the {side} hand closed on the banana, but no step read a contact'
         sensed[side] = (contact_steps, sorted(fingers_seen))
     print(f'  gripper contact: OK (per hand, the steps with a contact and the fingers that sensed it: {sensed})')
+
+
+def _joint_pos(q: np.ndarray) -> dict:
+    return {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}
 
 
 def _check_yam_batch(num_envs: int) -> None:

@@ -81,11 +81,9 @@ _ROBOT_EVALS = {
 def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, robot, cameras, env_server, batch_size):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
-    RoboLab (https://github.com/NVLabs/RoboLab) is NVIDIA's Isaac Lab benchmark: tabletop manipulation
-    tasks on the DROID rig (Franka arm + Robotiq 2F-85), each with a fixed scene, a language instruction in
-    three phrasings (``instruction_type`` ``default``/``vague``/``specific``), a time budget of its own and a
-    scripted success check. RoboLab scores three task categories — ``visual``, ``relational`` and
-    ``procedural`` — and one task can sit on several axes, so the three category sweeps overlap.
+    Each RoboLab task has a fixed scene, a language instruction in three phrasings (``instruction_type``
+    ``default``/``vague``/``specific``), a time budget and a scripted success check. A task can sit in several of
+    the categories ``visual``, ``relational`` and ``procedural``, so the category sweeps overlap.
 
     ``_robolab_eval`` leaves ``task`` unbound; each named config below is a ``.override`` binding it — to a
     single task name, a category, or ``None`` for every task. A list of names also works. The env resolves it
@@ -104,8 +102,8 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
 
     ``env_server`` is the ``host:port`` of a RoboLab env server that already runs, which this eval shares with
     other evals: each drives one clone of its scene. The server's robot and camera set must be ``robot`` and
-    ``cameras``, and every eval
-    that shares it must set the same ``horizon_sec``. Without it, the eval launches a server of its own.
+    ``cameras``, and every eval that shares it must set the same ``horizon_sec``. Without it, the eval launches a
+    server of its own.
     ``batch_size`` is how many evals start each batch on that server; the server builds that many clones for them.
     Without it, a batch waits for every clone of the server.
 

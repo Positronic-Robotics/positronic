@@ -1,52 +1,23 @@
-"""RoboLab — NVIDIA's Isaac Lab manipulation benchmark — behind the env-server protocol.
+"""RoboLab behind the env-server protocol, in RoboLab's own interpreter, as ``launcher.py`` runs it.
 
-RoboLab's ``isaac50`` extra puts ``isaacsim 5.0`` + ``isaaclab 2.2`` in its own uv project, so this never
-shares positronic's venv: the launcher runs ``uv run --project <robolab clone> env.py --host ... --port ...
---headless`` with the positronic-free ``server``/``protocol`` modules on ``PYTHONPATH``. It imports only robolab,
-isaaclab and the modules beside it, never ``positronic``.
+It imports only robolab, isaaclab and the modules beside it, never positronic. One server serves one robot
+(``--robot``) and one camera set (``--cameras``), and steps at most ``--max-envs`` scene clones, one per slot.
 
-``--robot`` names the robot that the server puts in the task scenes, ``keys.DROID`` or ``keys.YAM``. One
-server serves one robot.
+The wire contract:
 
-For the DROID rig, one jointpos-substrate env serves every wire command: RoboLab's leaderboard stack drives
-``DroidJointPositionActionCfg`` (8-dim ``[q1..q7 absolute rad, gripper]`` at 15 Hz), so ``joint_pos`` passes
-through bit-identically and every other command converts server-side into the 7 joint targets — ``joint_vel``
-anchors on the measured joints, ``hold`` re-commands them, and Cartesian poses solve through ``pose_ik``, the
-IK of the FR3 driver, once per control step.
-Cartesian wire poses are in the eef control frame (``eef_frame`` = base_link ∘ ``EEF_OFFSET_ROT``; position
-env-local, rotation world) — the same frame the observations report, so observed and commanded pose share one
-frame.
-
-The YAM robot is the two-arm i2rt YAM of ``yam_spec``, with the configs of ``yam_robolab``. Its action holds 14 values,
-per arm six joint targets and the grip (``yam_spec.ACTION_TERMS``). The wire carries one command and one grip per arm,
-on the channels that ``protocol.arm_channel`` names by the arm. ``joint_pos`` passes through, ``joint_vel`` anchors on
-the measured joints and ``hold`` re-commands them. The server solves no Cartesian command for the YAM. The YAM server
-reports every pose in the world frame of the rig recordings (``yam_spec.ROOT_IN_RIG_WORLD``), and sends the arm
-mounts in that frame in the ``robot_meta``.
-
-The reset token carries the RoboLab env name and the instruction variant; the env builds that task on the
-first reset and caches it, rebuilding only when the key changes. There is no seed anywhere: RoboLab's eval
-path has no seed hook, so a recorded seed would only mislead.
-
-``--cameras`` names the set in ``keys.ROBOT_CAMERA_SETS`` of the robot that this server renders. RoboLab bakes the set
-into the registered task, so one server serves one set and the token carries no camera.
-
-``--max-envs`` bounds the scene clones: one Isaac process steps every clone inside a single ``env.step``, and each
-clone is a slot of the env server, driven by a client of its own. A reset builds as many clones as its batch has
-slots, and rebuilds the scene when that count changes. RoboLab freezes a clone that terminates rather than
-re-rolling it, and zeroes its action, so a batch runs until its slowest clone ends and every clone reports the
-verdict it froze on.
-
-Every frame also carries the ``gt_state`` (``keys.GT_STATE``) of each slot. It holds:
-
-- for each object in the task's contact list, except the table, the pose of the object. The position is in the frame
-  of the slot's scene clone (for the YAM, moved into the rig world) and the rotation is in the world frame, as for the
-  eef;
-- for each of those objects, whether RoboLab's gripper contact sensor touches it (for the YAM, any finger of either
-  hand);
-- for each condition chain of the current subtask, RoboLab's own progress through the chain.
-
-The progress is what RoboLab's subtask recorder already tracks, so the record adds no condition checks.
+- DROID: the env steps RoboLab's 8 joint-position values at 15 Hz. ``joint_pos`` passes through bit-identically,
+  ``joint_vel`` anchors on the measured joints, ``hold`` re-commands them, and a pose solves through ``pose_ik``
+  once per step. Poses are in the eef control frame (``eef_frame``): position env-local, rotation world.
+- YAM: the env steps the 14 values of ``yam_spec.ACTION_TERMS``, from one command and one grip per arm on the
+  ``protocol.arm_channel`` channels. It solves no pose command. Every pose is in the rig world frame
+  (``yam_spec.ROOT_IN_RIG_WORLD``), and ``robot_meta`` carries the arm mounts in that frame.
+- The reset token names the RoboLab env and the instruction variant, and carries no seed: RoboLab's eval path has no
+  seed hook. A reset rebuilds the scene only when the task key or the clone count changes.
+- A clone that terminates freezes, with a zero action, on its verdict until the slowest clone of the batch ends.
+- ``gt_state`` (``keys.GT_STATE``) holds per slot, for each contact object but the table, its pose (position in the
+  clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
+  touches it (for the YAM, any finger of either hand); and RoboLab's progress through each condition chain of the
+  current subtask.
 """
 
 import argparse

@@ -1,12 +1,6 @@
 """The Isaac Lab and RoboLab configs of the two-arm YAM robot, made from ``yam_spec``.
 
-It runs in RoboLab's own interpreter, after the Isaac app starts, and imports nothing from positronic.
-
-- ``convert``: writes the URDF and the stand of ``yam_spec`` and converts the URDF to USD.
-- ``register_envs``: registers the RoboLab task envs with this robot. The robot cfg spawns the articulation and the
-  three cameras, and carries the ``table_fixture`` and ``ee_recorder_bodies`` labels. The action has 14 values: per
-  arm six joint targets (rad) and the grip (0 open, 1 closed, linear between). The proprioception holds per arm the
-  joint positions, the grip (0 open, 1 closed) and the pose of the ``gripper`` link in the robot root frame (wxyz).
+Import it only after the Isaac app starts. It runs in RoboLab's interpreter and imports nothing from positronic.
 """
 
 import copy

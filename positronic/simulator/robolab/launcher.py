@@ -1,10 +1,7 @@
 """Launches the RoboLab env server as a subprocess and owns its lifetime.
 
-positronic starts the server: ``uv sync --frozen`` installs the Isaac Lab / Isaac Sim dependency stack from the lock
-of the pinned RoboLab checkout, and the env runs in RoboLab's own interpreter via
-``uv run --no-sync --project <checkout>``.
-The positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol``
-without dragging in positronic; ``robolab`` itself resolves from the uv project.
+The server runs ``env.py`` in the interpreter of the pinned RoboLab checkout, through ``uv run --project``. The
+positronic-free ``env_server`` package is on its ``PYTHONPATH``; positronic is not importable there.
 """
 
 import argparse
@@ -99,12 +96,8 @@ def _spawn(
     # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
     env = {**os.environ, 'PYTHONPATH': str(_ENV_SERVER_DIR), 'OMNI_KIT_ACCEPT_EULA': 'Y'}
     if robot == keys.DROID:
-        # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
-        # interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as
-        # ``robot_meta``. A fresh temp file per spawn, in the container-local tmpdir — never the shared cache
-        # filesystem, where a concurrent eval's rewrite could tear a reader mid-decode.
-        # The rig's own model, unaltered: RoboLab measures and drives at ``robolab_eef``, and ``RobolabDroidAdapter``
-        # converts between that and the model's ``GRIPPER_SITE`` on both the observation and command paths.
+        # env.py cannot build the DROID model, so it reads this encoded copy and sends it as ``robot_meta``.
+        # One temp file per spawn, off the shared cache, where a concurrent rewrite could tear a reader.
         fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
         with os.fdopen(fd, 'wb') as meta_file:
             meta_file.write(encode(bundled_franka_model()))

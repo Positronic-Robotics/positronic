@@ -1,8 +1,6 @@
-"""The two-arm i2rt YAM robot of the RoboLab env server: its names, limits, gains, mounts, stand, labels, cameras, the
-URDF and stand files it is built from, and the action that the wire commands map to.
+"""The two-arm i2rt YAM robot of the RoboLab env server, and the action that the wire commands map to.
 
-The env server runs in RoboLab's own interpreter and cannot import positronic, so it reads this module as a top-level
-``yam_spec`` from its own directory. It uses only Python and numpy. ``yam_robolab`` makes the Isaac Lab configs from it.
+RoboLab's interpreter imports this module as a top-level ``yam_spec``, so it uses only Python and numpy.
 
 Frames:
 

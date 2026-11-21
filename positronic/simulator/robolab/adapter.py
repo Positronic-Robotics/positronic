@@ -1,10 +1,7 @@
-"""The RoboLab adapters: the canonical embodiment contract <-> RoboLab's raw obs/command payloads, client-side.
+"""The client-side RoboLab adapters, between the canonical embodiment contract and the RoboLab wire.
 
-Runs in positronic's interpreter (the RoboLab env server runs in its own Isaac Lab interpreter). The command
-side is ``WireCommandAdapter``'s forwarding; all action encoding — the joint-target conversion and the
-differential IK that bridges Cartesian commands — lives server-side where the articulation model is, so the
-adapter's only geometry is the constant frame offset between what the env measures and what the rig reports.
-``RobolabDroidAdapter`` serves the DROID rig and ``RobolabYamAdapter`` the two-arm YAM.
+The env server owns the action encoding: joint targets and IK. ``RobolabDroidAdapter`` serves the DROID rig and
+``RobolabYamAdapter`` the two-arm YAM.
 """
 
 from abc import abstractmethod
