@@ -15,6 +15,9 @@ from positronic.utils import check_finite_positive
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 
+# A gripper target below 1 is a finger opening, so the fingers stop there and do not squeeze a thinner object.
+FULL_CLOSE_FROM = 0.5
+
 
 class Waypoint(BaseModel):
     """An absolute hand pose, in metres and radians, and the gripper (0=open, 1=closed) set on the way to it."""
@@ -78,7 +81,10 @@ class Motion:
     linear_speed: float = 0.15
     angular_speed: float = math.radians(30)
     fps: float = 25.0
-    grip_hold: float = 0.5
+    # A full close of a Robotiq 2F-85 on a Franka reads 0.97 at 0.69-0.74 s after its command.
+    grip_hold: float = 1.0
+    # A Franka hand settles within 2 mm of its rest pose by 0.5 s after the last command in 90 % of the paths.
+    settle_hold: float = 0.5
     max_waypoints: int = 5
 
     def __post_init__(self):
@@ -102,6 +108,13 @@ class Motion:
             rotation = start.rotation.interpolate(end.rotation, self.max_rotation / angle)
             bounded.roll, bounded.pitch, bounded.yaw = rotation.as_euler
         return bounded
+
+    @staticmethod
+    def _close_fully(target: Waypoint) -> Waypoint:
+        if FULL_CLOSE_FROM <= target.gripper < 1:
+            target = target.model_copy()
+            target.gripper = 1.0
+        return target
 
     @staticmethod
     def _commands(poses: Mapping[str | None, geom.Transform3D], targets: Targets) -> dict:
@@ -131,17 +144,20 @@ class Motion:
         """The trajectory of ``path`` from ``starts``.
 
         ``held`` is the target of each arm of ``starts`` before the path. An arm that a waypoint of ``path`` leaves
-        out holds its previous clamped target. All arms reach a waypoint together.
+        out holds its previous clamped target. All arms reach a waypoint together. A gripper of ``FULL_CLOSE_FROM``
+        or more becomes 1.
         """
         bounded, parts, clamped = [], [], False
-        for waypoint in path:
-            requested = {arm: waypoint.get(arm, held[arm]) for arm in starts}
+        for index, waypoint in enumerate(path, start=1):
+            requested = {arm: self._close_fully(waypoint[arm]) if arm in waypoint else held[arm] for arm in starts}
             targets = {arm: self._clamp(start, requested[arm]) for arm, start in starts.items()}
             clamped = clamped or targets != requested
             parts.append(self._segment(starts, targets))
-            if any(target.gripper != held[arm].gripper for arm, target in targets.items()):
-                hold = self._commands({arm: target.pose for arm, target in targets.items()}, targets)
-                parts.append([hold] * math.ceil(self.grip_hold * self.fps))
+            grips = any(target.gripper != held[arm].gripper for arm, target in targets.items())
+            hold = max(self.grip_hold if grips else 0.0, self.settle_hold if index == len(path) else 0.0)
+            if hold:
+                command = self._commands({arm: target.pose for arm, target in targets.items()}, targets)
+                parts.append([command] * math.ceil(hold * self.fps))
             bounded.append(targets)
             starts = {arm: target.pose for arm, target in targets.items()}
             held = targets

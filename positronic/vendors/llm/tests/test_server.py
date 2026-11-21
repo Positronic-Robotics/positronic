@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import secrets
 import time
 from contextlib import contextmanager
@@ -114,11 +115,14 @@ def test_a_path_answers_one_part_per_call_and_asks_the_model_only_after_the_last
     llm_model = LLMModel(LLMPolicy(Endpoint('test'), Motion(linear_speed=0.05)), tmp_path, 360.0)
     first = llm_model(observation(), session_id='a')
     second = llm_model(observation(), session_id='a')
+    hold = llm_model(observation(), session_id='a')
     assert len(requests) == 1
     assert first[0] == {}
     assert first[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0.04)
     assert second[-1][keys.ROBOT_COMMAND].pose.translation[0] == pytest.approx(0)
     assert len(first) - 1 == len(second) == round(0.04 / 0.05 * Motion().fps)
+    assert len(hold) == math.ceil(Motion().settle_hold * Motion().fps)
+    assert {command[keys.ROBOT_COMMAND].pose.translation[0] for command in hold} == {0}
     assert llm_model(observation(), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
     assert len(requests) == 2
     llm_model.close()
@@ -148,6 +152,7 @@ def test_a_spent_call_budget_gives_up(model, make_model):
     replies.append(move())
     llm_model = make_model(max_calls=1)
     assert len(llm_model(observation(), session_id='a')) > 1
+    assert len(llm_model(observation(), session_id='a')) == math.ceil(Motion().settle_hold * Motion().fps)
     assert llm_model(observation(), session_id='a') == [{policy_keys.END: PolicyEnd.GIVE_UP.value}]
     assert len(requests) == 1
 
@@ -171,6 +176,7 @@ def test_two_sessions_keep_separate_conversations(model, make_model):
     llm_model = make_model()
     llm_model(observation(), session_id='a')
     llm_model(observation(x=0.5), session_id='b')
+    llm_model(observation(), session_id='a')  # the hold at the last waypoint
     llm_model(observation(x=0.01), session_id='a')
     a_first, b_first, a_second = (observed_states(messages) for messages in requests)
     assert [state['position_m'][0] for state in b_first] == [0.5]
@@ -396,7 +402,10 @@ def test_a_served_session_sends_the_model_what_a_local_run_sends(model, make_mod
     monkeypatch.setattr(server, 'time', SimpleNamespace(monotonic=time.monotonic, monotonic_ns=lambda: now_ns[0]))
     llm_model = make_model()
     llm_model(observation(), session_id='a')
-    now_ns[0] = 1_000_000_000
+    llm_model(observation(), session_id='a')  # the hold at the last waypoint
+    # The local path starts late, at 1 s, and its hold at the last waypoint keeps its duration.
+    motion = Motion()
+    now_ns[0] = 1_000_000_000 + round((math.ceil(motion.settle_hold * motion.fps) + 1) / motion.fps * 1e9)
     assert llm_model(observation(x=0.01), session_id='a') == [{policy_keys.END: PolicyEnd.COMPLETE.value}]
     assert len(local) == 2
     assert [comparable(messages) for messages in requests] == local
