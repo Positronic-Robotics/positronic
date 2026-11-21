@@ -314,3 +314,13 @@ def test_the_yam_adapter_sends_each_arm_its_own_command_and_grip():
         assert wired[protocol.COMMAND_TYPE] == protocol.JOINT_POS
         np.testing.assert_array_equal(wired[protocol.COMMAND_JOINT_POS], target)
         assert action[protocol.arm_channel(protocol.TARGET_GRIP, arm)] == float(index)
+
+
+def test_the_exterior_pair_set_binds_both_exteriors_and_the_wrist():
+    wire = robolab_cfg._droid_camera_dict(robolab_keys.camera_set(robolab_keys.DROID, robolab_keys.EXTERIOR_PAIR_WRIST))
+
+    assert wire == {
+        keys.EXTERIOR_IMAGE: robolab_keys.EXTERIOR_CAMERA,
+        keys.EXTERIOR_IMAGE_2: robolab_keys.EXTERIOR_2_CAMERA,
+        keys.WRIST_IMAGE: robolab_keys.WRIST_CAMERA,
+    }

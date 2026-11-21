@@ -69,6 +69,12 @@ _ROBOT_EVALS = {
 }
 
 
+def _task_lib_paths(task_libs: str | Path | Sequence[str | Path]) -> tuple[Path, ...]:
+    """Each task library directory as an absolute path; one path alone is a list of one."""
+    libs = [task_libs] if isinstance(task_libs, str | Path) else task_libs
+    return tuple(Path(lib).expanduser().resolve() for lib in libs)
+
+
 @cfn.config(
     robot=robolab_keys.DROID,
     cameras=None,
@@ -111,9 +117,9 @@ def _robolab_eval(
     ``batch_size`` is how many evals start each batch on that server; the server builds that many clones for them.
     Without it, a batch waits for every clone of the server.
 
-    ``task_libs`` are task library directories on the host that runs the env server (see
-    ``positronic.simulator.robolab.task_catalog``). ``task`` then may name their tasks, which no category and no
-    ``None`` sweep includes. A shared ``env_server`` must already serve the same libraries.
+    ``task_libs`` are task library directories on the env server's host (``positronic.simulator.robolab.task_catalog``);
+    ``task`` may name their tasks, and no category or ``None`` sweep includes them. A shared ``env_server`` must
+    serve the same libraries.
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name, instruction type and episode length override ride each trial's
@@ -128,7 +134,7 @@ def _robolab_eval(
     robot_eval = _ROBOT_EVALS[robot]
     camera_dict = robot_eval.camera_dict(robolab_keys.camera_set(robot, cameras))
     if env_server is None:
-        serve = serve_robolab(cameras, robot=robot, task_libs=tuple(Path(lib) for lib in task_libs))
+        serve = serve_robolab(cameras, robot=robot, task_libs=_task_lib_paths(task_libs))
     else:
         serve = nullcontext(env_server_address(env_server))
     proxy = RemoteEnvControlSystem(robot_eval.adapter(camera_dict), serve, batch_size)

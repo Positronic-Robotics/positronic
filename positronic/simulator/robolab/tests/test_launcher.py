@@ -8,6 +8,7 @@ import contextlib
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
@@ -271,3 +272,31 @@ def test_a_directory_without_task_metadata_fails_before_any_spawn(spawned, tmp_p
             pass
 
     assert spawned == []
+
+
+@pytest.fixture
+def served_libs(monkeypatch) -> list[Any]:
+    """The ``task_libs`` each eval hands ``serve_robolab``, with no server launched."""
+    served: list[Any] = []
+
+    def serve(cameras, **kwargs):
+        served.append(kwargs['task_libs'])
+        return nullcontext(('localhost', 0))
+
+    monkeypatch.setattr(robolab_cfg, 'serve_robolab', serve)
+    return served
+
+
+def test_one_task_library_path_is_one_library(served_libs, tmp_path):
+    robolab_cfg.benchmark.override(task_libs=str(tmp_path)).instantiate()
+
+    assert served_libs == [(tmp_path.resolve(),)]
+
+
+def test_each_task_library_path_is_absolute_with_the_home_expanded(served_libs, tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    robolab_cfg.benchmark.override(task_libs=['~/a', 'b']).instantiate()
+
+    assert served_libs == [(tmp_path.resolve() / 'a', tmp_path.resolve() / 'b')]

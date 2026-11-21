@@ -24,7 +24,6 @@ The wire contract:
 
 import argparse
 import functools
-import importlib.util
 import math
 import os
 import sys
@@ -44,7 +43,7 @@ import torch
 import yam_spec
 from isaaclab.app import AppLauncher
 from server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
-from task_catalog import TaskCatalog
+from task_catalog import TaskCatalog, camera_sets
 
 
 class _NoopTelemetry:
@@ -151,35 +150,13 @@ def _load_robot_meta() -> dict[str, Any]:
         return protocol.decode(f.read())
 
 
-def _camera_presets(task_libs: list[Path]) -> dict[str, list[Any]]:
-    """Every camera set by name: RoboLab's presets, and the sets each task library's ``cameras.py`` returns."""
-    presets: dict[str, list[Any]] = {
-        keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
-        keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
-        keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
-    }
-    for index, lib in enumerate(task_libs):
-        path = lib / 'cameras.py'
-        if not path.is_file():
-            continue
-        spec = importlib.util.spec_from_file_location(f'task_lib_cameras_{index}', path)
-        assert spec is not None and spec.loader is not None  # a file that exists always yields a spec
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        presets.update(module.camera_sets())
-    return presets
-
-
 @contextmanager
-def _no_table_fixture(library_task: bool) -> Iterator[None]:
+def _no_table_fixture() -> Iterator[None]:
     """Register a task library's task on no robot table fixture: its scene holds the robot base.
 
     RoboLab spawns the table fixture that the robot cfg names (``DroidCfg.table_fixture``) into every task scene
     when the task registers.
     """
-    if not library_task:
-        yield
-        return
     fixture, DroidCfg.table_fixture = DroidCfg.table_fixture, None
     try:
         yield
@@ -545,14 +522,19 @@ class DroidEnv(RobolabEnv):
         self._eef_frame_idx = None
         self._eef_offset_rot = None
         self._far_past_limit_solves: list[int] = []  # per slot, this episode's IK solves with a joint far past a limit
-        presets = _camera_presets(args.task_lib)
-        if args.cameras not in presets:
-            raise ValueError(f'camera set {args.cameras!r} needs a task library whose cameras.py places it')
-        self._cameras = presets[args.cameras]
+        presets = {
+            keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
+            keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
+            keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
+        }
+        sets = camera_sets(args.task_lib, presets)
+        if args.cameras not in sets:
+            raise ValueError(f'no task library gives the camera set {args.cameras!r}; this server has {sorted(sets)}')
+        self._cameras = sets[args.cameras]
 
     def _register(self, task: str) -> None:
         # A library task registers by its file path; RoboLab names the env by the Task class in that file.
-        with _no_table_fixture(task in self._catalog.library):
+        with _no_table_fixture() if task in self._catalog.library else nullcontext():
             auto_register_droid_envs(task=[self._catalog.register_target(task)], cameras=self._cameras)
 
     def _bind_robot(self) -> None:

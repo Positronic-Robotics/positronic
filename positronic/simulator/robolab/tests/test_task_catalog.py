@@ -1,4 +1,4 @@
-"""Which tasks a RoboLab env server holds once it has task libraries: a library adds tasks by name only."""
+"""Which tasks and camera sets a RoboLab env server holds once it has task libraries: a library adds them by name."""
 
 import json
 from pathlib import Path
@@ -6,10 +6,7 @@ from typing import Any
 
 import pytest
 
-from positronic import keys
-from positronic.cfg.eval.sim import robolab as robolab_cfg
-from positronic.simulator.robolab import keys as robolab_keys
-from positronic.simulator.robolab.task_catalog import METADATA, TaskCatalog
+from positronic.simulator.robolab.task_catalog import METADATA, TaskCatalog, camera_sets
 
 CATEGORIES = {'counting': 'relational', 'color': 'visual'}
 
@@ -40,8 +37,12 @@ def benchmark(tmp_path) -> Path:
 def library(tmp_path) -> Path:
     lib = _write(tmp_path / 'lib', [_entry('LabTask', 'counting', '300', 'lab_task.py')])
     (lib / 'tasks').mkdir()
-    (lib / 'tasks' / 'lab_task.py').write_text('')
+    (lib / 'tasks' / 'lab_task.py').write_text(_task_class('LabTask'))
     return lib
+
+
+def _task_class(name: str) -> str:
+    return f'class {name}:\n    pass\n'
 
 
 def test_a_library_task_runs_by_its_name_with_its_own_budget(benchmark, library):
@@ -65,7 +66,7 @@ def test_no_category_and_no_whole_benchmark_sweep_picks_up_a_library_task(benchm
 def _library(root: Path, name: str, filename: str) -> Path:
     lib = _write(root, [_entry(name, 'counting', filename=filename)])
     (lib / 'tasks').mkdir()
-    (lib / 'tasks' / filename).write_text('')
+    (lib / 'tasks' / filename).write_text(_task_class(name))
     return lib
 
 
@@ -77,7 +78,8 @@ def test_a_library_task_named_as_a_benchmark_task_fails_at_load_and_names_both(b
 
     message = str(refused.value)
     assert str(lib / 'tasks' / 'count_task.py') in message
-    assert "RoboLab benchmark task 'CountTask'" in message
+    assert message.count("'CountTask'") == 1
+    assert 'RoboLab benchmark' in message
 
 
 def test_two_libraries_may_not_define_one_task_and_the_error_names_both_files(benchmark, tmp_path):
@@ -106,11 +108,47 @@ def test_an_unknown_name_names_itself_in_the_error(benchmark, library):
         catalog.select(['LabTask', 'NoSuchTask'])
 
 
-def test_the_exterior_pair_set_binds_both_exteriors_and_the_wrist():
-    wire = robolab_cfg._droid_camera_dict(robolab_keys.camera_set(robolab_keys.DROID, robolab_keys.EXTERIOR_PAIR_WRIST))
+def test_a_task_file_whose_class_is_not_the_metadata_name_fails_at_load(benchmark, tmp_path):
+    lib = _write(tmp_path / 'renamed', [_entry('LabTask', 'counting', filename='lab_task.py')])
+    (lib / 'tasks').mkdir()
+    (lib / 'tasks' / 'lab_task.py').write_text(_task_class('BananaInBowlTask'))
 
-    assert wire == {
-        keys.EXTERIOR_IMAGE: robolab_keys.EXTERIOR_CAMERA,
-        keys.EXTERIOR_IMAGE_2: robolab_keys.EXTERIOR_2_CAMERA,
-        keys.WRIST_IMAGE: robolab_keys.WRIST_CAMERA,
-    }
+    with pytest.raises(ValueError, match="no class 'LabTask'"):
+        TaskCatalog.load(benchmark, [lib], CATEGORIES)
+
+
+def _cameras(lib: Path, sets: dict[str, list[str]]) -> Path:
+    lib.mkdir(parents=True, exist_ok=True)
+    (lib / 'cameras.py').write_text(f'def camera_sets():\n    return {sets!r}\n')
+    return lib
+
+
+def test_a_library_camera_set_joins_the_presets(tmp_path):
+    lib = _cameras(tmp_path / 'lib', {'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']})
+    plain = tmp_path / 'plain'
+    plain.mkdir()
+
+    sets = camera_sets([lib, plain], {'wrist_left': ['left', 'wrist']})
+
+    assert sets == {'wrist_left': ['left', 'wrist'], 'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']}
+
+
+def test_a_library_camera_set_may_not_replace_a_preset(tmp_path):
+    lib = _cameras(tmp_path / 'lib', {'wrist_left': ['ext', 'wrist']})
+
+    with pytest.raises(ValueError, match="'wrist_left'") as refused:
+        camera_sets([lib], {'wrist_left': ['left', 'wrist']})
+
+    assert str(lib / 'cameras.py') in str(refused.value)
+
+
+def test_two_libraries_may_not_return_one_camera_set_and_the_error_names_both_files(tmp_path):
+    first = _cameras(tmp_path / 'first', {'exterior_pair_wrist': ['a']})
+    second = _cameras(tmp_path / 'second', {'exterior_pair_wrist': ['b']})
+
+    with pytest.raises(ValueError) as refused:
+        camera_sets([first, second], {})
+
+    message = str(refused.value)
+    assert str(first / 'cameras.py') in message
+    assert str(second / 'cameras.py') in message

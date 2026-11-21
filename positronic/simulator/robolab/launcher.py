@@ -156,7 +156,9 @@ def main() -> None:
     )
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
-    parser.add_argument('--task-lib', type=Path, action='append', default=[], help='a task library directory')
+    parser.add_argument(
+        '--task-lib', type=Path, action='append', default=[], help='a task library directory; repeatable'
+    )
     args = parser.parse_args()
     cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
     proc = _spawn(args.host, args.port, args.robot, cameras, args.max_envs, args.join_deadline, tuple(args.task_lib))

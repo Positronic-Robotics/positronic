@@ -1,23 +1,21 @@
-"""The tasks a RoboLab env server can build: RoboLab's own benchmark and the tasks of each task library it was given.
+"""The tasks and camera sets a RoboLab env server can build: RoboLab's own, and those of each task library it was given.
 
-A task library is a directory outside the RoboLab checkout that holds ``tasks/<file>.py`` (one RoboLab ``Task``
-class each, as RoboLab's own task files), ``_metadata/task_metadata.json`` in RoboLab's metadata schema, and the
-scenes and assets its tasks load. It may also hold ``cameras.py``, whose ``camera_sets()`` returns camera sets by
-name, as RoboLab's ``camera_presets`` holds them.
-
-A library scene holds the robot base, so the env server registers a library task on no robot table fixture
-(RoboLab 0.3 and later spawn the fixture of the robot cfg otherwise).
-
-The env server reads this module as a top-level ``task_catalog`` from its own directory, as it reads ``keys``, so it
-imports nothing from positronic or Isaac Lab.
+A task library is a directory that holds ``tasks/<file>.py`` with one RoboLab ``Task`` class each, named as its
+entry in ``_metadata/task_metadata.json`` (RoboLab's metadata schema), the scenes and assets its tasks load, and
+optionally ``cameras.py``, whose ``camera_sets()`` returns camera sets by name. The env server imports this module as
+a top-level ``task_catalog`` from its own directory, so it imports nothing from positronic or Isaac Lab.
 """
 
+import ast
+import importlib.util
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 METADATA = Path('_metadata') / 'task_metadata.json'
+CAMERAS = 'cameras.py'
 
 
 @dataclass(frozen=True)
@@ -52,6 +50,10 @@ def _read(metadata: Path, category_map: dict[str, str]) -> list[tuple[CatalogTas
     return tasks
 
 
+def _defines_class(file: Path, name: str) -> bool:
+    return any(isinstance(node, ast.ClassDef) and node.name == name for node in ast.parse(file.read_text()).body)
+
+
 @dataclass(frozen=True)
 class TaskCatalog:
     benchmark: dict[str, CatalogTask]
@@ -67,17 +69,17 @@ class TaskCatalog:
                 file = lib / 'tasks' / filename
                 # RoboLab names a task's env by its class, so one class name in two places registers one env twice.
                 if task.name in benchmark:
-                    raise ValueError(
-                        f'{file} defines {task.name!r}, the name of the RoboLab benchmark task {task.name!r}'
-                    )
+                    raise ValueError(f'{file} defines {task.name!r}, which is also a task of the RoboLab benchmark')
                 if task.name in library:
                     raise ValueError(f'{file} and {library[task.name].file} both define the task {task.name!r}')
                 if not file.is_file():
                     raise FileNotFoundError(f'task library {lib} names {task.name!r} in {file}, which does not exist')
+                if not _defines_class(file, task.name):
+                    raise ValueError(f'{file} defines no class {task.name!r}, the task name its metadata gives')
                 library[task.name] = LibraryTask(task, file)
         return cls(benchmark, library, frozenset(category_map.values()))
 
-    def select(self, selection: Any) -> list[CatalogTask]:
+    def select(self, selection: str | Sequence[str] | None) -> list[CatalogTask]:
         """The tasks ``selection`` names: a category, a task name, or a list of names; ``None`` is the whole
         benchmark. A category or ``None`` selects benchmark tasks only, so a library never changes a benchmark
         sweep; a library task runs only by its name."""
@@ -104,3 +106,25 @@ class TaskCatalog:
         names the env by the class in it), the name itself for a benchmark task."""
         lib_task = self.library.get(name)
         return name if lib_task is None else str(lib_task.file)
+
+
+def camera_sets(task_libs: Sequence[Path], presets: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    """RoboLab's camera ``presets`` and each set that a task library's ``cameras.py`` returns, by name.
+
+    A set name that RoboLab or another library already gives raises ``ValueError``.
+    """
+    sets = dict(presets)
+    sources: dict[str, Path | str] = dict.fromkeys(presets, 'RoboLab')
+    for index, lib in enumerate(task_libs):
+        path = lib / CAMERAS
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location(f'task_lib_cameras_{index}', path)
+        assert spec is not None and spec.loader is not None  # a file that exists always yields a spec
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for name, cameras in module.camera_sets().items():
+            if name in sets:
+                raise ValueError(f'{path} returns the camera set {name!r}, which {sources[name]} already gives')
+            sets[name], sources[name] = cameras, path
+    return sets
