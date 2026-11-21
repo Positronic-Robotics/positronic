@@ -175,6 +175,15 @@ class TestButtonMap:
     def test_the_trigger_is_the_grip(self):
         assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
 
+    def test_a_hold_does_not_count_the_time_the_controller_is_not_tracked(self):
+        buttons = ButtonMap(HOLD_SEC)
+        assert buttons.events(_buttons(b=1.0), 0) == []
+        buttons.lose()
+        assert buttons.events(_buttons(b=1.0), 300_000_000) == []
+        assert buttons.events(_buttons(), 310_000_000) == []
+        assert buttons.events(_buttons(b=1.0), 320_000_000) == []
+        assert buttons.events(_buttons(b=1.0), 620_000_000) == [Event.COMPLETE]
+
     def test_the_map_of_the_left_controller_reads_only_x(self):
         buttons = ButtonMap(HOLD_SEC, buttons=(Button.X,))
         assert buttons.ready_answer(_buttons(b=1.0), 0) is None
@@ -382,6 +391,24 @@ def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_targe
         assert _moves(steps)
         for step in _moves(steps):
             np.testing.assert_allclose(_target(step).translation, _target(moved).translation, atol=1e-6)
+        run.close()
+
+
+def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds(service, socket_path, runtime):
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        headset.press(a=1.0)
+        headset.buttons = _buttons(trigger=0.8)
+        held = _drive_until(run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(0.8))
+        headset.buttons = []
+        headset.pose = _raised(HAND)
+        _drive_until(run, lambda _: not service.state().control)
+        headset._samples(3)
+        steps, end = _drive(run, 0.3)
+        assert end is None and _moves(steps)
+        for step in _moves(steps):
+            np.testing.assert_allclose(_target(step).translation, _target(held).translation, atol=1e-6)
+            assert step.commands[keys.TARGET_GRIP] == pytest.approx(0.8)
         run.close()
 
 
