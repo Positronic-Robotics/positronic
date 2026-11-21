@@ -5,6 +5,7 @@ import importlib.util
 import inspect
 import sys
 import types
+import typing
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -348,7 +349,7 @@ def _camera(module, sdk: DroppingSdk, frames: RecordingEmitter, **settings):
         Mat=FakeMat,
         RESOLUTION=types.SimpleNamespace(AUTO='auto'),
         VIEW=types.SimpleNamespace(LEFT='left', LEFT_UNRECTIFIED='left_unrectified'),
-        DEPTH_MODE=types.SimpleNamespace(NONE='none', ULTRA='ultra'),
+        DEPTH_MODE=types.SimpleNamespace(NONE='none', NEURAL='neural'),
         MEASURE=types.SimpleNamespace(DEPTH='depth'),
         UNIT=types.SimpleNamespace(METER='meter'),
         TIME_REFERENCE=types.SimpleNamespace(IMAGE='image', CURRENT='current'),
@@ -940,10 +941,10 @@ def test_a_camera_reopened_after_a_near_black_fault_gets_the_full_limit_again(ze
 
 
 def _depth_images(module, **settings) -> list[np.ndarray]:
-    """The depth images that a camera with the depth mode `ultra` and ``settings`` sends in 0.1 s."""
+    """The depth images that a camera with the depth mode `neural` and ``settings`` sends in 0.1 s."""
     clock, stop, depths = MockClock(), StopFlag(), RecordingEmitter()
     sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER)
-    camera = _camera(module, sdk, RecordingEmitter(), depth_mode='ultra', **settings)
+    camera = _camera(module, sdk, RecordingEmitter(), depth_mode='neural', **settings)
     camera.depth._bind(depths, clock=clock)
     _drive(camera.run(stop, clock), clock, until=0.1)
     return [adapter.array for _, adapter in depths.emitted]
@@ -974,7 +975,7 @@ def test_depth_in_metres_is_zero_where_the_sdk_has_no_depth(zed_module):
 @pytest.mark.parametrize('view', ['right', 'side_by_side'])
 def test_a_metric_depth_format_refuses_a_view_other_than_the_left_view(zed_module, depth_format, view):
     with pytest.raises(ValueError, match='Set view="left"'):
-        zed_module.SLCamera(serial_number=SERIAL, depth_mode='ultra', depth_format=depth_format, view=view)
+        zed_module.SLCamera(serial_number=SERIAL, depth_mode='neural', depth_format=depth_format, view=view)
 
 
 def test_a_depth_format_that_the_driver_does_not_know_is_refused(zed_module):
@@ -1006,3 +1007,10 @@ def test_a_mono_camera_sends_no_intrinsics(zed_module):
     camera.left_intrinsics._bind(intrinsics, clock=clock)
     _drive(camera.run(stop, clock), clock, until=0.1)
     assert not intrinsics.emitted
+
+
+def test_each_depth_mode_of_the_driver_is_a_depth_mode_of_the_installed_sdk():
+    sl = pytest.importorskip('pyzed.sl', exc_type=ImportError)
+    zed = importlib.import_module('positronic.drivers.camera.zed')
+    depth_mode = inspect.signature(zed.SLCamera).parameters['depth_mode'].annotation
+    assert {name.upper() for name in typing.get_args(depth_mode)} <= set(sl.DEPTH_MODE.__members__)

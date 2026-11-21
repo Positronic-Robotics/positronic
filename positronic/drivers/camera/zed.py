@@ -119,7 +119,9 @@ class SLCamera(pimm.ControlSystem):
         resolution: Literal[
             'hd4k', 'qhdplus', 'hd2k', 'hd1080', 'hd1200', 'hd1536', 'hd720', 'svga', 'vga', 'auto'
         ] = 'auto',
-        depth_mode: Literal['none', 'near', 'far', 'high', 'ultra'] = 'none',
+        depth_mode: Literal[
+            'none', 'performance', 'quality', 'ultra', 'neural_light', 'neural', 'neural_plus'
+        ] = 'none',
         max_depth: float = 10,
         depth_format: Literal['uint8', 'uint16_mm', 'float32_m'] = 'uint8',
         depth_mask: bool = False,
@@ -561,7 +563,7 @@ class SLCamera(pimm.ControlSystem):
         if self.depth.num_bound > 0 and self._depth_mode == sl.DEPTH_MODE.NONE:
             raise RuntimeError(
                 'depth channel is connected but depth_mode is "none". '
-                'Set depth_mode to "near", "far", "high", or "ultra" to enable depth.'
+                'Set depth_mode to a mode other than "none" to enable depth.'
             )
 
         if self.depth_mask.num_bound > 0 and not depth_mask_enabled:
