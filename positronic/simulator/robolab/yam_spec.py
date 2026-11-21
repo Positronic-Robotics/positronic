@@ -90,6 +90,8 @@ FINGER_BOXES = {
     'pad': {'center': (0.0, -0.004, -0.112), 'size': (0.018, 0.008, 0.068)},
     'carriage': {'center': (0.0, -0.0125, -0.078), 'size': (0.068, 0.021, 0.024)},
 }
+# The point midway between the pads of one hand, in the wrist link.
+PAD_MIDDLE_IN_WRIST = (FINGER_BOXES['pad']['center'][0], 0.0, FINGER_BOXES['pad']['center'][2])
 
 # The 14 action values: per arm the six joint targets in rad, then the grip (0 open, 1 closed, linear between).
 ACTION_TERMS = tuple(

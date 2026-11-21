@@ -726,8 +726,7 @@ def _grasp_point(env: YamEnv, side: str) -> torch.Tensor:
     """The world point between the pads of ``side``'s hand, at the middle of the pads."""
     data = env._robot.data
     body = data.body_names.index(f'{side}_{yam_spec.WRIST_LINK}')
-    x, _y, z = yam_spec.FINGER_BOXES['pad']['center']
-    in_wrist = torch.tensor([[x, 0.0, z]], dtype=torch.float32, device=data.body_pos_w.device)
+    in_wrist = torch.tensor([yam_spec.PAD_MIDDLE_IN_WRIST], dtype=torch.float32, device=data.body_pos_w.device)
     return data.body_pos_w[0, body] + quat_apply(data.body_quat_w[0:1, body], in_wrist)[0]
 
 
