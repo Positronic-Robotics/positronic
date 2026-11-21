@@ -122,19 +122,30 @@ def test_the_pads_meet_on_the_wrist_axis_when_closed_and_open_95_mm(model, side)
 def test_the_robolab_labels_name_links_and_joints_of_the_urdf(urdf):
     links = {link.attrib['name'] for link in urdf.findall('link')}
     joints = {joint.attrib['name'] for joint in urdf.findall('joint')}
-    assert spec.CONTACT_GRIPPER[spec.CONTACT_GRIPPERS] == list(spec.SIDES)
-    for side in spec.SIDES:
-        assert spec.CONTACT_GRIPPER[side].removeprefix('{ENV_REGEX_NS}/robot/') in links
+    fingers = [spec.finger_label(side, finger) for side in spec.SIDES for finger in spec.FINGER_LINKS]
+    for label in fingers:
+        assert spec.CONTACT_GRIPPER[label].removeprefix('{ENV_REGEX_NS}/robot/') in links
     assert set(spec.EE_RECORDER_BODIES.values()) <= links
     assert {entry['joint'] for entry in spec.GRIPPER_CLOSURE.values()} <= joints
     assert {joint for _, names in spec.ACTION_TERMS for joint in names} <= joints
     assert {camera.parent for camera in spec.CAMERAS.values()} <= links
 
 
+def test_the_contact_groups_cover_every_finger_of_their_hands():
+    """The groups are flat, as RoboLab takes them: each names fingers only, and the gripper group names all four."""
+    fingers = {label for label, target in spec.CONTACT_GRIPPER.items() if isinstance(target, str)}
+    assert len(fingers) == len(spec.SIDES) * len(spec.FINGER_LINKS)
+    for side in spec.SIDES:
+        assert spec.CONTACT_GRIPPER[side] == [spec.finger_label(side, finger) for finger in spec.FINGER_LINKS]
+    assert set(spec.CONTACT_GRIPPER[spec.CONTACT_GRIPPERS]) == fingers
+    assert len(spec.CONTACT_GRIPPER[spec.CONTACT_GRIPPERS]) == len(fingers)
+
+
 def test_the_stand_is_under_the_plate_and_reaches_the_table_top():
     (x0, x1), (y0, y1), (_z0, z1) = spec.STAND_X, spec.STAND_Y, spec.STAND_Z
+    # The stand front is the plate front, so the bound takes float round-off.
     assert x0 <= spec.PLATE_CENTER_X - spec.PLATE_SIZE[0] / 2
-    assert spec.PLATE_CENTER_X + spec.PLATE_SIZE[0] / 2 <= x1
+    assert spec.PLATE_CENTER_X + spec.PLATE_SIZE[0] / 2 <= x1 + 1e-9
     assert y0 <= -spec.PLATE_SIZE[1] / 2 and spec.PLATE_SIZE[1] / 2 <= y1
     assert z1 == 0.0
     assert 'PhysicsCollisionAPI' in spec.stand_usda()
@@ -165,7 +176,9 @@ _HOLD = {protocol.COMMAND_TYPE: protocol.HOLD}
 def test_the_action_holds_each_arm_then_its_grip_in_the_term_order():
     left, right = np.full(6, 0.5, dtype=np.float32), np.full(6, -0.5, dtype=np.float32)
 
-    action, grips = spec.action(_wire(_joint_command(left), _joint_command(right), (1.0, 0.0)), _MEASURED, np.zeros(2))
+    action, grips, _ = spec.action(
+        _wire(_joint_command(left), _joint_command(right), (1.0, 0.0)), _MEASURED, np.zeros(2)
+    )
 
     assert spec.ACTION_DIM == action.shape[0] == 14
     assert [name for name, _ in spec.ACTION_TERMS] == ['left_arm', 'left_gripper', 'right_arm', 'right_gripper']
@@ -176,7 +189,7 @@ def test_the_action_holds_each_arm_then_its_grip_in_the_term_order():
 def test_a_joint_delta_moves_from_the_measured_joints_and_a_hold_keeps_them():
     delta = {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: np.full(6, 0.25)}
 
-    action, _ = spec.action(_wire(delta, _HOLD), _MEASURED, np.zeros(2))
+    action = spec.action(_wire(delta, _HOLD), _MEASURED, np.zeros(2)).values
 
     np.testing.assert_allclose(action[:6], _MEASURED[0] + 0.25)
     np.testing.assert_array_equal(action[7:13], _MEASURED[1])
@@ -192,7 +205,7 @@ def _joint_delta(dq) -> dict:
     ids=['not finite', 'wrong width', 'delta too wide', 'delta too narrow'],
 )
 def test_an_arm_holds_its_measured_joints_on_a_command_the_rig_refuses_and_a_warning_names_it(command, caplog):
-    action, _ = spec.action(_wire(command, _HOLD), _MEASURED, np.zeros(2))
+    action = spec.action(_wire(command, _HOLD), _MEASURED, np.zeros(2)).values
 
     np.testing.assert_array_equal(action[:6], _MEASURED[0])
     (record,) = caplog.records
@@ -200,24 +213,41 @@ def test_an_arm_holds_its_measured_joints_on_a_command_the_rig_refuses_and_a_war
 
 
 def test_an_arm_keeps_its_last_grip_when_the_wire_grip_is_not_finite():
-    action, grips = spec.action(_wire(_HOLD, _HOLD, (float('nan'), 1.0)), _MEASURED, np.array([1.0, 0.0]))
+    action, grips, _ = spec.action(_wire(_HOLD, _HOLD, (float('nan'), 1.0)), _MEASURED, np.array([1.0, 0.0]))
 
     assert (action[6], action[13]) == (1.0, 1.0)
     np.testing.assert_array_equal(grips, [1.0, 1.0])
 
 
-@pytest.mark.parametrize('kind', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
-def test_a_pose_command_holds_the_arm_with_a_warning_and_the_other_arm_moves(kind, caplog):
+def _pose_command(kind: str) -> dict:
     field = protocol.COMMAND_POSE if kind == protocol.CARTESIAN else protocol.COMMAND_DELTA
-    command = {protocol.COMMAND_TYPE: kind, field: np.concatenate([np.full(3, 0.1), np.eye(3).reshape(-1)])}
+    return {protocol.COMMAND_TYPE: kind, field: np.concatenate([np.full(3, 0.1), np.eye(3).reshape(-1)])}
+
+
+@pytest.mark.parametrize('kind', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
+def test_a_pose_command_holds_its_arm_with_no_log_and_the_other_arm_moves(kind, caplog):
     target = np.full(6, 0.3, dtype=np.float32)
 
-    action, _ = spec.action(_wire(command, _joint_command(target)), _MEASURED, np.zeros(2))
+    action = spec.action(_wire(_pose_command(kind), _joint_command(target)), _MEASURED, np.zeros(2))
 
-    np.testing.assert_array_equal(action[:6], _MEASURED[0])
-    np.testing.assert_array_equal(action[7:13], target)
-    (record,) = caplog.records
-    assert f'{kind} command not applied, the {spec.LEFT} arm holds' in record.getMessage()
+    np.testing.assert_array_equal(action.values[:6], _MEASURED[0])
+    np.testing.assert_array_equal(action.values[7:13], target)
+    assert action.pose_refused == (spec.LEFT,)
+    assert not caplog.records
+
+
+def test_an_episode_of_pose_commands_warns_once_per_arm_and_reports_the_count_per_clone_and_arm():
+    refusals = spec.PoseRefusals(num_envs=2)
+    wire = _wire(_pose_command(protocol.CARTESIAN), _pose_command(protocol.CARTESIAN_DELTA))
+
+    warnings = [w for _ in range(50) for w in refusals.add(1, spec.action(wire, _MEASURED, np.zeros(2)).pose_refused)]
+
+    assert len(warnings) == 2
+    assert all(spec.JOINT_COMMANDS_ONLY in w for w in warnings)
+    assert refusals.report() == [
+        f'slot 1: the {side} arm held on a pose command on 50 steps, as {spec.JOINT_COMMANDS_ONLY}'
+        for side in spec.SIDES
+    ]
 
 
 def test_a_channel_of_no_arm_is_refused():

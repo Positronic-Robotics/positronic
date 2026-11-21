@@ -17,7 +17,7 @@ import math
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -46,9 +46,10 @@ FINGER_OPEN = 0.0475
 # The bases are 0.61 m apart, in line and parallel, on a 0.022 m plate, as on the rig.
 MOUNT_Y = 0.305
 PLATE_THICKNESS = 0.022
-# The plate is a box under both bases. A base footprint is x +-0.035, y +-0.1 about its mount.
-PLATE_SIZE = (0.16, 0.86)
-PLATE_CENTER_X = -0.02
+# The plate is a box under both bases, its front edge at x 0.037 as measured on the rig. A base footprint is x +-0.035,
+# y +-0.1 about its mount.
+PLATE_SIZE = (0.137, 0.86)
+PLATE_CENTER_X = -0.0315
 # The robot root in the world frame of the rig recordings: the mounts of ``yam_bimanual_yambox`` minus the plate.
 ROOT_IN_RIG_WORLD = (0.30, 0.0, 0.3125 - PLATE_THICKNESS)
 
@@ -113,12 +114,21 @@ def proprio_term(side: str, term: str) -> str:
     return f'{side}_{term}'
 
 
-# The RoboLab labels. A contact sensor label must match one prim per env, so each hand names one finger. The group
-# ``CONTACT_GRIPPERS`` covers both hands.
+def finger_label(side: str, finger: str) -> str:
+    return f'{side}_{finger}'
+
+
+# The RoboLab labels. A contact sensor label must match one prim per env, so each finger has a label of its own. The
+# group of a side covers both fingers of that hand, and the group ``CONTACT_GRIPPERS`` covers all four fingers.
 CONTACT_GRIPPERS = 'gripper'
 CONTACT_GRIPPER = {
-    **{side: f'{{ENV_REGEX_NS}}/robot/{side}_{FINGER_LINKS[0]}' for side in SIDES},
-    CONTACT_GRIPPERS: list(SIDES),
+    **{
+        finger_label(side, finger): f'{{ENV_REGEX_NS}}/robot/{side}_{finger}'
+        for side in SIDES
+        for finger in FINGER_LINKS
+    },
+    **{side: [finger_label(side, finger) for finger in FINGER_LINKS] for side in SIDES},
+    CONTACT_GRIPPERS: [finger_label(side, finger) for side in SIDES for finger in FINGER_LINKS],
 }
 EE_RECORDER_BODIES = {f'{side}_ee_pose': f'{side}_{GRIPPER_SITE}' for side in SIDES}
 GRIPPER_CLOSURE = {
@@ -127,7 +137,7 @@ GRIPPER_CLOSURE = {
 }
 
 # The robot stand: a static box under the plate, from the plate down past the floor (robot frame).
-STAND_X = (-0.25, 0.06)
+STAND_X = (-0.25, 0.037)
 STAND_Y = (-0.50, 0.50)
 STAND_Z = (-0.75, 0.0)
 
@@ -362,22 +372,30 @@ def Xform "yam_stand"
 # ---- the action ----
 
 
-def _no_ik(*_pose: Any) -> None:
-    # TODO: a numpy IK of the YAM arm beside ``pose_ik``, tested against ``YamKinematics``, solves pose commands.
-    return None
+# TODO: a numpy IK of the YAM arm beside ``pose_ik``, tested against ``YamKinematics``, solves pose commands.
+JOINT_COMMANDS_ONLY = 'the RoboLab YAM env takes joint commands only'
+_POSE_COMMANDS = (protocol.CARTESIAN, protocol.CARTESIAN_DELTA)
 
 
-def _no_eef() -> tuple[np.ndarray, np.ndarray]:
-    # A Cartesian delta composes onto this pose, and ``_no_ik`` solves no pose.
-    return np.zeros(3), np.eye(3)
+def _no_pose(*_args: Any) -> Any:
+    raise AssertionError('action holds an arm on a pose command before arm_targets')
 
 
-def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """One clone's 14 action values in ``ACTION_TERMS`` order, and the grip of each arm, from the clone's wire action.
+class Action(NamedTuple):
+    """One clone's action: the 14 values in ``ACTION_TERMS`` order, the grip of each arm, and the arms that hold on a
+    pose command."""
+
+    values: np.ndarray
+    grips: np.ndarray
+    pose_refused: tuple[str, ...]
+
+
+def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> Action:
+    """One clone's action, from the clone's wire action.
 
     ``measured`` holds the measured joints of each arm in ``SIDES`` order, ``(2, 6)``. ``grips`` holds the last grip
     of each arm, which an arm keeps when its wire grip is not finite. A wire grip is in [0, 1], 1 closed, and goes in as
-    it is.
+    it is. An arm holds on a pose command, with no log: ``PoseRefusals`` reports it.
     """
     channels = {
         protocol.arm_channel(name, side) for side in SIDES for name in (protocol.ROBOT_COMMAND, protocol.TARGET_GRIP)
@@ -385,12 +403,46 @@ def action(wire: dict[str, Any], measured: np.ndarray, grips: np.ndarray) -> tup
     extra = set(wire) - channels
     if extra:
         raise ValueError(f'the RoboLab YAM robot cannot act on channels {sorted(extra)}')
-    values, new_grips = [], []
+    values, new_grips, pose_refused = [], [], []
     for i, side in enumerate(SIDES):
         grip = float(wire[protocol.arm_channel(protocol.TARGET_GRIP, side)])
         grip = grip if math.isfinite(grip) else float(grips[i])
         command = wire[protocol.arm_channel(protocol.ROBOT_COMMAND, side)]
-        targets = arm_action.arm_targets(command, measured[i], ik=_no_ik, read_eef=_no_eef, arm=side)
-        values += [targets.q, [grip]]
+        if command[protocol.COMMAND_TYPE] in _POSE_COMMANDS:
+            targets = np.asarray(measured[i], dtype=np.float32)
+            pose_refused.append(side)
+        else:
+            targets = arm_action.arm_targets(command, measured[i], ik=_no_pose, read_eef=_no_pose, arm=side).q
+        values += [targets, [grip]]
         new_grips.append(grip)
-    return np.concatenate(values).astype(np.float32), np.asarray(new_grips, dtype=np.float32)
+    return Action(
+        np.concatenate(values).astype(np.float32), np.asarray(new_grips, dtype=np.float32), tuple(pose_refused)
+    )
+
+
+class PoseRefusals:
+    """Per clone and arm, the steps of one episode on which the arm held on a pose command."""
+
+    def __init__(self, num_envs: int) -> None:
+        self._steps: list[dict[str, int]] = [dict.fromkeys(SIDES, 0) for _ in range(num_envs)]
+
+    def add(self, slot: int, sides: tuple[str, ...]) -> list[str]:
+        """Count one step of ``slot`` for each arm in ``sides``. Returns one warning per arm on its first such step."""
+        warnings = []
+        for side in sides:
+            self._steps[slot][side] += 1
+            if self._steps[slot][side] == 1:
+                warnings.append(
+                    f'slot {slot}: the {side} arm holds on a pose command, as {JOINT_COMMANDS_ONLY}; the count '
+                    'follows at the episode end'
+                )
+        return warnings
+
+    def report(self) -> list[str]:
+        """One line per clone and arm that held on a pose command in this episode."""
+        return [
+            f'slot {slot}: the {side} arm held on a pose command on {steps} steps, as {JOINT_COMMANDS_ONLY}'
+            for slot, counts in enumerate(self._steps)
+            for side, steps in counts.items()
+            if steps
+        ]

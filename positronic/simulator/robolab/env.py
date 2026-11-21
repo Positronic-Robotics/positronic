@@ -42,7 +42,8 @@ Every frame also carries the ``gt_state`` (``keys.GT_STATE``) of each slot. It h
 - for each object in the task's contact list, except the table, the pose of the object. The position is in the frame
   of the slot's scene clone (for the YAM, moved into the rig world) and the rotation is in the world frame, as for the
   eef;
-- for each of those objects, whether RoboLab's gripper contact sensor touches it (for the YAM, either hand);
+- for each of those objects, whether RoboLab's gripper contact sensor touches it (for the YAM, any finger of either
+  hand);
 - for each condition chain of the current subtask, RoboLab's own progress through the chain.
 
 The progress is what RoboLab's subtask recorder already tracks, so the record adds no condition checks.
@@ -759,6 +760,7 @@ class YamEnv(RobolabEnv):
         # The robot USD is converted once per server, into a directory of its own.
         robot_usd, stand_usd = yam_robolab.convert(Path(tempfile.mkdtemp(prefix='robolab-yam-')))
         self._register_envs = functools.partial(yam_robolab.register_envs, robot_usd=robot_usd, stand_usd=stand_usd)
+        self._pose_refusals = yam_spec.PoseRefusals(0)
 
     def _register(self, task: str) -> None:
         self._register_envs([task])
@@ -768,6 +770,7 @@ class YamEnv(RobolabEnv):
         self._joint_ids = [names.index(f'{side}_{joint}') for side in yam_spec.SIDES for joint in yam_spec.ARM_JOINTS]
         self._grip = torch.zeros(self._num_envs, len(yam_spec.SIDES), dtype=torch.float32, device=self._env.device)
         self._gripper = yam_spec.CONTACT_GRIPPERS
+        self._pose_refusals = yam_spec.PoseRefusals(self._num_envs)
 
     def _robot_meta(self) -> dict[str, Any]:
         # The client holds the arm model, so the meta holds only where each arm stands.
@@ -786,9 +789,18 @@ class YamEnv(RobolabEnv):
         # A slot with no wire action holds its measured joints and its grips.
         rows = np.concatenate([measured, self._grip.cpu().numpy()[:, :, None]], axis=2).reshape(self._num_envs, -1)
         for slot, wire in actions.items():
-            rows[slot], grips = yam_spec.action(wire, measured[slot], self._grip[slot].cpu().numpy())
-            self._grip[slot] = torch.as_tensor(grips, device=self._env.device)
+            act = yam_spec.action(wire, measured[slot], self._grip[slot].cpu().numpy())
+            rows[slot] = act.values
+            self._grip[slot] = torch.as_tensor(act.grips, device=self._env.device)
+            for warning in self._pose_refusals.add(slot, act.pose_refused):
+                print(f'{self._episode_task} episode {self._episode} {warning}', file=sys.stderr)
         return torch.as_tensor(rows, dtype=torch.float32, device=self._env.device)
+
+    def _end_episode(self) -> None:
+        """Print each arm's count of this episode's steps that held on a pose command, then zero the counts."""
+        for line in self._pose_refusals.report():
+            print(f'{self._episode_task} episode {self._episode} {line}', file=sys.stderr)
+        self._pose_refusals = yam_spec.PoseRefusals(self._num_envs)
 
     def _arm_observations(self, proprio: dict[str, Any]) -> list[dict[str, Any]]:
         # The proprio group holds no joint velocities, so they come from the articulation.
