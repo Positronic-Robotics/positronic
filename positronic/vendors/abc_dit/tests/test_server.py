@@ -347,6 +347,19 @@ def test_the_yambox_wide_top_rtc_pipeline_with_no_query_sends_the_whole_top_view
     assert len(reply) == 16
 
 
+def test_the_yambox_wide_top_rtc_real_prompts_pipeline_with_no_query_sends_the_real_prompts(tmp_path):
+    policy_server = PolicyServer(
+        _prefix_model(tmp_path), server.yambox_wide_top_rtc_real_prompts_pipeline, auth_token=TOKEN
+    )
+
+    meta, _ = _session(policy_server, _yambox_obs())
+
+    assert _log(tmp_path)[-1]['request'][abc_dit.PROMPT] == 'load the plates into the dish rack'
+    assert meta[codecs.PROMPT_PREFIX_META] == ''
+    assert meta[codecs.CROPS_META][keys.EXTERIOR_IMAGE] == [0.0, 0.0, 1.0, 1.0]
+    assert meta[codecs.PREFIX_LENGTH_META] == 4
+
+
 @pytest.mark.parametrize('query', ['crop=wider', 'schedule=async', 'sim_prefix=maybe', 'prompts=teleop', 'fps=10'])
 def test_a_session_query_with_an_unknown_value_or_name_is_refused(tmp_path, query):
     policy_server = PolicyServer(_prefix_model(tmp_path), server.yambox_crop_pipeline, auth_token=TOKEN)
