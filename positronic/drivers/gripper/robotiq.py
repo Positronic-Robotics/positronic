@@ -223,6 +223,13 @@ class _Gripper(DriverRun[float]):
         return self.hold_error(RuntimeError('the gripper did not activate'))
 
 
+def _serial_client(port: str):
+    """The Modbus RTU client of a Robotiq gripper on ``port``. It opens the port on ``connect``."""
+    return ModbusClient.ModbusSerialClient(
+        port=port, baudrate=_BAUD_RATE, bytesize=_BYTESIZE, parity=_PARITY, stopbits=_STOPBITS
+    )
+
+
 class Robotiq2F(pimm.ControlSystem):
     def __init__(self, port: str, tuning: RobotiqTuning = TUNING_2F85):
         self._port = port
@@ -332,9 +339,7 @@ class Robotiq2F(pimm.ControlSystem):
         return lost
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Command]:
-        client = ModbusClient.ModbusSerialClient(
-            port=self._port, baudrate=_BAUD_RATE, bytesize=_BYTESIZE, parity=_PARITY, stopbits=_STOPBITS
-        )
+        client = _serial_client(self._port)
         gripper = _Gripper(
             client, self._port, self.sync_move, self.target_grip, self.grip, self._tuning, should_stop, clock
         )
