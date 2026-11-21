@@ -43,16 +43,6 @@ def time_left(deadline: float) -> float:
     return max(0.0, deadline - time.monotonic())
 
 
-def _pause(seconds: float, cancelled: Callable[[], bool] | None) -> None:
-    """Sleep ``seconds``, or less once ``cancelled`` answers True. It is asked every ``CANCEL_POLL_S``."""
-    if cancelled is None:
-        time.sleep(seconds)
-        return
-    until = time.monotonic() + seconds
-    while (left := time_left(until)) > 0 and not cancelled():
-        time.sleep(min(CANCEL_POLL_S, left))
-
-
 class SessionOpeningCancelled(Exception):
     """The caller cancelled a session opening before the server answered. The last refused attempt is the cause."""
 
@@ -500,6 +490,16 @@ class InferenceClient:
         deadline = time.monotonic() + deadline_sec
         return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout), cancelled)
 
+    @staticmethod
+    def _pause(seconds: float, cancelled: Callable[[], bool] | None) -> None:
+        """Sleep ``seconds``, or less once ``cancelled`` answers True. It is asked every ``CANCEL_POLL_S``."""
+        if cancelled is None:
+            time.sleep(seconds)
+            return
+        until = time.monotonic() + seconds
+        while (left := time_left(until)) > 0 and not cancelled():
+            time.sleep(min(CANCEL_POLL_S, left))
+
     def _retry(self, deadline: float, attempt: Callable[[float], T], cancelled: Callable[[], bool] | None = None) -> T:
         """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``.
 
@@ -528,7 +528,7 @@ class InferenceClient:
                 raise not_ready
             pause = next(pauses)
             logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, pause)
-            _pause(min(pause, time_left(deadline)), cancelled)
+            self._pause(min(pause, time_left(deadline)), cancelled)
 
     def _naming_the_url(self, failure: Exception | None) -> str:
         """What ``failure`` says, with the session URL where it does not name the URL itself."""
