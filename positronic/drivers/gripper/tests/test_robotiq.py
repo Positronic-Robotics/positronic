@@ -798,3 +798,16 @@ def test_a_failed_write_keeps_the_files_of_the_closes_before_it(monkeypatch, tmp
         robotiq_grip_probe.write(record, tmp_path)
 
     assert {name: (tmp_path / name).read_bytes() for name in before} == before
+
+
+@pytest.mark.parametrize('name', ['pen.json', 'pen.csv', 'pen.txt'])
+def test_the_grip_probe_refuses_to_overwrite_any_of_its_files(monkeypatch, tmp_path, name):
+    (tmp_path / name).write_text('earlier')
+    bus = FakeBus()
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    monkeypatch.setattr('sys.argv', ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path)])
+
+    with pytest.raises(SystemExit, match=f'{name} exists'):
+        robotiq_grip_probe.main()
+    assert bus.writes == []
+    assert (tmp_path / name).read_text() == 'earlier'

@@ -145,17 +145,23 @@ def _replace(path: Path, text: str) -> None:
     os.replace(temp, path)
 
 
+def outputs(out: Path, label: str) -> tuple[Path, Path, Path]:
+    """The JSON, the CSV and the table file that the probe writes in ``out`` for ``label``."""
+    return out / f'{label}.json', out / f'{label}.csv', out / f'{label}.txt'
+
+
 def write(record: GripRecord, out: Path) -> None:
     """Write the JSON, the CSV and the table of ``record`` to ``out``."""
-    _replace(out / f'{record.label}.json', record.model_dump_json(indent=1))
+    json_path, csv_path, table_path = outputs(out, record.label)
+    _replace(json_path, record.model_dump_json(indent=1))
     rows = io.StringIO()
     writer = csv.writer(rows)
     writer.writerow(['repeat', *Sample.model_fields])
     for close in record.closes:
         for sample in close.samples:
             writer.writerow([close.repeat, *sample.model_dump(mode='json').values()])
-    _replace(out / f'{record.label}.csv', rows.getvalue())
-    _replace(out / f'{record.label}.txt', table(record))
+    _replace(csv_path, rows.getvalue())
+    _replace(table_path, table(record))
 
 
 class RobotiqGripProbe(pimm.ControlSystem):
@@ -277,8 +283,8 @@ def main() -> None:
     parser.add_argument('--out', type=Path, required=True, help='the directory for the files')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    if (args.out / f'{args.label}.json').exists():
-        raise SystemExit(f'{args.out / args.label}.json exists. Give a different --label or --out.')
+    if existing := [path for path in outputs(args.out, args.label) if path.exists()]:
+        raise SystemExit(f'{", ".join(map(str, existing))} exists. Give a different --label or --out.')
     record = GripRecord(label=args.label, speed=args.speed, force=args.force, record_s=args.record_s)
     with pimm.World() as world:
         world.run(RobotiqGripProbe(args.port, record, args.repeats, args.out, sys.stdin.fileno()))
