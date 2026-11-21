@@ -1992,6 +1992,42 @@ def test_an_inference_span_of_a_call_that_never_sent_carries_no_alone_mark(tmp_p
     assert telemetry_keys.ATTR_WIRE_SENT_ALONE not in infer.attrs
 
 
+def _wire_sends(tmp_path) -> list:
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    return sorted((s for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND), key=lambda s: s.start_ns)
+
+
+def _connection_marks(send) -> tuple:
+    return (
+        send.attrs[telemetry_keys.ATTR_WIRE_NEW_CONNECTION],
+        send.attrs.get(telemetry_keys.ATTR_WIRE_ENDPOINT),
+        telemetry_keys.ATTR_WIRE_CONNECT_MS in send.attrs,
+    )
+
+
+def test_only_the_first_send_on_a_connection_carries_the_dialed_endpoint_and_connect_time(tmp_path):
+    conn = _connection(_ready('only'), _answer({'action_data': [1]}), _answer({'action_data': [2]}))
+    fake = _FakeWire(conn)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-connection'):
+        session = InferenceClient(fake, _ADDRESS).new_session()
+        session.infer({'image': 'a'})
+        session.infer({'image': 'b'})
+    endpoint = fake.session_url(_ADDRESS)
+    assert [_connection_marks(send) for send in _wire_sends(tmp_path)] == [(True, endpoint, True), (False, None, False)]
+
+
+def test_the_first_send_after_a_reconnect_is_on_a_new_connection(tmp_path):
+    dropped = _connection(_ready('first'), wire.PeerDisconnected('dropped'))
+    reopened = _connection(_ready('second'), _answer({'action_data': [1]}), _answer({'action_data': [2]}))
+    fake = _FakeWire(dropped, reopened)
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-reconnect'):
+        session = InferenceClient(fake, _ADDRESS).new_session()
+        session.infer({'image': 'a'})
+        session.infer({'image': 'b'})
+    marks = [send.attrs[telemetry_keys.ATTR_WIRE_NEW_CONNECTION] for send in _wire_sends(tmp_path)]
+    assert marks == [True, True, False]
+
+
 @pytest.mark.parametrize('transport', ['websocket', 'grpc'])
 def test_bare_commands_cross_the_wire_as_typed_commands(start_server, make_mock_model, runtime, transport, tmp_path):
     pose = [0.4, 0.0, 0.6, 1, 0, 0, 0, 1, 0, 0, 0, 1]
