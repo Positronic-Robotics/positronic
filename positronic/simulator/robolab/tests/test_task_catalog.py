@@ -62,11 +62,34 @@ def test_no_category_and_no_whole_benchmark_sweep_picks_up_a_library_task(benchm
     assert [t.name for t in catalog.select('relational', set(CATEGORIES.values()))] == ['CountTask']
 
 
-def test_a_library_may_not_redefine_a_benchmark_task(benchmark, tmp_path):
-    lib = _write(tmp_path / 'clash', [_entry('CountTask', 'counting')])
+def _library(root: Path, name: str, filename: str) -> Path:
+    lib = _write(root, [_entry(name, 'counting', filename=filename)])
+    (lib / 'tasks').mkdir()
+    (lib / 'tasks' / filename).write_text('')
+    return lib
 
-    with pytest.raises(ValueError, match='redefines'):
+
+def test_a_library_task_named_as_a_benchmark_task_fails_at_load_and_names_both(benchmark, tmp_path):
+    lib = _library(tmp_path / 'clash', 'CountTask', 'count_task.py')
+
+    with pytest.raises(ValueError) as refused:
         TaskCatalog.load(benchmark, [lib], CATEGORIES)
+
+    message = str(refused.value)
+    assert str(lib / 'tasks' / 'count_task.py') in message
+    assert "RoboLab benchmark task 'CountTask'" in message
+
+
+def test_two_libraries_may_not_define_one_task_and_the_error_names_both_files(benchmark, tmp_path):
+    first = _library(tmp_path / 'first', 'LabTask', 'lab_task.py')
+    second = _library(tmp_path / 'second', 'LabTask', 'other_lab_task.py')
+
+    with pytest.raises(ValueError) as refused:
+        TaskCatalog.load(benchmark, [first, second], CATEGORIES)
+
+    message = str(refused.value)
+    assert str(first / 'tasks' / 'lab_task.py') in message
+    assert str(second / 'tasks' / 'other_lab_task.py') in message
 
 
 def test_a_library_entry_without_its_task_file_fails_at_load(benchmark, tmp_path):

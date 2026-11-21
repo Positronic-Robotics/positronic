@@ -58,8 +58,11 @@ class TaskCatalog:
         library: dict[str, CatalogTask] = {}
         for lib in task_libs:
             for name, task in _read(lib / METADATA, category_map, lib / 'tasks').items():
-                if name in benchmark or name in library:
-                    raise ValueError(f'task library {lib} redefines task {name!r}')
+                # RoboLab names a task's env by its class, so one class name in two places registers one env twice.
+                if name in benchmark:
+                    raise ValueError(f'{task.file} defines {name!r}, the name of the RoboLab benchmark task {name!r}')
+                if name in library:
+                    raise ValueError(f'{task.file} and {library[name].file} both define the task {name!r}')
                 if task.file is None or not task.file.is_file():
                     raise FileNotFoundError(f'task library {lib} names {name!r} in {task.file}, which does not exist')
                 library[name] = task
