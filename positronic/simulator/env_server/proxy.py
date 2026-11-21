@@ -101,10 +101,13 @@ class RemoteEnvControlSystem(pimm.ControlSystem):
         model, a full observation payload and a non-terminal ``done``. Stale commands queued while inactive
         are dropped so the first step doesn't apply them.
         """
+        # A reset that fails leaves no trial live, so the proxy does not step the scene it drew or the one before.
+        self._active = False
         conn = self._connect()
         for _, receiver in self.commands.items():
             receiver.read()
         self._frame = conn.reset(self._adapter.reset_token(params), self._batch_size)
+        self._adapter.check_reset(params, self._frame)
         self._active = True
         self.robot_meta.emit(self._frame[protocol.FRAME_ROBOT_META])
         self._emit_payload(self._frame)

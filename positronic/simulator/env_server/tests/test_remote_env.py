@@ -768,6 +768,46 @@ def test_proxy_publishes_the_reset_frame_then_free_runs():
         assert obs_rx.read().data[0] >= 1
 
 
+class _RefusingAdapter(_CountdownAdapter):
+    def check_reset(self, params, frame):
+        raise ValueError(f'the env answered seed {params.get(eval_keys.SEED)} with another judge')
+
+
+@pytest.mark.timeout(60.0)
+def test_a_reset_answer_that_the_adapter_refuses_fails_the_reset_and_publishes_nothing():
+    with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_RefusingAdapter(), nullcontext((host, port)))
+        obs_rx = world.pair(proxy.observations['value'])
+        world.start([proxy])
+
+        with pytest.raises(ValueError, match='another judge'):
+            proxy.reset({eval_keys.SEED: 0})
+        assert obs_rx.read() is None
+
+
+class _RefusingSeedOneAdapter(_CountdownAdapter):
+    def check_reset(self, params, frame):
+        if params.get(eval_keys.SEED) == 1:
+            raise ValueError('the env answered seed 1 with another judge')
+
+
+@pytest.mark.timeout(60.0)
+def test_a_refused_reset_during_a_live_trial_leaves_the_proxy_stepping_nothing():
+    env = _CountdownEnv()
+    with serve_env(env) as (host, port), pimm.World(virtual_time=True) as world:
+        proxy = RemoteEnvControlSystem(_RefusingSeedOneAdapter(), nullcontext((host, port)))
+        scheduler = world.start([proxy])
+
+        proxy.reset({eval_keys.SEED: 0})
+        drive_scheduler(scheduler, steps=3)
+        assert env._steps >= 1
+
+        with pytest.raises(ValueError, match='another judge'):
+            proxy.reset({eval_keys.SEED: 1})
+        drive_scheduler(scheduler, steps=3)
+        assert env._steps == 0, 'the proxy stepped the scene of the refused reset'
+
+
 @pytest.mark.timeout(60.0)
 def test_an_env_that_keeps_the_listed_instruction_publishes_no_goal():
     with serve_env(_CountdownEnv()) as (host, port), pimm.World(virtual_time=True) as world:
