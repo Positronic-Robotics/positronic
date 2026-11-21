@@ -1,9 +1,10 @@
-"""How a run reaches its RoboLab env server: the clone count on the server's own command line, and an eval
-that shares a server some other process runs.
+"""How a run reaches its RoboLab env server: the robot and the clone count on the server's own command line, and
+an eval that shares a server some other process runs.
 
 Nothing here spawns RoboLab: the spawn needs its pinned checkout and the whole Isaac Lab stack.
 """
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -175,3 +176,77 @@ def test_an_eval_with_an_env_server_drives_that_server_and_launches_none(monkeyp
         trials = ev.tasks()
 
     assert [trial.prepare_args[eval_keys.SCENE][eval_keys.TASK] for trial in trials] == ['BananaInBowlTask']
+
+
+def test_a_run_that_names_no_robot_serves_the_droid_rig(spawned):
+    with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+        pass
+
+    assert _flag(spawned[0], '--robot') == robolab_keys.DROID
+
+
+def test_a_yam_run_serves_the_yam_from_the_same_checkout(spawned):
+    with launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM):
+        pass
+
+    assert _flag(spawned[0], '--robot') == robolab_keys.YAM
+    assert _flag(spawned[0], '--cameras') == robolab_keys.TOP_AND_WRISTS
+    assert _flag(spawned[0], '--project') == str(launcher._ROBOLAB_SRC)
+
+
+@pytest.mark.parametrize(
+    ('robot', 'cameras'),
+    [(robolab_keys.DROID, robolab_keys.WRIST_LEFT_RIGHT), (robolab_keys.YAM, robolab_keys.TOP_AND_WRISTS)],
+)
+def test_a_launch_that_names_no_camera_set_serves_the_default_set_of_its_robot(spawned, monkeypatch, robot, cameras):
+    monkeypatch.setattr(sys, 'argv', ['launcher', '--robot', robot, '--max-envs', '1', '--port', '9000'])
+    with pytest.raises(SystemExit):
+        launcher.main()
+
+    assert _flag(spawned[0], '--cameras') == cameras
+
+
+def test_a_camera_set_of_another_robot_fails_before_any_spawn(spawned):
+    with (
+        pytest.raises(ValueError, match='camera sets'),
+        launcher.serve_robolab(robolab_keys.WRIST_LEFT, robot=robolab_keys.YAM),
+    ):
+        pass
+
+    assert spawned == []
+
+
+class _Spawn:
+    """The environment of the last spawn of ``serve_robolab``, with the checkout, the sync and the spawn stubbed out."""
+
+    def __init__(self) -> None:
+        self.env: dict[str, str] = {}
+
+
+@pytest.fixture
+def spawn(monkeypatch, tmp_path) -> _Spawn:
+    seen = _Spawn()
+    monkeypatch.setattr(launcher, 'setup_lock', lambda cache: contextlib.nullcontext())
+    monkeypatch.setattr(launcher, 'ensure_pinned_checkout', lambda *args, **kwargs: tmp_path)
+    monkeypatch.setattr(
+        subprocess, 'run', lambda command, **kwargs: subprocess.CompletedProcess(command, 0, 'uv 0.13.7\n')
+    )
+    monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
+
+    def popen(command, **kwargs):
+        seen.env = kwargs['env']
+        return _StubProcess()
+
+    monkeypatch.setattr(subprocess, 'Popen', popen)
+    return seen
+
+
+def test_only_a_droid_server_gets_the_droid_rig_model(spawn):
+    with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+        pass
+    droid = spawn.env
+    with launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM):
+        pass
+
+    assert 'ROBOLAB_ROBOT_META' in droid
+    assert 'ROBOLAB_ROBOT_META' not in spawn.env

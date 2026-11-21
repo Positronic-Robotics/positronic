@@ -1,5 +1,5 @@
-"""The keys of a RoboLab task record, of the trial params the eval config owns, of a reset token, and the env's
-camera names.
+"""The keys of a RoboLab task record, of the trial params the eval config owns, of a reset token, the robots, and the
+env's camera names.
 
 The env server runs in RoboLab's own interpreter and cannot import positronic, so it reads this module as a
 top-level ``keys`` from its own directory. The eval config reads it as ``positronic.simulator.robolab.keys``.
@@ -48,12 +48,21 @@ GT_STATE_POSE = 'pose'
 GT_STATE_GRIPPER_CONTACT = 'gripper_contact'
 GT_STATE_PROGRESS = 'progress'
 
+# The robots an env server can put in the RoboLab scenes: the DROID rig (a Franka arm with a Robotiq 2F-85), or the
+# two-arm i2rt YAM. A keys module imports nothing, so the names are strings and ``ROBOTS`` lists them.
+DROID = 'droid'
+YAM = 'yam'
+
 # The cameras RoboLab renders, named as the env's ``image_obs`` group names them.
 OVER_SHOULDER_LEFT_CAMERA = 'over_shoulder_left_camera'
 OVER_SHOULDER_RIGHT_CAMERA = 'over_shoulder_right_camera'
 WRIST_CAMERA = 'wrist_cam'
+# The cameras of the YAM robot: one over the arms, one on each wrist.
+TOP_CAMERA = 'top_cam'
+LEFT_WRIST_CAMERA = 'left_wrist_cam'
+RIGHT_WRIST_CAMERA = 'right_wrist_cam'
 
-# The camera sets a run picks from. The names follow RoboLab's own presets.
+# The camera sets a run of the DROID rig picks from. The names follow RoboLab's own presets.
 WRIST_LEFT_RIGHT = 'wrist_left_right'
 WRIST_LEFT = 'wrist_left'
 WRIST_RIGHT = 'wrist_right'
@@ -62,3 +71,18 @@ CAMERA_SETS = {
     WRIST_LEFT: (OVER_SHOULDER_LEFT_CAMERA, WRIST_CAMERA),
     WRIST_RIGHT: (OVER_SHOULDER_RIGHT_CAMERA, WRIST_CAMERA),
 }
+# The camera set of the YAM robot.
+TOP_AND_WRISTS = 'top_and_wrists'
+YAM_CAMERA_SETS = {TOP_AND_WRISTS: (TOP_CAMERA, LEFT_WRIST_CAMERA, RIGHT_WRIST_CAMERA)}
+ROBOT_CAMERA_SETS = {DROID: CAMERA_SETS, YAM: YAM_CAMERA_SETS}
+ROBOTS = tuple(ROBOT_CAMERA_SETS)
+# The camera set a server of each robot renders when the launch names none.
+DEFAULT_CAMERA_SETS = {DROID: WRIST_LEFT_RIGHT, YAM: TOP_AND_WRISTS}
+
+
+def camera_set(robot: str, name: str) -> tuple[str, ...]:
+    """The cameras of the set ``name`` of ``robot``."""
+    sets = ROBOT_CAMERA_SETS[robot]
+    if name not in sets:
+        raise ValueError(f'the {robot} robot has the camera sets {sorted(sets)}, not {name!r}')
+    return sets[name]

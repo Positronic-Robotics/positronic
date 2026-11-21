@@ -17,14 +17,16 @@ from eval_vocabulary.episode import (
     SUBTASK_SIGNAL,
 )
 
-from positronic import keys
+import pimm
+from positronic import geom, keys
 from positronic.cfg.eval.sim import robolab as robolab_cfg
 from positronic.dataset.serializers import expand_suffixed
+from positronic.drivers.roboarm import command as roboarm_command
 from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.robolab import keys as robolab_keys
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab.adapter import RobolabDroidAdapter, RobolabYamAdapter
 
 
 class _Listing:
@@ -68,7 +70,7 @@ def asked(listing) -> list[Any]:
 
 
 def test_the_adapter_names_a_task_the_way_the_reset_token_does():
-    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+    adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
 
     params = adapter.task_params([_record('AnimalsInBinTask', 90.0, 'Put the animals in the bin', 'vague')])
 
@@ -80,7 +82,7 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
 
 
 def test_the_reset_token_carries_an_episode_length_only_when_one_replaces_the_budget():
-    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+    adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
     params = {eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.INSTRUCTION_TYPE: 'default'}
 
     budget = adapter.reset_token({**params, robolab_keys.EPISODE_LENGTH: 90.0})
@@ -116,7 +118,7 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
 
 def test_the_reset_builds_the_phrasing_that_the_listed_instruction_states(asked):
     trials = list(robolab_cfg.visual.override(instruction_type='vague').instantiate().tasks())
-    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+    adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
 
     tokens = [adapter.reset_token(trial.prepare_args[eval_keys.SCENE]) for trial in trials]
     assert [token[robolab_keys.TOKEN_INSTRUCTION_TYPE] for token in tokens] == ['vague', 'vague']
@@ -127,7 +129,7 @@ def test_the_config_passes_no_phrasing_apart_from_the_listing(listing):
     the config asked for another."""
     listing.phrasing = 'default'
     trials = list(robolab_cfg.visual.override(instruction_type='vague').instantiate().tasks())
-    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+    adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
 
     tokens = [adapter.reset_token(trial.prepare_args[eval_keys.SCENE]) for trial in trials]
     assert [token[robolab_keys.TOKEN_INSTRUCTION_TYPE] for token in tokens] == ['default', 'default']
@@ -176,7 +178,7 @@ def test_the_privileged_channel_carries_the_subtask_progress_and_the_scene_state
         robolab_keys.WRIST_CAMERA: np.zeros((2, 2, 3)),
     }
 
-    privileged = RobolabAdapter({}).privileged(raw)
+    privileged = RobolabDroidAdapter({}).privileged(raw)
 
     assert privileged.keys() == {robolab_keys.SUBTASK, robolab_keys.GT_STATE}
     assert privileged[robolab_keys.SUBTASK] is subtask
@@ -205,7 +207,7 @@ def test_the_env_writes_the_scene_state_in_the_layout_that_a_labeler_reads():
 
 def test_a_horizon_reaches_the_reset_token_and_the_deadline_follows_it(asked):
     trials = list(robolab_cfg.benchmark.override(horizon_sec=240.0).instantiate().tasks())
-    adapter = RobolabAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+    adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
 
     scenes = [trial.prepare_args[eval_keys.SCENE] for trial in trials]
     assert [scene[robolab_keys.EPISODE_LENGTH] for scene in scenes] == [50.0, 300.0]
@@ -241,4 +243,74 @@ def test_a_horizon_and_a_timeout_must_be_finite_and_positive(arg, value):
     ids=['running', 'success', 'failure', 'fault'],
 )
 def test_the_terminal_payload_carries_the_verdict_and_a_fault(frame, recorded):
-    assert RobolabAdapter({}).terminal(frame) == recorded
+    assert RobolabDroidAdapter({}).terminal(frame) == recorded
+
+
+def test_a_yam_eval_drives_both_arms_and_reads_the_three_yam_cameras(listing):
+    ev = robolab_cfg.yam_banana_in_bowl.instantiate()
+
+    assert ev.embodiment.descriptor == 'remote.robolab.yam_bimanual'
+    arms = {keys.arm_channel(channel, arm) for arm in keys.BIMANUAL_ARMS for channel in (keys.ROBOT_STATE, keys.GRIP)}
+    cameras = {keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE}
+    assert set(ev.embodiment.observations) == arms | cameras
+    commands = {keys.arm_channel(c, arm) for arm in keys.BIMANUAL_ARMS for c in (keys.ROBOT_COMMAND, keys.TARGET_GRIP)}
+    assert set(ev.embodiment.commands) == commands
+
+
+def test_an_eval_that_names_only_the_yam_renders_the_three_yam_cameras(listing):
+    ev = robolab_cfg.banana_in_bowl.override(robot=robolab_keys.YAM).instantiate()
+
+    cameras = {keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE}
+    assert cameras <= set(ev.embodiment.observations)
+
+
+def test_a_yam_eval_with_a_droid_camera_set_fails():
+    with pytest.raises(ValueError, match='camera sets'):
+        robolab_cfg.yam_banana_in_bowl.override(cameras=robolab_keys.WRIST_LEFT).instantiate()
+
+
+_YAM_EEF = {
+    keys.LEFT_ARM: geom.Transform3D(np.array([0.5, 0.25, 0.4]), geom.Rotation.from_euler([0.1, 0.2, 0.3])),
+    keys.RIGHT_ARM: geom.Transform3D(np.array([0.55, -0.2, 0.35]), geom.Rotation.from_euler([-0.3, 0.1, -0.2])),
+}
+
+
+def _yam_raw_obs() -> dict[str, Any]:
+    raw: dict[str, Any] = {robolab_keys.TOP_CAMERA: np.full((4, 6, 3), 7, dtype=np.uint8)}
+    for index, (arm, eef) in enumerate(_YAM_EEF.items()):
+        raw[protocol.arm_channel(protocol.OBS_EEF_POS, arm)] = eef.translation
+        raw[protocol.arm_channel(protocol.OBS_EEF_QUAT, arm)] = eef.rotation.as_quat
+        raw[protocol.arm_channel(protocol.OBS_JOINT_POS, arm)] = np.full(6, 0.1 * (index + 1))
+        raw[protocol.arm_channel(protocol.OBS_JOINT_VEL, arm)] = np.full(6, -0.1 * (index + 1))
+        raw[protocol.arm_channel(protocol.OBS_GRIP, arm)] = 0.25 * (index + 1)
+    return raw
+
+
+def test_the_yam_adapter_reports_each_arm_where_the_env_measures_it():
+    obs = RobolabYamAdapter({keys.EXTERIOR_IMAGE: robolab_keys.TOP_CAMERA}).observations(_yam_raw_obs())
+
+    for index, (arm, eef) in enumerate(_YAM_EEF.items()):
+        state = obs[keys.arm_channel(keys.ROBOT_STATE, arm)]
+        np.testing.assert_allclose(state.ee_pose.as_matrix, eef.as_matrix, atol=1e-6)
+        np.testing.assert_allclose(state.q, np.full(6, 0.1 * (index + 1)), atol=1e-6)
+        np.testing.assert_allclose(state.dq, np.full(6, -0.1 * (index + 1)), atol=1e-6)
+        assert obs[keys.arm_channel(keys.GRIP, arm)] == 0.25 * (index + 1)
+    assert (obs[keys.EXTERIOR_IMAGE].array == 7).all()
+
+
+def test_the_yam_adapter_sends_each_arm_its_own_command_and_grip():
+    adapter = RobolabYamAdapter({})
+    adapter.observations(_yam_raw_obs())
+    targets = {arm: np.full(6, 0.3 * (index + 1)) for index, arm in enumerate(keys.BIMANUAL_ARMS)}
+    commands: dict[str, pimm.Message | None] = {}
+    for index, (arm, target) in enumerate(targets.items()):
+        commands[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = pimm.Message(roboarm_command.JointPosition(target))
+        commands[keys.arm_channel(keys.TARGET_GRIP, arm)] = pimm.Message(float(index))
+
+    action = adapter.action(commands)
+
+    for index, (arm, target) in enumerate(targets.items()):
+        wired = action[protocol.arm_channel(protocol.ROBOT_COMMAND, arm)]
+        assert wired[protocol.COMMAND_TYPE] == protocol.JOINT_POS
+        np.testing.assert_array_equal(wired[protocol.COMMAND_JOINT_POS], target)
+        assert action[protocol.arm_channel(protocol.TARGET_GRIP, arm)] == float(index)
