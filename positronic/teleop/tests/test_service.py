@@ -507,6 +507,24 @@ def test_no_ready_within_the_ready_limit_fails_the_run(socket_path, runtime):
         _until_cleared(service)
 
 
+def test_the_end_of_the_ready_limit_says_when_no_controller_data_came_in_the_wait(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=0.2, silence_limit=0.1, hold_sec=HOLD_SEC)
+    with pytest.raises(service_module.TrialNotStarted, match='ready limit.*no controller data came in the wait'):
+        service.wait_for_ready(protocol.SessionParams(), threading.Event())
+    with _Headset(service), pytest.raises(service_module.TrialNotStarted, match='ready limit') as raised:
+        service.wait_for_ready(protocol.SessionParams(), threading.Event())
+    assert 'controller data' not in str(raised.value)
+
+
+def test_the_state_says_whether_a_sample_came_within_the_silence_limit(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 60.0, HOLD_SEC)
+    assert not service.state().tracked
+    _take(service, _buttons())
+    assert service.state().tracked
+    service.silence_limit = 0.0
+    assert not service.state().tracked
+
+
 def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket_path, runtime):
     """The wait for Ready is the preparation of the session, so the infer timeout does not bound it."""
     with TeleopService(
@@ -1427,7 +1445,33 @@ def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(s
     stop = types.SimpleNamespace(value=False)
     next(bridge.run(cast(pimm.SignalReceiver, stop), SystemClock()))
     [(_, state)] = sent.emitted
-    assert state == {'phase': Phase.IDLE, 'control': False, 'cameras': (), 'live': (), 'shown': None, 'chosen': None}
+    assert state == {
+        'phase': Phase.IDLE,
+        'control': False,
+        'cameras': (),
+        'live': (),
+        'shown': None,
+        'chosen': None,
+        'tracked': False,
+    }
+
+
+def test_the_headset_bridge_sends_whether_the_service_gets_controller_data(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 60.0, HOLD_SEC)
+    bridge = command._Headset(service)
+    sent = RecordingEmitter[dict]()
+    bridge.page_state._bind(sent, clock=SystemClock())
+    bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
+    positions, buttons = ManualCommandReceiver(), ManualCommandReceiver()
+    bridge.controller_positions._bind(positions)
+    bridge.buttons._bind(buttons)
+    bridge.page_input._bind(ManualCommandReceiver())
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), SystemClock())
+    next(loop)
+    positions.push({webxr.RIGHT: HAND})
+    buttons.push({webxr.RIGHT: _buttons()})
+    next(loop)
+    assert [state['tracked'] for _, state in sent.emitted] == [False, True]
 
 
 def _until_served(url: str, seconds: float = 10.0) -> None:
