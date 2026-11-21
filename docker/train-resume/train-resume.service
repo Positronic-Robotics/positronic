@@ -1,0 +1,20 @@
+# The host unit of a training VM: at each boot it relaunches the run that the data disk holds.
+# A training image carries it at /opt/train/train-resume.service; docker/README.md § Training images says how to install it.
+[Unit]
+Description=Relaunch the training run that /data/run holds
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/data
+ConditionPathExists=/data/run/run.env
+
+[Service]
+Type=simple
+EnvironmentFile=/data/run/run.env
+ExecStartPre=-/usr/bin/docker rm -f train
+ExecStart=/usr/bin/docker run --rm --name train --gpus all --ipc=host --network host --ulimit memlock=-1 \
+    --env-file /data/run/run.env -v /data:/data ${TRAIN_IMAGE} /opt/train/resume
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
