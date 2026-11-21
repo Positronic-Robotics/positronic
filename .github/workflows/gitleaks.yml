@@ -1,0 +1,20 @@
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main, main-positronic] # owner-free: allow
+
+permissions:
+  contents: read
+
+# A push run is keyed on its own sha: each push scans only its own commits, so none may be dropped.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gitleaks:
+    # Commit of Positronic-Robotics/secret-scanning to run; .gitleaks.toml is a copy of its gitleaks.toml. Public, not a secret.
+    # To move it, follow "Upgrading the rules or gitleaks" in that repository's README.
+    uses: Positronic-Robotics/secret-scanning/.github/workflows/gitleaks.yml@17271b2ddeb36438a2650e53a6e0f335832dc87e # owner-free: allow
