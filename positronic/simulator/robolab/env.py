@@ -124,6 +124,9 @@ from robolab.core.environments.runtime import create_env  # noqa: E402
 from robolab.core.events.subtask_recorder import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     SubtaskCompletionRecorderTerm,
 )
+from robolab.core.task.instruction import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    select_instruction_fields,
+)
 from robolab.core.task.task import resolve_instruction  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.core.utils.function_loader import get_callable_info  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.core.world.world_state import get_world  # noqa: E402  # pyright: ignore[reportMissingImports]
@@ -243,7 +246,8 @@ class RobolabEnv(EnvProtocol):
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """The tasks ``spec`` selects: ``task`` is one of RoboLab's categories, a task name, or a list of
         names. Without a ``task`` the whole benchmark runs. Each record states the instruction in the phrasing that
-        ``instruction_type`` names, as ``create_env`` resolves it, and names that phrasing for the reset."""
+        ``instruction_type`` names and names that phrasing for the reset. A task that has phrasings but not that one
+        raises ``ValueError`` here, before any scene is built."""
         benchmark = self._benchmark_tasks()
         categories = set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values())
         match spec.get('task'):
@@ -265,7 +269,9 @@ class RobolabEnv(EnvProtocol):
             {
                 keys.RECORD_NAME: name,
                 keys.RECORD_EPISODE_LENGTH_S: benchmark[name]['episode_length_s'],
-                protocol.TASK_INSTRUCTION: resolve_instruction(benchmark[name]['instruction'], instruction_type),
+                protocol.TASK_INSTRUCTION: resolve_instruction(
+                    select_instruction_fields(benchmark[name]['instruction'], instruction_type), instruction_type
+                ),
                 keys.RECORD_INSTRUCTION_TYPE: instruction_type,
             }
             for name in names
@@ -315,8 +321,8 @@ class RobolabEnv(EnvProtocol):
         if telemetry.active():
             self._env.sim.step = self._timed_phase(self._env.sim.step, 'physics')
             self._env.sim.render = self._timed_phase(self._env.sim.render, 'render')
-        # ``instruction`` is the language goal in the phrasing of the reset (``create_env`` keeps the selected
-        # phrasings as a ``{phrasing: text}`` dict); the rest is the task identity the episode records.
+        # ``META_INSTRUCTION`` is the instruction text in the phrasing of the reset: ``create_env`` keeps the selected
+        # phrasings as a ``{phrasing: text}`` dict. The rest names the task.
         self._meta = {
             keys.META_INSTRUCTION: resolve_instruction(self._env_cfg.instruction, instruction_type),
             'env_name': env_name,
@@ -337,16 +343,8 @@ class RobolabEnv(EnvProtocol):
         self._world = get_world(self._env)
         (self._gripper,) = self._env_cfg.contact_gripper
         self._objects = [name for name in self._env_cfg.contact_object_list if name != self._TABLE]
-        # HACK: this pin's recorder manager has no lookup by type, so this reads its private terms. RoboLab adds no
-        # term for a task without subtasks.
-        self._subtask_recorder = next(
-            (
-                term
-                for term in self._env.recorder_manager._terms.values()
-                if isinstance(term, SubtaskCompletionRecorderTerm)
-            ),
-            None,
-        )
+        # None for a task without subtasks: RoboLab adds no term for it.
+        self._subtask_recorder = self._env.recorder_manager.get_term(SubtaskCompletionRecorderTerm)
 
     def _nonfinite_arms(self) -> torch.Tensor:
         """Per slot, whether its arm joints or joint velocities hold a value that is not finite, ``(num_envs,)``."""

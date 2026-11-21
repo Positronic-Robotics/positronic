@@ -125,14 +125,14 @@ def test_the_setup_refuses_a_uv_too_old_for_the_robolab_build_config(monkeypatch
     calls = tmp_path / 'uv-calls'
     uv = tmp_path / 'bin' / 'uv'
     uv.parent.mkdir()
-    uv.write_text(f'#!/bin/sh\necho "$@" >> {calls}\necho "uv 0.8.3"\n')
+    uv.write_text(f'#!/bin/sh\necho "$@" >> {calls}\necho "uv 0.9.30"\n')
     uv.chmod(0o755)
     monkeypatch.setenv('PATH', f'{uv.parent}{os.pathsep}{os.environ["PATH"]}')
     monkeypatch.setattr(launcher, 'ensure_pinned_checkout', lambda *args, **kwargs: tmp_path)
     monkeypatch.setattr(launcher, '_ROBOLAB_SRC', tmp_path / 'robolab')
     monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
 
-    with pytest.raises(RuntimeError, match=r'uv 0\.8\.4 or newer'), launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+    with pytest.raises(RuntimeError, match=r'uv 0\.10\.0 or newer'), launcher.serve_robolab(robolab_keys.WRIST_LEFT):
         pass
 
     assert 'sync' not in calls.read_text()

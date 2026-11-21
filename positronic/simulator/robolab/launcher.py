@@ -1,8 +1,9 @@
 """Launches the RoboLab env server as a subprocess and owns its lifetime.
 
-positronic starts the server: the env runs in RoboLab's own interpreter via ``uv run --project <checkout>``,
-which installs the Isaac Lab / Isaac Sim dependency stack from the lock of the pinned RoboLab checkout. The
-positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol``
+positronic starts the server: ``uv sync --frozen`` installs the Isaac Lab / Isaac Sim dependency stack from the lock
+of the pinned RoboLab checkout, and the env runs in RoboLab's own interpreter via
+``uv run --no-sync --project <checkout>``.
+The positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol``
 without dragging in positronic; ``robolab`` itself resolves from the uv project.
 """
 
@@ -35,8 +36,8 @@ _ROBOLAB_PYTHON = '3.11'
 # RoboLab installs Isaac only through an extra; ``isaac50`` is the IsaacSim 5.0 / IsaacLab 2.2 stack env.py drives.
 _ROBOLAB_ISAAC_EXTRA = 'isaac50'
 
-# The oldest uv that reads ``[tool.uv.extra-build-dependencies]``, which RoboLab needs to build ``flatdict``.
-_UV_MIN_VERSION = (0, 8, 4)
+# RoboLab builds ``flatdict`` with ``[tool.uv.extra-build-dependencies]``, which uv makes stable in 0.10.0 (changelog).
+_UV_MIN_VERSION = (0, 10, 0)
 
 
 def _require_uv_version() -> None:
