@@ -38,6 +38,9 @@ See [the vendor README](../positronic/vendors/galaxea/README.md#docker-setup).
 `Dockerfile.serve-abc-dit` builds the private `abc-dit-yam` image in the same form, and it starts the
 `multitask_200k_yambox_wide_top_rtc` command. See [the vendor README](../positronic/vendors/abc_dit/README.md#docker-image).
 
+`Dockerfile.serve-pi05-abc` builds the private `pi05-abc-yam` image in the same form, and it starts the
+`bottles_16k` command. See [the vendor README](../positronic/vendors/pi05_abc/README.md#docker-image).
+
 ## References
 
 - Service definitions and compose commands: `docker-compose.yml`
