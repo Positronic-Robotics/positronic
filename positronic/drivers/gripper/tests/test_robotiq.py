@@ -2,6 +2,7 @@
 holds a lost gripper until a call activates it again."""
 
 import logging
+import os
 from enum import Enum, auto
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ import pytest
 import pimm
 from pimm.tests.testing import MockClock, wire_call
 from positronic.drivers.faults import DeviceFault, FaultKind
-from positronic.drivers.gripper import robotiq
+from positronic.drivers.gripper import robotiq, robotiq_grip_probe
 from positronic.drivers.gripper.robotiq import Activation, Fingers
 from positronic.drivers.gripper.robotiq_grip_probe import GripRecord, RobotiqGripProbe
 from positronic.drivers.roboarm.tests.fakes import StopFlag
@@ -667,24 +668,27 @@ def test_an_error_that_is_not_the_bus_ends_the_run(monkeypatch):
 PROBE_RECORD_S = 0.5
 
 
-def _probed(monkeypatch, bus: FakeBus, out, repeats: int) -> tuple[GripRecord, list[str]]:
-    """Run the grip probe over ``bus`` to its end. The record, and each prompt the operator answered."""
+def _probed(monkeypatch, bus: FakeBus, out, enters: int) -> GripRecord:
+    """Run the grip probe over ``bus`` to its end, with ``enters`` pushes of Enter and then the end of the input."""
     monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
     record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
-    prompts: list[str] = []
-    probe = RobotiqGripProbe('/dev/null', record, repeats, out, ask=prompts.append)
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'\n' * enters)
+    os.close(write_fd)
     clock = MockClock()
-    for command in probe.run(StopFlag(), clock):
-        clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
-    return record, prompts
+    try:
+        for command in RobotiqGripProbe('/dev/null', record, 3, out, read_fd).run(StopFlag(), clock):
+            clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
+    finally:
+        os.close(read_fd)
+    return record
 
 
 def test_the_grip_probe_records_each_close_on_an_object_and_writes_its_files(monkeypatch, tmp_path):
     bus = FakeBus(object_at=OBJECT)
     bus.current = 40
-    record, prompts = _probed(monkeypatch, bus, tmp_path, repeats=3)
+    record = _probed(monkeypatch, bus, tmp_path, enters=3)
 
-    assert len(prompts) == 3 and prompts[0].startswith('[pen 1/3]')
     assert [close.repeat for close in record.closes] == [1, 2, 3]
     for close in record.closes:
         o = close.outcome
@@ -704,7 +708,7 @@ def test_the_grip_probe_records_each_close_on_an_object_and_writes_its_files(mon
 
 
 def test_the_grip_probe_reports_no_object_for_a_close_on_nothing(monkeypatch, tmp_path):
-    record, _ = _probed(monkeypatch, FakeBus(), tmp_path, repeats=2)
+    record = _probed(monkeypatch, FakeBus(), tmp_path, enters=2)
 
     for close in record.closes:
         o = close.outcome
@@ -717,5 +721,48 @@ def test_the_grip_probe_refuses_a_port_that_does_not_open(monkeypatch, tmp_path)
     bus.answers = False
 
     with pytest.raises(SystemExit, match='A station or a console can hold the port'):
-        _probed(monkeypatch, bus, tmp_path, repeats=1)
+        _probed(monkeypatch, bus, tmp_path, enters=1)
     assert bus.writes == []
+
+
+def test_the_grip_probe_ends_when_the_input_ends(monkeypatch, tmp_path):
+    record = _probed(monkeypatch, FakeBus(object_at=OBJECT), tmp_path, enters=1)
+
+    assert len(record.closes) == 1
+
+
+def test_the_grip_probe_opens_the_fingers_when_a_write_of_its_files_fails(monkeypatch, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+
+    with pytest.raises(FileNotFoundError):
+        _probed(monkeypatch, bus, tmp_path / 'absent', enters=3)
+    assert bus.writes[-1][1] == 0, 'the probe left the fingers closed on the object'
+
+
+def test_a_stop_at_the_prompt_ends_the_grip_probe_with_the_fingers_open(monkeypatch, tmp_path):
+    """A Ctrl-C sets ``should_stop`` while the probe waits for Enter. The probe ends, and the fingers open."""
+    bus = FakeBus(object_at=OBJECT)
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
+    read_fd, write_fd = os.pipe()
+    stop, clock = StopFlag(), MockClock()
+    try:
+        for command in RobotiqGripProbe('/dev/null', record, 3, tmp_path, read_fd).run(stop, clock):
+            clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
+            stop.stopped = clock.now() > 10.0
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert record.closes == []
+    assert bus.writes[-1][1] == 0
+
+
+@pytest.mark.parametrize('seconds', ['0', '-1', 'nan'])
+def test_the_grip_probe_refuses_a_record_time_that_is_not_positive(monkeypatch, capsys, tmp_path, seconds):
+    argv = ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path), '--record-s', seconds]
+    monkeypatch.setattr('sys.argv', argv)
+
+    with pytest.raises(SystemExit):
+        robotiq_grip_probe.main()
+    assert 'is not a positive number of seconds' in capsys.readouterr().err

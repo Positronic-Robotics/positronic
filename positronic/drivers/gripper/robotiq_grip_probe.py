@@ -21,14 +21,21 @@ files, ``fingers`` is ``gOBJ`` (0..3, as in the manual), ``requested`` is ``gPR`
 
 import argparse
 import csv
-from collections.abc import Callable, Generator, Iterator
+import logging
+import math
+import os
+import select
+import sys
+from collections.abc import Generator, Iterator
 from pathlib import Path
 
 from pydantic import BaseModel
 
 import pimm
-from positronic.drivers.gripper.robotiq import TUNING_2F85, Fingers, Reading, _Gripper, _serial_client
+from positronic.drivers.gripper.robotiq import _BUS_FAULTS, TUNING_2F85, Fingers, Reading, _Gripper, _serial_client
 from positronic.drivers.utils import RecoveryOutcome
+
+logger = logging.getLogger(__name__)
 
 CLOSED = 1.0
 OPEN = 0.0
@@ -144,15 +151,15 @@ def write(record: GripRecord, out: Path) -> None:
 class RobotiqGripProbe(pimm.ControlSystem):
     """Closes the gripper ``repeats`` times on what the operator holds, and records each close to ``out``.
 
-    ``ask`` shows the operator a prompt and returns when the operator answers it.
+    The operator pushes Enter on the file descriptor ``operator`` before each close.
     """
 
-    def __init__(self, port: str, record: GripRecord, repeats: int, out: Path, ask: Callable[[str], object] = input):
+    def __init__(self, port: str, record: GripRecord, repeats: int, out: Path, operator: int):
         self._port = port
         self.record = record
         self._repeats = repeats
         self._out = out
-        self._ask = ask
+        self._operator = operator
         # _Gripper serves the moves of a driver. The probe sends it no move.
         self._moves = pimm.calls.ControlSystemHandler[float, None](self)
 
@@ -160,35 +167,53 @@ class RobotiqGripProbe(pimm.ControlSystem):
         client = _serial_client(self._port)
         if not client.connect():
             raise SystemExit(f'Cannot open {self._port}. A station or a console can hold the port: stop it first.')
+        gripper = _Gripper(
+            client, self._port, self._moves, pimm.NoOpReceiver(), pimm.NoOpEmitter(), TUNING_2F85, should_stop, clock
+        )
         try:
-            gripper = _Gripper(
-                client,
-                self._port,
-                self._moves,
-                pimm.NoOpReceiver(),
-                pimm.NoOpEmitter(),
-                TUNING_2F85,
-                should_stop,
-                clock,
-            )
             yield from self._probe(gripper, clock)
         finally:
+            self._release(gripper)
             client.close()
 
     def _probe(self, gripper: _Gripper, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
-        """Activate the gripper, then prompt, close, record and open once for each repeat."""
+        """Activate the gripper, then prompt, close, record and open once for each repeat, until the world stops."""
         if (yield from gripper.activate()) is not RecoveryOutcome.CLEARED:
             raise SystemExit(f'The gripper on {self._port} did not activate: {gripper.observe()}')
         yield from self._move(gripper, OPEN, clock)
         print(HEADER)
         for repeat in range(1, self._repeats + 1):
-            self._ask(f'[{self.record.label} {repeat}/{self._repeats}] Hold the object, then push Enter to close: ')
+            print(f'[{self.record.label} {repeat}/{self._repeats}] Hold the object, then push Enter to close: ', end='')
+            if not (yield from self._enter_pushed(gripper.should_stop)):
+                return
             samples = yield from self._move(gripper, CLOSED, clock)
+            if gripper.should_stop.value:
+                return
             close = Close(repeat=repeat, outcome=Outcome.of(samples), samples=samples)
             self.record.closes.append(close)
             write(self.record, self._out)
             print(row(self.record.label, close))
             yield from self._move(gripper, OPEN, clock)
+
+    def _enter_pushed(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Command, None, bool]:
+        """Yield until the operator pushes Enter. False when the world stops or the input ends first."""
+        sys.stdout.flush()
+        while not should_stop.value:
+            if not select.select([self._operator], [], [], 0)[0]:
+                yield pimm.Sleep(0.05)
+                continue
+            char = os.read(self._operator, 1)
+            if char in (b'\n', b''):
+                return char == b'\n'
+        return False
+
+    def _release(self, gripper: _Gripper) -> None:
+        """Ask the fingers open, so that they do not keep their grip on the object after the probe ends."""
+        try:
+            gripper.go_to(OPEN, self.record.speed, self.record.force)
+        # rules-allow: swallowed-error — a cleanup: the error that ended the probe is the one to propagate
+        except _BUS_FAULTS as exc:
+            logger.error('Could not ask the fingers of the gripper on %s to open: %s', self._port, exc)
 
     def _move(self, gripper: _Gripper, grip: float, clock: pimm.Clock) -> Generator[pimm.Command, None, list[Sample]]:
         """Put the fingers at ``grip`` and read the gripper for ``record_s`` seconds."""
@@ -200,6 +225,13 @@ class RobotiqGripProbe(pimm.ControlSystem):
             yield gripper.limiter.wait()
             samples.append(Sample.of(clock.now() - start, gripper.observe()))
         return samples
+
+
+def _seconds(text: str) -> float:
+    value = float(text)
+    if not (math.isfinite(value) and value > 0):
+        raise argparse.ArgumentTypeError(f'{value} is not a positive number of seconds')
+    return value
 
 
 def _byte(text: str) -> int:
@@ -216,7 +248,7 @@ def main() -> None:
     parser.add_argument('--repeats', type=int, default=5)
     parser.add_argument('--speed', type=_byte, default=255)
     parser.add_argument('--force', type=_byte, default=255)
-    parser.add_argument('--record-s', type=float, default=3.0, help='how long to read the gripper after a command')
+    parser.add_argument('--record-s', type=_seconds, default=3.0, help='how long to read the gripper after a command')
     parser.add_argument('--out', type=Path, required=True, help='the directory for the files')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -224,7 +256,7 @@ def main() -> None:
         raise SystemExit(f'{args.out / args.label}.json exists. Give a different --label or --out.')
     record = GripRecord(label=args.label, speed=args.speed, force=args.force, record_s=args.record_s)
     with pimm.World() as world:
-        world.run(RobotiqGripProbe(args.port, record, args.repeats, args.out))
+        world.run(RobotiqGripProbe(args.port, record, args.repeats, args.out, sys.stdin.fileno()))
     print(table(record), end='')
 
 
