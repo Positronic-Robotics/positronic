@@ -18,18 +18,20 @@ The wire contract:
   clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
   touches it (for the YAM, any finger of either hand); and RoboLab's progress through each condition chain of the
   current subtask.
+- ``--task-lib`` adds a task library (``task_catalog``): its tasks run by name beside the benchmark, and the camera
+  sets its ``cameras.py`` returns join RoboLab's presets for ``--cameras``.
 """
 
 import argparse
 import functools
-import json
+import importlib.util
 import math
 import os
 import sys
 import tempfile
 from abc import abstractmethod
-from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,7 @@ import torch
 import yam_spec
 from isaaclab.app import AppLauncher
 from server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
+from task_catalog import TaskCatalog
 
 
 class _NoopTelemetry:
@@ -90,6 +93,7 @@ parser.add_argument(
     default=DEFAULT_JOIN_DEADLINE,
     help='seconds the first reset of a batch waits for the clones whose clients have not asked for it',
 )
+parser.add_argument('--task-lib', type=Path, action='append', default=[], help='a task library directory; repeatable')
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
@@ -124,7 +128,7 @@ from robolab.core.utils.function_loader import get_callable_info  # noqa: E402  
 from robolab.core.world.world_state import get_world  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.registrations.droid import camera_presets  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
-from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
+from robolab.robots.droid import EEF_OFFSET_ROT, DroidCfg  # noqa: E402
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
 # ``create_env``: subtask progress feeds the wire ``subtask`` observation; per-step image recording only bloats
@@ -145,6 +149,42 @@ def _load_robot_meta() -> dict[str, Any]:
         return {}
     with open(path, 'rb') as f:
         return protocol.decode(f.read())
+
+
+def _camera_presets(task_libs: list[Path]) -> dict[str, list[Any]]:
+    """Every camera set by name: RoboLab's presets, and the sets each task library's ``cameras.py`` returns."""
+    presets: dict[str, list[Any]] = {
+        keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
+        keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
+        keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
+    }
+    for index, lib in enumerate(task_libs):
+        path = lib / 'cameras.py'
+        if not path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location(f'task_lib_cameras_{index}', path)
+        assert spec is not None and spec.loader is not None  # a file that exists always yields a spec
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        presets.update(module.camera_sets())
+    return presets
+
+
+@contextmanager
+def _no_table_fixture(library_task: bool) -> Iterator[None]:
+    """Register a task library's task on no robot table fixture: its scene holds the robot base.
+
+    RoboLab spawns the table fixture that the robot cfg names (``DroidCfg.table_fixture``) into every task scene
+    when the task registers.
+    """
+    if not library_task:
+        yield
+        return
+    fixture, DroidCfg.table_fixture = DroidCfg.table_fixture, None
+    try:
+        yield
+    finally:
+        DroidCfg.table_fixture = fixture
 
 
 class RobolabEnv(EnvProtocol):
@@ -183,6 +223,9 @@ class RobolabEnv(EnvProtocol):
         # Tasks registered with gymnasium in this process; re-registering rebuilds the cfg class and churns
         # the registry, so each registers once.
         self._registered: set[str] = set()
+        self._catalog = TaskCatalog.load(
+            Path(robolab.constants.TASK_DIR), args.task_lib, robolab.constants.BENCHMARK_TASK_CATEGORIES
+        )
         # Rebuilt with the env: robot handles and model-structure indices.
         self._robot: Any = None
         self._joint_ids: Any = None  # every arm joint of the robot, in the order of the wire arms
@@ -212,57 +255,23 @@ class RobolabEnv(EnvProtocol):
 
         return timed
 
-    @staticmethod
-    def _benchmark_tasks() -> dict[str, dict[str, Any]]:
-        """Every benchmark task by name: the seconds RoboLab gives an episode, the categories it sits in, and its
-        instruction as the task class states it, a text or one text per phrasing."""
-        with open(os.path.join(robolab.constants.TASK_DIR, '_metadata', 'task_metadata.json')) as f:
-            entries = json.load(f)
-        remap = robolab.constants.BENCHMARK_TASK_CATEGORIES
-        tasks = {}
-        for entry in entries:
-            attributes = [a.strip() for a in entry['attributes'].split(',')]
-            tasks[entry['task_name']] = {
-                'episode_length_s': float(entry['episode_s']),
-                # The metadata holds no variants for a task whose instruction is one text.
-                'instruction': entry['instruction_variants'] or entry['instruction'],
-                # An attribute outside the map, such as ``vague``, is a phrasing and no category.
-                'categories': {remap[a] for a in attributes if a in remap},
-            }
-        return tasks
-
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """The tasks ``spec`` selects: ``task`` is one of RoboLab's categories, a task name, or a list of
-        names. Without a ``task`` the whole benchmark runs. Each record states the instruction in the phrasing that
-        ``instruction_type`` names and names that phrasing for the reset. A task that has phrasings but not that one
-        raises ``ValueError`` here, before any scene is built."""
-        benchmark = self._benchmark_tasks()
-        categories = set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values())
-        match spec.get('task'):
-            case None:
-                names = list(benchmark)
-            case str() as category if category in categories:
-                names = [name for name, task in benchmark.items() if category in task['categories']]
-            case str() as name:
-                names = [name]
-            case selection:
-                names = list(selection)
-        unknown = [name for name in names if name not in benchmark]
-        if unknown:
-            raise ValueError(
-                f'RoboLab does not hold {unknown}; a task is a name, a list of names, or one of {sorted(categories)}'
-            )
+        names. Without a ``task`` the whole benchmark runs. A task library's task runs only by its name. Each record
+        states the instruction in the phrasing that ``instruction_type`` names and names that phrasing for the reset.
+        A task that has phrasings but not that one raises ``ValueError`` here, before any scene is built."""
+        selected = self._catalog.select(spec.get('task'), set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values()))
         instruction_type = spec[keys.SELECT_INSTRUCTION_TYPE]
         return [
             {
-                keys.RECORD_NAME: name,
-                keys.RECORD_EPISODE_LENGTH_S: benchmark[name]['episode_length_s'],
+                keys.RECORD_NAME: t.name,
+                keys.RECORD_EPISODE_LENGTH_S: t.episode_length_s,
                 protocol.TASK_INSTRUCTION: resolve_instruction(
-                    select_instruction_fields(benchmark[name]['instruction'], instruction_type), instruction_type
+                    select_instruction_fields(t.instruction, instruction_type), instruction_type
                 ),
                 keys.RECORD_INSTRUCTION_TYPE: instruction_type,
             }
-            for name in names
+            for t in selected
         ]
 
     def _build(self, task: str, instruction_type: str, episode_length_s: float | None, num_envs: int) -> None:
@@ -536,14 +545,15 @@ class DroidEnv(RobolabEnv):
         self._eef_frame_idx = None
         self._eef_offset_rot = None
         self._far_past_limit_solves: list[int] = []  # per slot, this episode's IK solves with a joint far past a limit
+        presets = _camera_presets(args.task_lib)
+        if args.cameras not in presets:
+            raise ValueError(f'camera set {args.cameras!r} needs a task library whose cameras.py places it')
+        self._cameras = presets[args.cameras]
 
     def _register(self, task: str) -> None:
-        presets = {
-            keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
-            keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
-            keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
-        }
-        auto_register_droid_envs(task=[task], cameras=presets[args.cameras])
+        # A library task registers by its file path; RoboLab names the env by the Task class in that file.
+        with _no_table_fixture(task in self._catalog.library):
+            auto_register_droid_envs(task=[self._catalog.register_target(task)], cameras=self._cameras)
 
     def _bind_robot(self) -> None:
         robot = self._robot

@@ -250,3 +250,24 @@ def test_only_a_droid_server_gets_the_droid_rig_model(spawn):
 
     assert 'ROBOLAB_ROBOT_META' in droid
     assert 'ROBOLAB_ROBOT_META' not in spawn.env
+
+
+def test_each_task_library_reaches_the_env_server(spawned, tmp_path):
+    libs = (tmp_path / 'a', tmp_path / 'b')
+    for lib in libs:
+        (lib / '_metadata').mkdir(parents=True)
+        (lib / '_metadata' / 'task_metadata.json').write_text('[]')
+
+    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, task_libs=libs):
+        pass
+
+    flags = [spawned[0][i + 1] for i, arg in enumerate(spawned[0]) if arg == '--task-lib']
+    assert flags == [str(lib) for lib in libs]
+
+
+def test_a_directory_without_task_metadata_fails_before_any_spawn(spawned, tmp_path):
+    with pytest.raises(FileNotFoundError, match='no task library'):
+        with launcher.serve_robolab(robolab_keys.WRIST_LEFT, task_libs=(tmp_path,)):
+            pass
+
+    assert spawned == []

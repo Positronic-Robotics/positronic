@@ -19,6 +19,7 @@ from positronic.simulator.env_server.launcher import ensure_pinned_checkout, ser
 from positronic.simulator.env_server.protocol import encode
 from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE
 from positronic.simulator.robolab import keys
+from positronic.simulator.robolab.task_catalog import METADATA as TASK_LIB_METADATA
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -46,9 +47,19 @@ def _require_uv_version() -> None:
 
 
 def _spawn(
-    host: str, port: int, robot: str, cameras: str, max_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
+    host: str,
+    port: int,
+    robot: str,
+    cameras: str,
+    max_envs: int,
+    join_deadline: float = DEFAULT_JOIN_DEADLINE,
+    task_libs: tuple[Path, ...] = (),
 ) -> subprocess.Popen:
     keys.camera_set(robot, cameras)
+    # A missing library fails here, before the Isaac boot, rather than in the server after it.
+    for lib in task_libs:
+        if not (lib / TASK_LIB_METADATA).is_file():
+            raise FileNotFoundError(f'{lib} is no task library: it has no {TASK_LIB_METADATA}')
     _require_uv_version()
     # One setup at a time, so no checkout resets files under ``uv sync``; the hold is one install, which a waiter needs.
     with setup_lock(_ROBOLAB_SRC.parent):
@@ -91,6 +102,7 @@ def _spawn(
         str(max_envs),
         '--join-deadline',
         str(join_deadline),
+        *(arg for lib in task_libs for arg in ('--task-lib', str(lib))),
         '--headless',
     ]
     # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
@@ -106,7 +118,12 @@ def _spawn(
 
 
 def serve_robolab(
-    cameras: str, host: str = 'localhost', *, robot: str = keys.DROID, max_envs: int = 1
+    cameras: str,
+    host: str = 'localhost',
+    *,
+    robot: str = keys.DROID,
+    max_envs: int = 1,
+    task_libs: tuple[Path, ...] = (),
 ) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
@@ -116,8 +133,10 @@ def serve_robolab(
 
     ``max_envs`` is the most clones of the scene the one Isaac process steps together. Each batch of evals gets as
     many clones as the batch size its first reset carries.
+
+    ``task_libs`` are task library directories on this host (see ``task_catalog``); their tasks run by name.
     """
-    return serve_subprocess(partial(_spawn, robot=robot, cameras=cameras, max_envs=max_envs), host)
+    return serve_subprocess(partial(_spawn, robot=robot, cameras=cameras, max_envs=max_envs, task_libs=task_libs), host)
 
 
 def main() -> None:
@@ -137,9 +156,10 @@ def main() -> None:
     )
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--task-lib', type=Path, action='append', default=[], help='a task library directory')
     args = parser.parse_args()
     cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
-    proc = _spawn(args.host, args.port, args.robot, cameras, args.max_envs, args.join_deadline)
+    proc = _spawn(args.host, args.port, args.robot, cameras, args.max_envs, args.join_deadline, tuple(args.task_lib))
     try:
         sys.exit(proc.wait())
     finally:
