@@ -28,6 +28,8 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
+# How long one session opening retries a host name the resolver has no answer for, inside the connect deadline.
+DEFAULT_UNRESOLVED_HOST_DEADLINE = 300.0
 # How often a pause between connect attempts asks the caller's cancel.
 CANCEL_POLL_S = 0.1
 # How long ``infer`` retries to rebuild a connection that dropped before its first answer.
@@ -370,22 +372,37 @@ class ConnectRetries:
     """The retry policy over one run of refused connect attempts.
 
     ``COLD`` and ``SILENT`` retry to the deadline. A ``FORBIDDEN`` refusal means a cold backend or a refused
-    credential, and gets ``MAX_FORBIDDEN_ATTEMPTS`` attempts.
+    credential, and gets ``MAX_FORBIDDEN_ATTEMPTS`` attempts. An ``UNRESOLVED`` host name retries for
+    ``unresolved_host_deadline`` seconds from the first of an unbroken run of them, and an attempt at that limit is
+    its last.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
 
-    def __init__(self) -> None:
+    def __init__(self, unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE) -> None:
         self._forbidden_attempts = 0
+        self._unresolved_host_deadline = unresolved_host_deadline
+        # The ``time.monotonic()`` instant the current run of ``UNRESOLVED`` refusals surfaces at.
+        self._unresolved_until: float | None = None
 
     def take(self, refusal: wire.Refusal) -> ConnectOutcome:
         """Spend a refused connect against the budget."""
+        if refusal is not wire.Refusal.UNRESOLVED:
+            self._unresolved_until = None
         if refusal is wire.Refusal.FORBIDDEN:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
+        elif refusal is wire.Refusal.UNRESOLVED:
+            if self._unresolved_until is None:
+                self._unresolved_until = time.monotonic() + self._unresolved_host_deadline
+            again = time_left(self._unresolved_until) > 0
         else:
             again = refusal in (wire.Refusal.COLD, wire.Refusal.SILENT)
         return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
+
+    def longest_pause(self) -> float:
+        """The longest pause before the next attempt that lets it begin by the limit of a refusal run."""
+        return math.inf if self._unresolved_until is None else time_left(self._unresolved_until)
 
 
 T = TypeVar('T')
@@ -396,9 +413,10 @@ class InferenceClient:
 
     ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one transport
     handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
-    ``connect_deadline`` one session opening with its retries while a backend is cold, ``infer_timeout`` one
-    inference round trip, and ``reconnect_deadline`` the rebuild of a connection that drops before its first
-    answer. No dial, status wait or pause lasts past a deadline.
+    ``connect_deadline`` one session opening with its retries while a backend is cold, ``unresolved_host_deadline``
+    the retries inside it while the resolver has no answer for the host name, ``infer_timeout`` one inference round
+    trip, and ``reconnect_deadline`` the rebuild of a connection that drops before its first answer. No dial, status
+    wait or pause lasts past a deadline.
 
     An edge that holds a dial while it starts a backend wants an ``open_timeout`` and a ``connect_deadline`` as
     long as the cold start: one dial then waits through it. A shorter one makes the client re-dial, and such an
@@ -413,6 +431,7 @@ class InferenceClient:
         headers: dict[str, str] | None = None,
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
+        unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         reconnect_deadline: float = DEFAULT_RECONNECT_DEADLINE,
     ):
@@ -427,6 +446,7 @@ class InferenceClient:
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
+        self.unresolved_host_deadline = unresolved_host_deadline
         self.infer_timeout = infer_timeout
         self.reconnect_deadline = reconnect_deadline
 
@@ -507,7 +527,7 @@ class InferenceClient:
         ``cancelled`` ends the retries as ``new_session`` says.
         """
         pauses = wire.retry_pauses()
-        retries = ConnectRetries()
+        retries = ConnectRetries(self.unresolved_host_deadline)
         not_ready: Exception | None = None
         while True:
             if cancelled is not None and cancelled():
@@ -528,7 +548,7 @@ class InferenceClient:
                 raise not_ready
             pause = next(pauses)
             logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, pause)
-            self._pause(min(pause, time_left(deadline)), cancelled)
+            self._pause(min(pause, retries.longest_pause(), time_left(deadline)), cancelled)
 
     def _naming_the_url(self, failure: Exception | None) -> str:
         """What ``failure`` says, with the session URL where it does not name the URL itself."""
