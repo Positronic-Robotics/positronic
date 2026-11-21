@@ -194,7 +194,10 @@ class RobotiqGripProbe(pimm.ControlSystem):
 
     def _probe(self, gripper: _Gripper, clock: pimm.Clock) -> Generator[pimm.Command, None, None]:
         """Activate the gripper, then prompt, close, record and open once for each repeat, until the world stops."""
-        if (yield from gripper.activate()) is not RecoveryOutcome.CLEARED:
+        outcome = yield from gripper.activate()
+        if gripper.should_stop.value:
+            return
+        if outcome is not RecoveryOutcome.CLEARED:
             raise SystemExit(f'The gripper on {self._port} did not activate: {gripper.observe()}')
         yield from self._move(gripper, OPEN, clock)
         print(HEADER)

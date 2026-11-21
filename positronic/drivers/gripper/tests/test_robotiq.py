@@ -759,6 +759,26 @@ def test_a_stop_at_the_prompt_ends_the_grip_probe_with_the_fingers_open(monkeypa
     assert bus.writes[-1][1] == 0
 
 
+def test_a_stop_during_the_activation_ends_the_grip_probe_without_an_activation_error(monkeypatch, tmp_path):
+    """A Ctrl-C while the gripper activates ends the probe as a stop, not as a gripper that did not activate."""
+    bus = FakeBus()
+    bus.completes = False
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    record = GripRecord(label='pen', speed=255, force=128, record_s=PROBE_RECORD_S)
+    read_fd, write_fd = os.pipe()
+    stop, clock = StopFlag(), MockClock()
+    try:
+        for command in RobotiqGripProbe('/dev/null', record, 3, tmp_path, read_fd).run(stop, clock):
+            clock.advance(command.seconds if isinstance(command, pimm.Sleep) else 0.0)
+            stop.stopped = clock.now() > 1.0
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert record.closes == []
+    assert bus.writes[-1][1] == 0
+
+
 @pytest.mark.parametrize(
     ('flag', 'value', 'refusal'),
     [
