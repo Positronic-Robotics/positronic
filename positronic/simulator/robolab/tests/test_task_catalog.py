@@ -117,6 +117,9 @@ def test_a_task_file_whose_class_is_not_the_metadata_name_fails_at_load(benchmar
         TaskCatalog.load(benchmark, [lib], CATEGORIES)
 
 
+SELECTABLE = {'wrist_left', 'exterior_pair_wrist'}
+
+
 def _cameras(lib: Path, sets: dict[str, list[str]]) -> Path:
     lib.mkdir(parents=True, exist_ok=True)
     (lib / 'cameras.py').write_text(f'def camera_sets():\n    return {sets!r}\n')
@@ -128,7 +131,7 @@ def test_a_library_camera_set_joins_the_presets(tmp_path):
     plain = tmp_path / 'plain'
     plain.mkdir()
 
-    sets = camera_sets([lib, plain], {'wrist_left': ['left', 'wrist']})
+    sets = camera_sets([lib, plain], {'wrist_left': ['left', 'wrist']}, SELECTABLE)
 
     assert sets == {'wrist_left': ['left', 'wrist'], 'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']}
 
@@ -137,7 +140,7 @@ def test_a_library_camera_set_may_not_replace_a_preset(tmp_path):
     lib = _cameras(tmp_path / 'lib', {'wrist_left': ['ext', 'wrist']})
 
     with pytest.raises(ValueError, match="'wrist_left'") as refused:
-        camera_sets([lib], {'wrist_left': ['left', 'wrist']})
+        camera_sets([lib], {'wrist_left': ['left', 'wrist']}, SELECTABLE)
 
     assert str(lib / 'cameras.py') in str(refused.value)
 
@@ -147,8 +150,17 @@ def test_two_libraries_may_not_return_one_camera_set_and_the_error_names_both_fi
     second = _cameras(tmp_path / 'second', {'exterior_pair_wrist': ['b']})
 
     with pytest.raises(ValueError) as refused:
-        camera_sets([first, second], {})
+        camera_sets([first, second], {}, SELECTABLE)
 
     message = str(refused.value)
     assert str(first / 'cameras.py') in message
     assert str(second / 'cameras.py') in message
+
+
+def test_a_library_camera_set_that_no_run_can_select_fails_at_load(tmp_path):
+    lib = _cameras(tmp_path / 'lib', {'top_down': ['top']})
+
+    with pytest.raises(ValueError, match="'top_down'") as refused:
+        camera_sets([lib], {}, SELECTABLE)
+
+    assert str(lib / 'cameras.py') in str(refused.value)

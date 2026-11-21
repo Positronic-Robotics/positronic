@@ -9,7 +9,7 @@ a top-level ``task_catalog`` from its own directory, so it imports nothing from 
 import ast
 import importlib.util
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -108,10 +108,13 @@ class TaskCatalog:
         return name if lib_task is None else str(lib_task.file)
 
 
-def camera_sets(task_libs: Sequence[Path], presets: dict[str, list[Any]]) -> dict[str, list[Any]]:
+def camera_sets(
+    task_libs: Sequence[Path], presets: dict[str, list[Any]], selectable: Collection[str]
+) -> dict[str, list[Any]]:
     """RoboLab's camera ``presets`` and each set that a task library's ``cameras.py`` returns, by name.
 
-    A set name that RoboLab or another library already gives raises ``ValueError``.
+    ``selectable`` names the sets a run can pick (``keys.CAMERA_SETS``). A library set outside it, or one whose name
+    RoboLab or another library already gives, raises ``ValueError``.
     """
     sets = dict(presets)
     sources: dict[str, Path | str] = dict.fromkeys(presets, 'RoboLab')
@@ -124,6 +127,10 @@ def camera_sets(task_libs: Sequence[Path], presets: dict[str, list[Any]]) -> dic
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         for name, cameras in module.camera_sets().items():
+            if name not in selectable:
+                raise ValueError(
+                    f'{path} returns the camera set {name!r}, which no run can select: {sorted(selectable)}'
+                )
             if name in sets:
                 raise ValueError(f'{path} returns the camera set {name!r}, which {sources[name]} already gives')
             sets[name], sources[name] = cameras, path

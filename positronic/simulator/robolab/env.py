@@ -527,7 +527,7 @@ class DroidEnv(RobolabEnv):
             keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
             keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
         }
-        sets = camera_sets(args.task_lib, presets)
+        sets = camera_sets(args.task_lib, presets, keys.CAMERA_SETS)
         if args.cameras not in sets:
             raise ValueError(f'no task library gives the camera set {args.cameras!r}; this server has {sorted(sets)}')
         self._cameras = sets[args.cameras]
