@@ -63,7 +63,7 @@ def test_a_non_101_answer_to_the_upgrade_says_what_the_server_is(status, refusal
         (InvalidMessage('did not receive a valid HTTP response'), wire.Refusal.SILENT),
         (InvalidHandshake('dropped'), wire.Refusal.COLD),
         (ConnectionRefusedError(111, 'Connection refused'), wire.Refusal.SILENT),
-        (socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution'), wire.Refusal.SILENT),
+        (socket.gaierror(socket.EAI_AGAIN, 'Temporary failure in name resolution'), wire.Refusal.UNRESOLVED),
         (ssl.SSLCertVerificationError('unknown issuer'), wire.Refusal.FINAL),
         (socket.gaierror(socket.EAI_NONAME, 'Name or service not known'), wire.Refusal.FINAL),
         (socket.gaierror(socket.EAI_NODATA, 'No address associated with hostname'), wire.Refusal.FINAL),
@@ -449,7 +449,7 @@ def test_a_keepalive_to_a_port_nothing_listens_on_is_no_answer():
 
 @pytest.mark.parametrize(
     ('errno_', 'refusal'),
-    [(socket.EAI_AGAIN, wire.Refusal.SILENT), (socket.EAI_NONAME, wire.Refusal.FINAL)],
+    [(socket.EAI_AGAIN, wire.Refusal.UNRESOLVED), (socket.EAI_NONAME, wire.Refusal.FINAL)],
     ids=['the-resolver-timed-out', 'no-such-host'],
 )
 def test_a_name_lookup_that_fails_reads_as_a_dial_reads_it(errno_, refusal, monkeypatch):
