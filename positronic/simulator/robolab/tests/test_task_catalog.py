@@ -113,7 +113,7 @@ def test_a_task_file_whose_class_is_not_the_metadata_name_fails_at_load(benchmar
     (lib / 'tasks').mkdir()
     (lib / 'tasks' / 'lab_task.py').write_text(_task_class('BananaInBowlTask'))
 
-    with pytest.raises(ValueError, match="no class 'LabTask'"):
+    with pytest.raises(ValueError, match="no module-level 'LabTask'"):
         TaskCatalog.load(benchmark, [lib], CATEGORIES)
 
 
@@ -179,3 +179,30 @@ def test_a_library_task_named_as_an_attribute_outside_the_categories_runs_by_its
     catalog = TaskCatalog.load(benchmark, [lib], CATEGORIES)
 
     assert [t.name for t in catalog.select('counting')] == ['counting']
+
+
+@pytest.mark.parametrize(
+    'source', ['LabTask = make_task("lab")\n', 'LabTask: type = make_task("lab")\n'], ids=['assign', 'annotated']
+)
+def test_a_task_file_that_binds_the_task_name_at_module_level_loads(benchmark, tmp_path, source):
+    lib = _write(tmp_path / 'bound', [_entry('LabTask', 'counting', filename='lab_task.py')])
+    (lib / 'tasks').mkdir()
+    (lib / 'tasks' / 'lab_task.py').write_text(source)
+
+    catalog = TaskCatalog.load(benchmark, [lib], CATEGORIES)
+
+    assert catalog.register_target('LabTask') == str(lib / 'tasks' / 'lab_task.py')
+
+
+@pytest.mark.parametrize(
+    'source',
+    ['def build():\n    LabTask = make_task("lab")\n', 'registry.LabTask = make_task("lab")\n'],
+    ids=['in-a-function', 'attribute'],
+)
+def test_a_task_file_that_binds_the_task_name_only_below_module_level_fails_at_load(benchmark, tmp_path, source):
+    lib = _write(tmp_path / 'unbound', [_entry('LabTask', 'counting', filename='lab_task.py')])
+    (lib / 'tasks').mkdir()
+    (lib / 'tasks' / 'lab_task.py').write_text(source)
+
+    with pytest.raises(ValueError, match="'LabTask'"):
+        TaskCatalog.load(benchmark, [lib], CATEGORIES)

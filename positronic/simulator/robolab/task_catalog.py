@@ -4,7 +4,7 @@ The env server imports this module as a top-level ``task_catalog`` from its own 
 positronic or Isaac Lab. A task library directory holds:
 
 - ``_metadata/task_metadata.json``, in RoboLab's metadata schema;
-- ``tasks/<file>.py``, one RoboLab ``Task`` class each, named as its metadata entry;
+- ``tasks/<file>.py``, each binding one RoboLab ``Task`` class at module level under its metadata name;
 - the scenes and assets its tasks load;
 - optionally ``cameras.py``, whose ``camera_sets()`` returns camera sets by a name in ``keys.CAMERA_SETS``.
 """
@@ -53,8 +53,18 @@ def _read(metadata: Path, category_map: dict[str, str]) -> list[tuple[CatalogTas
     return tasks
 
 
-def _defines_class(file: Path, name: str) -> bool:
-    return any(isinstance(node, ast.ClassDef) and node.name == name for node in ast.parse(file.read_text()).body)
+def _module_level_names(file: Path) -> set[str]:
+    """The names ``file`` binds at module level: its classes, and the plain names it assigns (``Task = make(...)``)."""
+    names = set()
+    for node in ast.parse(file.read_text()).body:
+        match node:
+            case ast.ClassDef(name=name):
+                names.add(name)
+            case ast.Assign(targets=targets):
+                names.update(target.id for target in targets if isinstance(target, ast.Name))
+            case ast.AnnAssign(target=ast.Name(id=name)):
+                names.add(name)
+    return names
 
 
 @dataclass(frozen=True)
@@ -81,8 +91,8 @@ class TaskCatalog:
                     raise ValueError(f'{file} defines {task.name!r}, which is the name of a RoboLab category')
                 if not file.is_file():
                     raise FileNotFoundError(f'task library {lib} names {task.name!r} in {file}, which does not exist')
-                if not _defines_class(file, task.name):
-                    raise ValueError(f'{file} defines no class {task.name!r}, the task name its metadata gives')
+                if task.name not in _module_level_names(file):
+                    raise ValueError(f'{file} binds no module-level {task.name!r}, the task name its metadata gives')
                 library[task.name] = LibraryTask(task, file)
         return cls(benchmark, library, categories)
 
