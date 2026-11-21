@@ -152,20 +152,6 @@ def _load_robot_meta() -> dict[str, Any]:
         return protocol.decode(f.read())
 
 
-@contextmanager
-def _no_table_fixture() -> Iterator[None]:
-    """Register a task library's task on no robot table fixture: its scene holds the robot base.
-
-    RoboLab spawns the table fixture that the robot cfg names (``DroidCfg.table_fixture``) into every task scene
-    when the task registers.
-    """
-    fixture, DroidCfg.table_fixture = DroidCfg.table_fixture, None
-    try:
-        yield
-    finally:
-        DroidCfg.table_fixture = fixture
-
-
 class RobolabEnv(EnvProtocol):
     """A RoboLab task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
@@ -511,6 +497,20 @@ class RobolabEnv(EnvProtocol):
         if self._env is not None:
             self._env.close()
             self._env = None
+
+
+@contextmanager
+def _no_table_fixture() -> Iterator[None]:
+    """Register a task library's task on no robot table fixture: its scene holds the robot base.
+
+    RoboLab spawns the table fixture that the robot cfg names (``DroidCfg.table_fixture``) into every task scene
+    when the task registers.
+    """
+    fixture, DroidCfg.table_fixture = DroidCfg.table_fixture, None
+    try:
+        yield
+    finally:
+        DroidCfg.table_fixture = fixture
 
 
 class DroidEnv(RobolabEnv):
