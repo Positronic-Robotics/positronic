@@ -1,14 +1,15 @@
 """Launches the RoboLab env server as a subprocess and owns its lifetime.
 
-positronic starts the server: the env runs in RoboLab's own interpreter via ``uv run --project <checkout>``,
-which resolves the Isaac Lab / Isaac Sim dependency stack from the pinned RoboLab checkout (far too heavy for
-a PEP 723 script header). The positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py`` imports
-the dumb ``server``/``protocol`` without dragging in positronic; ``robolab`` itself resolves from the uv
-project.
+positronic starts the server: ``uv sync --frozen`` installs the Isaac Lab / Isaac Sim dependency stack from the lock
+of the pinned RoboLab checkout, and the env runs in RoboLab's own interpreter via
+``uv run --no-sync --project <checkout>``.
+The positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol``
+without dragging in positronic; ``robolab`` itself resolves from the uv project.
 """
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -26,52 +27,49 @@ _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 
 _ROBOLAB_REPO = 'https://github.com/NVLabs/RoboLab.git'
-_ROBOLAB_COMMIT = '93a8e064babe099e49c61aca5ece7f25f585c6a2'  # v0.2.0
+_ROBOLAB_COMMIT = 'dc3383888b7279b4256312268a35a5f9046c44d3'  # v0.3.3
 _ROBOLAB_SRC = Path.home() / '.cache' / 'positronic' / 'robolab' / 'src'
 
-# RoboLab declares only ``requires-python = ">=3.11"``, so uv otherwise inherits the interpreter from the
-# calling environment (positronic runs 3.13) — and NVIDIA's index ships no cp313 ``isaaclab`` wheels.
+# RoboLab admits Python 3.11 and 3.12, and its lock holds ``isaaclab`` 2.2 (the ``isaac50`` stack) for cp311 only.
 _ROBOLAB_PYTHON = '3.11'
 
 # RoboLab installs Isaac only through an extra; ``isaac50`` is the IsaacSim 5.0 / IsaacLab 2.2 stack env.py drives.
 _ROBOLAB_ISAAC_EXTRA = 'isaac50'
 
-# RoboLab ships no uv.lock, so ``uv run --project`` re-resolves its dependencies on every fresh box and a
-# day-fresh release can break the install (cffi 2.1.0 published a macOS-only wheel and took down Linux
-# resolves). Known-broken releases are appended to the checkout's own ``constraint-dependencies``.
-# TODO: the dependency tree is still unfrozen — any unpinned release can shift the resolve.
-_CONSTRAINTS = ('cffi != 2.1.0',)
-_CONSTRAINTS_ANCHOR = 'constraint-dependencies = ['
+# RoboLab builds ``flatdict`` with ``[tool.uv.extra-build-dependencies]``, which uv makes stable in 0.10.0 (changelog).
+_UV_MIN_VERSION = (0, 10, 0)
 
 
-def _ensure_robolab_src() -> Path:
-    """The pinned RoboLab checkout with its LFS assets (Isaac Lab cannot load a USD from a pointer stub),
-    its ``constraint-dependencies`` extended with ``_CONSTRAINTS``."""
-    src = ensure_pinned_checkout(_ROBOLAB_REPO, _ROBOLAB_COMMIT, _ROBOLAB_SRC, lfs=True)
-    # Re-patch from pristine every run, so the edit is idempotent and survives the pin moving.
-    subprocess.run(['git', '-C', str(src), 'checkout', '--', 'pyproject.toml'], check=True)
-    pyproject = src / 'pyproject.toml'
-    text = pyproject.read_text()
-    if _CONSTRAINTS_ANCHOR not in text:
-        raise RuntimeError(f'RoboLab pyproject.toml has no {_CONSTRAINTS_ANCHOR!r} to extend')
-    additions = ''.join(f'"{constraint}", ' for constraint in _CONSTRAINTS)
-    pyproject.write_text(text.replace(_CONSTRAINTS_ANCHOR, _CONSTRAINTS_ANCHOR + additions, 1))
-    return src
+def _require_uv_version() -> None:
+    found = subprocess.run(['uv', '--version'], check=True, capture_output=True, text=True).stdout.strip()
+    match = re.match(r'uv (\d+)\.(\d+)\.(\d+)', found)
+    if match is None or tuple(int(part) for part in match.groups()) < _UV_MIN_VERSION:
+        minimum = '.'.join(str(part) for part in _UV_MIN_VERSION)
+        raise RuntimeError(f'the RoboLab setup needs uv {minimum} or newer, and found {found!r}')
 
 
 def _spawn(
     host: str, port: int, cameras: str, max_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
 ) -> subprocess.Popen:
-    # Only the setup is one at a time: a concurrent checkout would reset the patched pyproject.toml from under
-    # ``uv sync``. The per-eval ``env.py`` runs outside the lock, so evals still fan out.
+    _require_uv_version()
+    # One setup at a time, so no checkout resets files under ``uv sync``; the hold is one install, which a waiter needs.
     with setup_lock(_ROBOLAB_SRC.parent):
-        src = _ensure_robolab_src()
-        # Install the dependency stack before spawning: a cold first install (~15 GB of Isaac wheels) far
-        # exceeds the client's connect deadline, which should only ever cover Isaac boot. Idempotent and fast
-        # when warm. The spawn below passes ``--no-sync`` (``uv run`` re-syncs by default), so no resolve or
-        # install ever runs outside this lock.
+        # With its LFS assets: Isaac Lab cannot load a USD from a pointer stub.
+        src = ensure_pinned_checkout(_ROBOLAB_REPO, _ROBOLAB_COMMIT, _ROBOLAB_SRC, lfs=True)
+        # Before the spawn: a cold install (~15 GB) far exceeds the connect deadline. ``--frozen`` installs the
+        # shipped uv.lock and resolves nothing; the spawn passes ``--no-sync``, so no install runs outside the lock.
         subprocess.run(
-            ['uv', 'sync', '--project', str(src), '--python', _ROBOLAB_PYTHON, '--extra', _ROBOLAB_ISAAC_EXTRA],
+            [
+                'uv',
+                'sync',
+                '--frozen',
+                '--project',
+                str(src),
+                '--python',
+                _ROBOLAB_PYTHON,
+                '--extra',
+                _ROBOLAB_ISAAC_EXTRA,
+            ],
             check=True,
         )
     command = [
