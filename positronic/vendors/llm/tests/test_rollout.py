@@ -36,7 +36,7 @@ from positronic.vendors.llm.server import LLMModel, deployment
 class Arm(pimm.ControlSystem):
     """An arm that reaches each commanded position at once and measures a constant hand wrench."""
 
-    WRENCH = np.array([0.0, 0.0, 4.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    WRENCH = np.array([0.0, 3.0, 4.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
     def __init__(self):
         self.commands = pimm.ControlSystemReceiver(self)
@@ -242,7 +242,7 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
         target_x = before['position_m'][0] + 0.01
         assert after['position_m'][0] == pytest.approx(target_x, abs=1e-7)
         assert after['gripper'] == pytest.approx(0.2)
-        assert before['force_z_n'] == after['force_z_n'] == pytest.approx(Arm.WRENCH[2])
+        assert before['force_n'] == after['force_n'] == pytest.approx(5.0)
         assert list(episode[keys.EE_POSE].values())[-1][0] == pytest.approx(target_x)
         # The client plays the move at the local cadence. A charged run also counts the real round trips to the server.
         first, last = episode.bounds(RECEIVED_WORLD)

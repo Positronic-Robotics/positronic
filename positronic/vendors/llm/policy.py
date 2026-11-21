@@ -114,16 +114,16 @@ class RevealFrames(BaseModel):
     note: Annotated[str, Field(min_length=1)]
 
 
-# The hand state field of the force that the hand applies along its z axis. libfranka counts a force that the robot
-# applies to its surroundings as positive.
-_FORCE_Z = 'force_z_n'
+# The hand state field of the size of the measured external force. A size has no frame: the observation does not
+# carry the transform from the frame of the wrench to the hand frame.
+_FORCE = 'force_n'
 
 
 @dataclass
 class _Hand:
     pose: geom.Transform3D
     grip: float
-    force_z: float | None  # newtons along hand z, absent on a robot that measures no wrench
+    force: float | None  # newtons, absent on a robot that measures no wrench
 
     @classmethod
     def read(cls, obs: Mapping[str, Any], arm: str | None) -> '_Hand':
@@ -137,17 +137,17 @@ class _Hand:
         grip = float(obs[keys.arm_channel(keys.GRIP, arm)])
         if not np.isfinite(grip) or not 0 <= grip <= 1:
             raise ValueError('Measured gripper position must be in [0, 1]')
-        force_z = None
+        force = None
         # The robot state serializer leaves out the wrench of a robot that does not measure one.
         if (wrench := obs.get(f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_WRENCH_SUFFIX}')) is not None:
             wrench = np.asarray(wrench, dtype=float)
             if wrench.shape != (6,) or not np.all(np.isfinite(wrench)):
                 raise ValueError('Measured hand wrench must contain six finite values')
-            force_z = float(wrench[2])
-        return cls(geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT), grip, force_z)
+            force = float(np.linalg.norm(wrench[:3]))
+        return cls(geom.Transform3D.from_vector(pose, geom.Rotation.Representation.QUAT), grip, force)
 
     def measured(self) -> dict[str, Any]:
-        force = {} if self.force_z is None else {_FORCE_Z: self.force_z}
+        force = {} if self.force is None else {_FORCE: self.force}
         return {
             'position_m': self.pose.translation.tolist(),
             'roll_pitch_yaw_rad': self.pose.rotation.as_euler.tolist(),
@@ -251,8 +251,8 @@ class Conversation:
             'Gripper 0 is open and 1 is closed. '
             f'A gripper below {FULL_CLOSE_FROM} sets the finger opening. A gripper of {FULL_CLOSE_FROM} or more '
             'closes the fingers fully, so the clamped waypoint reports 1. '
-            f'{_FORCE_Z}, when the hand state has it, is the force in newtons that the hand applies to its '
-            'surroundings along hand z. It is positive when the hand pushes along hand z, for example down on a table. '
+            f'{_FORCE}, when the hand state has it, is the size in newtons of the external force on the hand that '
+            'the robot estimates. It does not give the direction of the force. '
             'A path plays its waypoints in order before the next observation; '
             'actual arrival must be checked from the measured state. '
             'Oversized segments are clamped from the previous clamped waypoint, and the first from the latest '

@@ -604,13 +604,22 @@ def last_state(metadata) -> dict:
     return [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'observation'][-1]
 
 
-def test_the_hand_state_reports_the_z_force_of_a_measured_wrench():
+@pytest.mark.parametrize(
+    ('wrench', 'force'),
+    [
+        # A frame turned against the hand moves the force out of z, and the size stays.
+        ([3.0, 0.0, 4.0, 0.1, 0.2, 0.3], 5.0),
+        ([0.0, 0.0, -3.0, 0.0, 0.0, 0.0], 3.0),
+        ([0.0, 0.0, 0.0, 0.5, -0.5, 0.2], 0.0),
+    ],
+)
+def test_the_hand_state_reports_the_size_of_the_measured_force(wrench, force):
     metadata = {}
     conversation = Conversation(llm(model='test'), metadata.__setitem__)
-    conversation.request({**observation(), keys.EE_WRENCH: np.array([1.0, 2.0, 7.5, 0.1, 0.2, 0.3])}, 0)
-    assert last_state(metadata)['force_z_n'] == 7.5
+    conversation.request({**observation(), keys.EE_WRENCH: np.array(wrench)}, 0)
+    assert last_state(metadata)['force_n'] == pytest.approx(force)
     prompt = metadata[policy_keys.TRANSCRIPT][0]['prompt']
-    assert 'force_z_n, when the hand state has it, is the force in newtons that the hand applies' in prompt
+    assert 'force_n, when the hand state has it, is the size in newtons of the external force on the hand' in prompt
 
 
 def test_a_hand_with_no_measured_wrench_reports_no_force():
@@ -619,8 +628,8 @@ def test_a_hand_with_no_measured_wrench_reports_no_force():
     wrench = f'{keys.arm_channel(keys.ROBOT_STATE, keys.RIGHT_ARM)}{keys.EE_WRENCH_SUFFIX}'
     conversation.request({**bimanual_observation(), wrench: np.array([0.0, 0.0, -3.0, 0.0, 0.0, 0.0])}, 0)
     arms = last_state(metadata)['arms']
-    assert 'force_z_n' not in arms[keys.LEFT_ARM]
-    assert arms[keys.RIGHT_ARM]['force_z_n'] == -3.0
+    assert 'force_n' not in arms[keys.LEFT_ARM]
+    assert arms[keys.RIGHT_ARM]['force_n'] == 3.0
 
 
 @pytest.mark.parametrize('wrench', [np.zeros(3), np.array([0.0, 0.0, np.nan, 0.0, 0.0, 0.0])])
