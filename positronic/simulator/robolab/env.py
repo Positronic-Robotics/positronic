@@ -723,7 +723,7 @@ class YamEnv(RobolabEnv):
 
     def __init__(self, max_envs: int = 1):
         super().__init__(max_envs)
-        import yam_robolab  # noqa: PLC0415 -- it needs RoboLab 0.3, which a DROID server does not run
+        import yam_robolab  # noqa: PLC0415 -- the YAM configs, which a DROID server does not use
 
         # The robot USD is converted once per server, into a directory of its own.
         robot_usd, stand_usd = yam_robolab.convert(Path(tempfile.mkdtemp(prefix='robolab-yam-')))

@@ -9,7 +9,7 @@ Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLaunc
     PYTHONPATH=positronic/simulator/env_server \
         uv run --extra isaac50 --project <robolab clone> positronic/simulator/robolab/validate.py --headless
 
-A YAM run takes the RoboLab 0.3 clone of the YAM server, and ``--robot yam``.
+A YAM run takes ``--robot yam``.
 """
 
 import math
