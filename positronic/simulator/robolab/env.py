@@ -385,11 +385,7 @@ class RobolabEnv(EnvProtocol):
             merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
             obs, _extras = self._env.reset_to(merged, None, is_relative=True)
         self._faulted = self._nonfinite_arms()
-        # ``meta`` carries the task identity and the resolved instruction. The reset frame's
-        # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
-        # would replay the prior trial's final values.
-        # The contact sensor also holds the prior trial's last physics step until the first step, so the reset frame
-        # reports no contact.
+        # Zero progress: the recorder's infos still hold the prior trial until a step refreshes them.
         observed = self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32), reset=True)
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: o} for o in observed],
@@ -468,6 +464,7 @@ class RobolabEnv(EnvProtocol):
             for slot, pose in enumerate(poses):
                 states[slot][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}'] = pose
         for slot, state in enumerate(states):
+            # On a reset frame the contact sensor still holds the prior trial's last physics step.
             touched = (
                 set()
                 if reset

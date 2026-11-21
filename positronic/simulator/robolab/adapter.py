@@ -85,7 +85,7 @@ class RobolabDroidAdapter(RobolabAdapter):
     """The DROID rig: one arm, measured and driven at ``ROBOLAB_EE_FRAME``."""
 
     def __init__(self, camera_dict: dict[str, str]):
-        # Converting here is what lets one checkpoint run on RoboLab and on the rig it stands in for unchanged.
+        # Converting here lets one checkpoint run unchanged on RoboLab and on the rig it stands in for.
         super().__init__(camera_dict, ROBOLAB_EE_FRAME)
 
     def _arm_observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:

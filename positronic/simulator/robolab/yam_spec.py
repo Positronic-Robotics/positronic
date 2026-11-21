@@ -51,10 +51,8 @@ PLATE_CENTER_X = -0.0315
 # The robot root in the world frame of the rig recordings: the mounts of ``yam_bimanual_yambox`` minus the plate.
 ROOT_IN_RIG_WORLD = (0.30, 0.0, 0.3125 - PLATE_THICKNESS)
 
-# Arm drives. kp and kd are the i2rt values for the YAM. The real arm adds gravity compensation, and the sim robot has
-# gravity off. The effort limits are the peak torques of the DM4340 (joints 1-3) and DM4310 (joints 4-6) motors. The
-# armatures are the MuJoCo Menagerie values. The velocity limits are assumed from the motor class: the i2rt URDF gives
-# 1 rad/s placeholders.
+# Arm drives: the i2rt gains, the peak motor torques, and assumed velocity limits (the URDF has 1 rad/s placeholders).
+# The sim robot has gravity off, as the real arm compensates it.
 ARM_STIFFNESS = (80.0, 80.0, 80.0, 10.0, 10.0, 10.0)
 ARM_DAMPING = (5.0, 5.0, 5.0, 1.5, 1.5, 1.5)
 ARM_EFFORT = (28.0, 28.0, 28.0, 10.0, 10.0, 10.0)

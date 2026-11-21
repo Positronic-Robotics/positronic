@@ -109,7 +109,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name, instruction type and episode length override ride each trial's
-    reset token. There is no per-trial seed: RoboLab's eval path exposes no seed hook, so trial params carry none.
+    reset token.
     The eval records two privileged signals and never gives them to the policy. ``subtask`` is the env's live
     subtask progress ``[status, completed, total, score]``. ``gt_state`` is the scene state: object poses, gripper
     contacts and progress per condition chain.

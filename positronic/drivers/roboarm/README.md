@@ -73,7 +73,7 @@ An arm whose controller runs settings of its own emits the values that the contr
 that emitter in `arm_meta_sources`, keyed by the arm's joint signal, and the harness records each key as
 `{key: {joint signal: value}}`.
 
-A remote benchmark env that measures somewhere else is wrapped, not excused: give `WireCommandAdapter` an
+For a remote benchmark env that measures somewhere else, give `WireCommandAdapter` an
 `env_control_frame` — the transform from `gripper` to what the env uses — and it converts both paths
 (`RobolabDroidAdapter`).
 
