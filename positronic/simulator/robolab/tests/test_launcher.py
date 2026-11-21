@@ -274,6 +274,19 @@ def test_a_directory_without_task_metadata_fails_before_any_spawn(spawned, tmp_p
     assert spawned == []
 
 
+def test_a_yam_server_with_a_task_library_fails_before_any_spawn(spawned, tmp_path):
+    (tmp_path / '_metadata').mkdir()
+    (tmp_path / '_metadata' / 'task_metadata.json').write_text('[]')
+
+    with (
+        pytest.raises(ValueError, match='task libraries'),
+        launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM, task_libs=(tmp_path,)),
+    ):
+        pass
+
+    assert spawned == []
+
+
 @pytest.fixture
 def served_libs(monkeypatch) -> list[Any]:
     """The ``task_libs`` each eval hands ``serve_robolab``, with no server launched."""

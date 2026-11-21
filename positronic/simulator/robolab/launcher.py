@@ -56,6 +56,8 @@ def _spawn(
     task_libs: tuple[Path, ...] = (),
 ) -> subprocess.Popen:
     keys.camera_set(robot, cameras)
+    if task_libs and robot != keys.DROID:
+        raise ValueError(f'task libraries hold tasks for the {keys.DROID} robot, not for the {robot} robot')
     # A missing library fails here, before the Isaac boot, rather than in the server after it.
     for lib in task_libs:
         if not (lib / TASK_LIB_METADATA).is_file():
@@ -134,7 +136,8 @@ def serve_robolab(
     ``max_envs`` is the most clones of the scene the one Isaac process steps together. Each batch of evals gets as
     many clones as the batch size its first reset carries.
 
-    ``task_libs`` are task library directories on this host (see ``task_catalog``); their tasks run by name.
+    ``task_libs`` are task library directories on this host (see ``task_catalog``); their tasks run by name. Only a
+    DROID server takes them.
     """
     return serve_subprocess(partial(_spawn, robot=robot, cameras=cameras, max_envs=max_envs, task_libs=task_libs), host)
 

@@ -18,8 +18,8 @@ The wire contract:
   clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
   touches it (for the YAM, any finger of either hand); and RoboLab's progress through each condition chain of the
   current subtask.
-- ``--task-lib`` adds a task library (``task_catalog``): its tasks run by name beside the benchmark, and the camera
-  sets its ``cameras.py`` returns join RoboLab's presets for ``--cameras``.
+- ``--task-lib`` adds a task library (``task_catalog``) to a DROID server: its tasks run by name beside the
+  benchmark, and the camera sets its ``cameras.py`` returns join RoboLab's presets for ``--cameras``.
 """
 
 import argparse
@@ -97,6 +97,8 @@ AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
 keys.camera_set(args.robot, args.cameras)
+if args.task_lib and args.robot != keys.DROID:
+    parser.error(f'task libraries hold tasks for the {keys.DROID} robot, not for the {args.robot} robot')
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
 simulation_app = AppLauncher(args).app
 
