@@ -49,6 +49,7 @@ The progress is what RoboLab's subtask recorder already tracks, so the record ad
 """
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -152,10 +153,6 @@ from robolab.core.world.world_state import get_world  # noqa: E402  # pyright: i
 from robolab.registrations.droid import camera_presets  # noqa: E402  # pyright: ignore[reportMissingImports]
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
 from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
-
-# The YAM configs need RoboLab 0.3, and the DROID server runs on RoboLab 0.2, so only a YAM server imports them.
-if args.robot == keys.YAM:
-    import yam_robolab  # noqa: E402
 
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
 # ``create_env``: subtask progress feeds the wire ``subtask`` observation; per-step image recording only bloats
@@ -757,12 +754,14 @@ class YamEnv(RobolabEnv):
 
     def __init__(self, max_envs: int = 1):
         super().__init__(max_envs)
+        import yam_robolab  # noqa: PLC0415 -- it needs RoboLab 0.3, which a DROID server does not run
+
         # The robot USD is converted once per server, into a directory of its own.
-        out_dir = Path(tempfile.mkdtemp(prefix='robolab-yam-'))
-        self._robot_usd, self._stand_usd = yam_robolab.convert(out_dir)  # pyright: ignore[reportPossiblyUnboundVariable]
+        robot_usd, stand_usd = yam_robolab.convert(Path(tempfile.mkdtemp(prefix='robolab-yam-')))
+        self._register_envs = functools.partial(yam_robolab.register_envs, robot_usd=robot_usd, stand_usd=stand_usd)
 
     def _register(self, task: str) -> None:
-        yam_robolab.register_envs([task], self._robot_usd, self._stand_usd)  # pyright: ignore[reportPossiblyUnboundVariable]
+        self._register_envs([task])
 
     def _bind_robot(self) -> None:
         names = self._robot.data.joint_names
