@@ -162,7 +162,9 @@ class RemotePolicy(Policy):
     codecs run. ``meta`` holds only the client's own values. Each run records the server's values in the episode
     metadata before its first yield, with the frames that the server and its declared stack state as ``EE_FRAMES``,
     and the ID of the session that serves the episode as ``SESSION_ID``.
-    ``wait_for_server`` waits for the server without a session.
+    ``wait_for_server`` waits for the server without a session. A caller that starts a run itself may pass it
+    ``cancelled`` (``runtime.start(policy, cancelled=...)``), which ends the session opening as
+    ``InferenceClient.new_session`` reads it: the run then raises ``SessionOpeningCancelled``.
     """
 
     def __init__(
@@ -213,8 +215,8 @@ class RemotePolicy(Policy):
         if run is not None:
             run.close()
 
-    def run(self, runtime: Runtime) -> PolicyRun:
-        session = self._client.new_session()
+    def run(self, runtime: Runtime, cancelled: cabc.Callable[[], bool] | None = None) -> PolicyRun:
+        session = self._client.new_session(cancelled=cancelled)
         execution = None
         run = None
         try:
