@@ -164,3 +164,18 @@ def test_a_library_camera_set_that_no_run_can_select_fails_at_load(tmp_path):
         camera_sets([lib], {}, SELECTABLE)
 
     assert str(lib / 'cameras.py') in str(refused.value)
+
+
+def test_a_library_task_named_as_a_category_fails_at_load(benchmark, tmp_path):
+    lib = _library(tmp_path / 'category', 'relational', 'relational.py')
+
+    with pytest.raises(ValueError, match="'relational'"):
+        TaskCatalog.load(benchmark, [lib], CATEGORIES)
+
+
+def test_a_library_task_named_as_an_attribute_outside_the_categories_runs_by_its_name(benchmark, tmp_path):
+    lib = _library(tmp_path / 'attribute', 'counting', 'counting.py')
+
+    catalog = TaskCatalog.load(benchmark, [lib], CATEGORIES)
+
+    assert [t.name for t in catalog.select('counting')] == ['counting']

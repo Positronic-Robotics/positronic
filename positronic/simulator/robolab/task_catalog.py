@@ -1,9 +1,12 @@
 """The tasks and camera sets a RoboLab env server can build: RoboLab's own, and those of each task library it was given.
 
-A task library is a directory that holds ``tasks/<file>.py`` with one RoboLab ``Task`` class each, named as its
-entry in ``_metadata/task_metadata.json`` (RoboLab's metadata schema), the scenes and assets its tasks load, and
-optionally ``cameras.py``, whose ``camera_sets()`` returns camera sets by name. The env server imports this module as
-a top-level ``task_catalog`` from its own directory, so it imports nothing from positronic or Isaac Lab.
+The env server imports this module as a top-level ``task_catalog`` from its own directory, so it imports nothing from
+positronic or Isaac Lab. A task library directory holds:
+
+- ``_metadata/task_metadata.json``, in RoboLab's metadata schema;
+- ``tasks/<file>.py``, one RoboLab ``Task`` class each, named as its metadata entry;
+- the scenes and assets its tasks load;
+- optionally ``cameras.py``, whose ``camera_sets()`` returns camera sets by a name in ``keys.CAMERA_SETS``.
 """
 
 import ast
@@ -63,6 +66,7 @@ class TaskCatalog:
     @classmethod
     def load(cls, benchmark_task_dir: Path, task_libs: list[Path], category_map: dict[str, str]) -> 'TaskCatalog':
         benchmark = {task.name: task for task, _ in _read(benchmark_task_dir / METADATA, category_map)}
+        categories = frozenset(category_map.values())
         library: dict[str, LibraryTask] = {}
         for lib in task_libs:
             for task, filename in _read(lib / METADATA, category_map):
@@ -72,12 +76,15 @@ class TaskCatalog:
                     raise ValueError(f'{file} defines {task.name!r}, which is also a task of the RoboLab benchmark')
                 if task.name in library:
                     raise ValueError(f'{file} and {library[task.name].file} both define the task {task.name!r}')
+                # ``select`` reads a category's name as that category, so a task of that name could never run.
+                if task.name in categories:
+                    raise ValueError(f'{file} defines {task.name!r}, which is the name of a RoboLab category')
                 if not file.is_file():
                     raise FileNotFoundError(f'task library {lib} names {task.name!r} in {file}, which does not exist')
                 if not _defines_class(file, task.name):
                     raise ValueError(f'{file} defines no class {task.name!r}, the task name its metadata gives')
                 library[task.name] = LibraryTask(task, file)
-        return cls(benchmark, library, frozenset(category_map.values()))
+        return cls(benchmark, library, categories)
 
     def select(self, selection: str | Sequence[str] | None) -> list[CatalogTask]:
         """The tasks ``selection`` names: a category, a task name, or a list of names; ``None`` is the whole
