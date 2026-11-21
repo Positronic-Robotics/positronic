@@ -271,7 +271,8 @@ Each loop in `run`, and each helper loop that `run` calls, keeps these rules:
   main-process group `interleave` advances the peers while one loop sleeps, so a blocking call there
   stalls them all.
 - **Yield on each pass.** Yield `pimm.Sleep(secs)` to wait. `pimm.Yield()` runs the loop again at the
-  same instant, so yield it only when another loop in the group sleeps to move the clock. A helper that
+  next instant, which is the nearest wake of a sleeping loop. So yield it only when another loop in the
+  group sleeps to move the clock. A helper that
   loops is a generator, and `run` yields each command that the helper yields.
 - **Give a helper loop its stop condition as an argument, and check it on each pass.** A wait in the
   active phase stops on `should_stop`, so it ends when the world stops. A shutdown wait starts after
