@@ -4,6 +4,7 @@ holds a lost gripper until a call activates it again."""
 import logging
 import os
 from enum import Enum, auto
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -758,11 +759,42 @@ def test_a_stop_at_the_prompt_ends_the_grip_probe_with_the_fingers_open(monkeypa
     assert bus.writes[-1][1] == 0
 
 
-@pytest.mark.parametrize('seconds', ['0', '-1', 'nan'])
-def test_the_grip_probe_refuses_a_record_time_that_is_not_positive(monkeypatch, capsys, tmp_path, seconds):
-    argv = ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path), '--record-s', seconds]
+@pytest.mark.parametrize(
+    ('flag', 'value', 'refusal'),
+    [
+        ('--record-s', '0', 'is not a positive number of seconds'),
+        ('--record-s', '-1', 'is not a positive number of seconds'),
+        ('--record-s', 'nan', 'is not a positive number of seconds'),
+        ('--repeats', '0', 'is not a positive count'),
+        ('--repeats', '-2', 'is not a positive count'),
+        ('--speed', '256', 'is not in 0..255'),
+        ('--force', '-1', 'is not in 0..255'),
+        ('--label', '../pen', 'is not a file name'),
+        ('--label', '', 'is not a file name'),
+    ],
+)
+def test_the_grip_probe_refuses_an_argument_out_of_range(monkeypatch, capsys, tmp_path, flag, value, refusal):
+    argv = ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path / 'out'), flag, value]
     monkeypatch.setattr('sys.argv', argv)
 
     with pytest.raises(SystemExit):
         robotiq_grip_probe.main()
-    assert 'is not a positive number of seconds' in capsys.readouterr().err
+    assert refusal in capsys.readouterr().err
+    assert not (tmp_path / 'out').exists(), 'the probe started before it checked its arguments'
+
+
+def test_a_failed_write_keeps_the_files_of_the_closes_before_it(monkeypatch, tmp_path):
+    record = _probed(monkeypatch, FakeBus(object_at=OBJECT), tmp_path, enters=1)
+    before = {name: (tmp_path / name).read_bytes() for name in ('pen.json', 'pen.csv', 'pen.txt')}
+    write_text = Path.write_text
+
+    def torn(path: Path, text: str) -> int:
+        write_text(path, text[: len(text) // 2])
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(Path, 'write_text', torn)
+    record.closes.append(record.closes[0])
+    with pytest.raises(OSError):
+        robotiq_grip_probe.write(record, tmp_path)
+
+    assert {name: (tmp_path / name).read_bytes() for name in before} == before

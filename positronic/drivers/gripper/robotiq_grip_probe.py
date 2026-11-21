@@ -21,9 +21,11 @@ files, ``fingers`` is ``gOBJ`` (0..3, as in the manual), ``requested`` is ``gPR`
 
 import argparse
 import csv
+import io
 import logging
 import math
 import os
+import re
 import select
 import sys
 from collections.abc import Generator, Iterator
@@ -136,16 +138,24 @@ def table(record: GripRecord) -> str:
     return '\n'.join([HEADER, *(row(record.label, close) for close in record.closes), total]) + '\n'
 
 
+def _replace(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` through a temporary file in the same directory. A failed write keeps the old file."""
+    temp = path.with_name(f'.{path.name}.tmp')
+    temp.write_text(text)
+    os.replace(temp, path)
+
+
 def write(record: GripRecord, out: Path) -> None:
     """Write the JSON, the CSV and the table of ``record`` to ``out``."""
-    (out / f'{record.label}.json').write_text(record.model_dump_json(indent=1))
-    with (out / f'{record.label}.csv').open('w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['repeat', *Sample.model_fields])
-        for close in record.closes:
-            for sample in close.samples:
-                writer.writerow([close.repeat, *sample.model_dump(mode='json').values()])
-    (out / f'{record.label}.txt').write_text(table(record))
+    _replace(out / f'{record.label}.json', record.model_dump_json(indent=1))
+    rows = io.StringIO()
+    writer = csv.writer(rows)
+    writer.writerow(['repeat', *Sample.model_fields])
+    for close in record.closes:
+        for sample in close.samples:
+            writer.writerow([close.repeat, *sample.model_dump(mode='json').values()])
+    _replace(out / f'{record.label}.csv', rows.getvalue())
+    _replace(out / f'{record.label}.txt', table(record))
 
 
 class RobotiqGripProbe(pimm.ControlSystem):
@@ -227,6 +237,19 @@ class RobotiqGripProbe(pimm.ControlSystem):
         return samples
 
 
+def _label(text: str) -> str:
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', text):
+        raise argparse.ArgumentTypeError(f'{text!r} is not a file name of letters, digits, "_", "." and "-"')
+    return text
+
+
+def _count(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f'{value} is not a positive count')
+    return value
+
+
 def _seconds(text: str) -> float:
     value = float(text)
     if not (math.isfinite(value) and value > 0):
@@ -244,8 +267,10 @@ def _byte(text: str) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--port', required=True, help='the serial port of the gripper, for example /dev/ttyUSB0')
-    parser.add_argument('--label', required=True, help='the object and the grip, for example pen-fingertip')
-    parser.add_argument('--repeats', type=int, default=5)
+    parser.add_argument(
+        '--label', type=_label, required=True, help='the object and the grip, for example pen-fingertip'
+    )
+    parser.add_argument('--repeats', type=_count, default=5)
     parser.add_argument('--speed', type=_byte, default=255)
     parser.add_argument('--force', type=_byte, default=255)
     parser.add_argument('--record-s', type=_seconds, default=3.0, help='how long to read the gripper after a command')
