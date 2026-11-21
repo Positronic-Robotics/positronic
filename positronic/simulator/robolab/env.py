@@ -260,7 +260,7 @@ class RobolabEnv(EnvProtocol):
         names. Without a ``task`` the whole benchmark runs. A task library's task runs only by its name. Each record
         states the instruction in the phrasing that ``instruction_type`` names and names that phrasing for the reset.
         A task that has phrasings but not that one raises ``ValueError`` here, before any scene is built."""
-        selected = self._catalog.select(spec.get('task'), set(robolab.constants.BENCHMARK_TASK_CATEGORIES.values()))
+        selected = self._catalog.select(spec.get('task'))
         instruction_type = spec[keys.SELECT_INSTRUCTION_TYPE]
         return [
             {

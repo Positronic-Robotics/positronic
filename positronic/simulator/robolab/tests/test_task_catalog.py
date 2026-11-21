@@ -47,7 +47,7 @@ def library(tmp_path) -> Path:
 def test_a_library_task_runs_by_its_name_with_its_own_budget(benchmark, library):
     catalog = TaskCatalog.load(benchmark, [library], CATEGORIES)
 
-    (task,) = catalog.select('LabTask', set(CATEGORIES.values()))
+    (task,) = catalog.select('LabTask')
 
     assert task.episode_length_s == 300.0
     assert task.instruction == 'do LabTask'
@@ -58,8 +58,8 @@ def test_a_library_task_runs_by_its_name_with_its_own_budget(benchmark, library)
 def test_no_category_and_no_whole_benchmark_sweep_picks_up_a_library_task(benchmark, library):
     catalog = TaskCatalog.load(benchmark, [library], CATEGORIES)
 
-    assert [t.name for t in catalog.select(None, set(CATEGORIES.values()))] == ['BananaInBowlTask', 'CountTask']
-    assert [t.name for t in catalog.select('relational', set(CATEGORIES.values()))] == ['CountTask']
+    assert [t.name for t in catalog.select(None)] == ['BananaInBowlTask', 'CountTask']
+    assert [t.name for t in catalog.select('relational')] == ['CountTask']
 
 
 def _library(root: Path, name: str, filename: str) -> Path:
@@ -103,7 +103,7 @@ def test_an_unknown_name_names_itself_in_the_error(benchmark, library):
     catalog = TaskCatalog.load(benchmark, [library], CATEGORIES)
 
     with pytest.raises(ValueError, match='NoSuchTask'):
-        catalog.select(['LabTask', 'NoSuchTask'], set(CATEGORIES.values()))
+        catalog.select(['LabTask', 'NoSuchTask'])
 
 
 def test_the_exterior_pair_set_binds_both_exteriors_and_the_wrist():
