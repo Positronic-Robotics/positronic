@@ -48,7 +48,7 @@ from positronic.simulator.env_server.tests.mujoco_env import (
     remote_stack_cubes_eval,
 )
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE, SIM_STATE_INTEGRATION
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab.adapter import RobolabDroidAdapter
 from positronic.tests.testing_coutils import drive_scheduler
 
 
@@ -572,7 +572,7 @@ class TestEnvControlFrame:
             _in_env_control_frame(roboarm_command.CartesianDelta(delta), self.frame, None)
 
     def test_a_one_arm_adapter_composes_a_delta_at_the_pose_its_observation_measured(self):
-        adapter = RobolabAdapter(camera_dict={})
+        adapter = RobolabDroidAdapter(camera_dict={})
         eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         adapter.observations({
             protocol.OBS_EEF_POS: eef.translation,
@@ -591,7 +591,7 @@ class TestEnvControlFrame:
         np.testing.assert_allclose(wired[protocol.COMMAND_POSE], expected.as_vector(self.rotmat), atol=1e-12)
 
     def test_robolab_reports_and_drives_the_same_frame(self):
-        adapter = RobolabAdapter(camera_dict={})
+        adapter = RobolabDroidAdapter(camera_dict={})
         eef = geom.Transform3D(np.array([0.4, 0.1, 0.3]), geom.Rotation.from_euler([0.1, 0.2, 0.3]))
         raw = {
             protocol.OBS_EEF_POS: eef.translation,

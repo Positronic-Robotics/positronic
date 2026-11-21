@@ -29,7 +29,7 @@ from positronic.eval import keys as eval_keys
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.robolab import keys as robolab_keys
-from positronic.simulator.robolab.adapter import RobolabAdapter
+from positronic.simulator.robolab.adapter import RobolabDroidAdapter
 from positronic.simulator.robolab.launcher import serve_robolab
 
 # Keep re-sending the last action after the log ends, matching RoboLab's own replay tail: the final placement
@@ -103,7 +103,7 @@ def _replay_episode(
 
 def _check_task_list(conn: EnvConnection, task: str) -> str:
     """Assert the server answers its own task list, as the adapter reads it. Return the task's instruction."""
-    adapter = RobolabAdapter({})
+    adapter = RobolabDroidAdapter({})
     records = conn.tasks(spec(task=task, **{robolab_keys.SELECT_INSTRUCTION_TYPE: _INSTRUCTION_TYPE}))
     params = adapter.task_params(records)
     assert [p[eval_keys.TASK] for p in params] == [task], f'{task} asked for, {params} answered'

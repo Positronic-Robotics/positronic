@@ -5,7 +5,10 @@ shares positronic's venv: the launcher runs ``uv run --project <robolab clone> e
 --headless`` with the positronic-free ``server``/``protocol`` modules on ``PYTHONPATH``. It imports only robolab,
 isaaclab and the modules beside it, never ``positronic``.
 
-One jointpos-substrate env serves every wire command: RoboLab's leaderboard stack drives
+``--robot`` names the robot that the server puts in the task scenes, ``keys.DROID`` or ``keys.YAM``. One server
+serves one robot.
+
+For the DROID rig, one jointpos-substrate env serves every wire command: RoboLab's leaderboard stack drives
 ``DroidJointPositionActionCfg`` (8-dim ``[q1..q7 absolute rad, gripper]`` at 15 Hz), so ``joint_pos`` passes
 through bit-identically and every other command converts server-side into the 7 joint targets — ``joint_vel``
 anchors on the measured joints, ``hold`` re-commands them, and Cartesian poses solve through ``pose_ik``, the
@@ -14,12 +17,19 @@ Cartesian wire poses are in the eef control frame (``eef_frame`` = base_link ∘
 env-local, rotation world) — the same frame the observations report, so observed and commanded pose share one
 frame.
 
+The YAM robot is the two-arm i2rt YAM of ``yam_spec``, with the configs of ``yam_robolab``. Its action holds 14 values,
+per arm six joint targets and the grip (``yam_spec.ACTION_TERMS``). The wire carries one command and one grip per arm,
+on the channels that ``protocol.arm_channel`` names by the arm. ``joint_pos`` passes through, ``joint_vel`` anchors on
+the measured joints and ``hold`` re-commands them. The server solves no Cartesian command for the YAM. The YAM server
+reports every pose in the world frame of the rig recordings (``yam_spec.ROOT_IN_RIG_WORLD``), and sends the arm
+mounts in that frame in the ``robot_meta``.
+
 The reset token carries the RoboLab env name and the instruction variant; the env builds that task on the
 first reset and caches it, rebuilding only when the key changes. There is no seed anywhere: RoboLab's eval
 path has no seed hook, so a recorded seed would only mislead.
 
-``--cameras`` names the set in ``keys.CAMERA_SETS`` this server renders. RoboLab bakes the set into the
-registered task, so one server serves one set and the token carries no camera.
+``--cameras`` names the set in ``keys.ROBOT_CAMERA_SETS`` of the robot that this server renders. RoboLab bakes the set
+into the registered task, so one server serves one set and the token carries no camera.
 
 ``--max-envs`` bounds the scene clones: one Isaac process steps every clone inside a single ``env.step``, and each
 clone is a slot of the env server, driven by a client of its own. A reset builds as many clones as its batch has
@@ -30,8 +40,9 @@ verdict it froze on.
 Every frame also carries the ``gt_state`` (``keys.GT_STATE``) of each slot. It holds:
 
 - for each object in the task's contact list, except the table, the pose of the object. The position is in the frame
-  of the slot's scene clone and the rotation is in the world frame, as for the eef;
-- for each of those objects, whether RoboLab's gripper contact sensor touches it;
+  of the slot's scene clone (for the YAM, moved into the rig world) and the rotation is in the world frame, as for the
+  eef;
+- for each of those objects, whether RoboLab's gripper contact sensor touches it (for the YAM, either hand);
 - for each condition chain of the current subtask, RoboLab's own progress through the chain.
 
 The progress is what RoboLab's subtask recorder already tracks, so the record adds no condition checks.
@@ -43,8 +54,10 @@ import math
 import os
 import sys
 import tempfile
+from abc import abstractmethod
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
+from pathlib import Path
 from typing import Any
 
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
@@ -53,6 +66,7 @@ import numpy as np
 import pose_ik
 import protocol  # pyright: ignore[reportMissingImports]
 import torch
+import yam_spec
 from isaaclab.app import AppLauncher
 from server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
 
@@ -92,7 +106,10 @@ except ImportError:
 parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server protocol.')
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
-parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
+parser.add_argument('--robot', default=keys.DROID, choices=keys.ROBOTS)
+parser.add_argument(
+    '--cameras', default=keys.WRIST_LEFT_RIGHT, help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS'
+)
 parser.add_argument('--max-envs', type=int, default=1, help='the most scene clones this server steps at once')
 parser.add_argument(
     '--join-deadline',
@@ -102,6 +119,7 @@ parser.add_argument(
 )
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
+keys.camera_set(args.robot, args.cameras)
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
 simulation_app = AppLauncher(args).app
 
@@ -134,6 +152,10 @@ from robolab.registrations.droid import camera_presets  # noqa: E402  # pyright:
 from robolab.registrations.droid.auto_env_registrations_jointpos import auto_register_droid_envs  # noqa: E402
 from robolab.robots.droid import EEF_OFFSET_ROT  # noqa: E402
 
+# The YAM configs need RoboLab 0.3, and the DROID server runs on RoboLab 0.2, so only a YAM server imports them.
+if args.robot == keys.YAM:
+    import yam_robolab  # noqa: E402
+
 # Both flags gate recorder construction in the env cfg's ``__post_init__``, so they are set before any
 # ``create_env``: subtask progress feeds the wire ``subtask`` observation; per-step image recording only bloats
 # the HDF5 the recorder writes. ``create_env`` also writes ``env_cfg.json`` and recordings into the global
@@ -161,7 +183,7 @@ class RobolabEnv(EnvProtocol):
     Built from the reset token's key (RoboLab env name, instruction variant, episode length) and the clone count,
     and cached; ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's own reset
     events, or restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
-    forwarded command into its row of the 8-dim jointpos action and reports, per slot, ``done`` (episode over)
+    forwarded commands into its row of the robot's action and reports, per slot, ``done`` (episode over)
     and ``success`` (the task's success termination fired). A slot whose arm state stops being finite is
     faulted: its episode ends as a failure with ``fault``, and the other slots continue.
 
@@ -173,6 +195,8 @@ class RobolabEnv(EnvProtocol):
     # the other entries, in their order, reads that sensor in one pass
     # (``robolab.core.sensors.contact_sensor_utils.create_contact_sensors``).
     _TABLE = 'table'
+    # The env origin in the world frame that the server reports every pose in.
+    _ENV_IN_WORLD = np.zeros(3, dtype=np.float32)
 
     def __init__(self, max_envs: int = 1):
         if max_envs < 1:
@@ -185,28 +209,22 @@ class RobolabEnv(EnvProtocol):
         self._env: Any = None
         self._env_cfg: Any = None
         self._meta = None
-        self._robot_meta = _load_robot_meta()
         self._control_dt = None
         # Tasks registered with gymnasium in this process; re-registering rebuilds the cfg class and churns
         # the registry, so each registers once.
         self._registered: set[str] = set()
         # Rebuilt with the env: robot handles and model-structure indices.
         self._robot: Any = None
-        self._joint_ids: Any = None
-        self._body_idx = None
-        self._link0_idx = None
-        self._eef_frame_idx = None
-        self._eef_offset_rot = None
-        self._grip: Any = None  # each slot's latest grip command, which a slot with no command holds
+        self._joint_ids: Any = None  # every arm joint of the robot, in the order of the wire arms
+        self._grip: Any = None  # each slot's latest grip command per arm, which an arm with no command holds
         self._faulted: Any = None  # per slot, whether its arm state stopped being finite in this episode
         self._world: Any = None
-        self._gripper = ''
+        self._gripper = ''  # the contact gripper label that the gripper contact of the ``gt_state`` reads
         self._objects: list[str] = []
         self._subtask_recorder: Any = None
         self._shown_chains: list[Any] = []  # each slot's chain machine at the last frame
         self._episode = 0  # the number of the current episode, counted by resets
         self._episode_task = ''  # the task of the current episode
-        self._far_past_limit_solves: list[int] = []  # per slot, this episode's IK solves with a joint far past a limit
         self._timeline = omni.timeline.get_timeline_interface()
         self._kit_app = omni.kit.app.get_app()
 
@@ -282,14 +300,8 @@ class RobolabEnv(EnvProtocol):
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
         self._num_envs = num_envs
-        self._far_past_limit_solves = [0] * num_envs
         if task not in self._registered:
-            presets = {
-                keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
-                keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
-                keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
-            }
-            auto_register_droid_envs(task=[task], cameras=presets[args.cameras])
+            self._register(task)
             self._registered.add(task)
         env_name = get_envs(task=task)[0]
         scene: Any = env_name
@@ -329,45 +341,49 @@ class RobolabEnv(EnvProtocol):
             'task_name': self._env_cfg._task_name,
             'attributes': list(self._env_cfg._task_attributes),
         }
-        robot = self._env.scene['robot']
-        self._robot = robot
-        self._joint_ids = [i for i, name in enumerate(robot.data.joint_names) if name.startswith('panda_joint')]
-        self._body_idx = robot.data.body_names.index('base_link')  # the Robotiq gripper mount flange
-        self._link0_idx = robot.data.body_names.index('panda_link0')
-        self._eef_frame_idx = self._env.scene['frames'].data.target_frame_names.index('eef_frame')
-        # One row per slot: isaaclab's quat ops require both operands to share a shape.
-        self._eef_offset_rot = torch.tensor(
-            [EEF_OFFSET_ROT] * self._num_envs, dtype=torch.float32, device=self._env.device
-        )
-        self._grip = torch.zeros(self._num_envs, dtype=torch.float32, device=self._env.device)
+        self._robot = self._env.scene['robot']
+        self._bind_robot()
         self._world = get_world(self._env)
-        (self._gripper,) = self._env_cfg.contact_gripper
         self._objects = [name for name in self._env_cfg.contact_object_list if name != self._TABLE]
         # None for a task without subtasks: RoboLab adds no term for it.
         self._subtask_recorder = self._env.recorder_manager.get_term(SubtaskCompletionRecorderTerm)
+
+    @abstractmethod
+    def _register(self, task: str) -> None:
+        """Register the RoboLab env of ``task`` with this server's robot and cameras."""
+
+    @abstractmethod
+    def _bind_robot(self) -> None:
+        """Read the handles of the robot from the built env: ``_joint_ids``, ``_grip``, ``_gripper`` and the robot's
+        own."""
+
+    @abstractmethod
+    def _robot_meta(self) -> dict[str, Any]:
+        """The ``robot_meta`` of a reset."""
+
+    @abstractmethod
+    def _action(self, actions: dict[int, dict[str, Any]]) -> torch.Tensor:
+        """The ``(num_envs, action values)`` action that the env steps, from each slot's wire action. It also updates
+        ``_grip``."""
+
+    @abstractmethod
+    def _arm_observations(self, proprio: dict[str, Any]) -> list[dict[str, Any]]:
+        """Per slot, the arm fields of the observation payload."""
+
+    def _end_episode(self) -> None:
+        """Report what the episode that ends has to report."""
 
     def _nonfinite_arms(self) -> torch.Tensor:
         """Per slot, whether its arm joints or joint velocities hold a value that is not finite, ``(num_envs,)``."""
         joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
         return ~torch.isfinite(joints).all(dim=1)
 
-    def _report_far_past_limit_solves(self) -> None:
-        """Print each slot's count of this episode's IK solves with a joint far past a limit, then zero the counts."""
-        for slot, solves in enumerate(self._far_past_limit_solves):
-            if solves:
-                print(
-                    f'{self._episode_task} episode {self._episode} slot {slot}: {solves} IK solves with a joint '
-                    f'more than {pose_ik.MAX_JOINT_STEP} rad past a limit',
-                    file=sys.stderr,
-                )
-        self._far_past_limit_solves = [0] * self._num_envs
-
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
         num_envs = self._max_envs if slots is None else slots
         if not 1 <= num_envs <= self._max_envs:
             raise ValueError(f'{num_envs} scene clones asked for, but this server steps 1 to {self._max_envs}')
-        self._report_far_past_limit_solves()
+        self._end_episode()
         self._episode += 1
         self._episode_task = token[keys.TOKEN_TASK]
         key = (
@@ -399,8 +415,7 @@ class RobolabEnv(EnvProtocol):
             merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
             obs, _extras = self._env.reset_to(merged, None, is_relative=True)
         self._faulted = self._nonfinite_arms()
-        # ``robot_meta`` carries the DROID rig's model (the launcher serialized it, since this server can't
-        # build it); ``meta`` carries the task identity and the resolved instruction. The reset frame's
+        # ``meta`` carries the task identity and the resolved instruction. The reset frame's
         # subtask progress is zeros: the recorder's infos refresh only after a step, so reading them here
         # would replay the prior trial's final values.
         # The contact sensor also holds the prior trial's last physics step until the first step, so the reset frame
@@ -409,7 +424,7 @@ class RobolabEnv(EnvProtocol):
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: o} for o in observed],
             protocol.FRAME_META: self._meta,
-            protocol.FRAME_ROBOT_META: self._robot_meta,
+            protocol.FRAME_ROBOT_META: self._robot_meta(),
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
 
@@ -425,16 +440,7 @@ class RobolabEnv(EnvProtocol):
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
             self._kit_app.update()
-        wires = {slot: protocol.single_arm(action) for slot, action in actions.items()}
-        for slot, wire in wires.items():
-            grip = float(wire[protocol.TARGET_GRIP])
-            if math.isfinite(grip):  # the rig refuses a grip that is not finite, so the slot keeps its last grip
-                self._grip[slot] = grip
-        act = torch.zeros(self._num_envs, 8, device=self._env.device)
-        act[:, :7] = self._joint_targets({slot: wire[protocol.ROBOT_COMMAND] for slot, wire in wires.items()})
-        # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
-        act[:, 7] = self._grip
-        obs, _reward, _term, _trunc, _info = self._env.step(act)
+        obs, _reward, _term, _trunc, _info = self._env.step(self._action(actions))
         self._faulted |= self._nonfinite_arms()
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps
@@ -456,6 +462,178 @@ class RobolabEnv(EnvProtocol):
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
+
+    def _measured_q(self) -> torch.Tensor:
+        """Every slot's measured arm joints, ``(num_envs, len(_joint_ids))``."""
+        return self._robot.data.joint_pos[:, self._joint_ids]
+
+    def _merged_state(self, base: Any, overlay: Any) -> Any:
+        """The scene's live state tree with the recording's entries written over it, as device tensors.
+
+        A recording holds one scene, so each recorded leaf is copied into the row of every clone.
+        """
+        if not isinstance(base, dict):
+            return torch.as_tensor(overlay, dtype=base.dtype, device=self._env.device).expand_as(base).clone()
+        return {
+            key: self._merged_state(value, overlay[key]) if key in overlay else value for key, value in base.items()
+        }
+
+    def _subtask_progress(self) -> np.ndarray:
+        """Every slot's live subtask progress as the wire ``[status, completed, total, score]`` vector,
+        ``(num_envs, 4)``. A width RoboLab reports for some other number of slots raises here."""
+        subtask = np.zeros((self._num_envs, 4), dtype=np.float32)
+        if self._subtask_recorder is not None:
+            infos = self._subtask_recorder.infos
+            subtask[:] = [(info['status'], info['completed'], info['total'], info['score']) for info in infos]
+        return subtask
+
+    @telemetry.traced('gt_state')
+    def _gt_state(self, *, reset: bool) -> list[dict[str, Any]]:
+        """Every slot's ``keys.GT_STATE`` entry: a flat dict from a recorded suffix to its value."""
+        states: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
+        for name in self._objects:
+            pos, quat = self._world.get_pose(name, is_relative=True)
+            poses = torch.cat([pos, quat], dim=-1).cpu().numpy().astype(np.float32)
+            poses[:, :3] += self._ENV_IN_WORLD
+            for slot, pose in enumerate(poses):
+                states[slot][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}'] = pose
+        for slot, state in enumerate(states):
+            touched = (
+                set()
+                if reset
+                else set(self._world.get_objects_in_contact_with(self._gripper, self._objects, env_id=slot))
+            )
+            for name in self._objects:
+                state[f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_GRIPPER_CONTACT}'] = name in touched
+            state.update(self._progress(slot))
+        return states
+
+    def _progress(self, slot: int) -> dict[str, bool]:
+        """Per condition of each chain in the slot's current subtask, whether RoboLab counts it done.
+
+        RoboLab replaces a subtask's chain machine in the step that completes the subtask. So the frame of that step
+        also reports the machine that RoboLab replaced. Empty for a task without subtasks.
+        """
+        if self._subtask_recorder is None:
+            return {}
+        current = self._subtask_recorder.subtask_state_machines[slot].conditionals_state_machine
+        shown, self._shown_chains[slot] = self._shown_chains[slot], current
+        progress = {}
+        for chains in {id(c): c for c in (shown, current) if c is not None}.values():
+            progress.update(self._chain_progress(chains))
+        return progress
+
+    @staticmethod
+    def _chain_progress(chains: Any) -> dict[str, bool]:
+        """Per condition of each chain that one RoboLab chain machine tracks, whether it is done."""
+        prefix = f'.{keys.GT_STATE_PROGRESS}.{chains.subtask_group_id}'
+        progress = {}
+        for group, done in chains.object_completed_table.items():
+            for index, ((condition, _score), condition_done) in enumerate(
+                zip(chains.subtask.get_group(group), done, strict=True)
+            ):
+                name, _params = get_callable_info(condition)
+                progress[f'{prefix}.{group}.{index}.{name}'] = bool(condition_done)
+        return progress
+
+    def _observe(self, obs: dict[str, Any], subtask: np.ndarray, *, reset: bool) -> list[dict[str, Any]]:
+        """One observation payload per slot."""
+        images = obs['image_obs']
+        arms = self._arm_observations(obs['proprio_obs'])
+        gt_states = self._gt_state(reset=reset)
+        return [
+            {
+                **arms[slot],
+                **{name: frame[slot].cpu().numpy() for name, frame in images.items()},
+                keys.SUBTASK: subtask[slot],
+                keys.GT_STATE: gt_states[slot],
+            }
+            for slot in range(self._num_envs)
+        ]
+
+    def close(self) -> None:
+        self._end_episode()
+        if self._env is not None:
+            self._env.close()
+            self._env = None
+
+
+class DroidEnv(RobolabEnv):
+    """The DROID rig in a RoboLab task: one Franka arm with a Robotiq 2F-85 gripper, and the 8-dim jointpos action."""
+
+    def __init__(self, max_envs: int = 1):
+        super().__init__(max_envs)
+        self._franka_meta = _load_robot_meta()
+        self._body_idx = None
+        self._link0_idx = None
+        self._eef_frame_idx = None
+        self._eef_offset_rot = None
+        self._far_past_limit_solves: list[int] = []  # per slot, this episode's IK solves with a joint far past a limit
+
+    def _register(self, task: str) -> None:
+        presets = {
+            keys.WRIST_LEFT_RIGHT: camera_presets.WRIST_LEFT_RIGHT,
+            keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
+            keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
+        }
+        auto_register_droid_envs(task=[task], cameras=presets[args.cameras])
+
+    def _bind_robot(self) -> None:
+        robot = self._robot
+        self._joint_ids = [i for i, name in enumerate(robot.data.joint_names) if name.startswith('panda_joint')]
+        self._body_idx = robot.data.body_names.index('base_link')  # the Robotiq gripper mount flange
+        self._link0_idx = robot.data.body_names.index('panda_link0')
+        self._eef_frame_idx = self._env.scene['frames'].data.target_frame_names.index('eef_frame')
+        # One row per slot: isaaclab's quat ops require both operands to share a shape.
+        self._eef_offset_rot = torch.tensor(
+            [EEF_OFFSET_ROT] * self._num_envs, dtype=torch.float32, device=self._env.device
+        )
+        self._grip = torch.zeros(self._num_envs, dtype=torch.float32, device=self._env.device)
+        (self._gripper,) = self._env_cfg.contact_gripper
+        self._far_past_limit_solves = [0] * self._num_envs
+
+    def _robot_meta(self) -> dict[str, Any]:
+        # The DROID rig's model, which the launcher serialized, since this server cannot build it.
+        return self._franka_meta
+
+    def _end_episode(self) -> None:
+        """Print each slot's count of this episode's IK solves with a joint far past a limit, then zero the counts."""
+        for slot, solves in enumerate(self._far_past_limit_solves):
+            if solves:
+                print(
+                    f'{self._episode_task} episode {self._episode} slot {slot}: {solves} IK solves with a joint '
+                    f'more than {pose_ik.MAX_JOINT_STEP} rad past a limit',
+                    file=sys.stderr,
+                )
+        self._far_past_limit_solves = [0] * self._num_envs
+
+    def _action(self, actions: dict[int, dict[str, Any]]) -> torch.Tensor:
+        wires = {slot: protocol.single_arm(action) for slot, action in actions.items()}
+        for slot, wire in wires.items():
+            grip = float(wire[protocol.TARGET_GRIP])
+            if math.isfinite(grip):  # the rig refuses a grip that is not finite, so the slot keeps its last grip
+                self._grip[slot] = grip
+        act = torch.zeros(self._num_envs, 8, device=self._env.device)
+        act[:, :7] = self._joint_targets({slot: wire[protocol.ROBOT_COMMAND] for slot, wire in wires.items()})
+        # The binary gripper term closes above 0.5, so the wire grip ([0, 1], 1 = closed) feeds it as-is.
+        act[:, 7] = self._grip
+        return act
+
+    def _arm_observations(self, proprio: dict[str, Any]) -> list[dict[str, Any]]:
+        # The eef pose is reported in the control frame Cartesian commands arrive in (``eef_frame``: env-local
+        # position, world quat wxyz), so the observed and commanded pose share a frame. The proprio group has
+        # no joint velocities, so they read straight from the articulation.
+        joint_vel = self._robot.data.joint_vel[:, self._joint_ids].cpu().numpy()
+        return [
+            {
+                protocol.OBS_JOINT_POS: proprio['arm_joint_pos'][slot].cpu().numpy(),
+                protocol.OBS_JOINT_VEL: joint_vel[slot],
+                protocol.OBS_EEF_POS: proprio['eef_pos'][slot].cpu().numpy(),
+                protocol.OBS_EEF_QUAT: proprio['eef_quat'][slot].cpu().numpy(),
+                protocol.OBS_GRIP: float(proprio['gripper_pos'][slot, 0]),
+            }
+            for slot in range(self._num_envs)
+        ]
 
     def _joint_targets(self, commands: dict[int, dict[str, Any]]) -> torch.Tensor:
         """The ``(num_envs, 7)`` absolute joint targets the substrate steps, from each slot's wire command.
@@ -555,10 +733,6 @@ class RobolabEnv(EnvProtocol):
         poses[:, :3, 3] = pos.double().cpu().numpy()
         return poses
 
-    def _measured_q(self) -> torch.Tensor:
-        """Every slot's measured arm joints, ``(num_envs, 7)``."""
-        return self._robot.data.joint_pos[:, self._joint_ids]
-
     def _eef_pose(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Every slot's measured eef control-frame pose: env-local position ``(num_envs, 3)``, world-frame
         quat wxyz ``(num_envs, 4)``."""
@@ -571,102 +745,73 @@ class RobolabEnv(EnvProtocol):
         vec = torch.as_tensor(vec, dtype=torch.float32, device=self._env.device)
         return vec[:3], quat_from_matrix(vec[3:].reshape(1, 3, 3)).squeeze(0)
 
-    def _merged_state(self, base: Any, overlay: Any) -> Any:
-        """The scene's live state tree with the recording's entries written over it, as device tensors.
 
-        A recording holds one scene, so each recorded leaf is copied into the row of every clone.
-        """
-        if not isinstance(base, dict):
-            return torch.as_tensor(overlay, dtype=base.dtype, device=self._env.device).expand_as(base).clone()
+class YamEnv(RobolabEnv):
+    """The two-arm YAM robot of ``yam_spec`` in a RoboLab task, with the 14-value joint position action.
+
+    The robot root is at the env origin, so the server adds ``yam_spec.ROOT_IN_RIG_WORLD`` to every position.
+    """
+
+    _ENV_IN_WORLD = np.asarray(yam_spec.ROOT_IN_RIG_WORLD, dtype=np.float32)
+
+    def __init__(self, max_envs: int = 1):
+        super().__init__(max_envs)
+        # The robot USD is converted once per server, into a directory of its own.
+        out_dir = Path(tempfile.mkdtemp(prefix='robolab-yam-'))
+        self._robot_usd, self._stand_usd = yam_robolab.convert(out_dir)  # pyright: ignore[reportPossiblyUnboundVariable]
+
+    def _register(self, task: str) -> None:
+        yam_robolab.register_envs([task], self._robot_usd, self._stand_usd)  # pyright: ignore[reportPossiblyUnboundVariable]
+
+    def _bind_robot(self) -> None:
+        names = self._robot.data.joint_names
+        self._joint_ids = [names.index(f'{side}_{joint}') for side in yam_spec.SIDES for joint in yam_spec.ARM_JOINTS]
+        self._grip = torch.zeros(self._num_envs, len(yam_spec.SIDES), dtype=torch.float32, device=self._env.device)
+        self._gripper = yam_spec.CONTACT_GRIPPERS
+
+    def _robot_meta(self) -> dict[str, Any]:
+        # The client holds the arm model, so the meta holds only where each arm stands.
         return {
-            key: self._merged_state(value, overlay[key]) if key in overlay else value for key, value in base.items()
+            protocol.MOUNTS: {
+                protocol.arm_channel(protocol.ROBOT_STATE, side) + protocol.JOINTS_SUFFIX: [
+                    float(v) for v in np.add(yam_spec.mount_xyz(side), self._ENV_IN_WORLD)
+                ]
+                for side in yam_spec.SIDES
+            }
         }
 
-    def _subtask_progress(self) -> np.ndarray:
-        """Every slot's live subtask progress as the wire ``[status, completed, total, score]`` vector,
-        ``(num_envs, 4)``. A width RoboLab reports for some other number of slots raises here."""
-        subtask = np.zeros((self._num_envs, 4), dtype=np.float32)
-        if self._subtask_recorder is not None:
-            infos = self._subtask_recorder.infos
-            subtask[:] = [(info['status'], info['completed'], info['total'], info['score']) for info in infos]
-        return subtask
+    def _arms_measured_q(self) -> np.ndarray:
+        """Every slot's measured joints per arm, ``(num_envs, arms, 6)``."""
+        return self._measured_q().cpu().numpy().reshape(self._num_envs, len(yam_spec.SIDES), -1)
 
-    @telemetry.traced('gt_state')
-    def _gt_state(self, *, reset: bool) -> list[dict[str, Any]]:
-        """Every slot's ``keys.GT_STATE`` entry: a flat dict from a recorded suffix to its value."""
-        states: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
-        for name in self._objects:
-            pos, quat = self._world.get_pose(name, is_relative=True)
-            poses = torch.cat([pos, quat], dim=-1).cpu().numpy().astype(np.float32)
-            for slot, pose in enumerate(poses):
-                states[slot][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}'] = pose
-        for slot, state in enumerate(states):
-            touched = (
-                set()
-                if reset
-                else set(self._world.get_objects_in_contact_with(self._gripper, self._objects, env_id=slot))
-            )
-            for name in self._objects:
-                state[f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_GRIPPER_CONTACT}'] = name in touched
-            state.update(self._progress(slot))
-        return states
+    def _action(self, actions: dict[int, dict[str, Any]]) -> torch.Tensor:
+        measured = self._arms_measured_q()
+        # A slot with no wire action holds its measured joints and its grips.
+        rows = np.concatenate([measured, self._grip.cpu().numpy()[:, :, None]], axis=2).reshape(self._num_envs, -1)
+        for slot, wire in actions.items():
+            rows[slot], grips = yam_spec.action(wire, measured[slot], self._grip[slot].cpu().numpy())
+            self._grip[slot] = torch.as_tensor(grips, device=self._env.device)
+        return torch.as_tensor(rows, dtype=torch.float32, device=self._env.device)
 
-    def _progress(self, slot: int) -> dict[str, bool]:
-        """Per condition of each chain in the slot's current subtask, whether RoboLab counts it done.
-
-        RoboLab replaces a subtask's chain machine in the step that completes the subtask. So the frame of that step
-        also reports the machine that RoboLab replaced. Empty for a task without subtasks.
-        """
-        if self._subtask_recorder is None:
-            return {}
-        current = self._subtask_recorder.subtask_state_machines[slot].conditionals_state_machine
-        shown, self._shown_chains[slot] = self._shown_chains[slot], current
-        progress = {}
-        for chains in {id(c): c for c in (shown, current) if c is not None}.values():
-            progress.update(self._chain_progress(chains))
-        return progress
-
-    @staticmethod
-    def _chain_progress(chains: Any) -> dict[str, bool]:
-        """Per condition of each chain that one RoboLab chain machine tracks, whether it is done."""
-        prefix = f'.{keys.GT_STATE_PROGRESS}.{chains.subtask_group_id}'
-        progress = {}
-        for group, done in chains.object_completed_table.items():
-            for index, ((condition, _score), condition_done) in enumerate(
-                zip(chains.subtask.get_group(group), done, strict=True)
-            ):
-                name, _params = get_callable_info(condition)
-                progress[f'{prefix}.{group}.{index}.{name}'] = bool(condition_done)
-        return progress
-
-    def _observe(self, obs: dict[str, Any], subtask: np.ndarray, *, reset: bool) -> list[dict[str, Any]]:
-        """One observation payload per slot."""
-        # The eef pose is reported in the control frame Cartesian commands arrive in (``eef_frame``: env-local
-        # position, world quat wxyz), so the observed and commanded pose share a frame. The proprio group has
-        # no joint velocities, so they read straight from the articulation.
-        proprio = obs['proprio_obs']
-        images = obs['image_obs']
+    def _arm_observations(self, proprio: dict[str, Any]) -> list[dict[str, Any]]:
+        # The proprio group holds no joint velocities, so they come from the articulation.
         joint_vel = self._robot.data.joint_vel[:, self._joint_ids].cpu().numpy()
-        gt_states = self._gt_state(reset=reset)
-        return [
-            {
-                protocol.OBS_JOINT_POS: proprio['arm_joint_pos'][slot].cpu().numpy(),
-                protocol.OBS_JOINT_VEL: joint_vel[slot],
-                protocol.OBS_EEF_POS: proprio['eef_pos'][slot].cpu().numpy(),
-                protocol.OBS_EEF_QUAT: proprio['eef_quat'][slot].cpu().numpy(),
-                protocol.OBS_GRIP: float(proprio['gripper_pos'][slot, 0]),
-                **{name: frame[slot].cpu().numpy() for name, frame in images.items()},
-                keys.SUBTASK: subtask[slot],
-                keys.GT_STATE: gt_states[slot],
-            }
-            for slot in range(self._num_envs)
-        ]
-
-    def close(self) -> None:
-        self._report_far_past_limit_solves()
-        if self._env is not None:
-            self._env.close()
-            self._env = None
+        joint_vel = joint_vel.reshape(self._num_envs, len(yam_spec.SIDES), -1)
+        observations: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
+        for arm, side in enumerate(yam_spec.SIDES):
+            joint_pos = proprio[f'{side}_arm_joint_pos'].cpu().numpy()
+            ee_pos = proprio[f'{side}_ee_pos'].cpu().numpy() + self._ENV_IN_WORLD
+            ee_quat = proprio[f'{side}_ee_quat'].cpu().numpy()
+            grip = proprio[f'{side}_gripper_pos'].cpu().numpy()
+            for slot, observation in enumerate(observations):
+                observation.update({
+                    protocol.arm_channel(protocol.OBS_JOINT_POS, side): joint_pos[slot],
+                    protocol.arm_channel(protocol.OBS_JOINT_VEL, side): joint_vel[slot, arm],
+                    protocol.arm_channel(protocol.OBS_EEF_POS, side): ee_pos[slot],
+                    protocol.arm_channel(protocol.OBS_EEF_QUAT, side): ee_quat[slot],
+                    protocol.arm_channel(protocol.OBS_GRIP, side): float(grip[slot, 0]),
+                })
+        return observations
 
 
 def main() -> None:
@@ -675,7 +820,8 @@ def main() -> None:
     # Under --timing the parent forwards the telemetry dir + run id via the environment; the server then
     # writes its own ``env.spans.jsonl`` sidecar. Inert otherwise.
     with telemetry.bind_from_env():
-        EnvServer(RobolabEnv(args.max_envs), args.host, args.port, join_deadline=args.join_deadline).serve_forever()
+        env = {keys.DROID: DroidEnv, keys.YAM: YamEnv}[args.robot](args.max_envs)
+        EnvServer(env, args.host, args.port, join_deadline=args.join_deadline).serve_forever()
     simulation_app.close()
 
 

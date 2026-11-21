@@ -1,4 +1,4 @@
-"""On-box validation for ``RobolabEnv``'s command transform — runs inside RoboLab's own venv.
+"""On-box validation for ``DroidEnv``'s command transform — runs inside RoboLab's own venv.
 
 positronic cannot import isaaclab/robolab, so the joint-target mapping and the differential-IK path in
 ``env.py`` cannot be unit-tested in positronic's suite. This script builds the real env, drives it directly
@@ -14,7 +14,7 @@ positronic cannot import isaaclab/robolab, so the joint-target mapping and the d
 - ``joint_vel``: the joint targets anchor on the measured joints (``q + dq``), exactly;
 - the eef_frame <-> base_link offset: un-offsetting the observed eef quat recovers the base_link body quat;
 - eef_frame against ``models.ROBOLAB_EE_FRAME``: RoboLab's own scene puts eef_frame where the constant
-  ``RobolabAdapter`` converts with says it is;
+  ``RobolabDroidAdapter`` converts with says it is;
 - Cartesian tracking, the ``examples/run_abs_ik_demo.py`` protocol: ±5 cm translations and ±20° world-axis
   rotations held 30 steps each, pass at 5 mm / 2°; the demo's own known-divergent ``translate +x`` case is
   reported but not fatal;
@@ -48,7 +48,7 @@ import protocol  # pyright: ignore[reportMissingImports]
 import torch
 
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.
-from env import RobolabEnv, args, simulation_app
+from env import DroidEnv, args, simulation_app
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
 
 from robolab.core.sensors.contact_sensor_utils import (  # pyright: ignore[reportMissingImports]
@@ -110,17 +110,17 @@ def _wire_pose(pos: torch.Tensor, quat: torch.Tensor) -> np.ndarray:
     return np.concatenate([pos.numpy(), rot.numpy().reshape(9)]).astype(np.float32)
 
 
-def _reset(env: RobolabEnv, token: dict) -> dict:
+def _reset(env: DroidEnv, token: dict) -> dict:
     """Reset the env under validation and report its one slot's frame: these checks drive a single scene."""
     return protocol.slot_frame(env.reset(token), 0)
 
 
-def _step(env: RobolabEnv, action: dict) -> dict:
+def _step(env: DroidEnv, action: dict) -> dict:
     """Step the env under validation with one slot's action and report that slot's frame."""
     return protocol.slot_frame(env.step({0: action}), 0)
 
 
-def _check_obs_contract(env: RobolabEnv) -> None:
+def _check_obs_contract(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     control_dt = out[protocol.FRAME_CONTROL_DT]
     assert abs(control_dt - 1 / 15) < 1e-6, f'control_dt {control_dt} != 1/15'
@@ -146,7 +146,7 @@ def _check_obs_contract(env: RobolabEnv) -> None:
     print('  obs contract: OK (keys, camera set, shapes, dtypes, quat norm, grip range)')
 
 
-def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
+def _check_gt_state(env: DroidEnv, obs: dict, *, reset: bool) -> None:
     """The ``gt_state`` of one frame: every object's pose and contact flag, and bool progress."""
     state = dict(obs[keys.GT_STATE])
     objects = f'.{keys.GT_STATE_OBJECTS}.'
@@ -166,7 +166,7 @@ def _check_gt_state(env: RobolabEnv, obs: dict, *, reset: bool) -> None:
         assert not (reset and done), f'{key} is done on a reset frame, so it holds the prior trial'
 
 
-def _check_gt_state_is_the_clones_own(env: RobolabEnv, obs: dict, slot: int) -> None:
+def _check_gt_state_is_the_clones_own(env: DroidEnv, obs: dict, slot: int) -> None:
     """Each object's ``gt_state`` pose is the pose that RoboLab reads for this clone alone.
 
     A slot that reports another clone's poses fails this only where the clones' scenes differ.
@@ -178,7 +178,7 @@ def _check_gt_state_is_the_clones_own(env: RobolabEnv, obs: dict, slot: int) -> 
         assert np.allclose(recorded, own, atol=1e-5), f'clone {slot} reports {recorded} for {name}, not its own {own}'
 
 
-def _check_gt_state_contract(env: RobolabEnv) -> None:
+def _check_gt_state_contract(env: DroidEnv) -> None:
     sensor = get_batch_contact_sensor(env._env.scene, env._gripper)
     assert sensor is not None, f'the scene has no batch contact sensor for {env._gripper}'
     filtered = sensor.data.force_matrix_w.shape[2]
@@ -193,7 +193,7 @@ def _check_gt_state_contract(env: RobolabEnv) -> None:
     print(f'  gt_state: OK ({len(env._objects)} objects with pose and contact; bool progress; reset frame clean)')
 
 
-def _check_grip(env: RobolabEnv) -> None:
+def _check_grip(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     for _ in range(_HOLD_STEPS):
         out = _step(env, protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 1.0))
@@ -206,7 +206,7 @@ def _check_grip(env: RobolabEnv) -> None:
     print('  grip: OK (closed > 0.9, open < 0.1)')
 
 
-def _check_joint_pos_passthrough(env: RobolabEnv) -> None:
+def _check_joint_pos_passthrough(env: DroidEnv) -> None:
     _reset(env, _TOKEN)
     q0 = env._measured_q()[0].cpu().numpy()
     target = q0 + np.array([0.1, -0.1, 0.1, -0.1, 0.1, -0.1, 0.1], dtype=np.float32)
@@ -221,7 +221,7 @@ def _check_joint_pos_passthrough(env: RobolabEnv) -> None:
     print(f'  joint_pos: OK (bit-identical pass-through; converged to {err:.4f} rad)')
 
 
-def _check_joint_vel_anchoring(env: RobolabEnv) -> None:
+def _check_joint_vel_anchoring(env: DroidEnv) -> None:
     _reset(env, _TOKEN)
     dq = np.full(7, 0.01, dtype=np.float32)
     expected = env._measured_q()[0] + torch.as_tensor(dq, device=env._env.device)
@@ -232,7 +232,7 @@ def _check_joint_vel_anchoring(env: RobolabEnv) -> None:
     print('  joint_vel: OK (targets anchor on measured q + dq, exactly)')
 
 
-def _check_eef_offset(env: RobolabEnv) -> None:
+def _check_eef_offset(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     eef_quat = torch.as_tensor(out[protocol.FRAME_OBS][protocol.OBS_EEF_QUAT]).reshape(1, 4)
     base_quat = env._robot.data.body_quat_w[:1, env._body_idx].cpu()
@@ -242,7 +242,7 @@ def _check_eef_offset(env: RobolabEnv) -> None:
     print('  eef offset: OK (obs eef_quat un-offsets to the base_link body quat)')
 
 
-def _check_flange_to_eef(env: RobolabEnv) -> None:
+def _check_flange_to_eef(env: DroidEnv) -> None:
     out = _reset(env, _TOKEN)
     robot, sim = env._robot, env._env
     assert robot is not None and sim is not None, 'reset builds both'
@@ -263,7 +263,7 @@ def _check_flange_to_eef(env: RobolabEnv) -> None:
     print(f'  flange -> eef_frame: OK ({pos_err * 1000:.4f} mm / {math.degrees(rot_err):.4f} deg)')
 
 
-def _reset_and_settle(env: RobolabEnv) -> tuple[torch.Tensor, torch.Tensor]:
+def _reset_and_settle(env: DroidEnv) -> tuple[torch.Tensor, torch.Tensor]:
     """Reset and settle the environment, then read its end-effector position and quaternion."""
     _reset(env, _TOKEN)
     out = _step(env, _HOLD)
@@ -273,7 +273,7 @@ def _reset_and_settle(env: RobolabEnv) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.as_tensor(obs[protocol.OBS_EEF_POS]), torch.as_tensor(obs[protocol.OBS_EEF_QUAT])
 
 
-def _run_cartesian_cases(env: RobolabEnv) -> int:
+def _run_cartesian_cases(env: DroidEnv) -> int:
     """The run_abs_ik_demo protocol over the wire ``cartesian`` path; returns the count of non-known failures."""
     init_pos, init_quat = _reset_and_settle(env)
     zero = torch.zeros(3)
@@ -327,7 +327,7 @@ def _run_cartesian_cases(env: RobolabEnv) -> int:
     return failures
 
 
-def _check_cartesian_delta(env: RobolabEnv) -> None:
+def _check_cartesian_delta(env: DroidEnv) -> None:
     cur_pos, cur_quat = _reset_and_settle(env)
     dpos = torch.tensor([0.0, 0.0, -0.05])
     dquat = _quat_about_axis(math.radians(10.0), 2)
@@ -352,7 +352,7 @@ def _check_cartesian_delta(env: RobolabEnv) -> None:
     print(f'  cartesian_delta: OK ({pos_err * 1000:.2f} mm / {math.degrees(rot_err):.2f} deg)')
 
 
-def _check_a_clone_that_ends_first(env: RobolabEnv) -> None:
+def _check_a_clone_that_ends_first(env: DroidEnv) -> None:
     """Clone 0 times out alone, then clone 1 makes subtask progress while clone 0 stays frozen.
 
     RoboLab freezes a clone at the end of its episode. On a later step where a running clone makes subtask
@@ -406,7 +406,7 @@ def _first_clone(state: Any) -> Any:
     return state[:1].cpu().numpy()
 
 
-def _check_a_recorded_state_reaches_every_clone(env: RobolabEnv) -> None:
+def _check_a_recorded_state_reaches_every_clone(env: DroidEnv) -> None:
     """A reset with a one-scene recorded state restores that state into every clone."""
     recorded = _first_clone(env._env.scene.get_state(is_relative=True))
     out = env.reset({**_TOKEN, keys.TOKEN_STATE: recorded})
@@ -418,7 +418,7 @@ def _check_a_recorded_state_reaches_every_clone(env: RobolabEnv) -> None:
     print(f'  batch: OK (a recorded state restores into all {env.num_slots} clones)')
 
 
-def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
+def _check_an_episode_length_replaces_the_budget(env: DroidEnv) -> None:
     """A token's episode length rebuilds the scene with only that length changed, and a token without one rebuilds
     the scene with RoboLab's budget."""
     length_s = 240.0
@@ -437,7 +437,7 @@ def _check_an_episode_length_replaces_the_budget(env: RobolabEnv) -> None:
     print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
-def _check_the_listing_refuses_an_unknown_phrasing(env: RobolabEnv) -> None:
+def _check_the_listing_refuses_an_unknown_phrasing(env: DroidEnv) -> None:
     """A phrasing that the task does not have fails at the task listing, before any scene is built, and a phrasing
     that the task has still lists."""
     task = _TOKEN[keys.TOKEN_TASK]
@@ -452,7 +452,7 @@ def _check_the_listing_refuses_an_unknown_phrasing(env: RobolabEnv) -> None:
     raise AssertionError('the listing accepted the phrasing vauge')
 
 
-def _check_a_clone_that_faults(env: RobolabEnv) -> None:
+def _check_a_clone_that_faults(env: DroidEnv) -> None:
     """The arm state of the last clone stops being finite in a step. That frame ends the clone alone, as a failure
     with ``fault``. The other clones go on with finite state through a stretch of pose solves that include the faulted
     clone. After a reset, the faulted clone steps again with no fault.
@@ -502,7 +502,7 @@ def _check_batch(num_envs: int) -> None:
     whose observed joints are another clone's. Builds its own env: the clone count is fixed at ``create_env``,
     so this cannot share the single-clone env the checks above drive.
     """
-    env = RobolabEnv(num_envs)
+    env = DroidEnv(num_envs)
     out = env.reset(_TOKEN)
     assert len(out[protocol.SLOTS]) == num_envs, f'{num_envs} clones asked for, {len(out[protocol.SLOTS])} answered'
     held = num_envs - 1
@@ -538,7 +538,7 @@ def _check_batch(num_envs: int) -> None:
     env.close()
 
 
-def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
+def _check_a_command_that_is_not_finite_holds(env: DroidEnv) -> None:
     """A NaN joint target, a NaN pose and a NaN grip hold, as the rig's driver does. No fault, and the joints stay
     finite."""
     env.reset(_TOKEN)
@@ -562,7 +562,7 @@ def _check_a_command_that_is_not_finite_holds(env: RobolabEnv) -> None:
 
 
 def main() -> None:
-    env = RobolabEnv()
+    env = DroidEnv()
     _check_the_listing_refuses_an_unknown_phrasing(env)
     _check_obs_contract(env)
     _check_gt_state_contract(env)
