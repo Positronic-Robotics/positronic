@@ -6,16 +6,19 @@ positronic or Isaac Lab. A task library directory holds:
 - ``_metadata/task_metadata.json``, in RoboLab's metadata schema;
 - ``tasks/<file>.py``, each binding one RoboLab ``Task`` class at module level under its metadata name;
 - the scenes and assets its tasks load;
-- optionally ``cameras.py``, whose ``camera_sets()`` returns camera sets by a name in ``keys.CAMERA_SETS``.
+- optionally ``cameras.py``, whose ``camera_sets()`` returns camera sets by a name in ``keys.CAMERA_SETS``. It may
+  import the other files of the library by relative imports.
 """
 
 import ast
+import importlib.machinery
 import importlib.util
 import json
 import sys
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 METADATA = Path('_metadata') / 'task_metadata.json'
@@ -126,6 +129,33 @@ class TaskCatalog:
         return name if lib_task is None else str(lib_task.file)
 
 
+def _drop_package(package: str) -> None:
+    for name in [n for n in sys.modules if n == package or n.startswith(f'{package}.')]:
+        del sys.modules[name]
+
+
+def _load_cameras_module(lib: Path, package: str) -> ModuleType:
+    """``lib``'s ``cameras.py`` as ``<package>.cameras`` of a stand-in package rooted at ``lib``.
+
+    Its relative imports resolve to the files of ``lib``, and ``sys.path`` stays as it is.
+    """
+    _drop_package(package)
+    package_spec = importlib.machinery.ModuleSpec(package, None, is_package=True)
+    package_spec.submodule_search_locations = [str(lib)]
+    sys.modules[package] = importlib.util.module_from_spec(package_spec)
+    spec = importlib.util.spec_from_file_location(f'{package}.cameras', lib / CAMERAS)
+    assert spec is not None and spec.loader is not None  # a file that exists always yields a spec
+    module = importlib.util.module_from_spec(spec)
+    # A dataclass with postponed annotations resolves its module through ``sys.modules`` while it is defined.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        _drop_package(package)
+        raise
+    return module
+
+
 def camera_sets(
     task_libs: Sequence[Path], presets: dict[str, list[Any]], selectable: Collection[str]
 ) -> dict[str, list[Any]]:
@@ -140,17 +170,7 @@ def camera_sets(
         path = lib / CAMERAS
         if not path.is_file():
             continue
-        spec = importlib.util.spec_from_file_location(f'task_lib_cameras_{index}', path)
-        assert spec is not None and spec.loader is not None  # a file that exists always yields a spec
-        module = importlib.util.module_from_spec(spec)
-        # A dataclass with postponed annotations resolves its module through ``sys.modules`` while it is defined.
-        sys.modules[spec.name] = module
-        try:
-            spec.loader.exec_module(module)
-        except BaseException:
-            del sys.modules[spec.name]
-            raise
-        for name, cameras in module.camera_sets().items():
+        for name, cameras in _load_cameras_module(lib, f'task_lib_{index}').camera_sets().items():
             if name not in selectable:
                 raise ValueError(
                     f'{path} returns the camera set {name!r}, which no run can select: {sorted(selectable)}'

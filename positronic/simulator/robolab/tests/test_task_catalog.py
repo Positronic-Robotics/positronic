@@ -227,6 +227,23 @@ def test_a_camera_module_with_a_dataclass_of_postponed_annotations_loads(tmp_pat
     assert [camera.name for camera in sets['exterior_pair_wrist']] == ['ext']
 
 
+def test_a_camera_module_imports_a_file_beside_it_by_a_relative_import(tmp_path):
+    lib = tmp_path / 'lib'
+    lib.mkdir()
+    (lib / 'camera_configs.py').write_text("EXTERIORS = ['ext', 'ext_2']\n")
+    (lib / 'cameras.py').write_text(
+        'from .camera_configs import EXTERIORS\n\n\n'
+        'def camera_sets():\n'
+        "    return {'exterior_pair_wrist': [*EXTERIORS, 'wrist']}\n"
+    )
+    path_before = list(sys.path)
+
+    sets = camera_sets([lib], {}, SELECTABLE)
+
+    assert sets == {'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']}
+    assert sys.path == path_before
+
+
 def test_a_camera_module_that_fails_to_load_leaves_no_module_behind(tmp_path):
     lib = tmp_path / 'lib'
     lib.mkdir()
