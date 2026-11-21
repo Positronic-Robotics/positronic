@@ -153,8 +153,8 @@ class Motion:
             targets = {arm: self._clamp(start, requested[arm]) for arm, start in starts.items()}
             clamped = clamped or targets != requested
             parts.append(self._segment(starts, targets))
-            grips = any(target.gripper != held[arm].gripper for arm, target in targets.items())
-            hold = max(self.grip_hold if grips else 0.0, self.settle_hold if index == len(path) else 0.0)
+            gripper_changed = any(target.gripper != held[arm].gripper for arm, target in targets.items())
+            hold = max(self.grip_hold if gripper_changed else 0.0, self.settle_hold if index == len(path) else 0.0)
             if hold:
                 command = self._commands({arm: target.pose for arm, target in targets.items()}, targets)
                 parts.append([command] * math.ceil(hold * self.fps))
