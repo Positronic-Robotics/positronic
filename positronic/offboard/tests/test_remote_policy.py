@@ -38,6 +38,7 @@ from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import (
+    CANCEL_POLL_S,
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
     DOWNLINK_MS,
@@ -46,6 +47,7 @@ from positronic.offboard.client import (
     ConnectRetries,
     InferenceClient,
     InferenceSession,
+    SessionOpeningCancelled,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -380,6 +382,62 @@ class TestNewSessionRetriesRefusedConnects:
             InferenceClient(fake, _ADDRESS, open_timeout=900.0, connect_deadline=60.0).new_session()
 
         assert fake_clock.now <= 60.0
+
+
+class TestACancelledSessionOpening:
+    """A caller that gives up on a server ends the opening's retries, in place of waiting out the deadline."""
+
+    def test_a_cancel_before_the_opening_dials_nothing(self):
+        fake = _FakeWire(MagicMock())
+        with patch('positronic.offboard.client.InferenceSession'), pytest.raises(SessionOpeningCancelled):
+            InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: True)
+
+        assert fake.dials == []
+
+    def test_a_cancel_ends_the_pause_it_comes_in_and_no_attempt_follows(self, fake_clock):
+        """Attempts at 0, 1 and 3 s are refused; the cancel comes in the 4 s pause after the third."""
+        fake = _SlowWire(fake_clock, *[(0.0, _refused(wire.Refusal.SILENT))] * 10)
+        cancel_at = 5.05
+        with pytest.raises(SessionOpeningCancelled) as cancelled:
+            InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: fake_clock.now >= cancel_at)
+
+        assert len(fake.dials) == 3
+        assert cancel_at <= fake_clock.now <= cancel_at + CANCEL_POLL_S
+        assert isinstance(cancelled.value.__cause__, wire.ConnectRefused)
+
+    def test_the_cancel_names_the_session_url_once_and_the_last_refusal(self, fake_clock):
+        fake = _SlowWire(fake_clock, (0.0, wire.ConnectRefused(wire.Refusal.SILENT, 'nothing answered')))
+        with pytest.raises(SessionOpeningCancelled) as cancelled:
+            InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: fake_clock.now > 0)
+
+        assert 'nothing answered' in str(cancelled.value)
+        assert str(cancelled.value).count('fake://localhost:8000') == 1
+
+    def test_an_opening_whose_cancel_never_comes_opens_its_session(self):
+        fake = _FakeWire(_refused(wire.Refusal.SILENT), MagicMock())
+        with (
+            patch('positronic.offboard.client.InferenceSession') as mock_session_cls,
+            patch('positronic.offboard.client.time.sleep'),
+        ):
+            session = InferenceClient(fake, _ADDRESS).new_session(cancelled=lambda: False)
+
+        assert session is mock_session_cls.return_value
+
+    def test_a_cancel_ends_a_remote_run_whose_session_is_still_opening(self, never_accepting_port):
+        """The first dial runs out its open timeout; the cancel then ends the 1 s pause after it."""
+        policy = RemotePolicy('websocket', _address('localhost', never_accepting_port), open_timeout=0.2)
+        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        asked = []
+
+        def cancelled() -> bool:
+            asked.append(True)
+            return len(asked) > 1
+
+        started = time.monotonic()
+        with pytest.raises(SessionOpeningCancelled):
+            runtime.start(policy, cancelled=cancelled)
+
+        assert time.monotonic() - started < 1.0
 
 
 def _ready(
@@ -1994,12 +2052,14 @@ def test_a_client_refuses_a_wire_handed_the_other_wire_address():
         InferenceClient(websocket.WebsocketUnixClientWire(), _ADDRESS)
 
 
-def test_a_websocket_port_that_never_answers_is_named_at_the_deadline():
+def test_a_websocket_port_that_never_answers_is_named_once_at_the_deadline():
     """Nothing listens on port 1; the refused connect is a backend that is not ready, and the deadline ends it."""
     address = dataclasses.replace(_ADDRESS, port=1)
     client = InferenceClient(websocket.WebsocketClientWire(), address, open_timeout=0.2, connect_deadline=0.0)
-    with pytest.raises(TimeoutError, match='ws://localhost:1'):
+    with pytest.raises(TimeoutError) as timed_out:
         client.new_session()
+
+    assert str(timed_out.value).count('ws://localhost:1/') == 1
 
 
 # What a wall-clock test grants past a deadline: a thread start and a closed socket, on a loaded machine.

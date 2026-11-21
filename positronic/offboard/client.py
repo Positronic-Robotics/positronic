@@ -28,6 +28,8 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
+# How often a pause between connect attempts asks the caller's cancel.
+CANCEL_POLL_S = 0.1
 # How long ``infer`` retries to rebuild a connection that dropped before its first answer.
 # FOOTGUN: the arm holds its last setpoint throughout, and an attended trial (``timeout_sec=None``) has no
 # episode deadline behind this one to end that stall.
@@ -39,6 +41,10 @@ STATUS_UPDATE_TIMEOUT_S = 30.0
 def time_left(deadline: float) -> float:
     """The seconds left before the ``time.monotonic()`` instant ``deadline``, and 0 once it has passed."""
     return max(0.0, deadline - time.monotonic())
+
+
+class SessionOpeningCancelled(Exception):
+    """The caller cancelled a session opening before the server answered. The last refused attempt is the cause."""
 
 
 # What ``wire_timing`` reports: the send, and the wait that follows it. The link and the receiver
@@ -441,12 +447,19 @@ class InferenceClient:
             conn.close(timeout=time_left(ready_by))
             raise
 
-    def new_session(self) -> InferenceSession:
+    def new_session(self, cancelled: Callable[[], bool] | None = None) -> InferenceSession:
         """Creates a new inference session on the server's model.
 
-        Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
+        Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it. ``cancelled`` lets
+        another thread or process end the opening: it is asked before each attempt and every ``CANCEL_POLL_S`` of
+        each pause, and once it answers True no attempt begins and ``SessionOpeningCancelled`` is raised. An attempt
+        in flight finishes first, and its dial waits ``open_timeout`` at most.
         """
-        return self._connect(self.connect_deadline, reopen=lambda: self._connect(self.reconnect_deadline, reopen=None))
+        return self._connect(
+            self.connect_deadline,
+            reopen=lambda: self._connect(self.reconnect_deadline, reopen=None),
+            cancelled=cancelled,
+        )
 
     def wait_for_server(self) -> None:
         """Return once a server answers on the address, without opening a session.
@@ -467,19 +480,42 @@ class InferenceClient:
 
         self._retry(time.monotonic() + self.connect_deadline, probe)
 
-    def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
+    def _connect(
+        self,
+        deadline_sec: float,
+        reopen: Callable[[], InferenceSession] | None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> InferenceSession:
         """A session on the server, retrying a cold backend, by ``deadline_sec`` of wall clock from now."""
         deadline = time.monotonic() + deadline_sec
-        return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout))
+        return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout), cancelled)
 
-    def _retry(self, deadline: float, attempt: Callable[[float], T]) -> T:
+    @staticmethod
+    def _pause(seconds: float, cancelled: Callable[[], bool] | None) -> None:
+        """Sleep ``seconds``, or less once ``cancelled`` answers True. It is asked every ``CANCEL_POLL_S``."""
+        if cancelled is None:
+            time.sleep(seconds)
+            return
+        until = time.monotonic() + seconds
+        while (left := time_left(until)) > 0 and not cancelled():
+            time.sleep(min(CANCEL_POLL_S, left))
+
+    def _retry(self, deadline: float, attempt: Callable[[float], T], cancelled: Callable[[], bool] | None = None) -> T:
         """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``.
 
         ``attempt`` takes the seconds its dial may wait: ``open_timeout`` or the time left, whichever is shorter.
+        ``cancelled`` ends the retries as ``new_session`` says.
         """
         pauses = wire.retry_pauses()
         retries = ConnectRetries()
+        not_ready: Exception | None = None
         while True:
+            if cancelled is not None and cancelled():
+                raise SessionOpeningCancelled(
+                    f'The caller cancelled the session opening: {self._naming_the_url(not_ready)}'
+                ) from not_ready
+            if not_ready is not None and time_left(deadline) <= 0:
+                raise TimeoutError(self._naming_the_url(not_ready)) from not_ready
             open_timeout = min(self.open_timeout, time_left(deadline))
             try:
                 return attempt(open_timeout)
@@ -492,9 +528,14 @@ class InferenceClient:
                 raise not_ready
             pause = next(pauses)
             logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, pause)
-            time.sleep(min(pause, time_left(deadline)))
-            if time_left(deadline) <= 0:
-                raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
+            self._pause(min(pause, time_left(deadline)), cancelled)
+
+    def _naming_the_url(self, failure: Exception | None) -> str:
+        """What ``failure`` says, with the session URL where it does not name the URL itself."""
+        if failure is None:
+            return f'no attempt began (connecting to {self.session_url})'
+        said = str(failure)
+        return said if self.session_url in said else f'{said} (connecting to {self.session_url})'
 
     def keepalive(self) -> int | None:
         """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after
