@@ -157,9 +157,12 @@ def _objects_on_receptacle(
     return [obj for name in sorted(found) if (obj := self.get_object_by_name(name))]
 
 
-# HACK: upstream computes the box of the root body across each receptacle contact before it checks the body name.
-# For a static geom that root is ``world``, whose box reads every mesh vertex, so ``get_info`` takes seconds.
-ObjectManager.objects_on_receptacle = _objects_on_receptacle
+def use_fast_objects_on_receptacle() -> None:
+    """Make every ``ObjectManager`` of this process use ``_objects_on_receptacle``."""
+    # HACK: upstream computes the box of the root body across each receptacle contact before it checks the body name.
+    # For a static geom that root is ``world``, whose box reads every mesh vertex, so ``get_info`` takes seconds.
+    # rules-allow: hidden-dependency — MolmoSpaces builds its ObjectManager internally and takes no class to use.
+    ObjectManager.objects_on_receptacle = _objects_on_receptacle
 
 
 # The arm joints of the robot model that the client records.
@@ -175,6 +178,7 @@ class MolmoSpacesEnv(EnvProtocol):
         right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
         hook: env_hook.LoadedHook | None = None,
     ) -> None:
+        use_fast_objects_on_receptacle()
         self._assets_dir = assets_dir
         self._hook, self._hook_record = hook if hook is not None else env_hook.load(None)
         self._found = mapping.discover_benchmarks(assets_dir)

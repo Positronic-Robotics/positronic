@@ -9,7 +9,7 @@ from typing import Any
 from unittest import mock
 
 # env.py installs the CGL stub before loading MolmoSpaces; import it before any other molmo_spaces import.
-import env  # noqa: F401
+import env
 import mujoco
 
 # MolmoSpaces is installed only in the server's isolated environment.
@@ -82,6 +82,7 @@ def _probe(pickup_pos: tuple[float, float, float], pickup_in_metadata: bool) -> 
 
 
 def main() -> None:
+    env.use_fast_objects_on_receptacle()
     print(json.dumps({name: _probe(*scene) for name, scene in _SCENES.items()}))
 
 
