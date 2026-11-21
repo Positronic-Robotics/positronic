@@ -1,6 +1,7 @@
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 
 import configuronic as cfn
 from eval_vocabulary.episode import GT_STATE_SIGNAL, SUBTASK_SIGNAL
@@ -68,6 +69,12 @@ _ROBOT_EVALS = {
 }
 
 
+def _task_lib_paths(task_libs: str | Path | Sequence[str | Path]) -> tuple[Path, ...]:
+    """Each task library directory as an absolute path; one path alone is a list of one."""
+    libs = [task_libs] if isinstance(task_libs, str | Path) else task_libs
+    return tuple(Path(lib).expanduser().resolve() for lib in libs)
+
+
 @cfn.config(
     robot=robolab_keys.DROID,
     cameras=None,
@@ -77,8 +84,11 @@ _ROBOT_EVALS = {
     horizon_sec=None,
     env_server=None,
     batch_size=None,
+    task_libs=(),
 )
-def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, robot, cameras, env_server, batch_size):
+def _robolab_eval(
+    task, instruction_type, trial_count, timeout, horizon_sec, robot, cameras, env_server, batch_size, task_libs
+):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
     Each RoboLab task has a fixed scene, a language instruction in three phrasings (``instruction_type``
@@ -107,6 +117,10 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
     ``batch_size`` is how many evals start each batch on that server; the server builds that many clones for them.
     Without it, a batch waits for every clone of the server.
 
+    ``task_libs`` are task library directories on the env server's host (``positronic.simulator.robolab.task_catalog``);
+    ``task`` may name their tasks, and no category or ``None`` sweep includes them. Only a DROID run takes them. A
+    shared ``env_server`` must serve the same libraries.
+
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name, instruction type and episode length override ride each trial's
     reset token.
@@ -120,7 +134,7 @@ def _robolab_eval(task, instruction_type, trial_count, timeout, horizon_sec, rob
     robot_eval = _ROBOT_EVALS[robot]
     camera_dict = robot_eval.camera_dict(robolab_keys.camera_set(robot, cameras))
     if env_server is None:
-        serve = serve_robolab(cameras, robot=robot)
+        serve = serve_robolab(cameras, robot=robot, task_libs=_task_lib_paths(task_libs))
     else:
         serve = nullcontext(env_server_address(env_server))
     proxy = RemoteEnvControlSystem(robot_eval.adapter(camera_dict), serve, batch_size)

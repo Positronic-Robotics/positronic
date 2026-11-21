@@ -8,6 +8,7 @@ import contextlib
 import os
 import subprocess
 import sys
+from contextlib import nullcontext
 from typing import Any
 
 import pytest
@@ -250,3 +251,65 @@ def test_only_a_droid_server_gets_the_droid_rig_model(spawn):
 
     assert 'ROBOLAB_ROBOT_META' in droid
     assert 'ROBOLAB_ROBOT_META' not in spawn.env
+
+
+def test_each_task_library_reaches_the_env_server(spawned, tmp_path):
+    libs = (tmp_path / 'a', tmp_path / 'b')
+    for lib in libs:
+        (lib / '_metadata').mkdir(parents=True)
+        (lib / '_metadata' / 'task_metadata.json').write_text('[]')
+
+    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, task_libs=libs):
+        pass
+
+    flags = [spawned[0][i + 1] for i, arg in enumerate(spawned[0]) if arg == '--task-lib']
+    assert flags == [str(lib) for lib in libs]
+
+
+def test_a_directory_without_task_metadata_fails_before_any_spawn(spawned, tmp_path):
+    with pytest.raises(FileNotFoundError, match='no task library'):
+        with launcher.serve_robolab(robolab_keys.WRIST_LEFT, task_libs=(tmp_path,)):
+            pass
+
+    assert spawned == []
+
+
+def test_a_yam_server_with_a_task_library_fails_before_any_spawn(spawned, tmp_path):
+    (tmp_path / '_metadata').mkdir()
+    (tmp_path / '_metadata' / 'task_metadata.json').write_text('[]')
+
+    with (
+        pytest.raises(ValueError, match='task libraries'),
+        launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM, task_libs=(tmp_path,)),
+    ):
+        pass
+
+    assert spawned == []
+
+
+@pytest.fixture
+def served_libs(monkeypatch) -> list[Any]:
+    """The ``task_libs`` each eval hands ``serve_robolab``, with no server launched."""
+    served: list[Any] = []
+
+    def serve(cameras, **kwargs):
+        served.append(kwargs['task_libs'])
+        return nullcontext(('localhost', 0))
+
+    monkeypatch.setattr(robolab_cfg, 'serve_robolab', serve)
+    return served
+
+
+def test_one_task_library_path_is_one_library(served_libs, tmp_path):
+    robolab_cfg.benchmark.override(task_libs=str(tmp_path)).instantiate()
+
+    assert served_libs == [(tmp_path.resolve(),)]
+
+
+def test_each_task_library_path_is_absolute_with_the_home_expanded(served_libs, tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    robolab_cfg.benchmark.override(task_libs=['~/a', 'b']).instantiate()
+
+    assert served_libs == [(tmp_path.resolve() / 'a', tmp_path.resolve() / 'b')]

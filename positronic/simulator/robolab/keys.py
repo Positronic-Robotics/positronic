@@ -61,15 +61,21 @@ WRIST_CAMERA = 'wrist_cam'
 TOP_CAMERA = 'top_cam'
 LEFT_WRIST_CAMERA = 'left_wrist_cam'
 RIGHT_WRIST_CAMERA = 'right_wrist_cam'
+# The exteriors a task library places with its own ``cameras.py``; RoboLab's presets hold neither.
+EXTERIOR_CAMERA = 'exterior_camera'
+EXTERIOR_2_CAMERA = 'exterior_2_camera'
 
 # The camera sets a run of the DROID rig picks from. The names follow RoboLab's own presets.
 WRIST_LEFT_RIGHT = 'wrist_left_right'
 WRIST_LEFT = 'wrist_left'
 WRIST_RIGHT = 'wrist_right'
+# Served only when a task library's ``cameras.py`` returns a set of this name.
+EXTERIOR_PAIR_WRIST = 'exterior_pair_wrist'
 CAMERA_SETS = {
     WRIST_LEFT_RIGHT: (OVER_SHOULDER_LEFT_CAMERA, OVER_SHOULDER_RIGHT_CAMERA, WRIST_CAMERA),
     WRIST_LEFT: (OVER_SHOULDER_LEFT_CAMERA, WRIST_CAMERA),
     WRIST_RIGHT: (OVER_SHOULDER_RIGHT_CAMERA, WRIST_CAMERA),
+    EXTERIOR_PAIR_WRIST: (EXTERIOR_CAMERA, EXTERIOR_2_CAMERA, WRIST_CAMERA),
 }
 # The camera set of the YAM robot.
 TOP_AND_WRISTS = 'top_and_wrists'
