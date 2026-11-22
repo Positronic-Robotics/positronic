@@ -301,8 +301,6 @@ class _Arm(DriverRun[command.CommandType]):
     _MIN_PROGRESS_M_PER_RAD = 0.02
     # A target that moved less than this since the last tick is still
     _STILL_M, _STILL_RAD = 5e-4, 5e-3
-    # A joint ramp of a park or a start move is checked against the obstacles at points this far apart
-    _RAMP_CHECK_STEP_RAD = 0.05
     # i2rt halts the chain once a joint reads 0.1 rad past its limits (i2rt/robots/motor_chain_robot.py:254).
     _CHAIN_LIMIT_MARGIN_RAD = 0.15
 
@@ -738,6 +736,17 @@ class _Arm(DriverRun[command.CommandType]):
                         f'farther than a correction of {bound:.4f} rad can close: something blocks it; '
                         f'measured={obs[_JOINT_POS]}'
                     )
+                # A correction moves the reference past ``goal``; the arm moves from where it rests to ``goal``
+                clearance = self._clearance
+                if (
+                    clearance is not None
+                    and self._stream.obstacles
+                    and not self._ramp_keeps_clear(clearance, obs[_JOINT_POS], reachable, self._open_share(grip))
+                ):
+                    raise TimeoutError(
+                        f'the arm rests at {obs[_JOINT_POS]}, and the ramp from there to {reachable} does not keep '
+                        'clear of the obstacles'
+                    )
                 corrected = np.clip(reference - (obs[_JOINT_POS] - goal), goal - bound, goal + bound)
                 if within_joint_limits:
                     corrected = np.clip(corrected, *self._joint_range)
@@ -820,17 +829,36 @@ class _Arm(DriverRun[command.CommandType]):
     @classmethod
     def _ramp_keeps_clear(cls, clearance: Clearance, start: np.ndarray, goal: np.ndarray, open_share: float) -> bool:
         """Whether no pair of the arm and an obstacle goes nearer than ``keep_clear_m`` and nearer than it is at the
-        nearer end, on the joint ramp from ``start`` to ``goal``, at points ``_RAMP_CHECK_STEP_RAD`` apart."""
-        ends = clearance.gaps(start, open_share, obstacles_only=True)
-        for pair, gap in clearance.gaps(goal, open_share, obstacles_only=True).items():
-            ends[pair] = min(gap, ends.get(pair, clearance.reach_m))
-        points = max(1, int(np.ceil(np.max(np.abs(goal - start)) / cls._RAMP_CHECK_STEP_RAD)))
-        return not any(
-            clearance.closes_a_gap(
-                start + share * (goal - start), ends, open_share, cls._GAP_TOLERANCE_M, obstacles_only=True
+        nearer end, on the joint ramp from ``start`` to ``goal``. The ramp splits until ``Clearance.travel_m`` between
+        two checked points proves the gap between them, or until that travel is less than twice ``_GAP_TOLERANCE_M``."""
+        reach, floor = clearance.reach_m, clearance.keep_clear_m - cls._GAP_TOLERANCE_M
+        first = clearance.gaps(start, open_share, obstacles_only=True)
+        last = clearance.gaps(goal, open_share, obstacles_only=True)
+        ends = dict(first)
+        for pair, gap in last.items():
+            ends[pair] = min(gap, ends.get(pair, reach))
+        allowed = {pair: min(floor, gap - cls._GAP_TOLERANCE_M) for pair, gap in ends.items()}
+
+        def closes(gaps: dict[frozenset[str], float]) -> bool:
+            return any(gap < allowed.get(pair, floor) for pair, gap in gaps.items())
+
+        stack = [(start, first, goal, last)]
+        while stack:
+            a, at_a, b, at_b = stack.pop()
+            travel = clearance.travel_m(b - a)
+            # Between the two ends, a pair is not nearer than `(at_a + at_b - travel) / 2`
+            proven = reach - travel / 2 >= floor and all(
+                (at_a.get(pair, reach) + at_b.get(pair, reach) - travel) / 2 >= allowed.get(pair, floor)
+                for pair in at_a.keys() | at_b.keys()
             )
-            for share in np.linspace(0.0, 1.0, points + 1)[1:]
-        )
+            if proven or travel <= 2 * cls._GAP_TOLERANCE_M:
+                continue
+            middle = (a + b) / 2
+            at_middle = clearance.gaps(middle, open_share, obstacles_only=True)
+            if closes(at_middle):
+                return False
+            stack += [(a, at_a, middle, at_middle), (middle, at_middle, b, at_b)]
+        return True
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure

@@ -1305,6 +1305,52 @@ def test_a_blocking_move_from_low_over_the_table_rises_before_its_joint_ramp(wor
     rig.loop.close()
 
 
+def test_a_joint_ramp_check_finds_a_small_box_between_two_points_of_the_ramp():
+    start = np.array([0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+    goal = start + np.array([1.0, 1.0, -1.0, 1.0, 1.0, 1.0])
+    corner = np.array([0.2862, 0.0949, 0.3572])  # link 4 passes through it between two points 0.05 rad apart
+    clearance = Clearance((Box(tuple((corner - 0.002).tolist()), tuple((corner + 0.002).tolist())),), KEEP_CLEAR_M)
+    gaps = [clearance.obstacle_gap(start + share * (goal - start), OPEN_SHARE) for share in np.linspace(0.0, 1.0, 2001)]
+    assert min(gaps[0], gaps[-1]) > KEEP_CLEAR_M and min(gaps) < 0
+    assert not yam._Arm._ramp_keeps_clear(clearance, start, goal, OPEN_SHARE)
+
+
+def test_a_settle_correction_whose_ramp_to_the_target_does_not_keep_clear_fails_the_move(world):
+    wall = Box((0.20, 0.075, -0.1), (0.80, 0.076, 0.6))
+    target = np.array([0.0, 1.6, 1.2, 0.0, 0.0, 0.0])
+    rig = Rig(
+        park_after_idle_s=60.0,
+        move_tuning=dataclasses.replace(yam.MOVE_SETTLE, max_correction_rad=0.35),
+        stream=StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(wall,)),
+    )
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0])  # the arm rests past the wall, and turns back through it
+    answer = _sync_caller(world, rig)(command.JointPosition(target))
+    _until_answered(rig, answer)
+    with pytest.raises(DeviceFault):
+        answer.result()
+    rig.loop.close()
+
+
+def test_a_blocking_move_that_rests_short_beside_the_table_settles_onto_its_target(world):
+    rig = Rig(park_after_idle_s=60.0, stream=StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,)))
+    rig.raise_arm()
+    rig.vendor.bias = np.array([0.03, 0.0, 0.0, 0.0, 0.0, 0.0])  # the correction turns joint 1 along the table
+    target = np.array([
+        0.6106968481848145,
+        1.3512742797030024,
+        0.4929837383893122,
+        -1.1083265004817153,
+        0.18626303737001582,
+        -1.0251803072262993,
+    ])
+    answer = _sync_caller(world, rig)(command.JointPosition(target))  # its open fingers 3 mm above the table
+    _until_answered(rig, answer)
+    answer.result()
+    np.testing.assert_allclose(rig.vendor._pos[:6], target, atol=0.01)
+    rig.loop.close()
+
+
 def test_a_park_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_error():
     stream = StreamTuning(
         keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), park_lift_m=0.001, park_lift_timeout_s=0.2

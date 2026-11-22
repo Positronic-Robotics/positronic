@@ -140,6 +140,33 @@ class Clearance:
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
         self._finger_ids = np.array([self._model.joint(name).qposadr.item() for name in _FINGERS])
         self._finger_travel = np.array([self._model.joint(name).range[1] for name in _FINGERS])
+        self._radii = self._joint_radii()
+
+    def travel_m(self, step: np.ndarray) -> float:
+        """The farthest that a point of the arm moves on the joint ramp ``step``, at most, in meters."""
+        return float(self._radii @ np.abs(step))
+
+    def _joint_radii(self) -> np.ndarray:
+        """The farthest distance from each arm joint to a point of a hull that it turns, at any pose, in meters.
+
+        A sum of distances between points that stay fixed to each other bounds it: each hull to the anchor of the
+        nearest joint above it, and each anchor to the next one. A finger slides, so its part counts at both ends of
+        its travel."""
+        model, data = self._model, self._data
+        hinges = [model.joint(name).id for name in YAM_JOINT_NAMES]
+        radii = np.zeros(len(hinges))
+        for open_share in (0.0, 1.0):
+            self._place(np.zeros(len(hinges)), open_share)
+            for g in range(model.ngeom):
+                body, point, reach = model.geom_bodyid[g], data.geom_xpos[g], float(model.geom_rbound[g])
+                while body != 0:
+                    for j in range(model.body_jntadr[body], model.body_jntadr[body] + model.body_jntnum[body]):
+                        reach += float(np.linalg.norm(data.xanchor[j] - point))
+                        point = data.xanchor[j]
+                        if j in hinges:
+                            radii[hinges.index(j)] = max(radii[hinges.index(j)], reach)
+                    body = model.body_parentid[body]
+        return radii
 
     def nears(self, q: np.ndarray, open_share: float) -> list[Near]:
         """The pairs nearer than ``reach_m`` at joints ``q``, the nearest point of each pair, with the fingers open by
