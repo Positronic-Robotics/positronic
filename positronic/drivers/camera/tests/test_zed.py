@@ -178,7 +178,9 @@ class FakeModel(enum.Enum):
 
 # Depths in metres as the SDK gives them: NaN, +Inf and -Inf where it has no depth
 NO_DEPTH = (np.nan, np.inf, -np.inf)
-DEPTH_M = np.array([NO_DEPTH, (0.0, 0.3, 1.2344), (10.0, 65.535, 65.536)], dtype=np.float32)
+DEPTH_M = np.array([NO_DEPTH, (0.0, 0.3, 1.2346), (10.0, 65.535, 70.0)], dtype=np.float32)
+# A depth below 0 is none the SDK documents. Its `uint8` value differs between processor types.
+DEPTH_WITH_NEGATIVE_M = np.array([(-0.5, 0.3)], dtype=np.float32)
 
 LEFT_INTRINSICS = PinholeIntrinsics(width=1280, height=720, fx=522.5, fy=522.25, cx=645.75, cy=361.5)
 
@@ -192,7 +194,7 @@ class DroppingSdk:
     before ``images_stop_at`` grabs with no error from then on, and gives no image. Every image shows ``scene``, a lit
     room by default, and the grabs that ``torn_grabs`` counts from 0 give a torn image. Each image's capture time is
     ``image_age_ns`` before its grab. From ``clock_back_at`` the host clock reads ``clock_back_ns`` earlier, as after a
-    clock correction, while the image clock keeps its course. Every depth measure is ``DEPTH_M``, and the rectified
+    clock correction, while the image clock keeps its course. Every depth measure is ``depth_m``, and the rectified
     left view has ``LEFT_INTRINSICS``.
     """
 
@@ -210,8 +212,10 @@ class DroppingSdk:
         clock_back_at: float = float('inf'),
         clock_back_ns: int = 0,
         model: FakeModel = FakeModel.ZED2i,
+        depth_m: np.ndarray = DEPTH_M,
     ):
         self.model = model
+        self.depth_m = depth_m
         self.clock = clock
         self.image_age_ns = image_age_ns
         self.clock_back_at = clock_back_at
@@ -302,7 +306,7 @@ class FakeCamera:
     def retrieve_measure(self, measure: 'FakeMat', kind) -> ErrorCode:
         assert self.opened_at is not None
         assert kind == 'depth'
-        measure.data = DEPTH_M.copy()
+        measure.data = self._sdk.depth_m.copy()
         return ErrorCode.SUCCESS
 
 
@@ -940,10 +944,10 @@ def test_a_camera_reopened_after_a_near_black_fault_gets_the_full_limit_again(ze
     assert max(_frame_times(frames)) == pytest.approx(reopened_at + zed_module.SLCamera.NEAR_BLACK_FAULT_SEC, abs=0.05)
 
 
-def _depth_images(module, **settings) -> list[np.ndarray]:
-    """The depth images that a camera with the depth mode `neural` and ``settings`` sends in 0.1 s."""
+def _depth_images(module, depth_m: np.ndarray = DEPTH_M, **settings) -> list[np.ndarray]:
+    """The depth images that a camera with the depth mode `neural` and ``settings`` sends in 0.1 s for ``depth_m``."""
     clock, stop, depths = MockClock(), StopFlag(), RecordingEmitter()
-    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER)
+    sdk = DroppingSdk(clock, lost_at=NEVER, listed_at=NEVER, depth_m=depth_m)
     camera = _camera(module, sdk, RecordingEmitter(), depth_mode='neural', **settings)
     camera.depth._bind(depths, clock=clock)
     _drive(camera.run(stop, clock), clock, until=0.1)
@@ -959,7 +963,7 @@ def test_depth_is_bytes_on_the_scale_of_the_largest_depth_by_default(zed_module)
 
 def test_depth_in_millimetres_is_zero_where_the_sdk_has_no_depth_or_the_depth_is_above_the_uint16_range(zed_module):
     images = _depth_images(zed_module, depth_format='uint16_mm')
-    expected = np.array([(0, 0, 0), (0, 300, 1234), (10000, 65535, 0)], dtype=np.uint16)
+    expected = np.array([(0, 0, 0), (0, 300, 1235), (10000, 65535, 0)], dtype=np.uint16)
     assert images and all(image.dtype == np.uint16 for image in images)
     np.testing.assert_array_equal(images[-1], expected[..., np.newaxis])
 
@@ -968,6 +972,16 @@ def test_depth_in_metres_is_zero_where_the_sdk_has_no_depth(zed_module):
     images = _depth_images(zed_module, depth_format='float32_m')
     expected = np.where(np.isfinite(DEPTH_M), DEPTH_M, 0)
     assert images and all(image.dtype == np.float32 for image in images)
+    np.testing.assert_array_equal(images[-1], expected[..., np.newaxis])
+
+
+@pytest.mark.parametrize(
+    ('depth_format', 'expected'),
+    [('uint16_mm', np.array([(0, 300)], np.uint16)), ('float32_m', np.array([(0, 0.3)], np.float32))],
+)
+def test_a_metric_depth_below_zero_is_zero(zed_module, depth_format, expected):
+    images = _depth_images(zed_module, DEPTH_WITH_NEGATIVE_M, depth_format=depth_format)
+    assert images
     np.testing.assert_array_equal(images[-1], expected[..., np.newaxis])
 
 
@@ -1000,13 +1014,12 @@ def test_each_open_sends_the_intrinsics_of_the_rectified_left_view(zed_module, w
     assert [data for _, data in intrinsics.emitted] == [LEFT_INTRINSICS] * 2
 
 
-def test_a_mono_camera_sends_no_intrinsics(zed_module):
-    clock, stop, intrinsics = MockClock(), StopFlag(), RecordingEmitter()
-    sdk = RebootingSdk(clock)
-    camera = _rebooting_camera(zed_module, sdk, RecordingEmitter(), mono=True)
-    camera.left_intrinsics._bind(intrinsics, clock=clock)
-    _drive(camera.run(stop, clock), clock, until=0.1)
-    assert not intrinsics.emitted
+def test_a_mono_camera_refuses_a_consumer_of_its_intrinsics(zed_module):
+    clock, stop = MockClock(), StopFlag()
+    camera = _rebooting_camera(zed_module, RebootingSdk(clock), RecordingEmitter(), mono=True)
+    camera.left_intrinsics._bind(RecordingEmitter(), clock=clock)
+    with pytest.raises(RuntimeError, match='a mono camera sends no intrinsics'):
+        next(camera.run(stop, clock))
 
 
 def test_each_depth_mode_of_the_driver_is_a_depth_mode_of_the_installed_sdk():

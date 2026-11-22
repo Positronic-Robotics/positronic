@@ -69,15 +69,19 @@ def depth_as_uint8(depth_m: np.ndarray, max_depth_m: float) -> np.ndarray:
 
 
 def depth_as_float32_m(depth_m: np.ndarray) -> np.ndarray:
-    """``depth_m`` with 0 in place of each value that is not a finite depth above 0."""
-    metres = np.nan_to_num(depth_m, nan=0, posinf=0, neginf=0).astype(np.float32)
-    metres[metres < 0] = 0
-    return metres
+    """A copy of ``depth_m`` with 0 in place of each value that is not a finite depth above 0."""
+    metres = np.nan_to_num(depth_m, nan=0, posinf=0, neginf=0).astype(np.float32, copy=False)
+    return np.maximum(metres, 0, out=metres)
 
 
 def depth_as_uint16_mm(depth_m: np.ndarray) -> np.ndarray:
-    """``depth_m`` in millimetres, with 0 in place of each value that is not a finite depth from 0 to 65.535 m."""
-    millimetres = np.rint(depth_as_float32_m(depth_m).astype(np.float64) * 1000)
+    """``depth_m`` in millimetres, with 0 in place of each value that is not a finite depth from 0 to 65.535 m.
+
+    The product with 1000 and its rounding to the nearest millimetre are in `float32`.
+    """
+    millimetres = depth_as_float32_m(depth_m)
+    millimetres *= 1000
+    np.rint(millimetres, out=millimetres)
     millimetres[millimetres > np.iinfo(np.uint16).max] = 0
     return millimetres.astype(np.uint16)
 
@@ -135,7 +139,8 @@ class SLCamera(pimm.ControlSystem):
             fps: (int) Frames per second
             view: (sl.VIEW) View to use
             resolution: (sl.RESOLUTION) Resolution to use
-            depth_mode: (sl.DEPTH_MODE) Depth mode to use
+            depth_mode: (sl.DEPTH_MODE) Depth mode to use. The SDK 5.4 calls 'performance', 'quality' and 'ultra'
+                        deprecated.
             coordinate_units: (sl.UNIT) Coordinate units to use
             max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
                         -Inf will be set to 0. All values above this will be set to max_depth.
@@ -556,6 +561,9 @@ class SLCamera(pimm.ControlSystem):
 
         if self._mono and (self._view_name != 'left' or self._depth_mode_name != 'none' or self._image_enhancement):
             raise RuntimeError('mono cameras support only view="left", depth_mode="none" and no image enhancement')
+
+        if self._mono and self.left_intrinsics.num_bound > 0:
+            raise RuntimeError('left_intrinsics channel is connected but a mono camera sends no intrinsics.')
 
         depth_mask_enabled = self._depth_mode != sl.DEPTH_MODE.NONE and self._depth_mask_requested
 
