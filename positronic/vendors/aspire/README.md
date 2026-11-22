@@ -35,8 +35,7 @@ The server serves a two-arm rig by default. For a rig whose channels carry no ar
 `robot_command`, `target_grip`), start it with `--settings.arms='[None]'`:
 
 ```bash
-uv run --locked python -m positronic.vendors.aspire.server --settings.arms='[None]' \
-  --calibration=path/to/calibration.json --websocket.served_address.port=8000
+uv run --locked python -m positronic.vendors.aspire.server --settings.arms='[None]' --websocket.served_address.port=8000
 ```
 
 ## How a call runs
@@ -86,10 +85,11 @@ trajectory that does not start within 0.02 rad of the measured joints (`stale_pl
 one-arm rig (`--settings.arms='[None]'`) the arm is `primary`, and the channels are those of the table without
 `.{arm}`. An arm has the joint count that its first observation holds: 6 for a YAM, 7 for a Franka. The bridge refuses
 a joint target of a different length (`invalid_request`). `--settings.embodiment` (`yam_real` by default) is the
-embodiment name of each state and command in a program.
+embodiment name of each state and command in a program. Set it on a rig that is not a YAM. An alias must name an arm
+of `--settings.arms`: on a rig with one named arm, set `--settings.aliases` so that `primary` names that arm.
 
-Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's
-measured hand poses, at the `gripper` site. The server states that site in its `ee_frames`.
+Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's measured hand poses, at
+the `gripper` site. The server states that site in its `ee_frames`.
 
 `get_task_context` carries the task instruction as `language` and `task_name`.
 
@@ -117,11 +117,17 @@ x to the right of the image, y down, z forward. A pose is `x, y, z, qw, qx, qy, 
 }
 ```
 
-The pose of a camera with no `hand` is in the base frame. The pose of a camera with `hand` is in the hand frame of
-that arm, as a program names the arm (`primary` names the right arm of the default two-arm rig). The bridge then gives
-`camera_pose` as the measured hand pose times this pose, at each observation. The hand frame is the frame of
-`robot_state.ee_pose`. The server refuses a `hand` that names no arm when it starts. It states the calibration in its
-metadata, under `calibration`.
+Start the server with `--calibration=path/to/calibration.json`. The pose of a camera with no `hand` is in the base
+frame. The pose of a camera with `hand` is in the hand frame of that arm. `hand` names an arm of `--settings.arms`:
+`primary` on a one-arm rig, `left` or `right` on a two-arm rig. It does not go through `--settings.aliases`. The
+bridge gives `camera_pose` as the measured hand pose times this pose, at each observation. The hand frame is the frame
+of `robot_state.ee_pose`. The server refuses a `hand` that names no arm when it starts. It states the calibration in
+its metadata, under `calibration`.
+
+The bridge refuses an observation that has no image for a calibrated camera or for a `depth.{camera}`, and a
+calibration whose principal point is outside the image. A wrist view's `camera_pose` uses the hand pose of the same
+observation. The bridge does not check that the image and the hand pose are of the same instant, so read a wrist view
+when the arm is still.
 
 ## Program rules
 
@@ -130,7 +136,7 @@ Perception and planning calls (`segment_text`, `localize_object`, `plan_motion`,
 program to ASPIRE's contract; they are not a sandbox. Run a program only from a source you trust.
 
 In a program, `ArmCommand`, `Trajectory` and `SynchronizedTrajectory` make values with the embodiment of
-`--settings.embodiment`. They are functions, so `isinstance` does not take them.
+`--settings.embodiment` when the program does not give one.
 
 ## Records
 
