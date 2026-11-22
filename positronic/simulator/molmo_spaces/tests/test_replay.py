@@ -78,25 +78,25 @@ _OPEN_BENCHMARK = mapping.BenchmarkPath(
 )
 
 
-def _assets_without_joint_grasps(tmp_path: Path, uids: list[str]) -> Path:
-    """A copy of the asset packs, made of links, where the droid library holds no joint grasps for ``uids``."""
+def _assets_without_grasps(tmp_path: Path, uids: list[str]) -> Path:
+    """A copy of the asset packs, made of links, where no grasp library holds grasps for ``uids``."""
     assets = Path(os.environ[mapping.ASSETS_DIR_ENV])
     copy = tmp_path / 'assets'
-    (copy / 'grasps' / 'droid').mkdir(parents=True)
+    copy.mkdir()
     for entry in assets.iterdir():
         if entry.name != 'grasps':
             (copy / entry.name).symlink_to(entry)
     for library in (assets / 'grasps').iterdir():
-        if library.name != 'droid':
-            (copy / 'grasps' / library.name).symlink_to(library)
-    for obj in (assets / 'grasps' / 'droid').iterdir():
-        if obj.name not in uids:
-            (copy / 'grasps' / 'droid' / obj.name).symlink_to(obj)
+        (copy / 'grasps' / library.name).mkdir(parents=True)
+        for obj in library.iterdir():
+            if obj.name not in uids:
+                (copy / 'grasps' / library.name / obj.name).symlink_to(obj)
     return copy
 
 
 # Episode 246 opens a drawer, on a slide joint, that is part of an iThor scene and is in no object package.
-# Episode 236 opens the door of a fridge from the thor object library, on a hinge. The values name their objects.
+# Episode 236 opens the door of a fridge from the thor object library, on a hinge.
+# The values are the asset ids of their objects.
 _OPEN_EPISODES = {246: 'Drawer_fbe3655c', 236: 'Fridge_21'}
 
 
@@ -105,7 +105,7 @@ def test_an_open_episode_resets_an_articulated_object_that_has_no_joint_grasp_fi
     episode_index: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     _skip_unless_present(_OPEN_BENCHMARK)
-    assets = _assets_without_joint_grasps(tmp_path, list(_OPEN_EPISODES.values()))
+    assets = _assets_without_grasps(tmp_path, list(_OPEN_EPISODES.values()))
     monkeypatch.setenv(mapping.ASSETS_DIR_ENV, str(assets))
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
