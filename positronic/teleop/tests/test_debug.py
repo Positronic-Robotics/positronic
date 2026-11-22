@@ -76,6 +76,10 @@ class _Rig:
             (lambda: self.press(a=1.0), 0.01),
         ]
 
+    def states(self, count: int = ArmControl.SETTLE_STATES) -> list:
+        """The steps that send ``count`` new states of the arm."""
+        return [(lambda: self.state.emit(_state()), 0.01)] * count
+
 
 def test_control_moves_the_arm_from_where_it_came_on_and_a_second_press_turns_it_off(world):
     rig = _Rig(world)
@@ -135,7 +139,7 @@ def test_b_turns_control_off_clears_the_errors_and_then_puts_the_arm_at_its_star
         (lambda: rig.take_calls(), 0.01),
         (lambda: marks.update(moves_before_clear=len(rig.calls)), 0.01),
         (lambda: [call.set_result(None) for call in cleared], 0.01),
-        (lambda: rig.state.emit(_state()), 0.01),
+        *rig.states(),
         (lambda: rig.take_calls(), 0.01),
         (lambda: rig.calls[0].set_result(None), 0.01),
         (lambda: marks.update(at_start=len(rig.commands.emitted)), 0.01),
@@ -152,13 +156,14 @@ def test_b_turns_control_off_clears_the_errors_and_then_puts_the_arm_at_its_star
     assert marks['after'] == marks['at_start'], 'control is off at the start pose'
 
 
-def test_the_start_move_waits_for_a_state_of_the_arm_after_the_press(world):
+def test_the_start_move_waits_for_the_settle_states_of_the_arm_after_the_press(world):
     rig = _Rig(world)
     marks = {}
     driver = ManualDriver([
         (lambda: rig.state.emit(_state()), 0.01),
         (lambda: rig.press(), 0.01),
         (lambda: rig.press(b=1.0), 0.01),
+        *rig.states(ArmControl.SETTLE_STATES - 1),
         (lambda: rig.take_calls(), 0.01),
         (lambda: marks.update(before_state=len(rig.calls)), 0.01),
         (lambda: rig.state.emit(_state()), 0.01),
@@ -167,6 +172,20 @@ def test_the_start_move_waits_for_a_state_of_the_arm_after_the_press(world):
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
     assert marks['before_state'] == 0 and len(rig.calls) == 1
+
+
+def test_the_start_move_fails_with_no_move_when_the_arm_sends_no_state(world):
+    rig = _Rig(world)
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.press(b=1.0), ArmControl.SETTLE_SEC + 0.1),
+        (lambda: rig.take_calls(), 0.0),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=1000)
+
+    assert not rig.calls
+    assert rig.events()[-1] == f'the start pose failed: the arm sent 0 new states in {ArmControl.SETTLE_SEC} s'
 
 
 def test_the_grip_goes_to_the_gripper_once_for_each_sample_of_the_buttons(world):
@@ -183,7 +202,7 @@ def test_a_start_pose_that_the_arm_refuses_is_an_event_and_the_teleoperation_goe
         (lambda: rig.state.emit(_state()), 0.01),
         (lambda: rig.press(), 0.01),
         (lambda: rig.press(b=1.0), 0.01),
-        (lambda: rig.state.emit(_state()), 0.01),
+        *rig.states(),
         (lambda: rig.take_calls(), 0.01),
         (lambda: rig.calls[0].set_exception(RuntimeError('out of reach')), 0.01),
         (lambda: rig.press(trigger=0.4), 0.01),

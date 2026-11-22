@@ -75,9 +75,12 @@ class ArmControl(pimm.ControlSystem):
     EVENTS = 4
     EVENT_CHARS = 60
     REPORT_SEC = 0.2
-    # How long a start move waits for a state that the arm sends after the last target. A driver takes a move before
-    # a target, so the move goes after the driver has read the target.
-    SETTLE_SEC = 0.1
+    # A driver reads a move before a target and keeps the target for its next tick, so a start move goes only after
+    # the driver read the last target. Each tick of a driver reads its requests and then sends one state. The third new
+    # state comes from a tick that began after the second came, so after the last target. The start move fails when
+    # the states do not come in `SETTLE_SEC`.
+    SETTLE_STATES = 3
+    SETTLE_SEC = 0.5
 
     def __init__(
         self,
@@ -202,12 +205,16 @@ class ArmControl(pimm.ControlSystem):
             answer.result()
 
     def _settle(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        """Yield until the arm sends a new state, at most ``SETTLE_SEC``."""
+        """Yield until the arm sends ``SETTLE_STATES`` new states. Raise TimeoutError when they do not come in
+        ``SETTLE_SEC``."""
         deadline = clock.now() + self.SETTLE_SEC
-        while not should_stop.value and clock.now() < deadline:
+        states = 0
+        while states < self.SETTLE_STATES and not should_stop.value:
+            if clock.now() >= deadline:
+                raise TimeoutError(f'the arm sent {states} new states in {self.SETTLE_SEC} s')
             message = self.robot_state.read()
             if message is not None and message.updated:
-                return
+                states += 1
             yield pimm.Sleep(0.001)
 
     def _to_start(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
