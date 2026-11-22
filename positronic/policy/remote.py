@@ -16,6 +16,7 @@ from positronic_wire.wire import SessionAddress
 from positronic import keys, telemetry, telemetry_keys
 from positronic.drivers.roboarm import command
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.drivers.roboarm.models import parse_ee_frames
 from positronic.offboard.client import (
     DEFAULT_CONNECT_DEADLINE,
     DEFAULT_INFER_TIMEOUT,
@@ -234,6 +235,8 @@ class RemotePolicy(Policy):
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.
                 frames = _server_frames(server_meta.get(roboarm_keys.EE_FRAMES, {}), stack_frames)
+                # The harness parses the recorded entry outside this run, where a parse error is not the server's.
+                parse_ee_frames(frames)
                 server_compresses_images = bool(server_meta.get(policy_keys.COMPRESS_IMAGES))
             except PolicyCommandError:
                 raise
