@@ -98,7 +98,7 @@ def test_an_open_episode_resets_its_articulated_object(episode_index: int):
 
 
 # Sets the episode joint of an articulated pickup object that has no joint grasp file, with the sampler that the server
-# builds, and prints the joint positions it set. argv: the object name, its joint name, the episode task as JSON.
+# builds, and prints the positions it set by joint name. argv: the object name, its joint name, the task as JSON.
 _SET_JOINT_VALUES = """
 import json
 import sys
@@ -112,10 +112,10 @@ name, joint, task = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
 
 class Articulated(MlSpacesArticulationObject):
     def __init__(self):
-        self.set_to = []
+        self.set_to = {}
 
     def set_joint_position(self, index, position):
-        self.set_to.append([index, position])
+        self.set_to[self.joint_names[index]] = position
 
 
 Articulated.name, Articulated.joint_names = name, [joint]
@@ -132,7 +132,7 @@ print(json.dumps(obj.set_to))
 _NO_GRASP_FILE = [('drawer_unit', 'drawer_unit_top'), ('notebook', 'hinge')]
 
 
-def _set_joint_values(name: str, joint: str, task: dict) -> list[list[float]]:
+def _set_joint_values(name: str, joint: str, task: dict) -> dict[str, float]:
     _skip_unless_present(_HARD_BENCHMARK)
     task = {'pickup_obj_name': name, **task}
     result = subprocess.run(
@@ -147,13 +147,13 @@ def _set_joint_values(name: str, joint: str, task: dict) -> list[list[float]]:
 
 @pytest.mark.parametrize(('name', 'joint'), _NO_GRASP_FILE, ids=[name for name, _ in _NO_GRASP_FILE])
 def test_an_episode_that_names_no_joint_samples_an_articulated_pickup_with_no_grasp_file(name: str, joint: str):
-    assert _set_joint_values(name, joint, {}) == []
+    assert _set_joint_values(name, joint, {}) == {}
 
 
 @pytest.mark.parametrize(('name', 'joint'), _NO_GRASP_FILE, ids=[name for name, _ in _NO_GRASP_FILE])
 def test_an_episode_that_names_a_joint_sets_it_on_an_articulated_pickup_with_no_grasp_file(name: str, joint: str):
     task = {'joint_name': joint, 'joint_start_position': [0.2]}
-    assert _set_joint_values(name, joint, task) == [[0, 0.2]]
+    assert _set_joint_values(name, joint, task) == {joint: 0.2}
 
 
 _HARD_BENCHMARK = mapping.BenchmarkPath(
