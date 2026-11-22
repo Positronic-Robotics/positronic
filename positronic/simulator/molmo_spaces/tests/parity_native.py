@@ -6,7 +6,6 @@ and reads robot state directly from MolmoSpaces.
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
 
 # env.py installs the CGL stub before loading MolmoSpaces; import it before any other molmo_spaces import.
@@ -50,12 +49,9 @@ def _observe(robot_view, env_obs: dict, camera_names: list[str]) -> dict:
     }
 
 
-def _run(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps: int, out_path: Path) -> None:
-    episodes = load_all_episodes(bench.under(Path(os.environ[mapping.ASSETS_DIR_ENV])))
-    # The server adds the right shoulder camera, so the reference builds the episode the same way.
-    episode = env.MolmoSpacesEnv._with_right_shoulder_camera(
-        episodes[episode_index], mapping.episode_rng(bench, episode_index)
-    )
+def _run(benchmark_dir: Path, episode_index: int, seed: int, max_steps: int, out_path: Path) -> None:
+    episodes = load_all_episodes(benchmark_dir)
+    episode = episodes[episode_index]
     cfg = env._DroidEvalConfig()
     cfg.seed = seed
     native_horizon = determine_task_horizon(episodes, None, cfg.policy_dt_ms)
@@ -110,13 +106,13 @@ def _run(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max_steps:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Native-drive MolmoSpaces reference for the parity test.')
-    parser.add_argument('--benchmark', type=mapping.BenchmarkPath.parse, required=True)
+    parser.add_argument('--benchmark_dir', required=True)
     parser.add_argument('--episode_index', type=int, default=0)
     parser.add_argument('--seed', type=int, required=True)
     parser.add_argument('--max_steps', type=int, required=True)
     parser.add_argument('--out', required=True, help='npz path for the recorded native rollout')
     args = parser.parse_args()
-    _run(args.benchmark, args.episode_index, args.seed, args.max_steps, Path(args.out))
+    _run(Path(args.benchmark_dir), args.episode_index, args.seed, args.max_steps, Path(args.out))
 
 
 if __name__ == '__main__':
