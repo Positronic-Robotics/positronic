@@ -1,7 +1,9 @@
+import mujoco as mj
 import numpy as np
 import pytest
 
-from positronic.drivers.roboarm.models import YAM_JOINT_NAMES
+from positronic.drivers.roboarm.models import YAM_JOINT_NAMES, YAM_MJCF_PATH
+from positronic.utils import package_assets_path
 from positronic.vendors.dream.limits import ChunkLimits, YamChunkLimiter
 
 FPS = 30.0
@@ -68,8 +70,8 @@ def test_the_gripper_closes_by_at_most_max_grip_step_per_row():
     assert report.grip_step == 3
 
 
-def _model_range(limiter: YamChunkLimiter, joint: int) -> np.ndarray:
-    return limiter._model.joint(YAM_JOINT_NAMES[joint]).range
+def _model_range(joint: int) -> np.ndarray:
+    return mj.MjModel.from_xml_path(package_assets_path(YAM_MJCF_PATH)).joint(YAM_JOINT_NAMES[joint]).range
 
 
 @pytest.mark.parametrize('commanded', [100.0, -100.0])
@@ -80,14 +82,14 @@ def test_a_joint_outside_its_range_holds_the_margin_inside_its_stop(commanded):
 
     out, report = limiter.limit(rows, POSE, AFTER_RAMP_S)
 
-    lower, upper = _model_range(limiter, 3)
+    lower, upper = _model_range(3)
     assert out[0, 3] == pytest.approx(upper - 0.03 if commanded > 0 else lower + 0.03)
     assert report.joint_range == 1
 
 
 def test_a_joint_inside_the_margin_of_its_stop_is_moved_out_of_it():
     limiter = _limiter(max_ee_speed_m_s=100.0)
-    lower, _ = _model_range(limiter, 2)
+    lower, _ = _model_range(2)
     rows = POSE[None].copy()
     rows[0, 2] = lower + 0.01
 
@@ -99,7 +101,7 @@ def test_a_joint_inside_the_margin_of_its_stop_is_moved_out_of_it():
 
 def test_a_joint_that_starts_at_its_stop_moves_out_at_the_ramp_speed_and_never_toward_the_stop():
     limiter = _limiter()
-    lower, _ = _model_range(limiter, 2)
+    lower, _ = _model_range(2)
     start = POSE.copy()
     start[2] = lower
     rows = np.repeat(start[None], 5, axis=0)
@@ -119,7 +121,7 @@ def test_no_margin_clips_to_the_range_itself():
 
     out, _ = limiter.limit(rows, POSE, AFTER_RAMP_S)
 
-    assert out[0, 3] == _model_range(limiter, 3)[1]
+    assert out[0, 3] == _model_range(3)[1]
 
 
 def test_a_margin_that_leaves_no_room_in_a_joint_range_is_refused():

@@ -286,3 +286,55 @@ def test_a_backend_not_up_yet_stays_not_ready_past_the_forbidden_attempts(refusa
         client_wire.probe.return_value = refusal
         for _ in range(ConnectRetries.MAX_FORBIDDEN_ATTEMPTS + 1):
             assert client.probe() is refusal
+
+
+def _probes_at(client: roboarena.RoboarenaClient, *answers: tuple[float, wire.Refusal | None]) -> list:
+    """Probe `client` once at each instant, with the wire answering as given. Returns each probe's result."""
+    clock = [0.0]
+    results = []
+    with (
+        patch('positronic.offboard.client.time.monotonic', side_effect=lambda: clock[0]),
+        patch.object(client, '_wire') as client_wire,
+    ):
+        for now, answer in answers:
+            clock[0], client_wire.probe.return_value = now, answer
+            try:
+                results.append(client.probe())
+            except wire.ConnectRefused as e:
+                results.append(e)
+    return results
+
+
+def test_readiness_raises_an_unresolved_host_at_the_limit_the_client_was_given():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000, unresolved_host_deadline=60.0)
+
+    *waiting, surfaced = _probes_at(client, *[(at, wire.Refusal.UNRESOLVED) for at in (0.0, 59.0, 60.0)])
+
+    assert waiting == [wire.Refusal.UNRESOLVED] * 2
+    assert isinstance(surfaced, wire.ConnectRefused) and surfaced.refusal is wire.Refusal.UNRESOLVED
+
+
+def test_a_server_that_answers_ends_the_run_of_unresolved_probes():
+    """The name resolves at 200 s and stops resolving at 250 s: the limit counts from 250 s, not from 0 s."""
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+
+    results = _probes_at(
+        client,
+        (0.0, wire.Refusal.UNRESOLVED),
+        (200.0, None),
+        (250.0, wire.Refusal.UNRESOLVED),
+        (549.0, wire.Refusal.UNRESOLVED),
+        (550.0, wire.Refusal.UNRESOLVED),
+    )
+
+    assert results[:4] == [wire.Refusal.UNRESOLVED, None, wire.Refusal.UNRESOLVED, wire.Refusal.UNRESOLVED]
+    assert isinstance(results[4], wire.ConnectRefused)
+
+
+def test_a_server_that_answers_gives_the_next_forbidden_refusals_their_full_attempts():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    forbidden = [(0.0, wire.Refusal.FORBIDDEN)] * (ConnectRetries.MAX_FORBIDDEN_ATTEMPTS - 1)
+
+    results = _probes_at(client, *forbidden, (0.0, None), *forbidden)
+
+    assert not any(isinstance(result, wire.ConnectRefused) for result in results)

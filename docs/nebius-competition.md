@@ -315,6 +315,10 @@ plays the competition eval against the server in the image over the network.
   `"compress_images": true` and decodes each `__jpeg__` envelope
   ([Serialization](https://github.com/Positronic-Robotics/positronic/blob/main/docs/connect-your-model.md#serialization)).
   A protocol v3 server ends the client stack that it declares with `component("encode_images", quality=90)`.
+- A server that reads the arm pose or sends pose commands states its end-effector frame as `ee_frames` in its
+  metadata ([State the end-effector frame](https://github.com/Positronic-Robotics/positronic/blob/main/docs/connect-your-model.md#state-the-end-effector-frame)).
+  A server that states no frame gets no `robot_state.ee_pose`. The code that reads the pose then fails with
+  `KeyError('robot_state.ee_pose')`, and the run fails with `policy_inference_crash`.
 - If a route refuses the token of the run, the run fails with `policy_setup_crash`.
 - The GPU is one `1g.24gb` slice of an NVIDIA RTX PRO 6000, with 24192 MiB of memory and a quarter
   of the card's compute.
@@ -573,7 +577,7 @@ and `reason` tell you why it failed.
 
 | link | content | when it is there |
 |---|---|---|
-| `result` | the run, the attempt that scored, and `scores` with `primary`, `episodes` and `unscored` | in all `artifacts` |
+| `result` | the run, where its episodes are, and `scores` with `primary`, `episodes` and `unscored` | in all `artifacts` |
 | `policy_log` | the stdout and stderr of your container | when your container printed something |
 | `diagnostics` | why the run failed, and the state of the machine | on a failed run, when the run wrote it |
 
@@ -592,7 +596,7 @@ your submissions:
 | `image_unpullable` | Is the image public, or does your credential read it? Is the digest correct? |
 | `image_too_large` | the compressed size of the image, against the limit in the rules |
 | `policy_setup_crash` | `policy_log`: the server did not start, or it refused the token of the run |
-| `policy_inference_crash` | `policy_log`: the server stopped after it started to serve. Or `reason`: the client could not use the client stack that the server declared, or an answer |
+| `policy_inference_crash` | `policy_log`: the server stopped after it started to serve. Or `reason`: the client could not use the client stack that the server declared, or an answer. `KeyError('robot_state.ee_pose')` in `reason` means that the server states no end-effector frame |
 | `policy_oom` | `diagnostics.container_oom_killed`, and the size of the model against the memory limits |
 | `latency_budget_exceeded` | the inference time for each step |
 | `wall_clock_exceeded` | the run went past its time limit |

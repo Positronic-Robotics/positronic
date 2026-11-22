@@ -16,6 +16,7 @@ from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import SHOULDER_CAMERAS, MolmoAdapter, ShoulderSide, camera_dict
 from positronic.simulator.molmo_spaces.launcher import serve_molmo_spaces
+from positronic.simulator.molmo_spaces.success_profile import SuccessProfile
 
 # Margin for the harness to observe the simulator's terminal signal.
 _TIMEOUT_MARGIN_SEC = 1.0
@@ -80,6 +81,7 @@ def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str]
     episode_cameras=None,
     env_hook=None,
     env_server=None,
+    success_profile=SuccessProfile.MOLMO_NATIVE,
 )
 def benchmarks(
     suite: str | list[str] | None,
@@ -97,6 +99,7 @@ def benchmarks(
     episode_cameras: dict[str, str] | None,
     env_hook: str | None,
     env_server: str | None,
+    success_profile: str,
 ) -> Eval:
     """A DROID evaluation over selected MolmoSpaces benchmark episodes.
 
@@ -135,6 +138,11 @@ def benchmarks(
     own hook. Start a server to dial with
     ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook <file>]``: it serves eval runs one
     after another, with one episode at a time, until Ctrl-C stops it.
+
+    ``success_profile`` is a ``SuccessProfile`` or its value: how the server judges success and when it ends a trial.
+    ``molmo_native`` is MolmoSpaces' own verdict, and the trial ends at the first step where it is true. ``strict_v1``
+    needs its predicate to hold for 1 s, and records 1 s more after the verdict. Every trial records the profile under
+    ``molmo.success_profile``. Scores of two profiles are not comparable.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
@@ -142,6 +150,7 @@ def benchmarks(
     require_finite_positive('horizon_sec', horizon_sec)
     if episode_paths is not None and not episode_paths:
         raise ValueError('--eval.episode_paths must name at least one episode')
+    profile = SuccessProfile(success_profile)
     pins = None if episode_paths is None else [_parse_episode_path(path) for path in episode_paths]
     if pins is not None:
         names = (*mapping.BenchmarkPath._fields, mapping.SELECT_EPISODES)
@@ -210,7 +219,12 @@ def benchmarks(
             params = entry.params
             deadline = timeout if timeout is not None else params[molmo_keys.TASK_HORIZON] + _TIMEOUT_MARGIN_SEC
             task = Task(instruction=entry.instruction, timeout_sec=deadline)
-            scene = {**params, **sides_record, molmo_keys.EPISODE_CAMERAS: episode_cameras}
+            scene = {
+                **params,
+                **sides_record,
+                molmo_keys.EPISODE_CAMERAS: episode_cameras,
+                molmo_keys.SUCCESS_PROFILE: profile.value,
+            }
             trials += [
                 (task, {**scene, **({eval_keys.SEED: seed + t} if seed is not None else {})})
                 for t in range(trial_count)

@@ -26,6 +26,7 @@ from positronic.simulator.env_server.tests.conftest import serve_env
 from positronic.simulator.molmo_spaces import keys as molmo_keys
 from positronic.simulator.molmo_spaces import mapping
 from positronic.simulator.molmo_spaces.adapter import ShoulderSide, camera_dict
+from positronic.simulator.molmo_spaces.success_profile import SuccessProfile
 from positronic.simulator.molmo_spaces.tests.make_fixture import build_payload
 
 _SUITE, _SCENE_DATASET, _TASK_CONFIG, _BENCHMARK = molmo_keys.BENCHMARK_DIMENSIONS
@@ -322,12 +323,15 @@ class _MolmoObservationEnv(EnvProtocol):
             }
         ]
 
-    def reset(self, token):
+    def reset(self, token, slots=None):
         self.tokens.append(token)
         self.actions.clear()
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self.observation}],
-            protocol.FRAME_META: {mapping.META_TASK: self.RESET_TASK},
+            protocol.FRAME_META: {
+                mapping.META_TASK: self.RESET_TASK,
+                mapping.META_SUCCESS_PROFILE: token[mapping.TOKEN_SUCCESS_PROFILE],
+            },
             protocol.FRAME_ROBOT_META: {},
             protocol.FRAME_CONTROL_DT: self.CONTROL_DT,
         }
@@ -371,6 +375,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
             mapping.TOKEN_SEED: seed,
             mapping.WITH_RIGHT_SHOULDER: True,
             mapping.WITH_OBJECT_IMAGE_POINTS: True,
+            mapping.TOKEN_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value,
         }
     ]
     assert policy.observations
@@ -417,6 +422,24 @@ def test_an_eval_without_the_object_image_points_asks_each_reset_to_drop_them(mo
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
     assert [token[mapping.WITH_OBJECT_IMAGE_POINTS] for token in env.tokens] == [False]
+
+
+@pytest.mark.timeout(60.0)
+def test_an_eval_asks_each_reset_for_its_success_profile_and_records_it(monkeypatch, tmp_path):
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    with serve_env(env) as address, pos3.mirror():
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook=None, hook_sha256=None: nullcontext(address))
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, success_profile='strict_v1').instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path)
+
+    assert [token[mapping.TOKEN_SUCCESS_PROFILE] for token in env.tokens] == [SuccessProfile.STRICT_V1.value]
+    assert LocalDataset(tmp_path)[0].static[molmo_keys.SUCCESS_PROFILE] == SuccessProfile.STRICT_V1.value
+
+
+def test_an_eval_refuses_a_success_profile_that_it_does_not_know():
+    with pytest.raises(ValueError, match='strict_v0'):
+        benchmarks.override(success_profile='strict_v0').instantiate()
 
 
 def _no_launch(hook=None, hook_sha256=None):
