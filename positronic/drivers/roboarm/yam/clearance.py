@@ -35,8 +35,9 @@ class StreamTuning:
     stops it at ``keep_clear_m``. A Cartesian target is kept ``obstacle_margin_m`` above each obstacle it is over.
     The obstacles are in the frame of the targets: the world frame of the arm.
 
-    A park or a start move from nearer than ``park_clear_m`` to an obstacle first raises the gripper, by
-    ``park_lift_m`` at most and for ``park_lift_timeout_s`` at most: the move ramps in joint space and checks no gap.
+    A park or a start move checks its joint ramp against the obstacles first. Where the ramp does not keep clear,
+    the gripper rises, by ``park_lift_m`` at most and for ``park_lift_timeout_s`` at most, or until the arm is
+    ``park_clear_m`` clear of them. A ramp that still does not keep clear fails the move.
     """
 
     max_joint_accel_rad_s2: float | None = None

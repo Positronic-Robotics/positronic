@@ -799,6 +799,7 @@ class _Arm(DriverRun[command.CommandType]):
             yield self.limiter.wait()
         q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
         if not self._ramp_keeps_clear(clearance, q, goal, open_share):
+            self.moves.errored = True
             raise TimeoutError(f'the arm did not rise clear of the obstacles for a joint ramp to {goal}; measured={q}')
 
     @classmethod

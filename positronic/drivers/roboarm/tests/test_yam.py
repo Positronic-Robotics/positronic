@@ -1286,6 +1286,17 @@ def test_a_park_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_err
     rig.loop.close()
 
 
+def test_a_start_move_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_error():
+    stream = StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), park_lift_m=0.001, park_lift_timeout_s=0.2)
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig.vendor._pos[:6] = LOW_OVER_THE_TABLE  # the arm lies where a released chain left it
+    rig.ready()
+    rig.tick(1.0)
+    assert np.max(np.abs(rig.vendor._pos[:6] - RAISED)) > 0.1
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    rig.loop.close()
+
+
 def test_world_frame_obstacles_move_with_the_base_of_the_arm():
     shift = np.array([0.30, -0.305, 0.3125])
     world_table = Box(tuple((np.array(TABLE.lower) + shift).tolist()), tuple((np.array(TABLE.upper) + shift).tolist()))
