@@ -819,13 +819,15 @@ class _Arm(DriverRun[command.CommandType]):
 
     @classmethod
     def _ramp_keeps_clear(cls, clearance: Clearance, start: np.ndarray, goal: np.ndarray, open_share: float) -> bool:
-        """Whether no pair of the arm and an obstacle goes nearer than ``keep_clear_m`` and nearer than it is at
-        ``start``, on the joint ramp from ``start`` to ``goal``, at points ``_RAMP_CHECK_STEP_RAD`` apart."""
-        before = clearance.gaps(start, open_share, obstacles_only=True)
+        """Whether no pair of the arm and an obstacle goes nearer than ``keep_clear_m`` and nearer than it is at the
+        nearer end, on the joint ramp from ``start`` to ``goal``, at points ``_RAMP_CHECK_STEP_RAD`` apart."""
+        ends = clearance.gaps(start, open_share, obstacles_only=True)
+        for pair, gap in clearance.gaps(goal, open_share, obstacles_only=True).items():
+            ends[pair] = min(gap, ends.get(pair, clearance.reach_m))
         points = max(1, int(np.ceil(np.max(np.abs(goal - start)) / cls._RAMP_CHECK_STEP_RAD)))
         return not any(
             clearance.closes_a_gap(
-                start + share * (goal - start), before, open_share, cls._GAP_TOLERANCE_M, obstacles_only=True
+                start + share * (goal - start), ends, open_share, cls._GAP_TOLERANCE_M, obstacles_only=True
             )
             for share in np.linspace(0.0, 1.0, points + 1)[1:]
         )
@@ -905,6 +907,13 @@ class _Arm(DriverRun[command.CommandType]):
         target: np.ndarray | None = None  # stays None for a malformed command, which the arm never sees
         try:
             target = self.to_joints(call.request, q)
+            reachable = np.clip(target, *self._joint_range)
+            if (
+                self._clearance is not None
+                and self._clearance.obstacle_gap(reachable, self._open_share(_OPEN_GRIP)) < 0
+            ):
+                raise ValueError(f'the target {reachable} puts the arm into an obstacle')
+            yield from self._raise_clear(reachable, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True)
             reference = yield from self._settle_onto(
                 target, _OPEN_GRIP, self.move_tuning, interrupt_on_stop=True, within_joint_limits=True, receipt=receipt
             )

@@ -1276,6 +1276,35 @@ def test_a_step_that_takes_a_pair_into_the_gap_closes_it_while_a_deeper_pair_com
     assert clearance.closes_a_gap(after_q, before, OPEN_SHARE, GAP_TOLERANCE_M, obstacles_only=False)
 
 
+def test_a_blocking_move_into_the_table_is_refused_and_the_arm_holds(world):
+    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig.raise_arm()
+    answer = _sync_caller(world, rig)(command.JointPosition(LOW_OVER_THE_TABLE))  # its open fingers in the table
+    _until_answered(rig, answer)
+    with pytest.raises(DeviceFault):
+        answer.result()
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    rig.loop.close()
+
+
+def test_a_blocking_move_from_low_over_the_table_rises_before_its_joint_ramp(world):
+    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig.ready()
+    rig.commands.push(command.JointPosition(LOW_OVER_THE_TABLE))
+    rig.tick(3.0)
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    start = clearance.gap(rig.vendor._pos[:6], OPEN_SHARE)
+    sent = len(rig.vendor.targets)
+    answer = _sync_caller(world, rig)(command.JointPosition(PARK))
+    _until_answered(rig, answer)
+    answer.result()
+    assert min(clearance.gap(q, OPEN_SHARE) for q in _asked(rig)[sent:]) >= min(start, KEEP_CLEAR_M) - GAP_TOLERANCE_M
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+    rig.loop.close()
+
+
 def test_a_park_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_error():
     stream = StreamTuning(
         keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), park_lift_m=0.001, park_lift_timeout_s=0.2
@@ -1362,7 +1391,7 @@ def test_a_stream_from_rest_in_the_gap_slides_along_the_table(world):
     stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
     rig = Rig(park_after_idle_s=60.0, stream=stream)
     rig.raise_arm()
-    in_the_gap = np.array([-0.427, 1.9285, 0.8107, -0.358, 1.1383, -0.7921])  # 2 mm from the table
+    in_the_gap = np.array([-0.4187, 1.9113, 0.8153, -0.351, 1.1161, -0.7767])  # 4.05 mm from the table
     answer = _sync_caller(world, rig)(command.JointPosition(in_the_gap))
     _until_answered(rig, answer)
     answer.result()
