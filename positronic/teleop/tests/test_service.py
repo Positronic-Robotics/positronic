@@ -178,7 +178,7 @@ class TestButtonMap:
     def test_a_hold_does_not_count_the_time_the_controller_is_not_tracked(self):
         buttons = ButtonMap(HOLD_SEC)
         assert buttons.events(_buttons(b=1.0), 0) == []
-        buttons.lose()
+        buttons.cancel_holds()
         assert buttons.events(_buttons(b=1.0), 300_000_000) == []
         assert buttons.events(_buttons(), 310_000_000) == []
         assert buttons.events(_buttons(b=1.0), 320_000_000) == []

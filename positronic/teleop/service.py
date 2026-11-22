@@ -149,9 +149,8 @@ class ButtonMap:
         self._new_presses(buttons, now_ns)
         self._used.update(self._down_since)
 
-    def lose(self) -> None:
-        """End the holds of the buttons that are down, while the controller is not tracked. Each of them presses again
-        only after it goes up."""
+    def cancel_holds(self) -> None:
+        """Cancel the holds of the buttons that are down. Each of them presses again only after it goes up."""
         self._used.update(self._down_since)
 
     def _is_held(self, button: Button, now_ns: int) -> bool:
@@ -394,7 +393,7 @@ class TeleopService:
             for controller, button_map in self._buttons.items():
                 values = buttons.get(controller)
                 if values is None:
-                    button_map.lose()
+                    button_map.cancel_holds()
                     continue
                 if self._phase is Phase.READY_WAIT and self._ready is None:
                     self._ready = button_map.ready_answer(values, now_ns)
