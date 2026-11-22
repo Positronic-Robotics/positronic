@@ -500,6 +500,8 @@ class _Arm(DriverRun[command.CommandType]):
         if not nears:
             return joints
         before = {near.pair: near.gap_m for near in nears}
+        lower, upper = self._joint_range
+        low, high = np.minimum(lower, sent), np.maximum(upper, sent)
         decel = self._stream.approach_decel_m_s2
         brake = decel * elapsed
         step = joints - sent
@@ -508,9 +510,13 @@ class _Arm(DriverRun[command.CommandType]):
                 allowed = -(
                     np.sqrt(brake**2 / 4 + 2.0 * decel * max(0.0, near.gap_m - clearance.keep_clear_m)) - brake / 2
                 )
-                closing, steepness = float(near.slope @ step), float(near.slope @ near.slope)
+                # The cut does not push a joint at a limit past it
+                at_limit = ((near.slope > 0) & (sent >= high)) | ((near.slope < 0) & (sent <= low))
+                free = np.where(at_limit, 0.0, near.slope)
+                closing, steepness = float(near.slope @ step), float(free @ free)
                 if closing < allowed * elapsed and steepness > 0:
-                    step = step + (allowed * elapsed - closing) / steepness * near.slope
+                    step = step + (allowed * elapsed - closing) / steepness * free
+        step = np.clip(sent + step, low, high) - sent
         # The cut can move a share of the step onto another joint; the speed cap holds again
         top = self._MAX_STREAMED_JOINT_SPEED_RAD_S * elapsed
         farthest = float(np.max(np.abs(step)))
@@ -518,12 +524,16 @@ class _Arm(DriverRun[command.CommandType]):
             step = step * (top / farthest)
         accel = self._stream.max_joint_accel_rad_s2
         if accel is not None:
-            change = np.clip(step / elapsed - self._sent_speed, -accel * elapsed, accel * elapsed)
-            # The cut step under the cap, or else the hardest brake the cap allows
+            # The cut step under the cap, or else the hardest brake the cap allows. One scale for all joints keeps the
+            # direction of the change, so from rest the capped step is a share of the cut step.
+            change = step / elapsed - self._sent_speed
+            change = change * min(1.0, accel * elapsed / max(float(np.max(np.abs(change))), 1e-12))
             braking = self._sent_speed - np.clip(self._sent_speed, -accel * elapsed, accel * elapsed)
             for capped in (self._sent_speed + change, braking):
-                joints = sent + capped * elapsed
-                if not clearance.closes_a_gap(joints, before, open_share, self._GAP_TOLERANCE_M, obstacles_only=False):
+                joints = np.clip(sent + capped * elapsed, low, high)
+                if np.any(joints != sent) and not clearance.closes_a_gap(
+                    joints, before, open_share, self._GAP_TOLERANCE_M, obstacles_only=False
+                ):
                     return joints
         # The gap holds over the acceleration cap where braking at the cap does not keep it
         kept = sent + step

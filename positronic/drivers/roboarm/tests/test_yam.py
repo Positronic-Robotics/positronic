@@ -1330,6 +1330,45 @@ def test_a_joint_move_into_the_table_brakes_at_the_acceleration_cap_where_that_k
     rig.loop.close()
 
 
+def test_a_gap_cut_never_takes_a_joint_past_its_range():
+    stream = StreamTuning(max_joint_accel_rad_s2=25.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
+    start = YamKinematics().fk(RAISED)
+    rng = np.random.default_rng(3)
+    for _ in range(8):  # down to the table with the wrist turned past its range
+        turn = (
+            geom.Rotation.from_rotvec(rng.normal(0.0, 1.2, 3))
+            * geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0]))
+            * start.rotation
+        )
+        above = np.array([rng.uniform(0.15, 0.45), rng.uniform(-0.2, 0.3), 0.10])
+        below = above + np.array([rng.uniform(-0.15, 0.15), rng.uniform(-0.15, 0.15), -0.15])
+        rig = Rig(park_after_idle_s=60.0, stream=stream)
+        rig.ready()
+        poses = _line(start.translation, above, start.rotation, 1.5) + [geom.Transform3D(above, turn)] * 150
+        asked = _stream_poses(rig, poses + _line(above, below, turn, 1.5) + [geom.Transform3D(below, turn)] * 100)
+        assert np.all((asked >= I2RT_YAM_RANGES[:, 0] - 1e-9) & (asked <= I2RT_YAM_RANGES[:, 1] + 1e-9))
+        rig.loop.close()
+
+
+def test_a_stream_from_rest_in_the_gap_slides_along_the_table(world):
+    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig.raise_arm()
+    in_the_gap = np.array([-0.427, 1.9285, 0.8107, -0.358, 1.1383, -0.7921])  # 2 mm from the table
+    answer = _sync_caller(world, rig)(command.JointPosition(in_the_gap))
+    _until_answered(rig, answer)
+    answer.result()
+    sent = len(rig.vendor.targets)
+    rig.commands.push(command.JointPosition(np.array([-0.508, 2.132, 0.718, -0.198, 1.699, -0.572])))
+    rig.tick(3.0)
+    asked = _asked(rig)[sent:]
+    assert np.max(np.abs(asked[-1] - in_the_gap)) > 0.2
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    start = clearance.gap(in_the_gap, OPEN_SHARE)
+    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= start - GAP_TOLERANCE_M
+    rig.loop.close()
+
+
 def test_world_frame_obstacles_move_with_the_base_of_the_arm():
     shift = np.array([0.30, -0.305, 0.3125])
     world_table = Box(tuple((np.array(TABLE.lower) + shift).tolist()), tuple((np.array(TABLE.upper) + shift).tolist()))
