@@ -13,7 +13,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from enum import StrEnum
 from functools import cached_property, partial, wraps
 from types import MappingProxyType
@@ -123,6 +123,11 @@ class BridgeSettings:
         """The name of each arm in a program, with its name on the rig."""
         return {PRIMARY_ARM if arm is None else arm: arm for arm in self.arms}
 
+    def program_arm(self, name: str) -> str | None:
+        """The key in ``arm_names`` of the arm a program names ``name``, aliases included; ``None`` for no arm."""
+        arm = name if name in self.arm_names else self.aliases.get(name)
+        return arm if arm in self.arm_names else None
+
     @property
     def round_ticks(self) -> int:
         return max(1, math.ceil(self.round_s * self.fps - _TICK_EPSILON))
@@ -161,6 +166,19 @@ class CameraCalibration(BaseModel, frozen=True, extra='forbid'):
     @cached_property
     def transform(self) -> geom.Transform3D:
         return geom.Transform3D.from_vector(np.array(self.pose, dtype=np.float64), geom.Rotation.Representation.QUAT)
+
+
+def camera_hands(calibration: Mapping[str, CameraCalibration], settings: BridgeSettings) -> dict[str, str]:
+    """The arm whose hand carries each calibrated camera that has a ``hand``, by camera name."""
+    hands = {}
+    for name, camera in calibration.items():
+        if camera.hand is None:
+            continue
+        arm = settings.program_arm(camera.hand)
+        if arm is None:
+            raise ValueError(f'The calibration of camera {name!r} names the hand of no arm: {camera.hand!r}')
+        hands[name] = arm
+    return hands
 
 
 class MoveEnd(StrEnum):
@@ -385,10 +403,8 @@ class CapBridge:
         self._program = program
         self._settings = settings
         self._arms = settings.arm_names
-        for name, camera in calibration.items():
-            if camera.hand is not None and camera.hand not in self._arms:
-                raise ValueError(f'The calibration of camera {name!r} names the hand of no arm: {camera.hand!r}')
         self._calibration = calibration
+        self._hands = camera_hands(calibration, settings)
         self._segmentation = segmentation
         self._grasps = grasps
         self._calls: list[CallTrace] = []
@@ -482,7 +498,8 @@ class CapBridge:
         calibration = self._calibration.get(name)
         if calibration is None:
             return CameraObservation(image, name, depth_m)
-        mount = geom.Transform3D.identity if calibration.hand is None else hands[calibration.hand]
+        hand = self._hands.get(name)
+        mount = geom.Transform3D.identity if hand is None else hands[hand]
         return CameraObservation(image, name, depth_m, calibration.matrix, self._pose(mount * calibration.transform))
 
     @staticmethod
@@ -606,7 +623,9 @@ class CapBridge:
                 return value.item()
             case MappingProxyType():
                 return dict(value)
-        raise TypeError(f'{type(value).__name__} has no JSON form in a call trace')
+        # A record must not change what the call gives the program, so a value with no JSON form is its repr.
+        logger.error('A call trace holds the repr of a value of type %s, which has no JSON form', type(value).__name__)
+        return repr(value)
 
     @staticmethod
     def _trace_form(value: Any) -> Any:
@@ -622,11 +641,11 @@ class CapBridge:
                 return ArraySummary(shape=value.shape, dtype=str(value.dtype), nonzero=np.count_nonzero(value))
             case PointCloud():
                 return PointCloudSummary(frame=value.frame, point_count=len(value.points))
-            case Segmentation() | SegmentationSet() | LocalizationResult():
+            case _ if is_dataclass(value) and not isinstance(value, type):
                 return {item.name: CapBridge._trace_form(getattr(value, item.name)) for item in fields(value)}
             case tuple() | list():
                 return [CapBridge._trace_form(item) for item in value]
-            case dict():
+            case Mapping():
                 return {key: CapBridge._trace_form(item) for key, item in value.items()}
         return value
 
@@ -719,8 +738,8 @@ class CapBridge:
             return call
 
     def _arm(self, name: str) -> str:
-        arm = name if name in self._arms else self._settings.aliases.get(name)
-        if arm not in self._arms:
+        arm = self._settings.program_arm(name)
+        if arm is None:
             raise ApiError(ErrorCode.NOT_FOUND, f'unknown arm {name!r}')
         return arm
 
@@ -785,9 +804,11 @@ class CapBridge:
         return self._segment(self._latest(), camera_name, lambda provider, view: provider.segment_text(view, text))
 
     def segment_points(self, camera_name: str, points_px: np.ndarray) -> SegmentationSet:
-        return self._segment(
-            self._latest(), camera_name, lambda provider, view: provider.segment_points(view, points_px)
-        )
+        points = np.asarray(points_px, dtype=np.float64)
+        if points.ndim != 2 or points.shape[0] == 0 or points.shape[1] != 2 or not np.all(np.isfinite(points)):
+            error = ApiError(ErrorCode.INVALID_REQUEST, f'points_px must be finite (N, 2) pixels, got {points.shape}')
+            return SegmentationSet(ok=False, error=error)
+        return self._segment(self._latest(), camera_name, lambda provider, view: provider.segment_points(view, points))
 
     def _segment(
         self,
@@ -802,10 +823,15 @@ class CapBridge:
         try:
             found = ask(self._segmentation, view)
         except Exception as error:
-            # ASPIRE gives a program a provider failure as a result. The log and the call trace hold the failure.
+            # One provider failure must not end the program: it gets the failure as a result, and the log holds it.
             return SegmentationSet(ok=False, error=self._provider_error(error))
         if not found.ok:
             return found
+        # The geometry calls take a mask only in the frame of the view it came from.
+        frames = {item.frame for item in found.segmentations} - {view.frame}
+        if frames:
+            message = f'the segmentation provider answered in frame {frames.pop()!r}, not {view.frame!r}'
+            return SegmentationSet(ok=False, error=ApiError(ErrorCode.PROVIDER_ERROR, message))
         return replace(found, segmentations=[replace(item, camera_name=camera_name) for item in found.segmentations])
 
     @staticmethod
@@ -862,7 +888,7 @@ class CapBridge:
         try:
             return provider.generate_grasps(target, scene_point_cloud=scene, max_candidates=max_candidates)
         except Exception as error:
-            # ASPIRE gives a program a provider failure as a result. The log and the call trace hold the failure.
+            # One provider failure must not end the program: it gets the failure as a result, and the log holds it.
             return GraspSet(ok=False, error=self._provider_error(error))
 
     def localize_object(

@@ -205,3 +205,10 @@ def test_a_calibration_file_that_does_not_map_each_camera_to_its_calibration_is_
     path.write_text(json.dumps(calibration))
     with pytest.raises(ValueError):
         CapProgramModel(programs, BridgeSettings(), tmp_path, calibration=path)
+
+
+def test_a_calibration_file_on_the_hand_of_no_arm_is_refused_when_the_server_starts(programs, tmp_path):
+    path = tmp_path / 'calibration.json'
+    path.write_text(json.dumps({WRIST: LOOKS_DOWN.model_dump() | {'hand': 'tertiary'}}))
+    with pytest.raises(ValueError, match='hand'):
+        CapProgramModel(programs, BridgeSettings(), tmp_path, calibration=path)

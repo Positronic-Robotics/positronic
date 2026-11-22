@@ -389,6 +389,8 @@ def test_a_one_arm_program_names_its_arm_primary_and_moves_the_joints_the_rig_ha
         assert moved.ok and moved.final_errors == {'primary': 0.0}, moved
         short = move_to_joints([0.5] * 6)
         assert short.error.code == 'invalid_request' and not short.diagnostics['accepted'], short
+        together = move_synchronized({'primary': [0.5] * 6})
+        assert together.error.code == 'invalid_request' and not together.diagnostics['accepted'], together
         other = open_gripper(arm='left')
         assert other.error.code == 'not_found', other
         period = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 7)}))
@@ -609,9 +611,26 @@ def test_a_calibration_that_is_not_a_camera_is_refused(intrinsics, pose):
         CameraCalibration(intrinsics=intrinsics, pose=pose)
 
 
-def test_a_calibration_on_the_hand_of_no_arm_is_refused(settings):
+def test_a_calibration_on_the_hand_of_no_arm_is_refused(settings, one_arm):
+    on_left = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=keys.LEFT_ARM)
     with pytest.raises(ValueError, match='hand'):
-        CapBridge(Program('program.py', 'pass'), settings, calibration={WRIST: LOOKS_DOWN})
+        CapBridge(Program('program.py', 'pass'), one_arm, calibration={WRIST: on_left})
+    unknown = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand='tertiary')
+    with pytest.raises(ValueError, match='hand'):
+        CapBridge(Program('program.py', 'pass'), settings, calibration={WRIST: unknown})
+
+
+def test_a_camera_on_the_primary_hand_of_a_two_arm_rig_follows_the_arm_that_primary_names(settings):
+    rig = Rig()
+    rig.views[keys.WRIST_IMAGE] = np.zeros((4, 6, 3), dtype=np.uint8)
+    bridge = CapBridge(Program('program.py', 'pass'), settings, calibration={WRIST: LOOKS_DOWN})
+    try:
+        bridge.answer(rig.obs())
+        pose = bridge.get_observation().cameras[WRIST].camera_pose
+        expected = rig.pose[keys.RIGHT_ARM].as_matrix @ LOOKS_DOWN.transform.as_matrix
+        np.testing.assert_allclose(pose.as_matrix(), expected)
+    finally:
+        bridge.close()
 
 
 def test_a_mask_becomes_points_in_the_base_frame_and_in_the_camera_frame(one_arm_bridge):
@@ -783,6 +802,51 @@ def test_a_provider_that_raises_gives_a_failed_result_and_the_trace_holds_the_er
         assert call.result['error']['code'] == code and call.result['error']['message'] == message
     found, _, located = bridge.calls
     assert found.result['segmentations'] == [] and located.result['geometry'] is None
+
+
+def test_segment_points_refuses_points_that_are_not_pixels(one_arm_bridge):
+    segmenter = Segmenter()
+    bridge = one_arm_bridge(segmentation=segmenter)
+    for points in ([], [1, 2], [[1, 2, 3]], [[1.0, float('nan')]]):
+        found = bridge.segment_points(WRIST, points)
+        assert not found.ok and found.error.code is ErrorCode.INVALID_REQUEST
+    assert segmenter.views == []
+
+
+def test_a_segmentation_in_a_frame_other_than_its_view_is_a_provider_error(one_arm_bridge):
+    class Elsewhere(Segmenter):
+        def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet:
+            return SegmentationSet(ok=True, segmentations=[Segmentation(MASK, query, 0.9, WRIST, 'optical')])
+
+    found = one_arm_bridge(segmentation=Elsewhere()).segment_text(WRIST, 'cup')
+    assert not found.ok and found.error.code is ErrorCode.PROVIDER_ERROR and 'optical' in found.error.message
+
+
+def test_the_trace_summarises_arrays_in_diagnostics_and_keeps_the_result_of_a_value_with_no_json_form(run, one_arm):
+    class Opaque:
+        def __repr__(self) -> str:
+            return 'Opaque()'
+
+    class Verbose:
+        def generate_grasps(self, point_cloud: PointCloud, **options) -> GraspSet:
+            grasp = GraspCandidate(Pose([0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], point_cloud.frame), 0.5, 0.04)
+            return GraspSet(ok=True, grasps=[grasp], diagnostics={'raw': np.zeros((50, 3)), 'model': Opaque()})
+
+    bridge, _ = run(
+        """
+        grasps = generate_grasps('wrist', segment_text('wrist', 'cup').segmentations[0], backend='verbose')
+        assert grasps.ok and str(grasps.diagnostics['model']) == 'Opaque()', grasps
+        """,
+        wrist_rig(),
+        one_arm,
+        calibration={WRIST: LOOKS_DOWN},
+        segmentation=Segmenter(),
+        grasps={'verbose': Verbose()},
+    )
+    completed(bridge)
+    diagnostics = bridge.calls[-1].result['diagnostics']
+    assert diagnostics['raw'] == ArraySummary(shape=(50, 3), dtype='float64', nonzero=0).model_dump(mode='json')
+    assert diagnostics['model'] == 'Opaque()'
 
 
 def test_a_grasp_provider_that_raises_gives_a_failed_grasp_set(one_arm_bridge):

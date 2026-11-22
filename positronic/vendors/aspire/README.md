@@ -118,9 +118,9 @@ x to the right of the image, y down, z forward. A pose is `x, y, z, qw, qx, qy, 
 ```
 
 The pose of a camera with no `hand` is in the base frame. The pose of a camera with `hand` is in the hand frame of
-that arm, as a program names the arm. The bridge then gives `camera_pose` as the measured hand pose times this pose,
-at each observation. The hand frame is the frame of `robot_state.ee_pose`. The server states the calibration in its
-metadata, under `calibration`.
+that arm, as a program names the arm (`primary` names the right arm of the default two-arm rig). The bridge then gives `camera_pose` as the measured hand pose times this pose,
+at each observation. The hand frame is the frame of `robot_state.ee_pose`. The server refuses a `hand` that names no arm when it
+starts. It states the calibration in its metadata, under `calibration`.
 
 ## Perception
 
@@ -149,7 +149,8 @@ holds its targets during the call.
 A call with no provider raises `NotImplementedError`. A provider that raises gives the program a result with
 `ok=False` and its error: an `ApiError` as the provider raised it, or `provider_error` for each other exception. A
 view that cannot give points gives `point_cloud_failed` from `localize_object` and `generate_grasps`, and raises
-`ValueError` from `mask_to_point_cloud`.
+`ValueError` from `mask_to_point_cloud`. A segmentation must be in the frame of its view, which is the camera name:
+the bridge gives `provider_error` for a segmentation in another frame.
 
 Planning calls (`solve_ik`, `plan_motion`, `plan_synchronized_motion`) raise `NotImplementedError`.
 
@@ -158,6 +159,9 @@ Planning calls (`solve_ik`, `plan_motion`, `plan_synchronized_motion`) raise `No
 A program may import the modules that `--settings.imports` names: `math` only by default. It sees ASPIRE's small set
 of builtins. `--settings.imports='[math,numpy]'` adds `numpy`, which can read and write files. These rules keep a
 program to ASPIRE's contract; they are not a sandbox. Run a program only from a source you trust.
+
+In a program, `ArmCommand`, `Trajectory` and `SynchronizedTrajectory` make values with the embodiment of
+`--settings.embodiment`. They are functions, so `isinstance` does not take them.
 
 ## Records
 
