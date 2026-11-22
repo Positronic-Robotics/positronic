@@ -13,14 +13,14 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import StrEnum
-from functools import wraps
+from functools import cached_property, partial, wraps
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, model_validator
 from pydantic_core import to_jsonable_python
 
 from positronic import geom, keys
@@ -29,9 +29,9 @@ from positronic.policy.base import Obs, PolicyEnd
 from positronic.policy.keys import END
 from positronic.utils import check_finite_positive
 
+from . import geometry
 from .contracts import (
-    EMBODIMENT,
-    JOINT_DIMENSION,
+    DEFAULT_EMBODIMENT,
     PRIMARY_ARM,
     SECONDARY_ARM,
     ApiError,
@@ -39,11 +39,19 @@ from .contracts import (
     CameraObservation,
     ErrorCode,
     ExecutionResult,
+    GraspCandidate,
+    GraspProvider,
+    GraspSet,
+    LocalizationResult,
     MotionStrategy,
     Observation,
+    PointCloud,
     Pose,
     RobotAction,
     RobotState,
+    Segmentation,
+    SegmentationProvider,
+    SegmentationSet,
     StepResult,
     SynchronizedTrajectory,
     TaskContext,
@@ -58,6 +66,8 @@ POSE_ORIENTATION_TOLERANCE_RAD = math.radians(10.0)
 TRAJECTORY_START_TOLERANCE_RAD = 0.02
 # The TaskContext fields that a positronic observation does not carry.
 TASK_SUITE = TASK_FAMILY = 'positronic'
+# ASPIRE's default grasp backend: the name `generate_grasps` asks for when a program names none.
+GRASP_BACKEND = 'contact-graspnet'
 
 
 # Absorbs float error in `round_s * fps`, so 1.1 s at 50 Hz is 55 ticks and not 56.
@@ -72,7 +82,12 @@ class BridgeSettings:
     within the tolerances of its target, when its joints and grippers stay still for ``still_rounds`` chunks short
     of it, or ``call_timeout_s`` after its path played. The bridge counts time in the chunks it answered, so a slow
     simulator times out as a fast one does. ``think_timeout_s`` is wall time: how long one answer waits for the
-    program's next call before it holds the targets for a chunk. ``aliases`` maps ASPIRE's arm roles to arm names.
+    program's next call before it holds the targets for a chunk.
+
+    ``arms`` names the rig's arms as its channels do: ``keys.ONE_ARM`` for a rig whose channels carry no arm name.
+    A program names that arm ``primary``. ``aliases`` gives an arm more names. ``embodiment`` is the name each
+    state and command of a program carries. ``default_camera`` is the view ``localize_object`` reads when a program
+    names none. ``imports`` names the modules that a program may import.
     """
 
     fps: float = 30.0
@@ -87,19 +102,65 @@ class BridgeSettings:
     call_timeout_s: float = 10.0
     think_timeout_s: float = 5.0
     base_frame: str = 'world'
+    arms: Sequence[str | None] = keys.BIMANUAL_ARMS
     aliases: Mapping[str, str] = field(
         default_factory=lambda: {PRIMARY_ARM: keys.RIGHT_ARM, SECONDARY_ARM: keys.LEFT_ARM}
     )
+    embodiment: str = DEFAULT_EMBODIMENT
+    default_camera: str = keys.EXTERIOR_IMAGE.removeprefix(keys.IMAGE_PREFIX)
+    imports: Sequence[str] = ('math',)
 
     def __post_init__(self) -> None:
         for name in ('fps', 'round_s', 'call_timeout_s', 'think_timeout_s'):
             check_finite_positive(getattr(self, name), name)
         if self.still_rounds < 1:
             raise ValueError('still_rounds must be at least 1')
+        if not self.arms or len(self.arm_names) != len(self.arms):
+            raise ValueError('arms must name at least one arm, and each arm once')
+
+    @property
+    def arm_names(self) -> dict[str, str | None]:
+        """The name of each arm in a program, with its name on the rig."""
+        return {PRIMARY_ARM if arm is None else arm: arm for arm in self.arms}
 
     @property
     def round_ticks(self) -> int:
         return max(1, math.ceil(self.round_s * self.fps - _TICK_EPSILON))
+
+
+_Row = tuple[float, float, float]
+
+
+class CameraCalibration(BaseModel, frozen=True, extra='forbid'):
+    """The camera matrix of one camera and the pose of its optical frame, as a calibration file holds them.
+
+    ``pose`` is x, y, z, qw, qx, qy, qz in the base frame. With ``hand`` it is in the hand frame of that arm, as a
+    program names the arm. The optical frame has x to the right of the image, y down and z forward.
+    """
+
+    intrinsics: tuple[_Row, _Row, _Row]
+    pose: tuple[float, float, float, float, float, float, float]
+    hand: str | None = None
+
+    @model_validator(mode='after')
+    def _validate(self) -> Self:
+        if not np.all(np.isfinite(self.matrix)) or not np.all(np.isfinite(self.pose)):
+            raise ValueError('intrinsics and pose must be finite')
+        if self.intrinsics[2] != (0.0, 0.0, 1.0) or self.intrinsics[0][0] <= 0.0 or self.intrinsics[1][1] <= 0.0:
+            raise ValueError('intrinsics must have positive focal lengths and the last row [0, 0, 1]')
+        if not math.isclose(np.linalg.norm(self.pose[3:]), 1.0, abs_tol=1e-3):
+            raise ValueError('the quaternion of pose must have unit length')
+        return self
+
+    @cached_property
+    def matrix(self) -> np.ndarray:
+        matrix = np.array(self.intrinsics, dtype=np.float64)
+        matrix.setflags(write=False)
+        return matrix
+
+    @cached_property
+    def transform(self) -> geom.Transform3D:
+        return geom.Transform3D.from_vector(np.array(self.pose, dtype=np.float64), geom.Rotation.Representation.QUAT)
 
 
 class MoveEnd(StrEnum):
@@ -129,11 +190,27 @@ class Program:
         return hashlib.sha256(self.source.encode()).hexdigest()
 
 
+class ArraySummary(BaseModel):
+    """What a call trace holds of an array with two or more dimensions, such as a mask."""
+
+    shape: tuple[int, ...]
+    dtype: str
+    nonzero: int
+
+
+class PointCloudSummary(BaseModel):
+    """What a call trace holds of a point cloud."""
+
+    frame: str
+    point_count: int
+
+
 class CallTrace(BaseModel):
     """One CapApi call that a program made: its arguments, its result or what it raised, and when it ran.
 
     ``*_wall_s`` are seconds of wall time since the program started. ``*_robot_s`` are seconds of the bridge's
-    clock: the time of the chunks it answered. Each observation in ``result`` carries no camera images.
+    clock: the time of the chunks it answered. An observation in ``args``, ``kwargs`` or ``result`` carries no camera
+    images. A mask is an ``ArraySummary`` there, and a point cloud a ``PointCloudSummary``.
     """
 
     name: str
@@ -153,6 +230,13 @@ class ProgramOutcome:
 
     end: PolicyEnd
     error: str | None = None
+
+
+class GraspStrategy(StrEnum):
+    """How ``select_grasp`` chooses a grasp."""
+
+    TOP_DOWN = 'top_down'
+    HIGHEST_SCORE = 'highest_score'
 
 
 class ProgramStopped(BaseException):
@@ -175,19 +259,20 @@ class _ChunkPlan:
     holds: int
     end: PolicyEnd | None
 
-    def chunk(self) -> list[dict[str, Any]]:
-        chunk = [_commands(targets) for targets in self.path] + [_commands(self.hold)] * self.holds
+    def chunk(self, arm_names: Mapping[str, str | None]) -> list[dict[str, Any]]:
+        """The answer on the rig's channels; ``arm_names`` gives each arm's name on the rig."""
+
+        def commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
+            entry: dict[str, Any] = {}
+            for arm, target in targets.items():
+                entry[keys.arm_channel(keys.ROBOT_COMMAND, arm_names[arm])] = target.command
+                entry[keys.arm_channel(keys.TARGET_GRIP, arm_names[arm])] = target.grip
+            return entry
+
+        chunk = [commands(targets) for targets in self.path] + [commands(self.hold)] * self.holds
         if self.end is not None:
             chunk[-1] = {**chunk[-1], END: self.end.value}
         return chunk
-
-
-def _commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
-    commands: dict[str, Any] = {}
-    for arm, target in targets.items():
-        commands[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = target.command
-        commands[keys.arm_channel(keys.TARGET_GRIP, arm)] = target.grip
-    return commands
 
 
 @dataclass(frozen=True)
@@ -283,14 +368,29 @@ class CapBridge:
 
     ``answer`` takes one positronic observation and returns the next action chunk. The first observation starts the
     program and fixes each arm's home at its measured joints. Every later answer carries ``END`` once the program
-    ended. Perception and planning calls raise ``NotImplementedError``.
+    ended. ``calibration`` gives a camera view its intrinsics and its pose, by camera name. ``grasps`` holds a grasp
+    provider for each backend name. A call that needs a provider the bridge does not have raises
+    ``NotImplementedError``, and so does each planning call.
     """
 
-    embodiment = EMBODIMENT
-
-    def __init__(self, program: Program, settings: BridgeSettings):
+    def __init__(
+        self,
+        program: Program,
+        settings: BridgeSettings,
+        *,
+        calibration: Mapping[str, CameraCalibration] = MappingProxyType({}),
+        segmentation: SegmentationProvider | None = None,
+        grasps: Mapping[str, GraspProvider] = MappingProxyType({}),
+    ):
         self._program = program
         self._settings = settings
+        self._arms = settings.arm_names
+        for name, camera in calibration.items():
+            if camera.hand is not None and camera.hand not in self._arms:
+                raise ValueError(f'The calibration of camera {name!r} names the hand of no arm: {camera.hand!r}')
+        self._calibration = calibration
+        self._segmentation = segmentation
+        self._grasps = grasps
         self._calls: list[CallTrace] = []
         self._started_wall_s = 0.0
         self._turn = threading.Condition()
@@ -302,6 +402,10 @@ class CapBridge:
         self._call: _Call | None = None
         self._outcome: ProgramOutcome | None = None
         self._closed = False
+
+    @property
+    def embodiment(self) -> str:
+        return self._settings.embodiment
 
     @property
     def outcome(self) -> ProgramOutcome | None:
@@ -330,7 +434,7 @@ class CapBridge:
             self._turn.notify_all()
             self._turn.wait_for(self._program_is_waiting, timeout=self._settings.think_timeout_s)
             plan = self._advance()
-        return plan.chunk()
+        return plan.chunk(self._arms)
 
     def close(self) -> None:
         with self._turn:
@@ -347,31 +451,54 @@ class CapBridge:
     # ---- The rig side: observations in, chunks out ----
 
     def _observe(self, obs: Obs) -> Observation:
-        joints, velocities, poses, grippers = {}, {}, {}, {}
-        for arm in keys.BIMANUAL_ARMS:
-            state = keys.arm_channel(keys.ROBOT_STATE, arm)
+        joints, velocities, hands, grippers = {}, {}, {}, {}
+        for arm, rig_arm in self._arms.items():
+            state = keys.arm_channel(keys.ROBOT_STATE, rig_arm)
             joints[arm] = obs[f'{state}{keys.JOINTS_SUFFIX}']
             velocities[arm] = obs[f'{state}{keys.JOINT_VEL_SUFFIX}']
-            pose = geom.Transform3D.from_vector(
+            hands[arm] = geom.Transform3D.from_vector(
                 np.asarray(obs[f'{state}{keys.EE_POSE_SUFFIX}'], dtype=np.float64), geom.Rotation.Representation.QUAT
             )
-            poses[arm] = Pose(pose.translation, pose.rotation.as_quat, self._settings.base_frame)
             # ASPIRE's gripper runs from 0 (closed) to 1 (open); positronic's grip from 0 (open) to 1 (closed).
-            grippers[arm] = float(np.clip(1.0 - float(obs[keys.arm_channel(keys.GRIP, arm)]), 0.0, 1.0))
-        state = RobotState(joints, velocities, poses, grippers, self._settings.base_frame)
-        cameras = {
-            name.removeprefix(keys.IMAGE_PREFIX): CameraObservation(
-                np.asarray(value), name.removeprefix(keys.IMAGE_PREFIX)
-            )
-            for name, value in obs.items()
-            if name.startswith(keys.IMAGE_PREFIX)
-        }
+            grippers[arm] = float(np.clip(1.0 - float(obs[keys.arm_channel(keys.GRIP, rig_arm)]), 0.0, 1.0))
+        poses = {arm: self._pose(hand) for arm, hand in hands.items()}
+        state = RobotState(
+            joints, velocities, poses, grippers, self._settings.base_frame, embodiment=self._settings.embodiment
+        )
+        names = [key.removeprefix(keys.IMAGE_PREFIX) for key in obs if key.startswith(keys.IMAGE_PREFIX)]
+        cameras = {name: self._camera(name, obs, hands) for name in names}
         language = str(obs[keys.TASK])
         task = TaskContext(TASK_SUITE, 0, language, language, TASK_FAMILY)
         return Observation(cameras, state, task)
 
+    def _pose(self, transform: geom.Transform3D) -> Pose:
+        return Pose(transform.translation, transform.rotation.as_quat, self._settings.base_frame)
+
+    def _camera(self, name: str, obs: Obs, hands: Mapping[str, geom.Transform3D]) -> CameraObservation:
+        """The view of camera ``name``; ``hands`` holds the measured hand pose of each arm."""
+        image = np.asarray(obs[f'{keys.IMAGE_PREFIX}{name}'])
+        depth = obs.get(f'{keys.DEPTH_PREFIX}{name}')
+        depth_m = None if depth is None else self._depth_m(depth)
+        calibration = self._calibration.get(name)
+        if calibration is None:
+            return CameraObservation(image, name, depth_m)
+        mount = geom.Transform3D.identity if calibration.hand is None else hands[calibration.hand]
+        return CameraObservation(image, name, depth_m, calibration.matrix, self._pose(mount * calibration.transform))
+
+    @staticmethod
+    def _depth_m(depth: Any) -> np.ndarray:
+        """Depth in metres from ``uint16`` millimetres or floating metres; 0 where the camera measured none."""
+        depth = np.asarray(depth)
+        if depth.ndim == 3 and depth.shape[-1] == 1:
+            depth = depth[..., 0]
+        if depth.dtype == np.uint16:
+            return depth.astype(np.float32) / 1000.0
+        if not np.issubdtype(depth.dtype, np.floating):
+            raise ValueError(f'Depth must hold uint16 millimetres or floating metres, got {depth.dtype}')
+        return np.where(np.isfinite(depth) & (depth > 0.0), depth, 0.0).astype(np.float32)
+
     def _start(self, state: RobotState) -> None:
-        for arm in keys.BIMANUAL_ARMS:
+        for arm in self._arms:
             self._home[arm] = state.joint_positions[arm]
             self._targets[arm] = _ArmTarget(
                 JointPosition(state.joint_positions[arm]), 1.0 - state.gripper_positions[arm]
@@ -437,9 +564,8 @@ class CapBridge:
 
     # ---- The program side ----
 
-    @staticmethod
-    def _import_math(name: str, _globals=None, _locals=None, _fromlist=(), level=0):
-        if level != 0 or name != 'math':
+    def _import(self, name: str, _globals=None, _locals=None, _fromlist=(), level=0):
+        if level != 0 or name not in self._settings.imports:
             raise ImportError(f'import of {name!r} is not allowed in generated programs')
         return importlib.import_module(name)
 
@@ -450,10 +576,10 @@ class CapBridge:
             for builtin in (Exception, ValueError, TypeError, abs, all, any, bool, dict, enumerate, float, int, len)
             + (list, max, min, print, range, reversed, round, set, sorted, str, sum, tuple, zip)
         }
-        builtins['__import__'] = self._import_math
-        constructors = {
-            t.__name__: t for t in (ArmCommand, MotionStrategy, Pose, RobotAction, SynchronizedTrajectory, Trajectory)
-        }
+        builtins['__import__'] = self._import
+        constructors: dict[str, Any] = {t.__name__: t for t in (MotionStrategy, Pose, RobotAction)}
+        for of_embodiment in (ArmCommand, SynchronizedTrajectory, Trajectory):
+            constructors[of_embodiment.__name__] = partial(of_embodiment, embodiment=self.embodiment)
         tools = {name: self._traced(name, tool) for name, tool in self._tools().items()}
         namespace: dict[str, Any] = {'__builtins__': builtins, **constructors, **tools}
         self._started_wall_s = time.monotonic()
@@ -483,8 +609,8 @@ class CapBridge:
         raise TypeError(f'{type(value).__name__} has no JSON form in a call trace')
 
     @staticmethod
-    def _without_images(value: Any) -> Any:
-        """``value`` with every observation in it stripped of its camera images."""
+    def _trace_form(value: Any) -> Any:
+        """``value`` as a call trace holds it: no camera view, and a summary of each mask and point cloud."""
         match value:
             case Observation():
                 return replace(value, cameras={})
@@ -492,6 +618,16 @@ class CapBridge:
                 return replace(value, final_observation=replace(observation, cameras={}))
             case StepResult(observation=Observation() as observation):
                 return replace(value, observation=replace(observation, cameras={}))
+            case np.ndarray() if value.ndim >= 2:
+                return ArraySummary(shape=value.shape, dtype=str(value.dtype), nonzero=np.count_nonzero(value))
+            case PointCloud():
+                return PointCloudSummary(frame=value.frame, point_count=len(value.points))
+            case Segmentation() | SegmentationSet() | LocalizationResult():
+                return {item.name: CapBridge._trace_form(getattr(value, item.name)) for item in fields(value)}
+            case tuple() | list():
+                return [CapBridge._trace_form(item) for item in value]
+            case dict():
+                return {key: CapBridge._trace_form(item) for key, item in value.items()}
         return value
 
     def _traced(self, name: str, tool: Callable[..., Any]) -> Callable[..., Any]:
@@ -510,9 +646,9 @@ class CapBridge:
             finally:
                 trace = CallTrace(
                     name=name,
-                    args=to_jsonable_python(args, fallback=self._jsonable),
-                    kwargs=to_jsonable_python(kwargs, fallback=self._jsonable),
-                    result=to_jsonable_python(self._without_images(result), fallback=self._jsonable),
+                    args=to_jsonable_python(self._trace_form(args), fallback=self._jsonable),
+                    kwargs=to_jsonable_python(self._trace_form(kwargs), fallback=self._jsonable),
+                    result=to_jsonable_python(self._trace_form(result), fallback=self._jsonable),
                     raised=raised,
                     started_wall_s=started_wall_s,
                     ended_wall_s=time.monotonic() - self._started_wall_s,
@@ -531,30 +667,26 @@ class CapBridge:
     @staticmethod
     def _unsupported(name: str) -> Callable[..., Any]:
         def call(*args: object, **kwargs: object) -> Any:
-            raise NotImplementedError(f'{name} is not available: this bridge serves no perception or planning')
+            raise NotImplementedError(f'{name} is not available: this bridge serves no planning')
 
         call.__name__ = name
         return call
 
     def _tools(self) -> dict[str, Callable[..., Any]]:
-        perception = (
-            'segment_text',
-            'segment_points',
-            'mask_to_point_cloud',
-            'crop_point_cloud',
-            'estimate_geometry',
-            'generate_grasps',
-            'solve_ik',
-            'plan_motion',
-            'plan_synchronized_motion',
-            'localize_object',
-            'select_grasp',
-        )
-        tools: dict[str, Callable[..., Any]] = {name: self._unsupported(name) for name in perception}
+        planning = ('solve_ik', 'plan_motion', 'plan_synchronized_motion')
+        tools: dict[str, Callable[..., Any]] = {name: self._unsupported(name) for name in planning}
         tools.update(
             get_task_context=self.get_task_context,
             get_observation=self.get_observation,
             get_robot_state=self.get_robot_state,
+            segment_text=self.segment_text,
+            segment_points=self.segment_points,
+            mask_to_point_cloud=self.mask_to_point_cloud,
+            crop_point_cloud=geometry.crop_point_cloud,
+            estimate_geometry=geometry.estimate_oriented_bounding_box,
+            generate_grasps=self.generate_grasps,
+            localize_object=self.localize_object,
+            select_grasp=self.select_grasp,
             step=self.step,
             execute_trajectory=self.execute_trajectory,
             set_gripper=self.set_gripper,
@@ -587,8 +719,8 @@ class CapBridge:
             return call
 
     def _arm(self, name: str) -> str:
-        arm = self._settings.aliases.get(name, name)
-        if arm not in keys.BIMANUAL_ARMS:
+        arm = name if name in self._arms else self._settings.aliases.get(name)
+        if arm not in self._arms:
             raise ApiError(ErrorCode.NOT_FOUND, f'unknown arm {name!r}')
         return arm
 
@@ -649,20 +781,132 @@ class CapBridge:
     def get_robot_state(self) -> RobotState:
         return self._latest().robot_state
 
+    def segment_text(self, camera_name: str, text: str) -> SegmentationSet:
+        return self._segment(self._latest(), camera_name, lambda provider, view: provider.segment_text(view, text))
+
+    def segment_points(self, camera_name: str, points_px: np.ndarray) -> SegmentationSet:
+        return self._segment(
+            self._latest(), camera_name, lambda provider, view: provider.segment_points(view, points_px)
+        )
+
+    def _segment(
+        self,
+        observation: Observation,
+        camera_name: str,
+        ask: Callable[[SegmentationProvider, CameraObservation], SegmentationSet],
+    ) -> SegmentationSet:
+        """The segmentation provider's answer for one view, with each segmentation under ``camera_name``."""
+        if self._segmentation is None:
+            raise NotImplementedError('segmentation is not available: this bridge has no segmentation provider')
+        view = self._view(observation, camera_name)
+        try:
+            found = ask(self._segmentation, view)
+        except Exception as error:
+            # ASPIRE gives a program a provider failure as a result. The log and the call trace hold the failure.
+            return SegmentationSet(ok=False, error=self._provider_error(error))
+        if not found.ok:
+            return found
+        return replace(found, segmentations=[replace(item, camera_name=camera_name) for item in found.segmentations])
+
+    @staticmethod
+    def _provider_error(error: Exception) -> ApiError:
+        """The error of the result that answers a provider call which raised ``error``."""
+        if isinstance(error, ApiError):
+            return error
+        logger.error('A perception provider raised', exc_info=error)
+        return ApiError(ErrorCode.PROVIDER_ERROR, f'{type(error).__name__}: {error}')
+
+    @staticmethod
+    def _view(observation: Observation, camera_name: str) -> CameraObservation:
+        if camera_name not in observation.cameras:
+            raise ValueError(f'observation has no camera {camera_name!r}')
+        return observation.cameras[camera_name]
+
+    @staticmethod
+    def _segmentation_of(mask: Segmentation | np.ndarray, view: CameraObservation) -> Segmentation:
+        if isinstance(mask, Segmentation):
+            return mask
+        return Segmentation(mask=mask, label='object', score=1.0, camera_name=view.frame, frame=view.frame)
+
+    def mask_to_point_cloud(
+        self, mask: Segmentation | np.ndarray, camera_name: str, target_frame: str | None = None
+    ) -> PointCloud:
+        """The points of ``mask`` in ``target_frame``: the base frame when it is ``None``."""
+        observation = self._latest()
+        view = self._view(observation, camera_name)
+        frame = target_frame or observation.robot_state.base_frame
+        return geometry.mask_to_point_cloud(view, self._segmentation_of(mask, view), target_frame=frame)
+
+    def generate_grasps(
+        self,
+        camera_name: str,
+        mask: Segmentation | np.ndarray,
+        *,
+        backend: str = GRASP_BACKEND,
+        max_candidates: int = 5,
+    ) -> GraspSet:
+        provider = self._grasps.get(backend)
+        if provider is None:
+            raise NotImplementedError(
+                f'generate_grasps is not available: this bridge has no grasp provider {backend!r}'
+            )
+        observation = self._latest()
+        view = self._view(observation, camera_name)
+        base = observation.robot_state.base_frame
+        try:
+            target = geometry.mask_to_point_cloud(view, self._segmentation_of(mask, view), target_frame=base)
+            whole_view = self._segmentation_of(np.ones(view.rgb.shape[:2], dtype=np.bool_), view)
+            scene = geometry.mask_to_point_cloud(view, whole_view, target_frame=base)
+        except ValueError as exc:
+            return GraspSet(ok=False, error=ApiError(ErrorCode.POINT_CLOUD_FAILED, f'cannot project grasp mask: {exc}'))
+        try:
+            return provider.generate_grasps(target, scene_point_cloud=scene, max_candidates=max_candidates)
+        except Exception as error:
+            # ASPIRE gives a program a provider failure as a result. The log and the call trace hold the failure.
+            return GraspSet(ok=False, error=self._provider_error(error))
+
+    def localize_object(
+        self, query: str, *, camera_name: str | None = None, target_frame: str | None = None
+    ) -> LocalizationResult:
+        """Segment ``query`` in one view and box its points; the view is ``default_camera`` when none is named."""
+        observation = self._latest()
+        name = camera_name or self._settings.default_camera
+        found = self._segment(observation, name, lambda provider, view: provider.segment_text(view, query))
+        if not found.ok:
+            return LocalizationResult(ok=False, error=found.error)
+        segmentation = found.segmentations[0]
+        frame = target_frame or observation.robot_state.base_frame
+        try:
+            points = geometry.mask_to_point_cloud(self._view(observation, name), segmentation, target_frame=frame)
+            box = geometry.estimate_oriented_bounding_box(points)
+        except ValueError as exc:
+            error = ApiError(ErrorCode.POINT_CLOUD_FAILED, f'object localization geometry failed: {exc}')
+            return LocalizationResult(ok=False, segmentation=segmentation, error=error)
+        return LocalizationResult(ok=True, geometry=box, segmentation=segmentation, point_cloud=points)
+
+    @staticmethod
+    def select_grasp(grasps: GraspSet, strategy: str = GraspStrategy.TOP_DOWN) -> GraspCandidate | None:
+        if not grasps.ok:
+            return None
+        if GraspStrategy(strategy) is GraspStrategy.TOP_DOWN:
+            return geometry.select_top_down_grasp(grasps)
+        return max(grasps.grasps, key=lambda grasp: grasp.score)
+
     def step(self, action: RobotAction) -> StepResult:
         try:
-            if action.embodiment != EMBODIMENT:
+            if action.embodiment != self.embodiment:
                 raise ApiError(
-                    ErrorCode.INVALID_REQUEST, f'action embodiment {action.embodiment!r} is not {EMBODIMENT!r}'
+                    ErrorCode.INVALID_REQUEST, f'action embodiment {action.embodiment!r} is not {self.embodiment!r}'
                 )
             commands = {self._arm(name): command for name, command in action.arms.items()}
+            joints = {arm: self._joint_target(command.target, arm) for arm, command in commands.items()}
         except ApiError as refusal:
             return StepResult(ok=False, error=refusal, diagnostics={DIAGNOSTIC_ACCEPTED: False})
         with self._turn:
             targets = dict(self._targets)
         for arm, command in commands.items():
             grip = targets[arm].grip if command.gripper_position is None else 1.0 - command.gripper_position
-            targets[arm] = _ArmTarget(JointPosition(command.target), grip)
+            targets[arm] = _ArmTarget(joints[arm], grip)
         call = self._await(_Call([targets], {}, one_period=True))
         assert call.end is not None
         diagnostics = {DIAGNOSTIC_ACCEPTED: True, DIAGNOSTIC_MOVE_END: call.end.value}
@@ -670,9 +914,9 @@ class CapBridge:
 
     @_refusal_is_a_result
     def execute_trajectory(self, trajectory: Trajectory | SynchronizedTrajectory) -> ExecutionResult:
-        if trajectory.embodiment != EMBODIMENT:
+        if trajectory.embodiment != self.embodiment:
             raise ApiError(
-                ErrorCode.INVALID_REQUEST, f'trajectory embodiment {trajectory.embodiment!r} is not {EMBODIMENT!r}'
+                ErrorCode.INVALID_REQUEST, f'trajectory embodiment {trajectory.embodiment!r} is not {self.embodiment!r}'
             )
         if isinstance(trajectory, Trajectory):
             arm = self._arm(trajectory.arm)
@@ -683,6 +927,7 @@ class CapBridge:
             grippers = None
             if trajectory.gripper_positions is not None:
                 grippers = {self._arm(name): values for name, values in trajectory.gripper_positions.items()}
+        goals = {arm: _Goal(self._joint_target(joints[-1], arm)) for arm, joints in waypoints.items()}
         measured = self.get_robot_state().joint_positions
         start = trajectory.expected_start.joint_positions
         for arm in waypoints:
@@ -701,7 +946,6 @@ class CapBridge:
                 grip = held[arm].grip if grippers is None else 1.0 - float(grippers[arm][index])
                 targets[arm] = _ArmTarget(JointPosition(joints[index]), grip)
             path.append(targets)
-        goals = {arm: _Goal(JointPosition(joints[-1])) for arm, joints in waypoints.items()}
         return self._result(self._await(_Call(path, goals)), self._settings.joint_tolerance_rad)
 
     @_refusal_is_a_result
@@ -711,7 +955,7 @@ class CapBridge:
     @_refusal_is_a_result
     def set_grippers(self, positions: Mapping[str, float]) -> ExecutionResult:
         goals = self._grip_goals(positions)
-        if set(goals) != set(keys.BIMANUAL_ARMS):
+        if set(goals) != set(self._arms):
             raise ApiError(ErrorCode.INVALID_REQUEST, 'positions must name every robot arm')
         return self._settle(goals, None)
 
@@ -732,7 +976,8 @@ class CapBridge:
         self, target: np.ndarray, tolerance: float = 0.01, max_steps: int = 120, *, arm: str = PRIMARY_ARM
     ) -> ExecutionResult:
         _motion_options(tolerance, max_steps)
-        return self._settle({self._arm(arm): _Goal(self._joint_target(target))}, tolerance)
+        arm = self._arm(arm)
+        return self._settle({arm: _Goal(self._joint_target(target, arm))}, tolerance)
 
     @_refusal_is_a_result
     def move_to_pose(
@@ -760,8 +1005,9 @@ class CapBridge:
             raise ApiError(ErrorCode.INVALID_REQUEST, 'targets must name at least one arm')
         goals = {}
         for name, target in targets.items():
-            command = self._pose_target(target) if isinstance(target, Pose | Mapping) else self._joint_target(target)
-            goals[self._arm(name)] = _Goal(command)
+            arm = self._arm(name)
+            pose = isinstance(target, Pose | Mapping)
+            goals[arm] = _Goal(self._pose_target(target) if pose else self._joint_target(target, arm))
         return self._settle(goals, tolerance)
 
     def open_gripper(self, *, arm: str = PRIMARY_ARM) -> ExecutionResult:
@@ -786,12 +1032,13 @@ class CapBridge:
             raise ApiError(ErrorCode.INVALID_REQUEST, f'pose frame {pose.frame!r} is not {self._settings.base_frame!r}')
         return CartesianPosition(geom.Transform3D(pose.position, geom.Rotation.from_quat(pose.quaternion_wxyz)))
 
-    @staticmethod
-    def _joint_target(target: object) -> JointPosition:
+    def _joint_target(self, target: object, arm: str) -> JointPosition:
         try:
             joints = np.asarray(target, dtype=np.float64)
         except (TypeError, ValueError) as exc:
             raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite joint vector: {exc}') from exc
-        if joints.shape != (JOINT_DIMENSION,) or not np.all(np.isfinite(joints)):
-            raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite {JOINT_DIMENSION}-joint vector')
+        # The measured joints of the arm give its joint count.
+        count = len(self._home[arm])
+        if joints.shape != (count,) or not np.all(np.isfinite(joints)):
+            raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite {count}-joint vector')
         return JointPosition(joints)

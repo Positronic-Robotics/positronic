@@ -1,8 +1,8 @@
-"""The ASPIRE CapApi value types and environment boundary that a program sees, for the ``yam_real`` embodiment.
+"""The ASPIRE CapApi value types, provider boundaries and environment boundary that a program sees.
 
 Ported from NVlabs/ASPIRE ``src/cap_harness/{contracts,errors,protocols}.py`` at commit ``fa00f0e``, under the Apache
-License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are ASPIRE's. A camera observation holds
-RGB only: its depth, intrinsics and pose are ``None``, because the rig sends no calibrated depth.
+License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are ASPIRE's. An arm has the joint count
+of its state. A camera observation holds depth, intrinsics and a pose only when the rig gives them.
 """
 
 from collections.abc import Mapping, Sequence
@@ -13,8 +13,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-EMBODIMENT = 'yam_real'
-JOINT_DIMENSION = 6
+DEFAULT_EMBODIMENT = 'yam_real'
 PRIMARY_ARM = 'primary'
 SECONDARY_ARM = 'secondary'
 
@@ -145,7 +144,11 @@ class MotionStrategy:
 
 @dataclass(frozen=True, slots=True)
 class CameraObservation:
-    """One camera view: RGB with height, width and channels. Depth, intrinsics and pose are ``None`` on this rig."""
+    """One camera view: RGB with height, width and channels, and what the rig gives of depth, intrinsics and pose.
+
+    ``depth_m`` is metres along the optical axis, with 0 where the camera measured no depth. ``camera_pose`` is the
+    pose of the optical frame: x to the right of the image, y down, z forward.
+    """
 
     rgb: np.ndarray
     frame: str
@@ -153,6 +156,10 @@ class CameraObservation:
     intrinsics: np.ndarray | None = None
     camera_pose: Pose | None = None
     timestamp_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.depth_m is not None and self.depth_m.shape != self.rgb.shape[:2]:
+            raise ValueError(f'depth_m must have shape {self.rgb.shape[:2]}, got {self.depth_m.shape}')
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,7 +176,7 @@ class RobotState:
     base_frame: str
     joint_names: Mapping[str, Sequence[str]] | None = None
     timestamp_s: float | None = None
-    embodiment: str = EMBODIMENT
+    embodiment: str = DEFAULT_EMBODIMENT
 
     def __post_init__(self) -> None:
         arms = set(self.joint_positions)
@@ -182,14 +189,14 @@ class RobotState:
                 raise ValueError(
                     f'end_effector_poses[{arm!r}] is in frame {pose.frame!r}, expected {self.base_frame!r}'
                 )
-        names = self.joint_names or {arm: tuple(f'joint_{i}' for i in range(JOINT_DIMENSION)) for arm in arms}
-        shape = (JOINT_DIMENSION,)
         positions = {
-            arm: _vector(value, f'joint_positions[{arm!r}]', shape) for arm, value in self.joint_positions.items()
+            arm: _vector(value, f'joint_positions[{arm!r}]', (None,)) for arm, value in self.joint_positions.items()
         }
         velocities = {
-            arm: _vector(value, f'joint_velocities[{arm!r}]', shape) for arm, value in self.joint_velocities.items()
+            arm: _vector(value, f'joint_velocities[{arm!r}]', positions[arm].shape)
+            for arm, value in self.joint_velocities.items()
         }
+        names = self.joint_names or {arm: tuple(f'joint_{i}' for i in range(len(positions[arm]))) for arm in arms}
         grippers = {
             arm: _unit_interval(value, f'gripper_positions[{arm!r}]') for arm, value in self.gripper_positions.items()
         }
@@ -236,14 +243,12 @@ class ArmCommand:
     mode: str
     target: np.ndarray
     gripper_position: float | None = None
-    embodiment: str = EMBODIMENT
+    embodiment: str = DEFAULT_EMBODIMENT
 
     def __post_init__(self) -> None:
         if self.mode != 'joint_position':
             raise ValueError("mode must be 'joint_position'")
-        if self.embodiment != EMBODIMENT:
-            raise ValueError(f'unsupported embodiment {self.embodiment!r}; expected {EMBODIMENT!r}')
-        object.__setattr__(self, 'target', _vector(self.target, 'target', (JOINT_DIMENSION,)))
+        object.__setattr__(self, 'target', _vector(self.target, 'target', (None,)))
         if self.gripper_position is not None:
             object.__setattr__(self, 'gripper_position', _unit_interval(self.gripper_position, 'gripper_position'))
 
@@ -257,6 +262,8 @@ class RobotAction:
     def __post_init__(self) -> None:
         if not self.arms or not all(isinstance(command, ArmCommand) for command in self.arms.values()):
             raise ValueError('arms must map arm names to ArmCommand values')
+        if len({command.embodiment for command in self.arms.values()}) != 1:
+            raise ValueError('all RobotAction arm commands must use the same embodiment')
         object.__setattr__(self, 'arms', MappingProxyType(dict(self.arms)))
 
     @property
@@ -276,10 +283,10 @@ class Trajectory:
     expected_start: RobotState
     arm: str = PRIMARY_ARM
     gripper_positions: np.ndarray | None = None
-    embodiment: str = EMBODIMENT
+    embodiment: str = DEFAULT_EMBODIMENT
 
     def __post_init__(self) -> None:
-        positions = _vector(self.joint_positions, 'joint_positions', (None, JOINT_DIMENSION))
+        positions = _vector(self.joint_positions, 'joint_positions', (None, None))
         if positions.shape[0] == 0:
             raise ValueError('joint_positions must contain at least one waypoint')
         if not self.dt_s > 0:
@@ -307,11 +314,11 @@ class SynchronizedTrajectory:
     collision_aware: bool
     expected_start: RobotState
     gripper_positions: Mapping[str, np.ndarray] | None = None
-    embodiment: str = EMBODIMENT
+    embodiment: str = DEFAULT_EMBODIMENT
 
     def __post_init__(self) -> None:
         positions = {
-            arm: _vector(value, f'joint_positions[{arm!r}]', (None, JOINT_DIMENSION))
+            arm: _vector(value, f'joint_positions[{arm!r}]', (None, None))
             for arm, value in self.joint_positions.items()
         }
         lengths = {value.shape[0] for value in positions.values()}

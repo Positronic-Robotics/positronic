@@ -1,6 +1,9 @@
 import hashlib
+import json
+from textwrap import dedent
 
 import pytest
+from positronic_model_server.serialization import deserialise, serialise
 
 from positronic import keys
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -9,18 +12,29 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
 from positronic.policy.spec import from_spec
-from positronic.vendors.aspire.bridge import BridgeSettings
+from positronic.vendors.aspire.bridge import BridgeSettings, PointCloudSummary
 from positronic.vendors.aspire.server import (
+    META_CALIBRATION,
     META_PROGRAM,
     META_PROGRAM_SHA256,
     META_SESSION_RECORD,
+    META_SETTINGS,
     PARAM_PROGRAM,
     POLICY_TYPE,
     CapProgramModel,
     SessionRecord,
     deployment,
 )
-from positronic.vendors.aspire.tests.test_bridge import Rig
+from positronic.vendors.aspire.tests.test_bridge import (
+    LOOKS_DOWN,
+    MASK_CENTRE,
+    PERCEPTION_PROGRAM,
+    WRIST,
+    Grasper,
+    Rig,
+    Segmenter,
+    wrist_rig,
+)
 
 PROGRAM = """
 result = close_gripper(arm='left')
@@ -41,6 +55,18 @@ def programs(tmp_path):
 def model(programs, tmp_path):
     settings = BridgeSettings(fps=10.0, round_s=0.2, call_timeout_s=2.0, think_timeout_s=30.0)
     model = CapProgramModel(programs, settings, tmp_path)
+    yield model
+    model.close()
+
+
+@pytest.fixture
+def one_arm_model(programs, tmp_path):
+    """A model of a one-arm rig with a calibration file for its wrist camera and fake perception providers."""
+    calibration = tmp_path / 'calibration.json'
+    calibration.write_text(json.dumps({WRIST: LOOKS_DOWN.model_dump()}))
+    settings = BridgeSettings(fps=10.0, round_s=0.2, call_timeout_s=2.0, think_timeout_s=30.0, arms=keys.ONE_ARM)
+    providers = {'segmentation': Segmenter(), 'grasps': {'top-down': Grasper()}}
+    model = CapProgramModel(programs, settings, tmp_path, calibration=calibration, **providers)
     yield model
     model.close()
 
@@ -137,3 +163,45 @@ def test_a_program_that_does_not_compile_gives_up_with_its_error(model, programs
     assert run_session(model, 'broken', Rig(), 'broken.py')[-1][END] == PolicyEnd.GIVE_UP.value
     broken = record(tmp_path, 'broken')
     assert 'SyntaxError' in broken.error and broken.calls == []
+
+
+def test_meta_of_a_one_arm_rig_states_the_unnamed_hand_frames_and_the_calibration(one_arm_model):
+    meta = one_arm_model.meta()
+    frames = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])
+    assert frames == dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE))
+    assert meta[f'{META_SETTINGS}.arms'] == keys.ONE_ARM
+    assert meta[f'{META_CALIBRATION}.{WRIST}.pose'] == LOOKS_DOWN.pose
+    assert meta[f'{META_CALIBRATION}.{WRIST}.intrinsics'] == LOOKS_DOWN.intrinsics
+    assert meta[f'{META_CALIBRATION}.{WRIST}.hand'] == LOOKS_DOWN.hand
+    # The handshake carries the meta.
+    assert deserialise(serialise(meta)) == json.loads(json.dumps(meta))
+
+
+def test_a_one_arm_session_gets_calibrated_views_and_the_providers(one_arm_model, programs, tmp_path):
+    (programs / 'perceive.py').write_text(dedent(PERCEPTION_PROGRAM))
+    rig = wrist_rig()
+    chunk = run_session(one_arm_model, 'perceive', rig, 'perceive.py')
+    assert chunk[-1][END] == PolicyEnd.COMPLETE.value
+    assert set(chunk[-1]) == {keys.ROBOT_COMMAND, keys.TARGET_GRIP, END}
+    assert rig.pose[None].translation == pytest.approx(MASK_CENTRE, abs=1e-6)
+    calls = {call.name: call for call in record(tmp_path, 'perceive').calls}
+    assert calls['segment_text'].result['ok'] and calls['generate_grasps'].result['ok']
+    assert calls['mask_to_point_cloud'].result == PointCloudSummary(frame='world', point_count=6).model_dump()
+
+
+@pytest.mark.parametrize(
+    'calibration',
+    [
+        {WRIST: LOOKS_DOWN.model_dump() | {'frame': 'world'}},
+        {WRIST: {'pose': LOOKS_DOWN.pose}},
+        {WRIST: LOOKS_DOWN.model_dump() | {'pose': [0.0, 0.0, 0.3]}},
+        [LOOKS_DOWN.model_dump()],
+    ],
+)
+def test_a_calibration_file_that_does_not_map_each_camera_to_its_calibration_is_refused(
+    programs, tmp_path, calibration
+):
+    path = tmp_path / 'calibration.json'
+    path.write_text(json.dumps(calibration))
+    with pytest.raises(ValueError):
+        CapProgramModel(programs, BridgeSettings(), tmp_path, calibration=path)
