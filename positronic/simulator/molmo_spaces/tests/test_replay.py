@@ -11,6 +11,7 @@ Run on a box with the asset packs (a GPU-less one uses mesa software EGL)::
 """
 
 import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -94,6 +95,65 @@ def test_an_open_episode_resets_its_articulated_object(episode_index: int):
         finally:
             conn.close()
     assert frame[protocol.FRAME_META][mapping.META_HOUSE_INDEX] == 21
+
+
+# Sets the episode joint of an articulated pickup object that has no joint grasp file, with the sampler that the server
+# builds, and prints the joint positions it set. argv: the object name, its joint name, the episode task as JSON.
+_SET_JOINT_VALUES = """
+import json
+import sys
+from types import SimpleNamespace
+
+import env
+from molmo_spaces.env.data_views import MlSpacesArticulationObject
+
+name, joint, task = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+
+
+class Articulated(MlSpacesArticulationObject):
+    def __init__(self):
+        self.set_to = []
+
+    def set_joint_position(self, index, position):
+        self.set_to.append([index, position])
+
+
+Articulated.name, Articulated.joint_names = name, [joint]
+obj = Articulated()
+sampler = object.__new__(env.JsonEvalTaskSampler)
+sampler.episode_spec = SimpleNamespace(task=task)
+manager = SimpleNamespace(get_object_by_name=lambda _: obj)
+meta = {'objects': {name: {'asset_id': name, 'name_map': {'joints': {}}}}}
+sampler.set_joint_values(SimpleNamespace(object_managers=[manager], current_batch_index=0, current_scene_metadata=meta))
+print(json.dumps(obj.set_to))
+"""
+
+# Articulated objects that a scene can add and that no grasp library holds: a drawer unit and a book with a hinge.
+_NO_GRASP_FILE = [('drawer_unit', 'drawer_unit_top'), ('notebook', 'hinge')]
+
+
+def _set_joint_values(name: str, joint: str, task: dict) -> list[list[float]]:
+    _skip_unless_present(_HARD_BENCHMARK)
+    task = {'pickup_obj_name': name, **task}
+    result = subprocess.run(
+        [str(launcher.ensure_molmo_venv()), '-c', _SET_JOINT_VALUES, name, joint, json.dumps(task)],
+        env=launcher.molmo_subprocess_env(),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return json.loads(result.stdout.splitlines()[-1])
+
+
+@pytest.mark.parametrize(('name', 'joint'), _NO_GRASP_FILE, ids=[name for name, _ in _NO_GRASP_FILE])
+def test_an_episode_that_names_no_joint_samples_an_articulated_pickup_with_no_grasp_file(name: str, joint: str):
+    assert _set_joint_values(name, joint, {}) == []
+
+
+@pytest.mark.parametrize(('name', 'joint'), _NO_GRASP_FILE, ids=[name for name, _ in _NO_GRASP_FILE])
+def test_an_episode_that_names_a_joint_sets_it_on_an_articulated_pickup_with_no_grasp_file(name: str, joint: str):
+    task = {'joint_name': joint, 'joint_start_position': [0.2]}
+    assert _set_joint_values(name, joint, task) == [[0, 0.2]]
 
 
 _HARD_BENCHMARK = mapping.BenchmarkPath(
