@@ -76,12 +76,8 @@ def depth_as_float32_m(depth_m: np.ndarray) -> np.ndarray:
 
 
 def depth_as_uint16_mm(depth_m: np.ndarray) -> np.ndarray:
-    """``depth_m`` in millimetres, with 0 in place of each value that is not a finite depth from 0 to 65.535 m.
-
-    The product with 1000 and its rounding to the nearest millimetre are in `float32`.
-    """
-    millimetres = depth_as_float32_m(depth_m)
-    millimetres *= 1000
+    """``depth_m`` in millimetres, rounded in ``float32``; 0 for each value not a finite depth from 0 to 65.535 m."""
+    millimetres = depth_as_float32_m(depth_m) * np.float32(1000)
     np.rint(millimetres, out=millimetres)
     millimetres[millimetres > np.iinfo(np.uint16).max] = 0
     return millimetres.astype(np.uint16)
@@ -143,11 +139,11 @@ class SLCamera(pimm.ControlSystem):
             depth_mode: (sl.DEPTH_MODE) Depth mode to use. The SDK 5.4 calls 'performance', 'quality' and 'ultra'
                         deprecated.
             coordinate_units: (sl.UNIT) Coordinate units to use
-            max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
-                        -Inf and depths below 0 will be set to 0. All values above this will be set to max_depth.
-                        Only ``depth_format='uint8'`` uses it.
-            depth_format: (DepthFormat) Type and unit of the depth image. ``'uint16_mm'`` and ``'float32_m'``
-                        need ``view='left'``, the view whose pixels the depth image matches.
+            max_depth: (float) Maximum depth to use. The uint8 image writes this depth for NaN, +Inf and each larger
+                        depth, and 0 for -Inf and each depth below 0. Only ``depth_format='uint8'`` uses it.
+            depth_format: (DepthFormat) Type and unit of the depth image. The depth is on the pixel grid of the
+                        rectified left view, which ``left_intrinsics`` describes. ``'uint16_mm'`` and ``'float32_m'``
+                        need ``view='left'``, so that the frame and the depth image have the same pixels.
             depth_mask: (bool) If True, will also generate image with 0 set to NaNs pixels, and 1 set to valid pixels
             mono: (bool) Open a single-sensor camera (e.g. ZED X One) via ``sl.CameraOne``. Mono cameras
                   support only ``view='left'``, ``depth_mode='none'`` and no image enhancement.
@@ -185,7 +181,7 @@ class SLCamera(pimm.ControlSystem):
         self._depth_mask_adapter = None  # Lazy init
 
         # The rectified left view at the stream's resolution, sent at each open of a stereo camera
-        self.left_intrinsics: pimm.ControlSystemEmitter[PinholeIntrinsics] = pimm.ControlSystemEmitter(self)
+        self.left_intrinsics = pimm.ControlSystemEmitter[PinholeIntrinsics](self)
 
         self.ready = pimm.calls.ControlSystemHandler[None, None](self)
         # Releases the camera, reboots it and opens it again, where the SDK reboots the model
@@ -299,7 +295,10 @@ class SLCamera(pimm.ControlSystem):
         return zed
 
     def _hold(self, error: DeviceFault) -> DeviceFault:
-        """Keep ``error`` until a ready call repairs the camera, and send it on every channel in place of data."""
+        """Keep ``error`` until a ready call repairs the camera, and send it on each image channel in place of data.
+
+        ``left_intrinsics`` keeps its last value: an error does not change the calibration of the camera.
+        """
         logger.error('Camera %s holds an error until it is asked to be ready: %s', self._serial_number, error)
         self._error = error
         for emitter in (self.frame, self.depth, self.depth_mask):

@@ -179,7 +179,7 @@ class FakeModel(enum.Enum):
 # Depths in metres as the SDK gives them: NaN, +Inf and -Inf where it has no depth
 NO_DEPTH = (np.nan, np.inf, -np.inf)
 DEPTH_M = np.array([NO_DEPTH, (0.0, 0.3, 1.2346), (10.0, 65.535, 70.0)], dtype=np.float32)
-# A depth below 0 is none the SDK documents
+# The SDK documents no depth below 0
 DEPTH_WITH_NEGATIVE_M = np.array([(-0.5, 0.3)], dtype=np.float32)
 
 LEFT_INTRINSICS = PinholeIntrinsics(width=1280, height=720, fx=522.5, fy=522.25, cx=645.75, cy=361.5)
@@ -954,11 +954,22 @@ def _depth_images(module, depth_m: np.ndarray = DEPTH_M, **settings) -> list[np.
     return [adapter.array for _, adapter in depths.emitted]
 
 
-def test_depth_is_bytes_on_the_scale_of_the_largest_depth_by_default(zed_module):
-    images = _depth_images(zed_module, max_depth=10)
-    expected = np.array([(255, 255, 0), (0, 7, 31), (255, 255, 255)], dtype=np.uint8)
+@pytest.mark.parametrize(
+    ('settings', 'expected'),
+    [
+        ({}, [(255, 255, 0), (0, 7, 31), (255, 255, 255)]),
+        ({'max_depth': 5}, [(255, 255, 0), (0, 15, 62), (255, 255, 255)]),
+    ],
+)
+def test_depth_is_bytes_on_the_scale_of_the_largest_depth_by_default(zed_module, settings, expected):
+    images = _depth_images(zed_module, **settings)
     assert images and all(image.dtype == np.uint8 for image in images)
-    np.testing.assert_array_equal(images[-1], expected[..., np.newaxis])
+    np.testing.assert_array_equal(images[-1], np.array(expected, dtype=np.uint8)[..., np.newaxis])
+
+
+@pytest.mark.parametrize('view', ['right', 'side_by_side'])
+def test_the_default_depth_format_takes_every_view(zed_module, view):
+    zed_module.SLCamera(serial_number=SERIAL, depth_mode='neural', view=view)
 
 
 def test_depth_in_millimetres_is_zero_where_the_sdk_has_no_depth_or_the_depth_is_above_the_uint16_range(zed_module):
