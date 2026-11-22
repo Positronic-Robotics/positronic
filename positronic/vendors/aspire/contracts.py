@@ -345,6 +345,184 @@ def _require_error_unless_ok(ok: bool, error: ApiError | None) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class Segmentation:
+    """One scored binary mask in an explicitly named camera frame."""
+
+    mask: np.ndarray
+    label: str
+    score: float
+    camera_name: str
+    frame: str
+    box_xyxy: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        mask = np.array(self.mask)
+        if mask.ndim != 2 or mask.size == 0:
+            raise ValueError('mask must have non-empty shape (H, W)')
+        if mask.dtype != np.bool_ and not np.all((mask == 0) | (mask == 1)):
+            raise ValueError('mask must be boolean or contain only 0/1 values')
+        mask = mask.astype(np.bool_)
+        mask.setflags(write=False)
+        object.__setattr__(self, 'mask', mask)
+        object.__setattr__(self, 'score', _unit_interval(self.score, 'score'))
+        if self.box_xyxy is not None:
+            box = _vector(self.box_xyxy, 'box_xyxy', (4,))
+            if box[2] < box[0] or box[3] < box[1]:
+                raise ValueError('box_xyxy must satisfy x2 >= x1 and y2 >= y1')
+            object.__setattr__(self, 'box_xyxy', box)
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentationSet:
+    """Recoverable result of a segmentation provider call."""
+
+    ok: bool
+    segmentations: Sequence[Segmentation] = ()
+    error: ApiError | None = None
+    diagnostics: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_error_unless_ok(self.ok, self.error)
+        items = tuple(self.segmentations)
+        if self.ok and not items:
+            raise ValueError('a successful SegmentationSet must contain at least one segmentation')
+        if not self.ok and items:
+            raise ValueError('a failed SegmentationSet cannot carry segmentations')
+        if len({(item.camera_name, item.frame, item.mask.shape) for item in items}) > 1:
+            raise ValueError('all segmentations must share camera, frame, and mask shape')
+        object.__setattr__(self, 'segmentations', items)
+        object.__setattr__(self, 'diagnostics', MappingProxyType(dict(self.diagnostics)))
+
+    @property
+    def value(self) -> tuple[Segmentation, ...] | None:
+        return tuple(self.segmentations) if self.ok else None
+
+
+@dataclass(frozen=True, slots=True)
+class PointCloud:
+    """Finite XYZ points, and optional RGB colors, expressed in ``frame``."""
+
+    points: np.ndarray
+    frame: str
+    colors: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        points = _vector(self.points, 'points', (None, 3))
+        if points.shape[0] == 0:
+            raise ValueError('points must contain at least one point')
+        object.__setattr__(self, 'points', points)
+        if self.colors is not None:
+            colors = np.array(self.colors)
+            if colors.shape != points.shape:
+                raise ValueError(f'colors must have shape {points.shape}, got {colors.shape}')
+            colors.setflags(write=False)
+            object.__setattr__(self, 'colors', colors)
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectGeometry:
+    """An oriented bounding box represented by a pose and positive XYZ extents."""
+
+    pose: Pose
+    extents: np.ndarray
+    point_count: int | None = None
+
+    def __post_init__(self) -> None:
+        extents = _vector(self.extents, 'extents', (3,))
+        if np.any(extents <= 0.0):
+            raise ValueError('extents must be strictly positive')
+        object.__setattr__(self, 'extents', extents)
+        if self.point_count is not None and self.point_count <= 0:
+            raise ValueError('point_count must be a positive integer or None')
+
+    @property
+    def frame(self) -> str:
+        return self.pose.frame
+
+
+def _non_negative(value: float, name: str) -> float:
+    number = float(value)
+    if not np.isfinite(number) or number < 0.0:
+        raise ValueError(f'{name} must be finite and not negative')
+    return number
+
+
+@dataclass(frozen=True, slots=True)
+class GraspCandidate:
+    """A scored gripper pose and opening width in metres."""
+
+    pose: Pose
+    score: float
+    width_m: float
+    approach_distance_m: float = 0.0
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'score', _unit_interval(self.score, 'score'))
+        object.__setattr__(self, 'width_m', _non_negative(self.width_m, 'width_m'))
+        object.__setattr__(self, 'approach_distance_m', _non_negative(self.approach_distance_m, 'approach_distance_m'))
+        object.__setattr__(self, 'metadata', MappingProxyType(dict(self.metadata)))
+
+    @property
+    def frame(self) -> str:
+        return self.pose.frame
+
+    @property
+    def transform(self) -> np.ndarray:
+        return self.pose.as_matrix()
+
+
+@dataclass(frozen=True, slots=True)
+class GraspSet:
+    """Recoverable result of grasp generation."""
+
+    ok: bool
+    grasps: Sequence[GraspCandidate] = ()
+    error: ApiError | None = None
+    diagnostics: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_error_unless_ok(self.ok, self.error)
+        grasps = tuple(self.grasps)
+        if self.ok and not grasps:
+            raise ValueError('a successful GraspSet must contain at least one grasp')
+        if not self.ok and grasps:
+            raise ValueError('a failed GraspSet cannot carry grasps')
+        if len({item.frame for item in grasps}) > 1:
+            raise ValueError('all grasp candidates must use the same frame')
+        object.__setattr__(self, 'grasps', grasps)
+        object.__setattr__(self, 'diagnostics', MappingProxyType(dict(self.diagnostics)))
+
+    @property
+    def value(self) -> tuple[GraspCandidate, ...] | None:
+        return tuple(self.grasps) if self.ok else None
+
+
+@dataclass(frozen=True, slots=True)
+class LocalizationResult:
+    """Recoverable composed localization result with optional intermediate values."""
+
+    ok: bool
+    geometry: ObjectGeometry | None = None
+    segmentation: Segmentation | None = None
+    point_cloud: PointCloud | None = None
+    error: ApiError | None = None
+    diagnostics: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_error_unless_ok(self.ok, self.error)
+        if self.ok and self.geometry is None:
+            raise ValueError('a successful LocalizationResult must carry geometry')
+        if self.geometry is not None and self.point_cloud is not None and self.geometry.frame != self.point_cloud.frame:
+            raise ValueError('geometry and point_cloud must use the same frame')
+        object.__setattr__(self, 'diagnostics', MappingProxyType(dict(self.diagnostics)))
+
+    @property
+    def value(self) -> ObjectGeometry | None:
+        return self.geometry if self.ok else None
+
+
+@dataclass(frozen=True, slots=True)
 class StepResult:
     """Result of exactly one adapter control period."""
 
@@ -410,6 +588,31 @@ class ExecutionResult:
             return ExecutionStatus.TRUNCATED
         assert self.error is not None
         return _STATUS_OF_ERROR.get(self.error.code, ExecutionStatus.FAILED)
+
+
+@runtime_checkable
+class SegmentationProvider(Protocol):
+    """Backend capable of text- and point-prompted image segmentation."""
+
+    def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet: ...
+
+    def segment_points(
+        self, observation: CameraObservation, points_px: np.ndarray, *, point_labels: np.ndarray | None = None
+    ) -> SegmentationSet: ...
+
+
+@runtime_checkable
+class GraspProvider(Protocol):
+    """Backend that proposes framed grasp candidates from object geometry."""
+
+    def generate_grasps(
+        self,
+        point_cloud: PointCloud,
+        *,
+        scene_point_cloud: PointCloud | None = None,
+        geometry: ObjectGeometry | None = None,
+        max_candidates: int | None = None,
+    ) -> GraspSet: ...
 
 
 @runtime_checkable
