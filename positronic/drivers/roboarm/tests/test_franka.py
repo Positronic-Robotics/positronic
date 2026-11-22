@@ -2980,6 +2980,14 @@ def test_a_clean_start_connects_once_parks_and_streams_the_arm_state(desk, world
     assert len(run.meta.emitted) == 1, 'a clean start sends the robot model once'
 
 
+def test_the_robot_model_a_run_sends_names_the_droid_robot(desk, world):
+    """The arm and its Robotiq 2F-85 make a DROID rig, so its recordings say so in the ``robot`` static."""
+    run = _start_run(world, _driver(FakeArm(JOGGED)), ticks=3)
+
+    [meta] = [data for _, data in run.meta.emitted]
+    assert meta[roboarm_keys.ROBOT] == 'droid'
+
+
 def test_the_run_streams_the_release_instruction_over_the_missing_connection_while_the_stop_is_pressed(
     desk, world, monkeypatch
 ):
