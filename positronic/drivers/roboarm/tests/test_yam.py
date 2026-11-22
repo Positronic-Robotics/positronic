@@ -1266,6 +1266,14 @@ def test_a_box_beside_the_shoulder_counts_against_link_1_as_joint_1_turns_toward
     assert turned < KEEP_CLEAR_M < apart
 
 
+def test_a_turn_of_joint_1_with_the_fingers_in_the_table_does_not_close_a_gap_by_rounding():
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    q = np.array([-0.599, 2.1766, 0.7344, -0.5877, 1.1936, -0.5204])  # the left fingertip 38 mm in the table
+    before = {near.pair: near.gap_m for near in clearance.nears(q, OPEN_SHARE)}
+    turned = q + np.array([1e-4, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert not clearance.closes_a_gap(turned, before, OPEN_SHARE, GAP_TOLERANCE_M, obstacles_only=False)
+
+
 def test_a_step_that_takes_a_pair_into_the_gap_closes_it_while_a_deeper_pair_comes_out():
     clearance = Clearance((TABLE,), KEEP_CLEAR_M)
     # The arm in the table 10.8 mm deep; the step takes it out to 6.0 mm, and the fingers in from 7.8 mm to -4.9 mm

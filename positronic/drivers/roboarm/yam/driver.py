@@ -529,9 +529,7 @@ class _Arm(DriverRun[command.CommandType]):
             braking = self._sent_speed - np.clip(self._sent_speed, -accel * elapsed, accel * elapsed)
             for capped in (self._sent_speed + change, braking):
                 joints = np.clip(sent + capped * elapsed, low, high)
-                if np.any(joints != sent) and not clearance.closes_a_gap(
-                    joints, before, open_share, self._GAP_TOLERANCE_M, obstacles_only=False
-                ):
+                if not clearance.closes_a_gap(joints, before, open_share, self._GAP_TOLERANCE_M, obstacles_only=False):
                     return joints
         # The gap holds over the acceleration cap where braking at the cap does not keep it
         kept = sent + step

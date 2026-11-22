@@ -94,6 +94,8 @@ _ALWAYS_NEAR = {
 }
 _OBSTACLE = 'obstacle'
 _FINGERS = ('joint7', 'joint8')
+# Two near poses read gaps that differ by up to about 1e-8 m where the arm moves along a face
+_NOISE_M = 1e-6
 # The arm slows down from this far past ``keep_clear_m``: a brake of 3 m/s2 stops 0.6 m/s in 6 cm
 _SLOW_ZONE_M = 0.08
 
@@ -191,10 +193,11 @@ class Clearance:
         obstacles_only: bool,
     ) -> bool:
         """Whether at joints ``q`` a pair is nearer than ``keep_clear_m`` less ``tolerance_m``, and nearer than its gap
-        ``before``. Each pair counts: a pair deep in the gap does not hide another that enters it."""
+        ``before`` by more than ``_NOISE_M``. Each pair counts: a pair deep in the gap does not hide another that enters
+        it."""
         floor = self.keep_clear_m - tolerance_m
         return any(
-            gap < floor and gap < before.get(pair, self.reach_m)
+            gap < floor and gap < before.get(pair, self.reach_m) - _NOISE_M
             for pair, gap in self.gaps(q, open_share, obstacles_only=obstacles_only).items()
         )
 
