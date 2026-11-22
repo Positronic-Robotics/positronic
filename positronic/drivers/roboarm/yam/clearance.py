@@ -31,19 +31,30 @@ class StreamTuning:
 
     ``max_joint_accel_rad_s2`` caps the joint acceleration, and a joint brakes in time to stop at its target; None
     caps nothing. ``keep_clear_m`` stops the arm before a step that takes it nearer than this to itself or
-    ``obstacles``; None checks nothing. A Cartesian target is kept ``obstacle_margin_m`` above each obstacle it is
-    over. The obstacles are in the frame of the targets: the world frame of the arm.
+    ``obstacles``; None checks nothing. Near them, the gap closes no faster than a brake of ``approach_decel_m_s2``
+    stops it at ``keep_clear_m``. A Cartesian target is kept ``obstacle_margin_m`` above each obstacle it is over.
+    The obstacles are in the frame of the targets: the world frame of the arm.
+
+    A park or a start move from nearer than ``park_clear_m`` to an obstacle first raises the gripper, by
+    ``park_lift_m`` at most and for ``park_lift_timeout_s`` at most: the move ramps in joint space and checks no gap.
     """
 
     max_joint_accel_rad_s2: float | None = None
     keep_clear_m: float | None = None
     obstacles: tuple[Box, ...] = ()
     obstacle_margin_m: float = 0.01
+    approach_decel_m_s2: float = 3.0
+    park_clear_m: float = 0.06
+    park_lift_m: float = 0.08
+    park_lift_timeout_s: float = 2.0
 
     def __post_init__(self):
         for value in (self.max_joint_accel_rad_s2, self.keep_clear_m):
             if value is not None and not (np.isfinite(value) and value > 0):
                 raise ValueError(f'a stream limit needs a finite positive value or None, not {value}')
+        for value in (self.approach_decel_m_s2, self.park_clear_m, self.park_lift_m, self.park_lift_timeout_s):
+            if not (np.isfinite(value) and value > 0):
+                raise ValueError(f'a stream setting needs a finite positive value, not {value}')
         if not (np.isfinite(self.obstacle_margin_m) and self.obstacle_margin_m >= 0):
             raise ValueError(f'obstacle_margin_m needs a finite value >= 0, not {self.obstacle_margin_m}')
 
@@ -67,19 +78,39 @@ def lift_above(pose: geom.Transform3D, boxes: Sequence[Box], margin_m: float) ->
 
 # Pairs the gap leaves out. The foot and link 1 sit on each other, and the hulls of the base and link 2 stay 9 mm apart
 # as joint 2 turns. The stops of joint 4 keep links 3 and 5 apart, and their hulls meet 3 mm short of its lower stop.
-# An obstacle under the foot touches the foot and link 1.
-_ALWAYS_NEAR = {frozenset(pair) for pair in [('base', 'link1'), ('base', 'link2'), ('link3', 'link5')]}
+# Joint 6 turns the fingers about an axis of link 5, so their hulls stay 51 mm apart at every pose.
+_ALWAYS_NEAR = {
+    frozenset(pair)
+    for pair in [
+        ('base', 'link1'),
+        ('base', 'link2'),
+        ('link3', 'link5'),
+        ('link5', 'tip_left'),
+        ('link5', 'tip_right'),
+    ]
+}
 _OBSTACLE = 'obstacle'
-_ON_OBSTACLES = {'base', 'link1'}
+_ON_OBSTACLES = {'base', 'link1'}  # an obstacle under the foot touches the foot and link 1
+_FINGERS = ('joint7', 'joint8')
+# The arm slows down from this far past ``keep_clear_m``: a brake of 3 m/s2 stops 0.6 m/s in 6 cm
+_SLOW_ZONE_M = 0.08
+
+
+@dataclass(frozen=True)
+class Near:
+    """A pair of the arm and itself or an obstacle: its gap in meters, and how the gap changes with each joint."""
+
+    gap_m: float
+    slope: np.ndarray  # m/rad, one value per arm joint
 
 
 class Clearance:
-    """The smallest gap between the arm and itself or ``boxes``, up to ``reach_m``. The gripper shell counts, which
-    the MJCF leaves out of collisions. A hull is larger than its link, so a gap is a lower bound."""
+    """The gap between the arm and itself or ``obstacles``, for a stream that keeps ``keep_clear_m``. The gripper shell
+    counts, which the MJCF leaves out of collisions. A hull is larger than its link, so a gap is a lower bound."""
 
-    def __init__(self, boxes: Sequence[Box], reach_m: float):
+    def __init__(self, obstacles: Sequence[Box], keep_clear_m: float):
         spec = mj.MjSpec.from_file(package_assets_path(YAM_MJCF_PATH))
-        for index, box in enumerate(boxes):
+        for index, box in enumerate(obstacles):
             lower, upper = np.asarray(box.lower), np.asarray(box.upper)
             spec.worldbody.add_geom(
                 name=f'{_OBSTACLE}{index}',
@@ -87,8 +118,11 @@ class Clearance:
                 size=((upper - lower) / 2).tolist(),
                 pos=((upper + lower) / 2).tolist(),
             )
+        self.obstacles = tuple(obstacles)
+        self.keep_clear_m = keep_clear_m
+        self.reach_m = keep_clear_m + _SLOW_ZONE_M  # pairs farther than this read as this gap
         self._model = spec.compile()
-        self._model.geom_margin[:] = reach_m
+        self._model.geom_margin[:] = self.reach_m
         self._names: list[str] = []
         for g in range(self._model.ngeom):
             body = mj.mj_id2name(self._model, mj.mjtObj.mjOBJ_BODY, self._model.geom_bodyid[g])
@@ -98,39 +132,59 @@ class Clearance:
         self._data = mj.MjData(self._model)
         self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
-        self.reach_m = reach_m
+        self._finger_ids = np.array([self._model.joint(name).qposadr.item() for name in _FINGERS])
+        self._finger_travel = np.array([self._model.joint(name).range[1] for name in _FINGERS])
 
     @staticmethod
-    def _counts(a: str, b: str) -> bool:
-        pair = {a, b}
+    def _counts(pair: set[str]) -> bool:
         return frozenset(pair) not in _ALWAYS_NEAR and not (_OBSTACLE in pair and pair & _ON_OBSTACLES)
 
-    def gap(self, q: np.ndarray) -> float:
-        """The gap at joints ``q`` in meters, ``reach_m`` when nothing is nearer, negative where hulls overlap."""
-        return self.gap_and_slope(q)[0]
+    def nears(self, q: np.ndarray, open_share: float) -> list[Near]:
+        """The pairs nearer than ``reach_m`` at joints ``q``, the nearest point of each pair, with the fingers open by
+        ``open_share`` of their travel (0 closed, 1 open)."""
+        self._place(q, open_share)
+        data = self._data
+        nearest: dict[frozenset[str], mj.MjContact] = {}
+        for contact in data.contact[: data.ncon]:
+            pair = frozenset((self._names[contact.geom1], self._names[contact.geom2]))
+            if self._counts(set(pair)) and (pair not in nearest or contact.dist < nearest[pair].dist):
+                nearest[pair] = contact
+        return [Near(float(contact.dist), self._slope(contact)) for contact in nearest.values()]
 
-    def gap_and_slope(self, q: np.ndarray) -> tuple[float, np.ndarray]:
-        """The gap at joints ``q``, and how the gap of its nearest pair changes with each joint in m/rad. The slope is
-        zero where nothing is nearer than ``reach_m``."""
-        model, data = self._model, self._data
+    def _place(self, q: np.ndarray, open_share: float) -> None:
+        data = self._data
         data.qpos[:] = 0.0
         data.qpos[self._qpos_ids] = q
-        mj.mj_fwdPosition(model, data)
-        nearest = None
-        for contact in data.contact[: data.ncon]:
-            if self._counts(self._names[contact.geom1], self._names[contact.geom2]):
-                if nearest is None or contact.dist < nearest.dist:
-                    nearest = contact
+        data.qpos[self._finger_ids] = float(np.clip(open_share, 0.0, 1.0)) * self._finger_travel
+        mj.mj_fwdPosition(self._model, data)
+
+    def _slope(self, contact: mj.MjContact) -> np.ndarray:
+        """How the gap of ``contact`` changes with each joint. The normal points from geom1 to geom2: the gap grows as
+        the point on geom2 moves along it, away from geom1."""
+        model, data = self._model, self._data
         slope = np.zeros(len(self._dof_ids))
-        if nearest is None:
-            return self.reach_m, slope
-        # The normal points from geom1 to geom2: the gap grows as the point on geom2 moves along it, away from geom1
-        normal = nearest.frame[:3]
-        for side, sign in ((nearest.geom2, 1.0), (nearest.geom1, -1.0)):
+        normal = contact.frame[:3]
+        for side, sign in ((contact.geom2, 1.0), (contact.geom1, -1.0)):
             body = model.geom_bodyid[side]
             if body == 0:
                 continue
             shift = np.zeros((3, model.nv))
-            mj.mj_jac(model, data, shift, None, nearest.pos, body)
+            mj.mj_jac(model, data, shift, None, contact.pos, body)
             slope += sign * normal @ shift[:, self._dof_ids]
-        return float(nearest.dist), slope
+        return slope
+
+    def gap(self, q: np.ndarray, open_share: float) -> float:
+        """The least gap at joints ``q`` in meters, ``reach_m`` when nothing is nearer, negative where hulls overlap."""
+        return min((near.gap_m for near in self.nears(q, open_share)), default=self.reach_m)
+
+    def obstacle_gap(self, q: np.ndarray, open_share: float) -> float:
+        """The least gap between the arm and the obstacles at joints ``q``; ``reach_m`` when none is nearer."""
+        self._place(q, open_share)
+        data = self._data
+        gaps = [
+            float(contact.dist)
+            for contact in data.contact[: data.ncon]
+            if _OBSTACLE in (self._names[contact.geom1], self._names[contact.geom2])
+            and self._counts({self._names[contact.geom1], self._names[contact.geom2]})
+        ]
+        return min(gaps, default=self.reach_m)

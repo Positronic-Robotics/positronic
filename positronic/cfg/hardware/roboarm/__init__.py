@@ -147,6 +147,13 @@ def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'Frict
     return FrictionFade(zero_below_rad_s=zero_below_rad_s, full_from_rad_s=full_from_rad_s)
 
 
+@cfn.config()
+def yam_stream(**fields) -> 'StreamTuning':
+    from positronic.drivers.roboarm.yam.clearance import UNLIMITED_STREAM
+
+    return dataclasses.replace(UNLIMITED_STREAM, **fields)
+
+
 @cfn.config(max_joint_accel_rad_s2=12.0, keep_clear_m=0.005, obstacle_margin_m=0.01, table_reach_below_m=0.02)
 def yambox_stream(
     max_joint_accel_rad_s2: float | None,
@@ -160,10 +167,9 @@ def yambox_stream(
     The feet of the arms stand at x 0.30, y +-0.305, z 0.3125 on a plate 23.5 mm thick, 760 mm wide and centered,
     from 230 mm behind the feet to 40 mm ahead. The table top is 23.5 mm below the feet, from the back of the plate
     to 1170 mm ahead, 205 mm past the plate on the right (-y) and 235 mm on the left. The arm sees the table top
-    ``table_reach_below_m`` lower than it is, so the fingertips reach the table and take a flat object from it: with
-    the table where it is, they stopped about 1 cm above it on the rig.
+    ``table_reach_below_m`` lower than it is, so the fingertips reach the table and take a flat object from it.
 
-    ``max_joint_accel_rad_s2`` also smooths a policy: a 0.12 rad step of a 15 Hz policy lands in about 140 ms, not 67.
+    ``max_joint_accel_rad_s2`` applies to a policy too: a 0.12 rad step of a 15 Hz policy lands in about 140 ms.
     """
     from positronic.drivers.roboarm.yam.clearance import Box, StreamTuning
 
@@ -183,7 +189,7 @@ def yambox_stream(
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
     gripper_force_cap_n=None,
-    stream=None,
+    stream=yam_stream,
 )
 def yam(
     channel: str,
@@ -194,9 +200,8 @@ def yam(
     park_tuning: 'SettleTuning',
     move_tuning: 'SettleTuning',
     gripper_force_cap_n: float | None,
-    stream: 'StreamTuning | None',
+    stream: 'StreamTuning',
 ):
-    from positronic.drivers.roboarm.yam.clearance import UNLIMITED_STREAM
     from positronic.drivers.roboarm.yam.driver import Robot
 
     return Robot(
@@ -208,5 +213,5 @@ def yam(
         park_tuning=park_tuning,
         move_tuning=move_tuning,
         gripper_force_cap_n=gripper_force_cap_n,
-        stream=UNLIMITED_STREAM if stream is None else stream,
+        stream=stream,
     )
