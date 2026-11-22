@@ -88,8 +88,8 @@ def _run_native(bench: mapping.BenchmarkPath, episode_index: int, seed: int, max
         [
             str(python),
             str(_PARITY_NATIVE),
-            '--benchmark_dir',
-            str(bench.under(Path(os.environ[mapping.ASSETS_DIR_ENV]))),
+            '--benchmark',
+            str(bench.relative),
             '--episode_index',
             str(episode_index),
             '--seed',
