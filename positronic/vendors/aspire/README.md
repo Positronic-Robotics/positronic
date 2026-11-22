@@ -91,8 +91,45 @@ of `--settings.arms`: on a rig with one named arm, set `--settings.aliases` so t
 Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's measured hand poses, at
 the `gripper` site. The server states that site in its `ee_frames`.
 
-`get_observation` returns the RGB view of each `image.*` camera, named without the prefix, for example `exterior`. A
-view has no depth, intrinsics or pose. `get_task_context` carries the task instruction as `language` and `task_name`.
+`get_task_context` carries the task instruction as `language` and `task_name`.
+
+## Camera views
+
+`get_observation` returns the view of each `image.*` camera, named without the prefix, for example `exterior`. A view
+always holds `rgb`. It holds more when the rig and the server give more:
+
+| Field | Source |
+| --- | --- |
+| `depth_m` | The observation's `depth.{camera}`, beside `image.{camera}` and with its height and width. The bridge reads `uint16` millimetres or floating metres. The view holds `float32` metres, with 0 where the camera measured no depth |
+| `intrinsics`, `camera_pose` | The calibration file, `--calibration` |
+
+No camera driver in positronic sends `depth.{camera}`. With no depth and no calibration, a view holds `rgb` only.
+
+The calibration file is a JSON object. It maps a camera name to the camera's matrix and the pose of its optical frame:
+x to the right of the image, y down, z forward. A pose is `x, y, z, qw, qx, qy, qz`, as `robot_state.ee_pose` is.
+
+```json
+{
+  "exterior": {"intrinsics": [[525.0, 0.0, 640.0], [0.0, 525.0, 360.0], [0.0, 0.0, 1.0]],
+               "pose": [0.9, 0.4, 0.6, 0.0, 0.92388, 0.38268, 0.0]},
+  "wrist": {"intrinsics": [[365.0, 0.0, 640.0], [0.0, 365.0, 360.0], [0.0, 0.0, 1.0]],
+            "pose": [0.0, -0.06, 0.03, 1.0, 0.0, 0.0, 0.0], "hand": "primary"}
+}
+```
+
+Start the server with `--calibration=path/to/calibration.json`. The pose of a camera with no `hand` is in the base
+frame. The pose of a camera with `hand` is in the hand frame of that arm. `hand` names an arm of `--settings.arms`:
+`primary` on a one-arm rig, `left` or `right` on a two-arm rig. It does not go through `--settings.aliases`. The
+bridge gives `camera_pose` as the measured hand pose times this pose, at each observation. The hand frame is the frame
+of `robot_state.ee_pose`. The server refuses a `hand` that names no arm when it starts. It states the calibration in
+its metadata, under `calibration`.
+
+The bridge refuses an observation that has no image for a calibrated camera or for a `depth.{camera}`, and a
+calibration whose principal point is outside the image. A wrist view's `camera_pose` uses the hand pose of the same
+observation. The bridge does not check that the image and the hand pose are of the same instant, so read a wrist view
+when the arm is still.
+
+## Program rules
 
 Perception and planning calls (`segment_text`, `localize_object`, `plan_motion`, `solve_ik` and the others) raise
 `NotImplementedError`. A program may import `math` only, and it sees ASPIRE's small set of builtins. These rules keep a

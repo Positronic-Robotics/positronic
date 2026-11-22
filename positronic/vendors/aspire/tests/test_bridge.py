@@ -14,6 +14,7 @@ from positronic.vendors.aspire.bridge import (
     DIAGNOSTIC_ACCEPTED,
     DIAGNOSTIC_MOVE_END,
     BridgeSettings,
+    CameraCalibration,
     CapBridge,
     MoveEnd,
     Program,
@@ -22,6 +23,8 @@ from positronic.vendors.aspire.contracts import PRIMARY_ARM, EnvironmentAdapter
 
 ARMS = keys.BIMANUAL_ARMS
 QUAT = geom.Rotation.Representation.QUAT
+WRIST = keys.WRIST_IMAGE.removeprefix(keys.IMAGE_PREFIX)
+EXTERIOR = keys.EXTERIOR_IMAGE.removeprefix(keys.IMAGE_PREFIX)
 
 
 def command(arm: str | None) -> str:
@@ -46,9 +49,11 @@ class Rig:
         self.shortfall = np.zeros(3)
         # Arms whose joints creep on and never settle, whatever the command.
         self.creeping: set[str] = set()
+        # The camera images, and each depth the rig sends, by observation key.
+        self.views: dict[str, np.ndarray] = {keys.EXTERIOR_IMAGE: np.zeros((4, 6, 3), dtype=np.uint8)}
 
     def obs(self) -> dict:
-        obs = {keys.TASK: 'stack the cups', keys.EXTERIOR_IMAGE: np.zeros((4, 6, 3), dtype=np.uint8)}
+        obs = {keys.TASK: 'stack the cups', **self.views}
         for arm in self.arms:
             state = keys.arm_channel(keys.ROBOT_STATE, arm)
             obs[f'{state}{keys.JOINTS_SUFFIX}'] = self.q[arm].copy()
@@ -446,3 +451,171 @@ def test_the_embodiment_of_a_two_arm_program_is_yam_real_by_default(run):
 def test_settings_refuse_arms_that_do_not_name_each_arm_once(arms):
     with pytest.raises(ValueError, match='arms'):
         BridgeSettings(arms=arms)
+
+
+# A wrist camera 0.3 m above the hand of a one-arm rig. It looks down: its optical z is the hand's -z, and its y
+# is the hand's -y.
+INTRINSICS = ((10.0, 0.0, 3.0), (0.0, 10.0, 1.5), (0.0, 0.0, 1.0))
+LOOKS_DOWN = CameraCalibration(intrinsics=INTRINSICS, pose=(0.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0), hand=PRIMARY_ARM)
+# Depth in millimetres, with no depth at one pixel.
+DEPTH_MM = np.full((4, 6, 1), 500, dtype=np.uint16)
+DEPTH_MM[:, 3] = 400
+DEPTH_MM[0, 0] = 0
+
+
+def wrist_rig() -> Rig:
+    rig = Rig(keys.ONE_ARM, joints=7)
+    rig.views[keys.WRIST_IMAGE] = np.arange(72, dtype=np.uint8).reshape(4, 6, 3)
+    rig.views[f'{keys.DEPTH_PREFIX}{WRIST}'] = DEPTH_MM
+    return rig
+
+
+@pytest.fixture
+def one_arm_bridge(one_arm):
+    """Make a bridge of a one-arm rig that read one observation; its wrist camera is calibrated by default."""
+    bridges = []
+
+    def one_arm_bridge(rig: Rig | None = None, **bridge_args) -> CapBridge:
+        bridge_args.setdefault('calibration', {WRIST: LOOKS_DOWN})
+        bridge = CapBridge(Program('program.py', 'pass'), one_arm, **bridge_args)
+        bridges.append(bridge)
+        bridge.answer((rig or wrist_rig()).obs())
+        return bridge
+
+    yield one_arm_bridge
+    for bridge in bridges:
+        bridge.close()
+
+
+def test_a_calibrated_view_carries_its_intrinsics_and_metric_depth(one_arm_bridge):
+    cameras = one_arm_bridge().get_observation().cameras
+    view = cameras[WRIST]
+    np.testing.assert_array_equal(view.intrinsics, INTRINSICS)
+    assert view.depth_m.shape == (4, 6) and view.depth_m.dtype == np.float32
+    np.testing.assert_allclose(view.depth_m, DEPTH_MM[..., 0] / 1000.0)
+    assert view.depth_m[0, 0] == 0.0
+    exterior = cameras[EXTERIOR]
+    assert exterior.depth_m is None and exterior.intrinsics is None and exterior.camera_pose is None
+
+
+def test_the_pose_of_a_wrist_camera_follows_the_hand(one_arm_bridge):
+    rig = wrist_rig()
+    offset = geom.Transform3D(np.array([0.02, -0.05, 0.1]), geom.Rotation.from_euler(np.array([0.3, -0.4, 1.2])))
+    wrist = CameraCalibration(intrinsics=INTRINSICS, pose=tuple(offset.as_vector(QUAT)), hand=PRIMARY_ARM)
+    fixed = CameraCalibration(intrinsics=INTRINSICS, pose=tuple(offset.as_vector(QUAT)))
+    bridge = one_arm_bridge(rig, calibration={WRIST: wrist, EXTERIOR: fixed})
+    for hand in (
+        rig.pose[None],
+        geom.Transform3D(np.array([0.5, -0.1, 0.4]), geom.Rotation.from_euler([2.0, 0.5, -1.0])),
+    ):
+        rig.pose[None] = hand
+        bridge.answer(rig.obs())
+        cameras = bridge.get_observation().cameras
+        assert cameras[WRIST].camera_pose.frame == 'world'
+        np.testing.assert_allclose(cameras[WRIST].camera_pose.as_matrix(), hand.as_matrix @ offset.as_matrix, atol=1e-9)
+        np.testing.assert_allclose(cameras[EXTERIOR].camera_pose.as_matrix(), offset.as_matrix, atol=1e-9)
+
+
+@pytest.mark.parametrize(
+    ('depth', 'metres'),
+    [
+        (np.array([[1250, 0]], dtype=np.uint16), [[1.25, 0.0]]),
+        (np.array([[[1250], [0]]], dtype=np.uint16), [[1.25, 0.0]]),
+        (np.array([[0.75, np.nan], [np.inf, -1.0]], dtype=np.float32), [[0.75, 0.0], [0.0, 0.0]]),
+        (np.array([[0.75, 0.5]], dtype=np.float64), [[0.75, 0.5]]),
+    ],
+)
+def test_depth_reads_as_metres_with_zero_for_no_depth(one_arm_bridge, depth, metres):
+    rig = wrist_rig()
+    rig.views[keys.WRIST_IMAGE] = np.zeros((*np.shape(metres), 3), dtype=np.uint8)
+    rig.views[f'{keys.DEPTH_PREFIX}{WRIST}'] = depth
+    view = one_arm_bridge(rig, calibration={}).get_observation().cameras[WRIST]
+    assert view.depth_m.dtype == np.float32
+    np.testing.assert_allclose(view.depth_m, metres)
+
+
+@pytest.mark.parametrize('depth', [np.full((4, 6), 128, dtype=np.uint8), np.full((2, 3), 500, dtype=np.uint16)])
+def test_a_depth_that_is_not_metric_or_not_the_size_of_its_image_is_refused(one_arm_bridge, depth):
+    rig = wrist_rig()
+    rig.views[f'{keys.DEPTH_PREFIX}{WRIST}'] = depth
+    with pytest.raises(ValueError, match='[Dd]epth'):
+        one_arm_bridge(rig)
+
+
+@pytest.mark.parametrize(
+    ('intrinsics', 'pose'),
+    [
+        (((10.0, 0.0, 2.0), (0.0, 10.0, 1.0), (0.0, 0.0, 2.0)), LOOKS_DOWN.pose),
+        (((0.0, 0.0, 2.0), (0.0, 10.0, 1.0), (0.0, 0.0, 1.0)), LOOKS_DOWN.pose),
+        (((10.0, 0.0, 2.0), (0.0, 10.0, 1.0)), LOOKS_DOWN.pose),
+        (INTRINSICS, (0.0, 0.0, 0.3, 0.0, 2.0, 0.0, 0.0)),
+        (INTRINSICS, (0.0, 0.0, 0.3, 1.0, 0.0, 0.0)),
+        (INTRINSICS, (float('nan'), 0.0, 0.3, 1.0, 0.0, 0.0, 0.0)),
+        (((10.0, 0.0, float('nan')), (0.0, 10.0, 1.0), (0.0, 0.0, 1.0)), LOOKS_DOWN.pose),
+        (((10.0, 0.0, 2.0), (0.0, 0.0, 1.0), (0.0, 0.0, 1.0)), LOOKS_DOWN.pose),
+    ],
+)
+def test_a_calibration_that_is_not_finite_unit_and_pinhole_is_refused(intrinsics, pose):
+    with pytest.raises(ValueError):
+        CameraCalibration(intrinsics=intrinsics, pose=pose)
+
+
+def test_a_calibration_on_the_hand_of_no_arm_is_refused(settings, one_arm):
+    on_left = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=keys.LEFT_ARM)
+    with pytest.raises(ValueError, match='hand'):
+        CapBridge(Program('program.py', 'pass'), one_arm, calibration={WRIST: on_left})
+    # On a two-arm rig a hand is `left` or `right`: the aliases do not apply to a calibration.
+    for hand in ('tertiary', PRIMARY_ARM):
+        unknown = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=hand)
+        with pytest.raises(ValueError, match='hand'):
+            CapBridge(Program('program.py', 'pass'), settings, calibration={WRIST: unknown})
+
+
+def test_a_camera_on_the_right_hand_of_a_two_arm_rig_follows_that_hand_in_the_base_frame_of_the_settings(settings):
+    rig = Rig()
+    rig.views[keys.WRIST_IMAGE] = np.zeros((4, 6, 3), dtype=np.uint8)
+    on_right = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=keys.RIGHT_ARM)
+    bridge = CapBridge(
+        Program('program.py', 'pass'), replace(settings, base_frame='table'), calibration={WRIST: on_right}
+    )
+    try:
+        bridge.answer(rig.obs())
+        pose = bridge.get_observation().cameras[WRIST].camera_pose
+        expected = rig.pose[keys.RIGHT_ARM].as_matrix @ LOOKS_DOWN.transform.as_matrix
+        np.testing.assert_allclose(pose.as_matrix(), expected)
+        assert pose.frame == 'table'
+    finally:
+        bridge.close()
+
+
+def test_equal_calibrations_compare_equal():
+    same = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=PRIMARY_ARM)
+    assert LOOKS_DOWN.matrix is not None and same == LOOKS_DOWN
+    assert same != CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose)
+
+
+def test_a_depth_reaches_a_view_with_no_calibration(one_arm_bridge):
+    view = one_arm_bridge(calibration={}).get_observation().cameras[WRIST]
+    assert view.intrinsics is None and view.camera_pose is None
+    np.testing.assert_allclose(view.depth_m, DEPTH_MM[..., 0] / 1000.0)
+
+
+@pytest.mark.parametrize(
+    ('calibration', 'extra', 'message'),
+    [
+        ({'writs': LOOKS_DOWN}, {}, 'no image'),
+        ({}, {f'{keys.DEPTH_PREFIX}side': DEPTH_MM}, 'no image'),
+        (
+            {WRIST: CameraCalibration(intrinsics=((10.0, 0.0, 640.0), *INTRINSICS[1:]), pose=LOOKS_DOWN.pose)},
+            {},
+            'principal',
+        ),
+    ],
+)
+def test_an_observation_that_does_not_fit_the_calibration_or_its_depths_is_refused(
+    one_arm_bridge, calibration, extra, message
+):
+    rig = wrist_rig()
+    rig.views.update(extra)
+    with pytest.raises(ValueError, match=message):
+        one_arm_bridge(rig, calibration=calibration)

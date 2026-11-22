@@ -2,8 +2,8 @@
 
 Ported from NVlabs/ASPIRE ``src/cap_harness/{contracts,errors,protocols}.py`` at commit ``fa00f0e``, under the Apache
 License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are ASPIRE's. An arm has the joint count
-of its state. A camera observation holds RGB only: its depth, intrinsics and pose are ``None``, because the rig sends
-no calibrated depth.
+of its state. A camera observation holds depth only when the rig sends it, and intrinsics and a pose only when the
+server has a calibration for the camera. It refuses a depth of another size than its image.
 """
 
 from collections.abc import Mapping, Sequence
@@ -145,7 +145,11 @@ class MotionStrategy:
 
 @dataclass(frozen=True, slots=True)
 class CameraObservation:
-    """One camera view: RGB with height, width and channels. Depth, intrinsics and pose are ``None`` on this rig."""
+    """One camera view: RGB with height, width and channels, and its depth, intrinsics and pose when it has them.
+
+    ``depth_m`` is metres along the optical axis, with 0 where the camera measured no depth. ``camera_pose`` is the
+    pose of the optical frame: x to the right of the image, y down, z forward.
+    """
 
     rgb: np.ndarray
     frame: str
@@ -153,6 +157,10 @@ class CameraObservation:
     intrinsics: np.ndarray | None = None
     camera_pose: Pose | None = None
     timestamp_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.depth_m is not None and self.depth_m.shape != self.rgb.shape[:2]:
+            raise ValueError(f'depth_m must have shape {self.rgb.shape[:2]}, got {self.depth_m.shape}')
 
 
 @dataclass(frozen=True, slots=True)
