@@ -1,6 +1,6 @@
 # The bridge injects the CapApi functions and types into a program; each line that uses one waives F821.
-# A fixed two-arm CapApi program: lift each hand, work both grippers, return both hands together, and go home.
-# It reads no camera, so it suits a smoke run of the bridge on any bimanual scene.
+# A fixed CapApi program for each arm of the rig: lift each hand, work the grippers, return the hands together, and
+# go home. It reads no camera, so it suits a smoke run of the bridge on any scene with one arm or two.
 state = get_robot_state()  # noqa: F821
 starts = {arm: state.end_effector_poses[arm] for arm in state.arms}
 report = {}

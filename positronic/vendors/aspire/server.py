@@ -120,8 +120,9 @@ class CapProgramModel(Model):
 
     def meta(self) -> dict[str, Any]:
         # The program reads the measured hand pose and moves the hand at the rig's grip point.
-        signals = [f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS] + [
-            f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS
+        arms = self._settings.arms
+        signals = [f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.EE_POSE_SUFFIX}' for arm in arms] + [
+            f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}' for arm in arms
         ]
         frames = ee_frames_entry(dict.fromkeys(signals, EEFrame(site=GRIPPER_SITE)))
         return frames | flatten_dict({policy_keys.TYPE: POLICY_TYPE, META_SETTINGS: asdict(self._settings)})
@@ -154,12 +155,12 @@ def serve(
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
 ):
-    """Serve the CapApi programs in ``programs_dir`` to bimanual sessions.
+    """Serve the CapApi programs in ``programs_dir`` to the sessions of one rig.
 
     Each session names its program with the session parameter ``program``, a path relative to ``programs_dir``, and
-    runs the file as it reads at the session's start. ``--settings.*`` sets the pacing and how the bridge decides that
-    a move ended. Each session's record goes to ``sessions_dir``, relative to the working directory unless absolute.
-    The wire flags are those of the offboard ``serve``.
+    runs the file as it reads at the session's start. ``--settings.*`` sets the rig's arms, the pacing and how the
+    bridge decides that a move ended. Each session's record goes to ``sessions_dir``, relative to the working
+    directory unless absolute. The wire flags are those of the offboard ``serve``.
     """
     directory = Path(sessions_dir).resolve()
     directory.mkdir(parents=True, exist_ok=True)
