@@ -123,10 +123,29 @@ that arm, as a program names the arm (`primary` names the right arm of the defau
 `robot_state.ee_pose`. The server refuses a `hand` that names no arm when it starts. It states the calibration in its
 metadata, under `calibration`.
 
+## Perception
+
+The bridge holds no perception model. `--segmentation` names a configuronic config of a segmentation provider: an
+object with the `segment_text` method of `SegmentationProvider` in [`contracts.py`](contracts.py). All sessions share
+the provider, so it can get calls from more than one thread. A program's thread calls the provider, and the robot holds
+its targets during the call.
+
+| Call | Needs | What it does |
+| --- | --- | --- |
+| `segment_text` | A segmentation provider | Asks the provider about the view of one camera |
+| `mask_to_point_cloud` | A view with depth and intrinsics | Gives the points of a mask in the base frame, or in the camera frame when `target_frame` is the camera name |
+
+With no provider, `segment_text` raises `NotImplementedError`. A provider that raises gives the program a result with
+`ok=False` and its error: an `ApiError` as the provider raised it, or `provider_error` for each other exception. A
+segmentation must be in the frame of its view, which is the camera name: the bridge gives `provider_error` for a
+segmentation in another frame. `mask_to_point_cloud` raises `ValueError` for a view that cannot give points.
+
+The other perception calls (`segment_points`, `generate_grasps`, `localize_object`, `select_grasp` and the others) and
+the planning calls (`solve_ik`, `plan_motion`, `plan_synchronized_motion`) raise `NotImplementedError`.
+
 ## Program rules
 
-Perception and planning calls (`segment_text`, `localize_object`, `plan_motion`, `solve_ik` and the others) raise
-`NotImplementedError`. A program may import `math` only, and it sees ASPIRE's small set of builtins. These rules keep a
+A program may import `math` only, and it sees ASPIRE's small set of builtins. These rules keep a
 program to ASPIRE's contract; they are not a sandbox. Run a program only from a source you trust.
 
 In a program, `ArmCommand`, `Trajectory` and `SynchronizedTrajectory` make values with the embodiment of
@@ -149,6 +168,9 @@ An entry of `calls` holds:
 | `started_wall_s`, `ended_wall_s` | Server wall time, in seconds from the program's start |
 | `started_robot_s`, `ended_robot_s` | Robot time, in seconds of the chunks the bridge answered |
 
+In `args`, `kwargs` and `result`, an array with two or more dimensions, such as a mask, is its `shape`, its `dtype` and
+its `nonzero` count. A point cloud is its `frame` and its `point_count`. A value with no JSON form is its `repr`.
+
 The episode records the program name, its SHA-256 and the record's file name (`session_record`) under
 `inference.policy.server`.
 
@@ -158,5 +180,5 @@ The episode records the program name, its SHA-256 and the record's file name (`s
 uv run --locked pytest positronic/vendors/aspire/tests
 ```
 
-The tests drive the bridge with fake observation streams of a two-arm rig and of a one-arm rig. They need no
-simulator.
+The tests drive the bridge with fake observation streams of a two-arm rig and of a one-arm rig, and with a fake
+segmentation provider. They need no simulator and no perception model.

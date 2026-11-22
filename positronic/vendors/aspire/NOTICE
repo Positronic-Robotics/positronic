@@ -6,7 +6,8 @@ errors.py, protocols.py, geometry.py, api.py and runtime.py. ASPIRE is under the
 Positronic changed the port: it takes the joint count of an arm from the rig's state and the embodiment name from a
 setting, keeps of the perception types only segmentation and point clouds, keeps of the provider protocols only
 text-prompted segmentation, drops the planning types, and lets a camera observation hold RGB without depth,
-intrinsics or pose.
+intrinsics or pose. With no segmentation provider, segment_text raises NotImplementedError, where ASPIRE gives a
+result with ok=False. A provider that raises gives a result with ok=False, where ASPIRE lets the exception through.
 
 The NOTICE of ASPIRE reads:
 

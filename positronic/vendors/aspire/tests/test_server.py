@@ -1,6 +1,8 @@
 import hashlib
 import json
+from textwrap import dedent
 
+import numpy as np
 import pytest
 from positronic_model_server.serialization import deserialise, serialise
 
@@ -11,7 +13,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
 from positronic.policy.spec import from_spec
-from positronic.vendors.aspire.bridge import BridgeSettings
+from positronic.vendors.aspire.bridge import BridgeSettings, PointCloudSummary
 from positronic.vendors.aspire.server import (
     META_CALIBRATION,
     META_PROGRAM,
@@ -24,7 +26,8 @@ from positronic.vendors.aspire.server import (
     SessionRecord,
     deployment,
 )
-from positronic.vendors.aspire.tests.test_bridge import LOOKS_DOWN, WRIST, Rig, wrist_rig
+from positronic.vendors.aspire.tests.test_bridge import LOOKS_DOWN, PERCEPTION_PROGRAM, WRIST, Rig, Segmenter, wrist_rig
+from positronic.vendors.aspire.tests.test_geometry import MASK_POINTS
 
 PROGRAM = """
 result = close_gripper(arm='left')
@@ -205,3 +208,21 @@ def test_a_calibration_file_on_the_hand_of_no_arm_is_refused_when_the_server_sta
     path.write_text(json.dumps({WRIST: LOOKS_DOWN.model_dump() | {'hand': 'tertiary'}}))
     with pytest.raises(ValueError, match='hand'):
         CapProgramModel(programs, BridgeSettings(), tmp_path, calibration=path)
+
+
+def test_a_session_asks_the_segmentation_provider_and_records_the_points(programs, tmp_path):
+    calibration = tmp_path / 'calibration.json'
+    calibration.write_text(json.dumps({WRIST: LOOKS_DOWN.model_dump()}))
+    (programs / 'perceive.py').write_text(dedent(PERCEPTION_PROGRAM))
+    settings = BridgeSettings(fps=10.0, round_s=0.2, call_timeout_s=2.0, think_timeout_s=30.0, arms=keys.ONE_ARM)
+    model = CapProgramModel(programs, settings, tmp_path, calibration=calibration, segmentation=Segmenter())
+    rig = wrist_rig()
+    try:
+        chunk = run_session(model, 'perceive', rig, 'perceive.py')
+    finally:
+        model.close()
+    assert chunk[-1][END] == PolicyEnd.COMPLETE.value, record(tmp_path, 'perceive').error
+    assert rig.pose[None].translation == pytest.approx(np.mean(MASK_POINTS, axis=0), abs=1e-6)
+    calls = {call.name: call for call in record(tmp_path, 'perceive').calls}
+    assert calls['segment_text'].result['ok']
+    assert calls['mask_to_point_cloud'].result == PointCloudSummary(frame='world', point_count=6).model_dump()

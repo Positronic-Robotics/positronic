@@ -26,6 +26,7 @@ from positronic.policy.sequential import Sequential
 from positronic.utils import flatten_dict
 
 from .bridge import BridgeSettings, CallTrace, CameraCalibration, CapBridge, Program, camera_hands
+from .contracts import SegmentationProvider
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +58,17 @@ class CapProgramModel(Model):
 
     A session writes its record when its program ends, and again when the session ends. A record of a session that
     ended before its program has no ``end``. ``calibration`` is a JSON file that maps each camera name to its
-    ``CameraCalibration``.
+    ``CameraCalibration``. All sessions share the calibration and the segmentation provider.
     """
 
     def __init__(
-        self, programs_dir: Path, settings: BridgeSettings, sessions_dir: Path, *, calibration: Path | None = None
+        self,
+        programs_dir: Path,
+        settings: BridgeSettings,
+        sessions_dir: Path,
+        *,
+        calibration: Path | None = None,
+        segmentation: SegmentationProvider | None = None,
     ):
         self._programs_dir = programs_dir.resolve()
         self._settings = settings
@@ -71,6 +78,7 @@ class CapProgramModel(Model):
             self._calibration = TypeAdapter(dict[str, CameraCalibration]).validate_json(calibration.read_text())
         # A hand that names no arm fails here, at the server's start, and not at the first session.
         camera_hands(self._calibration, settings)
+        self._segmentation = segmentation
         self._bridges: dict[str, CapBridge] = {}
         self._recorded: set[str] = set()
 
@@ -85,7 +93,9 @@ class CapProgramModel(Model):
         if not path.is_relative_to(self._programs_dir) or not path.is_file():
             raise ValueError(f'{name!r} names no program in the programs directory')
         program = Program(name, path.read_text())
-        self._bridges[session_id] = CapBridge(program, self._settings, calibration=self._calibration)
+        self._bridges[session_id] = CapBridge(
+            program, self._settings, calibration=self._calibration, segmentation=self._segmentation
+        )
         return {
             META_PROGRAM: program.name,
             META_PROGRAM_SHA256: program.sha256,
@@ -155,6 +165,7 @@ def deployment(settings: BridgeSettings) -> PolicyDeployment:
     settings=cfn.Config(BridgeSettings),
     sessions_dir='aspire_sessions',
     calibration=None,
+    segmentation=None,
     websocket=offboard_server.websocket,
     grpc=None,
     idle_timeout_min=None,
@@ -164,6 +175,7 @@ def serve(
     settings: BridgeSettings,
     sessions_dir: str,
     calibration: str | None,
+    segmentation: SegmentationProvider | None,
     websocket: server_wire.Wire | None,
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
@@ -173,8 +185,8 @@ def serve(
     Each session names its program with the session parameter ``program``, a path relative to ``programs_dir``, and
     runs the file as it reads at the session's start. ``--settings.*`` sets the rig's arms, the pacing and how the
     bridge decides that a move ended. Each session's record goes to ``sessions_dir``, relative to the working
-    directory unless absolute. ``calibration`` names the calibration file. The wire flags are those of the offboard
-    ``serve``.
+    directory unless absolute. ``calibration`` names the calibration file. ``segmentation`` is the segmentation
+    provider. The wire flags are those of the offboard ``serve``.
     """
     directory = Path(sessions_dir).resolve()
     directory.mkdir(parents=True, exist_ok=True)
@@ -185,6 +197,7 @@ def serve(
         settings,
         directory,
         calibration=None if calibration is None else Path(calibration),
+        segmentation=segmentation,
     )
     wires = [w for w in (websocket, grpc) if w is not None]
     serve_model(build, deployment(settings), wires, idle_timeout_min)
