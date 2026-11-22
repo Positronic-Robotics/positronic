@@ -5,9 +5,9 @@
 sends observations and plays the action chunks that the server answers. The program never drives a motor. The rig's
 driver solves IK and limits speed.
 
-The vendor holds a port of the ASPIRE value types (`contracts.py`) and does not depend on the ASPIRE package. That
-package requires Python older than 3.13, and positronic runs on 3.13. See [NOTICE](NOTICE) for the source and the
-licence.
+The vendor holds a port of the ASPIRE value types (`contracts.py`) and of its point geometry (`geometry.py`). It does
+not depend on the ASPIRE package. That package requires Python older than 3.13, and positronic runs on 3.13. See
+[NOTICE](NOTICE) for the source and the licence.
 
 ## Run
 
