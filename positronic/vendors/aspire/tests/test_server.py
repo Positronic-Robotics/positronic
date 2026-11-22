@@ -1,6 +1,8 @@
 import hashlib
+import json
 
 import pytest
+from positronic_model_server.serialization import deserialise, serialise
 
 from positronic import keys
 from positronic.drivers.roboarm import keys as roboarm_keys
@@ -11,6 +13,7 @@ from positronic.policy.keys import END
 from positronic.policy.spec import from_spec
 from positronic.vendors.aspire.bridge import BridgeSettings
 from positronic.vendors.aspire.server import (
+    META_CALIBRATION,
     META_PROGRAM,
     META_PROGRAM_SHA256,
     META_SESSION_RECORD,
@@ -21,7 +24,7 @@ from positronic.vendors.aspire.server import (
     SessionRecord,
     deployment,
 )
-from positronic.vendors.aspire.tests.test_bridge import Rig
+from positronic.vendors.aspire.tests.test_bridge import LOOKS_DOWN, WRIST, Rig, wrist_rig
 
 PROGRAM = """
 result = close_gripper(arm='left')
@@ -154,3 +157,51 @@ def test_a_one_arm_session_answers_on_the_unnamed_channels_and_its_meta_states_t
         model.close()
     assert chunk[-1][END] == PolicyEnd.COMPLETE.value
     assert set(chunk[-1]) == {keys.ROBOT_COMMAND, keys.TARGET_GRIP, END}
+
+
+def test_a_session_gets_the_views_of_the_calibration_file_and_the_meta_states_it(programs, tmp_path):
+    calibration = tmp_path / 'calibration.json'
+    calibration.write_text(json.dumps({WRIST: LOOKS_DOWN.model_dump()}))
+    (programs / 'look.py').write_text(
+        "view = get_observation().cameras['wrist']\n"
+        'assert view.intrinsics[0][0] == 10.0 and view.depth_m[1][1] == 0.5\n'
+        'assert abs(view.camera_pose.position[2] - 0.6) < 1e-9\n'
+    )
+    settings = BridgeSettings(fps=10.0, round_s=0.2, call_timeout_s=2.0, think_timeout_s=30.0, arms=keys.ONE_ARM)
+    model = CapProgramModel(programs, settings, tmp_path, calibration=calibration)
+    try:
+        meta = model.meta()
+        chunk = run_session(model, 'look', wrist_rig(), 'look.py')
+    finally:
+        model.close()
+    assert chunk[-1][END] == PolicyEnd.COMPLETE.value, record(tmp_path, 'look').error
+    assert meta[f'{META_CALIBRATION}.{WRIST}.pose'] == LOOKS_DOWN.pose
+    assert meta[f'{META_CALIBRATION}.{WRIST}.intrinsics'] == LOOKS_DOWN.intrinsics
+    assert meta[f'{META_CALIBRATION}.{WRIST}.hand'] == LOOKS_DOWN.hand
+    # The handshake carries the meta.
+    assert deserialise(serialise(meta)) == json.loads(json.dumps(meta))
+
+
+@pytest.mark.parametrize(
+    'calibration',
+    [
+        {WRIST: LOOKS_DOWN.model_dump() | {'frame': 'world'}},
+        {WRIST: {'pose': LOOKS_DOWN.pose}},
+        {WRIST: LOOKS_DOWN.model_dump() | {'pose': [0.0, 0.0, 0.3]}},
+        [LOOKS_DOWN.model_dump()],
+    ],
+)
+def test_a_calibration_file_that_does_not_map_each_camera_to_its_calibration_is_refused(
+    programs, tmp_path, calibration
+):
+    path = tmp_path / 'calibration.json'
+    path.write_text(json.dumps(calibration))
+    with pytest.raises(ValueError):
+        CapProgramModel(programs, BridgeSettings(), tmp_path, calibration=path)
+
+
+def test_a_calibration_file_on_the_hand_of_no_arm_is_refused_when_the_server_starts(programs, tmp_path):
+    path = tmp_path / 'calibration.json'
+    path.write_text(json.dumps({WRIST: LOOKS_DOWN.model_dump() | {'hand': 'tertiary'}}))
+    with pytest.raises(ValueError, match='hand'):
+        CapProgramModel(programs, BridgeSettings(), tmp_path, calibration=path)

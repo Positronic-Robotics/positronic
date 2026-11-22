@@ -15,12 +15,12 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from functools import partial, wraps
+from functools import cached_property, partial, wraps
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Self
 
 import numpy as np
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, model_validator
 from pydantic_core import to_jsonable_python
 
 from positronic import geom, keys
@@ -117,6 +117,54 @@ class BridgeSettings:
     @property
     def round_ticks(self) -> int:
         return max(1, math.ceil(self.round_s * self.fps - _TICK_EPSILON))
+
+
+_Row = tuple[float, float, float]
+
+
+class CameraCalibration(BaseModel, frozen=True, extra='forbid'):
+    """The camera matrix of one camera and the pose of its optical frame, as a calibration file holds them.
+
+    ``pose`` is x, y, z, qw, qx, qy, qz in the base frame. With ``hand`` it is in the hand frame of that arm, as a
+    program names the arm. The optical frame has x to the right of the image, y down and z forward.
+    """
+
+    intrinsics: tuple[_Row, _Row, _Row]
+    pose: tuple[float, float, float, float, float, float, float]
+    hand: str | None = None
+
+    @model_validator(mode='after')
+    def _validate(self) -> Self:
+        if not np.all(np.isfinite(self.matrix)) or not np.all(np.isfinite(self.pose)):
+            raise ValueError('intrinsics and pose must be finite')
+        if self.intrinsics[2] != (0.0, 0.0, 1.0) or self.intrinsics[0][0] <= 0.0 or self.intrinsics[1][1] <= 0.0:
+            raise ValueError('intrinsics must have positive focal lengths and the last row [0, 0, 1]')
+        if not math.isclose(np.linalg.norm(self.pose[3:]), 1.0, abs_tol=1e-3):
+            raise ValueError('the quaternion of pose must have unit length')
+        return self
+
+    @cached_property
+    def matrix(self) -> np.ndarray:
+        matrix = np.array(self.intrinsics, dtype=np.float64)
+        matrix.setflags(write=False)
+        return matrix
+
+    @cached_property
+    def transform(self) -> geom.Transform3D:
+        return geom.Transform3D.from_vector(np.array(self.pose, dtype=np.float64), geom.Rotation.Representation.QUAT)
+
+
+def camera_hands(calibration: Mapping[str, CameraCalibration], settings: BridgeSettings) -> dict[str, str]:
+    """The arm whose hand carries each calibrated camera that has a ``hand``, by camera name."""
+    hands = {}
+    for name, camera in calibration.items():
+        if camera.hand is None:
+            continue
+        arm = settings.program_arm(camera.hand)
+        if arm is None:
+            raise ValueError(f'The calibration of camera {name!r} names the hand of no arm: {camera.hand!r}')
+        hands[name] = arm
+    return hands
 
 
 class MoveEnd(StrEnum):
@@ -301,13 +349,22 @@ class CapBridge:
 
     ``answer`` takes one positronic observation and returns the next action chunk. The first observation starts the
     program and fixes each arm's home at its measured joints. Every later answer carries ``END`` once the program
-    ended. Perception and planning calls raise ``NotImplementedError``.
+    ended. ``calibration`` gives a camera view its intrinsics and its pose, by camera name. Perception and planning
+    calls raise ``NotImplementedError``.
     """
 
-    def __init__(self, program: Program, settings: BridgeSettings):
+    def __init__(
+        self,
+        program: Program,
+        settings: BridgeSettings,
+        *,
+        calibration: Mapping[str, CameraCalibration] = MappingProxyType({}),
+    ):
         self._program = program
         self._settings = settings
         self._arms = settings.arm_names
+        self._calibration = calibration
+        self._hands = camera_hands(calibration, settings)
         self._calls: list[CallTrace] = []
         self._started_wall_s = 0.0
         self._turn = threading.Condition()
@@ -368,30 +425,52 @@ class CapBridge:
     # ---- The rig side: observations in, chunks out ----
 
     def _observe(self, obs: Obs) -> Observation:
-        joints, velocities, poses, grippers = {}, {}, {}, {}
+        joints, velocities, hands, grippers = {}, {}, {}, {}
         for arm, rig_arm in self._arms.items():
             state = keys.arm_channel(keys.ROBOT_STATE, rig_arm)
             joints[arm] = obs[f'{state}{keys.JOINTS_SUFFIX}']
             velocities[arm] = obs[f'{state}{keys.JOINT_VEL_SUFFIX}']
-            pose = geom.Transform3D.from_vector(
+            hands[arm] = geom.Transform3D.from_vector(
                 np.asarray(obs[f'{state}{keys.EE_POSE_SUFFIX}'], dtype=np.float64), geom.Rotation.Representation.QUAT
             )
-            poses[arm] = Pose(pose.translation, pose.rotation.as_quat, self._settings.base_frame)
             # ASPIRE's gripper runs from 0 (closed) to 1 (open); positronic's grip from 0 (open) to 1 (closed).
             grippers[arm] = float(np.clip(1.0 - float(obs[keys.arm_channel(keys.GRIP, rig_arm)]), 0.0, 1.0))
+        poses = {arm: self._pose(hand) for arm, hand in hands.items()}
         state = RobotState(
             joints, velocities, poses, grippers, self._settings.base_frame, embodiment=self._settings.embodiment
         )
-        cameras = {
-            name.removeprefix(keys.IMAGE_PREFIX): CameraObservation(
-                np.asarray(value), name.removeprefix(keys.IMAGE_PREFIX)
-            )
-            for name, value in obs.items()
-            if name.startswith(keys.IMAGE_PREFIX)
-        }
+        names = [key.removeprefix(keys.IMAGE_PREFIX) for key in obs if key.startswith(keys.IMAGE_PREFIX)]
+        cameras = {name: self._camera(name, obs, hands) for name in names}
         language = str(obs[keys.TASK])
         task = TaskContext(TASK_SUITE, 0, language, language, TASK_FAMILY)
         return Observation(cameras, state, task)
+
+    def _pose(self, transform: geom.Transform3D) -> Pose:
+        return Pose(transform.translation, transform.rotation.as_quat, self._settings.base_frame)
+
+    def _camera(self, name: str, obs: Obs, hands: Mapping[str, geom.Transform3D]) -> CameraObservation:
+        """The view of camera ``name``; ``hands`` holds the measured hand pose of each arm."""
+        image = np.asarray(obs[f'{keys.IMAGE_PREFIX}{name}'])
+        depth = obs.get(f'{keys.DEPTH_PREFIX}{name}')
+        depth_m = None if depth is None else self._depth_m(depth)
+        calibration = self._calibration.get(name)
+        if calibration is None:
+            return CameraObservation(image, name, depth_m)
+        hand = self._hands.get(name)
+        mount = geom.Transform3D.identity if hand is None else hands[hand]
+        return CameraObservation(image, name, depth_m, calibration.matrix, self._pose(mount * calibration.transform))
+
+    @staticmethod
+    def _depth_m(depth: Any) -> np.ndarray:
+        """Depth in metres from ``uint16`` millimetres or floating metres; 0 where the camera measured none."""
+        depth = np.asarray(depth)
+        if depth.ndim == 3 and depth.shape[-1] == 1:
+            depth = depth[..., 0]
+        if depth.dtype == np.uint16:
+            return depth.astype(np.float32) / 1000.0
+        if not np.issubdtype(depth.dtype, np.floating):
+            raise ValueError(f'Depth must hold uint16 millimetres or floating metres, got {depth.dtype}')
+        return np.where(np.isfinite(depth) & (depth > 0.0), depth, 0.0).astype(np.float32)
 
     def _start(self, state: RobotState) -> None:
         for arm in self._arms:
