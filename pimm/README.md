@@ -20,7 +20,6 @@ both loops alive (with the sensor happily running in a background process).
 
 ```python
 import math
-import time
 
 import pimm
 
@@ -58,8 +57,7 @@ with pimm.World() as world:
 
     world.connect(sensor.signal, logger.source)
 
-    for sleep in world.start(logger, background=sensor):
-        time.sleep(sleep.seconds)
+    world.run(logger, background=sensor)
 ```
 
 Run it and you will see a stream of timestamps and sine values. A few important
@@ -72,9 +70,9 @@ things happened under the hood:
   context. This makes process boundaries explicit and helps catch "it worked under
   fork" foot-guns, but it also means background control systems (and anything they
   capture) must be **picklable**.
-- The loop returned by `world.start(...)` schedules the logger in the main process
-  and forwards `Sleep` values so you can decide how to wait (here we simply
-  `time.sleep`).
+- `world.run(...)` schedules the logger in the main process and waits out each
+  `Sleep`. To decide how to wait yourself, iterate `world.start(...)`: it yields a
+  `pimm.Command` at each pass, a `Sleep` or a `Yield`.
 - When the with-block ends—or the user kills the program—the world notifies every
   loop through the `should_stop` signal so they can exit gracefully.
 - A control system RETURNING raises that same signal, background or foreground alike. So stopping
@@ -306,15 +304,16 @@ world then immediately wires the pair using the same transport selection logic a
 lives in a background process.
 
 This lets the main process nudge or observe background systems after
-`world.start(...)` begins yielding sleeps. For example, in
-[`positronic/inference.py`](../positronic/inference.py) we pair the
-dataset writer's command receiver:
+`world.start(...)` returns. For example,
+[`positronic/replay_record.py`](../positronic/replay_record.py) pairs the
+dataset writer's command receiver and starts an episode once the loops run:
 
 ```python
-commands = world.pair(ds_agent.command)
-commands.emit(DsWriterCommand(type=DsWriterCommandType.START_EPISODE))
-for sleep in world.start(harness, bg_cs):
-    time.sleep(sleep.seconds)
+ds_cmd = world.pair(ds_agent.command)
+sim_iter = world.start([sim, replay, ds_agent], gui)
+ds_cmd.emit(DsWriterCommand.START(output_path, episode.static))
+for _ in sim_iter:
+    p_bar.n = round(world.clock.now(), 1)
 ```
 
 Because the paired emitter shares ownership with the dataset agent, the world
