@@ -1,11 +1,12 @@
-contracts.py and parts of bridge.py are a modified port of files of ASPIRE (https://github.com/NVlabs/ASPIRE), at
-commit fa00f0ef2bc1d91d594b9aa502c22133c9f538f7: src/cap_harness/contracts.py, errors.py, protocols.py, geometry.py,
-api.py and runtime.py. ASPIRE is under the Apache License 2.0
+contracts.py, geometry.py and parts of bridge.py are a modified port of files of ASPIRE
+(https://github.com/NVlabs/ASPIRE), at commit fa00f0ef2bc1d91d594b9aa502c22133c9f538f7: src/cap_harness/contracts.py,
+errors.py, protocols.py, geometry.py, api.py and runtime.py. ASPIRE is under the Apache License 2.0
 (https://github.com/NVlabs/ASPIRE/blob/fa00f0ef2bc1d91d594b9aa502c22133c9f538f7/LICENSE).
 
 Positronic changed the port: it takes the joint count of an arm from the rig's state and the embodiment name from a
-setting, drops the perception and planning types, and lets a camera observation hold RGB without depth, intrinsics or
-pose.
+setting, keeps of the perception types only segmentation and point clouds, keeps of the provider protocols only
+text-prompted segmentation, drops the planning types, and lets a camera observation hold RGB without depth,
+intrinsics or pose.
 
 The NOTICE of ASPIRE reads:
 
