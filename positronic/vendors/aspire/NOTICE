@@ -13,6 +13,11 @@ Positronic changed the port:
   target frame.
 - A camera observation can hold RGB without depth, intrinsics or pose. It refuses a depth of another size than its
   image.
+- With no segmentation provider, segment_text raises NotImplementedError, where ASPIRE gives a result with ok=False.
+- A provider that raises gives a result with ok=False, where ASPIRE lets the exception through.
+- segment_text refuses a segmentation in a frame other than its view's frame.
+- mask_to_point_cloud gives points in the bridge's base frame when the call names no frame, where ASPIRE names the
+  frame robot_base.
 
 The NOTICE of ASPIRE reads:
 

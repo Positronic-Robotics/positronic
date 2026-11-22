@@ -13,13 +13,24 @@ from positronic.policy.keys import END
 from positronic.vendors.aspire.bridge import (
     DIAGNOSTIC_ACCEPTED,
     DIAGNOSTIC_MOVE_END,
+    ArraySummary,
     BridgeSettings,
     CameraCalibration,
     CapBridge,
     MoveEnd,
+    PointCloudSummary,
     Program,
 )
-from positronic.vendors.aspire.contracts import PRIMARY_ARM, EnvironmentAdapter
+from positronic.vendors.aspire.contracts import (
+    PRIMARY_ARM,
+    ApiError,
+    CameraObservation,
+    EnvironmentAdapter,
+    ErrorCode,
+    Segmentation,
+    SegmentationSet,
+)
+from positronic.vendors.aspire.tests.test_geometry import MASK
 
 ARMS = keys.BIMANUAL_ARMS
 QUAT = geom.Rotation.Representation.QUAT
@@ -98,9 +109,9 @@ def run(settings):
     bridges = []
 
     def run(
-        program: str, rig: Rig | None = None, settings: BridgeSettings = settings
+        program: str, rig: Rig | None = None, settings: BridgeSettings = settings, **bridge_args
     ) -> tuple[CapBridge, list[list[dict]]]:
-        bridge = CapBridge(Program('program.py', dedent(program)), settings)
+        bridge = CapBridge(Program('program.py', dedent(program)), settings, **bridge_args)
         bridges.append(bridge)
         return bridge, drive(bridge, rig or Rig())
 
@@ -237,6 +248,7 @@ def test_a_raising_program_gives_up_and_records_its_error(run):
     'program, error',
     [
         ('segment_text("exterior", "cup")', 'NotImplementedError'),
+        ('segment_points("exterior", [[1, 2]])', 'NotImplementedError'),
         ('import os', 'ImportError'),
         ('open("/etc/hostname")', 'NameError'),
         ('move_to_joints(', 'SyntaxError'),
@@ -463,6 +475,18 @@ DEPTH_MM[:, 3] = 400
 DEPTH_MM[0, 0] = 0
 
 
+# The points of `MASK` in the base frame, row by row, for the wrist camera at the start pose of the hand, 0.6 m above
+# the point (0.3, 0.2) of the base frame and looking down.
+MASK_POINTS = [
+    [0.25, 0.225, 0.1],
+    [0.3, 0.22, 0.2],
+    [0.35, 0.225, 0.1],
+    [0.25, 0.175, 0.1],
+    [0.3, 0.18, 0.2],
+    [0.35, 0.175, 0.1],
+]
+
+
 def wrist_rig() -> Rig:
     rig = Rig(keys.ONE_ARM, joints=7)
     rig.views[keys.WRIST_IMAGE] = np.arange(72, dtype=np.uint8).reshape(4, 6, 3)
@@ -619,3 +643,159 @@ def test_an_observation_that_does_not_fit_the_calibration_or_its_depths_is_refus
     rig.views.update(extra)
     with pytest.raises(ValueError, match=message):
         one_arm_bridge(rig, calibration=calibration)
+
+
+class Segmenter:
+    """A segmentation provider that answers each prompt with ``MASK``, or raises ``error``. It keeps each view."""
+
+    def __init__(self, error: Exception | None = None):
+        self.error = error
+        self.views: list[CameraObservation] = []
+
+    def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet:
+        self.views.append(observation)
+        if self.error is not None:
+            raise self.error
+        found = Segmentation(MASK, query, 0.9, 'the provider names no camera', observation.frame, [2, 1, 4, 2])
+        return SegmentationSet(ok=True, segmentations=[found], diagnostics={'model': Opaque()})
+
+
+class Opaque:
+    """A value with no JSON form."""
+
+    def __repr__(self) -> str:
+        return 'Opaque()'
+
+
+PERCEPTION_PROGRAM = """
+    found = segment_text('wrist', 'cup')
+    if found.ok:
+        assert str(found.diagnostics['model']) == 'Opaque()', found
+        cloud = mask_to_point_cloud(found.segmentations[0], 'wrist')
+        centre = [sum(point[axis] for point in cloud.points) / len(cloud.points) for axis in range(3)]
+        target = Pose(position=centre, quaternion_wxyz=[0.0, 1.0, 0.0, 0.0], frame=cloud.frame)
+        moved = move_to_pose(target)
+        assert moved.ok, moved
+"""
+
+
+@pytest.fixture
+def run_perception(run, one_arm):
+    def run_perception(rig: Rig, segmenter: Segmenter) -> CapBridge:
+        bridge, _ = run(PERCEPTION_PROGRAM, rig, one_arm, calibration={WRIST: LOOKS_DOWN}, segmentation=segmenter)
+        completed(bridge)
+        return bridge
+
+    return run_perception
+
+
+def test_a_program_moves_to_the_points_of_what_the_provider_found(run_perception):
+    rig, segmenter = wrist_rig(), Segmenter()
+    run_perception(rig, segmenter)
+    np.testing.assert_allclose(rig.pose[None].translation, np.mean(MASK_POINTS, axis=0), atol=1e-6)
+    (view,) = segmenter.views
+    assert view.frame == WRIST and view.depth_m is not None and view.camera_pose is not None
+
+
+def test_the_trace_records_perception_without_a_mask_or_a_point_array(run_perception):
+    bridge = run_perception(wrist_rig(), Segmenter())
+    calls = {call.name: call for call in bridge.calls}
+    mask = ArraySummary(shape=(4, 6), dtype='bool', nonzero=6).model_dump(mode='json')
+    cloud = PointCloudSummary(frame='world', point_count=6).model_dump()
+    found = calls['segment_text'].result
+    assert found['ok'] and found['error'] is None and found['diagnostics'] == {'model': 'Opaque()'}
+    segmentation = {'mask': mask, 'label': 'cup', 'score': 0.9, 'camera_name': 'wrist', 'frame': 'wrist'}
+    assert found['segmentations'] == [segmentation | {'box_xyxy': [2, 1, 4, 2]}]
+    assert calls['mask_to_point_cloud'].args[0]['mask'] == mask and calls['mask_to_point_cloud'].result == cloud
+    assert calls['move_to_pose'].result['final_observation']['cameras'] == {}
+
+
+@pytest.mark.parametrize(
+    ('error', 'code', 'message'),
+    [
+        (RuntimeError('the model is down'), ErrorCode.PROVIDER_ERROR, 'RuntimeError: the model is down'),
+        (ApiError(ErrorCode.NO_SEGMENTATION, 'nothing matches cup'), ErrorCode.NO_SEGMENTATION, 'nothing matches cup'),
+    ],
+)
+def test_a_provider_that_raises_gives_a_failed_result_and_the_trace_holds_the_error(
+    run_perception, error, code, message
+):
+    bridge = run_perception(wrist_rig(), Segmenter(error))
+    (call,) = bridge.calls
+    assert call.name == 'segment_text' and call.raised is None and not call.result['ok']
+    assert call.result['error']['code'] == code and call.result['error']['message'] == message
+    assert call.result['segmentations'] == []
+
+
+def test_a_segmentation_in_a_frame_other_than_its_view_is_a_provider_error(one_arm_bridge):
+    class Elsewhere(Segmenter):
+        def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet:
+            return SegmentationSet(ok=True, segmentations=[Segmentation(MASK, query, 0.9, WRIST, 'optical')])
+
+    found = one_arm_bridge(segmentation=Elsewhere()).segment_text(WRIST, 'cup')
+    assert not found.ok and found.error.code is ErrorCode.PROVIDER_ERROR and 'optical' in found.error.message
+
+
+def test_a_mask_becomes_points_in_the_base_frame_by_default_and_in_the_camera_frame_on_request(one_arm_bridge):
+    bridge = one_arm_bridge()
+    cloud = bridge.mask_to_point_cloud(MASK, WRIST)
+    assert cloud.frame == 'world'
+    np.testing.assert_allclose(cloud.points, MASK_POINTS, atol=1e-6)
+    assert bridge.mask_to_point_cloud(MASK, WRIST, target_frame=WRIST).frame == WRIST
+    with pytest.raises(ValueError, match='no depth'):
+        bridge.mask_to_point_cloud(MASK, EXTERIOR)
+    with pytest.raises(ValueError, match='no camera'):
+        bridge.mask_to_point_cloud(MASK, 'side')
+
+
+def test_a_provider_that_raises_is_logged_at_error(one_arm_bridge, caplog):
+    found = one_arm_bridge(segmentation=Segmenter(RuntimeError('the model is down'))).segment_text(WRIST, 'cup')
+    assert not found.ok
+    assert [record.levelname for record in caplog.records] == ['ERROR']
+    assert 'the model is down' in caplog.text
+
+
+def test_a_failed_answer_of_the_provider_reaches_the_program_unchanged(one_arm_bridge):
+    failed = SegmentationSet(ok=False, error=ApiError(ErrorCode.NO_SEGMENTATION, 'nothing matches cup'))
+
+    class Empty(Segmenter):
+        def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet:
+            return failed
+
+    assert one_arm_bridge(segmentation=Empty()).segment_text(WRIST, 'cup') is failed
+
+
+def test_an_answer_that_is_not_a_segmentation_set_is_a_provider_error(one_arm_bridge):
+    class Wrong(Segmenter):
+        def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet:
+            return None  # pyright: ignore[reportReturnType]
+
+    found = one_arm_bridge(segmentation=Wrong()).segment_text(WRIST, 'cup')
+    assert not found.ok and found.error.code is ErrorCode.PROVIDER_ERROR and 'NoneType' in found.error.message
+
+
+def test_segment_text_refuses_a_camera_the_observation_does_not_have(one_arm_bridge):
+    with pytest.raises(ValueError, match='no camera'):
+        one_arm_bridge(segmentation=Segmenter()).segment_text('side', 'cup')
+
+
+def test_the_trace_keeps_the_waypoints_of_a_trajectory_and_summarises_a_mask_given_by_keyword(run, one_arm):
+    bridge, _ = run(
+        """
+        start = get_robot_state()
+        path = Trajectory(joint_positions=[[0.1] * 7, [0.2] * 7], dt_s=0.2, joint_names=start.joint_names['primary'],
+                          planner='test', collision_aware=False, expected_start=start)
+        assert execute_trajectory(path).ok
+        mask = segment_text('wrist', 'cup').segmentations[0].mask
+        assert mask_to_point_cloud(mask=mask, camera_name='wrist').frame == 'world'
+        """,
+        wrist_rig(),
+        one_arm,
+        calibration={WRIST: LOOKS_DOWN},
+        segmentation=Segmenter(),
+    )
+    completed(bridge)
+    calls = {call.name: call for call in bridge.calls}
+    assert calls['execute_trajectory'].args[0]['joint_positions'] == [[0.1] * 7, [0.2] * 7]
+    summary = ArraySummary(shape=(4, 6), dtype='bool', nonzero=6).model_dump(mode='json')
+    assert calls['mask_to_point_cloud'].kwargs == {'mask': summary, 'camera_name': 'wrist'}

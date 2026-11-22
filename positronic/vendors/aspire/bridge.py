@@ -13,7 +13,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, make_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, make_dataclass, replace
 from enum import StrEnum
 from functools import wraps
 from types import MappingProxyType
@@ -29,6 +29,7 @@ from positronic.policy.base import Obs, PolicyEnd
 from positronic.policy.keys import END
 from positronic.utils import check_finite_positive
 
+from . import geometry
 from .contracts import (
     DEFAULT_EMBODIMENT,
     PRIMARY_ARM,
@@ -40,9 +41,13 @@ from .contracts import (
     ExecutionResult,
     MotionStrategy,
     Observation,
+    PointCloud,
     Pose,
     RobotAction,
     RobotState,
+    Segmentation,
+    SegmentationProvider,
+    SegmentationSet,
     StepResult,
     SynchronizedTrajectory,
     TaskContext,
@@ -184,11 +189,27 @@ class Program:
         return hashlib.sha256(self.source.encode()).hexdigest()
 
 
+class ArraySummary(BaseModel):
+    """What a call trace holds of a ``bool`` array with two or more dimensions, such as a mask."""
+
+    shape: tuple[int, ...]
+    dtype: str
+    nonzero: int
+
+
+class PointCloudSummary(BaseModel):
+    """What a call trace holds of a point cloud."""
+
+    frame: str
+    point_count: int
+
+
 class CallTrace(BaseModel):
     """One CapApi call that a program made: its arguments, its result or what it raised, and when it ran.
 
     ``*_wall_s`` are seconds of wall time since the program started. ``*_robot_s`` are seconds of the bridge's
-    clock: the time of the chunks it answered. Each observation in ``result`` carries no camera images.
+    clock: the time of the chunks it answered. An observation in ``args``, ``kwargs`` or ``result`` carries no camera
+    images. A mask is an ``ArraySummary`` there, and a point cloud a ``PointCloudSummary``.
     """
 
     name: str
@@ -339,8 +360,9 @@ class CapBridge:
 
     ``answer`` takes one positronic observation and returns the next action chunk. The first observation starts the
     program and fixes each arm's home at its measured joints. Every later answer carries ``END`` once the program
-    ended. ``calibration`` gives a camera view its intrinsics and its pose, by camera name. Perception and planning
-    calls raise ``NotImplementedError``.
+    ended. ``calibration`` gives a camera view its intrinsics and its pose, by camera name. ``segmentation`` answers
+    ``segment_text``, which raises ``NotImplementedError`` with no provider. ``mask_to_point_cloud`` needs no provider.
+    Each other perception call and each planning call raises ``NotImplementedError``.
     """
 
     def __init__(
@@ -349,12 +371,14 @@ class CapBridge:
         settings: BridgeSettings,
         *,
         calibration: Mapping[str, CameraCalibration] = MappingProxyType({}),
+        segmentation: SegmentationProvider | None = None,
     ):
         self._program = program
         self._settings = settings
         self._arms = settings.rig_arms
         check_calibration(calibration, settings)
         self._calibration = calibration
+        self._segmentation = segmentation
         self._calls: list[CallTrace] = []
         self._started_wall_s = 0.0
         self._turn = threading.Condition()
@@ -583,18 +607,26 @@ class CapBridge:
                 return value.item()
             case MappingProxyType():
                 return dict(value)
-        raise TypeError(f'{type(value).__name__} has no JSON form in a call trace')
+        # A record must not change what the call gives the program, so a value with no JSON form is its repr.
+        logger.error('A call trace holds the repr of a value of type %s, which has no JSON form', type(value).__name__)
+        return repr(value)
 
     @staticmethod
-    def _without_images(value: Any) -> Any:
-        """``value`` with every observation in it stripped of its camera images."""
+    def _trace_form(value: Any) -> Any:
+        """``value`` as a call trace holds it: no camera view, and a summary of each mask and point cloud."""
         match value:
             case Observation():
                 return replace(value, cameras={})
-            case ExecutionResult(final_observation=Observation() as observation):
-                return replace(value, final_observation=replace(observation, cameras={}))
-            case StepResult(observation=Observation() as observation):
-                return replace(value, observation=replace(observation, cameras={}))
+            case np.ndarray() if value.dtype == np.bool_ and value.ndim >= 2:
+                return ArraySummary(shape=value.shape, dtype=str(value.dtype), nonzero=np.count_nonzero(value))
+            case PointCloud():
+                return PointCloudSummary(frame=value.frame, point_count=len(value.points))
+            case _ if is_dataclass(value) and not isinstance(value, type):
+                return {item.name: CapBridge._trace_form(getattr(value, item.name)) for item in fields(value)}
+            case tuple() | list():
+                return [CapBridge._trace_form(item) for item in value]
+            case Mapping():
+                return {key: CapBridge._trace_form(item) for key, item in value.items()}
         return value
 
     def _traced(self, name: str, tool: Callable[..., Any]) -> Callable[..., Any]:
@@ -613,9 +645,9 @@ class CapBridge:
             finally:
                 trace = CallTrace(
                     name=name,
-                    args=to_jsonable_python(args, fallback=self._jsonable),
-                    kwargs=to_jsonable_python(kwargs, fallback=self._jsonable),
-                    result=to_jsonable_python(self._without_images(result), fallback=self._jsonable),
+                    args=to_jsonable_python(self._trace_form(args), fallback=self._jsonable),
+                    kwargs=to_jsonable_python(self._trace_form(kwargs), fallback=self._jsonable),
+                    result=to_jsonable_python(self._trace_form(result), fallback=self._jsonable),
                     raised=raised,
                     started_wall_s=started_wall_s,
                     ended_wall_s=time.monotonic() - self._started_wall_s,
@@ -634,16 +666,14 @@ class CapBridge:
     @staticmethod
     def _unsupported(name: str) -> Callable[..., Any]:
         def call(*args: object, **kwargs: object) -> Any:
-            raise NotImplementedError(f'{name} is not available: this bridge serves no perception or planning')
+            raise NotImplementedError(f'{name} is not available: this bridge does not serve it')
 
         call.__name__ = name
         return call
 
     def _tools(self) -> dict[str, Callable[..., Any]]:
-        perception = (
-            'segment_text',
+        unsupported = (
             'segment_points',
-            'mask_to_point_cloud',
             'crop_point_cloud',
             'estimate_geometry',
             'generate_grasps',
@@ -653,11 +683,13 @@ class CapBridge:
             'localize_object',
             'select_grasp',
         )
-        tools: dict[str, Callable[..., Any]] = {name: self._unsupported(name) for name in perception}
+        tools: dict[str, Callable[..., Any]] = {name: self._unsupported(name) for name in unsupported}
         tools.update(
             get_task_context=self.get_task_context,
             get_observation=self.get_observation,
             get_robot_state=self.get_robot_state,
+            segment_text=self.segment_text,
+            mask_to_point_cloud=self.mask_to_point_cloud,
             step=self.step,
             execute_trajectory=self.execute_trajectory,
             set_gripper=self.set_gripper,
@@ -751,6 +783,50 @@ class CapBridge:
 
     def get_robot_state(self) -> RobotState:
         return self._latest().robot_state
+
+    def segment_text(self, camera_name: str, text: str) -> SegmentationSet:
+        """The segmentation provider's answer for the view of ``camera_name``, each segmentation under that name."""
+        if self._segmentation is None:
+            raise NotImplementedError('segment_text is not available: this bridge has no segmentation provider')
+        view = self._view(self._latest(), camera_name)
+        try:
+            found = self._segmentation.segment_text(view, text)
+        except ApiError as error:
+            return SegmentationSet(ok=False, error=error)
+        # rules-allow: swallowed-error — provider code is not ours; the result, the trace and the log keep its failure
+        except Exception as error:
+            logger.error('The segmentation provider raised', exc_info=error)
+            return SegmentationSet(
+                ok=False, error=ApiError(ErrorCode.PROVIDER_ERROR, f'{type(error).__name__}: {error}')
+            )
+        if not isinstance(found, SegmentationSet):
+            message = f'the segmentation provider answered {type(found).__name__}, not SegmentationSet'
+            return SegmentationSet(ok=False, error=ApiError(ErrorCode.PROVIDER_ERROR, message))
+        if not found.ok:
+            return found
+        # `mask_to_point_cloud` takes a mask only in the frame of the view it came from.
+        frames = {item.frame for item in found.segmentations} - {view.frame}
+        if frames:
+            message = f'the segmentation provider answered in frame {frames.pop()!r}, not {view.frame!r}'
+            return SegmentationSet(ok=False, error=ApiError(ErrorCode.PROVIDER_ERROR, message))
+        return replace(found, segmentations=[replace(item, camera_name=camera_name) for item in found.segmentations])
+
+    def mask_to_point_cloud(
+        self, mask: Segmentation | np.ndarray, camera_name: str, target_frame: str | None = None
+    ) -> PointCloud:
+        """The points of ``mask`` in ``target_frame``: the base frame when it is ``None``."""
+        observation = self._latest()
+        view = self._view(observation, camera_name)
+        if not isinstance(mask, Segmentation):
+            mask = Segmentation(mask=mask, label='object', score=1.0, camera_name=camera_name, frame=view.frame)
+        frame = observation.robot_state.base_frame if target_frame is None else target_frame
+        return geometry.mask_to_point_cloud(view, mask, target_frame=frame)
+
+    @staticmethod
+    def _view(observation: Observation, camera_name: str) -> CameraObservation:
+        if camera_name not in observation.cameras:
+            raise ValueError(f'observation has no camera {camera_name!r}')
+        return observation.cameras[camera_name]
 
     def step(self, action: RobotAction) -> StepResult:
         try:
