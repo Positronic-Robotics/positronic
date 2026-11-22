@@ -1,10 +1,7 @@
 """Launches the RoboLab env server as a subprocess and owns its lifetime.
 
-positronic starts the server: ``uv sync --frozen`` installs the Isaac Lab / Isaac Sim dependency stack from the lock
-of the pinned RoboLab checkout, and the env runs in RoboLab's own interpreter via
-``uv run --no-sync --project <checkout>``.
-The positronic-free ``env_server`` package rides ``PYTHONPATH`` so ``env.py`` imports the dumb ``server``/``protocol``
-without dragging in positronic; ``robolab`` itself resolves from the uv project.
+The server runs ``env.py`` in the interpreter of the pinned RoboLab checkout, through ``uv run --project``. The
+positronic-free ``env_server`` package is on its ``PYTHONPATH``; positronic is not importable there.
 """
 
 import argparse
@@ -22,6 +19,7 @@ from positronic.simulator.env_server.launcher import ensure_pinned_checkout, ser
 from positronic.simulator.env_server.protocol import encode
 from positronic.simulator.env_server.server import DEFAULT_JOIN_DEADLINE
 from positronic.simulator.robolab import keys
+from positronic.simulator.robolab.task_catalog import METADATA as TASK_LIB_METADATA
 
 _ENV_SCRIPT = Path(__file__).parent / 'env.py'
 _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
@@ -49,8 +47,21 @@ def _require_uv_version() -> None:
 
 
 def _spawn(
-    host: str, port: int, cameras: str, max_envs: int, join_deadline: float = DEFAULT_JOIN_DEADLINE
+    host: str,
+    port: int,
+    robot: str,
+    cameras: str,
+    max_envs: int,
+    join_deadline: float = DEFAULT_JOIN_DEADLINE,
+    task_libs: tuple[Path, ...] = (),
 ) -> subprocess.Popen:
+    keys.camera_set(robot, cameras)
+    if task_libs and robot != keys.DROID:
+        raise ValueError(f'task libraries hold tasks for the {keys.DROID} robot, not for the {robot} robot')
+    # A missing library fails here, before the Isaac boot, rather than in the server after it.
+    for lib in task_libs:
+        if not (lib / TASK_LIB_METADATA).is_file():
+            raise FileNotFoundError(f'{lib} is no task library: it has no {TASK_LIB_METADATA}')
     _require_uv_version()
     # One setup at a time, so no checkout resets files under ``uv sync``; the hold is one install, which a waiter needs.
     with setup_lock(_ROBOLAB_SRC.parent):
@@ -85,53 +96,60 @@ def _spawn(
         host,
         '--port',
         str(port),
+        '--robot',
+        robot,
         '--cameras',
         cameras,
         '--max-envs',
         str(max_envs),
         '--join-deadline',
         str(join_deadline),
+        *(arg for lib in task_libs for arg in ('--task-lib', str(lib))),
         '--headless',
     ]
-    # The DROID rig's model (URDF + meshes + gripper) for the viewer and offline IK. env.py runs in RoboLab's
-    # interpreter and cannot build it, so it is serialized here (wire codec) and env.py emits it as
-    # ``robot_meta``. A fresh temp file per spawn, in the container-local tmpdir — never the shared cache
-    # filesystem, where a concurrent eval's rewrite could tear a reader mid-decode.
-    # The rig's own model, unaltered: RoboLab measures and drives at ``robolab_eef``, and ``RobolabAdapter``
-    # converts between that and the model's ``GRIPPER_SITE`` on both the observation and command paths.
-    robot_meta = bundled_franka_model()
-    fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
-    with os.fdopen(fd, 'wb') as meta_file:
-        meta_file.write(encode(robot_meta))
     # Isaac Sim prompts for its EULA on stdin at first launch; the server is headless, so accept it here.
-    env = {
-        **os.environ,
-        'PYTHONPATH': str(_ENV_SERVER_DIR),
-        'OMNI_KIT_ACCEPT_EULA': 'Y',
-        'ROBOLAB_ROBOT_META': meta_path,
-    }
+    env = {**os.environ, 'PYTHONPATH': str(_ENV_SERVER_DIR), 'OMNI_KIT_ACCEPT_EULA': 'Y'}
+    if robot == keys.DROID:
+        # env.py cannot build the DROID model, so it reads this encoded copy and sends it as ``robot_meta``.
+        # One temp file per spawn, off the shared cache, where a concurrent rewrite could tear a reader.
+        fd, meta_path = tempfile.mkstemp(prefix='robolab_robot_meta_', suffix='.bin')
+        with os.fdopen(fd, 'wb') as meta_file:
+            meta_file.write(encode(bundled_franka_model()))
+        env['ROBOLAB_ROBOT_META'] = meta_path
     return subprocess.Popen(command, env=env)
 
 
 def serve_robolab(
-    cameras: str, host: str = 'localhost', *, max_envs: int = 1
+    cameras: str,
+    host: str = 'localhost',
+    *,
+    robot: str = keys.DROID,
+    max_envs: int = 1,
+    task_libs: tuple[Path, ...] = (),
 ) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
-    ``cameras`` names the set in ``keys.CAMERA_SETS`` the server renders; RoboLab bakes it into the
-    registered task, so one server serves one set.
+    ``robot`` names the robot that the server puts in the task scenes, one of ``keys.ROBOTS``. ``cameras`` names
+    the set in ``keys.ROBOT_CAMERA_SETS[robot]`` the server renders; RoboLab bakes it into the registered task, so one
+    server serves one set.
 
     ``max_envs`` is the most clones of the scene the one Isaac process steps together. Each batch of evals gets as
     many clones as the batch size its first reset carries.
+
+    ``task_libs`` are task library directories on this host (see ``task_catalog``); their tasks run by name. Only a
+    DROID server takes them.
     """
-    return serve_subprocess(partial(_spawn, cameras=cameras, max_envs=max_envs), host)
+    return serve_subprocess(partial(_spawn, robot=robot, cameras=cameras, max_envs=max_envs, task_libs=task_libs), host)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description='Serve RoboLab to several evals, one scene clone each, batch after batch until it is stopped.'
     )
-    parser.add_argument('--cameras', default=keys.WRIST_LEFT_RIGHT, choices=sorted(keys.CAMERA_SETS))
+    parser.add_argument('--robot', default=keys.DROID, choices=keys.ROBOTS)
+    parser.add_argument(
+        '--cameras', help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; keys.DEFAULT_CAMERA_SETS without it'
+    )
     parser.add_argument('--max-envs', type=int, required=True, help='the most scene clones, one per eval of a batch')
     parser.add_argument(
         '--join-deadline',
@@ -141,8 +159,12 @@ def main() -> None:
     )
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
+    parser.add_argument(
+        '--task-lib', type=Path, action='append', default=[], help='a task library directory; repeatable'
+    )
     args = parser.parse_args()
-    proc = _spawn(args.host, args.port, args.cameras, args.max_envs, args.join_deadline)
+    cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
+    proc = _spawn(args.host, args.port, args.robot, cameras, args.max_envs, args.join_deadline, tuple(args.task_lib))
     try:
         sys.exit(proc.wait())
     finally:
