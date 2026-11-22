@@ -93,7 +93,6 @@ _ALWAYS_NEAR = {
     ]
 }
 _OBSTACLE = 'obstacle'
-_ON_OBSTACLES = {'base', 'link1'}  # an obstacle under the foot touches the foot and link 1
 _FINGERS = ('joint7', 'joint8')
 # The arm slows down from this far past ``keep_clear_m``: a brake of 3 m/s2 stops 0.6 m/s in 6 cm
 _SLOW_ZONE_M = 0.08
@@ -142,9 +141,6 @@ class Clearance:
         self._finger_ids = np.array([self._model.joint(name).qposadr.item() for name in _FINGERS])
         self._finger_travel = np.array([self._model.joint(name).range[1] for name in _FINGERS])
 
-    def _counts(self, pair: set[str]) -> bool:
-        return frozenset(pair) not in _ALWAYS_NEAR and not (pair & self._obstacle_names and pair & _ON_OBSTACLES)
-
     def nears(self, q: np.ndarray, open_share: float) -> list[Near]:
         """The pairs nearer than ``reach_m`` at joints ``q``, the nearest point of each pair, with the fingers open by
         ``open_share`` of their travel (0 closed, 1 open)."""
@@ -190,7 +186,7 @@ class Clearance:
         nearest: dict[frozenset[str], mj.MjContact] = {}
         for contact in data.contact[: data.ncon]:
             pair = frozenset((self._names[contact.geom1], self._names[contact.geom2]))
-            if not self._counts(set(pair)) or (obstacles_only and not pair & self._obstacle_names):
+            if pair in _ALWAYS_NEAR or (obstacles_only and not pair & self._obstacle_names):
                 continue
             if pair not in nearest or contact.dist < nearest[pair].dist:
                 nearest[pair] = contact

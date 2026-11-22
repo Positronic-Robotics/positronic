@@ -1258,6 +1258,14 @@ def test_a_start_move_from_low_over_the_table_on_a_chain_just_opened_keeps_clear
     rig.loop.close()
 
 
+def test_a_box_beside_the_shoulder_counts_against_link_1_as_joint_1_turns_toward_it():
+    clearance = Clearance((Box((-0.05, 0.06, 0.06), (0.05, 0.20, 0.13)),), KEEP_CLEAR_M)
+    pair = frozenset({'link1', 'obstacle0'})
+    apart = clearance.gaps(np.zeros(6), OPEN_SHARE, obstacles_only=True)[pair]
+    turned = clearance.gaps(np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0]), OPEN_SHARE, obstacles_only=True)[pair]
+    assert turned < KEEP_CLEAR_M < apart
+
+
 def test_a_step_that_takes_a_pair_into_the_gap_closes_it_while_a_deeper_pair_comes_out():
     clearance = Clearance((TABLE,), KEEP_CLEAR_M)
     # The arm in the table 10.8 mm deep; the step takes it out to 6.0 mm, and the fingers in from 7.8 mm to -4.9 mm
