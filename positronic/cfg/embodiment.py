@@ -12,6 +12,7 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
 if TYPE_CHECKING:
+    from positronic.drivers.roboarm.yam.clearance import StreamTuning
     from positronic.drivers.roboarm.yam.compensation import Compensation
     from positronic.drivers.roboarm.yam.settle import SettleTuning
 
@@ -108,6 +109,7 @@ def yam(robot_arm, cameras):
         keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
     },
     gripper_force_cap_n=None,
+    stream=None,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
@@ -120,6 +122,7 @@ def yam_bimanual(
     mounts: dict[str, list[float]],
     compensation: dict[str, 'Compensation'],
     gripper_force_cap_n: float | None,
+    stream: 'StreamTuning | None',
     cameras,
     park_after_idle_s: float | None,
     park_tuning: dict[str, 'SettleTuning'],
@@ -132,11 +135,13 @@ def yam_bimanual(
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
     signal that drives it. ``compensation[side]`` is the gravity model and the friction that i2rt adds to the PD of
-    that arm. ``gripper_force_cap_n`` is the force cap of both grippers (see ``yam.Robot``). Each arm's meta
+    that arm. ``gripper_force_cap_n`` is the force cap of both grippers (see ``yam.Robot``). ``stream`` is how a
+    streamed target moves each arm, its obstacles in the world frame; None keeps only the speed cap. Each arm's meta
     carries the settings that its chain reports.
     """
     from positronic import geom
     from positronic.drivers.roboarm.yam import driver as yam_driver
+    from positronic.drivers.roboarm.yam.clearance import UNLIMITED_STREAM
 
     arms = {
         side: yam_driver.Robot(
@@ -147,6 +152,7 @@ def yam_bimanual(
             park_tuning=park_tuning[side],
             move_tuning=move_tuning[side],
             gripper_force_cap_n=gripper_force_cap_n,
+            stream=UNLIMITED_STREAM if stream is None else stream,
         )
         for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
     }
@@ -214,6 +220,7 @@ yam_bimanual_yambox = yam_bimanual.override(
             ),
         ),
     ),
+    stream=positronic.cfg.hardware.roboarm.yambox_stream,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.yambox_zed_x_one_left.override(resolution='svga', fps=30),
