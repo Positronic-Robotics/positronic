@@ -301,6 +301,8 @@ class _Arm(DriverRun[command.CommandType]):
     _MIN_PROGRESS_M_PER_RAD = 0.02
     # A target that moved less than this since the last tick is still
     _STILL_M, _STILL_RAD = 5e-4, 5e-3
+    # A joint ramp of a park or a start move is checked against the obstacles at points this far apart
+    _RAMP_CHECK_STEP_RAD = 0.05
     # i2rt halts the chain once a joint reads 0.1 rad past its limits (i2rt/robots/motor_chain_robot.py:254).
     _CHAIN_LIMIT_MARGIN_RAD = 0.15
 
@@ -497,7 +499,7 @@ class _Arm(DriverRun[command.CommandType]):
         nears = clearance.nears(sent, open_share)
         if not nears:
             return joints
-        now = min(near.gap_m for near in nears)
+        before = {near.pair: near.gap_m for near in nears}
         decel = self._stream.approach_decel_m_s2
         brake = decel * elapsed
         step = joints - sent
@@ -518,16 +520,10 @@ class _Arm(DriverRun[command.CommandType]):
         if accel is not None:
             change = np.clip(step / elapsed - self._sent_speed, -accel * elapsed, accel * elapsed)
             smooth = sent + (self._sent_speed + change) * elapsed
-            if not self._closes_past_tolerance(clearance, smooth, now, open_share):
+            if not clearance.closes_a_gap(smooth, before, open_share, self._GAP_TOLERANCE_M):
                 return smooth
         kept = sent + step
-        return sent if self._closes_past_tolerance(clearance, kept, now, open_share) else kept
-
-    @classmethod
-    def _closes_past_tolerance(cls, clearance: Clearance, joints: np.ndarray, now: float, open_share: float) -> bool:
-        """Whether ``joints`` are nearer than ``keep_clear_m`` less ``_GAP_TOLERANCE_M``, and nearer than ``now``."""
-        gap = clearance.gap(joints, open_share)
-        return gap < clearance.keep_clear_m - cls._GAP_TOLERANCE_M and gap < now
+        return sent if clearance.closes_a_gap(kept, before, open_share, self._GAP_TOLERANCE_M) else kept
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
         """Hold the measured position, publish it, and return it as the target."""
@@ -775,15 +771,16 @@ class _Arm(DriverRun[command.CommandType]):
     def _raise_clear(
         self, goal: np.ndarray, grip: float, tuning: SettleTuning, interrupt_on_stop: bool
     ) -> Generator[pimm.Command, None, None]:
-        """Raise the gripper straight up, its turn kept, until the arm is ``park_clear_m`` clear of the obstacles,
-        before a move to ``goal`` that ramps in joint space and checks no gap. An arm at ``goal`` does not move. On a
-        stop, return and leave the settle to see it."""
-        if self._clearance is None or not self._stream.obstacles:
+        """Make the joint ramp to ``goal`` keep clear of the obstacles, before a move that ramps in joint space and
+        checks no gap. A ramp that keeps clear goes at once. Otherwise raise the gripper straight up, its turn kept,
+        until the arm is ``park_clear_m`` clear of the obstacles. Raise ``TimeoutError`` when the ramp from there still
+        does not keep clear. On a stop, return and leave the move to see it."""
+        clearance = self._clearance
+        if clearance is None or not self._stream.obstacles:
             return
+        open_share = self._open_share(grip)
         q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
-        if np.max(np.abs(q - goal)) <= tuning.tolerance_rad:
-            return
-        if self._clearance.obstacle_gap(q, self._open_share(grip)) >= self._stream.park_clear_m:
+        if np.max(np.abs(q - goal)) <= tuning.tolerance_rad or self._ramp_keeps_clear(clearance, q, goal, open_share):
             return
         if self._sent_joints is None:
             self.command_target(q, grip)  # a chain just opened: the raise steps from the joints it reads
@@ -795,11 +792,25 @@ class _Arm(DriverRun[command.CommandType]):
             if self.should_stop.value and interrupt_on_stop:
                 return
             obs = self.observations()
-            if self._clearance.obstacle_gap(obs[_JOINT_POS], self._open_share(grip)) >= self._stream.park_clear_m:
-                return
+            if clearance.obstacle_gap(obs[_JOINT_POS], open_share) >= self._stream.park_clear_m:
+                break
             self.step_toward(above, grip, None)
             self.publish(obs, RobotStatus.BUSY)
             yield self.limiter.wait()
+        q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
+        if not self._ramp_keeps_clear(clearance, q, goal, open_share):
+            raise TimeoutError(f'the arm did not rise clear of the obstacles for a joint ramp to {goal}; measured={q}')
+
+    @classmethod
+    def _ramp_keeps_clear(cls, clearance: Clearance, start: np.ndarray, goal: np.ndarray, open_share: float) -> bool:
+        """Whether the joint ramp from ``start`` to ``goal`` keeps the gap to the obstacles at the lesser of
+        ``keep_clear_m`` and the gap at ``start``, at points ``_RAMP_CHECK_STEP_RAD`` apart."""
+        floor = min(clearance.keep_clear_m, clearance.obstacle_gap(start, open_share)) - cls._GAP_TOLERANCE_M
+        points = max(1, int(np.ceil(np.max(np.abs(goal - start)) / cls._RAMP_CHECK_STEP_RAD)))
+        return all(
+            clearance.obstacle_gap(start + share * (goal - start), open_share) >= floor
+            for share in np.linspace(0.0, 1.0, points + 1)[1:]
+        )
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure

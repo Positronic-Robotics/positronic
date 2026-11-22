@@ -98,8 +98,10 @@ _SLOW_ZONE_M = 0.08
 
 @dataclass(frozen=True)
 class Near:
-    """A pair of the arm and itself or an obstacle: its gap in meters, and how the gap changes with each joint."""
+    """A pair of the arm and itself or an obstacle: the names of the two, its gap in meters, and how the gap changes
+    with each joint."""
 
+    pair: frozenset[str]
     gap_m: float
     slope: np.ndarray  # m/rad, one value per arm joint
 
@@ -150,7 +152,18 @@ class Clearance:
             pair = frozenset((self._names[contact.geom1], self._names[contact.geom2]))
             if self._counts(set(pair)) and (pair not in nearest or contact.dist < nearest[pair].dist):
                 nearest[pair] = contact
-        return [Near(float(contact.dist), self._slope(contact)) for contact in nearest.values()]
+        return [Near(pair, float(contact.dist), self._slope(contact)) for pair, contact in nearest.items()]
+
+    def closes_a_gap(
+        self, q: np.ndarray, before: dict[frozenset[str], float], open_share: float, tolerance_m: float
+    ) -> bool:
+        """Whether at joints ``q`` a pair is nearer than ``keep_clear_m`` less ``tolerance_m``, and nearer than its gap
+        ``before``. Each pair counts: a pair deep in the gap does not hide another that enters it."""
+        floor = self.keep_clear_m - tolerance_m
+        return any(
+            near.gap_m < floor and near.gap_m < before.get(near.pair, self.reach_m)
+            for near in self.nears(q, open_share)
+        )
 
     def _place(self, q: np.ndarray, open_share: float) -> None:
         data = self._data

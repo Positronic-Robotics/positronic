@@ -1258,6 +1258,34 @@ def test_a_start_move_from_low_over_the_table_on_a_chain_just_opened_keeps_clear
     rig.loop.close()
 
 
+def test_a_step_that_takes_a_pair_into_the_gap_closes_it_while_a_deeper_pair_comes_out():
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    # The arm in the table 10.8 mm deep; the step takes it out to 6.0 mm, and the fingers in from 7.8 mm to -4.9 mm
+    before_q = np.array([1.42, 2.513, 1.409, -0.175, -0.498, 1.625])
+    after_q = np.array([1.458, 2.488, 1.432, -0.234, -0.507, 1.654])
+    before = {near.pair: near.gap_m for near in clearance.nears(before_q, OPEN_SHARE)}
+    assert clearance.gap(after_q, OPEN_SHARE) > clearance.gap(before_q, OPEN_SHARE)
+    assert clearance.closes_a_gap(after_q, before, OPEN_SHARE, GAP_TOLERANCE_M)
+
+
+def test_a_park_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_error():
+    stream = StreamTuning(
+        keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), park_lift_m=0.001, park_lift_timeout_s=0.2
+    )  # a raise too short to clear the table
+    rig = Rig(park_after_idle_s=1.0, stream=stream)
+    rig.ready()
+    rig.commands.push(command.JointPosition(LOW_OVER_THE_TABLE))
+    rig.tick(0.9)
+    sent = len(rig.vendor.targets)
+    start = Clearance((TABLE,), KEEP_CLEAR_M).gap(rig.vendor._pos[:6], OPEN_SHARE)
+    rig.tick(6.0)
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    assert min(clearance.gap(q, OPEN_SHARE) for q in _asked(rig)[sent:]) >= min(start, KEEP_CLEAR_M) - GAP_TOLERANCE_M
+    assert np.max(np.abs(rig.vendor._pos[:6] - PARK)) > 0.1
+    assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    rig.loop.close()
+
+
 def test_world_frame_obstacles_move_with_the_base_of_the_arm():
     shift = np.array([0.30, -0.305, 0.3125])
     world_table = Box(tuple((np.array(TABLE.lower) + shift).tolist()), tuple((np.array(TABLE.upper) + shift).tolist()))
