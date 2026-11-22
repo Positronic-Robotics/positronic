@@ -80,9 +80,6 @@ DESCRIPTOR = 'descriptor'
 # The prefix that identifies a camera on the wire: an embodiment declares its cameras by naming
 # them this way, and every consumer picks them out of the observations by it.
 IMAGE_PREFIX = 'image.'
-# The prefix of a camera's metric depth, beside its image and with its height and width: ``depth.wrist`` for
-# ``image.wrist``. A depth is uint16 millimetres or floating metres along the optical axis; 0 marks no depth.
-DEPTH_PREFIX = 'depth.'
 WRIST_IMAGE = f'{IMAGE_PREFIX}wrist'
 WRIST_LEFT_IMAGE = f'{IMAGE_PREFIX}wrist_left'
 WRIST_RIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_right'
@@ -91,3 +88,6 @@ EXTERIOR_IMAGE_2 = f'{IMAGE_PREFIX}exterior_2'
 # An upright view from the wrist, and a view from the right side of the hand.
 WRIST_UPRIGHT_IMAGE = f'{IMAGE_PREFIX}wrist_upright'
 HANDCAM_RIGHT_IMAGE = f'{IMAGE_PREFIX}handcam_right'
+# The prefix of a camera's metric depth, beside its image and with its height and width: ``depth.wrist`` for
+# ``image.wrist``. A depth is uint16 millimetres or floating metres along the optical axis; 0 marks no depth.
+DEPTH_PREFIX = 'depth.'

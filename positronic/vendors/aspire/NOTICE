@@ -3,11 +3,21 @@ contracts.py, geometry.py and parts of bridge.py are a modified port of files of
 errors.py, protocols.py, geometry.py, api.py and runtime.py. ASPIRE is under the Apache License 2.0
 (https://github.com/NVlabs/ASPIRE/blob/fa00f0ef2bc1d91d594b9aa502c22133c9f538f7/LICENSE).
 
-Positronic changed the port: it takes the joint count of an arm from the rig's state and the embodiment name from a
-setting, keeps of the perception types only segmentation and point clouds, keeps of the provider protocols only
-text-prompted segmentation, drops the planning types, and lets a camera observation hold RGB without depth,
-intrinsics or pose. With no segmentation provider, segment_text raises NotImplementedError, where ASPIRE gives a
-result with ok=False. A provider that raises gives a result with ok=False, where ASPIRE lets the exception through.
+Positronic changed the port:
+
+- It takes the joint count of an arm from the rig's state, and the embodiment name from a setting.
+- It keeps two perception types, segmentations and point clouds. It drops the other perception types and the
+  planning types.
+- Its segmentation provider protocol has text prompts only.
+- geometry.py keeps mask_to_point_cloud only. It refuses a view with no depth, no intrinsics or no pose in the
+  target frame.
+- A camera observation can hold RGB without depth, intrinsics or pose. It refuses a depth of another size than its
+  image.
+- With no segmentation provider, segment_text raises NotImplementedError, where ASPIRE gives a result with ok=False.
+- A provider that raises gives a result with ok=False, where ASPIRE lets the exception through.
+- segment_text refuses a segmentation in a frame other than its view's frame.
+- mask_to_point_cloud gives points in the bridge's base frame when the call names no frame, where ASPIRE names the
+  frame robot_base.
 
 The NOTICE of ASPIRE reads:
 

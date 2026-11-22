@@ -25,7 +25,7 @@ from positronic.policy.processors import ChunkedSchedule, EndOnField, Trajectory
 from positronic.policy.sequential import Sequential
 from positronic.utils import flatten_dict
 
-from .bridge import BridgeSettings, CallTrace, CameraCalibration, CapBridge, Program, camera_hands
+from .bridge import BridgeSettings, CallTrace, CameraCalibration, CapBridge, Program, check_calibration
 from .contracts import SegmentationProvider
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ META_PROGRAM_SHA256 = 'program_sha256'
 META_SESSION_RECORD = 'session_record'
 META_SETTINGS = 'settings'
 META_CALIBRATION = 'calibration'
+META_SEGMENTATION = 'segmentation'
 EXAMPLES_DIR = Path(__file__).parent / 'examples'
 
 
@@ -76,8 +77,11 @@ class CapProgramModel(Model):
         self._calibration: dict[str, CameraCalibration] = {}
         if calibration is not None:
             self._calibration = TypeAdapter(dict[str, CameraCalibration]).validate_json(calibration.read_text())
-        # A hand that names no arm fails here, at the server's start, and not at the first session.
-        camera_hands(self._calibration, settings)
+        check_calibration(self._calibration, settings)
+        if segmentation is not None and (
+            isinstance(segmentation, type) or not isinstance(segmentation, SegmentationProvider)
+        ):
+            raise TypeError(f'segmentation must be a SegmentationProvider instance, got {segmentation!r}')
         self._segmentation = segmentation
         self._bridges: dict[str, CapBridge] = {}
         self._recorded: set[str] = set()
@@ -146,6 +150,9 @@ class CapProgramModel(Model):
         frames = ee_frames_entry(dict.fromkeys(signals, EEFrame(site=GRIPPER_SITE)))
         calibration = {name: camera.model_dump() for name, camera in self._calibration.items()}
         meta = {policy_keys.TYPE: POLICY_TYPE, META_SETTINGS: asdict(self._settings), META_CALIBRATION: calibration}
+        if self._segmentation is not None:
+            provider = type(self._segmentation)
+            meta[META_SEGMENTATION] = f'{provider.__module__}.{provider.__qualname__}'
         return frames | flatten_dict(meta)
 
     def close(self) -> None:

@@ -13,9 +13,9 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, make_dataclass, replace
 from enum import StrEnum
-from functools import cached_property, partial, wraps
+from functools import wraps
 from types import MappingProxyType
 from typing import Any, Self
 
@@ -106,18 +106,13 @@ class BridgeSettings:
             check_finite_positive(getattr(self, name), name)
         if self.still_rounds < 1:
             raise ValueError('still_rounds must be at least 1')
-        if not self.arms or len(self.arm_names) != len(self.arms):
+        if isinstance(self.arms, str) or not self.arms or len(self.rig_arms) != len(self.arms):
             raise ValueError('arms must name at least one arm, and each arm once')
 
     @property
-    def arm_names(self) -> dict[str, str | None]:
-        """The name of each arm in a program, with its name on the rig."""
+    def rig_arms(self) -> dict[str, str | None]:
+        """The name of each arm on the rig, by its name in a program."""
         return {PRIMARY_ARM if arm is None else arm: arm for arm in self.arms}
-
-    def program_arm(self, name: str) -> str | None:
-        """The key in ``arm_names`` of the arm a program names ``name``, aliases included; ``None`` for no arm."""
-        arm = name if name in self.arm_names else self.aliases.get(name)
-        return arm if arm in self.arm_names else None
 
     @property
     def round_ticks(self) -> int:
@@ -130,8 +125,8 @@ _Row = tuple[float, float, float]
 class CameraCalibration(BaseModel, frozen=True, extra='forbid'):
     """The camera matrix of one camera and the pose of its optical frame, as a calibration file holds them.
 
-    ``pose`` is x, y, z, qw, qx, qy, qz in the base frame. With ``hand`` it is in the hand frame of that arm, as a
-    program names the arm. The optical frame has x to the right of the image, y down and z forward.
+    ``pose`` is x, y, z, qw, qx, qy, qz in the base frame. With ``hand`` it is in the hand frame of that arm, named
+    as in ``BridgeSettings.rig_arms``. The optical frame has x to the right of the image, y down and z forward.
     """
 
     intrinsics: tuple[_Row, _Row, _Row]
@@ -148,28 +143,23 @@ class CameraCalibration(BaseModel, frozen=True, extra='forbid'):
             raise ValueError('the quaternion of pose must have unit length')
         return self
 
-    @cached_property
+    @property
     def matrix(self) -> np.ndarray:
         matrix = np.array(self.intrinsics, dtype=np.float64)
         matrix.setflags(write=False)
         return matrix
 
-    @cached_property
+    @property
     def transform(self) -> geom.Transform3D:
         return geom.Transform3D.from_vector(np.array(self.pose, dtype=np.float64), geom.Rotation.Representation.QUAT)
 
 
-def camera_hands(calibration: Mapping[str, CameraCalibration], settings: BridgeSettings) -> dict[str, str]:
-    """The arm whose hand carries each calibrated camera that has a ``hand``, by camera name."""
-    hands = {}
+def check_calibration(calibration: Mapping[str, CameraCalibration], settings: BridgeSettings) -> None:
+    """Raise ``ValueError`` when a camera's ``hand`` names no arm of the rig."""
     for name, camera in calibration.items():
-        if camera.hand is None:
-            continue
-        arm = settings.program_arm(camera.hand)
-        if arm is None:
-            raise ValueError(f'The calibration of camera {name!r} names the hand of no arm: {camera.hand!r}')
-        hands[name] = arm
-    return hands
+        if camera.hand is not None and camera.hand not in settings.rig_arms:
+            arms = sorted(settings.rig_arms)
+            raise ValueError(f'The calibration of camera {name!r} names the hand of no arm in {arms}: {camera.hand!r}')
 
 
 class MoveEnd(StrEnum):
@@ -200,7 +190,7 @@ class Program:
 
 
 class ArraySummary(BaseModel):
-    """What a call trace holds of an array with two or more dimensions, such as a mask."""
+    """What a call trace holds of a ``bool`` array with two or more dimensions, such as a mask."""
 
     shape: tuple[int, ...]
     dtype: str
@@ -261,14 +251,14 @@ class _ChunkPlan:
     holds: int
     end: PolicyEnd | None
 
-    def chunk(self, arm_names: Mapping[str, str | None]) -> list[dict[str, Any]]:
-        """The answer on the rig's channels; ``arm_names`` gives each arm's name on the rig."""
+    def chunk(self, rig_arms: Mapping[str, str | None]) -> list[dict[str, Any]]:
+        """The answer on the rig's channels; ``rig_arms`` gives each arm's name on the rig."""
 
         def commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
             entry: dict[str, Any] = {}
             for arm, target in targets.items():
-                entry[keys.arm_channel(keys.ROBOT_COMMAND, arm_names[arm])] = target.command
-                entry[keys.arm_channel(keys.TARGET_GRIP, arm_names[arm])] = target.grip
+                entry[keys.arm_channel(keys.ROBOT_COMMAND, rig_arms[arm])] = target.command
+                entry[keys.arm_channel(keys.TARGET_GRIP, rig_arms[arm])] = target.grip
             return entry
 
         chunk = [commands(targets) for targets in self.path] + [commands(self.hold)] * self.holds
@@ -371,8 +361,8 @@ class CapBridge:
     ``answer`` takes one positronic observation and returns the next action chunk. The first observation starts the
     program and fixes each arm's home at its measured joints. Every later answer carries ``END`` once the program
     ended. ``calibration`` gives a camera view its intrinsics and its pose, by camera name. ``segmentation`` answers
-    ``segment_text``; with no provider, ``segment_text`` raises ``NotImplementedError``, and so does each other
-    perception call and each planning call.
+    ``segment_text``, which raises ``NotImplementedError`` with no provider. ``mask_to_point_cloud`` needs no provider.
+    Each other perception call and each planning call raises ``NotImplementedError``.
     """
 
     def __init__(
@@ -385,9 +375,9 @@ class CapBridge:
     ):
         self._program = program
         self._settings = settings
-        self._arms = settings.arm_names
+        self._arms = settings.rig_arms
+        check_calibration(calibration, settings)
         self._calibration = calibration
-        self._hands = camera_hands(calibration, settings)
         self._segmentation = segmentation
         self._calls: list[CallTrace] = []
         self._started_wall_s = 0.0
@@ -449,22 +439,25 @@ class CapBridge:
     # ---- The rig side: observations in, chunks out ----
 
     def _observe(self, obs: Obs) -> Observation:
-        joints, velocities, hands, grippers = {}, {}, {}, {}
+        joints, velocities, hand_poses, grippers = {}, {}, {}, {}
         for arm, rig_arm in self._arms.items():
             state = keys.arm_channel(keys.ROBOT_STATE, rig_arm)
             joints[arm] = obs[f'{state}{keys.JOINTS_SUFFIX}']
             velocities[arm] = obs[f'{state}{keys.JOINT_VEL_SUFFIX}']
-            hands[arm] = geom.Transform3D.from_vector(
+            hand_poses[arm] = geom.Transform3D.from_vector(
                 np.asarray(obs[f'{state}{keys.EE_POSE_SUFFIX}'], dtype=np.float64), geom.Rotation.Representation.QUAT
             )
             # ASPIRE's gripper runs from 0 (closed) to 1 (open); positronic's grip from 0 (open) to 1 (closed).
             grippers[arm] = float(np.clip(1.0 - float(obs[keys.arm_channel(keys.GRIP, rig_arm)]), 0.0, 1.0))
-        poses = {arm: self._pose(hand) for arm, hand in hands.items()}
+        poses = {arm: self._pose(hand) for arm, hand in hand_poses.items()}
         state = RobotState(
             joints, velocities, poses, grippers, self._settings.base_frame, embodiment=self._settings.embodiment
         )
-        names = [key.removeprefix(keys.IMAGE_PREFIX) for key in obs if key.startswith(keys.IMAGE_PREFIX)]
-        cameras = {name: self._camera(name, obs, hands) for name in names}
+        names = {key.removeprefix(keys.IMAGE_PREFIX) for key in obs if key.startswith(keys.IMAGE_PREFIX)}
+        depths = {key.removeprefix(keys.DEPTH_PREFIX) for key in obs if key.startswith(keys.DEPTH_PREFIX)}
+        if unseen := (set(self._calibration) | depths) - names:
+            raise ValueError(f'The calibration or a depth names cameras with no image in the observation: {unseen}')
+        cameras = {name: self._camera(name, obs, hand_poses) for name in sorted(names)}
         language = str(obs[keys.TASK])
         task = TaskContext(TASK_SUITE, 0, language, language, TASK_FAMILY)
         return Observation(cameras, state, task)
@@ -472,16 +465,18 @@ class CapBridge:
     def _pose(self, transform: geom.Transform3D) -> Pose:
         return Pose(transform.translation, transform.rotation.as_quat, self._settings.base_frame)
 
-    def _camera(self, name: str, obs: Obs, hands: Mapping[str, geom.Transform3D]) -> CameraObservation:
-        """The view of camera ``name``; ``hands`` holds the measured hand pose of each arm."""
+    def _camera(self, name: str, obs: Obs, hand_poses: Mapping[str, geom.Transform3D]) -> CameraObservation:
+        """The view of camera ``name``; ``hand_poses`` holds the measured hand pose of each arm."""
         image = np.asarray(obs[f'{keys.IMAGE_PREFIX}{name}'])
         depth = obs.get(f'{keys.DEPTH_PREFIX}{name}')
         depth_m = None if depth is None else self._depth_m(depth)
         calibration = self._calibration.get(name)
         if calibration is None:
             return CameraObservation(image, name, depth_m)
-        hand = self._hands.get(name)
-        mount = geom.Transform3D.identity if hand is None else hands[hand]
+        height, width = image.shape[:2]
+        if not (0.0 <= calibration.matrix[0, 2] <= width and 0.0 <= calibration.matrix[1, 2] <= height):
+            raise ValueError(f'The principal point of camera {name!r} is outside its {width}x{height} image')
+        mount = geom.Transform3D.identity if calibration.hand is None else hand_poses[calibration.hand]
         return CameraObservation(image, name, depth_m, calibration.matrix, self._pose(mount * calibration.transform))
 
     @staticmethod
@@ -491,10 +486,14 @@ class CapBridge:
         if depth.ndim == 3 and depth.shape[-1] == 1:
             depth = depth[..., 0]
         if depth.dtype == np.uint16:
-            return depth.astype(np.float32) / 1000.0
-        if not np.issubdtype(depth.dtype, np.floating):
+            metres = depth.astype(np.float32) / 1000.0
+        elif np.issubdtype(depth.dtype, np.floating):
+            metres = depth.astype(np.float32)
+            metres[~(np.isfinite(metres) & (metres > 0.0))] = 0.0
+        else:
             raise ValueError(f'Depth must hold uint16 millimetres or floating metres, got {depth.dtype}')
-        return np.where(np.isfinite(depth) & (depth > 0.0), depth, 0.0).astype(np.float32)
+        metres.setflags(write=False)
+        return metres
 
     def _start(self, state: RobotState) -> None:
         for arm in self._arms:
@@ -578,8 +577,10 @@ class CapBridge:
         }
         builtins['__import__'] = self._import_math
         constructors: dict[str, Any] = {t.__name__: t for t in (MotionStrategy, Pose, RobotAction)}
-        for of_embodiment in (ArmCommand, SynchronizedTrajectory, Trajectory):
-            constructors[of_embodiment.__name__] = partial(of_embodiment, embodiment=self.embodiment)
+        # A subclass changes only the default of `embodiment`, so a program may still give it by position.
+        default = [('embodiment', str, field(default=self.embodiment))]
+        for base in (ArmCommand, SynchronizedTrajectory, Trajectory):
+            constructors[base.__name__] = make_dataclass(base.__name__, default, bases=(base,), frozen=True, slots=True)
         tools = {name: self._traced(name, tool) for name, tool in self._tools().items()}
         namespace: dict[str, Any] = {'__builtins__': builtins, **constructors, **tools}
         self._started_wall_s = time.monotonic()
@@ -616,11 +617,7 @@ class CapBridge:
         match value:
             case Observation():
                 return replace(value, cameras={})
-            case ExecutionResult(final_observation=Observation() as observation):
-                return replace(value, final_observation=replace(observation, cameras={}))
-            case StepResult(observation=Observation() as observation):
-                return replace(value, observation=replace(observation, cameras={}))
-            case np.ndarray() if value.ndim >= 2:
+            case np.ndarray() if value.dtype == np.bool_ and value.ndim >= 2:
                 return ArraySummary(shape=value.shape, dtype=str(value.dtype), nonzero=np.count_nonzero(value))
             case PointCloud():
                 return PointCloudSummary(frame=value.frame, point_count=len(value.points))
@@ -675,7 +672,7 @@ class CapBridge:
         return call
 
     def _tools(self) -> dict[str, Callable[..., Any]]:
-        perception = (
+        unsupported = (
             'segment_points',
             'crop_point_cloud',
             'estimate_geometry',
@@ -686,7 +683,7 @@ class CapBridge:
             'localize_object',
             'select_grasp',
         )
-        tools: dict[str, Callable[..., Any]] = {name: self._unsupported(name) for name in perception}
+        tools: dict[str, Callable[..., Any]] = {name: self._unsupported(name) for name in unsupported}
         tools.update(
             get_task_context=self.get_task_context,
             get_observation=self.get_observation,
@@ -725,8 +722,8 @@ class CapBridge:
             return call
 
     def _arm(self, name: str) -> str:
-        arm = self._settings.program_arm(name)
-        if arm is None:
+        arm = name if name in self._arms else self._settings.aliases.get(name)
+        if arm not in self._arms:
             raise ApiError(ErrorCode.NOT_FOUND, f'unknown arm {name!r}')
         return arm
 
@@ -796,12 +793,15 @@ class CapBridge:
             found = self._segmentation.segment_text(view, text)
         except ApiError as error:
             return SegmentationSet(ok=False, error=error)
+        # rules-allow: swallowed-error — provider code is not ours; the result, the trace and the log keep its failure
         except Exception as error:
-            # One provider failure must not end the program: it gets the failure as a result, and the log holds it.
             logger.error('The segmentation provider raised', exc_info=error)
             return SegmentationSet(
                 ok=False, error=ApiError(ErrorCode.PROVIDER_ERROR, f'{type(error).__name__}: {error}')
             )
+        if not isinstance(found, SegmentationSet):
+            message = f'the segmentation provider answered {type(found).__name__}, not SegmentationSet'
+            return SegmentationSet(ok=False, error=ApiError(ErrorCode.PROVIDER_ERROR, message))
         if not found.ok:
             return found
         # `mask_to_point_cloud` takes a mask only in the frame of the view it came from.
@@ -819,7 +819,7 @@ class CapBridge:
         view = self._view(observation, camera_name)
         if not isinstance(mask, Segmentation):
             mask = Segmentation(mask=mask, label='object', score=1.0, camera_name=camera_name, frame=view.frame)
-        frame = target_frame or observation.robot_state.base_frame
+        frame = observation.robot_state.base_frame if target_frame is None else target_frame
         return geometry.mask_to_point_cloud(view, mask, target_frame=frame)
 
     @staticmethod
@@ -973,7 +973,6 @@ class CapBridge:
             joints = np.asarray(target, dtype=np.float64)
         except (TypeError, ValueError) as exc:
             raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite joint vector: {exc}') from exc
-        # The measured joints of the arm give its joint count.
         count = len(self._home[arm])
         if joints.shape != (count,) or not np.all(np.isfinite(joints)):
             raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite {count}-joint vector')

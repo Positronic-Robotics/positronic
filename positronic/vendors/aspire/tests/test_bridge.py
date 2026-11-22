@@ -30,7 +30,7 @@ from positronic.vendors.aspire.contracts import (
     Segmentation,
     SegmentationSet,
 )
-from positronic.vendors.aspire.tests.test_geometry import MASK, MASK_POINTS
+from positronic.vendors.aspire.tests.test_geometry import MASK
 
 ARMS = keys.BIMANUAL_ARMS
 QUAT = geom.Rotation.Representation.QUAT
@@ -386,8 +386,8 @@ def test_a_one_arm_program_names_its_arm_primary_and_moves_the_joints_the_rig_ha
         assert other.error.code == 'not_found', other
         period = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 7)}))
         assert period.ok and period.observation.robot_state.joint_positions['primary'][6] == 0.1, period
-        wide = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 6)}))
-        assert wide.error.code == 'invalid_request', wide
+        short_step = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 6)}))
+        assert short_step.error.code == 'invalid_request', short_step
         start = get_robot_state()
         path = Trajectory(joint_positions=[[0.1] * 7, [0.2] * 7], dt_s=0.2, joint_names=start.joint_names['primary'],
                           planner='test', collision_aware=False, expected_start=start)
@@ -413,9 +413,23 @@ def test_the_embodiment_of_a_program_is_the_one_the_settings_name(run, one_arm):
         assert get_robot_state().embodiment == 'franka'
         command = ArmCommand(mode='joint_position', target=[0.1] * 7)
         assert command.embodiment == 'franka' and step(RobotAction(arms={'primary': command})).ok
-        other = ArmCommand(mode='joint_position', target=[0.1] * 7, embodiment='yam_real')
+        other = ArmCommand('joint_position', [0.1] * 7, None, 'yam_real')
         refused = step(RobotAction(arms={'primary': other}))
         assert refused.error.code == 'invalid_request' and not refused.diagnostics['accepted'], refused
+        start = get_robot_state()
+        names = start.joint_names['primary']
+        path = Trajectory(joint_positions=[[0.2] * 7], dt_s=0.2, joint_names=names, planner='test',
+                          collision_aware=False, expected_start=start)
+        assert path.embodiment == 'franka' and execute_trajectory(path).ok
+        start = get_robot_state()
+        both = SynchronizedTrajectory(joint_positions={'primary': [[0.3] * 7]}, dt_s=0.2,
+                                      joint_names={'primary': names}, planner='test', collision_aware=False,
+                                      expected_start=start)
+        assert both.embodiment == 'franka' and execute_trajectory(both).ok
+        start = get_robot_state()
+        yam = Trajectory(joint_positions=[[0.4] * 7], dt_s=0.2, joint_names=names, planner='test',
+                         collision_aware=False, expected_start=start, embodiment='yam_real')
+        assert execute_trajectory(yam).error.code == 'invalid_request'
         try:
             RobotAction(arms={'primary': command, 'secondary': other})
             mixed = None
@@ -437,11 +451,18 @@ def test_an_observation_whose_joint_velocities_do_not_match_its_joints_is_refuse
         CapBridge(Program('program.py', 'pass'), one_arm).answer(obs)
 
 
-def test_settings_refuse_arms_that_do_not_name_each_arm_once():
+def test_the_embodiment_of_a_two_arm_program_is_yam_real_by_default(run):
+    bridge, _ = run("""
+        assert get_robot_state().embodiment == 'yam_real'
+        assert ArmCommand(mode='joint_position', target=[0.1] * 6).embodiment == 'yam_real'
+    """)
+    completed(bridge)
+
+
+@pytest.mark.parametrize('arms', [(), (None, PRIMARY_ARM), (keys.LEFT_ARM, keys.LEFT_ARM), keys.LEFT_ARM])
+def test_settings_refuse_arms_that_do_not_name_each_arm_once(arms):
     with pytest.raises(ValueError, match='arms'):
-        BridgeSettings(arms=())
-    with pytest.raises(ValueError, match='arms'):
-        BridgeSettings(arms=(None, PRIMARY_ARM))
+        BridgeSettings(arms=arms)
 
 
 # A wrist camera 0.3 m above the hand of a one-arm rig. It looks down: its optical z is the hand's -z, and its y
@@ -452,6 +473,18 @@ LOOKS_DOWN = CameraCalibration(intrinsics=INTRINSICS, pose=(0.0, 0.0, 0.3, 0.0, 
 DEPTH_MM = np.full((4, 6, 1), 500, dtype=np.uint16)
 DEPTH_MM[:, 3] = 400
 DEPTH_MM[0, 0] = 0
+
+
+# The points of `MASK` in the base frame, row by row, for the wrist camera at the start pose of the hand, 0.6 m above
+# the point (0.3, 0.2) of the base frame and looking down.
+MASK_POINTS = [
+    [0.25, 0.225, 0.1],
+    [0.3, 0.22, 0.2],
+    [0.35, 0.225, 0.1],
+    [0.25, 0.175, 0.1],
+    [0.3, 0.18, 0.2],
+    [0.35, 0.175, 0.1],
+]
 
 
 def wrist_rig() -> Rig:
@@ -520,7 +553,7 @@ def test_depth_reads_as_metres_with_zero_for_no_depth(one_arm_bridge, depth, met
     rig = wrist_rig()
     rig.views[keys.WRIST_IMAGE] = np.zeros((*np.shape(metres), 3), dtype=np.uint8)
     rig.views[f'{keys.DEPTH_PREFIX}{WRIST}'] = depth
-    view = one_arm_bridge(rig).get_observation().cameras[WRIST]
+    view = one_arm_bridge(rig, calibration={}).get_observation().cameras[WRIST]
     assert view.depth_m.dtype == np.float32
     np.testing.assert_allclose(view.depth_m, metres)
 
@@ -542,9 +575,11 @@ def test_a_depth_that_is_not_metric_or_not_the_size_of_its_image_is_refused(one_
         (INTRINSICS, (0.0, 0.0, 0.3, 0.0, 2.0, 0.0, 0.0)),
         (INTRINSICS, (0.0, 0.0, 0.3, 1.0, 0.0, 0.0)),
         (INTRINSICS, (float('nan'), 0.0, 0.3, 1.0, 0.0, 0.0, 0.0)),
+        (((10.0, 0.0, float('nan')), (0.0, 10.0, 1.0), (0.0, 0.0, 1.0)), LOOKS_DOWN.pose),
+        (((10.0, 0.0, 2.0), (0.0, 0.0, 1.0), (0.0, 0.0, 1.0)), LOOKS_DOWN.pose),
     ],
 )
-def test_a_calibration_that_is_not_a_camera_is_refused(intrinsics, pose):
+def test_a_calibration_that_is_not_finite_unit_and_pinhole_is_refused(intrinsics, pose):
     with pytest.raises(ValueError):
         CameraCalibration(intrinsics=intrinsics, pose=pose)
 
@@ -553,22 +588,61 @@ def test_a_calibration_on_the_hand_of_no_arm_is_refused(settings, one_arm):
     on_left = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=keys.LEFT_ARM)
     with pytest.raises(ValueError, match='hand'):
         CapBridge(Program('program.py', 'pass'), one_arm, calibration={WRIST: on_left})
-    unknown = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand='tertiary')
-    with pytest.raises(ValueError, match='hand'):
-        CapBridge(Program('program.py', 'pass'), settings, calibration={WRIST: unknown})
+    # On a two-arm rig a hand is `left` or `right`: the aliases do not apply to a calibration.
+    for hand in ('tertiary', PRIMARY_ARM):
+        unknown = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=hand)
+        with pytest.raises(ValueError, match='hand'):
+            CapBridge(Program('program.py', 'pass'), settings, calibration={WRIST: unknown})
 
 
-def test_a_camera_on_the_primary_hand_of_a_two_arm_rig_follows_the_arm_that_primary_names(settings):
+def test_a_camera_on_the_right_hand_of_a_two_arm_rig_follows_that_hand_in_the_base_frame_of_the_settings(settings):
     rig = Rig()
     rig.views[keys.WRIST_IMAGE] = np.zeros((4, 6, 3), dtype=np.uint8)
-    bridge = CapBridge(Program('program.py', 'pass'), settings, calibration={WRIST: LOOKS_DOWN})
+    on_right = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=keys.RIGHT_ARM)
+    bridge = CapBridge(
+        Program('program.py', 'pass'), replace(settings, base_frame='table'), calibration={WRIST: on_right}
+    )
     try:
         bridge.answer(rig.obs())
         pose = bridge.get_observation().cameras[WRIST].camera_pose
         expected = rig.pose[keys.RIGHT_ARM].as_matrix @ LOOKS_DOWN.transform.as_matrix
         np.testing.assert_allclose(pose.as_matrix(), expected)
+        assert pose.frame == 'table'
     finally:
         bridge.close()
+
+
+def test_equal_calibrations_compare_equal():
+    same = CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose, hand=PRIMARY_ARM)
+    assert LOOKS_DOWN.matrix is not None and same == LOOKS_DOWN
+    assert same != CameraCalibration(intrinsics=INTRINSICS, pose=LOOKS_DOWN.pose)
+
+
+def test_a_depth_reaches_a_view_with_no_calibration(one_arm_bridge):
+    view = one_arm_bridge(calibration={}).get_observation().cameras[WRIST]
+    assert view.intrinsics is None and view.camera_pose is None
+    np.testing.assert_allclose(view.depth_m, DEPTH_MM[..., 0] / 1000.0)
+
+
+@pytest.mark.parametrize(
+    ('calibration', 'extra', 'message'),
+    [
+        ({'writs': LOOKS_DOWN}, {}, 'no image'),
+        ({}, {f'{keys.DEPTH_PREFIX}side': DEPTH_MM}, 'no image'),
+        (
+            {WRIST: CameraCalibration(intrinsics=((10.0, 0.0, 640.0), *INTRINSICS[1:]), pose=LOOKS_DOWN.pose)},
+            {},
+            'principal',
+        ),
+    ],
+)
+def test_an_observation_that_does_not_fit_the_calibration_or_its_depths_is_refused(
+    one_arm_bridge, calibration, extra, message
+):
+    rig = wrist_rig()
+    rig.views.update(extra)
+    with pytest.raises(ValueError, match=message):
+        one_arm_bridge(rig, calibration=calibration)
 
 
 class Segmenter:
@@ -672,3 +746,56 @@ def test_a_mask_becomes_points_in_the_base_frame_by_default_and_in_the_camera_fr
         bridge.mask_to_point_cloud(MASK, EXTERIOR)
     with pytest.raises(ValueError, match='no camera'):
         bridge.mask_to_point_cloud(MASK, 'side')
+
+
+def test_a_provider_that_raises_is_logged_at_error(one_arm_bridge, caplog):
+    found = one_arm_bridge(segmentation=Segmenter(RuntimeError('the model is down'))).segment_text(WRIST, 'cup')
+    assert not found.ok
+    assert [record.levelname for record in caplog.records] == ['ERROR']
+    assert 'the model is down' in caplog.text
+
+
+def test_a_failed_answer_of_the_provider_reaches_the_program_unchanged(one_arm_bridge):
+    failed = SegmentationSet(ok=False, error=ApiError(ErrorCode.NO_SEGMENTATION, 'nothing matches cup'))
+
+    class Empty(Segmenter):
+        def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet:
+            return failed
+
+    assert one_arm_bridge(segmentation=Empty()).segment_text(WRIST, 'cup') is failed
+
+
+def test_an_answer_that_is_not_a_segmentation_set_is_a_provider_error(one_arm_bridge):
+    class Wrong(Segmenter):
+        def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet:
+            return None  # pyright: ignore[reportReturnType]
+
+    found = one_arm_bridge(segmentation=Wrong()).segment_text(WRIST, 'cup')
+    assert not found.ok and found.error.code is ErrorCode.PROVIDER_ERROR and 'NoneType' in found.error.message
+
+
+def test_segment_text_refuses_a_camera_the_observation_does_not_have(one_arm_bridge):
+    with pytest.raises(ValueError, match='no camera'):
+        one_arm_bridge(segmentation=Segmenter()).segment_text('side', 'cup')
+
+
+def test_the_trace_keeps_the_waypoints_of_a_trajectory_and_summarises_a_mask_given_by_keyword(run, one_arm):
+    bridge, _ = run(
+        """
+        start = get_robot_state()
+        path = Trajectory(joint_positions=[[0.1] * 7, [0.2] * 7], dt_s=0.2, joint_names=start.joint_names['primary'],
+                          planner='test', collision_aware=False, expected_start=start)
+        assert execute_trajectory(path).ok
+        mask = segment_text('wrist', 'cup').segmentations[0].mask
+        assert mask_to_point_cloud(mask=mask, camera_name='wrist').frame == 'world'
+        """,
+        wrist_rig(),
+        one_arm,
+        calibration={WRIST: LOOKS_DOWN},
+        segmentation=Segmenter(),
+    )
+    completed(bridge)
+    calls = {call.name: call for call in bridge.calls}
+    assert calls['execute_trajectory'].args[0]['joint_positions'] == [[0.1] * 7, [0.2] * 7]
+    summary = ArraySummary(shape=(4, 6), dtype='bool', nonzero=6).model_dump(mode='json')
+    assert calls['mask_to_point_cloud'].kwargs == {'mask': summary, 'camera_name': 'wrist'}

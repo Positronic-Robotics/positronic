@@ -5,9 +5,9 @@
 sends observations and plays the action chunks that the server answers. The program never drives a motor. The rig's
 driver solves IK and limits speed.
 
-The vendor holds a port of the ASPIRE value types (`contracts.py`) and does not depend on the ASPIRE package. That
-package requires Python older than 3.13, and positronic runs on 3.13. See [NOTICE](NOTICE) for the source and the
-licence.
+The vendor holds a port of the ASPIRE value types (`contracts.py`) and of its point geometry (`geometry.py`). It does
+not depend on the ASPIRE package. That package requires Python older than 3.13, and positronic runs on 3.13. See
+[NOTICE](NOTICE) for the source and the licence.
 
 ## Run
 
@@ -35,8 +35,7 @@ The server serves a two-arm rig by default. For a rig whose channels carry no ar
 `robot_command`, `target_grip`), start it with `--settings.arms='[None]'`:
 
 ```bash
-uv run --locked python -m positronic.vendors.aspire.server --settings.arms='[None]' \
-  --calibration=path/to/calibration.json --websocket.served_address.port=8000
+uv run --locked python -m positronic.vendors.aspire.server --settings.arms='[None]' --websocket.served_address.port=8000
 ```
 
 ## How a call runs
@@ -86,10 +85,11 @@ trajectory that does not start within 0.02 rad of the measured joints (`stale_pl
 one-arm rig (`--settings.arms='[None]'`) the arm is `primary`, and the channels are those of the table without
 `.{arm}`. An arm has the joint count that its first observation holds: 6 for a YAM, 7 for a Franka. The bridge refuses
 a joint target of a different length (`invalid_request`). `--settings.embodiment` (`yam_real` by default) is the
-embodiment name of each state and command in a program.
+embodiment name of each state and command in a program. Set it on a rig that is not a YAM. An alias must name an arm
+of `--settings.arms`: on a rig with one named arm, set `--settings.aliases` so that `primary` names that arm.
 
-Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's
-measured hand poses, at the `gripper` site. The server states that site in its `ee_frames`.
+Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's measured hand poses, at
+the `gripper` site. The server states that site in its `ee_frames`.
 
 `get_task_context` carries the task instruction as `language` and `task_name`.
 
@@ -117,18 +117,26 @@ x to the right of the image, y down, z forward. A pose is `x, y, z, qw, qx, qy, 
 }
 ```
 
-The pose of a camera with no `hand` is in the base frame. The pose of a camera with `hand` is in the hand frame of
-that arm, as a program names the arm (`primary` names the right arm of the default two-arm rig). The bridge then gives
-`camera_pose` as the measured hand pose times this pose, at each observation. The hand frame is the frame of
-`robot_state.ee_pose`. The server refuses a `hand` that names no arm when it starts. It states the calibration in its
-metadata, under `calibration`.
+Start the server with `--calibration=path/to/calibration.json`. The pose of a camera with no `hand` is in the base
+frame. The pose of a camera with `hand` is in the hand frame of that arm. `hand` names an arm of `--settings.arms`:
+`primary` on a one-arm rig, `left` or `right` on a two-arm rig. It does not go through `--settings.aliases`. The
+bridge gives `camera_pose` as the measured hand pose times this pose, at each observation. The hand frame is the frame
+of `robot_state.ee_pose`. The server refuses a `hand` that names no arm when it starts. It states the calibration in
+its metadata, under `calibration`.
+
+The bridge refuses an observation that has no image for a calibrated camera or for a `depth.{camera}`, and a
+calibration whose principal point is outside the image. A wrist view's `camera_pose` uses the hand pose of the same
+observation. The bridge does not check that the image and the hand pose are of the same instant, so read a wrist view
+when the arm is still.
 
 ## Perception
 
-The bridge holds no perception model. `--segmentation` names a configuronic config of a segmentation provider: an
-object with the `segment_text` method of `SegmentationProvider` in [`contracts.py`](contracts.py). All sessions share
-the provider, so it can get calls from more than one thread. A program's thread calls the provider, and the robot holds
-its targets during the call.
+The bridge holds no perception model, and positronic ships no provider. `--segmentation=@my_package.segmenter`
+names a configuronic config of a segmentation provider: an object with the `segment_text` method of
+`SegmentationProvider` in [`contracts.py`](contracts.py). The server refuses a value that is not such an object when it
+starts, and states the provider's class in its metadata, under `segmentation`. All sessions share the provider, so it
+can get calls from more than one thread. A program's thread calls the provider, and the robot holds its targets during
+the call.
 
 | Call | Needs | What it does |
 | --- | --- | --- |
@@ -138,7 +146,12 @@ its targets during the call.
 With no provider, `segment_text` raises `NotImplementedError`. A provider that raises gives the program a result with
 `ok=False` and its error: an `ApiError` as the provider raised it, or `provider_error` for each other exception. A
 segmentation must be in the frame of its view, which is the camera name: the bridge gives `provider_error` for a
-segmentation in another frame. `mask_to_point_cloud` raises `ValueError` for a view that cannot give points.
+segmentation in another frame, and for an answer that is not a `SegmentationSet`. `mask_to_point_cloud` raises
+`ValueError` for a view that cannot give points.
+
+`mask_to_point_cloud` reads the latest view of the camera, not the view that `segment_text` read. When the arm moves
+between the two calls, the mask and the depth do not match. Call both while the arm is still, for example after a move
+that ended `arrived`.
 
 The other perception calls (`segment_points`, `generate_grasps`, `localize_object`, `select_grasp` and the others) and
 the planning calls (`solve_ik`, `plan_motion`, `plan_synchronized_motion`) raise `NotImplementedError`.
@@ -148,8 +161,13 @@ the planning calls (`solve_ik`, `plan_motion`, `plan_synchronized_motion`) raise
 A program may import `math` only, and it sees ASPIRE's small set of builtins. These rules keep a
 program to ASPIRE's contract; they are not a sandbox. Run a program only from a source you trust.
 
+A numpy method that imports a module when it runs, such as `ndarray.mean`, can fail in a program with `ImportError`.
+It fails when no code in the server's process called it before, so a program can pass in one process and fail in
+another. Use `sum` and `len` on the rows of an array:
+`sum(point[0] for point in cloud.points) / len(cloud.points)`.
+
 In a program, `ArmCommand`, `Trajectory` and `SynchronizedTrajectory` make values with the embodiment of
-`--settings.embodiment`. They are functions, so `isinstance` does not take them.
+`--settings.embodiment` when the program does not give one.
 
 ## Records
 
@@ -168,8 +186,9 @@ An entry of `calls` holds:
 | `started_wall_s`, `ended_wall_s` | Server wall time, in seconds from the program's start |
 | `started_robot_s`, `ended_robot_s` | Robot time, in seconds of the chunks the bridge answered |
 
-In `args`, `kwargs` and `result`, an array with two or more dimensions, such as a mask, is its `shape`, its `dtype` and
-its `nonzero` count. A point cloud is its `frame` and its `point_count`. A value with no JSON form is its `repr`.
+In `args`, `kwargs` and `result`, a `bool` array with two or more dimensions, such as a mask, is its `shape`, its
+`dtype` and its `nonzero` count. A point cloud is its `frame` and its `point_count`. A value with no JSON form is its
+`repr`.
 
 The episode records the program name, its SHA-256 and the record's file name (`session_record`) under
 `inference.policy.server`.

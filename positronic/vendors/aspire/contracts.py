@@ -2,7 +2,8 @@
 
 Ported from NVlabs/ASPIRE ``src/cap_harness/{contracts,errors,protocols}.py`` at commit ``fa00f0e``, under the Apache
 License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are ASPIRE's. An arm has the joint count
-of its state. A camera observation holds depth, intrinsics and a pose only when the rig gives them.
+of its state. A camera observation holds depth only when the rig sends it, and intrinsics and a pose only when the
+server has a calibration for the camera. It refuses a depth of another size than its image.
 """
 
 from collections.abc import Mapping, Sequence
@@ -88,6 +89,11 @@ def _vector(value: object, name: str, shape: tuple[int | None, ...]) -> np.ndarr
     return array
 
 
+def _check_text(value: object, name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'{name} must be a non-empty string')
+
+
 def _unit_interval(value: float, name: str) -> float:
     number = float(value)
     if not 0.0 <= number <= 1.0:
@@ -107,8 +113,7 @@ class Pose:
         quaternion = _vector(self.quaternion_wxyz, 'quaternion_wxyz', (4,))
         if not np.isclose(np.linalg.norm(quaternion), 1.0, rtol=0.0, atol=1e-5):
             raise ValueError('quaternion_wxyz must be normalized to unit length')
-        if not isinstance(self.frame, str) or not self.frame.strip():
-            raise ValueError('frame must be a non-empty string')
+        _check_text(self.frame, 'frame')
         object.__setattr__(self, 'position', _vector(self.position, 'position', (3,)))
         object.__setattr__(self, 'quaternion_wxyz', quaternion)
 
@@ -144,7 +149,7 @@ class MotionStrategy:
 
 @dataclass(frozen=True, slots=True)
 class CameraObservation:
-    """One camera view: RGB with height, width and channels, and what the rig gives of depth, intrinsics and pose.
+    """One camera view: RGB with height, width and channels, and its depth, intrinsics and pose when it has them.
 
     ``depth_m`` is metres along the optical axis, with 0 where the camera measured no depth. ``camera_pose`` is the
     pose of the optical frame: x to the right of the image, y down, z forward.
@@ -372,6 +377,9 @@ class Segmentation:
         mask.setflags(write=False)
         object.__setattr__(self, 'mask', mask)
         object.__setattr__(self, 'score', _unit_interval(self.score, 'score'))
+        _check_text(self.label, 'label')
+        _check_text(self.camera_name, 'camera_name')
+        _check_text(self.frame, 'frame')
         if self.box_xyxy is not None:
             box = _vector(self.box_xyxy, 'box_xyxy', (4,))
             if box[2] < box[0] or box[3] < box[1]:
@@ -418,10 +426,17 @@ class PointCloud:
         if points.shape[0] == 0:
             raise ValueError('points must contain at least one point')
         object.__setattr__(self, 'points', points)
+        _check_text(self.frame, 'frame')
         if self.colors is not None:
             colors = np.array(self.colors)
             if colors.shape != points.shape:
                 raise ValueError(f'colors must have shape {points.shape}, got {colors.shape}')
+            integer = np.issubdtype(colors.dtype, np.integer)
+            if not (integer or np.issubdtype(colors.dtype, np.floating)) or not np.all(np.isfinite(colors)):
+                raise ValueError('colors must be finite integers or floats')
+            upper = 255 if integer else 1.0
+            if colors.min() < 0 or colors.max() > upper:
+                raise ValueError(f'colors must be in [0, {upper}]')
             colors.setflags(write=False)
             object.__setattr__(self, 'colors', colors)
 
