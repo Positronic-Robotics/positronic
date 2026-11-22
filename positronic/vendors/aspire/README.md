@@ -85,10 +85,11 @@ trajectory that does not start within 0.02 rad of the measured joints (`stale_pl
 one-arm rig (`--settings.arms='[None]'`) the arm is `primary`, and the channels are those of the table without
 `.{arm}`. An arm has the joint count that its first observation holds: 6 for a YAM, 7 for a Franka. The bridge refuses
 a joint target of a different length (`invalid_request`). `--settings.embodiment` (`yam_real` by default) is the
-embodiment name of each state and command in a program.
+embodiment name of each state and command in a program. Set it on a rig that is not a YAM. An alias must name an arm
+of `--settings.arms`: on a rig with one named arm, set `--settings.aliases` so that `primary` names that arm.
 
-Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's
-measured hand poses, at the `gripper` site. The server states that site in its `ee_frames`.
+Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's measured hand poses, at
+the `gripper` site. The server states that site in its `ee_frames`.
 
 `get_observation` returns the RGB view of each `image.*` camera, named without the prefix, for example `exterior`. A
 view has no depth, intrinsics or pose. `get_task_context` carries the task instruction as `language` and `task_name`.
@@ -98,7 +99,7 @@ Perception and planning calls (`segment_text`, `localize_object`, `plan_motion`,
 program to ASPIRE's contract; they are not a sandbox. Run a program only from a source you trust.
 
 In a program, `ArmCommand`, `Trajectory` and `SynchronizedTrajectory` make values with the embodiment of
-`--settings.embodiment`. They are functions, so `isinstance` does not take them.
+`--settings.embodiment` when the program does not give one.
 
 ## Records
 

@@ -369,8 +369,8 @@ def test_a_one_arm_program_names_its_arm_primary_and_moves_the_joints_the_rig_ha
         assert other.error.code == 'not_found', other
         period = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 7)}))
         assert period.ok and period.observation.robot_state.joint_positions['primary'][6] == 0.1, period
-        wide = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 6)}))
-        assert wide.error.code == 'invalid_request', wide
+        short_step = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 6)}))
+        assert short_step.error.code == 'invalid_request', short_step
         start = get_robot_state()
         path = Trajectory(joint_positions=[[0.1] * 7, [0.2] * 7], dt_s=0.2, joint_names=start.joint_names['primary'],
                           planner='test', collision_aware=False, expected_start=start)
@@ -396,9 +396,23 @@ def test_the_embodiment_of_a_program_is_the_one_the_settings_name(run, one_arm):
         assert get_robot_state().embodiment == 'franka'
         command = ArmCommand(mode='joint_position', target=[0.1] * 7)
         assert command.embodiment == 'franka' and step(RobotAction(arms={'primary': command})).ok
-        other = ArmCommand(mode='joint_position', target=[0.1] * 7, embodiment='yam_real')
+        other = ArmCommand('joint_position', [0.1] * 7, None, 'yam_real')
         refused = step(RobotAction(arms={'primary': other}))
         assert refused.error.code == 'invalid_request' and not refused.diagnostics['accepted'], refused
+        start = get_robot_state()
+        names = start.joint_names['primary']
+        path = Trajectory(joint_positions=[[0.2] * 7], dt_s=0.2, joint_names=names, planner='test',
+                          collision_aware=False, expected_start=start)
+        assert path.embodiment == 'franka' and execute_trajectory(path).ok
+        start = get_robot_state()
+        both = SynchronizedTrajectory(joint_positions={'primary': [[0.3] * 7]}, dt_s=0.2,
+                                      joint_names={'primary': names}, planner='test', collision_aware=False,
+                                      expected_start=start)
+        assert both.embodiment == 'franka' and execute_trajectory(both).ok
+        start = get_robot_state()
+        yam = Trajectory(joint_positions=[[0.4] * 7], dt_s=0.2, joint_names=names, planner='test',
+                         collision_aware=False, expected_start=start, embodiment='yam_real')
+        assert execute_trajectory(yam).error.code == 'invalid_request'
         try:
             RobotAction(arms={'primary': command, 'secondary': other})
             mixed = None
@@ -420,8 +434,15 @@ def test_an_observation_whose_joint_velocities_do_not_match_its_joints_is_refuse
         CapBridge(Program('program.py', 'pass'), one_arm).answer(obs)
 
 
-def test_settings_refuse_arms_that_do_not_name_each_arm_once():
+def test_the_embodiment_of_a_two_arm_program_is_yam_real_by_default(run):
+    bridge, _ = run("""
+        assert get_robot_state().embodiment == 'yam_real'
+        assert ArmCommand(mode='joint_position', target=[0.1] * 6).embodiment == 'yam_real'
+    """)
+    completed(bridge)
+
+
+@pytest.mark.parametrize('arms', [(), (None, PRIMARY_ARM), (keys.LEFT_ARM, keys.LEFT_ARM), keys.LEFT_ARM])
+def test_settings_refuse_arms_that_do_not_name_each_arm_once(arms):
     with pytest.raises(ValueError, match='arms'):
-        BridgeSettings(arms=())
-    with pytest.raises(ValueError, match='arms'):
-        BridgeSettings(arms=(None, PRIMARY_ARM))
+        BridgeSettings(arms=arms)

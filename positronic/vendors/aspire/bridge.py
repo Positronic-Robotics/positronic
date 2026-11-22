@@ -13,9 +13,9 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, make_dataclass, replace
 from enum import StrEnum
-from functools import partial, wraps
+from functools import wraps
 from types import MappingProxyType
 from typing import Any
 
@@ -101,18 +101,13 @@ class BridgeSettings:
             check_finite_positive(getattr(self, name), name)
         if self.still_rounds < 1:
             raise ValueError('still_rounds must be at least 1')
-        if not self.arms or len(self.arm_names) != len(self.arms):
+        if isinstance(self.arms, str) or not self.arms or len(self.rig_arms) != len(self.arms):
             raise ValueError('arms must name at least one arm, and each arm once')
 
     @property
-    def arm_names(self) -> dict[str, str | None]:
-        """The name of each arm in a program, with its name on the rig."""
+    def rig_arms(self) -> dict[str, str | None]:
+        """The name of each arm on the rig, by its name in a program."""
         return {PRIMARY_ARM if arm is None else arm: arm for arm in self.arms}
-
-    def program_arm(self, name: str) -> str | None:
-        """The key in ``arm_names`` of the arm a program names ``name``, aliases included; ``None`` for no arm."""
-        arm = name if name in self.arm_names else self.aliases.get(name)
-        return arm if arm in self.arm_names else None
 
     @property
     def round_ticks(self) -> int:
@@ -192,14 +187,14 @@ class _ChunkPlan:
     holds: int
     end: PolicyEnd | None
 
-    def chunk(self, arm_names: Mapping[str, str | None]) -> list[dict[str, Any]]:
-        """The answer on the rig's channels; ``arm_names`` gives each arm's name on the rig."""
+    def chunk(self, rig_arms: Mapping[str, str | None]) -> list[dict[str, Any]]:
+        """The answer on the rig's channels; ``rig_arms`` gives each arm's name on the rig."""
 
         def commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
             entry: dict[str, Any] = {}
             for arm, target in targets.items():
-                entry[keys.arm_channel(keys.ROBOT_COMMAND, arm_names[arm])] = target.command
-                entry[keys.arm_channel(keys.TARGET_GRIP, arm_names[arm])] = target.grip
+                entry[keys.arm_channel(keys.ROBOT_COMMAND, rig_arms[arm])] = target.command
+                entry[keys.arm_channel(keys.TARGET_GRIP, rig_arms[arm])] = target.grip
             return entry
 
         chunk = [commands(targets) for targets in self.path] + [commands(self.hold)] * self.holds
@@ -307,7 +302,7 @@ class CapBridge:
     def __init__(self, program: Program, settings: BridgeSettings):
         self._program = program
         self._settings = settings
-        self._arms = settings.arm_names
+        self._arms = settings.rig_arms
         self._calls: list[CallTrace] = []
         self._started_wall_s = 0.0
         self._turn = threading.Condition()
@@ -475,8 +470,10 @@ class CapBridge:
         }
         builtins['__import__'] = self._import_math
         constructors: dict[str, Any] = {t.__name__: t for t in (MotionStrategy, Pose, RobotAction)}
-        for of_embodiment in (ArmCommand, SynchronizedTrajectory, Trajectory):
-            constructors[of_embodiment.__name__] = partial(of_embodiment, embodiment=self.embodiment)
+        # A subclass changes only the default of `embodiment`, so a program may still give it by position.
+        default = [('embodiment', str, field(default=self.embodiment))]
+        for base in (ArmCommand, SynchronizedTrajectory, Trajectory):
+            constructors[base.__name__] = make_dataclass(base.__name__, default, bases=(base,), frozen=True, slots=True)
         tools = {name: self._traced(name, tool) for name, tool in self._tools().items()}
         namespace: dict[str, Any] = {'__builtins__': builtins, **constructors, **tools}
         self._started_wall_s = time.monotonic()
@@ -610,8 +607,8 @@ class CapBridge:
             return call
 
     def _arm(self, name: str) -> str:
-        arm = self._settings.program_arm(name)
-        if arm is None:
+        arm = name if name in self._arms else self._settings.aliases.get(name)
+        if arm not in self._arms:
             raise ApiError(ErrorCode.NOT_FOUND, f'unknown arm {name!r}')
         return arm
 
@@ -817,7 +814,6 @@ class CapBridge:
             joints = np.asarray(target, dtype=np.float64)
         except (TypeError, ValueError) as exc:
             raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite joint vector: {exc}') from exc
-        # The measured joints of the arm give its joint count.
         count = len(self._home[arm])
         if joints.shape != (count,) or not np.all(np.isfinite(joints)):
             raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite {count}-joint vector')
