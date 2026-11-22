@@ -274,17 +274,16 @@ def test_a_directory_without_task_metadata_fails_before_any_spawn(spawned, tmp_p
     assert spawned == []
 
 
-def test_a_yam_server_with_a_task_library_fails_before_any_spawn(spawned, tmp_path):
+def test_a_yam_server_gets_its_task_library(spawned, tmp_path):
     (tmp_path / '_metadata').mkdir()
     (tmp_path / '_metadata' / 'task_metadata.json').write_text('[]')
 
-    with (
-        pytest.raises(ValueError, match='task libraries'),
-        launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM, task_libs=(tmp_path,)),
-    ):
+    with launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM, task_libs=(tmp_path,)):
         pass
 
-    assert spawned == []
+    command = spawned[0]
+    assert command[command.index('--robot') + 1] == robolab_keys.YAM
+    assert [command[i + 1] for i, arg in enumerate(command) if arg == '--task-lib'] == [str(tmp_path)]
 
 
 @pytest.fixture
