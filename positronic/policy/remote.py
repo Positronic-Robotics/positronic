@@ -235,7 +235,7 @@ class RemotePolicy(Policy):
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.
                 frames = _server_frames(server_meta.get(roboarm_keys.EE_FRAMES, {}), stack_frames)
-                # The harness parses the recorded entry outside this run, where a parse error is not the server's.
+                # Parse here, so that an entry that does not parse fails as metadata that the server states.
                 parse_ee_frames(frames)
                 server_compresses_images = bool(server_meta.get(policy_keys.COMPRESS_IMAGES))
             except PolicyCommandError:
