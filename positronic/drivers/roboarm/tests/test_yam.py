@@ -1265,7 +1265,7 @@ def test_a_step_that_takes_a_pair_into_the_gap_closes_it_while_a_deeper_pair_com
     after_q = np.array([1.458, 2.488, 1.432, -0.234, -0.507, 1.654])
     before = {near.pair: near.gap_m for near in clearance.nears(before_q, OPEN_SHARE)}
     assert clearance.gap(after_q, OPEN_SHARE) > clearance.gap(before_q, OPEN_SHARE)
-    assert clearance.closes_a_gap(after_q, before, OPEN_SHARE, GAP_TOLERANCE_M)
+    assert clearance.closes_a_gap(after_q, before, OPEN_SHARE, GAP_TOLERANCE_M, obstacles_only=False)
 
 
 def test_a_park_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_error():
@@ -1294,6 +1294,39 @@ def test_a_start_move_whose_raise_does_not_clear_the_table_holds_the_arm_and_rea
     rig.tick(1.0)
     assert np.max(np.abs(rig.vendor._pos[:6] - RAISED)) > 0.1
     assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
+    rig.loop.close()
+
+
+def test_a_start_move_takes_no_second_pair_into_the_table_while_a_first_one_is_deep_in_it():
+    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    # A pose 43.5 mm deep in the table, from where the joint ramp to the start pose takes another pair into it
+    deep = np.array([0.977, 3.288, 2.766, -0.569, 1.379, -1.208])
+    rig.vendor._pos[:6] = deep
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    before = clearance.gaps(deep, OPEN_SHARE, obstacles_only=True)
+    rig.ready()
+    for q in _asked(rig):
+        for pair, gap in clearance.gaps(q, OPEN_SHARE, obstacles_only=True).items():
+            assert gap >= min(KEEP_CLEAR_M, before.get(pair, clearance.reach_m)) - GAP_TOLERANCE_M, (sorted(pair), gap)
+    rig.loop.close()
+
+
+def test_a_joint_move_into_the_table_brakes_at_the_acceleration_cap_where_that_keeps_the_gap():
+    accel = 50.0
+    rig = Rig(
+        park_after_idle_s=60.0,
+        stream=StreamTuning(max_joint_accel_rad_s2=accel, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,)),
+    )
+    rig.ready()
+    sent = len(rig.vendor.targets)
+    rig.commands.push(command.JointPosition(np.array([-0.427, 2.175, 0.81, -0.358, 1.138, -0.792])))  # in the table
+    rig.tick(3.0)
+    asked = _asked(rig)[sent - 1 :]
+    speeds = np.diff(asked, axis=0) * yam._CONTROL_HZ
+    assert np.max(np.abs(np.diff(speeds, axis=0))) <= accel / yam._CONTROL_HZ * (1 + 1e-6)
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
     rig.loop.close()
 
 

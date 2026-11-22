@@ -519,11 +519,16 @@ class _Arm(DriverRun[command.CommandType]):
         accel = self._stream.max_joint_accel_rad_s2
         if accel is not None:
             change = np.clip(step / elapsed - self._sent_speed, -accel * elapsed, accel * elapsed)
-            smooth = sent + (self._sent_speed + change) * elapsed
-            if not clearance.closes_a_gap(smooth, before, open_share, self._GAP_TOLERANCE_M):
-                return smooth
+            # The cut step under the cap, or else the hardest brake the cap allows
+            braking = self._sent_speed - np.clip(self._sent_speed, -accel * elapsed, accel * elapsed)
+            for capped in (self._sent_speed + change, braking):
+                joints = sent + capped * elapsed
+                if not clearance.closes_a_gap(joints, before, open_share, self._GAP_TOLERANCE_M, obstacles_only=False):
+                    return joints
+        # The gap holds over the acceleration cap where braking at the cap does not keep it
         kept = sent + step
-        return sent if clearance.closes_a_gap(kept, before, open_share, self._GAP_TOLERANCE_M) else kept
+        closes = clearance.closes_a_gap(kept, before, open_share, self._GAP_TOLERANCE_M, obstacles_only=False)
+        return sent if closes else kept
 
     def hold_where_it_stopped(self) -> tuple[np.ndarray, float]:
         """Hold the measured position, publish it, and return it as the target."""
@@ -804,12 +809,14 @@ class _Arm(DriverRun[command.CommandType]):
 
     @classmethod
     def _ramp_keeps_clear(cls, clearance: Clearance, start: np.ndarray, goal: np.ndarray, open_share: float) -> bool:
-        """Whether the joint ramp from ``start`` to ``goal`` keeps the gap to the obstacles at the lesser of
-        ``keep_clear_m`` and the gap at ``start``, at points ``_RAMP_CHECK_STEP_RAD`` apart."""
-        floor = min(clearance.keep_clear_m, clearance.obstacle_gap(start, open_share)) - cls._GAP_TOLERANCE_M
+        """Whether no pair of the arm and an obstacle goes nearer than ``keep_clear_m`` and nearer than it is at
+        ``start``, on the joint ramp from ``start`` to ``goal``, at points ``_RAMP_CHECK_STEP_RAD`` apart."""
+        before = clearance.gaps(start, open_share, obstacles_only=True)
         points = max(1, int(np.ceil(np.max(np.abs(goal - start)) / cls._RAMP_CHECK_STEP_RAD)))
-        return all(
-            clearance.obstacle_gap(start + share * (goal - start), open_share) >= floor
+        return not any(
+            clearance.closes_a_gap(
+                start + share * (goal - start), before, open_share, cls._GAP_TOLERANCE_M, obstacles_only=True
+            )
             for share in np.linspace(0.0, 1.0, points + 1)[1:]
         )
 

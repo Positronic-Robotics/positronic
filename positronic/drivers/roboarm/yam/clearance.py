@@ -32,8 +32,10 @@ class StreamTuning:
     ``max_joint_accel_rad_s2`` caps the joint acceleration, and a joint brakes in time to stop at its target; None
     caps nothing. ``keep_clear_m`` stops the arm before a step that takes it nearer than this to itself or
     ``obstacles``; None checks nothing. Near them, the gap closes no faster than a brake of ``approach_decel_m_s2``
-    stops it at ``keep_clear_m``. A Cartesian target is kept ``obstacle_margin_m`` above each obstacle it is over.
-    The obstacles are in the frame of the targets: the world frame of the arm.
+    stops it at ``keep_clear_m``. Where a brake at the acceleration cap does not keep the gap, the gap holds over the
+    cap: the arm came into the slow zone faster than the cap can stop it there. A Cartesian target is kept
+    ``obstacle_margin_m`` above each obstacle it is over. The obstacles are in the frame of the targets: the world
+    frame of the arm.
 
     A park or a start move checks its joint ramp against the obstacles first. Where the ramp does not keep clear,
     the gripper rises, by ``park_lift_m`` at most and for ``park_lift_timeout_s`` at most, or until the arm is
@@ -146,25 +148,53 @@ class Clearance:
     def nears(self, q: np.ndarray, open_share: float) -> list[Near]:
         """The pairs nearer than ``reach_m`` at joints ``q``, the nearest point of each pair, with the fingers open by
         ``open_share`` of their travel (0 closed, 1 open)."""
-        self._place(q, open_share)
-        data = self._data
-        nearest: dict[frozenset[str], mj.MjContact] = {}
-        for contact in data.contact[: data.ncon]:
-            pair = frozenset((self._names[contact.geom1], self._names[contact.geom2]))
-            if self._counts(set(pair)) and (pair not in nearest or contact.dist < nearest[pair].dist):
-                nearest[pair] = contact
-        return [Near(pair, float(contact.dist), self._slope(contact)) for pair, contact in nearest.items()]
+        return [
+            Near(pair, float(contact.dist), self._slope(contact))
+            for pair, contact in self._nearest(q, open_share, obstacles_only=False).items()
+        ]
+
+    def gaps(self, q: np.ndarray, open_share: float, *, obstacles_only: bool) -> dict[frozenset[str], float]:
+        """The gap of each pair nearer than ``reach_m`` at joints ``q``; with ``obstacles_only``, of the pairs of the
+        arm and an obstacle."""
+        return {pair: float(contact.dist) for pair, contact in self._nearest(q, open_share, obstacles_only).items()}
 
     def closes_a_gap(
-        self, q: np.ndarray, before: dict[frozenset[str], float], open_share: float, tolerance_m: float
+        self,
+        q: np.ndarray,
+        before: dict[frozenset[str], float],
+        open_share: float,
+        tolerance_m: float,
+        *,
+        obstacles_only: bool,
     ) -> bool:
         """Whether at joints ``q`` a pair is nearer than ``keep_clear_m`` less ``tolerance_m``, and nearer than its gap
         ``before``. Each pair counts: a pair deep in the gap does not hide another that enters it."""
         floor = self.keep_clear_m - tolerance_m
         return any(
-            near.gap_m < floor and near.gap_m < before.get(near.pair, self.reach_m)
-            for near in self.nears(q, open_share)
+            gap < floor and gap < before.get(pair, self.reach_m)
+            for pair, gap in self.gaps(q, open_share, obstacles_only=obstacles_only).items()
         )
+
+    def gap(self, q: np.ndarray, open_share: float) -> float:
+        """The least gap at joints ``q`` in meters, ``reach_m`` when nothing is nearer, negative where hulls overlap."""
+        return min(self.gaps(q, open_share, obstacles_only=False).values(), default=self.reach_m)
+
+    def obstacle_gap(self, q: np.ndarray, open_share: float) -> float:
+        """The least gap between the arm and the obstacles at joints ``q``; ``reach_m`` when none is nearer."""
+        return min(self.gaps(q, open_share, obstacles_only=True).values(), default=self.reach_m)
+
+    def _nearest(self, q: np.ndarray, open_share: float, obstacles_only: bool) -> dict[frozenset[str], mj.MjContact]:
+        """The nearest contact of each counted pair at joints ``q``."""
+        self._place(q, open_share)
+        data = self._data
+        nearest: dict[frozenset[str], mj.MjContact] = {}
+        for contact in data.contact[: data.ncon]:
+            pair = frozenset((self._names[contact.geom1], self._names[contact.geom2]))
+            if not self._counts(set(pair)) or (obstacles_only and not pair & self._obstacle_names):
+                continue
+            if pair not in nearest or contact.dist < nearest[pair].dist:
+                nearest[pair] = contact
+        return nearest
 
     def _place(self, q: np.ndarray, open_share: float) -> None:
         data = self._data
@@ -187,19 +217,3 @@ class Clearance:
             mj.mj_jac(model, data, shift, None, contact.pos, body)
             slope += sign * normal @ shift[:, self._dof_ids]
         return slope
-
-    def gap(self, q: np.ndarray, open_share: float) -> float:
-        """The least gap at joints ``q`` in meters, ``reach_m`` when nothing is nearer, negative where hulls overlap."""
-        return min((near.gap_m for near in self.nears(q, open_share)), default=self.reach_m)
-
-    def obstacle_gap(self, q: np.ndarray, open_share: float) -> float:
-        """The least gap between the arm and the obstacles at joints ``q``; ``reach_m`` when none is nearer."""
-        self._place(q, open_share)
-        data = self._data
-        gaps = [
-            float(contact.dist)
-            for contact in data.contact[: data.ncon]
-            if {self._names[contact.geom1], self._names[contact.geom2]} & self._obstacle_names
-            and self._counts({self._names[contact.geom1], self._names[contact.geom2]})
-        ]
-        return min(gaps, default=self.reach_m)
