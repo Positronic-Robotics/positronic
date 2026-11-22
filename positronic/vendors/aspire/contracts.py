@@ -1,4 +1,4 @@
-"""The ASPIRE CapApi value types and environment boundary that a program sees.
+"""The ASPIRE CapApi value types, segmentation provider boundary and environment boundary that a program sees.
 
 Ported from NVlabs/ASPIRE ``src/cap_harness/{contracts,errors,protocols}.py`` at commit ``fa00f0e``, under the Apache
 License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are ASPIRE's. An arm has the joint count
@@ -89,6 +89,11 @@ def _vector(value: object, name: str, shape: tuple[int | None, ...]) -> np.ndarr
     return array
 
 
+def _check_text(value: object, name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'{name} must be a non-empty string')
+
+
 def _unit_interval(value: float, name: str) -> float:
     number = float(value)
     if not 0.0 <= number <= 1.0:
@@ -108,8 +113,7 @@ class Pose:
         quaternion = _vector(self.quaternion_wxyz, 'quaternion_wxyz', (4,))
         if not np.isclose(np.linalg.norm(quaternion), 1.0, rtol=0.0, atol=1e-5):
             raise ValueError('quaternion_wxyz must be normalized to unit length')
-        if not isinstance(self.frame, str) or not self.frame.strip():
-            raise ValueError('frame must be a non-empty string')
+        _check_text(self.frame, 'frame')
         object.__setattr__(self, 'position', _vector(self.position, 'position', (3,)))
         object.__setattr__(self, 'quaternion_wxyz', quaternion)
 
@@ -353,6 +357,91 @@ def _require_error_unless_ok(ok: bool, error: ApiError | None) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class Segmentation:
+    """One scored binary mask in an explicitly named camera frame."""
+
+    mask: np.ndarray
+    label: str
+    score: float
+    camera_name: str
+    frame: str
+    box_xyxy: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        mask = np.array(self.mask)
+        if mask.ndim != 2 or mask.size == 0:
+            raise ValueError('mask must have non-empty shape (H, W)')
+        if mask.dtype != np.bool_ and not np.all((mask == 0) | (mask == 1)):
+            raise ValueError('mask must be boolean or contain only 0/1 values')
+        mask = mask.astype(np.bool_)
+        mask.setflags(write=False)
+        object.__setattr__(self, 'mask', mask)
+        object.__setattr__(self, 'score', _unit_interval(self.score, 'score'))
+        _check_text(self.label, 'label')
+        _check_text(self.camera_name, 'camera_name')
+        _check_text(self.frame, 'frame')
+        if self.box_xyxy is not None:
+            box = _vector(self.box_xyxy, 'box_xyxy', (4,))
+            if box[2] < box[0] or box[3] < box[1]:
+                raise ValueError('box_xyxy must satisfy x2 >= x1 and y2 >= y1')
+            object.__setattr__(self, 'box_xyxy', box)
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentationSet:
+    """Recoverable result of a segmentation provider call."""
+
+    ok: bool
+    segmentations: Sequence[Segmentation] = ()
+    error: ApiError | None = None
+    diagnostics: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_error_unless_ok(self.ok, self.error)
+        items = tuple(self.segmentations)
+        if self.ok and not items:
+            raise ValueError('a successful SegmentationSet must contain at least one segmentation')
+        if not self.ok and items:
+            raise ValueError('a failed SegmentationSet cannot carry segmentations')
+        if len({(item.camera_name, item.frame, item.mask.shape) for item in items}) > 1:
+            raise ValueError('all segmentations must share camera, frame, and mask shape')
+        object.__setattr__(self, 'segmentations', items)
+        object.__setattr__(self, 'diagnostics', MappingProxyType(dict(self.diagnostics)))
+
+    @property
+    def value(self) -> tuple[Segmentation, ...] | None:
+        return tuple(self.segmentations) if self.ok else None
+
+
+@dataclass(frozen=True, slots=True)
+class PointCloud:
+    """Finite XYZ points, and optional RGB colors, expressed in ``frame``."""
+
+    points: np.ndarray
+    frame: str
+    colors: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        points = _vector(self.points, 'points', (None, 3))
+        if points.shape[0] == 0:
+            raise ValueError('points must contain at least one point')
+        object.__setattr__(self, 'points', points)
+        _check_text(self.frame, 'frame')
+        if self.colors is not None:
+            colors = np.array(self.colors)
+            if colors.shape != points.shape:
+                raise ValueError(f'colors must have shape {points.shape}, got {colors.shape}')
+            integer = np.issubdtype(colors.dtype, np.integer)
+            if not (integer or np.issubdtype(colors.dtype, np.floating)) or not np.all(np.isfinite(colors)):
+                raise ValueError('colors must be finite integers or floats')
+            upper = 255 if integer else 1.0
+            if colors.min() < 0 or colors.max() > upper:
+                raise ValueError(f'colors must be in [0, {upper}]')
+            colors.setflags(write=False)
+            object.__setattr__(self, 'colors', colors)
+
+
+@dataclass(frozen=True, slots=True)
 class StepResult:
     """Result of exactly one adapter control period."""
 
@@ -418,6 +507,13 @@ class ExecutionResult:
             return ExecutionStatus.TRUNCATED
         assert self.error is not None
         return _STATUS_OF_ERROR.get(self.error.code, ExecutionStatus.FAILED)
+
+
+@runtime_checkable
+class SegmentationProvider(Protocol):
+    """Backend capable of text-prompted image segmentation."""
+
+    def segment_text(self, observation: CameraObservation, query: str) -> SegmentationSet: ...
 
 
 @runtime_checkable
