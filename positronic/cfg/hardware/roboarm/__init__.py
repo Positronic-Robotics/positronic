@@ -158,6 +158,7 @@ def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'Frict
     park_after_idle_s=60.0,
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
+    gripper_force_cap_n=None,
 )
 def yam(
     channel: str,
@@ -167,6 +168,7 @@ def yam(
     park_after_idle_s: float | None,
     park_tuning: 'SettleTuning',
     move_tuning: 'SettleTuning',
+    gripper_force_cap_n: float | None,
 ):
     from positronic.drivers.roboarm.yam.driver import Robot
 
@@ -178,4 +180,5 @@ def yam(
         park_after_idle_s=park_after_idle_s,
         park_tuning=park_tuning,
         move_tuning=move_tuning,
+        gripper_force_cap_n=gripper_force_cap_n,
     )

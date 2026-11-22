@@ -467,6 +467,62 @@ def test_stats_sample_skips_failing_device(tmp_path, monkeypatch):
     sampler._nvml.shutdown()
 
 
+def _refuse_nvml_utilisation(monkeypatch):
+    """NVML as a Jetson's: it opens the GPU and refuses every utilisation and memory query."""
+    _install_fake_nvml(monkeypatch)
+
+    def _refuse(handle):
+        raise pynvml.NVMLError(pynvml.NVML_ERROR_NOT_SUPPORTED)
+
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetUtilizationRates', _refuse)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetMemoryInfo', _refuse)
+
+
+def test_a_jetson_gpu_sample_takes_its_load_from_sysfs_when_nvml_refuses(tmp_path, monkeypatch):
+    _refuse_nvml_utilisation(monkeypatch)
+    load = tmp_path / 'load'
+    load.write_text('204\n')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=load)
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert sample[telemetry.STAT_GPU_COUNT] == 1
+    [gpu] = sample[telemetry.STAT_GPUS]
+    assert gpu[telemetry.GPU_UTIL_PCT] == pytest.approx(20.4)
+    assert gpu[telemetry.GPU_MEM_USED_B] is None
+
+
+def test_a_jetson_whose_nvml_sample_comes_back_empty_still_reads_one_sysfs_gpu(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    monkeypatch.setattr(pynvml, 'nvmlDeviceGetCount', lambda: 3)
+    load = tmp_path / 'load'
+    load.write_text('500\n')
+    sampler = telemetry.StatsSampler(tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=load)
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert sample[telemetry.STAT_GPU_COUNT] == 1
+    assert [gpu[telemetry.GPU_UTIL_PCT] for gpu in sample[telemetry.STAT_GPUS]] == [pytest.approx(50.0)]
+
+
+def test_a_box_with_no_sysfs_gpu_load_reads_its_gpus_through_nvml(tmp_path, monkeypatch):
+    _install_fake_nvml(monkeypatch)
+    sampler = telemetry.StatsSampler(
+        tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=tmp_path / 'absent'
+    )
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert [gpu[telemetry.GPU_UTIL_PCT] for gpu in sample[telemetry.STAT_GPUS]] == [_FakeUtil.gpu]
+
+
+def test_a_box_with_no_sysfs_gpu_load_keeps_an_empty_gpu_list(tmp_path, monkeypatch):
+    _refuse_nvml_utilisation(monkeypatch)
+    sampler = telemetry.StatsSampler(
+        tmp_path / f'{HARNESS_PROCESS}{telemetry.STATS_SUFFIX}', tegra_gpu_load_path=tmp_path / 'absent'
+    )
+    sample = sampler._sample()
+    sampler._nvml.shutdown()
+    assert sample[telemetry.STAT_GPUS] == []
+
+
 class _UnreadableProc:
     """A child whose every read raises ``error``."""
 
@@ -663,6 +719,63 @@ def test_bind_from_env_records_under_the_process_it_names(tmp_path, monkeypatch)
     (path,) = _env_sidecars(tmp_path)
     assert _spans_by_name(path)['client'].process == HARNESS_PROCESS
     assert _run_id(path) == 'rollout-1'
+
+
+# Module scope: a World pickles a background loop into the child that runs it.
+def _one_span_then_idle(stop_reader, clock):
+    with telemetry.span('driver.tick'):
+        pass
+    telemetry.force_flush()
+    while not stop_reader.read().data:
+        yield pimm.Sleep(0.01)
+
+
+def test_a_background_process_writes_its_own_sidecar_under_the_run_id(tmp_path, monkeypatch):
+    """A World that binds each child from the environment gives a driver its own file, apart from the harness's."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.setenv(ENV_RUN_ID, 'rollout-1')
+    path = tmp_path / telemetry.TELEMETRY_SUBDIR / f'_one_span_then_idle{telemetry.SPANS_SUFFIX}'
+    with pimm.World(process_scope=telemetry.bind_from_env) as world:
+        world.start_in_subprocess(_one_span_then_idle)
+        deadline = time.monotonic() + 30
+        while not path.exists() or not path.read_text():
+            assert time.monotonic() < deadline, 'the background process wrote no sidecar'
+            time.sleep(0.01)
+    assert _spans_by_name(path)['driver.tick'].process == '_one_span_then_idle'
+    assert _run_id(path) == 'rollout-1'
+    assert _env_sidecars(tmp_path) == [path]
+
+
+def test_one_run_id_gives_a_background_process_the_id_of_the_process_that_spawned_it(tmp_path, monkeypatch):
+    """With no run id set, a child binding from the environment would mint its own and join no run."""
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path / telemetry.TELEMETRY_SUBDIR))
+    monkeypatch.delenv(ENV_RUN_ID, raising=False)
+    path = tmp_path / telemetry.TELEMETRY_SUBDIR / f'_one_span_then_idle{telemetry.SPANS_SUFFIX}'
+    with telemetry.one_run_id(), pimm.World(process_scope=telemetry.bind_from_env) as world:
+        run_id = os.environ[ENV_RUN_ID]
+        world.start_in_subprocess(_one_span_then_idle)
+        deadline = time.monotonic() + 30
+        while not path.exists() or not path.read_text():
+            assert time.monotonic() < deadline, 'the background process wrote no sidecar'
+            time.sleep(0.01)
+    assert _run_id(path) == run_id
+    assert ENV_RUN_ID not in os.environ
+
+
+def test_one_run_id_keeps_a_run_id_set_before_it_and_restores_it(monkeypatch):
+    monkeypatch.setenv(ENV_RUN_ID, 'given')
+    with telemetry.one_run_id():
+        assert os.environ[ENV_RUN_ID] == 'given'
+        os.environ[ENV_RUN_ID] = 'changed in the block'
+    assert os.environ[ENV_RUN_ID] == 'given'
+
+
+def test_one_run_id_replaces_an_empty_run_id_and_restores_it(monkeypatch):
+    """bind_from_env reads an empty run id as absent, so one_run_id must hold a real id for it."""
+    monkeypatch.setenv(ENV_RUN_ID, '')
+    with telemetry.one_run_id():
+        assert os.environ[ENV_RUN_ID]
+    assert os.environ[ENV_RUN_ID] == ''
 
 
 def test_bind_from_env_records_nothing_when_the_sidecar_cannot_open(tmp_path, monkeypatch, caplog):

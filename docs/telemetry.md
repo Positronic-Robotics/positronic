@@ -39,8 +39,8 @@ positronic eval run --eval <eval> --policy <policy> --output_dir <dir> --timing
 
 `--timing` needs `--output_dir` (the sidecars are written under it) and an **all-simulated** sweep: everything
 under the bound tracer enters the report, so a sweep containing a real embodiment is rejected up front rather
-than allowed to pollute it. (A real eval runs its recorder and producers as separate processes with no shared
-tracer, so there is nothing to time there anyway — run real embodiments in a separate untimed invocation.)
+than allowed to pollute it. (A real eval runs its producers as separate processes, each with its own sidecar and
+no pass span — run real embodiments in a separate untimed invocation.)
 
 A run that records episodes writes the harness sidecar without being asked: `prepare_output_dir` points
 `POSITRONIC_ENV_TELEMETRY_DIR` at `<output_dir>/telemetry/`, so the spans land where `pos3.sync` mirrors them
@@ -63,10 +63,18 @@ Everything lands under `<output_dir>/telemetry/`, one set of files per process:
 | `harness.spans.jsonl` | the eval process | OTLP/JSON-lines spans: the pass, each episode, and its phase spans |
 | `harness.stats.jsonl` | the eval process | one machine-load sample per line |
 | `env.spans.jsonl` | a launched env server (e.g. RoboLab) | the server's own step decomposition, in its own file |
+| `<process>.spans.jsonl` | each background process of a rig World (a camera, arm or gripper driver) | the spans that process opens, in its own file |
 
 A launched env server writes its own files because it runs in its own interpreter (RoboLab's Isaac venv, where
 positronic cannot be imported); it is handed the telemetry dir and run id through the environment its launcher
 forwards, and writes the same OTLP/JSON-lines shape with a stdlib-only writer. Nothing rides over the wire.
+
+On a rig, the camera, arm and gripper drivers run as background processes of the World. The World opens
+`telemetry.bind_from_env` in each of them at start, under the process's name (`ZedCamera.run`, for example), so
+each one records into its own file and none takes the harness's file. The World gives two processes of one class
+two names: the second is `ZedCamera.run.2`. The World runs inside `telemetry.one_run_id`, so the harness and
+every background process stamp the same run id. The recorder encodes on a thread of the harness process, so its
+spans stay in `harness.spans.jsonl`.
 
 ### Span schema (`*.spans.jsonl`)
 
@@ -88,9 +96,29 @@ The span names are the contract:
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
-| `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
+| `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
+| `driver.command` | root (an arm driver's file) | `command.sync`; `command.age_ms` on a streamed setpoint | one command that an arm driver takes, from its read to its apply |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
+
+### Reading arm commands
+
+An arm driver records one `driver.command` span in its own file for each command that it takes. The span starts
+when a tick of the driver reads the command. It ends when the first write to the hardware that carries the command
+returns: the franka controller call, the kinova current command, the so101 bus write, the yam joint command, or the
+CRON velocity command or planned move. The driver takes a `CommandReceipt` from `Moves.take()` right after the read,
+passes it with the target, and calls `receipt.applied()` after the write. A second call records nothing.
+
+- `command.sync` is true for a call whose asker waits for the arrival, and false for a streamed setpoint.
+- `command.age_ms` is the time from the emit of a streamed setpoint to its read, on the host's monotonic clock.
+  A call carries no emit time, so its span has no age.
+
+The span of a call ends when the move starts, not when the arm arrives. A call that waits through an arm error is
+timed from its first read. A command that the driver drops, for example a target with no finite joints, records no
+span. A command whose first write fails, a target that the driver replaces before its first write, and a move that a
+stop or a refusal ends before its first write also record no span.
 
 ### Reading harness steps
 
@@ -125,7 +153,8 @@ A step can find a required observation missing, for example while a camera start
 so its span has only `step.late_ms`, the observe values and the collection values.
 
 The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
-recorder and the producers run in other processes. Their cost reaches a step only as CPU contention.
+producers run in other processes, and each writes its own sidecar. Their cost reaches a step only as CPU
+contention.
 
 This prints the p10, p50 and p90 of each value over all steps that called the policy in a spans file:
 
@@ -175,7 +204,10 @@ server that sends no instants gives no `wire.*` values, and its `served.*` value
 
 A server reads a request only after it answers the request before it. So a call that the client sends while another
 call is in flight waits on the server before `received_ns`, and its one-way values would count that wait as network
-time. Such a call gives no `wire.*` values.
+time. Such a call gives no one-way values.
+
+`wire.sent_alone` is `true` on a call that the client sent with no earlier call in flight, and `false` on a call sent
+behind another. A call that never reached its send carries no mark.
 
 ### Stats schema (`*.stats.jsonl`)
 
@@ -185,15 +217,16 @@ list holding one object per GPU and a list holding one object per process. Its k
 and `PROC_*` constants in `positronic/telemetry.py`
 — read them there; the sampler writes them and the reduce imports them.
 
-The process readings cover this eval's whole process tree (harness + env server + Isaac children): the
-tree sums (`STAT_CPU_PROC_PCT`, `STAT_RSS_PROC_B`), and a list with one `PROC_*` entry (name, pid, CPU
-percent, RSS) per process. The caller names a pid through `process_names`; a pid it does not name takes
-the OS process name. A process's CPU percent in its first
-sample covers no interval, so it is not a reading. The GPU list is empty on a box with no NVML, and shorter
-than the recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that
-count tells a reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot
-be attributed (a PID namespace without `--pid=host`, or a driver that will not report it), and per-process GPU
-utilisation is always null: it is not reliably attributable under MPS / co-location.
+The process readings cover this eval's whole process tree (harness + env server + Isaac children): the tree sums
+(`STAT_CPU_PROC_PCT`, `STAT_RSS_PROC_B`), and a list with one `PROC_*` entry (name, pid, CPU percent, RSS) per
+process. The caller names a pid through `process_names`; a pid it does not name takes the OS process name. A
+process's CPU percent in its first sample covers no interval, so it is not a reading. On a Jetson, the one GPU
+entry takes its load from sysfs (an Orin's path by default, `tegra_gpu_load_path` elsewhere) and carries no memory or
+power reading. The GPU list is empty on a box with no NVML and no Jetson GPU, and shorter than the
+recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that count tells a
+reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot be attributed (a PID
+namespace without `--pid=host`, or a driver that will not report it), and per-process GPU utilisation is always
+null: it is not reliably attributable under MPS / co-location.
 
 ## Reporting
 
@@ -210,6 +243,15 @@ the input (`<run_dir>` may be an `s3://` URI). It reports:
 - the **env-step split** — physics / render / server-other (the env server's own decomposition), plus the wire
   and materialisation shares of the client step; absent for a native sim, which reports no server decomposition;
 - **inference latency** — call count and p50 / p95;
+- the **latency table** — the count, the episode count and the p50 / p90 / p99 of each part of a step and of a
+  policy call, over the spans that start inside an episode of the same run. Only a value named `_ms` makes a row, so
+  `step.gc_generation` makes none. `wire.uplink_ms` and `wire.downlink_ms` hold the clock offset, so they make no
+  row either; `wire.network_ms` does. A row named with `+` and `-` is that
+  sum of spans. `wire.send + wire.recv - served.served_ms - served.encode_ms` holds the transfer both ways and no
+  clock offset. A call with no `served.encode_ms` subtracts 0 for it. The row still holds the serialise of the
+  answer on the server. It counts only the calls with `wire.sent_alone` `true`, so a spans file from a client that
+  writes no such mark gives no such row. The `-` rows of a call leave out a call that sent more than once: it holds the
+  reconnect between its attempts, and its `served.*` values are of the last attempt only. A spans file with no `harness.step` spans gives the call rows only;
 - the **real-time factor** — recorded virtual duration over span wall;
 - the sim box's **GPU load** — mean utilisation, peak VRAM, and this eval's peak process VRAM, from the stats
   stream. The two peaks are box-wide totals, so they need samples that saw every device and read unavailable

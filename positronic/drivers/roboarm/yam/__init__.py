@@ -1,9 +1,9 @@
-"""The i2rt YAM arm: the driver in `driver`, its settle tuning in `settle`, the torque it asks i2rt to add in
-`compensation`."""
+"""The i2rt YAM arm: the driver in `driver`, its FK/IK in `kinematics`, its settle tuning in `settle`, the torque it
+asks i2rt to add in `compensation`."""
 
 import importlib
 
-_SUBMODULES = ('driver', 'settle', 'compensation')
+_SUBMODULES = ('driver', 'kinematics', 'settle', 'compensation')
 
 
 def __getattr__(name: str):

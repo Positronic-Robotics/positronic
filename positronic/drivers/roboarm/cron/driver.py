@@ -19,7 +19,7 @@ from positronic.drivers.roboarm.cron.controller import (
     PowerState,
     Reading,
 )
-from positronic.drivers.utils import DriverRun, MoveRefused, MoveStatus, log_failure
+from positronic.drivers.utils import CommandReceipt, DriverRun, MoveRefused, MoveStatus, log_failure
 from positronic.eval import NO_MODEL_ROBOT_META
 
 logger = logging.getLogger(__name__)
@@ -144,6 +144,8 @@ class _Arm(DriverRun[command.CommandType]):
         cleared_at: float | None = None
         # A delta that the move resolves when it starts, from the arm then: the arm can move until it holds
         delta: command.CartesianDelta | None = None
+        # The receipt of the call, applied once the planner takes the move
+        receipt: CommandReceipt | None = None
 
     @dataclass
     class _PowerUp:
@@ -175,6 +177,8 @@ class _Arm(DriverRun[command.CommandType]):
         self._pose: geom.Transform3D | None = None
         # The joints of a streamed joint target, which the steps of each tick go to
         self._joint_goal: np.ndarray | None = None
+        # The receipt of the command that set the streamed target, until a velocity toward it goes out
+        self._stream_receipt: CommandReceipt | None = None
         self._move: _Arm._Move | None = None
         self._power = self._PowerUp()
         # The joints the arm read, and the travel commanded on each tick of the stream
@@ -342,10 +346,14 @@ class _Arm(DriverRun[command.CommandType]):
         assert isinstance(cmd, command.JointPosition)
         return self._checked(cmd, np.asarray(cmd.positions, dtype=np.float64))
 
-    def track(self, cmd: command.CommandType) -> None:
+    def _end_stream(self) -> None:
+        """Drop the streamed target, with its receipt: the arm brakes to a stop."""
+        self.target, self._pose, self._joint_goal, self._stream_receipt = None, None, None, None
+
+    def track(self, cmd: command.CommandType, receipt: CommandReceipt | None) -> None:
         """Put the loop on the target ``cmd`` asks for, with nobody waiting on the arrival. The target is the goal of
         steps on each tick, damped least squares steps for a Cartesian target: the joints move toward it no faster than
-        the arm can follow, and not into the arm itself."""
+        the arm can follow, and not into the arm itself. The first velocity toward the target applies ``receipt``."""
         if not self.usable or self._power.run_at is not None:
             # An arm that is not in RUN, or that makes the joint move after RUN, takes no target; its status says so
             return
@@ -365,30 +373,32 @@ class _Arm(DriverRun[command.CommandType]):
             )
         except Exception:
             # The stream ends on a target it refuses, and the arm brakes: it must not drive on to the target before
-            self.target, self._pose, self._joint_goal = None, None, None
+            self._end_stream()
             raise
         self.target, self._pose, self._joint_goal = np.array(seed, dtype=np.float64), pose, goal
+        self._stream_receipt = receipt
 
-    def sync_move(self, call: pimm.calls.Call[command.CommandType, None]) -> None:
+    def sync_move(self, call: pimm.calls.Call[command.CommandType, None], receipt: CommandReceipt | None) -> None:
         """Put the loop on the target ``call`` asks for; ``settle`` answers it once the arm reads back there.
 
-        The move waits while the stream brakes to a stop, and while the controller clears an error.
+        The move waits while the stream brakes to a stop, and while the controller clears an error. The planner taking
+        the move applies ``receipt``, of ``call``.
         """
         # The move ends the stream also when it is refused: the arm brakes and does not drive on to the stream target
-        self.target, self._pose, self._joint_goal = None, None, None
+        self._end_stream()
         with pimm.calls.raise_to(call):
             if isinstance(call.request, command.CartesianDelta):
                 # A delta applies to the arm in HOLD: it is resolved and checked when the move starts. Until then the
                 # move holds the arm where it is
                 self._pose_of(call.request, self.reading)
-                self._defer(self.reading.q.copy(), call, 0, self.reading, call.request)
+                self._defer(self.reading.q.copy(), call, 0, self.reading, call.request, receipt)
                 return
             target = self._to_joints(call.request, self.reading)
             # The check samples each degree and the loop sends no velocity meanwhile, so a stream at speed brakes
             # first: the move is checked when it starts
             if not self.velocity.any():
                 self._check_move(self.reading.q, target)
-            self._defer(target, call, 0, self.reading)
+            self._defer(target, call, 0, self.reading, receipt=receipt)
 
     def _defer(
         self,
@@ -397,12 +407,15 @@ class _Arm(DriverRun[command.CommandType]):
         restarts: int,
         reading: Reading,
         delta: command.CartesianDelta | None = None,
+        receipt: CommandReceipt | None = None,
     ) -> None:
         """Put the move to ``target`` in wait, from the arm in ``reading``, until the stream brakes to a stop and the
         controller clears an error."""
         now = self.clock.now()
         in_failure = reading.power is PowerState.FAILURE
-        self._move = self._Move(target, call, now + _RECOVER_S, reading.q.copy(), in_failure, restarts, delta=delta)
+        self._move = self._Move(
+            target, call, now + _RECOVER_S, reading.q.copy(), in_failure, restarts, delta=delta, receipt=receipt
+        )
         self.moves.accept(call, target, _ARRIVED_TOL, now, _RECOVER_S)
 
     def step(self) -> None:
@@ -414,7 +427,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._last_step = now
         if not self.usable:
             # An arm that left RUN holds no target: it must not resume one when it comes back
-            self.target, self._pose, self._joint_goal = None, None, None
+            self._end_stream()
             self.velocity[:] = 0.0
             self._recover(now)
             return
@@ -438,7 +451,7 @@ class _Arm(DriverRun[command.CommandType]):
                 # The model of the controller can refuse a pose on one tick. The stream ends, and the arm brakes and
                 # stays under control, as after a target it refuses
                 logger.error(f'{self.controller.ip}: the streamed target is dropped: {e}')
-                self.target, self._pose, self._joint_goal = None, None, None
+                self._end_stream()
         if self.target is None:
             # A stream that ended, by a planned move or a refused target, brakes to a stop
             if self.velocity.any():
@@ -451,7 +464,10 @@ class _Arm(DriverRun[command.CommandType]):
         # Not faster than the arm can stop from in the error left: at the gain alone, braking would need more
         # than max_accel and the arm would overshoot
         limit_speed = np.minimum(np.sqrt(2.0 * self.max_accel * np.abs(error)), self.max_speed)
+        receipt, self._stream_receipt = self._stream_receipt, None
         self._command(np.clip(_GAIN * error, -limit_speed, limit_speed), dt)
+        if receipt is not None:
+            receipt.applied()
 
     def _command(self, wanted: np.ndarray, dt: float) -> None:
         """Command the velocity that goes toward ``wanted`` no faster than ``max_accel``."""
@@ -510,6 +526,8 @@ class _Arm(DriverRun[command.CommandType]):
             self.moves.fail(e)
             self.moves.errored = errored
             return
+        if move.receipt is not None:
+            move.receipt.applied()
         distance = float(np.max(np.abs(move.target - self.reading.q)))
         travel_s = _MOVE_GRACE_S + _MOVE_SLACK * distance / float(self.max_speed.min())
         self.moves.accept(move.call, move.target, _ARRIVED_TOL, now, travel_s)
@@ -598,11 +616,12 @@ class Robot(pimm.ControlSystem):
                 while not should_stop.value:
                     arm.settle()
                     asked = arm.moves.next_request()
+                    receipt = arm.moves.take()
                     if isinstance(asked, pimm.calls.Call):
-                        arm.sync_move(asked)
+                        arm.sync_move(asked, receipt)
                     elif asked is not None:
                         with log_failure(asked):
-                            arm.track(asked)
+                            arm.track(asked, receipt)
 
                     arm.step()
                     arm.publish()

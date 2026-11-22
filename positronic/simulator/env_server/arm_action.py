@@ -1,19 +1,20 @@
-"""The wire command of one arm as absolute joint targets, and the IK that solves a pose command, for an
-environment server to apply.
+"""The wire command of one arm as absolute joint targets, for an environment server to apply.
 
 This module must work in an isolated interpreter without Positronic installed.
 """
 
+import logging
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-import mujoco
 import numpy as np
 
 if __package__:
     from positronic.simulator.env_server import protocol
 else:
     import protocol
+
+logger = logging.getLogger(__name__)
 
 
 def unpack_wire_pose(vector: Any) -> tuple[np.ndarray, np.ndarray]:
@@ -33,90 +34,69 @@ def compose_reference_delta(
     )
 
 
-def wire_command_to_arm_action(
-    command: dict[str, Any],
-    current_q: Any,
-    *,
-    ik: Callable[[np.ndarray, np.ndarray], Any],
-    current_eef: tuple[Any, Any],
-) -> np.ndarray | None:
-    """Absolute arm joint targets, or None where ``ik`` finds no solution.
-
-    ``ik`` and ``current_eef`` use poses in the frame the env measures.
-    """
-    current = np.asarray(current_q, dtype=np.float32).reshape(-1)
-    match command[protocol.COMMAND_TYPE]:
-        case protocol.JOINT_POS:
-            target = command[protocol.COMMAND_JOINT_POS]
-        case protocol.JOINT_DELTA:
-            dq = np.asarray(command[protocol.COMMAND_JOINT_DELTA], dtype=np.float32).reshape(-1)
-            if dq.shape[0] != current.shape[0]:
-                raise ValueError(f'joint delta {dq.shape[0]} vs measured joints {current.shape[0]}')
-            target = current + dq
-        case protocol.HOLD:
-            target = current
-        case protocol.CARTESIAN:
-            target = ik(*unpack_wire_pose(command[protocol.COMMAND_POSE]))
-        case protocol.CARTESIAN_DELTA:
-            delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
-            target = ik(*compose_reference_delta(*current_eef, delta_pos, delta_rot))
-        case other:
-            raise ValueError(
-                f'{other!r} is not a canonical command type; the contract is {list(protocol.CANONICAL_COMMAND_TYPES)}'
-            )
-    return None if target is None else np.asarray(target, dtype=np.float32).reshape(-1)
-
-
-IK_ITERATIONS = 100
-IK_DAMPING = 0.05
-
-
-class IkSolution(NamedTuple):
-    """The joints an IK solve reached, the pose error at them, and whether a check passed in the budget."""
+class ArmTargets(NamedTuple):
+    """The absolute joint targets of one arm, and why the env refused its command; ``refusal`` is None for an applied
+    command."""
 
     q: np.ndarray
-    residual: np.ndarray
-    converged: bool
+    refusal: str | None
 
 
-def damped_least_squares_ik(
-    model: mujoco.MjModel,
+class _Refused(Exception):
+    """A command that the env does not apply; the message is the reason."""
+
+
+def _joint_values(values: Any, joints: int) -> np.ndarray:
+    q = np.asarray(values, dtype=np.float32).reshape(-1)
+    if q.size != joints:
+        raise _Refused(f'width {q.size} for {joints} joints')
+    if not np.isfinite(q).all():
+        raise _Refused('a value is not finite')
+    return q
+
+
+def _solved(q: Any, joints: int) -> np.ndarray:
+    if q is None:
+        raise _Refused('no IK solution')
+    return _joint_values(q, joints)
+
+
+def arm_targets(
+    command: dict[str, Any],
+    measured_q: Any,
     *,
-    live_qpos: Any,
-    site_id: int,
-    qpos_ids: Any,
-    dof_ids: Any,
-    start_q: Any,
-    lower: Any,
-    upper: Any,
-    pose_error: Callable[[np.ndarray, np.ndarray], np.ndarray],
-    converged: Callable[[np.ndarray], bool],
-) -> IkSolution:
-    """Damped-least-squares differential IK on a site's world-frame Jacobian.
+    ik: Callable[[np.ndarray, np.ndarray], Any],
+    read_eef: Callable[[], tuple[Any, Any]],
+    arm: str | None = None,
+) -> ArmTargets:
+    """The absolute joint targets of one arm's wire command, or the measured joints for a command that the env refuses.
 
-    The solve runs on a scratch ``MjData`` seeded from ``live_qpos``, so it moves nothing in the live scene.
-    ``pose_error(site_pos, site_rot)`` is the world-frame ``[position(3), rotation(3)]`` error to the target.
-    Without convergence, ``q`` holds the joints after the last step.
+    The env refuses a target or a joint delta of the wrong width, a value that is not finite, and a pose that ``ik``
+    cannot solve, with one warning that names ``arm``. A command type that is not canonical and a pose that is not 12
+    values raise ``ValueError``. ``ik`` and ``read_eef`` use poses in the frame the env measures; only a Cartesian delta
+    calls ``read_eef``.
     """
-    data = mujoco.MjData(model)
-    data.qpos[:] = live_qpos
-    q = np.array(start_q, dtype=np.float64)
-
-    def error_at(q: np.ndarray) -> np.ndarray:
-        data.qpos[qpos_ids] = q
-        mujoco.mj_forward(model, data)
-        site_pos = np.array(data.site_xpos[site_id])
-        site_rot = np.array(data.site_xmat[site_id]).reshape(3, 3)
-        return np.asarray(pose_error(site_pos, site_rot), dtype=np.float64)
-
-    for _ in range(IK_ITERATIONS):
-        error = error_at(q)
-        if converged(error):
-            return IkSolution(q, error, True)
-        jacp = np.zeros((3, model.nv))
-        jacr = np.zeros((3, model.nv))
-        mujoco.mj_jacSite(model, data, jacp, jacr, site_id)
-        jac = np.vstack([jacp, jacr])[:, dof_ids]
-        dq = jac.T @ np.linalg.solve(jac @ jac.T + IK_DAMPING**2 * np.eye(6), error)
-        q = np.clip(q + dq, lower, upper)
-    return IkSolution(q, error_at(q), False)
+    measured = np.asarray(measured_q, dtype=np.float32).reshape(-1)
+    kind = command[protocol.COMMAND_TYPE]
+    try:
+        match kind:
+            case protocol.JOINT_POS:
+                q = _joint_values(command[protocol.COMMAND_JOINT_POS], measured.size)
+            case protocol.JOINT_DELTA:
+                q = measured + _joint_values(command[protocol.COMMAND_JOINT_DELTA], measured.size)
+            case protocol.HOLD:
+                q = measured
+            case protocol.CARTESIAN:
+                q = _solved(ik(*unpack_wire_pose(command[protocol.COMMAND_POSE])), measured.size)
+            case protocol.CARTESIAN_DELTA:
+                delta_pos, delta_rot = unpack_wire_pose(command[protocol.COMMAND_DELTA])
+                q = _solved(ik(*compose_reference_delta(*read_eef(), delta_pos, delta_rot)), measured.size)
+            case other:
+                raise ValueError(
+                    f'{other!r} is not a canonical command type; the contract is '
+                    f'{list(protocol.CANONICAL_COMMAND_TYPES)}'
+                )
+    except _Refused as refusal:
+        logger.warning('%s command not applied, the %s holds: %s', kind, f'{arm} arm' if arm else 'arm', refusal)
+        return ArmTargets(measured, str(refusal))
+    return ArmTargets(q, None)

@@ -3,6 +3,7 @@ import logging
 import math
 import subprocess
 import sys
+import time
 import types
 from collections.abc import Callable, Iterator
 from enum import Enum
@@ -16,7 +17,7 @@ import pimm
 import positronic.cfg.embodiment as embodiment_cfg
 import positronic.cfg.hardware.roboarm as roboarm_cfg
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom, keys, wire
+from positronic import geom, keys, telemetry, wire
 from positronic.cfg.eval.real import yam as yam_eval
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.drivers.faults import DeviceFault, FaultKind
@@ -34,12 +35,16 @@ from positronic.drivers.roboarm.models import (
 from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POSES, SAME_POSE_M, SAME_POSE_RAD
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
+from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
+from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, YamKinematics
+from positronic.drivers.utils import RecoveryOutcome
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy.base import Policy, PolicyRun, Step
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.amazon_abc import mapping as abc_mapping
+from positronic.telemetry_keys import ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.zeros(6)
@@ -157,6 +162,7 @@ class Site(Enum):
     COMMANDS_READ = ('commands', 'read')
     TARGET_GRIP_READ = ('target_grip', 'read')
     IDLE_PARK_READ = ('idle_park_on', 'read')
+    GRIPPER_FORCE_CAP_READ = ('gripper_force_cap_n', 'read')
 
 
 # Calls made after torque is released, outside the protected region.
@@ -205,17 +211,21 @@ class Rig:
         watch=None,
         park_after_idle_s=1.0,
         compensation=I2RT_COMPENSATION,
+        gripper_force_cap_n=None,
+        driver: yam.Robot | None = None,
     ):
         self.vendor = FakeYam()
         self.commands = ManualCommandReceiver()
         self.grip = ManualCommandReceiver()
         self.idle_park_on = ManualCommandReceiver()
+        self.gripper_force_cap = ManualCommandReceiver()
         self.states = RecordingEmitter()
         ports: dict[str, Any] = {
             'vendor': self.vendor,
             'commands': self.commands,
             'target_grip': self.grip,
             'idle_park_on': self.idle_park_on,
+            'gripper_force_cap_n': self.gripper_force_cap,
             'state': self.states,
         }
         self.grips = RecordingEmitter()
@@ -223,17 +233,19 @@ class Rig:
         ports |= {'grip': self.grips, 'robot_meta': RecordingEmitter(), 'arm_meta': self.arm_metas}
         if watch is not None:
             ports = {port: Watched(target, port, watch) for port, target in ports.items()}
-        self.driver = yam.Robot(
+        self.driver = driver or yam.Robot(
             connect=lambda channel, sim, compensation: ports['vendor'],
             compensation=compensation,
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
+            gripper_force_cap_n=gripper_force_cap_n,
         )
         self.clock = MockClock()
         self.driver.commands._bind(ports['commands'])
         self.driver.target_grip._bind(ports['target_grip'])
         self.driver.idle_park_on._bind(ports['idle_park_on'])
+        self.driver.gripper_force_cap_n._bind(ports['gripper_force_cap_n'])
         self.driver.state._bind(ports['state'], clock=self.clock)
         self.driver.grip._bind(ports['grip'], clock=self.clock)
         self.driver.robot_meta._bind(ports['robot_meta'], clock=self.clock)
@@ -707,7 +719,7 @@ def _earlier_world_poses(embodiment, earlier_z):
 
 @pytest.mark.parametrize('embodiment, earlier_z', EARLIER_MOUNT_Z, ids=['default', 'yambox'])
 def test_each_bimanual_yam_reports_the_ee_pose_that_the_earlier_model_reported(embodiment, earlier_z):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for mount, q, earlier in _earlier_world_poses(embodiment, earlier_z):
         reported = mount * kinematics.fk(q)
         assert np.linalg.norm(reported.translation - earlier.translation) < SAME_POSE_M
@@ -718,7 +730,7 @@ def test_each_bimanual_yam_reports_the_ee_pose_that_the_earlier_model_reported(e
 def test_each_bimanual_yam_solves_an_earlier_pose_to_the_joints_that_the_earlier_model_reached_it_at(
     embodiment, earlier_z
 ):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for mount, q, earlier in _earlier_world_poses(embodiment, earlier_z):
         start = np.clip(q + 0.05, kinematics.lower, kinematics.upper)
         solved = kinematics.ik(mount.inv * earlier, start, kinematics.lower, kinematics.upper)
@@ -738,7 +750,7 @@ def test_the_yam_legacy_frame_is_the_grasp_site_of_the_earlier_model():
 
 
 def test_at_its_base_in_the_earlier_base_the_bundled_yam_model_reports_the_earlier_poses():
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for q, translation, quat in EARLIER_MODEL_POSES:
         reported = YAM_BASE_IN_EARLIER_BASE * kinematics.fk(np.array(q))
         assert np.linalg.norm(reported.translation - np.array(translation)) < SAME_POSE_M
@@ -754,7 +766,7 @@ def test_the_single_arm_yam_reports_and_records_the_ee_pose_that_the_earlier_mod
     embodiment = embodiment_cfg.yam.instantiate()
     (robot,) = [system for system in embodiment.control_systems if isinstance(system, yam.Robot)]
     recorded = geom.Transform3D(np.array(embodiment.static_meta[eval_keys.MOUNTS][keys.JOINTS]))
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     for q, translation, quat in EARLIER_MODEL_POSES:
         for mount in (robot.base_pose, recorded):
             reported = mount * kinematics.fk(np.array(q))
@@ -1001,7 +1013,7 @@ def test_a_cartesian_target_that_needs_joint_4_below_minus_half_pi_reaches_the_c
     rig.raise_arm()
     wrist_down = RAISED.copy()
     wrist_down[3] = -1.62  # past -pi/2, inside the -1.69297 of the i2rt arm model
-    rig.commands.push(command.CartesianPosition(yam._Kinematics().fk(wrist_down)))
+    rig.commands.push(command.CartesianPosition(YamKinematics().fk(wrist_down)))
     rig.tick(0.9)
     np.testing.assert_allclose(_asked(rig)[-1], wrist_down, atol=1e-6)
 
@@ -1064,7 +1076,7 @@ def test_the_park_holds_its_correction_past_the_joint_range(rig):
     sent = len(rig.vendor.targets)
     rig.tick(0.5)
     held = _asked(rig)[sent:]
-    assert np.all(held[:, 2] < yam._Kinematics().lower[2])
+    assert np.all(held[:, 2] < YamKinematics().lower[2])
     assert all(np.array_equal(asked, held[0]) for asked in held)
 
 
@@ -1075,7 +1087,7 @@ def _solver_answers(monkeypatch, posture: np.ndarray, *, success: bool) -> None:
         data.qpos[[model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES]] = posture
         return data.qpos, 0.0, success
 
-    monkeypatch.setattr(yam, 'qpos_from_site_pose', solve)
+    monkeypatch.setattr(yam_kinematics, 'qpos_from_site_pose', solve)
 
 
 # Reaching forward and down. At this joint-3 angle, links 2 and 3 are on one line (MJCF joint-4 offset 0.245, 0.06).
@@ -1090,27 +1102,27 @@ def past_full_stretch(kinematics, distance_m: float) -> geom.Transform3D:
 
 
 def test_ik_takes_an_answer_the_solver_reports_as_failed_when_it_is_inside_the_tolerance(monkeypatch):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     _solver_answers(monkeypatch, STRETCHED, success=False)
-    target = past_full_stretch(kinematics, yam._IK_POS_TOL / 2)
+    target = past_full_stretch(kinematics, IK_POS_TOL / 2)
     np.testing.assert_array_equal(kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper), STRETCHED)
 
 
 def test_ik_accepts_a_target_past_full_stretch_inside_the_tolerance_from_every_nearly_equal_start():
-    kinematics = yam._Kinematics()
-    target = past_full_stretch(kinematics, 0.8 * yam._IK_POS_TOL)
+    kinematics = YamKinematics()
+    target = past_full_stretch(kinematics, 0.8 * IK_POS_TOL)
     for k in range(20):
         assert kinematics.ik(target, STRETCHED + k * 1e-12, kinematics.lower, kinematics.upper) is not None
 
 
 def test_ik_refuses_a_target_farther_past_full_stretch_than_the_tolerance():
-    kinematics = yam._Kinematics()
-    target = past_full_stretch(kinematics, 5 * yam._IK_POS_TOL)
+    kinematics = YamKinematics()
+    target = past_full_stretch(kinematics, 5 * IK_POS_TOL)
     assert kinematics.ik(target, STRETCHED, kinematics.lower, kinematics.upper) is None
 
 
 def test_ik_clamps_a_joint_just_below_its_range_to_its_lower_limit(monkeypatch):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     asked = RAISED.copy()
     asked[3] = kinematics.lower[3] - 0.002
     _solver_answers(monkeypatch, asked, success=True)
@@ -1120,7 +1132,7 @@ def test_ik_clamps_a_joint_just_below_its_range_to_its_lower_limit(monkeypatch):
 
 
 def test_ik_wraps_a_joint_a_full_turn_below_its_range_back_into_it(monkeypatch):
-    kinematics = yam._Kinematics()
+    kinematics = YamKinematics()
     inside = RAISED.copy()
     inside[0] = 2.98  # a full turn below is past joint 1's lower limit, and the turn fits its range
     a_turn_below = inside.copy()
@@ -1225,7 +1237,7 @@ def test_world_exit_parks_a_foreground_yam_before_closing():
 def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it(monkeypatch):
     vendor = FakeYam()
     driver = yam.Robot(connect=lambda channel, sim, compensation: vendor)
-    fk = yam._Kinematics.fk
+    fk = YamKinematics.fk
     armed = []
 
     def fk_once_failing(kinematics, q):
@@ -1234,7 +1246,7 @@ def test_a_foreground_yam_that_faults_parks_before_the_world_reports_it(monkeypa
             raise ValueError('forward kinematics failed')
         return fk(kinematics, q)
 
-    monkeypatch.setattr(yam._Kinematics, 'fk', fk_once_failing)
+    monkeypatch.setattr(YamKinematics, 'fk', fk_once_failing)
     with pytest.raises(ValueError, match='forward kinematics failed'):
         with pimm.World(virtual_time=True) as world:
             loop = world.start(driver)
@@ -1877,6 +1889,116 @@ def test_a_ready_call_on_an_open_chain_is_answered_at_once(world, rig):
     assert len(rig.vendor.targets) > connected, 'the arm stopped taking commands'
 
 
+def _recoverer(world, rig: Rig) -> pimm.calls.Caller[None, RecoveryOutcome]:
+    caller = pimm.calls.ControlSystemCaller[None, RecoveryOutcome](rig.driver)
+    wire_call(world, caller, rig.driver.recover)
+    return caller
+
+
+def test_a_recover_call_on_a_lost_arm_opens_the_chain_again_and_answers_cleared_at_the_start_pose(world, rig):
+    reopened = _lose_the_chain(rig)
+
+    answer = _recoverer(world, rig)(None)
+    rig.tick(0.1)
+    assert not answer.done(), 'the recover call was answered before the arm reached the start pose'
+    rig.ready()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    np.testing.assert_allclose(reopened._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert _last(rig.states).status == RobotStatus.AVAILABLE
+
+
+def test_a_recover_call_whose_chain_does_not_open_answers_its_error_and_the_arm_stays_lost(world, rig):
+    _lose_the_chain(rig)
+
+    def refuse(channel, sim, compensation):
+        raise OSError('CAN interface can0 is down')
+
+    rig.driver._connect = refuse
+    answer = _recoverer(world, rig)(None)
+    rig.tick()
+
+    with pytest.raises(DeviceFault, match='can0 is down') as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(_last(rig.states), pimm.SignalError)
+
+
+def test_a_recover_call_on_an_arm_with_no_fault_answers_cleared_and_does_not_move_it(world, rig):
+    rig.raise_arm()
+    sent = len(rig.vendor.targets)
+
+    answer = _recoverer(world, rig)(None)
+    rig.tick()
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    held = _asked(rig)[sent:]
+    np.testing.assert_allclose(held, np.tile(RAISED, (len(held), 1)), atol=0.005)
+    assert not rig.vendor.released_at
+
+
+def test_a_recover_call_that_the_driver_stops_before_the_start_pose_does_not_answer_cleared(world, rig):
+    """The boundary of a move to the start pose: a stop ends it where the arm is, and the fault holds."""
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    _block_joints_2_and_3_at(rig, 0.0)
+
+    answer = _recoverer(world, rig)(None)
+    rig.tick(0.1)
+    rig.finish()
+
+    with pytest.raises(DeviceFault, match='stopped before the arm reached the start pose'):
+        answer.result()
+
+
+def test_a_recover_call_on_an_arm_whose_park_stopped_moves_it_to_the_start_pose_and_answers_cleared(world, rig):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    assert _last(rig.states).status == RobotStatus.ERROR
+    _block_joints_2_and_3_at(rig, 0.0)  # the operator takes the object away
+
+    answer = _recoverer(world, rig)(None)
+    _until_answered(rig, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert _last(rig.states).status == RobotStatus.AVAILABLE
+
+
+def test_a_recover_call_on_an_arm_that_reads_error_after_a_missed_blocking_move_moves_it_to_the_start_pose(world, rig):
+    rig.rest()
+    rig.vendor.stuck = True
+    missed = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    _until_answered(rig, missed, within_s=120)
+    assert _last(rig.states).status == RobotStatus.ERROR
+    rig.vendor.stuck = False
+
+    answer = _recoverer(world, rig)(None)
+    _until_answered(rig, answer)
+
+    assert answer.result() is RecoveryOutcome.CLEARED
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=yam.MOVE_SETTLE.tolerance_rad)
+    assert _last(rig.states).status == RobotStatus.AVAILABLE
+
+
+def test_a_recover_call_whose_start_move_misses_answers_the_miss(world, rig):
+    rig.raise_arm()
+    _block_joints_2_and_3_at(rig, 0.3)
+    rig.tick(20)
+    rig.vendor.stuck = True
+
+    answer = _recoverer(world, rig)(None)
+    _until_answered(rig, answer, within_s=120)
+
+    with pytest.raises(DeviceFault) as answered:
+        answer.result()
+    assert answered.value.kind is FaultKind.ARM
+    assert isinstance(answered.value.__cause__, TimeoutError)
+    assert _last(rig.states).status == RobotStatus.ERROR
+
+
 _START_MOVE_LOG = 'Moving the arm to the start pose'
 
 
@@ -2411,12 +2533,15 @@ def test_a_fade_that_the_chain_cannot_take_parks_and_releases_the_chain_before_i
 
 
 class FakeMotorChain:
-    """Seven motors for i2rt's ``MotorChainRobot``: they hold at 0.5 rad, report ``vel`` and keep each torque sent."""
+    """Seven motors for i2rt's ``MotorChainRobot``: they hold at ``pos``, report ``vel`` and ``eff``, and keep each
+    torque sent."""
 
     running = True
 
     def __init__(self):
+        self.pos = np.full(7, 0.5)
         self.vel = np.zeros(7)
+        self.eff = np.zeros(7)
         self.torques: list[np.ndarray] = []
 
     def __len__(self) -> int:
@@ -2424,8 +2549,8 @@ class FakeMotorChain:
 
     def read_states(self) -> list[types.SimpleNamespace]:
         return [
-            types.SimpleNamespace(pos=0.5, vel=speed, eff=0.0, temp_mos=0.0, temp_rotor=0.0, timestamp=0.0)
-            for speed in self.vel
+            types.SimpleNamespace(pos=pos, vel=speed, eff=eff, temp_mos=0.0, temp_rotor=0.0, timestamp=0.0)
+            for pos, speed, eff in zip(self.pos, self.vel, self.eff, strict=True)
         ]
 
     def set_commands(self, torques: np.ndarray, **_) -> list[types.SimpleNamespace]:
@@ -2464,6 +2589,279 @@ def test_the_friction_fade_runs_on_the_hardware_chain_of_i2rt(monkeypatch):
         chain.update()  # i2rt reads the speed of the cycle before
         chain.update()
         np.testing.assert_allclose(motors.torques[-1], share * STATION_FRICTION_TORQUE, atol=1e-12)
+
+
+GRIPPER_OPEN_RAD = 6.57  # the motor turn over the stroke of i2rt's linear 4310 gripper, which closes at 0 rad
+OBJECT_AT_RAD = 2.0  # where the fingers meet an object
+STALL_EFFORT_NM = 0.5  # i2rt's limiter finds a stall when the mean gripper effort over its window passes this
+STALL_WINDOW_S = 0.1  # the window of i2rt's limiter
+SQUEEZE_CAP_N = 20.0  # its torque is past STALL_EFFORT_NM
+ARM_TARGET = np.array([0.1, -0.2, 0.3, -0.4, 0.5, -0.6])
+CHAIN_CLOSED, CHAIN_OPEN = 0.0, 1.0  # the grip as the chain takes it
+
+
+def _gripper_torque_nm(force_n: float) -> float:
+    """The torque of i2rt's limiter for ``force_n``: 0.096 m of stroke over 6.57 rad, and 0.3 Nm against friction."""
+    return force_n * 0.096 / GRIPPER_OPEN_RAD + 0.3
+
+
+class GripperMotors(FakeMotorChain):
+    """A ``FakeMotorChain`` whose gripper motor runs the P-D law of a DM motor, one ``STEP_S`` per command.
+
+    It keeps each command and the torque that the P-D loop of the gripper asks for. The motor gives at most
+    ``MAX_TORQUE_NM``, less near ``MAX_SPEED_RAD_S``, against ``FRICTION_NM``. The fingers stop at ``stop_at``.
+    """
+
+    STEP_S = 0.001
+    INERTIA = 4e-4  # kg m^2
+    FRICTION_NM = 0.3
+    MAX_TORQUE_NM = 7.0
+    MAX_SPEED_RAD_S = 20.0
+
+    def __init__(self, stop_at: float, start_at: float):
+        super().__init__()
+        self.stop_at = stop_at
+        self.pos[6] = start_at
+        self.restart()
+
+    def restart(self) -> None:
+        """Forget the commands, and start the clock far past the zero stamps of the effort history of the limiter."""
+        self.now = 1e4
+        self.commands: list[np.ndarray] = []
+        self.asked: list[float] = []
+        self.efforts: list[float] = []
+        self.at_object: list[bool] = []
+
+    def set_commands(self, torques: np.ndarray, **commands) -> list[types.SimpleNamespace]:
+        pos, vel, kp, kd = commands['pos'], commands['vel'], commands['kp'], commands['kd']  # what i2rt passes
+        self.commands.append(np.stack([torques, pos, vel, kp, kd]))
+        q, v = self.pos[6], self.vel[6]
+        asked = torques[6] + kp[6] * (pos[6] - q) + kd[6] * (vel[6] - v)
+        self.asked.append(asked)
+        limit = self.MAX_TORQUE_NM * (1 - min(abs(v) / self.MAX_SPEED_RAD_S, 1.0) if asked * v > 0 else 1.0)
+        torque = float(np.clip(asked, -limit, limit))
+        if v == 0 and abs(torque) <= self.FRICTION_NM:
+            new_v = 0.0
+        else:
+            new_v = v + (torque - self.FRICTION_NM * np.sign(v or torque)) / self.INERTIA * self.STEP_S
+            new_v = 0.0 if v * new_v < 0 else new_v  # friction stops the motor and does not turn it back
+        self.pos[6] = max(q + new_v * self.STEP_S, self.stop_at)
+        self.vel[6] = 0.0 if self.pos[6] == self.stop_at else new_v
+        self.eff[6] = torque
+        self.efforts.append(torque)
+        self.at_object.append(self.pos[6] == self.stop_at)
+        self.now += self.STEP_S
+        return self.read_states()
+
+    def closing_torques(self) -> np.ndarray:
+        return -np.asarray(self.asked)
+
+    def first_stall_step(self) -> int | None:
+        """The first step by which i2rt's limiter has found a stall: the fingers stood at the object for a window of the
+        limiter, with a mean effort past ``STALL_EFFORT_NM``. None if no step came after such a window."""
+        window = round(STALL_WINDOW_S / self.STEP_S)
+        for end in range(window, len(self.efforts)):
+            if (
+                all(self.at_object[end - window : end])
+                and abs(np.mean(self.efforts[end - window : end])) > STALL_EFFORT_NM
+            ):
+                return end
+        return None
+
+
+I2RT_GRIPPER_FORCE_LIMIT_N = 50.0  # the gripper force limit that i2rt's get_yam_robot opens a chain with
+
+
+def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float = GRIPPER_OPEN_RAD):
+    """i2rt's hardware chain over ``GripperMotors``, with the gripper force limit of i2rt's ``get_yam_robot``. Its
+    control thread is stopped, so each ``update`` runs one cycle. i2rt's limiter reads the clock of the motors."""
+    motor_chain_robot = pytest.importorskip('i2rt.robots.motor_chain_robot')
+    motors = GripperMotors(stop_at, start_at)
+    monkeypatch.setattr('i2rt.robots.utils.time', types.SimpleNamespace(time=lambda: motors.now))
+    chain = motor_chain_robot.MotorChainRobot(
+        motor_chain=motors,
+        use_gravity_comp=False,
+        gripper_index=6,
+        gripper_limits=np.array([0.0, GRIPPER_OPEN_RAD]),
+        joint_limits=np.array([[-3.0, 3.0]] * 6),
+        kp=np.array([10.0] * 6 + [20.0]),  # i2rt's kp and kd for the gripper motor
+        kd=np.array([1.0] * 6 + [0.5]),
+        limit_gripper_force=I2RT_GRIPPER_FORCE_LIMIT_N,
+        zero_gravity_mode=False,
+    )
+    chain.close()
+    motors.restart()
+    return chain, motors
+
+
+def _opened_by_a_driver(chain, gripper_force_cap_n: float | None) -> yam.Robot:
+    """A driver with ``gripper_force_cap_n`` that opened ``chain`` and stopped before a park, which the arm of the
+    stopped chain never ends. The driver caps the chain before it yields for the first time."""
+    rig = Rig(gripper_force_cap_n=gripper_force_cap_n)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    next(rig.loop)
+    rig.loop.close()
+    return rig.driver
+
+
+def _run(chain, motors: GripperMotors, grip: float, seconds: float) -> None:
+    """Command ``ARM_TARGET`` and ``grip`` (0 closed, 1 open), and run ``seconds`` of updates."""
+    chain.command_joint_pos(np.append(ARM_TARGET, grip))
+    for _ in range(round(seconds / motors.STEP_S)):
+        chain.update()
+
+
+def _squeeze(monkeypatch, gripper_force_cap_n: float | None) -> tuple[Any, GripperMotors]:
+    """Close the gripper on an object for a second, through a driver with ``gripper_force_cap_n``."""
+    chain, motors = _gripper_chain(monkeypatch)
+    _opened_by_a_driver(chain, gripper_force_cap_n)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.0)
+    return chain, motors
+
+
+def test_the_gripper_force_cap_holds_before_and_after_i2rt_finds_a_stall(monkeypatch):
+    """i2rt's limiter replaces the gripper target once it finds a stall, so a cap on the target sent to i2rt is lost."""
+    _, motors = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    stall = motors.first_stall_step()
+    assert stall is not None, 'the squeeze did not reach the stall of i2rt'
+    closing = motors.closing_torques()
+    assert np.max(closing[:stall]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+    assert np.max(closing[stall:]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+
+
+def test_the_gripper_force_cap_leaves_the_commands_of_the_arm_motors_alone(monkeypatch):
+    _, capped = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    _, plain = _squeeze(monkeypatch, None)
+    assert np.max(plain.closing_torques()) > _gripper_torque_nm(SQUEEZE_CAP_N)
+    np.testing.assert_array_equal(np.stack(capped.commands)[:, :, :6], np.stack(plain.commands)[:, :, :6])
+
+
+def test_a_gripper_force_cap_of_zero_sends_the_commands_of_i2rt(monkeypatch):
+    _, zero = _squeeze(monkeypatch, 0.0)
+    plain, motors = _gripper_chain(monkeypatch)
+    _run(plain, motors, CHAIN_CLOSED, seconds=1.0)
+    np.testing.assert_array_equal(np.stack(zero.commands), np.stack(motors.commands))
+
+
+def test_the_gripper_force_cap_leaves_an_opening_gripper_alone(monkeypatch):
+    commands = []
+    for cap in (SQUEEZE_CAP_N, None):
+        chain, motors = _gripper_chain(monkeypatch, stop_at=0.0, start_at=0.0)
+        _opened_by_a_driver(chain, cap)
+        _run(chain, motors, CHAIN_OPEN, seconds=0.5)
+        assert np.max(-motors.closing_torques()) > _gripper_torque_nm(SQUEEZE_CAP_N)
+        commands.append(np.stack(motors.commands))
+    np.testing.assert_array_equal(*commands)
+
+
+def _free_close_s(monkeypatch, gripper_force_cap_n: float | None) -> float:
+    """How long the gripper takes from open to 0.05 rad short of closed, with nothing between the fingers."""
+    chain, motors = _gripper_chain(monkeypatch, stop_at=0.0)
+    _opened_by_a_driver(chain, gripper_force_cap_n)
+    chain.command_joint_pos(np.append(ARM_TARGET, CHAIN_CLOSED))
+    for steps in range(10_000):
+        if motors.pos[6] <= 0.05:
+            return steps * motors.STEP_S
+        chain.update()
+    raise AssertionError('the gripper did not close')
+
+
+def test_a_capped_gripper_closes_on_nothing_about_as_fast_as_an_uncapped_one(monkeypatch):
+    """The cap limits the sum of the position torque and the damping torque. A cap on the position torque alone lets
+    the damping of a fast close take most of the drive."""
+    assert _free_close_s(monkeypatch, SQUEEZE_CAP_N) <= 1.1 * _free_close_s(monkeypatch, None)
+
+
+def test_a_gripper_force_cap_from_its_input_is_in_force_before_the_next_command(monkeypatch):
+    """The control thread of i2rt can take a command before the driver goes on, so the cap goes in force first."""
+    chain, motors = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=None)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    next(rig.loop)
+    _run(chain, motors, CHAIN_CLOSED, seconds=0.3)
+    assert motors.closing_torques()[-1] > _gripper_torque_nm(SQUEEZE_CAP_N)
+    send = chain.command_joint_pos
+
+    def send_closed_and_update(joint_pos):
+        send(np.append(joint_pos[:6], CHAIN_CLOSED))
+        chain.update()
+
+    chain.command_joint_pos = send_closed_and_update
+    rig.gripper_force_cap.push(SQUEEZE_CAP_N)
+    next(rig.loop)
+    assert motors.closing_torques()[-1] <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+    rig.loop.close()
+
+
+def test_the_arm_meta_carries_the_gripper_force_cap_that_the_chain_runs(monkeypatch):
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=SQUEEZE_CAP_N)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.tick()
+    assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] == SQUEEZE_CAP_N
+    rig.ready()  # the arm of the stopped chain misses its start pose, and the driver serves it
+    rig.gripper_force_cap.push(0.0)
+    rig.tick()
+    assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    rig.loop.close()
+
+
+def test_the_arm_meta_names_the_stall_force_of_i2rts_gripper_limiter_with_no_cap(monkeypatch):
+    """i2rt's limiter holds a stalled gripper with its own force whatever the cap, so a meta with no cap names it."""
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=None)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.tick()
+    meta = _last(rig.arm_metas)
+    assert meta[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    assert meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] == I2RT_GRIPPER_FORCE_LIMIT_N
+    rig.loop.close()
+
+
+def test_the_arm_meta_names_a_gripper_force_cap_sent_during_a_blocking_move(world, monkeypatch):
+    chain, _ = _gripper_chain(monkeypatch)
+    rig = Rig(gripper_force_cap_n=SQUEEZE_CAP_N)
+    rig.driver._connect = lambda channel, sim, compensation: chain
+    rig.ready()
+    answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+    rig.tick()
+    rig.gripper_force_cap.push(0.0)
+    rig.tick()
+    assert not answer.done(), 'the move ended before the arm meta was read'
+    assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] is None
+    rig.loop.close()
+
+
+@pytest.mark.parametrize('cap_n', [-1.0, math.nan, math.inf])
+def test_a_gripper_force_cap_that_is_not_a_finite_force_is_refused(cap_n):
+    with pytest.raises(ValueError, match='gripper_force_cap_n'):
+        yam.Robot(gripper_force_cap_n=cap_n)
+
+
+@pytest.mark.parametrize('cap_n', [-1.0, math.nan, math.inf])
+def test_a_gripper_force_cap_input_that_is_not_a_finite_force_parks_releases_and_is_raised(cap_n):
+    rig = Rig()
+    rig.raise_arm()
+    rig.gripper_force_cap.push(cap_n)
+    rig.tick()  # the refusal lands in the run, before anything asks the driver to stop
+    with pytest.raises(ValueError, match='gripper_force_cap_n'):
+        rig.finish(within_s=30)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
+def test_the_yam_configs_give_each_gripper_its_force_cap(monkeypatch):
+    single = roboarm_cfg.yam.override(gripper_force_cap_n=15.0).instantiate()
+    bimanual = embodiment_cfg.yam_bimanual.override(cameras={}, gripper_force_cap_n=15.0).instantiate()
+    arms = [single, *(system for system in bimanual.control_systems if isinstance(system, yam.Robot))]
+    assert len(arms) == 3
+    for arm in arms:
+        chain, _ = _gripper_chain(monkeypatch)
+        rig = Rig(driver=arm)
+        rig.driver._connect = lambda channel, sim, compensation, chain=chain: chain
+        rig.tick()
+        assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] == 15.0
+        rig.loop.close()
 
 
 @pytest.mark.parametrize(
@@ -2568,8 +2966,8 @@ def test_the_yam_package_hands_out_the_driver():
     assert yam_package.Robot is yam.Robot
 
 
-@pytest.mark.parametrize('module', ['settle', 'compensation'])
-def test_the_settings_of_the_configs_import_without_the_driver(module):
+@pytest.mark.parametrize('module', ['kinematics', 'settle', 'compensation'])
+def test_the_modules_beside_the_driver_import_without_it(module):
     loaded = subprocess.run(
         [sys.executable, '-c', f'import sys, positronic.drivers.roboarm.yam.{module}; print(sorted(sys.modules))'],
         capture_output=True,
@@ -2577,3 +2975,76 @@ def test_the_settings_of_the_configs_import_without_the_driver(module):
         check=True,
     ).stdout
     assert 'positronic.drivers.roboarm.yam.driver' not in loaded
+
+
+def test_each_streamed_command_the_arm_takes_is_timed_and_one_it_cannot_take_is_not(rig, tmp_path):
+    rig.ready()
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        rig.commands.push(command.JointPosition(np.full(6, np.nan)))
+        rig.tick(0.1)
+        rig.commands.push(command.JointPosition(RAISED))
+        rig.tick(0.1)
+
+    spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False]
+
+
+def _command_spans(tmp_path):
+    return [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+
+
+def _time_chain_writes(rig, monkeypatch):
+    """Record the wall time of each command that reaches the chain, in epoch nanoseconds."""
+    written_ns, send = [], rig.vendor.command_joint_pos
+
+    def timed(joint_pos):
+        send(joint_pos)
+        written_ns.append(time.time_ns())
+
+    monkeypatch.setattr(rig.vendor, 'command_joint_pos', timed)
+    return written_ns
+
+
+def test_a_blocking_move_is_timed_once_until_its_first_command_reaches_the_chain(world, rig, tmp_path, monkeypatch):
+    rig.raise_arm()
+    written_ns = _time_chain_writes(rig, monkeypatch)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _sync_caller(world, rig)(command.JointPosition(PARK))
+        _until_answered(rig, answer)
+        answer.result()
+
+    [span] = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is True
+    sent = [w for w in written_ns if w >= span.start_ns]
+    assert len(sent) > 1  # the ramp sends many commands, and one span times the move
+    assert span.end_ns >= sent[0]
+
+
+def test_a_blocking_move_stopped_before_its_first_command_is_not_timed(world, rig, tmp_path, monkeypatch):
+    rig.rest()
+    to_joints = yam._Arm.to_joints
+
+    def stop_while_solving(arm, cmd, q):
+        rig.stop.stopped = True
+        return to_joints(arm, cmd, q)
+
+    monkeypatch.setattr(yam._Arm, 'to_joints', stop_while_solving)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        answer = _sync_caller(world, rig)(command.JointPosition(RAISED))
+        rig.tick(0.05)
+        rig.finish()
+    with pytest.raises(yam.MoveAbandoned):
+        answer.result()
+    assert _command_spans(tmp_path) == []
+
+
+def test_a_streamed_command_is_timed_until_its_command_reaches_the_chain(rig, tmp_path, monkeypatch):
+    rig.ready()
+    written_ns = _time_chain_writes(rig, monkeypatch)
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        rig.commands.push(command.JointPosition(RAISED))
+        rig.tick(0.01)
+
+    [span] = _command_spans(tmp_path)
+    assert span.attrs[ATTR_COMMAND_SYNC] is False
+    assert span.end_ns >= next(w for w in written_ns if w >= span.start_ns)

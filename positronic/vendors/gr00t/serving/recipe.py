@@ -127,6 +127,7 @@ def client_stack(
     image_mappings: dict[str, str],
     compress_images: bool,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+    inference_lead: float = 0.0,
     rtc: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Describe scheduling, observation preparation and native-result decoding for one session."""
@@ -139,7 +140,7 @@ def client_stack(
             fps=fps,
             request_timing={'reference': 'before_end'},
             merge={'start': 'after_previous', 'horizon_sec': horizon_sec},
-            latency_estimate=0.0,
+            latency_estimate=inference_lead,
         ),
     )
     codec = inference(settings, rtc=rtc is not None)

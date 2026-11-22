@@ -20,6 +20,7 @@ from positronic.offboard.client import (
     DEFAULT_CONNECT_DEADLINE,
     DEFAULT_INFER_TIMEOUT,
     DEFAULT_OPEN_TIMEOUT,
+    DEFAULT_UNRESOLVED_HOST_DEADLINE,
     DOWNLINK_MS,
     UPLINK_MS,
     InferenceClient,
@@ -79,7 +80,8 @@ def round_trip(
             return session.infer(prepared)
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
-            telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing))
+            alone = {} if session.sent_alone is None else {telemetry_keys.ATTR_WIRE_SENT_ALONE: session.sent_alone}
+            telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing), **alone)
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
@@ -152,16 +154,18 @@ def _server_frames(declared: dict[str, Any], from_stack: dict[str, Any]) -> dict
 class RemotePolicy(Policy):
     """Run the server-declared client stack around an ordinary remote inference call.
 
-    ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout`` and ``connect_deadline``
-    bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality of images sent to a server
-    that asks for compressed images.
+    ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout``, ``connect_deadline`` and
+    ``unresolved_host_deadline`` bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality
+    of images sent to a server that asks for compressed images.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
     codecs run. ``meta`` holds only the client's own values. Each run records the server's values in the episode
     metadata before its first yield, with the frames that the server and its declared stack state as ``EE_FRAMES``,
     and the ID of the session that serves the episode as ``SESSION_ID``.
-    ``wait_for_server`` waits for the server without a session.
+    ``wait_for_server`` waits for the server without a session. A caller that starts a run itself may pass it
+    ``cancelled`` (``runtime.start(policy, cancelled=...)``), which ends the session opening as
+    ``InferenceClient.new_session`` reads it: the run then raises ``SessionOpeningCancelled``.
     """
 
     def __init__(
@@ -172,6 +176,7 @@ class RemotePolicy(Policy):
         headers: dict[str, str] | None = None,
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
+        unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
     ):
@@ -181,6 +186,7 @@ class RemotePolicy(Policy):
             headers=headers,
             open_timeout=open_timeout,
             connect_deadline=connect_deadline,
+            unresolved_host_deadline=unresolved_host_deadline,
             infer_timeout=infer_timeout,
         )
         self._jpeg_quality = jpeg_quality
@@ -212,8 +218,8 @@ class RemotePolicy(Policy):
         if run is not None:
             run.close()
 
-    def run(self, runtime: Runtime) -> PolicyRun:
-        session = self._client.new_session()
+    def run(self, runtime: Runtime, cancelled: cabc.Callable[[], bool] | None = None) -> PolicyRun:
+        session = self._client.new_session(cancelled=cancelled)
         execution = None
         run = None
         try:
@@ -221,12 +227,13 @@ class RemotePolicy(Policy):
                 server_meta = dict(session.metadata)
                 stack = declared_stack(server_meta, session.protocol_version)
                 execution = ExecutionRuntime(runtime, max_in_flight=1 if stack.ordered else session.max_in_flight)
-                client_meta = dict(stack.meta()) if session.protocol_version is ProtocolVersion.V3 else {}
+                stack_meta = dict(stack.meta())
+                # The declared stack runs on this client under every protocol, so its frames count for each server.
+                stack_frames = stack_meta.pop(roboarm_keys.EE_FRAMES, {})
+                client_meta = stack_meta if session.protocol_version is ProtocolVersion.V3 else {}
                 # Either side of the server's deployment may state the frames, so the run records both as one entry
                 # keyed by pose signal.
-                frames = _server_frames(
-                    server_meta.get(roboarm_keys.EE_FRAMES, {}), client_meta.pop(roboarm_keys.EE_FRAMES, {})
-                )
+                frames = _server_frames(server_meta.get(roboarm_keys.EE_FRAMES, {}), stack_frames)
                 server_compresses_images = bool(server_meta.get(policy_keys.COMPRESS_IMAGES))
             except PolicyCommandError:
                 raise
