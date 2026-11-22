@@ -33,6 +33,7 @@ import positronic.cfg.webxr
 from positronic import geom
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.webxr import LEFT, RIGHT, WebXR
+from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES, OperatorPosition, Tracker
 from .service import Button, ButtonMap
@@ -165,7 +166,7 @@ class ArmControl(pimm.ControlSystem):
         message = self.buttons.read()
         values = message.data.get(self.side)
         if values is None or silent:
-            self._buttons.lose()
+            self._buttons.cancel_holds()
             return set()
         if message.updated:
             self._trigger = ButtonMap.grip(values)
@@ -327,11 +328,12 @@ def debug(
     for side, arm in arms.items():
         if not len(arm.start_joints) or not np.all(np.isfinite(arm.start_joints)):
             raise ValueError(f'the {side} arm needs a finite angle for each joint of its start pose')
+    check_finite_positive(silence_sec, 'silence_sec')
     with pimm.World() as world:
         panel = Panel(list(arms))
         world.connect(panel.frame, webxr.frame)
-        controls: list[pimm.ControlSystem | None] = [panel]
-        devices: list[pimm.ControlSystem | None] = [webxr]
+        controls: list[pimm.ControlSystem] = [panel]
+        devices: list[pimm.ControlSystem] = [webxr]
         for side, arm in arms.items():
             control = ArmControl(side, arm.start_joints, operator_position, controller_axes, silence_sec)
             world.connect(webxr.controller_positions, control.controller_positions)
@@ -353,7 +355,7 @@ def debug(
             world.connect(control.report, panel.reports[side])
             controls.append(control)
         # Each device runs in a process of its own: the vendor client of a CRON arm keeps one connection a process
-        world.run(controls, devices)
+        world.run([*controls], [*devices])
 
 
 @cfn.config(

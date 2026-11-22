@@ -286,3 +286,10 @@ def test_the_panel_shows_an_arm_that_sent_no_report():
 def test_a_station_that_names_its_arms_wrong_is_refused(arms, match):
     with pytest.raises(ValueError, match=match):
         debug(arms, webxr=None, operator_position=OperatorPosition.FRONT)  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize('silence_sec', [0.0, -1.0, float('nan'), float('inf')])
+def test_a_silence_limit_that_is_not_finite_and_positive_is_refused(silence_sec):
+    arms = {RIGHT: Arm(ManualDriver([]), START_JOINTS)}
+    with pytest.raises(ValueError, match='silence_sec'):
+        debug(arms, webxr=None, operator_position=OperatorPosition.FRONT, silence_sec=silence_sec)  # pyright: ignore[reportArgumentType]
