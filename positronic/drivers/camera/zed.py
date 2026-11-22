@@ -63,9 +63,10 @@ class DepthFormat(Enum):
 
 
 def depth_as_uint8(depth_m: np.ndarray, max_depth_m: float) -> np.ndarray:
-    """``depth_m`` on the scale where 255 is ``max_depth_m``. NaN, +Inf and a larger depth are 255, and -Inf is 0."""
+    """``depth_m`` on the scale where 255 is ``max_depth_m``. NaN, +Inf and a larger depth are 255, and -Inf and a
+    depth below 0 are 0."""
     depth_m = np.nan_to_num(depth_m, nan=max_depth_m, posinf=max_depth_m, neginf=0)
-    return (depth_m.clip(max=max_depth_m) / max_depth_m * 255).astype(np.uint8)
+    return (depth_m.clip(0, max_depth_m) / max_depth_m * 255).astype(np.uint8)
 
 
 def depth_as_float32_m(depth_m: np.ndarray) -> np.ndarray:
@@ -143,7 +144,7 @@ class SLCamera(pimm.ControlSystem):
                         deprecated.
             coordinate_units: (sl.UNIT) Coordinate units to use
             max_depth: (float) Maximum depth to use. Depth NaNs and +Inf will be set to this distance.
-                        -Inf will be set to 0. All values above this will be set to max_depth.
+                        -Inf and depths below 0 will be set to 0. All values above this will be set to max_depth.
                         Only ``depth_format='uint8'`` uses it.
             depth_format: (DepthFormat) Type and unit of the depth image. ``'uint16_mm'`` and ``'float32_m'``
                         need ``view='left'``, the view whose pixels the depth image matches.

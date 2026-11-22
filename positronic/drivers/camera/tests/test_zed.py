@@ -179,7 +179,7 @@ class FakeModel(enum.Enum):
 # Depths in metres as the SDK gives them: NaN, +Inf and -Inf where it has no depth
 NO_DEPTH = (np.nan, np.inf, -np.inf)
 DEPTH_M = np.array([NO_DEPTH, (0.0, 0.3, 1.2346), (10.0, 65.535, 70.0)], dtype=np.float32)
-# A depth below 0 is none the SDK documents. Its `uint8` value differs between processor types.
+# A depth below 0 is none the SDK documents
 DEPTH_WITH_NEGATIVE_M = np.array([(-0.5, 0.3)], dtype=np.float32)
 
 LEFT_INTRINSICS = PinholeIntrinsics(width=1280, height=720, fx=522.5, fy=522.25, cx=645.75, cy=361.5)
@@ -195,7 +195,7 @@ class DroppingSdk:
     room by default, and the grabs that ``torn_grabs`` counts from 0 give a torn image. Each image's capture time is
     ``image_age_ns`` before its grab. From ``clock_back_at`` the host clock reads ``clock_back_ns`` earlier, as after a
     clock correction, while the image clock keeps its course. Every depth measure is ``depth_m``, and the rectified
-    left view has ``LEFT_INTRINSICS``.
+    left view has ``left_intrinsics``, ``LEFT_INTRINSICS`` until a test sets another value.
     """
 
     def __init__(
@@ -216,6 +216,7 @@ class DroppingSdk:
     ):
         self.model = model
         self.depth_m = depth_m
+        self.left_intrinsics = LEFT_INTRINSICS
         self.clock = clock
         self.image_age_ns = image_age_ns
         self.clock_back_at = clock_back_at
@@ -277,10 +278,9 @@ class FakeCamera:
 
     def get_camera_information(self) -> types.SimpleNamespace:
         assert self.opened_at is not None and self.closed_at is None, 'camera information of a camera that is not open'
-        size = types.SimpleNamespace(width=LEFT_INTRINSICS.width, height=LEFT_INTRINSICS.height)
-        left = types.SimpleNamespace(
-            fx=LEFT_INTRINSICS.fx, fy=LEFT_INTRINSICS.fy, cx=LEFT_INTRINSICS.cx, cy=LEFT_INTRINSICS.cy
-        )
+        intrinsics = self._sdk.left_intrinsics
+        size = types.SimpleNamespace(width=intrinsics.width, height=intrinsics.height)
+        left = types.SimpleNamespace(fx=intrinsics.fx, fy=intrinsics.fy, cx=intrinsics.cx, cy=intrinsics.cy)
         calibration = types.SimpleNamespace(left_cam=left)
         configuration = types.SimpleNamespace(resolution=size, calibration_parameters=calibration)
         return types.SimpleNamespace(camera_model=self._sdk.model, camera_configuration=configuration)
@@ -977,9 +977,13 @@ def test_depth_in_metres_is_zero_where_the_sdk_has_no_depth(zed_module):
 
 @pytest.mark.parametrize(
     ('depth_format', 'expected'),
-    [('uint16_mm', np.array([(0, 300)], np.uint16)), ('float32_m', np.array([(0, 0.3)], np.float32))],
+    [
+        ('uint8', np.array([(0, 7)], np.uint8)),
+        ('uint16_mm', np.array([(0, 300)], np.uint16)),
+        ('float32_m', np.array([(0, 0.3)], np.float32)),
+    ],
 )
-def test_a_metric_depth_below_zero_is_zero(zed_module, depth_format, expected):
+def test_a_depth_below_zero_is_zero(zed_module, depth_format, expected):
     images = _depth_images(zed_module, DEPTH_WITH_NEGATIVE_M, depth_format=depth_format)
     assert images
     np.testing.assert_array_equal(images[-1], expected[..., np.newaxis])
@@ -1006,12 +1010,19 @@ def test_each_open_sends_the_intrinsics_of_the_rectified_left_view(zed_module, w
     _drive(loop, clock, until=LOST_AT)
     assert [data for _, data in intrinsics.emitted] == [LEFT_INTRINSICS]
 
+    recalibrated = LEFT_INTRINSICS._replace(fx=523.0, cx=646.0)
+    sdk.left_intrinsics = recalibrated
     _drive(loop, clock, until=LISTED_AGAIN_AT)
     answer = _readier(world, camera)(None)
     _drive(loop, clock, until=clock.now() + 0.01)
 
     assert answer.result() is None
-    assert [data for _, data in intrinsics.emitted] == [LEFT_INTRINSICS] * 2
+    assert [data for _, data in intrinsics.emitted] == [LEFT_INTRINSICS, recalibrated]
+
+
+def test_each_depth_format_of_the_driver_is_a_depth_format(zed_module):
+    annotation = inspect.signature(zed_module.SLCamera).parameters['depth_format'].annotation
+    assert set(typing.get_args(annotation)) == {member.value for member in zed_module.DepthFormat}
 
 
 def test_a_mono_camera_refuses_a_consumer_of_its_intrinsics(zed_module):
