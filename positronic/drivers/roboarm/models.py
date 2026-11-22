@@ -249,10 +249,6 @@ def attach_robotiq_2f85(arm_root: ET.Element, meshes: dict[str, bytes]) -> dict:
     return gripper[roboarm_keys.GRIPPER]
 
 
-# The robot type of an arm that the Franka driver runs with the Robotiq 2F-85: the arm and gripper of a DROID rig.
-DROID_ROBOT = 'droid'
-
-
 @lru_cache(maxsize=1)
 def bundled_franka_model() -> dict:
     """FR3 and Robotiq 2F-85 model metadata."""

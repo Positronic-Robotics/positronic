@@ -1,7 +1,7 @@
 """The keys of the robot model an episode carries, of the frame each of its pose signals is stated in, and of the
 settings each arm runs with."""
 
-# The robot type an episode records as a static: ``i2rt_yam``, ``droid``. A reader that tells robots apart keys on it.
+# The robot type an episode records as a static: ``i2rt_yam``, ``droid``.
 ROBOT = 'robot'
 # The robot model, carried in episode statics for the transforms that solve against it (``IKJointsAction``).
 URDF = 'urdf'
