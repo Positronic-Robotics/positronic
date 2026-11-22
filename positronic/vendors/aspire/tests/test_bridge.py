@@ -1,4 +1,5 @@
 import threading
+from dataclasses import replace
 from pathlib import Path
 from textwrap import dedent
 
@@ -17,29 +18,30 @@ from positronic.vendors.aspire.bridge import (
     MoveEnd,
     Program,
 )
-from positronic.vendors.aspire.contracts import EnvironmentAdapter
+from positronic.vendors.aspire.contracts import PRIMARY_ARM, EnvironmentAdapter
 
 ARMS = keys.BIMANUAL_ARMS
 QUAT = geom.Rotation.Representation.QUAT
 
 
-def command(arm: str) -> str:
+def command(arm: str | None) -> str:
     return keys.arm_channel(keys.ROBOT_COMMAND, arm)
 
 
-def grip(arm: str) -> str:
+def grip(arm: str | None) -> str:
     return keys.arm_channel(keys.TARGET_GRIP, arm)
 
 
 class Rig:
-    """A bimanual robot that reaches each chunk's last target at once, unless a test holds it back."""
+    """A robot that reaches each chunk's last target at once, unless a test holds it back."""
 
-    def __init__(self):
-        self.q = {arm: np.full(6, 0.1 * i) for i, arm in enumerate(ARMS)}
-        self.pose = {arm: geom.Transform3D(np.array([0.3, 0.2 - 0.4 * i, 0.3])) for i, arm in enumerate(ARMS)}
-        self.grip = dict.fromkeys(ARMS, 0.0)
+    def __init__(self, arms: tuple[str | None, ...] = ARMS, joints: int = 6):
+        self.arms = arms
+        self.q = {arm: np.full(joints, 0.1 * i) for i, arm in enumerate(arms)}
+        self.pose = {arm: geom.Transform3D(np.array([0.3, 0.2 - 0.4 * i, 0.3])) for i, arm in enumerate(arms)}
+        self.grip = dict.fromkeys(arms, 0.0)
         # The most each gripper closes: an object in the jaws stops it short.
-        self.grip_limit = dict.fromkeys(ARMS, 1.0)
+        self.grip_limit = dict.fromkeys(arms, 1.0)
         # How far short of a pose target each hand stops.
         self.shortfall = np.zeros(3)
         # Arms whose joints creep on and never settle, whatever the command.
@@ -47,17 +49,17 @@ class Rig:
 
     def obs(self) -> dict:
         obs = {keys.TASK: 'stack the cups', keys.EXTERIOR_IMAGE: np.zeros((4, 6, 3), dtype=np.uint8)}
-        for arm in ARMS:
+        for arm in self.arms:
             state = keys.arm_channel(keys.ROBOT_STATE, arm)
             obs[f'{state}{keys.JOINTS_SUFFIX}'] = self.q[arm].copy()
-            obs[f'{state}{keys.JOINT_VEL_SUFFIX}'] = np.zeros(6)
+            obs[f'{state}{keys.JOINT_VEL_SUFFIX}'] = np.zeros(len(self.q[arm]))
             obs[f'{state}{keys.EE_POSE_SUFFIX}'] = self.pose[arm].as_vector(QUAT)
             obs[keys.arm_channel(keys.GRIP, arm)] = self.grip[arm]
         return obs
 
     def play(self, chunk: list[dict]) -> None:
         last = chunk[-1]
-        for arm in ARMS:
+        for arm in self.arms:
             if arm in self.creeping:
                 self.q[arm] = self.q[arm] + 0.01
                 continue
@@ -90,7 +92,9 @@ def settings() -> BridgeSettings:
 def run(settings):
     bridges = []
 
-    def run(program: str, rig: Rig | None = None) -> tuple[CapBridge, list[list[dict]]]:
+    def run(
+        program: str, rig: Rig | None = None, settings: BridgeSettings = settings
+    ) -> tuple[CapBridge, list[list[dict]]]:
         bridge = CapBridge(Program('program.py', dedent(program)), settings)
         bridges.append(bridge)
         return bridge, drive(bridge, rig or Rig())
@@ -331,3 +335,93 @@ def test_the_trace_records_a_call_that_the_bridge_refused(run):
     (call,) = bridge.calls
     assert not call.result['ok'] and not call.result['diagnostics'][DIAGNOSTIC_ACCEPTED]
     assert DIAGNOSTIC_MOVE_END not in call.result['diagnostics']
+
+
+@pytest.fixture
+def one_arm(settings) -> BridgeSettings:
+    return replace(settings, arms=keys.ONE_ARM)
+
+
+def test_the_example_program_completes_on_a_one_arm_rig_with_seven_joints(run, one_arm):
+    example = (Path(__file__).parents[1] / 'examples' / 'lift_and_return.py').read_text()
+    bridge, chunks = run(example, Rig(keys.ONE_ARM, joints=7), one_arm)
+    completed(bridge)
+    assert {key for chunk in chunks for element in chunk for key in element} == {command(None), grip(None), END}
+    moves = [call for call in bridge.calls if call.name != 'get_robot_state']
+    names = ['move_to_pose', 'set_grippers', 'set_grippers', 'move_synchronized', 'go_home']
+    assert [call.name for call in moves] == names
+    assert all(call.result['diagnostics'][DIAGNOSTIC_MOVE_END] == MoveEnd.ARRIVED for call in moves)
+
+
+def test_a_one_arm_program_names_its_arm_primary_and_moves_the_joints_the_rig_has(run, one_arm):
+    bridge, chunks = run(
+        """
+        state = get_robot_state()
+        assert state.arms == ('primary',) and len(state.joint_positions['primary']) == 7
+        assert len(state.joint_names['primary']) == 7
+        moved = move_to_joints([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25])
+        assert moved.ok and moved.final_errors == {'primary': 0.0}, moved
+        short = move_to_joints([0.5] * 6)
+        assert short.error.code == 'invalid_request' and not short.diagnostics['accepted'], short
+        together = move_synchronized({'primary': [0.5] * 6})
+        assert together.error.code == 'invalid_request' and not together.diagnostics['accepted'], together
+        other = open_gripper(arm='left')
+        assert other.error.code == 'not_found', other
+        period = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 7)}))
+        assert period.ok and period.observation.robot_state.joint_positions['primary'][6] == 0.1, period
+        wide = step(RobotAction(arms={'primary': ArmCommand(mode='joint_position', target=[0.1] * 6)}))
+        assert wide.error.code == 'invalid_request', wide
+        start = get_robot_state()
+        path = Trajectory(joint_positions=[[0.1] * 7, [0.2] * 7], dt_s=0.2, joint_names=start.joint_names['primary'],
+                          planner='test', collision_aware=False, expected_start=start)
+        assert execute_trajectory(path).ok
+        start = get_robot_state()
+        narrow = Trajectory(joint_positions=[[0.2] * 6], dt_s=0.2, joint_names=start.joint_names['primary'],
+                            planner='test', collision_aware=False, expected_start=start)
+        assert execute_trajectory(narrow).error.code == 'invalid_request'
+        assert close_gripper().ok and get_robot_state().gripper_positions['primary'] == 0.0
+        assert go_home().ok
+    """,
+        Rig(keys.ONE_ARM, joints=7),
+        one_arm,
+    )
+    completed(bridge)
+    np.testing.assert_allclose(chunks[-1][-1][command(None)].positions, np.zeros(7))
+    assert chunks[-1][-1][grip(None)] == 1.0
+
+
+def test_the_embodiment_of_a_program_is_the_one_the_settings_name(run, one_arm):
+    bridge, _ = run(
+        """
+        assert get_robot_state().embodiment == 'franka'
+        command = ArmCommand(mode='joint_position', target=[0.1] * 7)
+        assert command.embodiment == 'franka' and step(RobotAction(arms={'primary': command})).ok
+        other = ArmCommand(mode='joint_position', target=[0.1] * 7, embodiment='yam_real')
+        refused = step(RobotAction(arms={'primary': other}))
+        assert refused.error.code == 'invalid_request' and not refused.diagnostics['accepted'], refused
+        try:
+            RobotAction(arms={'primary': command, 'secondary': other})
+            mixed = None
+        except ValueError as error:
+            mixed = str(error)
+        assert 'same embodiment' in mixed, mixed
+    """,
+        Rig(keys.ONE_ARM, joints=7),
+        replace(one_arm, embodiment='franka'),
+    )
+    completed(bridge)
+    assert bridge.embodiment == 'franka'
+
+
+def test_an_observation_whose_joint_velocities_do_not_match_its_joints_is_refused(one_arm):
+    obs = Rig(keys.ONE_ARM, joints=7).obs()
+    obs[keys.JOINT_VEL] = np.zeros(6)
+    with pytest.raises(ValueError, match='joint_velocities'):
+        CapBridge(Program('program.py', 'pass'), one_arm).answer(obs)
+
+
+def test_settings_refuse_arms_that_do_not_name_each_arm_once():
+    with pytest.raises(ValueError, match='arms'):
+        BridgeSettings(arms=())
+    with pytest.raises(ValueError, match='arms'):
+        BridgeSettings(arms=(None, PRIMARY_ARM))

@@ -28,8 +28,15 @@ uv run --locked positronic eval run --eval=.sim.amazon_abc.put_bottles --eval.ti
   --output_dir=~/datasets/aspire/abc
 ```
 
-[`examples/lift_and_return.py`](examples/lift_and_return.py) lifts each hand by 5 cm, closes and opens both grippers,
-returns both hands together, and homes both arms. It reads no camera.
+[`examples/lift_and_return.py`](examples/lift_and_return.py) lifts each hand by 5 cm, closes and opens the grippers,
+returns the hands together, and homes each arm. It reads no camera. It runs on a rig with one arm or two.
+
+The server serves a two-arm rig by default. For a rig whose channels carry no arm name (`robot_state.q`, `grip`,
+`robot_command`, `target_grip`), start it with `--settings.arms='[None]'`:
+
+```bash
+uv run --locked python -m positronic.vendors.aspire.server --settings.arms='[None]' --websocket.served_address.port=8000
+```
 
 ## How a call runs
 
@@ -73,8 +80,14 @@ An arm that a call does not move keeps its last target. At the first observation
 and `go_home` returns an arm to those joints. `execute_trajectory` plays its waypoints at the chunk rate and refuses a
 trajectory that does not start within 0.02 rad of the measured joints (`stale_plan`).
 
-Arms are `left` and `right`. `--settings.aliases` maps ASPIRE's `primary` and `secondary` to them; the default maps
-`primary` to `right`. Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's
+`--settings.arms` names the arms of the rig as its channels do. The default is `left` and `right`.
+`--settings.aliases` maps ASPIRE's `primary` and `secondary` to them; the default maps `primary` to `right`. On a
+one-arm rig (`--settings.arms='[None]'`) the arm is `primary`, and the channels are those of the table without
+`.{arm}`. An arm has the joint count that its first observation holds: 6 for a YAM, 7 for a Franka. The bridge refuses
+a joint target of a different length (`invalid_request`). `--settings.embodiment` (`yam_real` by default) is the
+embodiment name of each state and command in a program.
+
+Poses are in one frame, `--settings.base_frame` (`world` by default): the frame of the rig's
 measured hand poses, at the `gripper` site. The server states that site in its `ee_frames`.
 
 `get_observation` returns the RGB view of each `image.*` camera, named without the prefix, for example `exterior`. A
@@ -83,6 +96,9 @@ view has no depth, intrinsics or pose. `get_task_context` carries the task instr
 Perception and planning calls (`segment_text`, `localize_object`, `plan_motion`, `solve_ik` and the others) raise
 `NotImplementedError`. A program may import `math` only, and it sees ASPIRE's small set of builtins. These rules keep a
 program to ASPIRE's contract; they are not a sandbox. Run a program only from a source you trust.
+
+In a program, `ArmCommand`, `Trajectory` and `SynchronizedTrajectory` make values with the embodiment of
+`--settings.embodiment`. They are functions, so `isinstance` does not take them.
 
 ## Records
 
@@ -110,4 +126,5 @@ The episode records the program name, its SHA-256 and the record's file name (`s
 uv run --locked pytest positronic/vendors/aspire/tests
 ```
 
-The tests drive the bridge with a fake two-arm observation stream. They need no simulator.
+The tests drive the bridge with fake observation streams of a two-arm rig and of a one-arm rig. They need no
+simulator.

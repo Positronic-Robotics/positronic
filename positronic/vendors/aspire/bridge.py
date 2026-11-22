@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from functools import wraps
+from functools import partial, wraps
 from types import MappingProxyType
 from typing import Any
 
@@ -30,8 +30,7 @@ from positronic.policy.keys import END
 from positronic.utils import check_finite_positive
 
 from .contracts import (
-    EMBODIMENT,
-    JOINT_DIMENSION,
+    DEFAULT_EMBODIMENT,
     PRIMARY_ARM,
     SECONDARY_ARM,
     ApiError,
@@ -72,7 +71,11 @@ class BridgeSettings:
     within the tolerances of its target, when its joints and grippers stay still for ``still_rounds`` chunks short
     of it, or ``call_timeout_s`` after its path played. The bridge counts time in the chunks it answered, so a slow
     simulator times out as a fast one does. ``think_timeout_s`` is wall time: how long one answer waits for the
-    program's next call before it holds the targets for a chunk. ``aliases`` maps ASPIRE's arm roles to arm names.
+    program's next call before it holds the targets for a chunk.
+
+    ``arms`` names the rig's arms as its channels do: ``keys.ONE_ARM`` for a rig whose channels carry no arm name.
+    A program names that arm ``primary``. ``aliases`` gives an arm more names. ``embodiment`` is the name each
+    state and command of a program carries.
     """
 
     fps: float = 30.0
@@ -87,15 +90,29 @@ class BridgeSettings:
     call_timeout_s: float = 10.0
     think_timeout_s: float = 5.0
     base_frame: str = 'world'
+    arms: Sequence[str | None] = keys.BIMANUAL_ARMS
     aliases: Mapping[str, str] = field(
         default_factory=lambda: {PRIMARY_ARM: keys.RIGHT_ARM, SECONDARY_ARM: keys.LEFT_ARM}
     )
+    embodiment: str = DEFAULT_EMBODIMENT
 
     def __post_init__(self) -> None:
         for name in ('fps', 'round_s', 'call_timeout_s', 'think_timeout_s'):
             check_finite_positive(getattr(self, name), name)
         if self.still_rounds < 1:
             raise ValueError('still_rounds must be at least 1')
+        if not self.arms or len(self.arm_names) != len(self.arms):
+            raise ValueError('arms must name at least one arm, and each arm once')
+
+    @property
+    def arm_names(self) -> dict[str, str | None]:
+        """The name of each arm in a program, with its name on the rig."""
+        return {PRIMARY_ARM if arm is None else arm: arm for arm in self.arms}
+
+    def program_arm(self, name: str) -> str | None:
+        """The key in ``arm_names`` of the arm a program names ``name``, aliases included; ``None`` for no arm."""
+        arm = name if name in self.arm_names else self.aliases.get(name)
+        return arm if arm in self.arm_names else None
 
     @property
     def round_ticks(self) -> int:
@@ -175,19 +192,20 @@ class _ChunkPlan:
     holds: int
     end: PolicyEnd | None
 
-    def chunk(self) -> list[dict[str, Any]]:
-        chunk = [_commands(targets) for targets in self.path] + [_commands(self.hold)] * self.holds
+    def chunk(self, arm_names: Mapping[str, str | None]) -> list[dict[str, Any]]:
+        """The answer on the rig's channels; ``arm_names`` gives each arm's name on the rig."""
+
+        def commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
+            entry: dict[str, Any] = {}
+            for arm, target in targets.items():
+                entry[keys.arm_channel(keys.ROBOT_COMMAND, arm_names[arm])] = target.command
+                entry[keys.arm_channel(keys.TARGET_GRIP, arm_names[arm])] = target.grip
+            return entry
+
+        chunk = [commands(targets) for targets in self.path] + [commands(self.hold)] * self.holds
         if self.end is not None:
             chunk[-1] = {**chunk[-1], END: self.end.value}
         return chunk
-
-
-def _commands(targets: Mapping[str, _ArmTarget]) -> dict[str, Any]:
-    commands: dict[str, Any] = {}
-    for arm, target in targets.items():
-        commands[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = target.command
-        commands[keys.arm_channel(keys.TARGET_GRIP, arm)] = target.grip
-    return commands
 
 
 @dataclass(frozen=True)
@@ -286,11 +304,10 @@ class CapBridge:
     ended. Perception and planning calls raise ``NotImplementedError``.
     """
 
-    embodiment = EMBODIMENT
-
     def __init__(self, program: Program, settings: BridgeSettings):
         self._program = program
         self._settings = settings
+        self._arms = settings.arm_names
         self._calls: list[CallTrace] = []
         self._started_wall_s = 0.0
         self._turn = threading.Condition()
@@ -302,6 +319,10 @@ class CapBridge:
         self._call: _Call | None = None
         self._outcome: ProgramOutcome | None = None
         self._closed = False
+
+    @property
+    def embodiment(self) -> str:
+        return self._settings.embodiment
 
     @property
     def outcome(self) -> ProgramOutcome | None:
@@ -330,7 +351,7 @@ class CapBridge:
             self._turn.notify_all()
             self._turn.wait_for(self._program_is_waiting, timeout=self._settings.think_timeout_s)
             plan = self._advance()
-        return plan.chunk()
+        return plan.chunk(self._arms)
 
     def close(self) -> None:
         with self._turn:
@@ -348,8 +369,8 @@ class CapBridge:
 
     def _observe(self, obs: Obs) -> Observation:
         joints, velocities, poses, grippers = {}, {}, {}, {}
-        for arm in keys.BIMANUAL_ARMS:
-            state = keys.arm_channel(keys.ROBOT_STATE, arm)
+        for arm, rig_arm in self._arms.items():
+            state = keys.arm_channel(keys.ROBOT_STATE, rig_arm)
             joints[arm] = obs[f'{state}{keys.JOINTS_SUFFIX}']
             velocities[arm] = obs[f'{state}{keys.JOINT_VEL_SUFFIX}']
             pose = geom.Transform3D.from_vector(
@@ -357,8 +378,10 @@ class CapBridge:
             )
             poses[arm] = Pose(pose.translation, pose.rotation.as_quat, self._settings.base_frame)
             # ASPIRE's gripper runs from 0 (closed) to 1 (open); positronic's grip from 0 (open) to 1 (closed).
-            grippers[arm] = float(np.clip(1.0 - float(obs[keys.arm_channel(keys.GRIP, arm)]), 0.0, 1.0))
-        state = RobotState(joints, velocities, poses, grippers, self._settings.base_frame)
+            grippers[arm] = float(np.clip(1.0 - float(obs[keys.arm_channel(keys.GRIP, rig_arm)]), 0.0, 1.0))
+        state = RobotState(
+            joints, velocities, poses, grippers, self._settings.base_frame, embodiment=self._settings.embodiment
+        )
         cameras = {
             name.removeprefix(keys.IMAGE_PREFIX): CameraObservation(
                 np.asarray(value), name.removeprefix(keys.IMAGE_PREFIX)
@@ -371,7 +394,7 @@ class CapBridge:
         return Observation(cameras, state, task)
 
     def _start(self, state: RobotState) -> None:
-        for arm in keys.BIMANUAL_ARMS:
+        for arm in self._arms:
             self._home[arm] = state.joint_positions[arm]
             self._targets[arm] = _ArmTarget(
                 JointPosition(state.joint_positions[arm]), 1.0 - state.gripper_positions[arm]
@@ -451,9 +474,9 @@ class CapBridge:
             + (list, max, min, print, range, reversed, round, set, sorted, str, sum, tuple, zip)
         }
         builtins['__import__'] = self._import_math
-        constructors = {
-            t.__name__: t for t in (ArmCommand, MotionStrategy, Pose, RobotAction, SynchronizedTrajectory, Trajectory)
-        }
+        constructors: dict[str, Any] = {t.__name__: t for t in (MotionStrategy, Pose, RobotAction)}
+        for of_embodiment in (ArmCommand, SynchronizedTrajectory, Trajectory):
+            constructors[of_embodiment.__name__] = partial(of_embodiment, embodiment=self.embodiment)
         tools = {name: self._traced(name, tool) for name, tool in self._tools().items()}
         namespace: dict[str, Any] = {'__builtins__': builtins, **constructors, **tools}
         self._started_wall_s = time.monotonic()
@@ -587,8 +610,8 @@ class CapBridge:
             return call
 
     def _arm(self, name: str) -> str:
-        arm = self._settings.aliases.get(name, name)
-        if arm not in keys.BIMANUAL_ARMS:
+        arm = self._settings.program_arm(name)
+        if arm is None:
             raise ApiError(ErrorCode.NOT_FOUND, f'unknown arm {name!r}')
         return arm
 
@@ -651,18 +674,19 @@ class CapBridge:
 
     def step(self, action: RobotAction) -> StepResult:
         try:
-            if action.embodiment != EMBODIMENT:
+            if action.embodiment != self.embodiment:
                 raise ApiError(
-                    ErrorCode.INVALID_REQUEST, f'action embodiment {action.embodiment!r} is not {EMBODIMENT!r}'
+                    ErrorCode.INVALID_REQUEST, f'action embodiment {action.embodiment!r} is not {self.embodiment!r}'
                 )
             commands = {self._arm(name): command for name, command in action.arms.items()}
+            joints = {arm: self._joint_target(command.target, arm) for arm, command in commands.items()}
         except ApiError as refusal:
             return StepResult(ok=False, error=refusal, diagnostics={DIAGNOSTIC_ACCEPTED: False})
         with self._turn:
             targets = dict(self._targets)
         for arm, command in commands.items():
             grip = targets[arm].grip if command.gripper_position is None else 1.0 - command.gripper_position
-            targets[arm] = _ArmTarget(JointPosition(command.target), grip)
+            targets[arm] = _ArmTarget(joints[arm], grip)
         call = self._await(_Call([targets], {}, one_period=True))
         assert call.end is not None
         diagnostics = {DIAGNOSTIC_ACCEPTED: True, DIAGNOSTIC_MOVE_END: call.end.value}
@@ -670,9 +694,9 @@ class CapBridge:
 
     @_refusal_is_a_result
     def execute_trajectory(self, trajectory: Trajectory | SynchronizedTrajectory) -> ExecutionResult:
-        if trajectory.embodiment != EMBODIMENT:
+        if trajectory.embodiment != self.embodiment:
             raise ApiError(
-                ErrorCode.INVALID_REQUEST, f'trajectory embodiment {trajectory.embodiment!r} is not {EMBODIMENT!r}'
+                ErrorCode.INVALID_REQUEST, f'trajectory embodiment {trajectory.embodiment!r} is not {self.embodiment!r}'
             )
         if isinstance(trajectory, Trajectory):
             arm = self._arm(trajectory.arm)
@@ -683,6 +707,7 @@ class CapBridge:
             grippers = None
             if trajectory.gripper_positions is not None:
                 grippers = {self._arm(name): values for name, values in trajectory.gripper_positions.items()}
+        goals = {arm: _Goal(self._joint_target(joints[-1], arm)) for arm, joints in waypoints.items()}
         measured = self.get_robot_state().joint_positions
         start = trajectory.expected_start.joint_positions
         for arm in waypoints:
@@ -701,7 +726,6 @@ class CapBridge:
                 grip = held[arm].grip if grippers is None else 1.0 - float(grippers[arm][index])
                 targets[arm] = _ArmTarget(JointPosition(joints[index]), grip)
             path.append(targets)
-        goals = {arm: _Goal(JointPosition(joints[-1])) for arm, joints in waypoints.items()}
         return self._result(self._await(_Call(path, goals)), self._settings.joint_tolerance_rad)
 
     @_refusal_is_a_result
@@ -711,7 +735,7 @@ class CapBridge:
     @_refusal_is_a_result
     def set_grippers(self, positions: Mapping[str, float]) -> ExecutionResult:
         goals = self._grip_goals(positions)
-        if set(goals) != set(keys.BIMANUAL_ARMS):
+        if set(goals) != set(self._arms):
             raise ApiError(ErrorCode.INVALID_REQUEST, 'positions must name every robot arm')
         return self._settle(goals, None)
 
@@ -732,7 +756,8 @@ class CapBridge:
         self, target: np.ndarray, tolerance: float = 0.01, max_steps: int = 120, *, arm: str = PRIMARY_ARM
     ) -> ExecutionResult:
         _motion_options(tolerance, max_steps)
-        return self._settle({self._arm(arm): _Goal(self._joint_target(target))}, tolerance)
+        arm = self._arm(arm)
+        return self._settle({arm: _Goal(self._joint_target(target, arm))}, tolerance)
 
     @_refusal_is_a_result
     def move_to_pose(
@@ -760,8 +785,9 @@ class CapBridge:
             raise ApiError(ErrorCode.INVALID_REQUEST, 'targets must name at least one arm')
         goals = {}
         for name, target in targets.items():
-            command = self._pose_target(target) if isinstance(target, Pose | Mapping) else self._joint_target(target)
-            goals[self._arm(name)] = _Goal(command)
+            arm = self._arm(name)
+            pose = isinstance(target, Pose | Mapping)
+            goals[arm] = _Goal(self._pose_target(target) if pose else self._joint_target(target, arm))
         return self._settle(goals, tolerance)
 
     def open_gripper(self, *, arm: str = PRIMARY_ARM) -> ExecutionResult:
@@ -786,12 +812,13 @@ class CapBridge:
             raise ApiError(ErrorCode.INVALID_REQUEST, f'pose frame {pose.frame!r} is not {self._settings.base_frame!r}')
         return CartesianPosition(geom.Transform3D(pose.position, geom.Rotation.from_quat(pose.quaternion_wxyz)))
 
-    @staticmethod
-    def _joint_target(target: object) -> JointPosition:
+    def _joint_target(self, target: object, arm: str) -> JointPosition:
         try:
             joints = np.asarray(target, dtype=np.float64)
         except (TypeError, ValueError) as exc:
             raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite joint vector: {exc}') from exc
-        if joints.shape != (JOINT_DIMENSION,) or not np.all(np.isfinite(joints)):
-            raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite {JOINT_DIMENSION}-joint vector')
+        # The measured joints of the arm give its joint count.
+        count = len(self._home[arm])
+        if joints.shape != (count,) or not np.all(np.isfinite(joints)):
+            raise ApiError(ErrorCode.INVALID_REQUEST, f'joint target must be a finite {count}-joint vector')
         return JointPosition(joints)

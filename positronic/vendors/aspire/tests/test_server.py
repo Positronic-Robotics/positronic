@@ -14,6 +14,7 @@ from positronic.vendors.aspire.server import (
     META_PROGRAM,
     META_PROGRAM_SHA256,
     META_SESSION_RECORD,
+    META_SETTINGS,
     PARAM_PROGRAM,
     POLICY_TYPE,
     CapProgramModel,
@@ -137,3 +138,19 @@ def test_a_program_that_does_not_compile_gives_up_with_its_error(model, programs
     assert run_session(model, 'broken', Rig(), 'broken.py')[-1][END] == PolicyEnd.GIVE_UP.value
     broken = record(tmp_path, 'broken')
     assert 'SyntaxError' in broken.error and broken.calls == []
+
+
+def test_a_one_arm_session_answers_on_the_unnamed_channels_and_its_meta_states_their_hand_frames(programs, tmp_path):
+    (programs / 'one_arm.py').write_text('assert close_gripper().ok and go_home().ok\n')
+    settings = BridgeSettings(fps=10.0, round_s=0.2, call_timeout_s=2.0, think_timeout_s=30.0, arms=keys.ONE_ARM)
+    model = CapProgramModel(programs, settings, tmp_path)
+    try:
+        meta = model.meta()
+        frames = parse_ee_frames(meta[roboarm_keys.EE_FRAMES])
+        assert frames == dict.fromkeys((keys.EE_POSE, keys.TARGET_EE_POSE), EEFrame(site=GRIPPER_SITE))
+        assert meta[f'{META_SETTINGS}.arms'] == keys.ONE_ARM
+        chunk = run_session(model, 'one-arm', Rig(keys.ONE_ARM, joints=7), 'one_arm.py')
+    finally:
+        model.close()
+    assert chunk[-1][END] == PolicyEnd.COMPLETE.value
+    assert set(chunk[-1]) == {keys.ROBOT_COMMAND, keys.TARGET_GRIP, END}
