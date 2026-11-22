@@ -778,11 +778,15 @@ class _Arm(DriverRun[command.CommandType]):
         """Raise the gripper straight up, its turn kept, until the arm is ``park_clear_m`` clear of the obstacles,
         before a move to ``goal`` that ramps in joint space and checks no gap. An arm at ``goal`` does not move. On a
         stop, return and leave the settle to see it."""
-        if self._clearance is None or not self._stream.obstacles or self._sent_joints is None:
+        if self._clearance is None or not self._stream.obstacles:
             return
-        q = self.observations()[_JOINT_POS]
+        q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
         if np.max(np.abs(q - goal)) <= tuning.tolerance_rad:
             return
+        if self._clearance.obstacle_gap(q, self._open_share(grip)) >= self._stream.park_clear_m:
+            return
+        if self._sent_joints is None:
+            self.command_target(q, grip)  # a chain just opened: the raise steps from the joints it reads
         start = self._kin.fk(q)
         lift = np.array([0.0, 0.0, self._stream.park_lift_m])
         above = self._base_pose * geom.Transform3D(start.translation + lift, start.rotation)

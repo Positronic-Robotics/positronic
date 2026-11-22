@@ -1232,6 +1232,32 @@ def test_an_idle_park_from_low_over_the_table_keeps_clear_of_it():
     rig.loop.close()
 
 
+def test_a_link_near_two_obstacles_has_a_gap_to_each():
+    plate = Box((-0.23, -0.075, -0.0235), (0.04, 0.685, 0.0))
+    lower_table = Box((-0.23, -0.28, -0.0835), (1.17, 0.92, -0.0435))
+    # The open fingers in front of the edge of the plate, above the lower table
+    q = np.array([-0.136, 1.803, 0.295, -0.645, 1.363, 0.471])
+
+    def near_gaps(boxes):
+        return {
+            round(near.gap_m, 4) for near in Clearance(boxes, KEEP_CLEAR_M).nears(q, OPEN_SHARE) if near.gap_m < 0.03
+        }
+
+    assert near_gaps((plate, lower_table)) >= near_gaps((plate,)) | near_gaps((lower_table,))
+
+
+def test_a_start_move_from_low_over_the_table_on_a_chain_just_opened_keeps_clear_of_it():
+    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig.vendor._pos[:6] = LOW_OVER_THE_TABLE  # the arm lies where a released chain left it, its open fingers low
+    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
+    start = clearance.gap(LOW_OVER_THE_TABLE, OPEN_SHARE)
+    rig.ready()
+    assert min(clearance.gap(q, OPEN_SHARE) for q in _asked(rig)) >= start - GAP_TOLERANCE_M
+    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
+    rig.loop.close()
+
+
 def test_world_frame_obstacles_move_with_the_base_of_the_arm():
     shift = np.array([0.30, -0.305, 0.3125])
     world_table = Box(tuple((np.array(TABLE.lower) + shift).tolist()), tuple((np.array(TABLE.upper) + shift).tolist()))

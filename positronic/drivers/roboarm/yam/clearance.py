@@ -128,16 +128,17 @@ class Clearance:
             body = mj.mj_id2name(self._model, mj.mjtObj.mjOBJ_BODY, self._model.geom_bodyid[g])
             if body == 'gripper':
                 self._model.geom_contype[g] = self._model.geom_conaffinity[g] = 1
-            self._names.append(_OBSTACLE if body == 'world' else body)
+            # Each obstacle has its name, so a link near two of them is cut for each
+            self._names.append(mj.mj_id2name(self._model, mj.mjtObj.mjOBJ_GEOM, g) if body == 'world' else body)
+        self._obstacle_names = {name for name in self._names if name.startswith(_OBSTACLE)}
         self._data = mj.MjData(self._model)
         self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
         self._finger_ids = np.array([self._model.joint(name).qposadr.item() for name in _FINGERS])
         self._finger_travel = np.array([self._model.joint(name).range[1] for name in _FINGERS])
 
-    @staticmethod
-    def _counts(pair: set[str]) -> bool:
-        return frozenset(pair) not in _ALWAYS_NEAR and not (_OBSTACLE in pair and pair & _ON_OBSTACLES)
+    def _counts(self, pair: set[str]) -> bool:
+        return frozenset(pair) not in _ALWAYS_NEAR and not (pair & self._obstacle_names and pair & _ON_OBSTACLES)
 
     def nears(self, q: np.ndarray, open_share: float) -> list[Near]:
         """The pairs nearer than ``reach_m`` at joints ``q``, the nearest point of each pair, with the fingers open by
@@ -184,7 +185,7 @@ class Clearance:
         gaps = [
             float(contact.dist)
             for contact in data.contact[: data.ncon]
-            if _OBSTACLE in (self._names[contact.geom1], self._names[contact.geom2])
+            if {self._names[contact.geom1], self._names[contact.geom2]} & self._obstacle_names
             and self._counts({self._names[contact.geom1], self._names[contact.geom2]})
         ]
         return min(gaps, default=self.reach_m)
