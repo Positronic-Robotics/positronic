@@ -27,6 +27,7 @@ from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers import webxr
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
+from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.webxr import Frontend, SessionMode, WebXR
 from positronic.geom import Rotation, Transform3D
@@ -320,6 +321,90 @@ def test_an_arm_state_that_carries_a_signal_error_is_sounded_and_the_session_goe
     assert marks['after'] > marks['pressed']
 
 
+def test_a_lost_right_controller_turns_control_off(world):
+    dc, _arm, buttons, _grips, sounds = build_teleop_arm(world)
+    state, poses = world.pair(dc.robot_state), world.pair(dc.controller_positions)
+    commands = RecordingEmitter()
+    dc.robot_commands._bind(commands, clock=world.clock)
+    hand = Transform3D(np.array([0.1, 0.2, 0.3]), Rotation.identity)
+    moved = Transform3D(np.array([0.1, 0.2, 0.4]), Rotation.identity)
+    marks = {}
+
+    driver = ManualDriver([
+        (lambda: state.emit(types.SimpleNamespace(ee_pose=Transform3D(), status=RobotStatus.AVAILABLE)), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: hand}), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: moved}), 0.01),
+        (lambda: marks.update(on=len(commands.emitted)), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: None}), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: hand}), 0.01),
+        (lambda: marks.update(lost=len(commands.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert marks['on'] > 0
+    assert marks['lost'] == marks['on']
+    assert [path.name for _, path in sounds.emitted] == ['error-occurred.wav']
+
+
+def test_a_right_controller_lost_while_the_arm_state_is_an_error_turns_control_off(world):
+    dc, _arm, buttons, _grips, _sounds = build_teleop_arm(world)
+    state, poses = world.pair(dc.robot_state), world.pair(dc.controller_positions)
+    commands = RecordingEmitter()
+    dc.robot_commands._bind(commands, clock=world.clock)
+    hand = Transform3D(np.array([0.1, 0.2, 0.3]), Rotation.identity)
+    available = types.SimpleNamespace(ee_pose=Transform3D(), status=RobotStatus.AVAILABLE)
+    marks = {}
+
+    driver = ManualDriver([
+        (lambda: state.emit(available), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: hand}), 0.01),
+        (lambda: buttons.emit(make_buttons(A=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(A=True)), 0.01),
+        (lambda: state.emit(pimm.SignalError('Release the emergency stop button')), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: None}), 0.01),
+        (lambda: state.emit(available), 0.01),
+        (lambda: marks.update(back=len(commands.emitted)), 0.01),
+        (lambda: poses.emit({webxr.LEFT: None, webxr.RIGHT: hand}), 0.01),
+        (lambda: marks.update(after=len(commands.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert marks['after'] == marks['back']
+
+
+def test_a_press_of_b_just_before_the_controller_is_lost_starts_one_recording(world):
+    dc, _arm, buttons, _grips, _sounds = build_teleop_arm(world)
+    commands = RecordingEmitter()
+    dc.ds_agent_commands._bind(commands, clock=world.clock)
+
+    driver = ManualDriver([
+        (lambda: buttons.emit(make_buttons(B=False)), 0.01),
+        (lambda: buttons.emit(make_buttons(B=True)), 0.001),
+        (lambda: buttons.emit({webxr.LEFT: None, webxr.RIGHT: None}), 0.05),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert len(commands.emitted) == 1
+
+
+def test_a_session_that_starts_with_no_controller_tracked_sends_no_grip_until_the_trigger_comes(world):
+    dc, _arm, buttons, grips, _sounds = build_teleop_arm(world)
+    marks = {}
+
+    driver = ManualDriver([
+        (lambda: buttons.emit({webxr.LEFT: None, webxr.RIGHT: None}), 0.01),
+        (lambda: marks.update(untracked=len(grips.emitted)), 0.01),
+        (lambda: buttons.emit(make_buttons(trigger=0.7)), 0.01),
+        (lambda: marks.update(tracked=len(grips.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([dc, driver]), steps=400)
+
+    assert marks['untracked'] == 0
+    assert marks['tracked'] > 0 and grips.emitted[-1][1] == pytest.approx(0.7)
+
+
 def test_a_station_that_measured_no_spread_puts_the_arm_at_its_nominal(world):
     """Jitter is a station's to measure, and the arms that have none named are the ones asked for their
     nominal joints themselves."""
@@ -501,19 +586,59 @@ def test_the_page_input_emits_each_object_that_the_page_posts(world):
 
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
-    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0]})
+    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0, 0.0, 1.0, 0.0]})
     positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
     assert positions[webxr.LEFT] is None and buttons[webxr.LEFT] is None
     right, right_buttons = positions[webxr.RIGHT], buttons[webxr.RIGHT]
     assert right is not None and right_buttons is not None
     np.testing.assert_allclose(right.translation, pose.translation)
     np.testing.assert_allclose(right.rotation.as_quat, pose.rotation.as_quat)
-    np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0])
+    np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0, 0.0, 1.0, 0.0])
+
+
+def _hand_message(values: list[float]) -> dict:
+    """A page message of a right hand that the headset tracks with no controller in it, with ``values``."""
+    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
+    message['controllers'][webxr.RIGHT]['buttons'] = values
+    return message
+
+
+@pytest.mark.parametrize('values', [[], [0.0, 1.0]], ids=['no values', 'too few values'])
+def test_a_hand_with_too_few_button_values_parses_as_a_controller_that_is_not_tracked(values):
+    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(_hand_message(values))))
+    assert positions[webxr.RIGHT] is None and buttons[webxr.RIGHT] is None
+
+
+def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(world):
+    served = WebXR(port=free_port(), use_https=False)
+    positions, buttons = RecordingEmitter(), RecordingEmitter()
+    served.controller_positions._bind(positions, clock=world.clock)
+    served.buttons._bind(buttons, clock=world.clock)
+    controller = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
+    hand = _hand_message([])
+    with (
+        _served_webxr(webxr=served) as base,
+        ws_client.connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as ws,
+    ):
+        ws.send(json.dumps(controller))
+        ws.send(json.dumps(hand))
+        deadline = time.monotonic() + 5
+        while len(positions.emitted) < 2 or len(buttons.emitted) < 2:
+            assert time.monotonic() < deadline, 'the stream emitted no sample of the hand'
+            time.sleep(0.01)
+    assert positions.emitted[0][1][webxr.RIGHT] is not None
+    assert positions.emitted[1][1] == {webxr.LEFT: None, webxr.RIGHT: None}
+    assert buttons.emitted[1][1] == {webxr.LEFT: None, webxr.RIGHT: None}
 
 
 def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
     with pytest.raises(ValueError, match='positions and buttons must name the same controllers'):
         webxr.controller_message({webxr.RIGHT: Transform3D()}, {})
+
+
+def test_a_controller_message_refuses_a_controller_with_fewer_button_values_than_a_controller_has():
+    with pytest.raises(ValueError, match='at least 6 button values'):
+        webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 5})
 
 
 def test_the_phone_page_for_data_collection_keeps_its_own_mode():
