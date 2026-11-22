@@ -393,6 +393,29 @@ def test_multi_gpu_peak_vram_sums_devices_per_sample(tmp_path):
     assert sim.peak_proc_vram_gb is None
 
 
+def test_jetson_samples_with_no_gpu_memory_give_a_mean_load_and_no_vram_peak(tmp_path):
+    telemetry_dir = tmp_path / TELEMETRY_SUBDIR
+    telemetry_dir.mkdir()
+    _write_lines(telemetry_dir / f'{HARNESS_PROCESS}{SPANS_SUFFIX}', [_span(SPAN_EVAL_PASS, 0, 10, 'pass0')])
+    stats = [
+        {
+            STAT_T_NS: t,
+            STAT_GPU_COUNT: 1,
+            STAT_GPUS: [{GPU_INDEX: 0, GPU_UTIL_PCT: util, GPU_MEM_USED_B: None, GPU_PROC_MEM_B: None}],
+        }
+        for t, util in ((1, 20.0), (2, 40.0))
+    ]
+    (telemetry_dir / f'{HARNESS_PROCESS}{STATS_SUFFIX}').write_text(''.join(json.dumps(s) + '\n' for s in stats))
+
+    report = _build_report(_read_spans_dir(telemetry_dir), _read_stats_dir(telemetry_dir), policy_gpu=None)
+
+    sim = report.gpu.sim
+    assert sim is not None
+    assert sim.mean_util_pct == pytest.approx(30.0)
+    assert (sim.peak_vram_gb, sim.peak_proc_vram_gb) == (None, None)
+    _render(report)
+
+
 def test_partial_per_gpu_proc_vram_excluded_from_peak(tmp_path):
     """A sample where some GPU can't attribute process memory (``proc_mem_b`` None) is incomplete for the
     box-wide process-VRAM peak and contributes nothing; the peak reflects only samples where every GPU

@@ -97,6 +97,8 @@ The span names are the contract:
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
+| `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
+| `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
 | `driver.command` | root (an arm driver's file) | `command.sync`; `command.age_ms` on a streamed setpoint | one command that an arm driver takes, from its read to its apply |
 | `env.step` (server) | root (env file) | — | the env server's own in-step wall |
 | env-owned children (e.g. `physics`, `render`) | server `env.step` | env decides | the sim's native phase decomposition |
@@ -215,15 +217,16 @@ list holding one object per GPU and a list holding one object per process. Its k
 and `PROC_*` constants in `positronic/telemetry.py`
 — read them there; the sampler writes them and the reduce imports them.
 
-The process readings cover this eval's whole process tree (harness + env server + Isaac children): the
-tree sums (`STAT_CPU_PROC_PCT`, `STAT_RSS_PROC_B`), and a list with one `PROC_*` entry (name, pid, CPU
-percent, RSS) per process. The caller names a pid through `process_names`; a pid it does not name takes
-the OS process name. A process's CPU percent in its first
-sample covers no interval, so it is not a reading. The GPU list is empty on a box with no NVML, and shorter
-than the recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that
-count tells a reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot
-be attributed (a PID namespace without `--pid=host`, or a driver that will not report it), and per-process GPU
-utilisation is always null: it is not reliably attributable under MPS / co-location.
+The process readings cover this eval's whole process tree (harness + env server + Isaac children): the tree sums
+(`STAT_CPU_PROC_PCT`, `STAT_RSS_PROC_B`), and a list with one `PROC_*` entry (name, pid, CPU percent, RSS) per
+process. The caller names a pid through `process_names`; a pid it does not name takes the OS process name. A
+process's CPU percent in its first sample covers no interval, so it is not a reading. On a Jetson, the one GPU
+entry takes its load from sysfs (an Orin's path by default, `tegra_gpu_load_path` elsewhere) and carries no memory or
+power reading. The GPU list is empty on a box with no NVML and no Jetson GPU, and shorter than the
+recorded device count when a device refuses a query mid-run (MIG, a transiently lost GPU) — so that count tells a
+reader whether a sample saw the whole box. Per-process GPU memory is null where it cannot be attributed (a PID
+namespace without `--pid=host`, or a driver that will not report it), and per-process GPU utilisation is always
+null: it is not reliably attributable under MPS / co-location.
 
 ## Reporting
 

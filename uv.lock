@@ -5550,7 +5550,7 @@ wheels = [
 
 [[package]]
 name = "positronic"
-version = "0.4.10"
+version = "0.4.11"
 source = { editable = "." }
 dependencies = [
     { name = "av", version = "15.1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-positronic-lerobot' or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-molmoact2') or (extra == 'extra-10-positronic-lerobot-0-3-3' and extra == 'extra-10-positronic-yam') or (extra == 'extra-10-positronic-molmoact2' and extra == 'extra-10-positronic-yam')" },
@@ -5839,7 +5839,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/da/12/7ec831406129ac3ba
 
 [[package]]
 name = "positronic-model-server"
-version = "0.3.8"
+version = "0.3.9"
 source = { editable = "model_server" }
 dependencies = [
     { name = "msgpack" },
@@ -5894,7 +5894,7 @@ requires-dist = [
 
 [[package]]
 name = "positronic-wire"
-version = "0.12.3"
+version = "0.12.4"
 source = { editable = "wire" }
 
 [package.optional-dependencies]
