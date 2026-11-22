@@ -6,11 +6,9 @@ End-effector poses describe ``gripper/grasp_site`` in the arm base frame, ``fr3_
 
 import argparse
 import copy
-import functools
 import os
 import sys
 import types
-from unittest import mock
 
 # MuJoCo's CGL package and its ctypes bindings to Apple's OpenGL framework.
 _CGL_PACKAGE = 'mujoco.cgl'
@@ -91,7 +89,6 @@ from molmo_spaces.tasks.pick_and_place_task import (  # noqa: E402  # pyright: i
     PickAndPlaceTask,
 )
 from molmo_spaces.tasks.pick_task import PickTask  # noqa: E402  # pyright: ignore[reportMissingImports]
-from molmo_spaces.utils import grasps  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
 class _DroidEvalConfig(JsonBenchmarkEvalConfig):
@@ -103,19 +100,10 @@ class _DroidEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
-
-
-class _JointGraspSampler(JsonEvalTaskSampler):
-    """``JsonEvalTaskSampler`` that finds the joint grasps of iThor scene assets."""
-
-    # HACK: upstream looks up joint grasps with no grasp libraries. An iThor scene asset is in no object package,
-    # so that lookup finds no library and reset raises. Droid is the only built-in library with joint grasps.
-    # rules-allow: hidden-dependency — the upstream method takes no grasp libraries; a copy would fork MolmoSpaces.
-    @mock.patch.object(
-        grasps, 'get_joint_grasp_path', functools.partial(grasps.get_joint_grasp_path, grasp_libraries=['droid'])
-    )
-    def set_joint_values(self, env: Any) -> None:
-        super().set_joint_values(env)
+        # The benchmark episodes are judged under the physics they were recorded in. Island sleep freezes bodies at
+        # rest, and the grasp probe adds a free body to the state; the eval needs neither.
+        self.task_sampler_config.enable_scene_sleep = False
+        self.task_sampler_config.add_grasp_probe = False
 
 
 # The arm joints of the robot model that the client records.
@@ -237,7 +225,7 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg.task_horizon = determine_task_horizon(
             episodes, mapping.horizon_steps(horizon_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
         )
-        self._sampler = _JointGraspSampler(cfg, episode)
+        self._sampler = JsonEvalTaskSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._hook.task_sampled(self._task)
