@@ -655,6 +655,13 @@ def test_a_close_request_reports_a_full_close_as_its_target():
     assert 'A gripper of 0.5 or more closes the fingers fully' in metadata[policy_keys.TRANSCRIPT][0]['prompt']
 
 
+def test_the_prompt_states_the_full_close_threshold_of_the_motion():
+    metadata = {}
+    conversation = Conversation(llm(model='test', motion=Motion(full_close_from=0.8)), metadata.__setitem__)
+    conversation.request(observation(), 0)
+    assert 'A gripper of 0.8 or more closes the fingers fully' in metadata[policy_keys.TRANSCRIPT][0]['prompt']
+
+
 def bimanual_observation(left_x=0.0, right_x=0.0):
     poses = {keys.LEFT_ARM: [left_x, 0.3, 0.1, 1, 0, 0, 0], keys.RIGHT_ARM: [right_x, -0.3, 0.1, 1, 0, 0, 0]}
     return {

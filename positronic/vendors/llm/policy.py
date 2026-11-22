@@ -41,17 +41,7 @@ from positronic.policy.base import Policy, PolicyEnd, PolicyRun, Runtime, Step
 from positronic.utils import check_finite_nonnegative, check_finite_positive, flatten_dict
 
 from .client import Endpoint
-from .motion import (
-    FULL_CLOSE_FROM,
-    Finite,
-    Motion,
-    MoveArmsPath,
-    MovePath,
-    Targets,
-    Waypoint,
-    closest_approach,
-    closest_hand_distances,
-)
+from .motion import Finite, Motion, MoveArmsPath, MovePath, Targets, Waypoint, closest_approach, closest_hand_distances
 
 
 class Images(StrEnum):
@@ -236,6 +226,7 @@ class Conversation:
     def _initial(self) -> ModelRequest:
         arms = self._policy.arms
         named = arms != keys.ONE_ARM
+        full_close = self._policy.motion.full_close_from
         prompt = ''.join([
             f'Control the robot arms {", ".join(map(str, arms))} through exactly one tool call per response. '
             if named
@@ -249,7 +240,7 @@ class Conversation:
             'The axes of a hand start at its measured position and turn with its measured rotation. '
             'Hand z points along the approach direction. '
             'Gripper 0 is open and 1 is closed. '
-            f'A gripper below {FULL_CLOSE_FROM} sets the finger opening. A gripper of {FULL_CLOSE_FROM} or more '
+            f'A gripper below {full_close} sets the finger opening. A gripper of {full_close} or more '
             'closes the fingers fully, so the clamped waypoint reports 1. '
             f'{_FORCE}, when the hand state has it, is the size in newtons of the external force on the hand that '
             'the robot estimates. It does not give the direction of the force. '

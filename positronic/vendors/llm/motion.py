@@ -15,9 +15,6 @@ from positronic.utils import check_finite_positive
 
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 
-# A gripper target below 1 is a finger opening, so the fingers stop there and do not squeeze a thinner object.
-FULL_CLOSE_FROM = 0.5
-
 
 class Waypoint(BaseModel):
     """An absolute hand pose, in metres and radians, and the gripper (0=open, 1=closed) set on the way to it."""
@@ -85,6 +82,8 @@ class Motion:
     grip_hold: float = 1.0
     # A Franka hand settles within 2 mm of its rest pose by 0.5 s after the last command in 90 % of the paths.
     settle_hold: float = 0.5
+    # A gripper target below 1 is a finger opening, so the fingers stop there and do not squeeze a thinner object.
+    full_close_from: float = 0.5
     max_waypoints: int = 5
 
     def __post_init__(self):
@@ -92,6 +91,8 @@ class Motion:
             check_finite_positive(value, name)
         if not isinstance(self.max_waypoints, int):
             raise ValueError('max_waypoints must be an integer')
+        if self.full_close_from > 1:
+            raise ValueError('full_close_from must be at most 1')
         duration = max(self.max_translation / self.linear_speed, self.max_rotation / self.angular_speed, 1 / self.fps)
         if duration > 10 or math.ceil(duration * self.fps) / self.fps + 1 / self.fps > 10:
             raise ValueError('Motion limits must fit one segment within a 10 second trajectory')
@@ -109,9 +110,8 @@ class Motion:
             bounded.roll, bounded.pitch, bounded.yaw = rotation.as_euler
         return bounded
 
-    @staticmethod
-    def _close_fully(target: Waypoint) -> Waypoint:
-        if FULL_CLOSE_FROM <= target.gripper < 1:
+    def _close_fully(self, target: Waypoint) -> Waypoint:
+        if self.full_close_from <= target.gripper < 1:
             target = target.model_copy()
             target.gripper = 1.0
         return target
@@ -144,7 +144,7 @@ class Motion:
         """The trajectory of ``path`` from ``starts``.
 
         ``held`` is the target of each arm of ``starts`` before the path. An arm that a waypoint of ``path`` leaves
-        out holds its previous clamped target. All arms reach a waypoint together. A gripper of ``FULL_CLOSE_FROM``
+        out holds its previous clamped target. All arms reach a waypoint together. A gripper of ``full_close_from``
         or more becomes 1.
         """
         bounded, parts, clamped = [], [], False

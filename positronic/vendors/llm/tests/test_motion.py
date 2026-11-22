@@ -264,6 +264,21 @@ def test_a_close_request_commands_a_full_close(requested, commanded):
     assert not trajectory.clamped
 
 
+@pytest.mark.parametrize(
+    ('full_close_from', 'requested', 'commanded'), [(0.8, 0.7, 0.7), (0.8, 0.8, 1.0), (1.0, 0.99, 0.99)]
+)
+def test_the_full_close_threshold_is_a_motion_setting(full_close_from, requested, commanded):
+    motion = Motion(**SHORT_BOUNDS | {'full_close_from': full_close_from})
+    start = geom.Transform3D([0, 0, 0])
+    trajectory = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01, gripper=requested)}])
+    assert trajectory.bounded[0][None].gripper == commanded
+
+
+def test_a_full_close_threshold_above_1_is_refused():
+    with pytest.raises(ValueError, match='full_close_from'):
+        Motion(full_close_from=1.5)
+
+
 def test_close_requests_of_different_values_hold_the_gripper_once():
     motion = Motion(**SHORT_BOUNDS)
     start = geom.Transform3D([0, 0, 0])
