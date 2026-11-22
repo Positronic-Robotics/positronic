@@ -25,7 +25,7 @@ from positronic.policy.processors import ChunkedSchedule, EndOnField, Trajectory
 from positronic.policy.sequential import Sequential
 from positronic.utils import flatten_dict
 
-from .bridge import BridgeSettings, CallTrace, CameraCalibration, CapBridge, Program, camera_hands
+from .bridge import BridgeSettings, CallTrace, CameraCalibration, CapBridge, Program, check_calibration
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,7 @@ class CapProgramModel(Model):
         self._calibration: dict[str, CameraCalibration] = {}
         if calibration is not None:
             self._calibration = TypeAdapter(dict[str, CameraCalibration]).validate_json(calibration.read_text())
-        # A hand that names no arm fails here, at the server's start, and not at the first session.
-        camera_hands(self._calibration, settings)
+        check_calibration(self._calibration, settings)
         self._bridges: dict[str, CapBridge] = {}
         self._recorded: set[str] = set()
 

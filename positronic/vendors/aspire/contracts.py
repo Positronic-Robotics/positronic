@@ -2,7 +2,8 @@
 
 Ported from NVlabs/ASPIRE ``src/cap_harness/{contracts,errors,protocols}.py`` at commit ``fa00f0e``, under the Apache
 License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are ASPIRE's. An arm has the joint count
-of its state. A camera observation holds depth, intrinsics and a pose only when the rig gives them.
+of its state. A camera observation holds depth only when the rig sends it, and intrinsics and a pose only when the
+server has a calibration for the camera. It refuses a depth of another size than its image.
 """
 
 from collections.abc import Mapping, Sequence
@@ -144,7 +145,7 @@ class MotionStrategy:
 
 @dataclass(frozen=True, slots=True)
 class CameraObservation:
-    """One camera view: RGB with height, width and channels, and what the rig gives of depth, intrinsics and pose.
+    """One camera view: RGB with height, width and channels, and its depth, intrinsics and pose when it has them.
 
     ``depth_m`` is metres along the optical axis, with 0 where the camera measured no depth. ``camera_pose`` is the
     pose of the optical frame: x to the right of the image, y down, z forward.
