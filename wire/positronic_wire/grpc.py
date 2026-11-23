@@ -198,13 +198,6 @@ def target(host: str, port: int) -> str:
     return f'{wire.bracket_ipv6(host)}:{port}'
 
 
-def _resolved_target(resolved: list[tuple[Any, ...]]) -> str:
-    """The ``resolved`` addresses in the family of the first, as one target that gRPC dials with no lookup."""
-    family = resolved[0][0]
-    scheme = 'ipv6' if family == socket.AF_INET6 else 'ipv4'
-    return f'{scheme}:' + ','.join(target(*sockaddr[:2]) for kind, *_, sockaddr in resolved if kind == family)
-
-
 def _probe_share(open_timeout: float) -> float:
     """The share of one connect attempt the refusal probe gets; the readiness wait gets the rest.
 
@@ -297,6 +290,13 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         """One call on ``PROBE_PATH``, carrying ``headers``: a server that is up answers it ``UNIMPLEMENTED``."""
         return self._probe_on(self.channel(target(address.host, address.port)), headers, open_timeout)
 
+    @staticmethod
+    def _resolved_target(resolved: list[tuple[Any, ...]]) -> str:
+        """The ``resolved`` addresses in the family of the first, as one target that gRPC dials with no lookup."""
+        family = resolved[0][0]
+        scheme = 'ipv6' if family == socket.AF_INET6 else 'ipv4'
+        return f'{scheme}:' + ','.join(target(*sockaddr[:2]) for kind, *_, sockaddr in resolved if kind == family)
+
     def probe_public(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
@@ -315,7 +315,7 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
             ('grpc.ssl_target_name_override', address.host),
             ('grpc.enable_http_proxy', 0),
         ]
-        channel = self.channel(_resolved_target(resolved), named)
+        channel = self.channel(self._resolved_target(resolved), named)
         return self._probe_on(channel, headers, max(0.0, deadline - time.monotonic()))
 
     @staticmethod

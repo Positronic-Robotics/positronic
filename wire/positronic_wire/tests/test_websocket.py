@@ -1,6 +1,7 @@
 """The client side of the websocket wire."""
 
 import dataclasses
+import datetime
 import errno
 import ipaddress
 import json
@@ -14,6 +15,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+from cryptography.x509.oid import NameOID
 from positronic_wire import websocket, wire
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidMessage, InvalidStatus
@@ -772,16 +778,58 @@ def test_a_public_probe_whose_name_lookup_outlasts_the_timeout_is_no_answer_in_t
     assert time.monotonic() - started < 2.0, 'the timeout did not cover the lookup'
 
 
-def test_the_tls_member_probes_a_public_address_over_tls_under_the_hosts_name():
-    """websockets opens TLS on the socket it is given, and names the URL's host to the server."""
-    with (
-        patch('positronic_wire.websocket.public_socket') as public_socket,
-        patch('positronic_wire.websocket.connect', side_effect=_refused_upgrade(HTTPStatus.FORBIDDEN)) as connect,
-    ):
-        assert websocket.WebsocketTlsClientWire().probe_public(_ADDRESS, None, 3.0) is None
-    assert public_socket.call_args.args == ('localhost', 8000, 3.0)
-    assert connect.call_args.args == ('wss://localhost:8000',)
-    assert connect.call_args.kwargs['sock'] is public_socket.return_value
+def _self_signed(name: str, directory: Path) -> tuple[Path, Path]:
+    """A certificate for ``name``, signed by its own key, and that key, as PEM files in ``directory``."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509
+        .CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(name)]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    certificate_file, key_file = directory / f'{name}.pem', directory / f'{name}.key'
+    certificate_file.write_bytes(certificate.public_bytes(Encoding.PEM))
+    key_file.write_bytes(key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()))
+    return certificate_file, key_file
+
+
+def _over_tls(handler: Callable[[socket.socket], None], certificate_file: Path, key_file: Path):
+    """``handler`` behind a TLS handshake that presents ``certificate_file``."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificate_file, key_file)
+
+    def handshake_then_handle(conn: socket.socket) -> None:
+        try:
+            tls = context.wrap_socket(conn, server_side=True)
+        except ssl.SSLError:
+            return  # the client refused the certificate, which a test asserts on its own end
+        with tls:
+            handler(tls)
+
+    return handshake_then_handle
+
+
+@pytest.mark.parametrize(
+    ('certificate_name', 'refusal'), [('policy.invalid', None), ('another.invalid', wire.Refusal.FINAL)]
+)
+def test_the_tls_member_verifies_the_edge_under_the_hosts_name(certificate_name, refusal, tmp_path, monkeypatch):
+    asked: list[bytes] = []
+    certificate_file, key_file = _self_signed(certificate_name, tmp_path)
+    host, port = _served(_over_tls(_answering(b'HTTP/1.1 403 Forbidden', asked), certificate_file, key_file))
+    system_context = ssl.create_default_context
+    monkeypatch.setattr(ssl, 'create_default_context', lambda: system_context(cafile=certificate_file))
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *_args, **_kwargs: _resolving_to(host, port=port))
+    monkeypatch.setattr(wire, 'is_public', _public_alone(host))
+    assert websocket.WebsocketTlsClientWire().probe_public(_at('policy.invalid', port), None, 5.0) is refusal
+    assert [request.split(b'\r\n')[0] for request in asked] == ([b'GET / HTTP/1.1'] if refusal is None else [])
 
 
 def test_a_socket_is_never_public(tmp_path):
