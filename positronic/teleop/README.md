@@ -380,5 +380,5 @@ On a bimanual rig, use `--policy=@positronic.cfg.policy.teleop_yam`, and do step
 
 ## See Also
 
-- [Data Collection](../../docs/data-collection.md) – headset setup, and collection with `positronic-data-collection`
+- [Data Collection](../../docs/data-collection.md) – headset setup, hardware setup and review of the data
 - [Inference Guide](../../docs/inference.md) – the eval run and the station console

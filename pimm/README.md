@@ -170,7 +170,7 @@ all the same inputs or outputs. `FakeEmitter` and `FakeReceiver` act as
 placeholders that prevent signal flow:
 
 ```python
-class DataCollectionController(pimm.ControlSystem):
+class Recorder(pimm.ControlSystem):
     def __init__(self):
         self.robot_state = pimm.ControlSystemReceiver(self)
         self.gripper_state = pimm.FakeReceiver(self)  # Optional input
@@ -328,9 +328,8 @@ automatcially without your explicit request.
 
 ## Learn from Real Pipelines
 
-- [`positronic/data_collection.py`](../positronic/data_collection.py) wires WebXR
-  input, robot drivers, cameras, a dataset logger, and a DearPyGui dashboard. It
-  showcases extensive use of `world.connect`, shared memory, and background loops.
+- [`positronic/wire.py`](../positronic/wire.py) wires the harness, the robot
+  drivers, the cameras and a dataset logger into one `World` with `world.connect`.
 - [`positronic/simulator/mujoco/sim.py`](../positronic/simulator/mujoco/sim.py)
   exposes MuJoCo as a `ControlSystem` that also serves as the global clock, so the
   simulator drives every other loop deterministically.
