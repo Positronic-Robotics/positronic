@@ -3,7 +3,9 @@ import pytest
 from positronic_model_server.spec import component, parallel, sequence
 
 from positronic import keys
+from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset.transforms import image
+from positronic.drivers.roboarm import command
 from positronic.policy.arrival import transform_frames_on_arrival
 from positronic.policy.base import Processor
 from positronic.policy.codecs import TASK_FIELD, TransformImages, TransformOnArrival
@@ -19,14 +21,7 @@ STEPS = 30
 FRAME_SHAPE = (72, 128, 3)
 
 
-IMPEDANCE = {
-    'type': 'impedance',
-    'kq': [40.0, 30.0, 50.0, 25.0, 35.0, 25.0, 10.0],
-    'kqd': [4.0, 6.0, 5.0, 5.0, 3.0, 2.0, 1.0],
-    'kx': [400.0, 400.0, 400.0, 15.0, 15.0, 15.0],
-    'kxd': [37.0, 37.0, 37.0, 2.0, 2.0, 2.0],
-    'frame': [0.0, 0.0, -0.155, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-}
+IMPEDANCE = command.to_wire(DROID_IMPEDANCE)
 
 
 def _history(offsets: int) -> dict:

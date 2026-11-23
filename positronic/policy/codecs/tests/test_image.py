@@ -18,6 +18,7 @@ from positronic.gui.video_stream import AnnexBDecoder
 from positronic.policy import spec, training
 from positronic.policy.codecs import (
     LEROBOT_FEATURES,
+    TASK_FIELD,
     Codec,
     EncodeImages,
     EncodeVideo,
@@ -530,10 +531,11 @@ def test_a_frame_transformed_on_arrival_matches_the_declared_transform():
     frame = np.random.default_rng(3).integers(0, 256, (72, 128, 3), dtype=np.uint8)
     declared = TransformImages(40, 24, mode=ResizeMode.STRETCH, resample=Resample.AREA)
 
-    encoded = TransformOnArrival(declared, [keys.WRIST_IMAGE]).encode({keys.WRIST_IMAGE: frame, 'task': 'pick'})
+    encoded = TransformOnArrival(declared, [keys.WRIST_IMAGE]).encode({keys.WRIST_IMAGE: frame, TASK_FIELD: 'pick'})
 
-    np.testing.assert_array_equal(encoded[keys.WRIST_IMAGE], declared.encode({'image': frame})['image'])
-    assert encoded['task'] == 'pick'
+    expected = declared.encode({keys.WRIST_IMAGE: frame})[keys.WRIST_IMAGE]
+    np.testing.assert_array_equal(encoded[keys.WRIST_IMAGE], expected)
+    assert encoded[TASK_FIELD] == 'pick'
 
 
 def test_an_absent_field_and_a_value_that_is_no_rgb_frame_pass_on_arrival_unchanged():
