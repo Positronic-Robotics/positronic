@@ -82,8 +82,6 @@ class Motion:
     grip_hold: float = 1.0
     # A Franka hand settles within 2 mm of its rest pose by 0.5 s after the last command in 90 % of the paths.
     settle_hold: float = 0.5
-    # A gripper target below 1 is a finger opening, so the fingers stop there and do not squeeze a thinner object.
-    full_close_from: float = 0.5
     max_waypoints: int = 5
 
     def __post_init__(self):
@@ -91,8 +89,6 @@ class Motion:
             check_finite_positive(value, name)
         if not isinstance(self.max_waypoints, int):
             raise ValueError('max_waypoints must be an integer')
-        if self.full_close_from > 1:
-            raise ValueError('full_close_from must be at most 1')
         duration = max(self.max_translation / self.linear_speed, self.max_rotation / self.angular_speed, 1 / self.fps)
         if duration > 10 or math.ceil(duration * self.fps) / self.fps + 1 / self.fps > 10:
             raise ValueError('Motion limits must fit one segment within a 10 second trajectory')
@@ -109,12 +105,6 @@ class Motion:
             rotation = start.rotation.interpolate(end.rotation, self.max_rotation / angle)
             bounded.roll, bounded.pitch, bounded.yaw = rotation.as_euler
         return bounded
-
-    def _close_fully(self, target: Waypoint) -> Waypoint:
-        if self.full_close_from <= target.gripper < 1:
-            target = target.model_copy()
-            target.gripper = 1.0
-        return target
 
     @staticmethod
     def _commands(poses: Mapping[str | None, geom.Transform3D], targets: Targets) -> dict:
@@ -144,12 +134,11 @@ class Motion:
         """The trajectory of ``path`` from ``starts``.
 
         ``held`` is the target of each arm of ``starts`` before the path. An arm that a waypoint of ``path`` leaves
-        out holds its previous clamped target. All arms reach a waypoint together. A gripper of ``full_close_from``
-        or more becomes 1.
+        out holds its previous clamped target. All arms reach a waypoint together.
         """
         bounded, parts, clamped = [], [], False
         for index, waypoint in enumerate(path, start=1):
-            requested = {arm: self._close_fully(waypoint[arm]) if arm in waypoint else held[arm] for arm in starts}
+            requested = {arm: waypoint.get(arm, held[arm]) for arm in starts}
             targets = {arm: self._clamp(start, requested[arm]) for arm, start in starts.items()}
             clamped = clamped or targets != requested
             parts.append(self._segment(starts, targets))

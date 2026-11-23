@@ -639,27 +639,20 @@ def test_a_malformed_wrench_is_refused(wrench):
         conversation.request({**observation(), keys.EE_WRENCH: wrench}, 0)
 
 
-def test_a_close_request_reports_a_full_close_as_its_target():
+def test_a_partial_close_reports_the_requested_finger_opening_as_its_target():
     metadata = {}
     conversation = Conversation(llm(model='test'), metadata.__setitem__)
     waypoint = {'x': 0.0, 'y': 0, 'z': 0, 'roll': 0, 'pitch': 0, 'yaw': 0, 'gripper': 0.7}
-    close = ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': [waypoint], 'note': 'Grasp.'})])
+    close = ModelResponse([ToolCallPart(Tool.MOVE_PATH.value, {'waypoints': [waypoint], 'note': 'Pinch.'})])
     parts = decide(conversation, observation(), close)
-    assert {command[keys.TARGET_GRIP] for part in parts for command in part} == {1.0}
+    assert {command[keys.TARGET_GRIP] for part in parts for command in part} == {0.7}
     accepted = [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'accepted'][-1]
-    assert accepted['waypoints'][0]['gripper'] == 1.0
+    assert accepted['waypoints'][0]['gripper'] == 0.7
     assert accepted['clamped'] is False
     conversation.request({**observation(), keys.GRIP: 0.6}, 0)
-    assert last_state(metadata)['previous_target']['gripper'] == 1.0
-    assert last_state(metadata)['remaining_gripper'] == pytest.approx(0.4)
-    assert 'A gripper of 0.5 or more closes the fingers fully' in metadata[policy_keys.TRANSCRIPT][0]['prompt']
-
-
-def test_the_prompt_states_the_full_close_threshold_of_the_motion():
-    metadata = {}
-    conversation = Conversation(llm(model='test', motion=Motion(full_close_from=0.8)), metadata.__setitem__)
-    conversation.request(observation(), 0)
-    assert 'A gripper of 0.8 or more closes the fingers fully' in metadata[policy_keys.TRANSCRIPT][0]['prompt']
+    assert last_state(metadata)['previous_target']['gripper'] == 0.7
+    assert last_state(metadata)['remaining_gripper'] == pytest.approx(0.1)
+    assert 'closes the fingers fully' not in metadata[policy_keys.TRANSCRIPT][0]['prompt']
 
 
 def bimanual_observation(left_x=0.0, right_x=0.0):

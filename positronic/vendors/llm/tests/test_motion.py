@@ -254,38 +254,14 @@ def test_a_gripper_hold_is_a_part_of_its_own():
     assert {command[keys.TARGET_GRIP] for command in parts[-1]} == {1}
 
 
-@pytest.mark.parametrize(('requested', 'commanded'), [(0.0, 0.0), (0.49, 0.49), (0.5, 1.0), (0.8, 1.0), (1.0, 1.0)])
-def test_a_close_request_commands_a_full_close(requested, commanded):
+@pytest.mark.parametrize('requested', [0.0, 0.49, 0.5, 0.85, 1.0])
+def test_a_partial_close_commands_the_requested_finger_opening(requested):
     motion = Motion(**SHORT_BOUNDS)
     start = geom.Transform3D([0, 0, 0])
     trajectory = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01, gripper=requested)}])
-    assert trajectory.bounded[0][None].gripper == commanded
-    assert {command[keys.TARGET_GRIP] for part in trajectory.parts for command in part} == {commanded}
+    assert trajectory.bounded[0][None].gripper == requested
+    assert {command[keys.TARGET_GRIP] for part in trajectory.parts for command in part} == {requested}
     assert not trajectory.clamped
-
-
-@pytest.mark.parametrize(
-    ('full_close_from', 'requested', 'commanded'), [(0.8, 0.7, 0.7), (0.8, 0.8, 1.0), (1.0, 0.99, 0.99)]
-)
-def test_the_full_close_threshold_is_a_motion_setting(full_close_from, requested, commanded):
-    motion = Motion(**SHORT_BOUNDS | {'full_close_from': full_close_from})
-    start = geom.Transform3D([0, 0, 0])
-    trajectory = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, [{None: at(0.01, gripper=requested)}])
-    assert trajectory.bounded[0][None].gripper == commanded
-
-
-def test_a_full_close_threshold_above_1_is_refused():
-    with pytest.raises(ValueError, match='full_close_from'):
-        Motion(full_close_from=1.5)
-
-
-def test_close_requests_of_different_values_hold_the_gripper_once():
-    motion = Motion(**SHORT_BOUNDS)
-    start = geom.Transform3D([0, 0, 0])
-    path = [{None: at(0.0, gripper=0.6)}, {None: at(0.0, gripper=0.9)}, {None: at(0.01, gripper=0.9)}]
-    parts = motion.trajectory({None: start}, {None: Waypoint.at(start, 0)}, path).parts
-    grip_hold, settle_hold = math.ceil(motion.grip_hold * motion.fps), math.ceil(motion.settle_hold * motion.fps)
-    assert [len(part) for part in parts] == [1, grip_hold, 1, 5, settle_hold]
 
 
 def test_the_default_gripper_hold_lasts_past_a_full_close():
