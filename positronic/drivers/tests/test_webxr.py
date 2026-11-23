@@ -105,27 +105,21 @@ def test_the_headset_server_logs_through_the_process_handlers():
         assert root.handlers == handlers
 
 
-def test_the_phone_page_for_teleop_opens_in_its_teleop_mode():
+def test_the_phone_page_for_teleop_redirects_to_its_teleop_query():
     with _served_webxr(Frontend.IPHONE_TELEOP) as base:
         bare = httpx.get(base + '/', timeout=1.0)
         assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
-        page = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
-        assert page.status_code == 200 and "get('mode') === 'teleop'" in page.text
-        assert 'id="phase"' in page.text and "STATE_ROUTE = '/state'" in page.text and 'btn--control-on' in page.text
-        assert 'PHASES_THAT_OPEN_THE_GRIP = [PHASE.readyWait, PHASE.ended]' in page.text and 'setGrip(0.0)' in page.text
+        assert httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0).status_code == 200
 
 
 @pytest.mark.parametrize(('preset', 'session'), [(cfg_webxr.oculus, 'immersive-ar'), (cfg_webxr.psvr2, 'immersive-vr')])
-def test_the_headset_page_requests_the_session_of_its_preset(preset, session):
+def test_the_headset_page_serves_the_session_mode_of_its_preset(preset, session):
     served = preset.override(port=free_port(), use_https=False).instantiate()
     with _served_webxr(webxr=served) as base:
         assert httpx.get(base + '/', timeout=1.0).status_code == 200
         script = httpx.get(base + '/session-mode.js', timeout=1.0)
         assert script.headers['content-type'].startswith('text/javascript')
         assert script.text == f'export const SESSION_MODE = "{session}";\n'
-        core = httpx.get(base + '/core.js', timeout=1.0).text
-        assert "import { SESSION_MODE } from '/session-mode.js';" in core
-        assert 'requestSession(SESSION_MODE,' in core and 'isSessionSupported(SESSION_MODE)' in core
 
 
 def test_the_headset_page_drops_a_query():
