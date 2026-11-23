@@ -136,6 +136,51 @@ def test_an_inference_past_the_deadline_fails_and_closes_the_connection():
             client.infer({'value': 2})
 
 
+def _first_answer_waits(wait: Callable[[], Awaitable[None]]) -> Callable[[], Awaitable[None]]:
+    """A ``before_answer`` that awaits ``wait`` before the first answer and answers every later one at once."""
+    waited = threading.Event()
+
+    async def before_answer() -> None:
+        if not waited.is_set():
+            waited.set()
+            await wait()
+
+    return before_answer
+
+
+def _subprocess_on(port: int, infer_timeout: float) -> OpenpiSubprocess:
+    return OpenpiSubprocess(
+        checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_droid', infer_timeout=infer_timeout, ws_port=port
+    )
+
+
+@pytest.mark.usefixtures('short_keepalive')
+def test_the_inference_after_a_keepalive_timeout_reaches_the_subprocess_again():
+    async def block_the_event_loop() -> None:
+        time.sleep(1.0)
+
+    with _openpi_server(_first_answer_waits(block_the_event_loop)) as port:
+        subproc = _subprocess_on(port, infer_timeout=30.0)
+        try:
+            with pytest.raises(ConnectionClosedError, match='keepalive ping timeout'):
+                subproc.client.infer({'value': 1})
+            assert subproc.client.infer({'value': 2}) == {'echo': 2}
+        finally:
+            subproc.stop()
+
+
+@pytest.mark.usefixtures('short_keepalive')
+def test_the_inference_after_a_missed_deadline_reaches_the_subprocess_again():
+    with _openpi_server(_first_answer_waits(lambda: asyncio.sleep(1.5))) as port:
+        subproc = _subprocess_on(port, infer_timeout=0.5)
+        try:
+            with pytest.raises(TimeoutError, match='no inference result'):
+                subproc.client.infer({'value': 1})
+            assert subproc.client.infer({'value': 2}) == {'echo': 2}
+        finally:
+            subproc.stop()
+
+
 @pytest.mark.parametrize('dtype', [np.float32, np.float64])
 @pytest.mark.parametrize('overrides', [{}, {'config_name': 'pi0_libero'}], ids=['default', 'config-override'])
 def test_libero_server_converts_predictions_before_command_decoding(dtype, overrides):

@@ -29,7 +29,7 @@ class EnvConnection:
         *,
         open_timeout: float = 10.0,
         connect_deadline: float = 1800.0,
-        ping_timeout: float = 600.0,
+        ping_timeout: float = protocol.HEARTBEAT_TIMEOUT_S,
     ):
         uri = f'ws://{host}:{port}/'
         deadline = time.monotonic() + connect_deadline

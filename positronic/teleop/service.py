@@ -149,6 +149,10 @@ class ButtonMap:
         self._new_presses(buttons, now_ns)
         self._used.update(self._down_since)
 
+    def cancel_holds(self) -> None:
+        """Cancel the holds of the buttons that are down. Each of them presses again only after it goes up."""
+        self._used.update(self._down_since)
+
     def _is_held(self, button: Button, now_ns: int) -> bool:
         since = self._down_since.get(button)
         return since is not None and button not in self._used and now_ns - since >= self._hold_ns
@@ -380,11 +384,16 @@ class TeleopService:
         """Take one sample of the controllers, by ``LEFT`` and ``RIGHT``. A controller that the headset does not track
         is absent or ``None``."""
         now_ns = time.monotonic_ns()
+        # A controller with fewer button values than the maps read cannot press the clutch, so it drives no arm
+        controllers = {name for name, values in buttons.items() if values is not None and len(values) > max(Button)}
+        poses = {name: pose for name, pose in poses.items() if name in controllers}
+        buttons = {name: buttons[name] for name in controllers}
         with self._changed:
             self._sample = _Sample(self._sample.number + 1, poses, buttons)
             for controller, button_map in self._buttons.items():
                 values = buttons.get(controller)
                 if values is None:
+                    button_map.cancel_holds()
                     continue
                 if self._phase is Phase.READY_WAIT and self._ready is None:
                     self._ready = button_map.ready_answer(values, now_ns)

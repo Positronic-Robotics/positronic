@@ -29,7 +29,7 @@ _ENV_SERVER_DIR = Path(__file__).parents[1] / 'env_server'
 _MAPPING_DIR = Path(__file__).parent
 
 _MOLMO_REPO = 'https://github.com/allenai/molmospaces.git'
-_MOLMO_COMMIT = '713fd12ab593c3bbb4abfaa76622e14249aa36b3'
+_MOLMO_COMMIT = '67acef9a17bb8212a18aadfc8f62ff6171d84891'
 _MOLMO_SRC = Path.home() / '.cache' / 'positronic' / 'molmospaces' / 'src'
 
 # Version constraints compensate for MolmoSpaces' missing lockfile; the file documents how to regenerate them.
@@ -38,8 +38,9 @@ _MOLMO_CONSTRAINTS = Path(__file__).parent / 'molmo_constraints.txt'
 _MOLMO_OVERRIDES = Path(__file__).parent / 'molmo_overrides.txt'
 
 # MolmoSpaces requires Python 3.11. Filament benchmarks need the alternative mujoco-filament extra.
+# The robot configs import the G1 robot at module level, so every install needs the g1_humanoid extra.
 _MOLMO_PYTHON = '3.11'
-_MOLMO_EXTRA = 'mujoco'
+_MOLMO_EXTRAS = 'mujoco,g1_humanoid'
 
 
 def ensure_molmo_venv() -> Path:
@@ -50,7 +51,7 @@ def ensure_molmo_venv() -> Path:
         python = ensure_venv(venv, _MOLMO_PYTHON)
         # uv sync also resolves upstream's unused curobo extra, which requires CUDA to build.
         pins = ['-c', str(_MOLMO_CONSTRAINTS), '--override', str(_MOLMO_OVERRIDES)]
-        uv_pip_install(venv, [*pins, '-e', f'.[{_MOLMO_EXTRA}]', *SERVER_DEPS], cwd=src)
+        uv_pip_install(venv, [*pins, '-e', f'.[{_MOLMO_EXTRAS}]', *SERVER_DEPS], cwd=src)
     return python
 
 

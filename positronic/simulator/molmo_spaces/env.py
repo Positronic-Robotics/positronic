@@ -6,11 +6,9 @@ End-effector poses describe ``gripper/grasp_site`` in the arm base frame, ``fr3_
 
 import argparse
 import copy
-import functools
 import os
 import sys
 import types
-from unittest import mock
 
 # MuJoCo's CGL package and its ctypes bindings to Apple's OpenGL framework.
 _CGL_PACKAGE = 'mujoco.cgl'
@@ -70,6 +68,7 @@ from molmo_spaces.configs.robot_configs import (  # noqa: E402  # pyright: ignor
     ActionNoiseConfig,
     FrankaRobotConfig,
 )
+from molmo_spaces.env.object_manager import ObjectManager  # noqa: E402  # pyright: ignore[reportMissingImports]
 from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     RobotMountedCameraSpec,
     load_all_episodes,
@@ -91,7 +90,7 @@ from molmo_spaces.tasks.pick_and_place_task import (  # noqa: E402  # pyright: i
     PickAndPlaceTask,
 )
 from molmo_spaces.tasks.pick_task import PickTask  # noqa: E402  # pyright: ignore[reportMissingImports]
-from molmo_spaces.utils import grasps  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.utils import mujoco_scene_utils  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
 class _DroidEvalConfig(JsonBenchmarkEvalConfig):
@@ -103,19 +102,67 @@ class _DroidEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
+        # The benchmark episodes are judged under the physics they were recorded in. Island sleep freezes bodies at
+        # rest, and the grasp probe adds a free body to the state; the eval needs neither.
+        self.task_sampler_config.enable_scene_sleep = False
+        self.task_sampler_config.add_grasp_probe = False
 
 
-class _JointGraspSampler(JsonEvalTaskSampler):
-    """``JsonEvalTaskSampler`` that finds the joint grasps of iThor scene assets."""
+def _names_on_top_by_contact(data: mujoco.MjData, receptacle: set[int], names: set[str], min_cos: float) -> set[str]:
+    """The ``names`` of the root bodies that touch a ``receptacle`` geom from above, as MolmoSpaces tests a contact."""
+    model = data.model
+    found: set[str] = set()
+    for contact in data.contact:
+        first, second = (int(geom) in receptacle for geom in contact.geom)
+        if first == second:
+            continue
+        other = int(model.body_rootid[model.geom_bodyid[contact.geom[1 if first else 0]]])
+        name = model.body(other).name
+        if name not in names:
+            continue
+        normal = contact.frame[:3] / np.linalg.norm(contact.frame[:3])
+        if second:
+            normal = -normal
+        center, _ = mujoco_scene_utils.body_aabb(model, data, other)
+        if contact.pos[2] < center[2] and normal[2] >= min_cos:
+            found.add(name)
+    return found
 
-    # HACK: upstream looks up joint grasps with no grasp libraries. An iThor scene asset is in no object package,
-    # so that lookup finds no library and reset raises. Droid is the only built-in library with joint grasps.
-    # rules-allow: hidden-dependency — the upstream method takes no grasp libraries; a copy would fork MolmoSpaces.
-    @mock.patch.object(
-        grasps, 'get_joint_grasp_path', functools.partial(grasps.get_joint_grasp_path, grasp_libraries=['droid'])
+
+_upstream_objects_on_receptacle = ObjectManager.objects_on_receptacle
+
+
+def _objects_on_receptacle(
+    self: Any,
+    objs_to_check: list[Any],
+    bench_geom_ids: list[int],
+    angle_threshold: float = np.radians(30),
+    fallback_thres: float = 0.01,
+    attempt_contact: bool = True,
+) -> list[Any]:
+    """``ObjectManager.objects_on_receptacle`` that computes a box only for a body it can find and the receptacle."""
+    data = self.data
+    model = data.model
+    on_top: set[str] = set()
+    if attempt_contact:
+        names = {obj.name for obj in objs_to_check}
+        on_top = _names_on_top_by_contact(data, {int(g) for g in bench_geom_ids}, names, np.cos(angle_threshold))
+    # The fallback stage reads only the root body of each receptacle geom.
+    geom_of_root = {int(model.body_rootid[model.geom_bodyid[g]]): g for g in bench_geom_ids}
+    rest = [obj for obj in objs_to_check if obj.name not in on_top]
+    fallback = _upstream_objects_on_receptacle(
+        self, rest, list(geom_of_root.values()), angle_threshold, fallback_thres, attempt_contact=False
     )
-    def set_joint_values(self, env: Any) -> None:
-        super().set_joint_values(env)
+    found = on_top | {obj.name for obj in fallback}
+    return [obj for name in sorted(found) if (obj := self.get_object_by_name(name))]
+
+
+def use_fast_objects_on_receptacle() -> None:
+    """Make every ``ObjectManager`` of this process use ``_objects_on_receptacle``."""
+    # HACK: upstream computes the box of the root body across each receptacle contact before it checks the body name.
+    # For a static geom that root is ``world``, whose box reads every mesh vertex, so ``get_info`` takes seconds.
+    # rules-allow: hidden-dependency — MolmoSpaces builds its ObjectManager internally and takes no class to use.
+    ObjectManager.objects_on_receptacle = _objects_on_receptacle
 
 
 # The arm joints of the robot model that the client records.
@@ -131,6 +178,7 @@ class MolmoSpacesEnv(EnvProtocol):
         right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
         hook: env_hook.LoadedHook | None = None,
     ) -> None:
+        use_fast_objects_on_receptacle()
         self._assets_dir = assets_dir
         self._hook, self._hook_record = hook if hook is not None else env_hook.load(None)
         self._found = mapping.discover_benchmarks(assets_dir)
@@ -237,7 +285,7 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg.task_horizon = determine_task_horizon(
             episodes, mapping.horizon_steps(horizon_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
         )
-        self._sampler = _JointGraspSampler(cfg, episode)
+        self._sampler = JsonEvalTaskSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._hook.task_sampled(self._task)

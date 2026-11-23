@@ -30,17 +30,22 @@ STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
 
 # The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
+# The button values of a controller in the xr-standard gamepad layout, up to B or Y at index 5
+_CONTROLLER_BUTTONS = 6
 
 
 def parse_controller_message(
     data: Mapping[str, Any],
 ) -> tuple[dict[str, geom.Transform3D | None], dict[str, np.ndarray | None]]:
     """The poses and the buttons of the controllers in a message of the page on ``/ws``, the inverse of
-    ``controller_message``. A controller that the page does not track has ``None`` for both."""
+    ``controller_message``. A controller that the page does not track has ``None`` for both, and a tracked
+    controller has at least ``_CONTROLLER_BUTTONS`` button values."""
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
     buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
-        if data[_CONTROLLERS][side] is not None:
+        # A hand that the headset tracks with no controller in it has fewer values than a controller, or none. The pose
+        # and the buttons go out on two signals, so only here is the pose known to be of the hand.
+        if data[_CONTROLLERS][side] is not None and len(data[_CONTROLLERS][side][_BUTTONS]) >= _CONTROLLER_BUTTONS:
             translation = np.array(data[_CONTROLLERS][side][_POSITION], dtype=np.float64)
             rotation = np.array(data[_CONTROLLERS][side][_ORIENTATION], dtype=np.float64)
             buttons = np.array(data[_CONTROLLERS][side][_BUTTONS], dtype=np.float64)
@@ -59,6 +64,8 @@ def controller_message(
         raise ValueError(
             f'positions and buttons must name the same controllers, got {list(positions)}, {list(buttons)}'
         )
+    if short := {side: len(values) for side, values in buttons.items() if len(values) < _CONTROLLER_BUTTONS}:
+        raise ValueError(f'a controller has at least {_CONTROLLER_BUTTONS} button values, got {short}')
     tracked = {
         side: {
             _POSITION: pose.translation.tolist(),
@@ -333,10 +340,9 @@ class WebXR(pimm.ControlSystem):
                             if transform is not None:
                                 transform.translation *= self.sensitivity
 
-                        if controller_positions[LEFT] is not None or controller_positions[RIGHT] is not None:
-                            self.controller_positions.emit(controller_positions)
-                        if buttons[LEFT] is not None or buttons[RIGHT] is not None:
-                            self.buttons.emit(buttons)
+                        # A sample with no controller in it tells a reader that the controllers are not tracked
+                        self.controller_positions.emit(controller_positions)
+                        self.buttons.emit(buttons)
                         fps.tick()
                     except TimeoutError:
                         # Timeout is normal, just continue to check should_stop
