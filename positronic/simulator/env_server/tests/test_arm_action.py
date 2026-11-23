@@ -1,18 +1,23 @@
 """One arm's wire command as absolute joint targets, checked without any benchmark runtime."""
 
+import logging
+
 import numpy as np
 import pytest
 
 from positronic.simulator.env_server import arm_action, protocol
 
 _JOINTS = 7
-_MEASURED_EEF = (np.zeros(3), np.eye(3))
 
 
-def _action(command, current, *, ik=lambda _pos, _rot: np.zeros(_JOINTS), current_eef=_MEASURED_EEF) -> np.ndarray:
-    target = arm_action.wire_command_to_arm_action(command, current, ik=ik, current_eef=current_eef)
-    assert target is not None
-    return target
+def _measured_eef():
+    return np.zeros(3), np.eye(3)
+
+
+def _action(command, current, *, ik=lambda _pos, _rot: np.zeros(_JOINTS), read_eef=_measured_eef) -> np.ndarray:
+    target = arm_action.arm_targets(command, current, ik=ik, read_eef=read_eef)
+    assert target.refusal is None
+    return target.q
 
 
 def test_wire_command_joint_pos_passthrough():
@@ -34,15 +39,6 @@ def test_wire_command_hold_recommands_measured():
     current = np.linspace(-1.0, 1.0, _JOINTS, dtype=np.float32)
     out = _action({protocol.COMMAND_TYPE: protocol.HOLD}, current)
     assert np.array_equal(out, current)
-
-
-def test_wire_command_joint_count_mismatch_raises():
-    current = np.zeros(_JOINTS, dtype=np.float32)
-    with pytest.raises(ValueError):
-        _action(
-            {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: np.zeros(6, dtype=np.float32)},
-            current,
-        )
 
 
 def test_unpack_wire_pose_round_trips_translation_and_rotation():
@@ -94,19 +90,8 @@ def test_cartesian_delta_composes_onto_the_measured_eef_before_solving():
         protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA,
         protocol.COMMAND_DELTA: np.concatenate([[0.0, 0.1, 0.0], np.eye(3).reshape(-1)]),
     }
-    _action(cmd, np.zeros(_JOINTS), ik=ik, current_eef=(np.array([0.5, 0.0, 0.2]), np.eye(3)))
+    _action(cmd, np.zeros(_JOINTS), ik=ik, read_eef=lambda: (np.array([0.5, 0.0, 0.2]), np.eye(3)))
     assert np.allclose(seen['pos'], [0.5, 0.1, 0.2])
-
-
-@pytest.mark.parametrize('command_type', [protocol.CARTESIAN, protocol.CARTESIAN_DELTA])
-def test_a_pose_the_ik_cannot_solve_gives_no_target(command_type):
-    pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
-    field = protocol.COMMAND_POSE if command_type == protocol.CARTESIAN else protocol.COMMAND_DELTA
-    command = {protocol.COMMAND_TYPE: command_type, field: pose}
-    no_solution = arm_action.wire_command_to_arm_action(
-        command, np.zeros(_JOINTS), ik=lambda *_: None, current_eef=_MEASURED_EEF
-    )
-    assert no_solution is None
 
 
 def test_unknown_command_names_the_canonical_contract():
@@ -114,22 +99,83 @@ def test_unknown_command_names_the_canonical_contract():
         _action({protocol.COMMAND_TYPE: 'wrench'}, np.zeros(_JOINTS))
 
 
+_POSE = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
+
+
 @pytest.mark.parametrize('command_type', protocol.CANONICAL_COMMAND_TYPES)
 def test_every_canonical_command_type_converts_to_joint_targets(command_type):
-    pose = np.concatenate([np.zeros(3), np.eye(3).reshape(-1)])
     payload = {
         protocol.JOINT_POS: {protocol.COMMAND_JOINT_POS: np.zeros(_JOINTS)},
         protocol.JOINT_DELTA: {protocol.COMMAND_JOINT_DELTA: np.zeros(_JOINTS)},
         protocol.HOLD: {},
-        protocol.CARTESIAN: {protocol.COMMAND_POSE: pose},
-        protocol.CARTESIAN_DELTA: {protocol.COMMAND_DELTA: pose},
+        protocol.CARTESIAN: {protocol.COMMAND_POSE: _POSE},
+        protocol.CARTESIAN_DELTA: {protocol.COMMAND_DELTA: _POSE},
     }[command_type]
 
     target = _action(
         {protocol.COMMAND_TYPE: command_type, **payload},
         np.zeros(_JOINTS),
         ik=lambda _pos, _rot: np.zeros(_JOINTS),
-        current_eef=(np.zeros(3), np.eye(3)),
+        read_eef=_measured_eef if command_type == protocol.CARTESIAN_DELTA else lambda: pytest.fail('read the eef'),
     )
 
     assert target.shape == (_JOINTS,)
+
+
+@pytest.mark.parametrize(
+    ('command', 'refusal'),
+    [
+        (
+            {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: np.zeros(_JOINTS + 1)},
+            f'width {_JOINTS + 1} for {_JOINTS} joints',
+        ),
+        (
+            {protocol.COMMAND_TYPE: protocol.JOINT_DELTA, protocol.COMMAND_JOINT_DELTA: np.zeros(1)},
+            f'width 1 for {_JOINTS} joints',
+        ),
+        (
+            {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.zeros(_JOINTS - 1)},
+            f'width {_JOINTS - 1} for {_JOINTS} joints',
+        ),
+        (
+            {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: np.full(_JOINTS, np.nan)},
+            'not finite',
+        ),
+        ({protocol.COMMAND_TYPE: protocol.CARTESIAN, protocol.COMMAND_POSE: _POSE}, 'no IK solution'),
+        ({protocol.COMMAND_TYPE: protocol.CARTESIAN_DELTA, protocol.COMMAND_DELTA: _POSE}, 'no IK solution'),
+    ],
+    ids=[
+        'delta too wide',
+        'delta too narrow',
+        'target too narrow',
+        'target not finite',
+        'pose with no IK solution',
+        'pose delta with no IK solution',
+    ],
+)
+def test_a_command_the_env_refuses_holds_the_measured_joints_with_one_warning_that_names_the_arm(
+    command, refusal, caplog
+):
+    measured = np.arange(_JOINTS, dtype=np.float32)
+
+    target = arm_action.arm_targets(command, measured, ik=lambda *_: None, read_eef=_measured_eef, arm='left')
+
+    np.testing.assert_array_equal(target.q, measured)
+    assert refusal in target.refusal
+    (record,) = caplog.records
+    assert record.levelno == logging.WARNING
+    assert (
+        record.getMessage()
+        == f'{command[protocol.COMMAND_TYPE]} command not applied, the left arm holds: {target.refusal}'
+    )
+
+
+def test_a_command_the_env_accepts_passes_through_with_no_log(caplog):
+    q = np.full(_JOINTS, 0.3, dtype=np.float32)
+    command = {protocol.COMMAND_TYPE: protocol.JOINT_POS, protocol.COMMAND_JOINT_POS: q}
+
+    target = arm_action.arm_targets(command, np.zeros(_JOINTS), ik=lambda *_: None, read_eef=_measured_eef)
+
+    np.testing.assert_array_equal(target.q, q)
+    assert target.refusal is None
+    assert not caplog.records

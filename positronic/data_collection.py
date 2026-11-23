@@ -34,19 +34,17 @@ from positronic.teleop.clutch import CONTROLLER_AXES, OperatorPosition, Tracker
 from positronic.utils import package_assets_path
 from positronic.utils.buttons import ButtonHandler
 
+_BUTTON_INDICES = {'A': 4, 'B': 5, 'trigger': 0, 'thumb': 1, 'stick': 3}
+
 
 def _parse_buttons(buttons: dict, button_handler: ButtonHandler):
     for side in [LEFT, RIGHT]:
+        names = {f'{side}_{button}': index for button, index in _BUTTON_INDICES.items()}
         if buttons[side] is None:
-            continue
-
-        mapping = {
-            f'{side}_A': buttons[side][4],
-            f'{side}_B': buttons[side][5],
-            f'{side}_trigger': buttons[side][0],
-            f'{side}_thumb': buttons[side][1],
-            f'{side}_stick': buttons[side][3],
-        }
+            # A controller that is not tracked keeps its last values, so a press before the loss counts once
+            mapping = {name: button_handler.get_value(name) for name in names if name in button_handler}
+        else:
+            mapping = {name: buttons[side][index] for name, index in names.items()}
         button_handler.update_buttons(mapping)
 
 
@@ -171,8 +169,16 @@ class DataCollectionController(pimm.ControlSystem):
                         logging.error(f'The rig was not readied: {e}')
                         self.sound.emit(error_wav_path)
 
-                self.target_grip.emit(button_handler.get_value('right_trigger'))
+                if 'right_trigger' in button_handler:  # a session can start with no right controller tracked
+                    self.target_grip.emit(button_handler.get_value('right_trigger'))
                 cp_msg = self.controller_positions.read()
+                hand_pos = cp_msg.data.get(RIGHT)
+                # Before the arm state, which can raise: the hand can come back at another pose, and only a new press
+                # of A starts control from there
+                if tracker.on and hand_pos is None and not tracker.is_umi_mode:
+                    logging.warning('Control is off: the right controller is not tracked')
+                    tracker.turn_off()
+                    self.sound.emit(error_wav_path)
 
                 if tracker.on:
                     in_error, entered_error = _check_error(
@@ -180,9 +186,8 @@ class DataCollectionController(pimm.ControlSystem):
                     )
                     if entered_error:
                         self.sound.emit(error_wav_path)
-                    if not in_error and cp_msg.updated:
-                        cmd = roboarm.command.CartesianPosition(tracker.update(cp_msg.data[RIGHT]))
-                        self.robot_commands.emit(cmd)
+                    if not in_error and cp_msg.updated and hand_pos is not None:
+                        self.robot_commands.emit(roboarm.command.CartesianPosition(tracker.update(hand_pos)))
 
                 yield pimm.Sleep(0.001)
 
