@@ -252,3 +252,18 @@ def test_two_histories_of_one_camera_transform_each_frame_once(monkeypatch):
         TemporalStack,
         TransformImages,
     ]
+
+
+def test_each_camera_moves_with_the_transform_that_selects_it():
+    declared = Sequential(
+        TemporalStack(CAMERAS, (-0.2, 0.0)),
+        TransformImages(32, 32, mode=image.ResizeMode.PAD, paths=[[keys.WRIST_IMAGE]]),
+        TransformImages(48, 48, mode=image.ResizeMode.BOUND, paths=[[name] for name in CAMERAS]),
+    )
+
+    stack = _moved(declared)
+
+    wrist, others = stack.components[:2]
+    assert isinstance(wrist, TransformOnArrival) and wrist.fields == (keys.WRIST_IMAGE,)
+    assert isinstance(others, TransformOnArrival) and others.fields == (keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2)
+    assert isinstance(stack.components[2], TemporalStack)

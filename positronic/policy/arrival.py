@@ -22,29 +22,29 @@ def transform_frames_on_arrival(stack: Processor) -> Processor:
     result: list[Component] = []
     for index, component in enumerate(components):
         if isinstance(component, TemporalStack):
-            arrival = _arrival(component, components[index + 1 :], moved)
-            if arrival is not None:
-                result.append(arrival)
+            result.extend(_arrivals(component, components[index + 1 :], moved))
         result.append(component)
     return stack if len(result) == len(components) else Sequential(*result)
 
 
-def _arrival(stack: TemporalStack, inner: tuple[Component, ...], moved: set[tuple[int, str]]) -> Codec | None:
-    """The transform of ``stack``'s camera fields that ``inner`` lets run in front of ``stack``, if any.
+def _arrivals(stack: TemporalStack, inner: tuple[Component, ...], moved: set[tuple[int, str]]) -> list[Codec]:
+    """The transforms of ``stack``'s camera fields that ``inner`` lets run in front of ``stack``.
 
-    A later temporal stack stacks a transformed frame as it stacks the original one, so the walk goes past it.
+    A later temporal stack stacks a transformed frame as it stacks the original one, so the walk goes past it. A
+    field stops at the first transform that selects it: a second one sees what the first made.
     """
     fields = [field for field in stack.keys if field.startswith(IMAGE_PREFIX)]
+    arrivals: list[Codec] = []
     for component in inner:
         if isinstance(component, TransformImages):
-            selected = [field for field in fields if component.selects(field) and (id(component), field) not in moved]
-            # The walk ends at the first transform: a second one sees what the first made.
-            if not selected:
-                return None
-            moved.update((id(component), field) for field in selected)
-            return TransformOnArrival(component, selected)
-        if not isinstance(component, TemporalStack):
+            selected = [field for field in fields if component.selects(field)]
+            new = [field for field in selected if (id(component), field) not in moved]
+            if new:
+                moved.update((id(component), field) for field in new)
+                arrivals.append(TransformOnArrival(component, new))
+            fields = [field for field in fields if field not in selected]
+        elif not isinstance(component, TemporalStack):
             fields = [field for field in fields if component.field_use(field) is FieldUse.FORWARDED]
         if not fields:
-            return None
-    return None
+            break
+    return arrivals
