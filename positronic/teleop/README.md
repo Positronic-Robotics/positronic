@@ -393,9 +393,9 @@ controller drives the left arm.
 | Quest | What it does |
 |---|---|
 | A (right) or X (left) | control of the arm on or off |
-| B (right) or Y (left) | control off, the errors of the arm and its gripper cleared, and the arm at its start pose |
+| a press of the stick | control off, the errors of the arm and its gripper cleared, and the arm at its start pose |
 | the trigger | the grip |
-| a hold of Y for 1 s | the panel (see Cameras) |
+| press or hold Y | the camera and the panel (see Cameras) |
 
 Control of an arm goes off when its controller is not tracked, when the headset sends nothing for 0.5 s
 (`--silence_sec`), and when the arm is in an error, busy or gives no state. The headset video shows the state of each

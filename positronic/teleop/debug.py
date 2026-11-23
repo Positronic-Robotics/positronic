@@ -5,7 +5,8 @@ fault.
 Each arm has its own controls:
 
 - A (right controller) or X (left controller): control of the arm on or off.
-- B or Y: control off, the errors of the arm and its gripper cleared, and the arm at its start pose.
+- A press of the stick: control off, the errors of the arm and its gripper cleared, and the arm at its start pose.
+- Y on the left controller stays with the headset page: the camera and the panel.
 - The trigger: the grip.
 
 Control of an arm goes off when its controller is not tracked, when the headset sends nothing for a while, and when
@@ -94,8 +95,9 @@ class ArmControl(pimm.ControlSystem):
         self._start_joints = np.asarray(start_joints, dtype=np.float64)
         self._tracker = Tracker(operator_position.value, controller_axes)
         self._silence_sec = silence_sec
-        # A and B, which are X and Y on the left controller. Only the presses count, so the hold time does not matter.
-        self._buttons = ButtonMap(1.0, buttons=(Button.A, Button.B))
+        # A (X on the left controller) and the stick. The headset page uses Y. Only the presses count, so the hold time
+        # does not matter.
+        self._buttons = ButtonMap(1.0, buttons=(Button.A, Button.STICK))
         self._events: collections.deque[str] = collections.deque(maxlen=self.EVENTS)
         # The tool point when control came on, and the last target since then
         self._start: np.ndarray | None = None
@@ -181,7 +183,7 @@ class ArmControl(pimm.ControlSystem):
         state = self._state()
         error = state is not None and state.status is RobotStatus.ERROR
         if error and not self._in_error:
-            self._note('the arm reports an error: B or Y clears it', logging.ERROR)
+            self._note('the arm reports an error: a press of the stick clears it', logging.ERROR)
         self._in_error = error
         if silent:
             self._control_off('the headset sends no sample')
@@ -251,7 +253,7 @@ class ArmControl(pimm.ControlSystem):
 
             if Button.A in presses:
                 self._toggle_control(None if silent else hand)
-            elif Button.B in presses:
+            elif Button.STICK in presses:
                 yield from self._go_to_start(should_stop, clock)
             elif self._tracker.on and positions.updated and hand is not None:
                 target = self._tracker.update(hand)
