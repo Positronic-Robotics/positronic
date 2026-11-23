@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Time the image transform of a declared client stack, per control step and per policy call.
 
-The probe builds a client stack from a server's declaration, as a rig does, with the image transform at each call
-or moved in front of the history. It then feeds it random camera frames at the control rate. The policy answers at
-once, so the time of a call is the work of the client stack before the request goes out. The probe prints, for each
-form, the time of each call and of each control step.
+The probe builds each stack twice, with the transform at the call and moved in front of the history, and feeds it
+random camera frames at the control rate. The policy answers at once, so a call's time is the client's own work.
 
 Usage
     uv run python utilities/probe_frame_transform.py
