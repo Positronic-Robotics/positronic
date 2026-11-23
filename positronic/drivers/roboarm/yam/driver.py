@@ -769,24 +769,20 @@ class _Arm(DriverRun[command.CommandType]):
         here = self._base_pose * self._kin.fk(q)
         above = geom.Transform3D(here.translation + np.array([0.0, 0.0, self._stream.raise_m]), here.rotation)
         started = self.clock.now()
-        while not self._ramp_keeps_clear(q, goal):
+        while not (clear := self._ramp_keeps_clear(q, goal)) or np.any(self._sent_speed):
             if self.should_stop.value and interrupt_on_stop:
                 return
-            if self.clock.now() - started >= self._stream.raise_timeout_s:
+            if clear:  # the joint ramp starts from rest: brake at the acceleration cap, on up from the obstacles
+                sent = cast(np.ndarray, self._sent_joints)
+                self._step(sent, grip, None, self._stream.max_joint_accel_rad_s2, keep_clear=True)
+            elif self.clock.now() - started >= self._stream.raise_timeout_s:
                 self.moves.errored = True
                 raise TimeoutError(f'the joint ramp to {goal} does not keep clear of the obstacles; measured={q}')
-            self.step_toward(above, grip, None)
+            else:
+                self.step_toward(above, grip, None)
             self.publish(self.observations(), RobotStatus.BUSY)
             yield self.limiter.wait()
             q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
-        # The joint ramp starts from rest: brake the raise at the acceleration cap, on up and away from the obstacles
-        while np.any(self._sent_speed):
-            if self.should_stop.value and interrupt_on_stop:
-                return
-            here = cast(np.ndarray, self._sent_joints)
-            self._step(here, grip, None, self._stream.max_joint_accel_rad_s2, keep_clear=True)
-            self.publish(self.observations(), RobotStatus.BUSY)
-            yield self.limiter.wait()
 
     def _gripper_height(self, q: np.ndarray) -> float:
         """How far the gripper at joints ``q`` is above the obstacles that it is over; infinite over none."""

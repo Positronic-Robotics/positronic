@@ -1190,7 +1190,9 @@ def test_a_followed_target_that_comes_over_the_table_from_beside_it_below_its_to
     down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
     beside = np.array([0.30, TABLE.lower[1] - 0.06, TABLE.upper[2] - 0.05])
     over = np.array([0.30, TABLE.lower[1] + 0.08, TABLE.upper[2] - 0.05])
-    rig.commands.push(command.JointPosition(kinematics.ik(geom.Transform3D(beside, down), RAISED, *I2RT_YAM_RANGES.T)))
+    q_beside = kinematics.ik(geom.Transform3D(beside, down), RAISED, *I2RT_YAM_RANGES.T)
+    assert q_beside is not None
+    rig.commands.push(command.JointPosition(q_beside))
     rig.tick(3.0)
     asked = _stream_poses(rig, _line(beside, over, down, 0.5) + [geom.Transform3D(over, down)] * 150)
     assert _gripper_heights(asked).min() > 0
