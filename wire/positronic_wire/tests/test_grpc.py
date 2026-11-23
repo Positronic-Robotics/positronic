@@ -96,10 +96,10 @@ def test_a_host_that_is_no_ipv6_literal_dials_unchanged(host, monkeypatch):
     assert _dialled_target(host, monkeypatch) == f'{host}:9000'
 
 
-def _status(code: grpc.StatusCode) -> grpc.RpcError:
+def _status(code: grpc.StatusCode, details: str = '') -> grpc.RpcError:
     status = MagicMock()
     status.code.return_value = code
-    status.details.return_value = ''
+    status.details.return_value = details
     return status
 
 
@@ -216,6 +216,17 @@ def test_a_public_probe_dials_the_addresses_its_one_lookup_answered_under_the_ho
     assert options['grpc.ssl_target_name_override'] == 'gpu-host'
     assert options['grpc.enable_http_proxy'] == 0
     assert sent[0][1] == (('x-caller', 'k'),)
+
+
+def test_a_public_probe_dials_the_other_family_where_nothing_answers_on_the_first(monkeypatch):
+    """One gRPC target holds one address family, so each family of the lookup gets its own channel."""
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *_args, **_kwargs: _resolving_to('2606:4700::1111', '8.8.8.8'))
+    opened = _secure_channels(monkeypatch)
+    unanswered = _status(grpc.StatusCode.UNAVAILABLE, 'failed to connect to all addresses')
+    answers = iter([unanswered, _status(grpc.StatusCode.UNIMPLEMENTED)])
+    monkeypatch.setattr(client_grpc, '_connect_refusal', lambda *_args: next(answers))
+    assert client_grpc.GrpcTlsClientWire().probe_public(_ADDRESS, None, 2.0) is None
+    assert [target for target, *_ in opened] == ['ipv6:[2606:4700::1111]:9000', 'ipv4:8.8.8.8:9000']
 
 
 @pytest.mark.parametrize('ip', ['10.0.0.1', '127.0.0.1', '100.64.0.1', 'fd7a:115c:a1e0::1', '169.254.169.254'])

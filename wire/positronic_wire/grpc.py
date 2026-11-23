@@ -291,16 +291,22 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         return self._probe_on(self.channel(target(address.host, address.port)), headers, open_timeout)
 
     @staticmethod
-    def _resolved_target(resolved: list[tuple[Any, ...]]) -> str:
-        """The ``resolved`` addresses in the family of the first, as one target that gRPC dials with no lookup."""
-        family = resolved[0][0]
-        scheme = 'ipv6' if family == socket.AF_INET6 else 'ipv4'
-        return f'{scheme}:' + ','.join(target(*sockaddr[:2]) for kind, *_, sockaddr in resolved if kind == family)
+    def _resolved_targets(resolved: list[tuple[Any, ...]]) -> list[str]:
+        """The ``resolved`` addresses as targets that gRPC dials with no lookup, one for each family, in the order the
+        lookup first names the family. One target holds addresses of one family alone."""
+        by_family: dict[int, list[str]] = {}
+        for family, *_, sockaddr in resolved:
+            by_family.setdefault(family, []).append(target(*sockaddr[:2]))
+        return [
+            f'{"ipv6" if family == socket.AF_INET6 else "ipv4"}:{",".join(dialled)}'
+            for family, dialled in by_family.items()
+        ]
 
     def probe_public(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """``probe``, on a channel to the addresses of ``wire.public_addresses``.
+        """``probe``, on a channel to the addresses of ``wire.public_addresses``, for each family where the one before
+        it answered nothing.
 
         The channel names the host as its authority, and as the name that TLS verifies on the TLS member. It takes no
         proxy, as the websocket members' probes take none.
@@ -315,8 +321,11 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
             ('grpc.ssl_target_name_override', address.host),
             ('grpc.enable_http_proxy', 0),
         ]
-        channel = self.channel(self._resolved_target(resolved), named)
-        return self._probe_on(channel, headers, max(0.0, deadline - time.monotonic()))
+        for pinned in self._resolved_targets(resolved):
+            refusal = self._probe_on(self.channel(pinned, named), headers, max(0.0, deadline - time.monotonic()))
+            if refusal is not wire.Refusal.SILENT:
+                return refusal
+        return wire.Refusal.SILENT
 
     @staticmethod
     def _probe_on(channel: grpc.Channel, headers: Mapping[str, str] | None, open_timeout: float) -> wire.Refusal | None:
