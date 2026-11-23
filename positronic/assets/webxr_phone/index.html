@@ -149,7 +149,7 @@
       }
 
       // The label of the B button: what its next press does.
-      function recordLabel(phase) {
+      function trialLabel(phase) {
         if (phase === PHASE.running) return 'Complete';
         return 'Ready';
       }
@@ -173,11 +173,11 @@
             configs.reset.label = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
             applyVisual('reset');
             const running = phase === PHASE.running;
-            configs.record.el.classList.toggle('btn--next-press', phase === PHASE.readyWait);
-            configs.record.el.classList.toggle('btn--task-running', running);
-            configs.record.label = recordLabel(phase);
-            configs.record.status = running ? 'hold 1 s' : '';
-            applyVisual('record');
+            configs.trial.el.classList.toggle('btn--next-press', phase === PHASE.readyWait);
+            configs.trial.el.classList.toggle('btn--task-running', running);
+            configs.trial.label = trialLabel(phase);
+            configs.trial.status = running ? 'hold 1 s' : '';
+            applyVisual('trial');
           } catch (e) {
             phaseEl.textContent = 'The teleop service does not answer';
           }
@@ -198,9 +198,9 @@
             classes: { off: 'btn--reset-off', on: 'btn--reset-on' }
           },
           track: { idx: BUTTON.a, el: document.getElementById('btnA'), label: 'Control', status: 'tap: on / off' },
-          record: { idx: BUTTON.b, el: document.getElementById('btnB'), label: 'Ready', status: 'hold: Complete' }
+          trial: { idx: BUTTON.b, el: document.getElementById('btnB'), label: 'Ready', status: 'hold: Complete' }
         };
-        const pressed = { reset: false, track: false, record: false };
+        const pressed = { reset: false, track: false, trial: false };
 
         const applyVisual = (name) => {
           const cfg = configs[name];
