@@ -468,7 +468,7 @@ class _Arm(DriverRun[command.CommandType]):
         limit = np.minimum(np.sqrt(brake**2 / 4 + 2.0 * accel * np.abs(step)) - brake / 2, top)
         wanted = np.clip(step / elapsed, -limit, limit)
         # A joint that slows down takes its own capped change, so it brakes in time. The joints that speed up share one
-        # scale, so from rest the step stays on the line to ``target`` rather than turning off it.
+        # scale, so from rest the step turns less off the line to ``target``.
         change, cap = wanted - sent_speed, accel * elapsed
         slows = change * sent_speed < 0
         speeding_up = np.where(slows, 0.0, np.abs(change))
@@ -581,7 +581,7 @@ class _Arm(DriverRun[command.CommandType]):
     ) -> None:
         """Command the grip, and the joints a tick from the joints sent toward ``target`` under the speed cap ``top``
         and the acceleration cap ``accel``; with ``keep_clear``, as ``_kept_clear`` changes them. The joint speed kept
-        for the next tick is that of the step planned, so a change that keeps clear does not carry on."""
+        for the next tick is that of the step planned."""
         sent = cast(np.ndarray, self._sent_joints)
         elapsed = min(self.clock.now() - self._sent_at, 1 / _CONTROL_HZ)
         planned = joints = self._next_joints(sent, self._sent_speed, target, elapsed, accel, top)
@@ -752,7 +752,6 @@ class _Arm(DriverRun[command.CommandType]):
                         f'farther than a correction of {bound:.4f} rad can close: something blocks it; '
                         f'measured={obs[_JOINT_POS]}'
                     )
-                # A correction moves the reference past ``goal``; the arm moves from where it rests to ``goal``
                 if not self._ramp_keeps_clear(obs[_JOINT_POS], reachable):
                     raise TimeoutError(
                         f'the arm rests at {obs[_JOINT_POS]}, and the ramp from there to {reachable} does not keep '
@@ -808,7 +807,7 @@ class _Arm(DriverRun[command.CommandType]):
         if self._ramp_keeps_clear(q, goal):
             return
         if self._sent_joints is None:
-            self.command_target(q, grip)  # a chain just opened: the raise steps from the joints it reads
+            self.command_target(q, grip)
         here = self._base_pose * self._kin.fk(q)
         above = geom.Transform3D(here.translation + np.array([0.0, 0.0, self._stream.raise_m]), here.rotation)
         started = self.clock.now()
