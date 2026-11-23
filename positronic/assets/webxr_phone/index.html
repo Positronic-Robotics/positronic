@@ -20,8 +20,8 @@
       .btn__title { line-height: 1; }
       .btn__status { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; line-height: 1; transition: background-color 0.2s ease, color 0.2s ease; }
       .btn--pill .btn__status { background: rgba(0,0,0,0.18); color: #111; }
-      .btn--reset-off { background: #6c757d; color: #fff; }
-      .btn--reset-on { background: #118ab2; color: #fff; }
+      .btn--cancel-off { background: #6c757d; color: #fff; }
+      .btn--cancel-on { background: #118ab2; color: #fff; }
       /* Make the control area 5x+ larger for easy touch */
       .slider { position: relative; width: 100%; height: 200px; touch-action: none; -webkit-tap-highlight-color: transparent; }
       .slider__track { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 24px; background: rgba(255,255,255,0.25); border-radius: 999px; }
@@ -68,7 +68,7 @@
               <span class="btn__title" data-title>Ready</span>
               <span class="btn__status" data-status>hold: Complete</span>
             </button>
-            <button class="btn btn--reset btn--reset-off" id="btnReset" title="Cancel" aria-label="Cancel">
+            <button class="btn btn--cancel btn--cancel-off" id="btnCancel" title="Cancel" aria-label="Cancel">
               <span class="btn__title" data-title>Cancel</span>
               <span class="btn__status" data-status></span>
             </button>
@@ -168,10 +168,10 @@
             shownPhase = phase;
             phaseEl.textContent = phaseText(state);
             const control = state[STATE_FIELD.control] === true;
-            configs.track.el.classList.toggle('btn--control-on', control);
-            configs.track.el.classList.toggle('btn--control-off', !control);
-            configs.reset.label = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
-            applyVisual('reset');
+            configs.control.el.classList.toggle('btn--control-on', control);
+            configs.control.el.classList.toggle('btn--control-off', !control);
+            configs.cancel.label = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
+            applyVisual('cancel');
             const running = phase === PHASE.running;
             configs.trial.el.classList.toggle('btn--next-press', phase === PHASE.readyWait);
             configs.trial.el.classList.toggle('btn--task-running', running);
@@ -190,17 +190,17 @@
       // labels of B and of Cancel.
       function setupButtons(setGrip) {
         const configs = {
-          reset: {
+          cancel: {
             idx: BUTTON.stick,
-            el: document.getElementById('btnReset'),
+            el: document.getElementById('btnCancel'),
             label: 'Cancel',
             status: '',
-            classes: { off: 'btn--reset-off', on: 'btn--reset-on' }
+            classes: { off: 'btn--cancel-off', on: 'btn--cancel-on' }
           },
-          track: { idx: BUTTON.a, el: document.getElementById('btnA'), label: 'Control', status: 'tap: on / off' },
+          control: { idx: BUTTON.a, el: document.getElementById('btnA'), label: 'Control', status: 'tap: on / off' },
           trial: { idx: BUTTON.b, el: document.getElementById('btnB'), label: 'Ready', status: 'hold: Complete' }
         };
-        const pressed = { reset: false, track: false, trial: false };
+        const pressed = { cancel: false, control: false, trial: false };
 
         const applyVisual = (name) => {
           const cfg = configs[name];
