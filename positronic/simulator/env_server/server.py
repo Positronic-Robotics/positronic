@@ -36,16 +36,21 @@ policies in one env:
 * The server serves batch after batch until ``shutdown``.
 """
 
+import inspect
 import queue
 import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from websockets.protocol import State
 from websockets.sync.server import ServerConnection, serve
+
+if TYPE_CHECKING:
+    # websockets 12 names this class otherwise.
+    from websockets.sync.server import Server
 
 # Isolated interpreters can import these modules as a package or as flat files.
 if __package__:
@@ -144,11 +149,20 @@ class EnvServer:
     thread. ``serve_forever`` returns on shutdown.
     """
 
-    def __init__(self, env: EnvProtocol, host: str, port: int, *, join_deadline: float = DEFAULT_JOIN_DEADLINE):
+    def __init__(
+        self,
+        env: EnvProtocol,
+        host: str,
+        port: int,
+        *,
+        join_deadline: float = DEFAULT_JOIN_DEADLINE,
+        ping_timeout: float = protocol.HEARTBEAT_TIMEOUT_S,
+    ):
         self._env = env
         self._host = host
         self._port = port
         self._join_deadline = join_deadline
+        self._ping_timeout = ping_timeout
         self._join_started: float | None = None  # when the first slot asked for the reset that starts a batch
         self._slots = [_Slot() for _ in range(env.num_slots)]
         self._batch_size = env.num_slots
@@ -352,11 +366,22 @@ class EnvServer:
             if isinstance(request, _Request):
                 request.reply.put(stopped)
 
+    def _serve(self) -> 'Server':
+        """A websockets server for ``_handle`` with the settings of the env server.
+
+        Reset tokens can exceed the default frame size. No deflate: see "The env-server wire" in
+        positronic/simulator/README.md. A native scene load blocks the server's keepalive too, so the server waits
+        ``ping_timeout`` for a pong. websockets 12, which a simulator's venv can carry, has no keepalive here.
+        """
+        if 'ping_timeout' not in inspect.signature(serve).parameters:
+            return serve(self._handle, self._host, self._port, max_size=None, compression=None)
+        return serve(
+            self._handle, self._host, self._port, max_size=None, compression=None, ping_timeout=self._ping_timeout
+        )
+
     def serve_forever(self) -> None:
-        # Reset tokens can exceed the default frame size.
         # Bare TCP probes never reach ``_handle``, so they take no slot.
-        # No deflate: see "The env-server wire" in positronic/simulator/README.md.
-        with serve(self._handle, self._host, self._port, max_size=None, compression=None) as server:
+        with self._serve() as server:
             self._server = server
             accept = threading.Thread(target=server.serve_forever, daemon=True)
             accept.start()
