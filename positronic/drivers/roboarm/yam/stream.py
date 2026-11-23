@@ -29,8 +29,9 @@ class StreamTuning:
     to stop at its target; None caps nothing. A joint target keeps the speed cap alone. A followed step that the
     obstacles raise or hold can pass the cap. ``obstacles`` are boxes in the
     world frame. A Cartesian target, streamed or in a blocking move, keeps the gripper ``obstacle_margin_m`` above
-    each obstacle it is over. A followed step that takes the gripper a little lower is raised, and one that takes it
-    into an obstacle from its side is held. A joint target, streamed or in a blocking move, is taken as it is.
+    each obstacle it is over. A followed step that takes the gripper a little lower is raised. Of a step that takes it
+    into an obstacle from its side, the arm takes only the rise. A joint target, streamed or in a blocking move, is
+    taken as it is.
 
     A park, a start move or a blocking move ramps in joint space. While its ramp takes the gripper lower over an
     obstacle than ``obstacle_margin_m`` and than both ends, the tool first rises straight up, by ``raise_m`` at most.

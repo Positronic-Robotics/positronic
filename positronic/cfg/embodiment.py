@@ -197,12 +197,13 @@ def yam_bimanual(
 
 # The yambox station. Its CAN chains carry the names udev gives the two adapters, because `can0` and `can1`
 # there are the onboard controllers and reach no arm.
+_FEET_X, _FEET_Y, _FEET_Z = positronic.cfg.hardware.roboarm.YAMBOX_FEET
 yam_bimanual_yambox = yam_bimanual.override(
     left_channel='can_follower_l',
     right_channel='can_follower_r',
     # Measured on this station: the bases sit 0.61 m apart, in line and parallel, on a 0.022 plate.
     # The sim scene's plate is 0.011, so only z differs from the default: it is 0.011 higher.
-    mounts={keys.LEFT_ARM: [0.30, 0.305, 0.3125], keys.RIGHT_ARM: [0.30, -0.305, 0.3125]},
+    mounts={keys.LEFT_ARM: [_FEET_X, _FEET_Y, _FEET_Z], keys.RIGHT_ARM: [_FEET_X, -_FEET_Y, _FEET_Z]},
     # A fit to live data over all poses of this station gives the mass of the end effector and the gravity factors,
     # except joint 2: its factor 0.96 is below the fit, so that the arm sags into the friction that holds it high on
     # a descent to the desk. Each friction value is below the static friction measured on its joint. The friction

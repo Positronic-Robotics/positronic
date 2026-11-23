@@ -266,6 +266,8 @@ def bundled_franka_model() -> dict:
 
 
 YAM_JOINT_NAMES = ('joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6')
+YAM_FINGER_JOINT_NAMES = ('joint7', 'joint8')
+YAM_GRIPPER_BODIES = ('gripper', 'tip_left', 'tip_right')
 YAM_JOINTS = len(YAM_JOINT_NAMES)
 YAM_WRIST_LINK = 'link6'
 # The vendored YAM MJCF, relative to the package: the model the driver solves FK and IK on, at ``GRIPPER_SITE``.

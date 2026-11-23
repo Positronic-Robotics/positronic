@@ -5,13 +5,12 @@ The driver solves FK/IK here, so its joint order and control frame must match th
 
 import mujoco as mj
 import numpy as np
-from scipy.spatial import ConvexHull
 
 from positronic import geom
 from positronic.utils import package_assets_path
 
 from ..ik import qpos_from_site_pose
-from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH
+from ..models import GRIPPER_SITE, YAM_FINGER_JOINT_NAMES, YAM_GRIPPER_BODIES, YAM_JOINT_NAMES, YAM_MJCF_PATH
 
 IK_POS_TOL = 1e-3  # meters; FK-verify acceptance for an IK solution after limit clamping
 IK_ROT_TOL = 1e-2  # radians
@@ -65,30 +64,34 @@ class YamKinematics:
         return self.gripper_points @ rotation.T + self._data.site_xpos[self._site_id]
 
     def _gripper_points(self) -> np.ndarray:
-        """Vertices of the convex hull of the gripper meshes, with the fingers closed and open, one in each 4 mm cell,
-        in the frame of ``GRIPPER_SITE``."""
-        cell_m = 0.004  # the gripper reaches at most 1 mm past the hull of the points kept
+        """The vertices of the gripper meshes, with the fingers closed and open, one in each 4 mm cell, in the frame of
+        ``GRIPPER_SITE``. The mesh between them reaches at most a few millimeters past them."""
+        points = np.vstack([self._gripper_vertices(open_share) for open_share in (0.0, 1.0)])
+        _, one_a_cell = np.unique(np.round(points / 0.004), axis=0, return_index=True)
+        return points[one_a_cell]
+
+    def _gripper_vertices(self, open_share: float) -> np.ndarray:
+        """The vertices of the gripper meshes with the fingers open by ``open_share`` of their travel, in the frame of
+        ``GRIPPER_SITE``."""
         model, data = self._model, self._data
-        fingers = [model.joint(name) for name in ('joint7', 'joint8')]
+        data.qpos[:] = 0.0
+        for name in YAM_FINGER_JOINT_NAMES:
+            finger = model.joint(name)
+            data.qpos[finger.qposadr.item()] = open_share * finger.range[1]
+        mj.mj_kinematics(model, data)
+        site_pos, site_mat = data.site_xpos[self._site_id], data.site_xmat[self._site_id].reshape(3, 3)
+        meshes = [
+            g
+            for g in range(model.ngeom)
+            if model.geom_type[g] == mj.mjtGeom.mjGEOM_MESH
+            and mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, model.geom_bodyid[g]) in YAM_GRIPPER_BODIES
+        ]
         points = []
-        for open_share in (0.0, 1.0):
-            data.qpos[:] = 0.0
-            for finger in fingers:
-                data.qpos[finger.qposadr.item()] = open_share * finger.range[1]
-            mj.mj_kinematics(model, data)
-            site_pos, site_mat = data.site_xpos[self._site_id], data.site_xmat[self._site_id].reshape(3, 3)
-            for g in range(model.ngeom):
-                body = mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, model.geom_bodyid[g])
-                if body in ('gripper', 'tip_left', 'tip_right') and model.geom_type[g] == mj.mjtGeom.mjGEOM_MESH:
-                    first = model.mesh_vertadr[model.geom_dataid[g]]
-                    vertices = model.mesh_vert[first : first + model.mesh_vertnum[model.geom_dataid[g]]]
-                    world = vertices @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
-                    points.append((world - site_pos) @ site_mat)
-        points = np.vstack(points)
-        points = points[ConvexHull(points).vertices]
-        _, one_a_cell = np.unique(np.round(points / cell_m), axis=0, return_index=True)
-        points = points[one_a_cell]
-        return points[ConvexHull(points).vertices]
+        for g in meshes:
+            first, count = model.mesh_vertadr[model.geom_dataid[g]], model.mesh_vertnum[model.geom_dataid[g]]
+            world = model.mesh_vert[first : first + count] @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
+            points.append((world - site_pos) @ site_mat)
+        return np.vstack(points)
 
     def _jacobian(self, q: np.ndarray) -> np.ndarray:
         """The 6x6 Jacobian of ``GRIPPER_SITE`` at ``q``: the shift rows, then the turn rows, in the arm-base frame."""

@@ -1183,7 +1183,7 @@ def test_a_followed_target_whose_turn_the_wrist_cannot_reach_keeps_the_gripper_a
     rig.loop.close()
 
 
-def test_a_followed_target_that_comes_over_the_table_from_beside_it_below_its_top_stops_the_gripper_at_its_side():
+def test_a_followed_target_that_comes_over_the_table_from_beside_it_below_its_top_keeps_the_gripper_out_of_it():
     rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
     rig.ready()
     kinematics = YamKinematics()
@@ -1196,6 +1196,25 @@ def test_a_followed_target_that_comes_over_the_table_from_beside_it_below_its_to
     rig.tick(3.0)
     asked = _stream_poses(rig, _line(beside, over, down, 0.5) + [geom.Transform3D(over, down)] * 150)
     assert _gripper_heights(asked).min() > 0
+    rig.loop.close()
+
+
+def test_an_arm_at_the_side_of_the_table_follows_a_target_that_rises_over_it():
+    rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
+    rig.ready()
+    kinematics = YamKinematics()
+    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
+    beside = np.array([0.30, TABLE.lower[1] - 0.06, TABLE.upper[2] - 0.05])
+    over = np.array([0.30, TABLE.lower[1] + 0.08, TABLE.upper[2] - 0.05])
+    q_beside = kinematics.ik(geom.Transform3D(beside, down), RAISED, *I2RT_YAM_RANGES.T)
+    assert q_beside is not None
+    rig.commands.push(command.JointPosition(q_beside))
+    rig.tick(3.0)
+    _stream_poses(rig, _line(beside, over, down, 0.5) + [geom.Transform3D(over, down)] * 150)
+    up = over + np.array([0.0, 0.0, 0.25])
+    asked = _stream_poses(rig, _line(over, up, down, 3.0) + [geom.Transform3D(up, down)] * 200)
+    assert _gripper_heights(asked).min() > 0
+    np.testing.assert_allclose(kinematics.fk(asked[-1]).translation, up, atol=0.005)
     rig.loop.close()
 
 

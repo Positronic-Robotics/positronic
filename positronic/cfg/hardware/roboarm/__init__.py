@@ -147,11 +147,16 @@ def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'Frict
     return FrictionFade(zero_below_rad_s=zero_below_rad_s, full_from_rad_s=full_from_rad_s)
 
 
-@cfn.config()
-def yam_stream(**fields) -> 'StreamTuning':
-    from positronic.drivers.roboarm.yam.stream import UNLIMITED_STREAM
+@cfn.config(max_joint_accel_rad_s2=None)
+def yam_stream(max_joint_accel_rad_s2: float | None) -> 'StreamTuning':
+    from positronic.drivers.roboarm.yam.stream import StreamTuning
 
-    return dataclasses.replace(UNLIMITED_STREAM, **fields)
+    return StreamTuning(max_joint_accel_rad_s2)
+
+
+# The feet of the YAM arms of the yambox station (measured 2026-11-22): x, the y of the left arm (the right arm is at
+# -y), and z, in the world frame of `yam_bimanual_yambox`
+YAMBOX_FEET = (0.30, 0.305, 0.3125)
 
 
 @cfn.config(max_joint_accel_rad_s2=12.0, obstacle_margin_m=0.002)
@@ -159,7 +164,7 @@ def yambox_stream(max_joint_accel_rad_s2: float | None, obstacle_margin_m: float
     """The stream of the YAM arms of the yambox station (measured 2026-11-22), in the world frame of
     ``yam_bimanual_yambox``.
 
-    The feet of the arms stand at x 0.30, y +-0.305, z 0.3125 on a plate 23.5 mm thick, 760 mm wide and centered,
+    The feet of the arms stand at ``YAMBOX_FEET`` on a plate 23.5 mm thick, 760 mm wide and centered,
     from 230 mm behind the feet to 40 mm ahead. The table top is 23.5 mm below the feet, from the back of the plate
     to 1170 mm ahead, 205 mm past the plate on the right (-y) and 235 mm on the left. A small ``obstacle_margin_m``
     lets the fingertips take a flat object from the table.
@@ -168,7 +173,7 @@ def yambox_stream(max_joint_accel_rad_s2: float | None, obstacle_margin_m: float
     """
     from positronic.drivers.roboarm.yam.stream import Box, StreamTuning
 
-    feet_x, feet_z = 0.30, 0.3125  # the mounts of `yam_bimanual_yambox`
+    feet_x, _, feet_z = YAMBOX_FEET
     table_top = feet_z - 0.0235
     plate = Box((feet_x - 0.230, -0.380, table_top), (feet_x + 0.040, 0.380, feet_z))
     table = Box((feet_x - 0.230, -0.585, table_top - 0.04), (feet_x + 1.170, 0.615, table_top))
