@@ -108,7 +108,6 @@ class ArmControl(pimm.ControlSystem):
         self._in_error = False
         self._clock: pimm.Clock | None = None  # the clock of `run`
         self._state_at: float | None = None  # when the arm sent its last new state
-        self._stale = False  # whether the arm sent no new state for `STALE_STATE_SEC`
         # The new states since the last target, until `SETTLE_STATES` of them show the driver read it; None after that
         self._states_since_target: int | None = None
 
@@ -165,14 +164,31 @@ class ArmControl(pimm.ControlSystem):
         self._events.append(f'{time.strftime("%H:%M:%S")} {shown[: self.EVENT_CHARS]}')
         self._send_report()
 
+    def _hold_unread_target(self) -> None:
+        """Replace the last target, while the driver may not have read it, with the last pose the arm sent, so a
+        stalled driver does not move the arm to it when it comes back."""
+        # rules-allow: hidden-dependency — the hold replaces only a target the driver has not read. A target it read
+        # came while its states were fresh, as every target of control does, and only the driver can drop it
+        if self._states_since_target is None:
+            return
+        self._states_since_target = None
+        message = self.robot_state.read()
+        if message is not None and not isinstance(message.data, pimm.SignalError):
+            self.robot_commands.emit(command.CartesianPosition(message.data.ee_pose))
+
+    def _turn_off(self) -> None:
+        """Turn control off, and replace the target the driver may not have read."""
+        self._tracker.turn_off()
+        self._hold_unread_target()
+
     def _control_off(self, reason: str) -> None:
         if self._tracker.on:
-            self._tracker.turn_off()
+            self._turn_off()
             self._note(f'control off: {reason}', logging.WARNING)
 
     def _toggle_control(self, hand: geom.Transform3D | None) -> None:
         if self._tracker.on:
-            self._tracker.turn_off()
+            self._turn_off()
             self._note('control off')
             return
         state = self._state()
@@ -187,9 +203,10 @@ class ArmControl(pimm.ControlSystem):
             self._start, self._target = np.array(state.ee_pose.translation, dtype=np.float64), None
             self._note('control on')
 
-    def _read_buttons(self, now_ns: int, silent: bool) -> set[Button]:
-        """The new presses of the controller, and the grip of a new sample to the gripper."""
-        message = self.buttons.read()
+    def _read_buttons(
+        self, message: pimm.Message[dict[str, Sequence[float] | None]], now_ns: int, silent: bool
+    ) -> set[Button]:
+        """The new presses of the controller in ``message``, and the grip of a new sample to the gripper."""
         values = message.data.get(self.side)
         if values is None or silent:
             self._buttons.cancel_holds()
@@ -200,17 +217,12 @@ class ArmControl(pimm.ControlSystem):
         return self._buttons.presses(values, now_ns)
 
     def _check_availability(self, hand: geom.Transform3D | None, silent: bool) -> None:
-        """Turn control off when the controller or the arm is not available, and note an error of the arm once. When
-        the state of the arm goes stale, replace the target that the driver may not have read."""
+        """Turn control off when the controller or the arm is not available, and note an error of the arm once."""
         state = self._state()
         error = state is not None and state.status is RobotStatus.ERROR
         if error and not self._in_error:
             self._note('the arm reports an error: a press of the stick clears it', logging.ERROR)
         self._in_error = error
-        stale = state is None and self._state_at is not None
-        if stale and not self._stale:
-            self._hold_unread_target()
-        self._stale = stale
         if silent:
             self._control_off('the headset sends no sample')
         elif hand is None:
@@ -219,18 +231,6 @@ class ArmControl(pimm.ControlSystem):
             self._control_off('the arm sends no state')
         elif state.status is not RobotStatus.AVAILABLE:
             self._control_off('the arm is not available')
-
-    def _hold_unread_target(self) -> None:
-        """Replace the last target, while the driver may not have read it, with the last pose the arm sent, so a
-        stalled driver does not move the arm to it when it comes back."""
-        # rules-allow: hidden-dependency — the hold replaces only a target the driver has not read. A target it read
-        # came while its states were fresh, as every target of control does, and only the driver can drop it
-        if self._states_since_target is None:
-            return
-        self._states_since_target = None
-        message = self.robot_state.read()
-        if message is not None and not isinstance(message.data, pimm.SignalError):
-            self.robot_commands.emit(command.CartesianPosition(message.data.ee_pose))
 
     def _wait(
         self, answer: pimm.calls.Answer, should_stop: pimm.SignalReceiver, clock: pimm.Clock
@@ -273,8 +273,7 @@ class ArmControl(pimm.ControlSystem):
             self._note('at the start pose')
 
     def _go_to_start(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        self._tracker.turn_off()
-        self._hold_unread_target()  # a stalled driver that comes back to answer ready would read the target next
+        self._turn_off()  # a stalled driver that comes back to answer ready would read the target next
         self._note('to the start pose')
         try:
             yield from self._to_start(should_stop, clock)
@@ -287,16 +286,19 @@ class ArmControl(pimm.ControlSystem):
         next_report = clock.now()
         last_sample = clock.now()
         while not should_stop.value:
+            # rules-allow: hidden-dependency — WebXR emits the poses of a sample before its buttons, so buttons read
+            # first pair a press with the poses of its own sample or a later one; one signal would change each reader
+            buttons = self.buttons.read()
             positions = self.controller_positions.read()
             if positions.updated:
                 last_sample = clock.now()
             silent = clock.now() - last_sample > self._silence_sec
             hand = positions.data.get(self.side)
-            presses = self._read_buttons(clock.now_ns(), silent)
+            presses = self._read_buttons(buttons, clock.now_ns(), silent)
             self._check_availability(hand, silent)
 
             if Button.A in presses:
-                self._toggle_control(None if silent else hand)
+                self._toggle_control(hand)  # a silent headset gives no press
             elif Button.STICK in presses:
                 yield from self._go_to_start(should_stop, clock)
             elif self._tracker.on and positions.updated and hand is not None:

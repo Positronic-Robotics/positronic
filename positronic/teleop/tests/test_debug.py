@@ -95,9 +95,11 @@ def test_control_moves_the_arm_from_where_it_came_on_and_a_second_press_turns_it
     ])
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
-    assert marks['on'] > 0 and marks['off'] == marks['on']
-    shift = rig.commands.emitted[-1][1].pose.translation - ROBOT_POSE.translation
+    # The press that turns control off replaces the target the driver has not read with the last pose of the arm
+    assert marks['on'] > 0 and marks['off'] == marks['on'] + 1
+    shift = rig.commands.emitted[marks['on'] - 1][1].pose.translation - ROBOT_POSE.translation
     assert np.linalg.norm(shift) == pytest.approx(0.05)
+    np.testing.assert_allclose(rig.commands.emitted[-1][1].pose.translation, ROBOT_POSE.translation)
     assert rig.events()[-2:] == ['control on', 'control off']
 
 
@@ -116,7 +118,8 @@ def test_a_lost_controller_turns_control_off_and_its_return_does_not_move_the_ar
     ])
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
-    assert marks['back'] == marks['on'] > 0
+    assert marks['on'] > 0 and marks['back'] == marks['on'] + 1, 'one hold of the unread target, then nothing'
+    np.testing.assert_allclose(rig.commands.emitted[-1][1].pose.translation, ROBOT_POSE.translation)
     assert rig.events()[-1] == 'control off: the controller is not tracked'
 
 
@@ -295,7 +298,6 @@ def test_a_driver_that_stalls_after_it_read_the_last_target_gets_no_new_target(w
     driver = ManualDriver([
         *rig.control_on(),
         (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
-        (lambda: rig.poses.emit({LEFT: None, RIGHT: None}), 0.01),  # the hand sends no more targets
         *rig.states(),
         (lambda: marks.update(before=len(rig.commands.emitted)), 2 * ArmControl.STALE_STATE_SEC),
     ])
