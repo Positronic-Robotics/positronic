@@ -41,6 +41,7 @@ from positronic.policy import keys as policy_keys
 from positronic.policy.base import (
     Answer,
     Commands,
+    FieldUse,
     Obs,
     Policy,
     PolicyEnd,
@@ -81,6 +82,9 @@ class EndOnField(Policy):
                 yield Step(commands, runtime.time_ns, outputs=step.outputs)
                 return end
             obs = yield step
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.FORWARDED
 
     def to_spec(self) -> dict[str, Any]:
         return {NAME: self.WIRE_NAME, VERSION: self.WIRE_VERSION}
@@ -391,10 +395,11 @@ class TrajectoryPlayer(Policy):
     def _need_recover(self, obs: Obs) -> bool:
         # TODO(#638): Read status from domain values when the harness preserves their types.
         return self._replan_on_error and any(
-            RobotStatus(obs[name]) is RobotStatus.ERROR
-            for name in obs
-            if name.startswith(f'{keys.ROBOT_STATE}.') and name.endswith(keys.STATUS_SUFFIX)
+            RobotStatus(obs[name]) is RobotStatus.ERROR for name in obs if keys.is_robot_status(name)
         )
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.OTHER if field == self._plan_key or keys.is_robot_status(field) else FieldUse.FORWARDED
 
     def _with_plan(self, obs: Obs, plan: deque[_Waypoint], current: _Waypoint | None, now_ns: int) -> Obs:
         if self._plan_key is None:
@@ -480,6 +485,11 @@ class Periodic(Policy):
             raise ValueError('sampling fps must be at most 1 GHz')
         self._fps = fps
         self._obs_time_key = obs_time_key
+
+    def field_use(self, field: str) -> FieldUse:
+        if field in (policy_keys.REPLAN_NOW, policy_keys.SAMPLE_INDEX, self._obs_time_key):
+            return FieldUse.OTHER
+        return FieldUse.FORWARDED
 
     def run(self, runtime: Runtime, inner: PolicyRun) -> PolicyRun:
         obs = yield
@@ -699,6 +709,17 @@ class InferenceSchedule(Policy):
         self._merge = merge
         self._latency_estimate = latency_estimate
         self._obs_time_key = obs_time_key
+
+    def field_use(self, field: str) -> FieldUse:
+        read_or_set = (
+            policy_keys.REPLAN_NOW,
+            policy_keys.PLAN,
+            policy_keys.RTC.ACTION_PREFIX,
+            policy_keys.CALL_ID,
+            policy_keys.CALL_TIMINGS,
+            self._obs_time_key,
+        )
+        return FieldUse.OTHER if field in read_or_set else FieldUse.FORWARDED
 
     def _call_obs(
         self, obs: Obs, trajectory: Trajectory | None, obs_time_ns: int, *, update: Trajectory | None, replan: bool
@@ -1054,6 +1075,13 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
             'pad_start=False requires 0.0 in offsets_sec: with only past offsets the first observation has no '
             'in-range targets and the stack would be empty'
         )
+
+    @property
+    def keys(self) -> tuple[str, ...]:
+        return self._keys
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.OTHER if field in self._keys else FieldUse.FORWARDED
 
     def run(self, runtime: Runtime, inner: ProcessorRun[Obs, OutputT, ReturnT]) -> ProcessorRun[Obs, OutputT, ReturnT]:
         buffer = _StackBuffer(self._offsets_sec, pad_start=self._pad_start)

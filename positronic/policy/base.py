@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterable, Mapping
 from concurrent.futures import Executor as WorkerExecutor
+from enum import Enum
 from functools import partial
 from typing import Any, ClassVar, Generic, ParamSpec, Self
 
@@ -170,6 +171,33 @@ class Runtime(ABC):
         """Whether any non-cancelled call is ready and its result has not been read."""
 
 
+class FieldUse(Enum):
+    """What a component does with the value of one observation field on its way inward."""
+
+    # The value reaches the inner side unchanged, at the same field, and nothing else there depends on it.
+    FORWARDED = 'forwarded'
+    # Nothing on the inner side depends on the value.
+    DROPPED = 'dropped'
+    # The component reads or changes the value, or makes no promise about it.
+    OTHER = 'other'
+
+    @staticmethod
+    def chained(uses: Iterable[FieldUse]) -> FieldUse:
+        """The use of components that each pass their output to the next, outermost first."""
+        for use in uses:
+            if use is not FieldUse.FORWARDED:
+                return use
+        return FieldUse.FORWARDED
+
+    @staticmethod
+    def merged(uses: Iterable[FieldUse]) -> FieldUse:
+        """The use of components that each read the same input, with their outputs merged."""
+        found = set(uses)
+        if FieldUse.OTHER in found:
+            return FieldUse.OTHER
+        return FieldUse.FORWARDED if FieldUse.FORWARDED in found else FieldUse.DROPPED
+
+
 class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
     """A reusable computation definition with typed inputs and outputs.
 
@@ -201,6 +229,10 @@ class Processor(ABC, Generic[InputT, OutputT, ReturnT]):
     def ordered(self) -> bool:
         """Each call of a run depends on the call before it, so the calls run one at a time."""
         return False
+
+    def field_use(self, field: str) -> FieldUse:
+        """What the run does with the value at ``field`` of each input before it sends the input inward."""
+        return FieldUse.OTHER
 
     def to_spec(self) -> dict[str, Any]:
         """A versioned component declaration with plain-data arguments."""
