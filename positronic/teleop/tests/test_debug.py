@@ -293,13 +293,30 @@ def test_a_driver_that_stalls_after_it_read_the_last_target_gets_no_new_target(w
     rig = _Rig(world)
     marks = {}
     driver = ManualDriver([
+        *rig.control_on(),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+        (lambda: rig.poses.emit({LEFT: None, RIGHT: None}), 0.01),  # the hand sends no more targets
         *rig.states(),
-        (lambda: rig.hand(HAND), 0.01),
         (lambda: marks.update(before=len(rig.commands.emitted)), 2 * ArmControl.STALE_STATE_SEC),
     ])
     drive_scheduler(world.start([rig.control, driver]), steps=2000)
 
-    assert len(rig.commands.emitted) == marks['before'] == 0
+    assert marks['before'] > 0
+    assert len(rig.commands.emitted) == marks['before']
+
+
+def test_the_stick_replaces_a_target_that_a_stalled_driver_has_not_read(world):
+    rig = _Rig(world)
+    driver = ManualDriver([
+        *rig.control_on(),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+        # The driver stalls before it read the target, and the stick goes before the state goes stale
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.press(stick=1.0), 0.01),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    np.testing.assert_allclose(rig.commands.emitted[-1][1].pose.translation, ROBOT_POSE.translation)
 
 
 def test_control_does_not_come_on_while_the_arm_moves_by_itself(world):

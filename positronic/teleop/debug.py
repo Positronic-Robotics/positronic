@@ -76,10 +76,10 @@ class ArmControl(pimm.ControlSystem):
     EVENTS = 4
     EVENT_CHARS = 60
     REPORT_SEC = 0.2
-    # A driver reads a move before a target and keeps the target for its next tick, so a start move goes only after
-    # the driver read the last target. Each tick of a driver reads its requests and then sends one state. The third new
-    # state comes from a tick that began after the second came, so after the last target. The start move fails when
-    # the states do not come in `SETTLE_SEC`.
+    # A driver reads a move before a target and keeps the target until the move ends, so a start move goes only after
+    # the driver read the last target. Each tick of a driver reads its requests and sends one state, in either order.
+    # The third new state comes from a tick that began after the second came, so after the last target. The start
+    # move fails when the states do not come in `SETTLE_SEC`.
     SETTLE_STATES = 3
     SETTLE_SEC = 0.5
     # An arm whose driver sends no new state for this long gives no state: its last state can be from before a stall
@@ -200,16 +200,16 @@ class ArmControl(pimm.ControlSystem):
         return self._buttons.presses(values, now_ns)
 
     def _check_availability(self, hand: geom.Transform3D | None, silent: bool) -> None:
-        """Turn control off when the controller or the arm is not available, and note an error of the arm once."""
+        """Turn control off when the controller or the arm is not available, and note an error of the arm once. When
+        the state of the arm goes stale, replace the target that the driver may not have read."""
         state = self._state()
         error = state is not None and state.status is RobotStatus.ERROR
         if error and not self._in_error:
             self._note('the arm reports an error: a press of the stick clears it', logging.ERROR)
         self._in_error = error
         stale = state is None and self._state_at is not None
-        if stale and not self._stale and self._states_since_target is not None:
-            self._hold_last_pose()
-            self._states_since_target = None
+        if stale and not self._stale:
+            self._hold_unread_target()
         self._stale = stale
         if silent:
             self._control_off('the headset sends no sample')
@@ -220,9 +220,14 @@ class ArmControl(pimm.ControlSystem):
         elif state.status is not RobotStatus.AVAILABLE:
             self._control_off('the arm is not available')
 
-    def _hold_last_pose(self) -> None:
-        """Replace the target that a stalled driver has not read yet with the last pose the arm sent, so the arm does
-        not move to it when the driver comes back."""
+    def _hold_unread_target(self) -> None:
+        """Replace the last target, while the driver may not have read it, with the last pose the arm sent, so a
+        stalled driver does not move the arm to it when it comes back."""
+        # rules-allow: hidden-dependency — the hold replaces only a target the driver has not read. A target it read
+        # came while its states were fresh, as every target of control does, and only the driver can drop it
+        if self._states_since_target is None:
+            return
+        self._states_since_target = None
         message = self.robot_state.read()
         if message is not None and not isinstance(message.data, pimm.SignalError):
             self.robot_commands.emit(command.CartesianPosition(message.data.ee_pose))
@@ -269,6 +274,7 @@ class ArmControl(pimm.ControlSystem):
 
     def _go_to_start(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         self._tracker.turn_off()
+        self._hold_unread_target()  # a stalled driver that comes back to answer ready would read the target next
         self._note('to the start pose')
         try:
             yield from self._to_start(should_stop, clock)
