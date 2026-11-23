@@ -23,6 +23,7 @@ from positronic_model_server.spec import component, parallel, sequence
 from positronic import keys, telemetry, telemetry_keys
 from positronic.policy.arrival import transform_frames_on_arrival
 from positronic.policy.base import Processor
+from positronic.policy.codecs import TASK_FIELD
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.spec import from_spec
 
@@ -51,7 +52,9 @@ def three_camera_history() -> dict:
         component('temporal_stack', version=2, keys=list(DROID_CAMERAS), offsets_sec=_offsets(4)),
         component('rtc_schedule', fps=FPS, call_after_sec=0.53, latency_estimate=0.3),
         parallel(
-            component('select_observation_fields', mapping={**{name: name for name in DROID_CAMERAS}, 'task': 'task'}),
+            component(
+                'select_observation_fields', mapping={**{name: name for name in DROID_CAMERAS}, TASK_FIELD: TASK_FIELD}
+            ),
             sequence(
                 component('set_control_mode', mode=IMPEDANCE),
                 component(
@@ -125,7 +128,7 @@ def _drive(stack: Processor, cameras: tuple[str, ...], width: int, height: int, 
                 keys.EE_POSE: np.zeros(7),
                 keys.GRIP: np.zeros(1),
                 keys.ROBOT_STATUS: 0,
-                'task': 'pick',
+                TASK_FIELD: 'pick',
             }
             start = time.perf_counter()
             run.send(obs)

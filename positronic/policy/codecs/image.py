@@ -231,10 +231,7 @@ def _is_rgb_frame(value: Any) -> bool:
 class TransformOnArrival(Codec):
     """Transform each camera frame in ``fields`` as ``transform`` does, on the step where the frame arrives.
 
-    The client puts it in front of a temporal stack that feeds ``transform``. Each frame is then transformed one
-    time, and ``transform`` finds no frame of the history left to transform. A field that is absent, or that holds no
-    RGB frame, passes unchanged, so ``transform`` refuses it as before. The client builds this codec itself, so it has
-    no wire form.
+    A field that is absent, or that holds no RGB frame, passes unchanged.
     """
 
     def __init__(self, transform: TransformImages, fields: Sequence[str]):

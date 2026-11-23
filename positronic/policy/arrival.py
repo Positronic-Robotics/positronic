@@ -12,12 +12,8 @@ Component = Processor | Codec
 def transform_frames_on_arrival(stack: Processor) -> Processor:
     """``stack`` with each camera frame of a temporal stack transformed as it arrives, when the result is the same.
 
-    A server can declare an image transform inside a temporal stack. The transform then runs on the whole history at
-    each call. This function puts a ``TransformOnArrival`` in front of the stack for each camera field that reaches
-    the transform unchanged, so the main loop transforms each frame one time and the call transforms none. The
-    transform gives each frame of a stack the same result as the frame alone, and gives a transformed frame back
-    unchanged. So the policy gets the same observation. A component between the two that does not promise to forward
-    the field (``FieldUse.FORWARDED``) keeps the field out.
+    A camera field moves only when every component between the stack and the transform forwards it
+    (``FieldUse.FORWARDED``).
     """
     if not isinstance(stack, Sequential):
         return stack

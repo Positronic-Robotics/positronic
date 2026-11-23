@@ -6,7 +6,7 @@ from positronic import keys
 from positronic.dataset.transforms import image
 from positronic.policy.arrival import transform_frames_on_arrival
 from positronic.policy.base import Processor
-from positronic.policy.codecs import TransformImages, TransformOnArrival
+from positronic.policy.codecs import TASK_FIELD, TransformImages, TransformOnArrival
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.processors import TemporalStack
 from positronic.policy.sequential import Sequential
@@ -52,7 +52,9 @@ def _three_camera_history_spec() -> dict:
         _history(4),
         component('rtc_schedule', fps=FPS, call_after_sec=0.2, latency_estimate=0.1),
         parallel(
-            component('select_observation_fields', mapping={**{name: name for name in CAMERAS}, 'task': 'task'}),
+            component(
+                'select_observation_fields', mapping={**{name: name for name in CAMERAS}, TASK_FIELD: TASK_FIELD}
+            ),
             sequence(
                 component('set_control_mode', mode=IMPEDANCE),
                 component(
@@ -123,7 +125,7 @@ def _run(stack: Processor, frames: list[dict[str, np.ndarray]]) -> list[dict[str
                 keys.GRIP: np.zeros(1),
                 keys.EE_POSE: np.zeros(7),
                 keys.ROBOT_STATUS: 0,
-                'task': 'pick',
+                TASK_FIELD: 'pick',
             }
             run.send(obs)
             # Each call ends before the next step, so both stacks make the same calls.

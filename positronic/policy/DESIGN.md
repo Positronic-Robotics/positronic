@@ -311,17 +311,9 @@ whole definition and sends it to the rig as a description.
   [wire compatibility rules](../offboard/README.md#compatibility-and-deprecation)
   define the details.
 
-The client changes one thing in a declared stack, and only where the policy
-gets the same input. A `TemporalStack` of camera frames can feed a
-`TransformImages`. The transform then resizes the whole history at each call,
-in one burst that competes with the control loop for the processor. The
-client puts a `TransformOnArrival` with the same transform in front of the
-stack, for each camera field that every component between the two forwards
-unchanged (`FieldUse.FORWARDED`). The main loop then resizes each frame one
-time, on the step where it arrives, and the call finds no frame to resize. The
-transform gives a frame of a stack the same result as the frame alone, and
-gives a frame that it made back unchanged, so the policy gets the same
-observation (`positronic/policy/arrival.py`).
+The client may reorder a declared stack only where the policy gets the same
+input. It moves an image transform in front of a temporal stack of camera
+frames, so that each frame is resized once (`positronic/policy/arrival.py`).
 
 Each remote run opens a server session and runs the declared client stack
 around an ordinary inference function. The session identifies that run's calls
