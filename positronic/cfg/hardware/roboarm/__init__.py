@@ -164,8 +164,7 @@ def yambox_stream(max_joint_accel_rad_s2: float | None, obstacle_margin_m: float
     to 1170 mm ahead, 205 mm past the plate on the right (-y) and 235 mm on the left. A small ``obstacle_margin_m``
     lets the fingertips take a flat object from the table.
 
-    ``max_joint_accel_rad_s2`` caps a followed Cartesian target, as from teleop. A joint target, as from the ABC
-    policies of the station, keeps the speed cap alone.
+    ``max_joint_accel_rad_s2`` caps a followed Cartesian target. A joint target keeps the speed cap alone.
     """
     from positronic.drivers.roboarm.yam.stream import Box, StreamTuning
 

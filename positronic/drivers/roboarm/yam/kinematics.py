@@ -23,10 +23,6 @@ FOLLOW_ROT_WEIGHT = 0.1
 FOLLOW_DAMPING = 0.05
 FOLLOW_SINGULAR = 0.08
 FOLLOW_MAX_STEP_RAD = 0.05
-_GRIPPER_BODIES = ('gripper', 'tip_left', 'tip_right')
-_FINGER_JOINTS = ('joint7', 'joint8')
-# One gripper point a cell of this size: the gripper reaches at most 1 mm past the hull of the points kept
-_GRIPPER_CELL_M = 0.004
 
 
 # TODO(#517): move this MJCF FK/IK beside `drivers/roboarm/kinematics.py`, in its vocabulary, so the MuJoCo sim
@@ -69,10 +65,11 @@ class YamKinematics:
         return self.gripper_points @ rotation.T + self._data.site_xpos[self._site_id]
 
     def _gripper_points(self) -> np.ndarray:
-        """Vertices of the convex hull of the gripper meshes, with the fingers closed and open, one in each cell of
-        ``_GRIPPER_CELL_M``, in the frame of ``GRIPPER_SITE``."""
+        """Vertices of the convex hull of the gripper meshes, with the fingers closed and open, one in each 4 mm cell,
+        in the frame of ``GRIPPER_SITE``."""
+        cell_m = 0.004  # the gripper reaches at most 1 mm past the hull of the points kept
         model, data = self._model, self._data
-        fingers = [model.joint(name) for name in _FINGER_JOINTS]
+        fingers = [model.joint(name) for name in ('joint7', 'joint8')]
         points = []
         for open_share in (0.0, 1.0):
             data.qpos[:] = 0.0
@@ -82,14 +79,14 @@ class YamKinematics:
             site_pos, site_mat = data.site_xpos[self._site_id], data.site_xmat[self._site_id].reshape(3, 3)
             for g in range(model.ngeom):
                 body = mj.mj_id2name(model, mj.mjtObj.mjOBJ_BODY, model.geom_bodyid[g])
-                if body in _GRIPPER_BODIES and model.geom_type[g] == mj.mjtGeom.mjGEOM_MESH:
+                if body in ('gripper', 'tip_left', 'tip_right') and model.geom_type[g] == mj.mjtGeom.mjGEOM_MESH:
                     first = model.mesh_vertadr[model.geom_dataid[g]]
                     vertices = model.mesh_vert[first : first + model.mesh_vertnum[model.geom_dataid[g]]]
                     world = vertices @ data.geom_xmat[g].reshape(3, 3).T + data.geom_xpos[g]
                     points.append((world - site_pos) @ site_mat)
         points = np.vstack(points)
         points = points[ConvexHull(points).vertices]
-        _, one_a_cell = np.unique(np.round(points / _GRIPPER_CELL_M), axis=0, return_index=True)
+        _, one_a_cell = np.unique(np.round(points / cell_m), axis=0, return_index=True)
         points = points[one_a_cell]
         return points[ConvexHull(points).vertices]
 

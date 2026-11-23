@@ -302,7 +302,13 @@ class _Arm(DriverRun[command.CommandType]):
     # The checked points of a joint ramp are this far apart in the joint that turns farthest
     _RAMP_STEP_RAD = 0.02
     # The gripper between two checked points of a ramp can dip this much below them
-    _RAMP_TOLERANCE_M = 0.002
+    _MARGIN_TOLERANCE_M = 0.002
+    # Under the acceleration cap the arm lags its followed joints, and its step dips up to 6 mm below their line
+    _STEP_DIP_M = 0.008
+    # A followed target whose gripper the arm reaches lower than the margin is raised this many times at most
+    _RELIFTS = 3
+    # A followed step that takes the gripper too low is cut to the share found in this many halvings
+    _CUT_HALVINGS = 5
     # i2rt halts the chain once a joint reads 0.1 rad past its limits (i2rt/robots/motor_chain_robot.py:254).
     _CHAIN_LIMIT_MARGIN_RAD = 0.15
 
@@ -524,24 +530,56 @@ class _Arm(DriverRun[command.CommandType]):
         sent = self._sent_joints
         if sent is None:
             raise RuntimeError('the chain has received no joints to step from')
-        accel = None
-        if isinstance(goal, geom.Transform3D):
-            target = self._base_pose.inv * self._lifted(goal)
-            joints = self._kin.follow(target, sent, *self._joint_range)
-            # Near the best pose for a target out of reach, the steps turn the joints and bring the tool almost no
-            # nearer: the arm would keep moving after the target stops. A moving target, as along a table, is followed
-            still = self._followed is not None and self._is_near(target, self._followed)
-            if still and self._kin.progress_per_rad(target, sent, joints) < self._MIN_PROGRESS_M_PER_RAD:
-                joints = sent
-            self._followed = target
-            goal, accel = joints, self._stream.max_joint_accel_rad_s2
-        else:
+        if not isinstance(goal, geom.Transform3D):
             self._followed = None
+            self._step(goal, grip, receipt, None, keep_clear=False)
+            return
+        target = self._base_pose.inv * self._lifted(goal)
+        joints = self._kin.follow(target, sent, *self._joint_range)
+        # At a joint limit the arm gives up a turn, and its gripper can reach lower than at the turn of the target
+        for _ in range(self._RELIFTS):
+            lack = self._stream.obstacle_margin_m - self._gripper_height(joints)
+            if lack <= 0:
+                break
+            target = geom.Transform3D(target.translation + np.array([0.0, 0.0, lack]), target.rotation)
+            joints = self._kin.follow(target, sent, *self._joint_range)
+        # Near the best pose for a target out of reach, the steps turn the joints and bring the tool almost no
+        # nearer, so the arm would keep moving after the target stops. Only a still target is held there.
+        still = self._followed is not None and self._is_near(target, self._followed)
+        if still and self._kin.progress_per_rad(target, sent, joints) < self._MIN_PROGRESS_M_PER_RAD:
+            joints = sent
+        self._followed = target
+        self._step(joints, grip, receipt, self._stream.max_joint_accel_rad_s2, keep_clear=True)
+
+    def _step(
+        self, target: np.ndarray, grip: float, receipt: CommandReceipt | None, accel: float | None, *, keep_clear: bool
+    ) -> None:
+        """Command the grip, and the joints a tick from the joints sent toward ``target`` under the speed cap and the
+        acceleration cap ``accel``; with ``keep_clear``, cut to the share of the step that ``_kept_clear`` allows."""
+        sent = cast(np.ndarray, self._sent_joints)
         elapsed = min(self.clock.now() - self._sent_at, 1 / _CONTROL_HZ)
-        joints = self._next_joints(sent, goal, elapsed, accel)
+        joints = self._next_joints(sent, target, elapsed, accel)
+        if keep_clear:
+            joints = self._kept_clear(sent, joints)
         speed = (joints - sent) / elapsed if elapsed > 0 else np.zeros_like(sent)
         self.command_target(joints, grip, receipt)
         self._sent_speed = speed
+
+    def _kept_clear(self, sent: np.ndarray, joints: np.ndarray) -> np.ndarray:
+        """``joints``, or the share of the step from ``sent`` that keeps the gripper over each obstacle no lower than
+        ``obstacle_margin_m`` less ``_STEP_DIP_M``, or than at ``sent``. The second bound is not less a tolerance, so
+        a gripper below the first does not go down a little more each tick."""
+        if not self._stream.obstacles:
+            return joints
+        floor = min(self._stream.obstacle_margin_m - self._STEP_DIP_M, self._gripper_height(sent))
+        if self._gripper_height(joints) >= floor:
+            return joints
+        kept, share = 0.0, 0.5
+        for _ in range(self._CUT_HALVINGS):
+            if self._gripper_height(sent + (kept + share) * (joints - sent)) >= floor:
+                kept += share
+            share /= 2
+        return sent + kept * (joints - sent)
 
     def _arrived(self, obs: dict[str, np.ndarray], target: np.ndarray, grip: float, tuning: SettleTuning) -> bool:
         if not np.all(np.abs(obs[_JOINT_POS] - target) < tuning.tolerance_rad):
@@ -721,8 +759,8 @@ class _Arm(DriverRun[command.CommandType]):
         self, goal: np.ndarray, grip: float, interrupt_on_stop: bool
     ) -> Generator[pimm.Command, None, None]:
         """Before the joint ramp to ``goal``, raise the tool straight up while that ramp does not keep clear of the
-        obstacles. Raise ``TimeoutError`` when it does not keep clear within ``raise_timeout_s``. On a stop, return and
-        leave the move to see it."""
+        obstacles, then brake to rest. Raise ``TimeoutError`` when it does not keep clear within ``raise_timeout_s``.
+        On a stop, return and leave the move to see it."""
         q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
         if self._ramp_keeps_clear(q, goal):
             return
@@ -741,6 +779,14 @@ class _Arm(DriverRun[command.CommandType]):
             self.publish(self.observations(), RobotStatus.BUSY)
             yield self.limiter.wait()
             q = np.asarray(self.observations()[_JOINT_POS], dtype=np.float64)
+        # The joint ramp starts from rest: brake the raise at the acceleration cap, on up and away from the obstacles
+        while np.any(self._sent_speed):
+            if self.should_stop.value and interrupt_on_stop:
+                return
+            here = cast(np.ndarray, self._sent_joints)
+            self._step(here, grip, None, self._stream.max_joint_accel_rad_s2, keep_clear=True)
+            self.publish(self.observations(), RobotStatus.BUSY)
+            yield self.limiter.wait()
 
     def _gripper_height(self, q: np.ndarray) -> float:
         """How far the gripper at joints ``q`` is above the obstacles that it is over; infinite over none."""
@@ -755,7 +801,7 @@ class _Arm(DriverRun[command.CommandType]):
             return True
         count = int(np.ceil(np.max(np.abs(goal - start)) / self._RAMP_STEP_RAD)) + 1
         heights = [self._gripper_height(start + share * (goal - start)) for share in np.linspace(0.0, 1.0, count)]
-        return min(heights) >= min(self._stream.obstacle_margin_m, heights[0], heights[-1]) - self._RAMP_TOLERANCE_M
+        return min(heights) >= min(self._stream.obstacle_margin_m, heights[0], heights[-1]) - self._MARGIN_TOLERANCE_M
 
     def go_to_start(self) -> Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]]:
         """Settle onto the start pose with the gripper open, and return the joints and grip to hold, with the failure

@@ -1123,6 +1123,8 @@ MARGIN_M = 0.01
 ABOVE_THE_TABLE = StreamTuning(obstacles=(TABLE,), obstacle_margin_m=MARGIN_M)
 # The gripper of a followed target rests this near it
 FOLLOW_TOL_M = 0.001
+# A followed step, a park, a start move or a blocking move may take the gripper this much below the margin
+RAMP_TOL_M = 0.003
 
 
 def test_a_cartesian_target_below_the_table_takes_the_gripper_to_the_margin_above_it_and_no_lower():
@@ -1159,6 +1161,39 @@ def test_a_tilted_open_gripper_keeps_its_fingers_above_the_table():
     heights = _gripper_heights(asked)
     assert heights.min() >= MARGIN_M - FOLLOW_TOL_M
     assert heights[-1] == pytest.approx(MARGIN_M, abs=FOLLOW_TOL_M)
+    rig.loop.close()
+
+
+def test_a_followed_target_whose_turn_the_wrist_cannot_reach_keeps_the_gripper_above_the_table():
+    rig = Rig(park_after_idle_s=60.0, stream=dataclasses.replace(ABOVE_THE_TABLE, max_joint_accel_rad_s2=12.0))
+    rig.ready()
+    start = YamKinematics().fk(RAISED)
+    # The wrist stops at its limits short of this turn, so the gripper reaches lower than at the target turn
+    turned = geom.Rotation.from_quat(np.array([0.2171, 0.5653, -0.7902, 0.0939]))
+    turn = (start.rotation.inv * turned).as_rotvec
+    above, below = np.array([0.399, 0.101, 0.12]), np.array([0.399, 0.101, TABLE.upper[2] - 0.03])
+    turn_down = [
+        geom.Transform3D(
+            start.translation + (above - start.translation) * s, start.rotation * geom.Rotation.from_rotvec(turn * s)
+        )
+        for s in np.linspace(0.005, 1.0, 300)
+    ]
+    asked = _stream_poses(rig, turn_down + _line(above, below, turned, 1.5) + [geom.Transform3D(below, turned)] * 150)
+    assert _gripper_heights(asked).min() >= MARGIN_M - RAMP_TOL_M
+    rig.loop.close()
+
+
+def test_a_followed_target_that_comes_over_the_table_from_beside_it_below_its_top_stops_the_gripper_at_its_side():
+    rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
+    rig.ready()
+    kinematics = YamKinematics()
+    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
+    beside = np.array([0.30, TABLE.lower[1] - 0.06, TABLE.upper[2] - 0.05])
+    over = np.array([0.30, TABLE.lower[1] + 0.08, TABLE.upper[2] - 0.05])
+    rig.commands.push(command.JointPosition(kinematics.ik(geom.Transform3D(beside, down), RAISED, *I2RT_YAM_RANGES.T)))
+    rig.tick(3.0)
+    asked = _stream_poses(rig, _line(beside, over, down, 0.5) + [geom.Transform3D(over, down)] * 150)
+    assert _gripper_heights(asked).min() > 0
     rig.loop.close()
 
 
@@ -1237,7 +1272,7 @@ LOW_OVER_THE_TABLE = np.radians([53.0, 100.0, 25.0, -66.0, 46.0, 107.0])
 
 
 def _assert_kept_clear(asked, start: np.ndarray) -> None:
-    floor = min(MARGIN_M, _gripper_heights([start])[0]) - yam._Arm._RAMP_TOLERANCE_M - FOLLOW_TOL_M
+    floor = min(MARGIN_M, _gripper_heights([start])[0]) - RAMP_TOL_M
     assert _gripper_heights(asked).min() >= floor
 
 
@@ -1273,6 +1308,22 @@ def test_a_blocking_move_from_low_over_the_table_keeps_the_gripper_clear_of_it(w
     _until_answered(rig, answer)
     answer.result()
     _assert_kept_clear(_asked(rig)[sent:], start)
+    np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
+    rig.loop.close()
+
+
+def test_an_idle_park_brakes_its_raise_to_rest_within_the_acceleration_cap_before_its_joint_ramp():
+    accel = 12.0
+    rig = Rig(park_after_idle_s=1.0, stream=dataclasses.replace(ABOVE_THE_TABLE, max_joint_accel_rad_s2=accel))
+    rig.ready()
+    rig.commands.push(command.JointPosition(LOW_OVER_THE_TABLE))
+    rig.tick(0.9)
+    sent = len(rig.vendor.targets)
+    rig.tick(12.0)
+    speeds = np.diff(_asked(rig)[sent - 1 :], axis=0) * yam._CONTROL_HZ
+    rises = int(np.flatnonzero(np.any(speeds != 0, axis=1))[0])
+    rests = rises + int(np.flatnonzero(np.all(speeds[rises:] == 0, axis=1))[0])
+    assert np.max(np.abs(np.diff(speeds[: rests + 1], axis=0))) <= accel / yam._CONTROL_HZ * (1 + 1e-6)
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
     rig.loop.close()
 
