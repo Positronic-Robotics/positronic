@@ -240,8 +240,9 @@ class StartPose(IntEnum):
     """Where the arm starts each episode.
 
     `nominal` is the rig's own pose. `droid_reset` is the reset pose of the DROID data collection, a
-    Franka pose. `abc_init` is the start pose of the ABC sim, a two-arm YAM pose. Each `abc_<task>` is
-    the median first pose of ABC's real two-arm YAM demos of that task, a two-arm YAM pose.
+    Franka pose. `abc_init` is the start pose of the ABC sim, a two-arm YAM pose. Each later member is
+    the median first pose of ABC's real two-arm YAM demos of one task. Its name is the rig station's
+    name for that pose, not a sim task id with a prefix.
     """
 
     INVALID = 0
