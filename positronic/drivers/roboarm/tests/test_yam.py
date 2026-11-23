@@ -36,9 +36,9 @@ from positronic.drivers.roboarm.tests.earlier_yam_model import EARLIER_MODEL_POS
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
-from positronic.drivers.roboarm.yam.clearance import UNLIMITED_STREAM, Box, Clearance, StreamTuning
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, YamKinematics
+from positronic.drivers.roboarm.yam.stream import UNLIMITED_STREAM, Box, StreamTuning, heights_above, points_at
 from positronic.drivers.utils import RecoveryOutcome
 from positronic.eval import Embodiment, Task
 from positronic.eval import keys as eval_keys
@@ -708,21 +708,15 @@ def test_the_bimanual_embodiment_states_a_frame_for_each_pose_signal_of_both_arm
 
 def test_the_yambox_stream_places_the_plate_and_the_table_of_the_station_in_its_world_frame():
     plate, table = roboarm_cfg.yambox_stream.instantiate().obstacles
-    # The feet stand at z 0.3125 on a plate 23.5 mm thick; the table top is 20 mm lower than it is, for the fingers
+    # The feet stand at z 0.3125 on a plate 23.5 mm thick, and the table top is level with the bottom of the plate
     np.testing.assert_allclose([plate.lower, plate.upper], [[0.07, -0.38, 0.289], [0.34, 0.38, 0.3125]], atol=1e-9)
     np.testing.assert_allclose(table.lower[:2], [0.07, -0.585], atol=1e-9)
-    np.testing.assert_allclose(table.upper, [1.47, 0.615, 0.269], atol=1e-9)
+    np.testing.assert_allclose(table.upper, [1.47, 0.615, 0.289], atol=1e-9)
 
 
 def test_the_yambox_station_streams_with_its_stream_and_the_other_bimanual_yams_with_the_speed_cap_alone():
     assert embodiment_cfg.yam_bimanual_yambox.kwargs['stream'].instantiate() == roboarm_cfg.yambox_stream.instantiate()
     assert embodiment_cfg.yam_bimanual.kwargs['stream'].instantiate() == UNLIMITED_STREAM
-
-
-def test_an_arm_with_obstacles_on_a_turned_base_is_refused():
-    turned = geom.Transform3D(rotation=geom.Rotation.from_rotvec(np.array([0.0, 0.0, 0.3])))
-    with pytest.raises(ValueError):
-        yam.Robot(base_pose=turned, stream=StreamTuning(obstacles=(TABLE,)))
 
 
 # The height of the arm-base frame of each bimanual embodiment under the earlier model.
@@ -1056,6 +1050,15 @@ def _line(start: np.ndarray, end: np.ndarray, rotation: geom.Rotation, seconds: 
     return [geom.Transform3D(start + (end - start) * (i + 1) / ticks, rotation) for i in range(ticks)]
 
 
+def _gripper_heights(joints, boxes=None, base=geom.Transform3D.identity) -> np.ndarray:
+    """How far the lowest point of the gripper is above ``boxes`` (the table), at each of ``joints``."""
+    kinematics = YamKinematics()
+    return np.array([
+        heights_above(points_at(base * kinematics.fk(q), kinematics.gripper_points), boxes or (TABLE,)).min()
+        for q in joints
+    ])
+
+
 def test_a_cartesian_stream_past_the_end_of_joint_1_holds_joint_1_at_its_limit_and_never_turns_it_back(rig):
     rig.ready()
     kinematics = YamKinematics()
@@ -1088,60 +1091,79 @@ def test_a_cartesian_stream_above_the_arm_follows_the_target_with_no_jump_to_ano
     assert max(gaps) < 0.02
 
 
-def test_a_capped_acceleration_starts_and_stops_a_streamed_move_within_the_cap():
+def test_a_capped_acceleration_starts_and_stops_a_followed_cartesian_move_within_the_cap():
     accel = 25.0
-    rig = Rig(stream=StreamTuning(max_joint_accel_rad_s2=accel))
+    rig = Rig(park_after_idle_s=60.0, stream=StreamTuning(max_joint_accel_rad_s2=accel))
+    rig.ready()
+    sent = len(rig.vendor.targets)
+    start = YamKinematics().fk(RAISED)
+    there = geom.Transform3D(start.translation + np.array([0.0, 0.30, -0.10]), start.rotation)  # a 32 cm jump
+    asked = _stream_poses(rig, [there] * 150)
+    asked = np.vstack([_asked(rig)[sent - 1], asked])
+    speeds = np.diff(asked, axis=0) * yam._CONTROL_HZ
+    assert np.max(np.abs(np.diff(speeds, axis=0))) <= accel / yam._CONTROL_HZ * (1 + 1e-6)
+    assert np.linalg.norm(YamKinematics().fk(asked[-1]).translation - there.translation) < 0.002
+    rig.loop.close()
+
+
+def test_a_streamed_joint_target_keeps_the_speed_cap_alone_under_an_acceleration_cap():
+    rig = Rig(stream=StreamTuning(max_joint_accel_rad_s2=1.0))
     rig.rest()
     sent = len(rig.vendor.targets)
     rig.commands.push(command.JointPosition(RAISED))
-    rig.tick(0.9)
-    asked = _asked(rig)[sent - 1 :]
-    speeds = np.diff(asked, axis=0) * yam._CONTROL_HZ
-    assert np.max(np.abs(np.diff(speeds, axis=0))) <= accel / yam._CONTROL_HZ * (1 + 1e-6)
-    assert np.all(asked <= RAISED + 1e-3)  # the last braking tick may pass the target by a rounding step
-    np.testing.assert_allclose(asked[-1], RAISED, atol=1e-6)
+    rig.tick(0.2)
+    first = _asked(rig)[sent] - _asked(rig)[sent - 1]
+    assert np.max(np.abs(first)) == pytest.approx(MAX_STREAMED_STEP, rel=1e-6)
     rig.loop.close()
 
 
-KEEP_CLEAR_M = 0.005
-# A step cut to keep the gap may close it by this much past KEEP_CLEAR_M
-GAP_TOLERANCE_M = 0.001
-OPEN_SHARE = 1.0  # the start move opens the fingers all the way
 # The table of the bimanual rig, 23.5 mm below the foot of each arm
 TABLE = Box(lower=(-0.23, -0.28, -0.0435), upper=(1.17, 0.92, -0.0235))
-# A pose with the shoulder folded back, where the hulls of the wrist reach into the base
-INTO_THE_BASE = np.array([0.0, 3.36, 0.15, -1.13, 0.03, 0.0])
-
-
-def test_a_streamed_target_into_the_arm_itself_stops_the_arm_the_kept_gap_away():
-    rig = Rig(park_after_idle_s=10.0, stream=StreamTuning(keep_clear_m=KEEP_CLEAR_M))
-    rig.raise_arm()
-    sent = len(rig.vendor.targets)
-    rig.commands.push(command.JointPosition(INTO_THE_BASE))
-    rig.tick(3.0)
-    clearance = Clearance((), KEEP_CLEAR_M)
-    gaps = [clearance.gap(q, OPEN_SHARE) for q in _asked(rig)[sent:]]
-    assert min(gaps) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
-    assert np.max(np.abs(_asked(rig)[-1] - INTO_THE_BASE)) > 0.1
-    rig.loop.close()
+MARGIN_M = 0.01
+ABOVE_THE_TABLE = StreamTuning(obstacles=(TABLE,), obstacle_margin_m=MARGIN_M)
+# The gripper of a followed target rests this near it
+FOLLOW_TOL_M = 0.001
 
 
 def test_a_cartesian_target_below_the_table_takes_the_gripper_to_the_margin_above_it_and_no_lower():
-    stream = StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), obstacle_margin_m=0.01)
-    rig = Rig(park_after_idle_s=10.0, stream=stream)
+    rig = Rig(park_after_idle_s=10.0, stream=ABOVE_THE_TABLE)
     rig.ready()
     kinematics = YamKinematics()
     down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
     start = kinematics.fk(RAISED).translation
     below = np.array([0.35, -0.10, TABLE.upper[2] - 0.04])
     asked = _stream_poses(rig, _line(start, below, down, 3.0) + [geom.Transform3D(below, down)] * 200)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
-    assert kinematics.fk(asked[-1]).translation[2] == pytest.approx(TABLE.upper[2] + 0.01, abs=0.005)
+    heights = _gripper_heights(asked)
+    assert heights.min() >= MARGIN_M - FOLLOW_TOL_M
+    assert heights[-1] == pytest.approx(MARGIN_M, abs=FOLLOW_TOL_M)
+
+
+def test_a_tilted_open_gripper_keeps_its_fingers_above_the_table():
+    rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
+    rig.ready()
+    kinematics = YamKinematics()
+    start = kinematics.fk(RAISED)
+    # Pointing down and tilted 45 deg about x: an open finger reaches 34 mm lower than the tool point
+    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * start.rotation
+    tilted = geom.Rotation.from_rotvec(np.array([np.pi / 4, 0.0, 0.0])) * down
+    turn = (start.rotation.inv * tilted).as_rotvec
+    above = np.array([0.33, -0.05, 0.10])
+    turn_down = [
+        geom.Transform3D(
+            start.translation + (above - start.translation) * s, start.rotation * geom.Rotation.from_rotvec(turn * s)
+        )
+        for s in np.linspace(0.005, 1.0, 200)
+    ]
+    below = np.array([0.33, -0.05, TABLE.upper[2] - 0.04])
+    asked = _stream_poses(rig, turn_down + _line(above, below, tilted, 1.5) + [geom.Transform3D(below, tilted)] * 100)
+    heights = _gripper_heights(asked)
+    assert heights.min() >= MARGIN_M - FOLLOW_TOL_M
+    assert heights[-1] == pytest.approx(MARGIN_M, abs=FOLLOW_TOL_M)
+    rig.loop.close()
 
 
 def _down_on_the_table(stream):
-    """A rig whose gripper points down and rests on the table at the kept gap, and that pose."""
+    """A rig whose gripper points down and rests at the margin above the table, and that pose."""
     rig = Rig(park_after_idle_s=60.0, stream=stream)
     rig.ready()
     kinematics = YamKinematics()
@@ -1160,37 +1182,32 @@ def _down_on_the_table(stream):
     return rig, on, down
 
 
-def test_a_gripper_held_at_the_gap_above_the_table_slides_along_it():
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig, on, down = _down_on_the_table(stream)
+def test_a_gripper_held_at_the_margin_above_the_table_slides_along_it():
+    rig, on, down = _down_on_the_table(dataclasses.replace(ABOVE_THE_TABLE, max_joint_accel_rad_s2=12.0))
     kinematics = YamKinematics()
     start = kinematics.fk(_asked(rig)[-1]).translation
     aside = on + np.array([0.0, 0.15, 0.0])
     asked = _stream_poses(rig, _line(on, aside, down, 2.0) + [geom.Transform3D(aside, down)] * 100)
     assert kinematics.fk(asked[-1]).translation[1] - start[1] == pytest.approx(0.15, abs=0.01)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
+    assert _gripper_heights(asked).min() >= MARGIN_M - FOLLOW_TOL_M
     rig.loop.close()
 
 
-def test_a_fast_move_into_the_table_brakes_within_the_acceleration_cap():
+def test_a_fast_move_down_to_the_table_brakes_within_the_acceleration_cap_and_stops_above_it():
     accel = 12.0
-    stream = StreamTuning(max_joint_accel_rad_s2=accel, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig, _, down = _down_on_the_table(stream)
+    rig, _, down = _down_on_the_table(dataclasses.replace(ABOVE_THE_TABLE, max_joint_accel_rad_s2=accel))
     above, below = np.array([0.35, -0.10, 0.12]), np.array([0.35, -0.10, -0.10])
     _stream_poses(rig, _line(YamKinematics().fk(_asked(rig)[-1]).translation, above, down, 1.0))
     rig.tick(0.5)
     asked = _stream_poses(rig, _line(above, below, down, 0.37) + [geom.Transform3D(below, down)] * 100)  # 0.6 m/s
     speeds = np.diff(asked, axis=0) * yam._CONTROL_HZ
     assert np.max(np.abs(np.diff(speeds, axis=0))) <= accel / yam._CONTROL_HZ * (1 + 1e-6)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
+    assert _gripper_heights(asked).min() > 0
     rig.loop.close()
 
 
 def test_an_arm_left_at_a_target_out_of_reach_comes_to_rest():
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig = Rig(park_after_idle_s=60.0, stream=StreamTuning(max_joint_accel_rad_s2=12.0))
     rig.ready()
     start = YamKinematics().fk(RAISED)
     yawed = geom.Rotation.from_rotvec(np.array([0.0, 0.0, 2 * np.pi / 3])) * start.rotation  # past the wrist range
@@ -1214,308 +1231,99 @@ def test_an_arm_left_at_a_target_out_of_reach_comes_to_rest():
     rig.loop.close()
 
 
-# A pose low over the table, where a park that ramps in joint space drags the fingers through the table
-LOW_OVER_THE_TABLE = np.radians([-82.0, 92.0, 18.0, -53.0, -46.0, -20.0])
+# A pose with the open gripper 16 mm above the table, from where the joint ramp takes it 14 mm into the table to the
+# park pose, and 7 mm to the start pose
+LOW_OVER_THE_TABLE = np.radians([53.0, 100.0, 25.0, -66.0, 46.0, 107.0])
 
 
-def test_an_idle_park_from_low_over_the_table_keeps_clear_of_it():
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=1.0, stream=stream)
+def _assert_kept_clear(asked, start: np.ndarray) -> None:
+    floor = min(MARGIN_M, _gripper_heights([start])[0]) - yam._Arm._RAMP_TOLERANCE_M - FOLLOW_TOL_M
+    assert _gripper_heights(asked).min() >= floor
+
+
+def test_an_idle_park_from_low_over_the_table_keeps_the_gripper_clear_of_it():
+    rig = Rig(park_after_idle_s=1.0, stream=ABOVE_THE_TABLE)
     rig.ready()
     rig.commands.push(command.JointPosition(LOW_OVER_THE_TABLE))
     rig.tick(0.9)
     sent = len(rig.vendor.targets)
     rig.tick(12.0)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in _asked(rig)[sent:]) > 0
+    _assert_kept_clear(_asked(rig)[sent:], LOW_OVER_THE_TABLE)
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
     rig.loop.close()
 
 
-def test_a_link_near_two_obstacles_has_a_gap_to_each():
-    plate = Box((-0.23, -0.075, -0.0235), (0.04, 0.685, 0.0))
-    lower_table = Box((-0.23, -0.28, -0.0835), (1.17, 0.92, -0.0435))
-    # The open fingers in front of the edge of the plate, above the lower table
-    q = np.array([-0.136, 1.803, 0.295, -0.645, 1.363, 0.471])
-
-    def near_gaps(boxes):
-        return {
-            round(near.gap_m, 4) for near in Clearance(boxes, KEEP_CLEAR_M).nears(q, OPEN_SHARE) if near.gap_m < 0.03
-        }
-
-    assert near_gaps((plate, lower_table)) >= near_gaps((plate,)) | near_gaps((lower_table,))
-
-
-def test_a_start_move_from_low_over_the_table_on_a_chain_just_opened_keeps_clear_of_it():
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
-    rig.vendor._pos[:6] = LOW_OVER_THE_TABLE  # the arm lies where a released chain left it, its open fingers low
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    start = clearance.gap(LOW_OVER_THE_TABLE, OPEN_SHARE)
+def test_a_start_move_from_low_over_the_table_on_a_chain_just_opened_keeps_the_gripper_clear_of_it():
+    rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
+    rig.vendor._pos[:6] = LOW_OVER_THE_TABLE  # the arm lies where a released chain left it
     rig.ready()
-    assert min(clearance.gap(q, OPEN_SHARE) for q in _asked(rig)) >= start - GAP_TOLERANCE_M
+    _assert_kept_clear(_asked(rig), LOW_OVER_THE_TABLE)
     np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
     rig.loop.close()
 
 
-def test_a_box_beside_the_shoulder_counts_against_link_1_as_joint_1_turns_toward_it():
-    clearance = Clearance((Box((-0.05, 0.06, 0.06), (0.05, 0.20, 0.13)),), KEEP_CLEAR_M)
-    pair = frozenset({'link1', 'obstacle0'})
-    apart = clearance.gaps(np.zeros(6), OPEN_SHARE, obstacles_only=True)[pair]
-    turned = clearance.gaps(np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.0]), OPEN_SHARE, obstacles_only=True)[pair]
-    assert turned < KEEP_CLEAR_M < apart
-
-
-def test_a_turn_of_joint_1_with_the_fingers_in_the_table_does_not_close_a_gap_by_rounding():
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    q = np.array([-0.599, 2.1766, 0.7344, -0.5877, 1.1936, -0.5204])  # the left fingertip 38 mm in the table
-    before = {near.pair: near.gap_m for near in clearance.nears(q, OPEN_SHARE)}
-    turned = q + np.array([1e-4, 0.0, 0.0, 0.0, 0.0, 0.0])
-    assert not clearance.closes_a_gap(turned, before, OPEN_SHARE, GAP_TOLERANCE_M, obstacles_only=False)
-
-
-def test_a_step_that_takes_a_pair_into_the_gap_closes_it_while_a_deeper_pair_comes_out():
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    # The arm in the table 10.8 mm deep; the step takes it out to 6.0 mm, and the fingers in from 7.8 mm to -4.9 mm
-    before_q = np.array([1.42, 2.513, 1.409, -0.175, -0.498, 1.625])
-    after_q = np.array([1.458, 2.488, 1.432, -0.234, -0.507, 1.654])
-    before = {near.pair: near.gap_m for near in clearance.nears(before_q, OPEN_SHARE)}
-    assert clearance.gap(after_q, OPEN_SHARE) > clearance.gap(before_q, OPEN_SHARE)
-    assert clearance.closes_a_gap(after_q, before, OPEN_SHARE, GAP_TOLERANCE_M, obstacles_only=False)
-
-
-def test_a_blocking_move_into_the_table_is_refused_and_the_arm_holds(world):
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
-    rig.raise_arm()
-    answer = _sync_caller(world, rig)(command.JointPosition(LOW_OVER_THE_TABLE))  # its open fingers in the table
-    _until_answered(rig, answer)
-    with pytest.raises(DeviceFault):
-        answer.result()
-    np.testing.assert_allclose(rig.vendor._pos[:6], RAISED, atol=0.005)
-    rig.loop.close()
-
-
-def test_a_blocking_move_from_low_over_the_table_rises_before_its_joint_ramp(world):
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
+def test_a_blocking_move_from_low_over_the_table_keeps_the_gripper_clear_of_it(world):
+    rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
     rig.ready()
     rig.commands.push(command.JointPosition(LOW_OVER_THE_TABLE))
     rig.tick(3.0)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    start = clearance.gap(rig.vendor._pos[:6], OPEN_SHARE)
+    start = rig.vendor._pos[:6].copy()
     sent = len(rig.vendor.targets)
     answer = _sync_caller(world, rig)(command.JointPosition(PARK))
     _until_answered(rig, answer)
     answer.result()
-    assert min(clearance.gap(q, OPEN_SHARE) for q in _asked(rig)[sent:]) >= min(start, KEEP_CLEAR_M) - GAP_TOLERANCE_M
+    _assert_kept_clear(_asked(rig)[sent:], start)
     np.testing.assert_allclose(rig.vendor._pos[:6], PARK, atol=0.005)
     rig.loop.close()
 
 
-def test_a_joint_ramp_check_finds_a_small_box_between_two_points_of_the_ramp():
-    start = np.array([0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
-    goal = start + np.array([1.0, 1.0, -1.0, 1.0, 1.0, 1.0])
-    corner = np.array([0.2862, 0.0949, 0.3572])  # link 4 passes through it between two points 0.05 rad apart
-    clearance = Clearance((Box(tuple((corner - 0.002).tolist()), tuple((corner + 0.002).tolist())),), KEEP_CLEAR_M)
-    gaps = [clearance.obstacle_gap(start + share * (goal - start), OPEN_SHARE) for share in np.linspace(0.0, 1.0, 2001)]
-    assert min(gaps[0], gaps[-1]) > KEEP_CLEAR_M and min(gaps) < 0
-    assert not yam._Arm._ramp_keeps_clear(clearance, start, goal, OPEN_SHARE)
+# A raise too short to make a ramp from low over the table keep clear
+NO_ROOM_TO_RISE = dataclasses.replace(ABOVE_THE_TABLE, raise_m=0.001)
 
 
-def test_a_settle_correction_whose_ramp_to_the_target_does_not_keep_clear_fails_the_move(world):
-    wall = Box((0.20, 0.075, -0.1), (0.80, 0.076, 0.6))
-    target = np.array([0.0, 1.6, 1.2, 0.0, 0.0, 0.0])
-    rig = Rig(
-        park_after_idle_s=60.0,
-        move_tuning=dataclasses.replace(yam.MOVE_SETTLE, max_correction_rad=0.35),
-        stream=StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(wall,)),
-    )
-    rig.raise_arm()
-    rig.vendor.bias = np.array([0.3, 0.0, 0.0, 0.0, 0.0, 0.0])  # the arm rests past the wall, and turns back through it
-    answer = _sync_caller(world, rig)(command.JointPosition(target))
-    _until_answered(rig, answer)
-    with pytest.raises(DeviceFault):
-        answer.result()
-    rig.loop.close()
-
-
-def test_a_blocking_move_that_rests_short_beside_the_table_settles_onto_its_target(world):
-    rig = Rig(park_after_idle_s=60.0, stream=StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,)))
-    rig.raise_arm()
-    rig.vendor.bias = np.array([0.03, 0.0, 0.0, 0.0, 0.0, 0.0])  # the correction turns joint 1 along the table
-    target = np.array([
-        0.6106968481848145,
-        1.3512742797030024,
-        0.4929837383893122,
-        -1.1083265004817153,
-        0.18626303737001582,
-        -1.0251803072262993,
-    ])
-    answer = _sync_caller(world, rig)(command.JointPosition(target))  # its open fingers 3 mm above the table
-    _until_answered(rig, answer)
-    answer.result()
-    np.testing.assert_allclose(rig.vendor._pos[:6], target, atol=0.01)
-    rig.loop.close()
-
-
-def test_a_park_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_error():
-    stream = StreamTuning(
-        keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), park_lift_m=0.001, park_lift_timeout_s=0.2
-    )  # a raise too short to clear the table
-    rig = Rig(park_after_idle_s=1.0, stream=stream)
+def test_a_park_whose_ramp_does_not_keep_clear_holds_the_arm_and_reads_error():
+    rig = Rig(park_after_idle_s=1.0, stream=NO_ROOM_TO_RISE)
     rig.ready()
     rig.commands.push(command.JointPosition(LOW_OVER_THE_TABLE))
     rig.tick(0.9)
-    sent = len(rig.vendor.targets)
-    start = Clearance((TABLE,), KEEP_CLEAR_M).gap(rig.vendor._pos[:6], OPEN_SHARE)
     rig.tick(6.0)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in _asked(rig)[sent:]) >= min(start, KEEP_CLEAR_M) - GAP_TOLERANCE_M
     assert np.max(np.abs(rig.vendor._pos[:6] - PARK)) > 0.1
     assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
     rig.loop.close()
 
 
-def test_a_start_move_whose_raise_does_not_clear_the_table_holds_the_arm_and_reads_error():
-    stream = StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), park_lift_m=0.001, park_lift_timeout_s=0.2)
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
+def test_a_start_move_whose_ramp_does_not_keep_clear_holds_the_arm_and_reads_error():
+    rig = Rig(park_after_idle_s=60.0, stream=NO_ROOM_TO_RISE)
     rig.vendor._pos[:6] = LOW_OVER_THE_TABLE  # the arm lies where a released chain left it
     rig.ready()
-    rig.tick(1.0)
+    rig.tick(3.0)
     assert np.max(np.abs(rig.vendor._pos[:6] - RAISED)) > 0.1
     assert rig.states.emitted[-1][1].status == RobotStatus.ERROR
     rig.loop.close()
 
 
-def test_a_start_move_takes_no_second_pair_into_the_table_while_a_first_one_is_deep_in_it():
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
-    # A pose 43.5 mm deep in the table, from where the joint ramp to the start pose takes another pair into it
-    deep = np.array([0.977, 3.288, 2.766, -0.569, 1.379, -1.208])
-    rig.vendor._pos[:6] = deep
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    before = clearance.gaps(deep, OPEN_SHARE, obstacles_only=True)
-    rig.ready()
-    for q in _asked(rig):
-        for pair, gap in clearance.gaps(q, OPEN_SHARE, obstacles_only=True).items():
-            assert gap >= min(KEEP_CLEAR_M, before.get(pair, clearance.reach_m)) - GAP_TOLERANCE_M, (sorted(pair), gap)
-    rig.loop.close()
-
-
-def test_a_joint_move_into_the_table_brakes_at_the_acceleration_cap_where_that_keeps_the_gap():
-    accel = 50.0
+def test_world_frame_obstacles_keep_their_place_under_a_turned_and_shifted_base():
+    base = geom.Transform3D(np.array([0.30, -0.305, 0.3125]), geom.Rotation.from_rotvec(np.array([0.0, 0.0, 0.5])))
+    world_table = Box((-1.0, -1.0, 0.25), (2.0, 1.0, 0.289))
     rig = Rig(
         park_after_idle_s=60.0,
-        stream=StreamTuning(max_joint_accel_rad_s2=accel, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,)),
+        stream=StreamTuning(obstacles=(world_table,), obstacle_margin_m=MARGIN_M),
+        base_pose=base,
     )
     rig.ready()
-    sent = len(rig.vendor.targets)
-    rig.commands.push(command.JointPosition(np.array([-0.427, 2.175, 0.81, -0.358, 1.138, -0.792])))  # in the table
-    rig.tick(3.0)
-    asked = _asked(rig)[sent - 1 :]
-    speeds = np.diff(asked, axis=0) * yam._CONTROL_HZ
-    assert np.max(np.abs(np.diff(speeds, axis=0))) <= accel / yam._CONTROL_HZ * (1 + 1e-6)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
-    rig.loop.close()
-
-
-def test_a_gap_cut_never_takes_a_joint_past_its_range():
-    stream = StreamTuning(max_joint_accel_rad_s2=25.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    start = YamKinematics().fk(RAISED)
-    rng = np.random.default_rng(3)
-    for _ in range(8):  # down to the table with the wrist turned past its range
-        turn = (
-            geom.Rotation.from_rotvec(rng.normal(0.0, 1.2, 3))
-            * geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0]))
-            * start.rotation
-        )
-        above = np.array([rng.uniform(0.15, 0.45), rng.uniform(-0.2, 0.3), 0.10])
-        below = above + np.array([rng.uniform(-0.15, 0.15), rng.uniform(-0.15, 0.15), -0.15])
-        rig = Rig(park_after_idle_s=60.0, stream=stream)
-        rig.ready()
-        poses = _line(start.translation, above, start.rotation, 1.5) + [geom.Transform3D(above, turn)] * 150
-        asked = _stream_poses(rig, poses + _line(above, below, turn, 1.5) + [geom.Transform3D(below, turn)] * 100)
-        assert np.all((asked >= I2RT_YAM_RANGES[:, 0] - 1e-9) & (asked <= I2RT_YAM_RANGES[:, 1] + 1e-9))
-        rig.loop.close()
-
-
-def test_a_stream_from_rest_in_the_gap_slides_along_the_table(world):
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
-    rig.raise_arm()
-    in_the_gap = np.array([-0.4187, 1.9113, 0.8153, -0.351, 1.1161, -0.7767])  # 4.05 mm from the table
-    answer = _sync_caller(world, rig)(command.JointPosition(in_the_gap))
-    _until_answered(rig, answer)
-    answer.result()
-    sent = len(rig.vendor.targets)
-    rig.commands.push(command.JointPosition(np.array([-0.508, 2.132, 0.718, -0.198, 1.699, -0.572])))
-    rig.tick(3.0)
-    asked = _asked(rig)[sent:]
-    assert np.max(np.abs(asked[-1] - in_the_gap)) > 0.2
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    start = clearance.gap(in_the_gap, OPEN_SHARE)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= start - GAP_TOLERANCE_M
-    rig.loop.close()
-
-
-def test_world_frame_obstacles_move_with_the_base_of_the_arm():
-    shift = np.array([0.30, -0.305, 0.3125])
-    world_table = Box(tuple((np.array(TABLE.lower) + shift).tolist()), tuple((np.array(TABLE.upper) + shift).tolist()))
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(world_table,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream, base_pose=geom.Transform3D(shift))
-    rig.ready()
     kinematics = YamKinematics()
     down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
-    start = kinematics.fk(RAISED).translation
-    below = np.array([0.35, -0.10, TABLE.upper[2] - 0.04])
-    world = [geom.Transform3D(pose.translation + shift, pose.rotation) for pose in _line(start, below, down, 3.0)]
-    asked = _stream_poses(rig, world + [world[-1]] * 200)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
-    rig.loop.close()
-
-
-def test_an_open_tilted_gripper_keeps_its_open_fingers_clear_of_the_table():
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
-    rig.ready()
-    kinematics = YamKinematics()
-    start = kinematics.fk(RAISED)
-    # Pointing down and tilted 45 deg about x: an open finger reaches 34 mm lower than a closed one
-    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * start.rotation
-    tilted = geom.Rotation.from_rotvec(np.array([np.pi / 4, 0.0, 0.0])) * down
-    turn = (start.rotation.inv * tilted).as_rotvec
-    above = np.array([0.33, -0.05, 0.10])
-    turn_down = [
-        geom.Transform3D(
-            start.translation + (above - start.translation) * s, start.rotation * geom.Rotation.from_rotvec(turn * s)
-        )
-        for s in np.linspace(0.005, 1.0, 200)
-    ]
-    below = np.array([0.33, -0.05, TABLE.upper[2] - 0.04])
-    asked = _stream_poses(rig, turn_down + _line(above, below, tilted, 1.5) + [geom.Transform3D(below, tilted)] * 100)
-    clearance = Clearance((TABLE,), KEEP_CLEAR_M)
-    assert min(clearance.gap(q, OPEN_SHARE) for q in asked) >= KEEP_CLEAR_M - GAP_TOLERANCE_M
-    rig.loop.close()
-
-
-def test_a_gap_cut_moves_no_joint_faster_than_the_speed_cap():
-    rig = Rig(park_after_idle_s=60.0, stream=StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,)))
-    rig.ready()
-    kinematics = YamKinematics()
-    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
-    start = kinematics.fk(RAISED).translation
-    below = np.array([0.35, 0.05, TABLE.upper[2] - 0.10])
-    asked = _stream_poses(rig, _line(start, below, down, 0.6) + [geom.Transform3D(below, down)] * 100)
-    assert np.max(np.abs(np.diff(asked, axis=0))) <= MAX_STREAMED_STEP * (1 + 1e-9)
+    start = base * kinematics.fk(RAISED)
+    below = base * geom.Transform3D(np.array([0.35, -0.10, -0.10]), down)
+    asked = _stream_poses(rig, _line(start.translation, below.translation, below.rotation, 3.0) + [below] * 200)
+    heights = _gripper_heights(asked, (world_table,), base)
+    assert heights.min() >= MARGIN_M - FOLLOW_TOL_M
+    assert heights[-1] == pytest.approx(MARGIN_M, abs=FOLLOW_TOL_M)
     rig.loop.close()
 
 
 def test_a_parked_arm_with_obstacles_does_not_move_up_when_the_driver_stops():
-    stream = StreamTuning(max_joint_accel_rad_s2=12.0, keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,))
-    rig = Rig(stream=stream)
+    rig = Rig(stream=ABOVE_THE_TABLE)
     rig.rest()
     sent = len(rig.vendor.targets)
     rig.finish()
@@ -1523,15 +1331,14 @@ def test_a_parked_arm_with_obstacles_does_not_move_up_when_the_driver_stops():
 
 
 def test_a_blocking_move_to_a_pose_below_the_table_stops_the_margin_above_it(world):
-    stream = StreamTuning(keep_clear_m=KEEP_CLEAR_M, obstacles=(TABLE,), obstacle_margin_m=0.01)
-    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
     rig.raise_arm()
     kinematics = YamKinematics()
     down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
     answer = _sync_caller(world, rig)(command.CartesianPosition(geom.Transform3D(np.array([0.35, 0.0, -0.10]), down)))
     _until_answered(rig, answer)
     answer.result()
-    assert kinematics.fk(rig.vendor._pos[:6]).translation[2] == pytest.approx(TABLE.upper[2] + 0.01, abs=0.005)
+    assert _gripper_heights([rig.vendor._pos[:6]])[0] == pytest.approx(MARGIN_M, abs=0.005)
     rig.loop.close()
 
 
@@ -1539,12 +1346,10 @@ def test_a_blocking_move_to_a_pose_below_the_table_stops_the_margin_above_it(wor
     'fields',
     [
         {'max_joint_accel_rad_s2': 0.0},
-        {'keep_clear_m': -0.01},
-        {'keep_clear_m': math.nan},
+        {'max_joint_accel_rad_s2': math.nan},
         {'obstacle_margin_m': -1e-3},
-        {'approach_decel_m_s2': 0.0},
-        {'park_clear_m': -0.06},
-        {'park_lift_timeout_s': math.inf},
+        {'raise_m': -0.06},
+        {'raise_timeout_s': math.inf},
     ],
 )
 def test_a_stream_tuning_that_is_not_finite_and_positive_is_refused(fields):

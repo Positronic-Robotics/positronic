@@ -12,9 +12,9 @@ from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation
 from positronic.eval import keys as eval_keys
 
 if TYPE_CHECKING:
-    from positronic.drivers.roboarm.yam.clearance import StreamTuning
     from positronic.drivers.roboarm.yam.compensation import Compensation
     from positronic.drivers.roboarm.yam.settle import SettleTuning
+    from positronic.drivers.roboarm.yam.stream import StreamTuning
 
 
 @cfn.config(
