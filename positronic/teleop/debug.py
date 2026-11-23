@@ -171,7 +171,9 @@ class ArmControl(pimm.ControlSystem):
         state = self._state()
         if hand is None:
             self._note('control refused: no controller', logging.WARNING)
-        elif state is None or state.status is not RobotStatus.AVAILABLE:
+        elif state is None:
+            self._note('control refused: the arm sends no state', logging.WARNING)
+        elif state.status is not RobotStatus.AVAILABLE:
             self._note('control refused: the arm is not available', logging.WARNING)
         else:
             self._tracker.turn_on(state.ee_pose, hand)
@@ -231,6 +233,7 @@ class ArmControl(pimm.ControlSystem):
             message = self.robot_state.read()
             if message is not None and message.updated:
                 states += 1
+                self._state_at = clock.now()
             yield pimm.Sleep(0.001)
 
     def _to_start(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
