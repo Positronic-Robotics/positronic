@@ -59,7 +59,7 @@ MOLMO_CONFIG = '.sim.molmo.benchmarks'
 MOLMO_TASK = 'franka_pick_droid_mini'
 MOLMO_EPISODE_INDEX_KEY = 'molmo.episode_index'
 MOLMO_SCORING = Scoring(labelers=(MOLMO_LABELER,), primary=MeanEpisodeScore())
-MOLMO_POSITRONIC_REVISION = '082717103e0af80b51646cfe60b20ef4580019c1'
+MOLMO_POSITRONIC_REVISION = '4340e02055608e57dc0c46ae12ff82903f21a5b3'
 
 
 def _franka_pick_mini(episodes: list[int]) -> EvalDefinition:
