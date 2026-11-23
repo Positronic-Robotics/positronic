@@ -312,8 +312,7 @@ whole definition and sends it to the rig as a description.
   define the details.
 
 The client may reorder a declared stack only where the policy gets the same
-input. It moves an image transform in front of a temporal stack of camera
-frames, so that each frame is resized once (`positronic/policy/arrival.py`).
+input (`positronic/policy/arrival.py`).
 
 Each remote run opens a server session and runs the declared client stack
 around an ordinary inference function. The session identifies that run's calls
