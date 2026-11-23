@@ -108,6 +108,7 @@ class ArmControl(pimm.ControlSystem):
         self._in_error = False
         self._clock: pimm.Clock | None = None  # the clock of `run`
         self._state_at: float | None = None  # when the arm sent its last new state
+        self._stale = False  # whether the arm sent no new state for `STALE_STATE_SEC`
 
         self.controller_positions = pimm.DefaultingReceiver[dict[str, geom.Transform3D | None]](self, default={})
         self.buttons = pimm.DefaultingReceiver[dict[str, Sequence[float] | None]](self, default={})
@@ -199,6 +200,10 @@ class ArmControl(pimm.ControlSystem):
         if error and not self._in_error:
             self._note('the arm reports an error: a press of the stick clears it', logging.ERROR)
         self._in_error = error
+        stale = state is None and self._state_at is not None
+        if stale and not self._stale:
+            self._hold_last_pose()
+        self._stale = stale
         if silent:
             self._control_off('the headset sends no sample')
         elif hand is None:
@@ -207,6 +212,13 @@ class ArmControl(pimm.ControlSystem):
             self._control_off('the arm sends no state')
         elif state.status is not RobotStatus.AVAILABLE:
             self._control_off('the arm is not available')
+
+    def _hold_last_pose(self) -> None:
+        """Replace the target that a stalled driver has not read yet with the last pose the arm sent, so the arm does
+        not move to it when the driver comes back."""
+        message = self.robot_state.read()
+        if message is not None and not isinstance(message.data, pimm.SignalError):
+            self.robot_commands.emit(command.CartesianPosition(message.data.ee_pose))
 
     def _wait(
         self, answer: pimm.calls.Answer, should_stop: pimm.SignalReceiver, clock: pimm.Clock

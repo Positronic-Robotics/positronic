@@ -269,6 +269,23 @@ def test_control_goes_off_when_the_arm_sends_no_new_state_for_a_while(world):
     assert marks['on'] > 0
     assert marks['after'] == marks['stalled'], 'control stays off when the driver sends states again'
     assert 'control off: the arm sends no state' in rig.events()
+    # The target that the stalled driver has not read is replaced by the last pose the arm sent
+    np.testing.assert_allclose(rig.commands.emitted[-1][1].pose.translation, ROBOT_POSE.translation)
+
+
+def test_a_driver_that_stalls_while_the_headset_is_silent_takes_no_target_from_before_the_stall(world):
+    rig = _Rig(world)
+    driver = ManualDriver([
+        *rig.control_on(),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+        # The headset goes silent, and a little later the driver stalls: control goes off for the headset first
+        *rig.states(4),
+        (lambda: None, 2 * ArmControl.STALE_STATE_SEC),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=2000)
+
+    assert 'control off: the headset sends no sample' in rig.events()
+    np.testing.assert_allclose(rig.commands.emitted[-1][1].pose.translation, ROBOT_POSE.translation)
 
 
 def test_control_does_not_come_on_while_the_arm_moves_by_itself(world):
