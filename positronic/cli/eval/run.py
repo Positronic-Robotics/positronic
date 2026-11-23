@@ -356,6 +356,7 @@ def run(
     sample_percent: int | None = None,
     sample_seed: int | None = None,
     policy_query: str | None = None,
+    min_vram_gb: int | None = None,
 ) -> SubmissionCreateResponse | None:
     """Run a selected eval (an embodiment and the tasks to run on it), in one of three places.
 
@@ -366,8 +367,9 @@ def run(
     ``--policy-image`` instead sends the run to the platform, which pulls that image and runs the
     eval of that NAME on the embodiment the eval names — a name the platform offers, not a config,
     since the platform owns the evals it offers. With no ``--eval``, it runs the eval that the
-    platform's leaderboards rank. ``--from-file`` files an eval plan for the lab rig,
-    as a YAML or JSON file. Two or more endpoints in it make one blind sample. ``--org`` names the
+    platform's leaderboards rank. ``--from-file`` files an eval plan from a YAML or JSON file. A plan
+    that names an ``eval`` runs on the platform's simulator. Any other plan runs on the lab rig, and
+    two or more endpoints in it make one blind sample. ``--org`` names the
     organisation a private run is for: beside ``--from-file`` it states the plan's request type, and
     with ``--policy-image`` it makes a private run instead of a `nebius_competition` one. A filed run —
     the platform's and the rig's — answers a submission id, which ``positronic eval status`` reads; a
@@ -376,6 +378,9 @@ def run(
     ``--sample-percent`` runs a random subset of the eval's trials on the platform, and
     ``--sample-seed`` picks the draw: the same seed draws the same trials. ``--policy-query`` holds the
     params the platform puts on each session URL of ``--policy-image``, for example ``horizon_sec=0.5``.
+    ``--min-vram-gb`` is the least GPU memory ``--policy-image`` needs, in GB of 10^9 bytes. With no
+    value the image gets a 24 GB slice. A private run (``--org``) gets the smallest slice that holds the
+    value. Without ``--org``, a value above 25 is refused.
 
     ``timing`` records wall-clock telemetry sidecars under ``output_dir`` (spans + machine-load stats) for a
     simulated eval; reduce them with ``positronic eval timing-report``.
@@ -402,6 +407,7 @@ def run(
         '--sample-percent': sample_percent,
         '--sample-seed': sample_seed,
         '--policy-query': policy_query,
+        '--min-vram-gb': min_vram_gb,
     }
     source = plan_source(eval, from_file)
 
@@ -461,6 +467,7 @@ def run(
             registry_password_file=registry_password_file,
             sample=_sample(sample_count, sample_percent, sample_seed),
             query=policy_query,
+            min_vram_gb=min_vram_gb,
         )
 
     if source is not None:

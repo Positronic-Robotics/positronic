@@ -51,7 +51,8 @@ def _drive_env_server(bench: mapping.BenchmarkPath, episode_index: int, seed: in
                 **bench._asdict(),
                 mapping.TOKEN_EPISODE_INDEX: episode_index,
                 mapping.TOKEN_SEED: seed,
-                mapping.WITH_RIGHT_SHOULDER: True,
+                # The right shoulder camera is the server's own; the native reference records only the episode's.
+                mapping.WITH_RIGHT_SHOULDER: False,
             }
             frame = conn.reset(token)
             camera_names = [k for k, v in frame[protocol.FRAME_OBS].items() if mapping.is_rgb_frame(v)]

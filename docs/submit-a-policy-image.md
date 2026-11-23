@@ -404,7 +404,11 @@ bytes. The platform then gives the run the smallest slice that holds it:
 `nvidia-smi` reports MiB. Convert a peak you measured with MiB × 2^20 / 10^9, round up, and add
 headroom. The largest slice depends on the GPU the run is placed on. A need that no slice of that GPU
 holds is refused when you submit. A competition run keeps the published slice: a competition plan
-whose `min_vram_gb` is more than 25 is refused.
+whose `min_vram_gb` is more than 25 is refused. A run that dies when it runs out of GPU memory names
+`min_vram_gb` in its failure.
+
+`positronic eval run --min-vram-gb=40` states it beside `--policy-image`. A plan file states it on
+the image endpoint:
 
 ```yaml
 endpoints:
@@ -501,6 +505,8 @@ uv run positronic eval list
   [A private image](#a-private-image).
 - `--policy-query=horizon_sec=0.5` states the session params of the image; see
   [Session params](#session-params).
+- `--min-vram-gb=40` states the GPU memory the image needs. A private run (`--org`) then gets a
+  larger slice; see [GPU memory](#gpu-memory).
 - Reuse the transaction key on a retry. The same key returns the original submission; a retry
   without one spends quota again. The same key with a different request is refused as a conflict.
 - `positronic eval catalog` prints the evals your key may name, and the tasks each one runs. The
@@ -510,8 +516,8 @@ uv run positronic eval list
   [Enter the competition](nebius-competition.md#enter-the-competition).
 - `users.me` reports your quota. A competition submission counts against a daily limit:
   [Submissions per day](nebius-competition.md#submissions-per-day). An
-  [eval plan](../client/README.md#eval-plans) runs on the lab rig, a real robot, and does not count
-  against it.
+  [eval plan](../client/README.md#eval-plans) for the lab rig, a real robot, does not count against
+  it.
 
 ## Read the outcome
 

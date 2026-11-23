@@ -136,7 +136,7 @@ def env(monkeypatch, scene: _FakeScene) -> Any:
 
     abc_sim.__dict__.update(get_task_spec=lambda name: task, list_task_specs=lambda: [task], make_env=make_env)
     monkeypatch.setitem(sys.modules, 'abc_sim', abc_sim)
-    for name in ('protocol', 'arm_action', 'mujoco_state', 'server'):
+    for name in ('protocol', 'arm_action', 'mujoco_ik', 'mujoco_state', 'server'):
         monkeypatch.setitem(sys.modules, name, _load(name, _SERVER_DIR / f'{name}.py'))
     monkeypatch.setitem(sys.modules, 'mapping', _load('mapping', _ABC_DIR / 'mapping.py'))
     monkeypatch.setitem(sys.modules, 'aperture', _load('aperture', _APERTURE_PATH))

@@ -378,6 +378,7 @@ def test_a_plan_file_that_is_not_there_names_it(platform, run_command, tmp_path:
         {'charge_inference_time': False},
         {'sample_count': 5},
         {'policy_query': 'horizon_sec=0.5'},
+        {'min_vram_gb': 48},
     ],
 )
 def test_a_rig_run_refuses_what_only_another_place_can_mean(platform, run_command, tmp_path: Path, elsewhere: dict):

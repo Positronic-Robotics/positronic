@@ -6,11 +6,9 @@ End-effector poses describe ``gripper/grasp_site`` in the arm base frame, ``fr3_
 
 import argparse
 import copy
-import functools
 import os
 import sys
 import types
-from unittest import mock
 
 # MuJoCo's CGL package and its ctypes bindings to Apple's OpenGL framework.
 _CGL_PACKAGE = 'mujoco.cgl'
@@ -44,6 +42,7 @@ import mujoco  # noqa: E402
 import mujoco_state  # noqa: E402 -- positronic-free, on PYTHONPATH
 import numpy as np  # noqa: E402
 import protocol  # noqa: E402
+import success_profile  # noqa: E402 -- positronic-free, on PYTHONPATH
 from server import EnvProtocol, EnvServer  # noqa: E402
 
 _DESCRIPTION = 'Serve MolmoSpaces over the env-server protocol.'
@@ -69,6 +68,7 @@ from molmo_spaces.configs.robot_configs import (  # noqa: E402  # pyright: ignor
     ActionNoiseConfig,
     FrankaRobotConfig,
 )
+from molmo_spaces.env.object_manager import ObjectManager  # noqa: E402  # pyright: ignore[reportMissingImports]
 from molmo_spaces.evaluation.benchmark_schema import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     RobotMountedCameraSpec,
     load_all_episodes,
@@ -82,7 +82,15 @@ from molmo_spaces.evaluation.eval_main import (  # noqa: E402  # pyright: ignore
 from molmo_spaces.tasks.json_eval_task_sampler import (  # noqa: E402  # pyright: ignore[reportMissingImports]
     JsonEvalTaskSampler,
 )
-from molmo_spaces.utils import grasps  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.tasks.opening_tasks import OpeningTask  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.tasks.pick_and_place_next_to_task import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    PickAndPlaceNextToTask,
+)
+from molmo_spaces.tasks.pick_and_place_task import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    PickAndPlaceTask,
+)
+from molmo_spaces.tasks.pick_task import PickTask  # noqa: E402  # pyright: ignore[reportMissingImports]
+from molmo_spaces.utils import mujoco_scene_utils  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 
 class _DroidEvalConfig(JsonBenchmarkEvalConfig):
@@ -94,19 +102,67 @@ class _DroidEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
+        # The benchmark episodes are judged under the physics they were recorded in. Island sleep freezes bodies at
+        # rest, and the grasp probe adds a free body to the state; the eval needs neither.
+        self.task_sampler_config.enable_scene_sleep = False
+        self.task_sampler_config.add_grasp_probe = False
 
 
-class _JointGraspSampler(JsonEvalTaskSampler):
-    """``JsonEvalTaskSampler`` that finds the joint grasps of iThor scene assets."""
+def _names_on_top_by_contact(data: mujoco.MjData, receptacle: set[int], names: set[str], min_cos: float) -> set[str]:
+    """The ``names`` of the root bodies that touch a ``receptacle`` geom from above, as MolmoSpaces tests a contact."""
+    model = data.model
+    found: set[str] = set()
+    for contact in data.contact:
+        first, second = (int(geom) in receptacle for geom in contact.geom)
+        if first == second:
+            continue
+        other = int(model.body_rootid[model.geom_bodyid[contact.geom[1 if first else 0]]])
+        name = model.body(other).name
+        if name not in names:
+            continue
+        normal = contact.frame[:3] / np.linalg.norm(contact.frame[:3])
+        if second:
+            normal = -normal
+        center, _ = mujoco_scene_utils.body_aabb(model, data, other)
+        if contact.pos[2] < center[2] and normal[2] >= min_cos:
+            found.add(name)
+    return found
 
-    # HACK: upstream looks up joint grasps with no grasp libraries. An iThor scene asset is in no object package,
-    # so that lookup finds no library and reset raises. Droid is the only built-in library with joint grasps.
-    # rules-allow: hidden-dependency — the upstream method takes no grasp libraries; a copy would fork MolmoSpaces.
-    @mock.patch.object(
-        grasps, 'get_joint_grasp_path', functools.partial(grasps.get_joint_grasp_path, grasp_libraries=['droid'])
+
+_upstream_objects_on_receptacle = ObjectManager.objects_on_receptacle
+
+
+def _objects_on_receptacle(
+    self: Any,
+    objs_to_check: list[Any],
+    bench_geom_ids: list[int],
+    angle_threshold: float = np.radians(30),
+    fallback_thres: float = 0.01,
+    attempt_contact: bool = True,
+) -> list[Any]:
+    """``ObjectManager.objects_on_receptacle`` that computes a box only for a body it can find and the receptacle."""
+    data = self.data
+    model = data.model
+    on_top: set[str] = set()
+    if attempt_contact:
+        names = {obj.name for obj in objs_to_check}
+        on_top = _names_on_top_by_contact(data, {int(g) for g in bench_geom_ids}, names, np.cos(angle_threshold))
+    # The fallback stage reads only the root body of each receptacle geom.
+    geom_of_root = {int(model.body_rootid[model.geom_bodyid[g]]): g for g in bench_geom_ids}
+    rest = [obj for obj in objs_to_check if obj.name not in on_top]
+    fallback = _upstream_objects_on_receptacle(
+        self, rest, list(geom_of_root.values()), angle_threshold, fallback_thres, attempt_contact=False
     )
-    def set_joint_values(self, env: Any) -> None:
-        super().set_joint_values(env)
+    found = on_top | {obj.name for obj in fallback}
+    return [obj for name in sorted(found) if (obj := self.get_object_by_name(name))]
+
+
+def use_fast_objects_on_receptacle() -> None:
+    """Make every ``ObjectManager`` of this process use ``_objects_on_receptacle``."""
+    # HACK: upstream computes the box of the root body across each receptacle contact before it checks the body name.
+    # For a static geom that root is ``world``, whose box reads every mesh vertex, so ``get_info`` takes seconds.
+    # rules-allow: hidden-dependency — MolmoSpaces builds its ObjectManager internally and takes no class to use.
+    ObjectManager.objects_on_receptacle = _objects_on_receptacle
 
 
 # The arm joints of the robot model that the client records.
@@ -122,6 +178,7 @@ class MolmoSpacesEnv(EnvProtocol):
         right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
         hook: env_hook.LoadedHook | None = None,
     ) -> None:
+        use_fast_objects_on_receptacle()
         self._assets_dir = assets_dir
         self._hook, self._hook_record = hook if hook is not None else env_hook.load(None)
         self._found = mapping.discover_benchmarks(assets_dir)
@@ -131,7 +188,8 @@ class MolmoSpacesEnv(EnvProtocol):
         self._task: Any = None
         self._robot_view: Any = None
         self._control_dt: float | None = None
-        self._meta: dict[str, Any] | None = None
+        self._judge: success_profile.Judge | None = None
+        self._meta: dict[str, Any] = {}
         self._camera_names: list[str] = []
 
     def _episodes_of(self, bench: mapping.BenchmarkPath) -> list[Any]:
@@ -215,7 +273,8 @@ class MolmoSpacesEnv(EnvProtocol):
         horizon_sec: float | None,
         with_right_shoulder: bool,
         with_object_image_points: bool = True,
-    ) -> None:
+    ) -> float:
+        """Sample the episode's task, and return its control period in seconds."""
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
@@ -226,7 +285,7 @@ class MolmoSpacesEnv(EnvProtocol):
         cfg.task_horizon = determine_task_horizon(
             episodes, mapping.horizon_steps(horizon_sec, cfg.policy_dt_ms), cfg.policy_dt_ms
         )
-        self._sampler = _JointGraspSampler(cfg, episode)
+        self._sampler = JsonEvalTaskSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
         self._hook.task_sampled(self._task)
@@ -235,12 +294,44 @@ class MolmoSpacesEnv(EnvProtocol):
             self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
         self._robot_view = self._task.env.current_robot.robot_view
         self._assert_bundled_arm()
-        self._control_dt = cfg.policy_dt_ms / 1000.0
         self._meta = {
             # Generated task descriptions can mislabel close episodes as "Open ...".
             mapping.META_TASK: episode.language.task_description,
             mapping.META_HOUSE_INDEX: episode.house_index,
         }
+        return cfg.policy_dt_ms / 1000.0
+
+    def _strict_check(self) -> success_profile.Check:
+        """The ``strict_v1`` check of the sampled task, which must be of a family that the profile judges."""
+        cfg = self._task.config.task_config
+        data = self._robot_view.mj_data
+        robot = self._robot_view.root_body_id
+
+        def body(name: str) -> int:
+            return data.model.body(name).id
+
+        # A subclass of a family's task is of that family, so the more derived classes come first.
+        if isinstance(self._task, OpeningTask):
+            if cfg.joint_index is None:
+                raise ValueError(f'{success_profile.SuccessProfile.STRICT_V1} needs the joint that the task names')
+            target = self._task.env.object_managers[0].get_object_by_name(cfg.pickup_obj_name)
+            joint = target.joint_ids[cfg.joint_index]
+            if self._task.config.task_type == 'close':
+                return success_profile.Close(data, joint)
+            return success_profile.Open(data, joint)
+        if isinstance(self._task, PickAndPlaceNextToTask):
+            return success_profile.PlaceNextTo(data, body(cfg.pickup_obj_name), body(cfg.place_receptacle_name), robot)
+        if isinstance(self._task, PickAndPlaceTask):
+            return success_profile.Place(
+                data,
+                body(cfg.pickup_obj_name),
+                body(cfg.place_receptacle_name),
+                robot,
+                cfg.max_place_receptacle_rot_displacement,
+            )
+        if isinstance(self._task, PickTask):
+            return success_profile.Pick(data, body(cfg.pickup_obj_name), robot)
+        raise ValueError(f'{success_profile.SuccessProfile.STRICT_V1} judges no {type(self._task).__name__}')
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """Selected episode records, with names, reset parameters and horizons in seconds."""
@@ -272,7 +363,10 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
         bench = mapping.BenchmarkPath(**{d: token[d] for d in mapping.BenchmarkPath._fields})
-        self._build(
+        profile = success_profile.SuccessProfile(
+            token.get(mapping.TOKEN_SUCCESS_PROFILE, success_profile.SuccessProfile.MOLMO_NATIVE)
+        )
+        self._control_dt = control_dt = self._build(
             bench,
             token[mapping.TOKEN_EPISODE_INDEX],
             token.get(mapping.TOKEN_SEED),
@@ -281,12 +375,17 @@ class MolmoSpacesEnv(EnvProtocol):
             token.get(mapping.WITH_OBJECT_IMAGE_POINTS, True),
         )
         obs, infos = self._task.reset()  # One observation dict and one info dict per environment.
+        # The checks of a strict judge take the start poses of the task's bodies, so they come after the task reset.
+        if profile is success_profile.SuccessProfile.STRICT_V1:
+            self._judge = success_profile.StrictJudge(self._task, self._strict_check(), control_dt)
+        else:
+            self._judge = success_profile.MolmoNativeJudge(self._task)
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
-        metrics = self._task_metrics(self._task.get_reward(), infos)
+        metrics = self._task_metrics(self._task.get_reward(), infos, self._judge.observe(infos[0]))
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: self._observe(env_obs, metrics, arm_error=False)}],
-            protocol.FRAME_META: self._meta,
+            protocol.FRAME_META: {**self._meta, mapping.META_SUCCESS_PROFILE: profile.value},
             protocol.FRAME_ROBOT_META: {},  # The client supplies the robot model through static_meta.
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
@@ -295,23 +394,24 @@ class MolmoSpacesEnv(EnvProtocol):
         (action,) = actions.values()  # MolmoSpaces runs one scene per server, so this server serves one slot
         wire = protocol.single_arm(action)
         measured = self._measured_arm_q()
-        arm = arm_action.wire_command_to_arm_action(
-            wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, current_eef=self._measured_eef_pose()
+        arm = arm_action.arm_targets(
+            wire[protocol.ROBOT_COMMAND], measured, ik=self._ik, read_eef=self._measured_eef_pose
         )
         gripper = np.array([mapping.grip_command_to_actuator(wire[protocol.TARGET_GRIP])], dtype=np.float32)
         obs, rewards, _term, _trunc, infos = self._task.step({
-            mapping.MOLMO_ARM_GROUP: measured if arm is None else arm,
+            mapping.MOLMO_ARM_GROUP: arm.q,
             mapping.MOLMO_GRIPPER_GROUP: gripper,
         })
-        metrics = self._task_metrics(rewards, infos)
-        success = bool(self._task.judge_success())
-        done = success or bool(self._task.is_done())
+        if self._judge is None:
+            raise RuntimeError('a MolmoSpaces env steps only after a reset')
+        judged = self._judge.step(infos[0])
+        metrics = self._task_metrics(rewards, infos, judged.metrics)
         return {
             protocol.SLOTS: [
                 {
-                    protocol.FRAME_OBS: self._observe(obs[0], metrics, arm_error=arm is None),
-                    protocol.FRAME_DONE: done,
-                    protocol.FRAME_SUCCESS: success,
+                    protocol.FRAME_OBS: self._observe(obs[0], metrics, arm_error=arm.refusal is not None),
+                    protocol.FRAME_DONE: judged.done,
+                    protocol.FRAME_SUCCESS: judged.success,
                 }
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt,
@@ -342,9 +442,9 @@ class MolmoSpacesEnv(EnvProtocol):
         return None if solution is None else solution[mapping.MOLMO_ARM_GROUP]
 
     @staticmethod
-    def _task_metrics(rewards: np.ndarray, infos: list[dict[str, Any]]) -> dict[str, Any]:
-        """The first environment's reward and info entries, as signals."""
-        return protocol.numeric_signals({**infos[0], mapping.TASK_METRIC_REWARD: rewards[0]})
+    def _task_metrics(rewards: np.ndarray, infos: list[dict[str, Any]], judged: dict[str, Any]) -> dict[str, Any]:
+        """The first environment's reward and info entries, and the metrics of the success profile, as signals."""
+        return protocol.numeric_signals({**infos[0], mapping.TASK_METRIC_REWARD: rewards[0], **judged})
 
     def _observe(self, env_obs: dict[str, Any], metrics: dict[str, Any], *, arm_error: bool) -> dict[str, Any]:
         """Raw observations, including the grasp-site pose in the arm base frame."""

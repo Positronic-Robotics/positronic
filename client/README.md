@@ -258,8 +258,8 @@ its `image` states it: a label on a task takes the value of the plan endpoint it
 An `image` endpoint may state `min_vram_gb`, the least GPU memory the image needs, in GB of 10^9
 bytes. The platform gives the run the smallest GPU slice that holds it. With no value, the image gets
 the published slice of 24192 MiB. A need that no slice of the run's GPU holds is refused at submit,
-and so is a need above the published slice where the plan's eval keeps that slice. Only an entry
-that names its `image` states it.
+and so is a need above the published slice on a `nebius_competition` plan. Only an entry that names
+its `image` states it. `positronic eval run --min-vram-gb` states it beside `--policy-image`.
 
 An `image` endpoint may state `query`, the session params the platform puts on each session URL of
 the image, for example `horizon_sec=0.5`. It holds the grammar of an address `query` (the table

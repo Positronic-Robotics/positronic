@@ -75,6 +75,10 @@ class ButtonHandler:
             return False
         return self._prev_states[button_name] >= threshold and self._button_states[button_name] < threshold
 
+    def __contains__(self, button_name: str) -> bool:
+        """True once ``button_name`` has a value"""
+        return button_name in self._button_states
+
     def get_value(self, button_name: str) -> float:
         """
         Gets the current value of a button
