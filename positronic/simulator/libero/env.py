@@ -42,6 +42,8 @@ object positions; a ``None`` seed draws one at random.
 
 import argparse
 import builtins
+import fcntl
+import os
 import pathlib
 import random
 from typing import Any
@@ -60,8 +62,12 @@ from server import EnvProtocol, EnvServer
 # writes the config from LIBERO's own package-relative paths, non-interactively.
 builtins.input = lambda *_args, **_kwargs: 'n'
 
-from libero.libero import benchmark, get_libero_path  # noqa: E402 -- must follow the stdin shim above
-from libero.libero.envs import OffScreenRenderEnv  # noqa: E402
+# The first import also checks for, then creates, the config dir and file without a lock, so two servers starting
+# on a fresh config path at once fail with FileExistsError or read a half-written file. Serialize the import.
+with open(os.environ.get('LIBERO_CONFIG_PATH', os.path.expanduser('~/.libero')) + '.lock', 'w') as _config_lock:
+    fcntl.flock(_config_lock, fcntl.LOCK_EX)
+    from libero.libero import benchmark, get_libero_path  # pyright: ignore[reportMissingImports] -- on PYTHONPATH
+    from libero.libero.envs import OffScreenRenderEnv  # pyright: ignore[reportMissingImports] -- on PYTHONPATH
 
 _IK_TOL = 1e-4
 
