@@ -168,7 +168,7 @@ class TestButtonMap:
         assert buttons.events(_buttons(a=0.95), 10) == [Event.CLUTCH]
 
     def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
-        page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
+        page = Path(package_assets_path('assets/webxr_phone/index.html')).read_text()
         [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
         assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
@@ -1431,7 +1431,7 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
 
 
 def test_the_phone_page_reads_fields_of_the_page_state():
-    page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
+    page = Path(package_assets_path('assets/webxr_phone/index.html')).read_text()
     [fields] = re.findall(r'const STATE_FIELD = \{([^}]*)\};', page)
     assert set(re.findall(r"'(\w+)'", fields)) <= set(command.PageState.__dataclass_fields__)
 

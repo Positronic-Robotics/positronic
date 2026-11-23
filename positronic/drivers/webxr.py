@@ -120,22 +120,11 @@ def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[st
     return tmp_key, tmp_cert
 
 
-# The query that shows the phone page with the labels of ``positronic teleop``.
-PHONE_TELEOP_QUERY = 'mode=teleop'
-
-
 class Frontend(StrEnum):
     """The page that ``WebXR`` serves."""
 
     HEADSET = 'headset'
-    IPHONE = 'iphone'
-    # The phone page with the labels of ``positronic teleop``.
-    IPHONE_TELEOP = 'iphone_teleop'
-
-    @property
-    def url_query(self) -> str:
-        """The query of the page URL, empty when the page has none."""
-        return PHONE_TELEOP_QUERY if self is Frontend.IPHONE_TELEOP else ''
+    PHONE = 'phone'
 
 
 class SessionMode(StrEnum):
@@ -151,7 +140,7 @@ def _build_access_url(host: str, port: int, use_https: bool) -> str:
 
 
 class WebXR(pimm.ControlSystem):
-    """WebXR server for a headset or an iPhone AR controller.
+    """WebXR server for a headset or a phone AR controller.
 
     Serves a single frontend at a time and streams controller/pose data back
     to the application over WebSocket, with an optional H.264 video stream.
@@ -164,8 +153,7 @@ class WebXR(pimm.ControlSystem):
     - If HTTPS is required, provide a cert trusted by the device.
 
     Endpoints
-    - `/`                -> selected frontend; it redirects to `/?mode=teleop` for phone teleop, and to `/` for
-                            any other query
+    - `/`                -> selected frontend; it redirects a URL with a query to `/`
     - `/state`           -> the last `page_state` value as JSON
     - `/input`           -> POST a JSON object from the page, such as a choice of the teleoperator; ``page_input``
                             emits it
@@ -233,12 +221,11 @@ class WebXR(pimm.ControlSystem):
 
         @app.get('/')
         async def root(request: Request):
-            query = self.frontend.url_query
-            if request.url.query != query:
-                return RedirectResponse(f'/?{query}' if query else '/')
+            if request.url.query:
+                return RedirectResponse('/')
             if self.frontend is Frontend.HEADSET:
                 return FileResponse(utils.package_assets_path('assets/webxr/index.html'))
-            return FileResponse(utils.package_assets_path('assets/webxr_iphone/index.html'))
+            return FileResponse(utils.package_assets_path('assets/webxr_phone/index.html'))
 
         @app.get(STATE_PATH)
         async def page_state():
@@ -381,8 +368,6 @@ class WebXR(pimm.ControlSystem):
 
         primary_host = utils.resolve_host_ip()
         url = _build_access_url(primary_host, self.port, self.use_https)
-        if self.frontend.url_query:
-            url += f'?{self.frontend.url_query}'
         banner = '=' * 80
         print(banner)
         print(f' >>> WEBXR interface available at: {url} <<<')
