@@ -82,6 +82,8 @@ class ArmControl(pimm.ControlSystem):
     # the states do not come in `SETTLE_SEC`.
     SETTLE_STATES = 3
     SETTLE_SEC = 0.5
+    # An arm whose driver sends no new state for this long gives no state: its last state can be from before a stall
+    STALE_STATE_SEC = 0.5
 
     def __init__(
         self,
@@ -104,6 +106,8 @@ class ArmControl(pimm.ControlSystem):
         self._target: np.ndarray | None = None
         self._trigger: float | None = None
         self._in_error = False
+        self._clock: pimm.Clock | None = None  # the clock of `run`
+        self._state_at: float | None = None  # when the arm sent its last new state
 
         self.controller_positions = pimm.DefaultingReceiver[dict[str, geom.Transform3D | None]](self, default={})
         self.buttons = pimm.DefaultingReceiver[dict[str, Sequence[float] | None]](self, default={})
@@ -116,9 +120,17 @@ class ArmControl(pimm.ControlSystem):
         self.report = pimm.ControlSystemEmitter[ArmReport](self)
 
     def _state(self) -> Any:
-        """The state of the arm, or ``None`` while it gives none."""
+        """The state of the arm, or ``None`` while it gives none: before its first state, while its signal is an error,
+        and when it sent no new state for ``STALE_STATE_SEC``."""
         message = self.robot_state.read()
-        return None if message is None or isinstance(message.data, pimm.SignalError) else message.data
+        if message is None or isinstance(message.data, pimm.SignalError) or self._clock is None:
+            return None
+        now = self._clock.now()
+        if message.updated:
+            self._state_at = now
+        if self._state_at is None or now - self._state_at > self.STALE_STATE_SEC:
+            return None
+        return message.data
 
     def _send_report(self) -> None:
         state = self._state()
@@ -189,7 +201,9 @@ class ArmControl(pimm.ControlSystem):
             self._control_off('the headset sends no sample')
         elif hand is None:
             self._control_off('the controller is not tracked')
-        elif state is None or state.status is not RobotStatus.AVAILABLE:
+        elif state is None:
+            self._control_off('the arm sends no state')
+        elif state.status is not RobotStatus.AVAILABLE:
             self._control_off('the arm is not available')
 
     def _wait(
@@ -240,6 +254,7 @@ class ArmControl(pimm.ControlSystem):
             self._note(f'the start pose failed: {e}', logging.ERROR)
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        self._clock = clock
         next_report = clock.now()
         last_sample = clock.now()
         while not should_stop.value:

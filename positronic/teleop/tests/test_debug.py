@@ -238,7 +238,9 @@ def test_control_goes_off_when_the_headset_sends_nothing_for_a_while(world):
     marks = {}
     driver = ManualDriver([
         *rig.control_on(),
-        (lambda: marks.update(on=len(rig.commands.emitted)), SILENCE_SEC + 0.1),
+        (lambda: marks.update(on=len(rig.commands.emitted)), 0.01),
+        # The arm keeps sending its state while the headset sends nothing
+        *[(lambda: rig.state.emit(_state()), 0.05)] * round((SILENCE_SEC + 0.1) / 0.05),
         (lambda: rig.hand(_raised(HAND, 0.10)), 0.01),
         (lambda: marks.update(after=len(rig.commands.emitted)), 0.0),
     ])
@@ -246,6 +248,27 @@ def test_control_goes_off_when_the_headset_sends_nothing_for_a_while(world):
 
     assert marks['after'] == marks['on']
     assert 'control off: the headset sends no sample' in rig.events()
+
+
+def test_control_goes_off_when_the_arm_sends_no_new_state_for_a_while(world):
+    rig = _Rig(world)
+    marks = {}
+    driver = ManualDriver([
+        *rig.control_on(),
+        (lambda: rig.hand(_raised(HAND, 0.02)), 0.01),
+        (lambda: marks.update(on=len(rig.commands.emitted)), 0.01),
+        # The driver stalls: its last state stays, and the hand keeps moving
+        *[(lambda: rig.hand(_raised(HAND, 0.03)), 0.05)] * round(2 * ArmControl.STALE_STATE_SEC / 0.05),
+        (lambda: marks.update(stalled=len(rig.commands.emitted)), 0.01),
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.hand(_raised(HAND, 0.10)), 0.01),
+        (lambda: marks.update(after=len(rig.commands.emitted)), 0.0),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=2000)
+
+    assert marks['on'] > 0
+    assert marks['after'] == marks['stalled'], 'control stays off when the driver sends states again'
+    assert 'control off: the arm sends no state' in rig.events()
 
 
 def test_control_does_not_come_on_while_the_arm_moves_by_itself(world):
