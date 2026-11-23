@@ -217,9 +217,9 @@ class RobotiqGripProbe(pimm.ControlSystem):
                 return
             close = Close(repeat=repeat, outcome=Outcome.of(samples), samples=samples)
             self.record.closes.append(close)
+            yield from self._move(gripper, OPEN, clock)
             write(self.record, self._out)
             print(row(self.record.label, close))
-            yield from self._move(gripper, OPEN, clock)
 
     def _enter_pushed(self, should_stop: pimm.SignalReceiver) -> Generator[pimm.Command, None, bool]:
         """Yield until the operator pushes Enter. False when the world stops or the input ends first."""

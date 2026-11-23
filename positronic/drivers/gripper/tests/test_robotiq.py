@@ -740,6 +740,21 @@ def test_the_grip_probe_opens_the_fingers_when_a_write_of_its_files_fails(monkey
     assert bus.writes[-1][1] == 0, 'the probe left the fingers closed on the object'
 
 
+def test_the_grip_probe_opens_the_fingers_before_it_writes_its_files(monkeypatch, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+    write = robotiq_grip_probe.write
+    requested_at_write = []
+
+    def recording_write(record, out):
+        requested_at_write.append(bus.writes[-1][1])
+        write(record, out)
+
+    monkeypatch.setattr(robotiq_grip_probe, 'write', recording_write)
+    _probed(monkeypatch, bus, tmp_path, enters=2)
+
+    assert requested_at_write == [0, 0], 'a slow write kept the fingers closed on the object'
+
+
 def test_a_stop_at_the_prompt_ends_the_grip_probe_with_the_fingers_open(monkeypatch, tmp_path):
     """A Ctrl-C sets ``should_stop`` while the probe waits for Enter. The probe ends, and the fingers open."""
     bus = FakeBus(object_at=OBJECT)
