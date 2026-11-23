@@ -278,14 +278,28 @@ def test_a_driver_that_stalls_while_the_headset_is_silent_takes_no_target_from_b
     driver = ManualDriver([
         *rig.control_on(),
         (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
-        # The headset goes silent, and a little later the driver stalls: control goes off for the headset first
-        *rig.states(4),
+        # The headset goes silent, and the driver stalls before it read the last target: control goes off for the
+        # headset first
+        *rig.states(ArmControl.SETTLE_STATES - 1),
         (lambda: None, 2 * ArmControl.STALE_STATE_SEC),
     ])
     drive_scheduler(world.start([rig.control, driver]), steps=2000)
 
     assert 'control off: the headset sends no sample' in rig.events()
     np.testing.assert_allclose(rig.commands.emitted[-1][1].pose.translation, ROBOT_POSE.translation)
+
+
+def test_a_driver_that_stalls_after_it_read_the_last_target_gets_no_new_target(world):
+    rig = _Rig(world)
+    marks = {}
+    driver = ManualDriver([
+        *rig.states(),
+        (lambda: rig.hand(HAND), 0.01),
+        (lambda: marks.update(before=len(rig.commands.emitted)), 2 * ArmControl.STALE_STATE_SEC),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=2000)
+
+    assert len(rig.commands.emitted) == marks['before'] == 0
 
 
 def test_control_does_not_come_on_while_the_arm_moves_by_itself(world):

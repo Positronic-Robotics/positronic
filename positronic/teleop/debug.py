@@ -109,6 +109,8 @@ class ArmControl(pimm.ControlSystem):
         self._clock: pimm.Clock | None = None  # the clock of `run`
         self._state_at: float | None = None  # when the arm sent its last new state
         self._stale = False  # whether the arm sent no new state for `STALE_STATE_SEC`
+        # The new states since the last target, until `SETTLE_STATES` of them show the driver read it; None after that
+        self._states_since_target: int | None = None
 
         self.controller_positions = pimm.DefaultingReceiver[dict[str, geom.Transform3D | None]](self, default={})
         self.buttons = pimm.DefaultingReceiver[dict[str, Sequence[float] | None]](self, default={})
@@ -129,6 +131,10 @@ class ArmControl(pimm.ControlSystem):
         now = self._clock.now()
         if message.updated:
             self._state_at = now
+            if self._states_since_target is not None:
+                self._states_since_target += 1
+                if self._states_since_target >= self.SETTLE_STATES:
+                    self._states_since_target = None
         if self._state_at is None or now - self._state_at > self.STALE_STATE_SEC:
             return None
         return message.data
@@ -201,8 +207,9 @@ class ArmControl(pimm.ControlSystem):
             self._note('the arm reports an error: a press of the stick clears it', logging.ERROR)
         self._in_error = error
         stale = state is None and self._state_at is not None
-        if stale and not self._stale:
+        if stale and not self._stale and self._states_since_target is not None:
             self._hold_last_pose()
+            self._states_since_target = None
         self._stale = stale
         if silent:
             self._control_off('the headset sends no sample')
@@ -255,6 +262,7 @@ class ArmControl(pimm.ControlSystem):
         yield from self._settle(should_stop, clock)
         if should_stop.value:
             return
+        self._states_since_target = None  # the settle states show that the driver read the last target
         yield from self._wait(self.sync_move(command.JointPosition(self._start_joints)), should_stop, clock)
         if not should_stop.value:
             self._note('at the start pose')
@@ -288,6 +296,7 @@ class ArmControl(pimm.ControlSystem):
             elif self._tracker.on and positions.updated and hand is not None:
                 target = self._tracker.update(hand)
                 self.robot_commands.emit(command.CartesianPosition(target))
+                self._states_since_target = 0
                 self._target = np.array(target.translation, dtype=np.float64)
 
             if clock.now() >= next_report:
