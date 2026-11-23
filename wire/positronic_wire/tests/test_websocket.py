@@ -742,10 +742,29 @@ def test_a_public_probe_dials_the_address_its_one_lookup_answered_under_the_host
     assert f'{_HEADER[0]}: {_HEADER[1]}\r\n'.encode() in asked[0]
 
 
-def test_a_public_probe_reads_each_status_as_a_probe_does(monkeypatch):
+def test_a_public_probe_reads_a_503_as_a_probe_does(monkeypatch):
     host, port = _served(_answering(b'HTTP/1.1 503 Service Unavailable', []))
     monkeypatch.setattr(wire, 'is_public', _public_alone(host))
     assert _WEBSOCKET.probe_public(_at(host, port), None, 5.0) is wire.Refusal.COLD
+
+
+def test_a_public_probe_reads_a_404_on_the_root_as_an_answer_and_opens_no_session(monkeypatch):
+    """An edge that routes the session path alone answers 404 on the root."""
+    sessions: list[str] = []
+
+    def only_the_session_path(connection, request):
+        return None if request.path == wire.SESSION_PATH else connection.respond(HTTPStatus.NOT_FOUND, 'Not Found\n')
+
+    def session(opened) -> None:
+        sessions.append(opened.request.path)
+
+    with serve(session, '127.0.0.1', 0, process_request=only_the_session_path) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        monkeypatch.setattr(wire, 'is_public', _public_alone('127.0.0.1'))
+        probed = _WEBSOCKET.probe_public(_at('127.0.0.1', server.socket.getsockname()[1]), None, 2.0)
+        server.shutdown()
+    assert probed is None
+    assert sessions == []
 
 
 def test_a_public_probe_of_a_port_nothing_answers_on_is_no_answer(monkeypatch):

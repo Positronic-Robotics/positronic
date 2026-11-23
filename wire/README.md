@@ -157,6 +157,8 @@ timeout is one wall-clock deadline over the name lookup, every address the name 
 read, so a server the caller did not write cannot hold the call past it. Both open their own socket, so
 they ignore a proxy the environment names, where `dial` goes through it.
 `probe_public` reads its answer as `probe` does, under the same deadline, and takes no proxy on any member.
+On the websocket wire it also reads a 404 on the root as a server, because an edge that routes only the
+session path answers 404 there.
 
 | What came back | Means |
 |---|---|

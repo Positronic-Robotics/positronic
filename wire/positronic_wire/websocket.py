@@ -9,7 +9,7 @@ import ssl
 import stat
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from functools import partial
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException
@@ -186,8 +186,10 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
         root: wire.AddressT,
         headers: Mapping[str, str] | None,
         open_timeout: float,
+        answers: Collection[HTTPStatus] = (HTTPStatus.FORBIDDEN,),
     ) -> wire.Refusal | None:
-        """``probe``'s handshake on the socket ``open_socket`` opens to ``root`` within ``open_timeout``."""
+        """``probe``'s handshake on the socket ``open_socket`` opens to ``root`` within ``open_timeout``. Each status of
+        ``answers`` reads as the server."""
         deadline = time.monotonic() + open_timeout
         try:
             # websockets closes `sock` where the handshake fails, and caps the answer it reads. The probe does not
@@ -201,7 +203,7 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
                 close_timeout=0,
             )
         except InvalidStatus as e:
-            if e.response.status_code == HTTPStatus.FORBIDDEN:
+            if e.response.status_code in answers:
                 return None
             return _status_refusal(e.response.status_code)
         except (OSError, InvalidHandshake, ConnectionClosed) as e:
@@ -342,9 +344,16 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     def probe_public(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
-        """``probe``'s handshake on a ``public_socket``, which names the host in the handshake and in TLS."""
+        """``probe``'s handshake on a ``public_socket``, which names the host in the handshake and in TLS.
+
+        A 404 also reads as the server: an edge that routes only the session path answers 404 on the root.
+        """
         return self._probe_on(
-            lambda root, timeout: public_socket(root.host, root.port, timeout), address.at_root(), headers, open_timeout
+            lambda root, timeout: public_socket(root.host, root.port, timeout),
+            address.at_root(),
+            headers,
+            open_timeout,
+            answers=(HTTPStatus.FORBIDDEN, HTTPStatus.NOT_FOUND),
         )
 
 
