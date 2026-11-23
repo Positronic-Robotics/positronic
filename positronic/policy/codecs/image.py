@@ -238,10 +238,6 @@ class TransformOnArrival(Codec):
         self._transform = transform
         self._fields = tuple(fields)
 
-    @property
-    def fields(self) -> tuple[str, ...]:
-        return self._fields
-
     def encode(self, data: dict) -> dict:
         fields = [field for field in self._fields if _is_rgb_frame(data.get(field))]
         return {**data, **dict(zip(fields, self._transform.transform_frames([data[f] for f in fields]), strict=True))}
