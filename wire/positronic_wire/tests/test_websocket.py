@@ -810,7 +810,7 @@ def _over_tls(handler: Callable[[socket.socket], None], certificate_file: Path, 
         try:
             tls = context.wrap_socket(conn, server_side=True)
         except ssl.SSLError:
-            return  # the client refused the certificate, which a test asserts on its own end
+            return  # the client refused the certificate
         with tls:
             handler(tls)
 
