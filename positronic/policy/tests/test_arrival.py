@@ -93,12 +93,6 @@ def _declared(spec: dict) -> Processor:
     return stack
 
 
-def _moved(stack: Processor) -> Sequential:
-    moved = transform_frames_on_arrival(stack)
-    assert isinstance(moved, Sequential)
-    return moved
-
-
 def _run(stack: Processor, frames: list[dict[str, np.ndarray]]) -> list[dict[str, np.ndarray]]:
     """The image fields of each call that the stack makes, over one step per frame set at ``FPS``."""
     calls = []
