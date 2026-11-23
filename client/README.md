@@ -372,7 +372,9 @@ An `image` endpoint whose registry serves no anonymous caller states `image_cred
 file names the registry user and the FILE the password is in. `positronic eval run --from-file`
 reads it as `EvalPlan[EndpointFile]`, then `plan_with_secrets_read` gives the `EvalPlan`
 a request carries, whose `RegistryCredential` holds the password. From Python, `credential_from_file`
-builds that credential.
+builds that credential. The platform copies the image when you file the plan, and the run pulls that
+copy. The plan is `pending` while the copy runs. The password must stay valid until the copy ends
+([A private image](../docs/submit-a-policy-image.md#a-private-image)).
 
 ```yaml
 endpoints:
