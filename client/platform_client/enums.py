@@ -200,6 +200,20 @@ class Wire(IntEnum):
 
 
 @unique
+class EndpointWarningReason(IntEnum):
+    """Why the platform could not confirm an endpoint of a plan when it filed the plan."""
+
+    INVALID = 0
+    not_public = 1  # the address is off the public internet, so the platform did not ask it
+    no_probe = 2  # the endpoint's wire carries no probe, so the platform did not ask it
+    no_answer = 3  # no server answered in time
+    unresolved = 4  # the host name did not resolve in time
+    not_ready = 5  # a server answered that it is not ready
+    forbidden = 6  # the server refused the call
+    credential_bound = 7  # the server refused a call that did not carry the org's credentials
+
+
+@unique
 class Placement(IntEnum):
     """Which side of the rig a piece of the scene sits on.
 

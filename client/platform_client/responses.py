@@ -16,6 +16,7 @@ from platform_client.enums import (
     BoardVisibility,
     CameraVantage,
     EndpointKind,
+    EndpointWarningReason,
     KeyStatus,
     OnExhausted,
     Placement,
@@ -364,13 +365,13 @@ class _ReasonBearing(BaseModel):
 
 
 class EndpointWarning(BaseModel):
-    """An endpoint of a filed plan that the platform could not confirm at filing, and why.
+    """An endpoint of a filed plan that the platform could not confirm at filing: why, as `reason`, and in words.
 
-    The endpoint did not answer, answered that it is not ready, or the platform did not ask it. The plan
-    is filed either way.
+    The plan is filed either way.
     """
 
     endpoint: str
+    reason: Slugged[EndpointWarningReason]
     message: str
 
 

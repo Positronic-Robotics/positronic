@@ -29,6 +29,7 @@ from platform_client.enums import (
     BoardVisibility,
     CameraVantage,
     EndpointKind,
+    EndpointWarningReason,
     ErrorCode,
     KeyStatus,
     OnExhausted,
@@ -279,7 +280,11 @@ MODELS: list[BaseModel] = [
         submission_id=SUB,
         status=SubmissionStatus.pending,
         resolved=RESOLVED,
-        endpoint_warnings=[EndpointWarning(endpoint='policy-a', message='no server answered at policy.example:8000')],
+        endpoint_warnings=[
+            EndpointWarning(
+                endpoint='policy-a', reason=EndpointWarningReason.no_answer, message='no policy server answered in time'
+            )
+        ],
     ),
     SubmissionListResponse(),
     SubmissionListResponse(

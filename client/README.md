@@ -319,8 +319,9 @@ carries it, and an episode on an endpoint that states none runs with the task's
 catalogue entry gives it, else the platform draws it. The platform makes each draw once per plan, so every run of
 the plan lays out that scene and that table, and runs the episodes in that order.
 The answer also carries `endpoint_warnings`. Each one names an endpoint of the plan that the platform could not
-confirm when it filed the plan, and says why: the endpoint did not answer, it answered that it is not ready, or
-the platform did not ask it. The plan is filed either way. The list is empty where there is nothing to report.
+confirm when it filed the plan, and says why, as a `reason` slug (`EndpointWarningReason`) and in words: the
+endpoint did not answer, it answered that it is not ready, or the platform did not ask it. The plan is filed
+either way. The list is empty where there is nothing to report.
 `submissions.get` carries the same `resolved`. A rig plan whose task resolves no
 `cap_per_episode_sec` or no `policy_preset` at any level is refused `bad_request`, and the refusal
 names each task and what it lacks. Name a preset the rig carries: `production` serves each
