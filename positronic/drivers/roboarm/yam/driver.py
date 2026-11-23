@@ -467,7 +467,13 @@ class _Arm(DriverRun[command.CommandType]):
         brake = accel * elapsed
         limit = np.minimum(np.sqrt(brake**2 / 4 + 2.0 * accel * np.abs(step)) - brake / 2, top)
         wanted = np.clip(step / elapsed, -limit, limit)
-        speed = sent_speed + np.clip(wanted - sent_speed, -accel * elapsed, accel * elapsed)
+        # A joint that slows down takes its own capped change, so it brakes in time. The joints that speed up share one
+        # scale, so from rest the step stays on the line to ``target`` rather than turning off it.
+        change, cap = wanted - sent_speed, accel * elapsed
+        slows = change * sent_speed < 0
+        speeding_up = np.where(slows, 0.0, np.abs(change))
+        scale = min(1.0, cap / max(float(np.max(speeding_up)), 1e-12))
+        speed = sent_speed + np.where(slows, np.clip(change, -cap, cap), change * scale)
         # A braking joint can pass its target by a rounding step; it never passes a limit it is inside
         lower, upper = self._joint_range
         return np.clip(sent + speed * elapsed, np.minimum(lower, sent), np.maximum(upper, sent))
@@ -574,13 +580,18 @@ class _Arm(DriverRun[command.CommandType]):
         keep_clear: bool,
     ) -> None:
         """Command the grip, and the joints a tick from the joints sent toward ``target`` under the speed cap ``top``
-        and the acceleration cap ``accel``; with ``keep_clear``, as ``_kept_clear`` changes them."""
+        and the acceleration cap ``accel``; with ``keep_clear``, as ``_kept_clear`` changes them. The joint speed kept
+        for the next tick is that of the step planned, so a change that keeps clear does not carry on."""
         sent = cast(np.ndarray, self._sent_joints)
         elapsed = min(self.clock.now() - self._sent_at, 1 / _CONTROL_HZ)
-        joints = self._next_joints(sent, self._sent_speed, target, elapsed, accel, top)
+        planned = joints = self._next_joints(sent, self._sent_speed, target, elapsed, accel, top)
         if keep_clear:
-            joints = self._kept_clear(sent, joints)
-        speed = (joints - sent) / elapsed if elapsed > 0 else np.zeros_like(sent)
+            joints = self._kept_clear(sent, planned)
+        if elapsed > 0:
+            step_speed, planned_speed = (joints - sent) / elapsed, (planned - sent) / elapsed
+            speed = np.clip(step_speed, np.minimum(planned_speed, 0.0), np.maximum(planned_speed, 0.0))
+        else:
+            speed = np.zeros_like(sent)
         self.command_target(joints, grip, receipt)
         self._sent_speed = speed
 

@@ -1199,6 +1199,51 @@ def test_a_followed_target_that_comes_over_the_table_from_beside_it_below_its_to
     rig.loop.close()
 
 
+def test_a_followed_target_that_comes_over_the_table_from_beside_it_takes_the_gripper_no_higher_than_it_asks():
+    stream = StreamTuning(max_joint_accel_rad_s2=12.0, obstacles=(TABLE,), obstacle_margin_m=0.002)
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig.ready()
+    kinematics = YamKinematics()
+    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * kinematics.fk(RAISED).rotation
+    beside = np.array([0.30, TABLE.lower[1] - 0.06, TABLE.upper[2] - 0.05])
+    over = np.array([0.30, TABLE.lower[1] + 0.08, TABLE.upper[2] - 0.05])
+    q_beside = kinematics.ik(geom.Transform3D(beside, down), RAISED, *I2RT_YAM_RANGES.T)
+    assert q_beside is not None
+    rig.commands.push(command.JointPosition(q_beside))
+    rig.tick(3.0)
+    sent = len(rig.vendor.targets)
+    asked = _stream_poses(rig, _line(beside, over, down, 0.5) + [geom.Transform3D(over, down)] * 150)
+    lifted = kinematics.fk(asked[-1]).translation[2]  # at rest on the lifted target
+    assert max(kinematics.fk(q).translation[2] for q in asked) <= lifted + 0.03
+    speeds = np.diff(_asked(rig)[sent - 1 :], axis=0) * yam._CONTROL_HZ
+    assert np.max(np.abs(speeds)) <= yam._Arm._MAX_STREAMED_JOINT_SPEED_RAD_S * (1 + 1e-6)
+    rig.loop.close()
+
+
+def test_a_gripper_led_from_the_table_over_the_plate_reaches_its_target():
+    plate = Box((-0.23, -0.685, -0.0235), (0.04, 0.075, 0.0))
+    stream = StreamTuning(max_joint_accel_rad_s2=12.0, obstacles=(plate, TABLE), obstacle_margin_m=0.002)
+    rig = Rig(park_after_idle_s=60.0, stream=stream)
+    rig.ready()
+    kinematics = YamKinematics()
+    start = kinematics.fk(RAISED)
+    down = geom.Rotation.from_rotvec(np.array([0.0, np.pi / 2, 0.0])) * start.rotation
+    above, on = np.array([0.156, -0.081, 0.10]), np.array([0.156, -0.081, TABLE.upper[2]])
+    turn = (start.rotation.inv * down).as_rotvec
+    turn_down = [
+        geom.Transform3D(
+            start.translation + (above - start.translation) * s, start.rotation * geom.Rotation.from_rotvec(turn * s)
+        )
+        for s in np.linspace(0.005, 1.0, 200)
+    ]
+    _stream_poses(rig, turn_down + _line(above, on, down, 1.5) + [geom.Transform3D(on, down)] * 100)
+    over_the_plate = np.array([-0.002, -0.081, TABLE.upper[2]])
+    asked = _stream_poses(rig, _line(on, over_the_plate, down, 1.0) + [geom.Transform3D(over_the_plate, down)] * 300)
+    np.testing.assert_allclose(kinematics.fk(asked[-1]).translation[:2], over_the_plate[:2], atol=0.005)
+    assert _gripper_heights(asked, (plate, TABLE)).min() >= 0.002 - RAMP_TOL_M
+    rig.loop.close()
+
+
 def test_an_arm_at_the_side_of_the_table_follows_a_target_that_rises_over_it():
     rig = Rig(park_after_idle_s=60.0, stream=ABOVE_THE_TABLE)
     rig.ready()
