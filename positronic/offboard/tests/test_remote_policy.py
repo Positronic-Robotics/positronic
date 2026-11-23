@@ -105,6 +105,11 @@ class _FakeWire(wire.ClientWire[wire.HostPortAddress]):
     ) -> wire.Refusal | None:
         return None
 
+    def probe_public(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        return None
+
     def keepalive(self, address, headers, timeout) -> int | None:
         raise wire.KeepaliveUnsupported('this wire answers sessions alone')
 

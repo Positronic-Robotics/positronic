@@ -8,10 +8,15 @@ spells whatever its library takes.
 
 import abc
 import dataclasses
+import ipaddress
+import queue
+import socket
+import threading
+import time
 from collections.abc import Iterator, Mapping
 from enum import Enum
 from pathlib import Path
-from typing import ClassVar, Generic, Self, TypeVar
+from typing import Any, ClassVar, Generic, Self, TypeVar
 
 # The server's HTTP API, and the route a session opens on under it.
 API_PATH = '/api/v1'
@@ -96,6 +101,10 @@ class ProbeUnsupported(Exception):
     """The wire carries no probe. A caller asks ``keepalive`` whether the server is up."""
 
 
+class NotPublic(Exception):
+    """The address names a host off the public internet, which ``ClientWire.probe_public`` does not dial."""
+
+
 class Refusal(Enum):
     """What a refused connect says about the server."""
 
@@ -106,6 +115,88 @@ class Refusal(Enum):
     SILENT = 'silent'
     # The resolver had no answer for the host name yet. Retry for a limited time, then surface.
     UNRESOLVED = 'unresolved'
+
+
+# The resolver's authoritative answers that the host has no address. A resolver that timed out answers
+# ``EAI_AGAIN``, which a later lookup can clear: a name can start resolving, where a misspelt one never does.
+_NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
+
+
+def lookup_refusal(failed: OSError) -> Refusal:
+    """What a name lookup that raised ``failed`` says about the server."""
+    if isinstance(failed, socket.gaierror) and failed.errno in _NO_SUCH_HOST_ERRNOS:
+        return Refusal.FINAL
+    if isinstance(failed, socket.gaierror) and failed.errno == socket.EAI_AGAIN:
+        return Refusal.UNRESOLVED
+    return Refusal.SILENT
+
+
+def seconds_until(deadline: float) -> float:
+    """Raises ``TimeoutError`` once ``deadline`` has passed, as a socket that timed out does."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError('the call spent its timeout')
+    return left
+
+
+def addresses(host: str, port: int, deadline: float) -> list[tuple[Any, ...]]:
+    """The addresses ``host`` resolves to, before ``deadline``, as ``socket.getaddrinfo`` answers them.
+
+    ``getaddrinfo`` takes no timeout. A lookup past the deadline ends in its own thread, which the resolver
+    configuration bounds (``timeout`` x ``attempts`` per nameserver), and nothing reads its answer.
+    """
+    found: queue.SimpleQueue[list[tuple[Any, ...]] | OSError] = queue.SimpleQueue()
+
+    def look_up() -> None:
+        try:
+            found.put(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+        except OSError as failed:
+            found.put(failed)
+
+    threading.Thread(target=look_up, name='wire-lookup', daemon=True).start()
+    try:
+        resolved = found.get(timeout=seconds_until(deadline))
+    except queue.Empty:
+        raise TimeoutError(f'{host} did not resolve in time') from None
+    if isinstance(resolved, OSError):
+        raise resolved
+    return resolved
+
+
+# The domain a tailnet's own names sit under. Its resolver answers them with tailnet addresses.
+TAILNET_DOMAIN = 'ts.net'
+# The well-known NAT64 prefix. A translator delivers each address under it to the IPv4 address in its last 32 bits.
+_NAT64 = ipaddress.IPv6Network('64:ff9b::/96')
+
+
+def is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether ``ip`` reaches one host on the public internet.
+
+    An IPv6 address that carries an IPv4 one is judged by the IPv4 one, which a translator delivers it to.
+    """
+    if isinstance(ip, ipaddress.IPv6Address):
+        nat64 = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF) if ip in _NAT64 else None
+        carried = ip.ipv4_mapped or ip.sixtofour or nat64
+        if carried is not None:
+            return is_public(carried)
+    return ip.is_global and not ip.is_multicast
+
+
+def public_addresses(host: str, port: int, deadline: float) -> list[tuple[Any, ...]]:
+    """The addresses ``host`` resolves to, before ``deadline``, where each one is public (``is_public``).
+
+    A dial to these addresses makes no second lookup, which can answer another address. Raises ``NotPublic`` for a
+    name under ``TAILNET_DOMAIN``, before the lookup, and for a name that resolves to any address that is not public.
+    A failed lookup raises as ``addresses`` does.
+    """
+    name = host.rstrip('.').lower()
+    if name == TAILNET_DOMAIN or name.endswith(f'.{TAILNET_DOMAIN}'):
+        raise NotPublic(f'{host} is a tailnet name')
+    resolved = addresses(host, port, deadline)
+    private = [str(sockaddr[0]) for *_, sockaddr in resolved if not is_public(ipaddress.ip_address(sockaddr[0]))]
+    if private:
+        raise NotPublic(f'{host} resolves to {", ".join(private)}, which is off the public internet')
+    return resolved
 
 
 def retry_pauses() -> Iterator[float]:
@@ -171,6 +262,15 @@ class ClientWire(abc.ABC, Generic[AddressT]):
         A ``Refusal`` says why none did, in the terms ``dial`` uses: ``COLD`` for a backend still starting,
         ``SILENT`` for a port nothing answers on, ``FORBIDDEN`` for a credential the edge refused, ``FINAL`` for
         a refusal no retry reaches. Raises ``ProbeUnsupported`` on a wire that carries no probe.
+        """
+
+    @abc.abstractmethod
+    def probe_public(self, address: AddressT, headers: Mapping[str, str] | None, open_timeout: float) -> Refusal | None:
+        """``probe``, of a server on the public internet alone.
+
+        The host resolves once (``public_addresses``), and the probe dials the addresses that lookup answered, under
+        the host's own name. Raises ``NotPublic`` before any dial where the address is not public, and
+        ``ProbeUnsupported`` where ``probe`` does.
         """
 
 

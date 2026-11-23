@@ -1,5 +1,6 @@
 """The client side of the roboarena wire."""
 
+import ipaddress
 import socket
 import ssl
 import threading
@@ -257,3 +258,27 @@ def test_a_server_that_announces_itself_answers_the_probe(roboarena_on):
 def test_a_server_that_announces_a_failure_in_text_raises_it(roboarena_on):
     with pytest.raises(roboarena.TextAnswer, match='the policy failed to load'):
         roboarena.RoboarenaClientWire().probe(roboarena_on(_announcing('the policy failed to load')), None, 5.0)
+
+
+def test_a_public_probe_reads_the_announcement_on_the_address_its_one_lookup_answered(roboarena_on, monkeypatch):
+    """A second lookup can answer another address, so the probe makes none."""
+    served = roboarena_on(_announcing(b'config'))
+    looked_up = []
+
+    def look_up(name, *_args, **_kwargs):
+        looked_up.append(name)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (served.host, served.port))]
+
+    monkeypatch.setattr(socket, 'getaddrinfo', look_up)
+    monkeypatch.setattr(wire, 'is_public', lambda ip: ip == ipaddress.ip_address(served.host))
+    address = roboarena.RoboarenaAddress('policy.example', served.port)
+    assert roboarena.RoboarenaClientWire().probe_public(address, None, 5.0) is None
+    assert looked_up == ['policy.example']
+
+
+def test_a_public_probe_dials_no_address_off_the_public_internet(monkeypatch):
+    resolved = [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.0.0.1', _ADDRESS.port))]
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *_args, **_kwargs: resolved)
+    with patch('positronic_wire.roboarena.connect') as dialled, pytest.raises(wire.NotPublic, match='10.0.0.1'):
+        roboarena.RoboarenaClientWire().probe_public(_ADDRESS, None, 1.0)
+    dialled.assert_not_called()

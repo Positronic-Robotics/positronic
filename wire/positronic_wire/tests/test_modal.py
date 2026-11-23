@@ -113,6 +113,9 @@ class FakeWire(wire.ClientWire[wire.HostPortAddress]):
         self.called.append(token)
         return wire.Refusal.FINAL if token in self.ended else None
 
+    def probe_public(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
+        return self.probe(address, headers, open_timeout)
+
 
 @pytest.fixture
 def edge() -> Iterator[FakeEdge]:
@@ -444,9 +447,10 @@ def test_a_keepalive_raises_cold_while_the_spare_starts(modal_wire, edge):
     assert refused.value.refusal is wire.Refusal.COLD
 
 
-def test_a_probe_is_unsupported_and_starts_no_session(modal_wire, edge):
+@pytest.mark.parametrize('verb', [modal.ModalClientWire.probe, modal.ModalClientWire.probe_public])
+def test_a_probe_is_unsupported_and_starts_no_session(verb, modal_wire, edge):
     with pytest.raises(wire.ProbeUnsupported):
-        modal_wire.probe(_ADDRESS, _CREDENTIALS, 5.0)
+        verb(modal_wire, _ADDRESS, _CREDENTIALS, 5.0)
 
     assert edge.starts == []
 

@@ -5,9 +5,11 @@ The stream is untyped bytes on both sides. There is no protobuf schema and no ge
 
 import json
 import queue
+import socket
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import grpc
 from positronic_wire import wire
@@ -196,6 +198,13 @@ def target(host: str, port: int) -> str:
     return f'{wire.bracket_ipv6(host)}:{port}'
 
 
+def _resolved_target(resolved: list[tuple[Any, ...]]) -> str:
+    """The ``resolved`` addresses in the family of the first, as one target that gRPC dials with no lookup."""
+    family = resolved[0][0]
+    scheme = 'ipv6' if family == socket.AF_INET6 else 'ipv4'
+    return f'{scheme}:' + ','.join(target(*sockaddr[:2]) for kind, *_, sockaddr in resolved if kind == family)
+
+
 def _probe_share(open_timeout: float) -> float:
     """The share of one connect attempt the refusal probe gets; the readiness wait gets the rest.
 
@@ -253,8 +262,8 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         query = f'?{address.query}' if address.query else ''
         return f'{target(address.host, address.port)}{address.path}{query}'
 
-    def channel(self, target: str) -> grpc.Channel:
-        return grpc.insecure_channel(target, options=_client_options())
+    def channel(self, target: str, options: Sequence[tuple[str, int | str]] = ()) -> grpc.Channel:
+        return grpc.insecure_channel(target, options=[*_client_options(), *options])
 
     def dial(
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
@@ -286,7 +295,32 @@ class GrpcClientWire(wire.ClientWire[wire.HostPortAddress]):
         self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
     ) -> wire.Refusal | None:
         """One call on ``PROBE_PATH``, carrying ``headers``: a server that is up answers it ``UNIMPLEMENTED``."""
-        channel = self.channel(target(address.host, address.port))
+        return self._probe_on(self.channel(target(address.host, address.port)), headers, open_timeout)
+
+    def probe_public(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        """``probe``, on a channel to the addresses of ``wire.public_addresses``.
+
+        The channel names the host as its authority, and as the name that TLS verifies on the TLS member. It takes no
+        proxy, as the websocket members' probes take none.
+        """
+        deadline = time.monotonic() + open_timeout
+        try:
+            resolved = wire.public_addresses(address.host, address.port, deadline)
+        except OSError as e:
+            return wire.lookup_refusal(e)
+        named = [
+            ('grpc.default_authority', target(address.host, address.port)),
+            ('grpc.ssl_target_name_override', address.host),
+            ('grpc.enable_http_proxy', 0),
+        ]
+        channel = self.channel(_resolved_target(resolved), named)
+        return self._probe_on(channel, headers, max(0.0, deadline - time.monotonic()))
+
+    @staticmethod
+    def _probe_on(channel: grpc.Channel, headers: Mapping[str, str] | None, open_timeout: float) -> wire.Refusal | None:
+        """``probe``'s call on ``channel``, which this closes."""
         try:
             answered = _connect_refusal(channel, _metadata(headers), open_timeout)
         finally:
@@ -302,6 +336,6 @@ class GrpcTlsClientWire(GrpcClientWire):
     NAME = 'grpc_tls'
     DEFAULT_PORT = 443
 
-    def channel(self, target: str) -> grpc.Channel:
+    def channel(self, target: str, options: Sequence[tuple[str, int | str]] = ()) -> grpc.Channel:
         # No roots named: the channel verifies the edge against the system's own roots.
-        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=_client_options())
+        return grpc.secure_channel(target, grpc.ssl_channel_credentials(), options=[*_client_options(), *options])

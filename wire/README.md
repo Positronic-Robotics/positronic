@@ -38,8 +38,8 @@ client end alone.
 
 | Module | Holds |
 |---|---|
-| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `retry_pauses()`, the pauses before each retry of a refused call, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, `ProbeUnsupported`, and the abstract `ClientWire` and `ClientConnection` |
-| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, `connected_socket(host, port, timeout)`, a TCP connect whose timeout covers the name lookup and every address, `tls_socket(host, port, timeout)`, the same connect with a verified TLS handshake, `https_connection(address, default_port, deadline)`, an HTTPS connection that opens on `tls_socket`, and `post_within(connection, path, headers, deadline, max_body_bytes)`, a `POST` whose deadline covers every read |
+| `positronic_wire.wire` | The routes (`API_PATH`, `SESSION_PATH`, `KEEPALIVE_PATH`), `ALIVE_SECONDS`, the key the keepalive answer carries, `MAX_MESSAGE_BYTES`, the addresses `HostPortAddress(host, port, path, query)` and `UnixSocketAddress(uds, path, query)` under the abstract `SessionAddress`, the type variable `AddressT` over them, `netloc`, `bracket_ipv6(host)`, `Refusal`, `retry_pauses()`, the pauses before each retry of a refused call, `ConnectRefused`, `PeerDisconnected`, `KeepaliveUnsupported`, `ProbeUnsupported`, `NotPublic`, `seconds_until(deadline)`, `addresses(host, port, deadline)`, a name lookup that the deadline bounds, `lookup_refusal(failed)`, which reads a failed lookup as a `Refusal`, `is_public(ip)`, `TAILNET_DOMAIN`, `public_addresses(host, port, deadline)`, the lookup that refuses an address off the public internet, and the abstract `ClientWire` and `ClientConnection` |
+| `positronic_wire.websocket` | `WebsocketClientWire`, `WebsocketTlsClientWire`, `WebsocketUnixClientWire`, `WebsocketClientConnection`, `refusal_of(raised)`, which reads a failed handshake as a `Refusal`, `connected_socket(host, port, timeout)`, a TCP connect whose timeout covers the name lookup and every address, `public_socket(host, port, timeout)`, the same connect to a public host alone, `tls_socket(host, port, timeout)`, the same connect with a verified TLS handshake, `https_connection(address, default_port, deadline)`, an HTTPS connection that opens on `tls_socket`, and `post_within(connection, path, headers, deadline, max_body_bytes)`, a `POST` whose deadline covers every read |
 | `positronic_wire.grpc` | `GrpcClientWire`, `GrpcTlsClientWire`, `GrpcClientConnection`, `target(host, port)`, and the calls both ends agree on: `SERVICE`, `METHOD`, `METHOD_PATH`, `KEEPALIVE_METHOD`, `KEEPALIVE_METHOD_PATH`, `PROBE_PATH`, `SESSION_PATH_HEADER`, `SESSION_QUERY_HEADER`, `MESSAGE_SIZE_OPTIONS`, `PING_EVERY_MS` |
 | `positronic_wire.roboarena` | `RoboarenaClientWire`, `RoboarenaClientConnection`, `RoboarenaAddress`, and `TextAnswer`, which a text frame raises. The handshake carries the headers the caller gives, and none where it gives none |
 | `positronic_wire.modal` | `ModalClientWire` and `ModalClientConnection`, a websocket session over TLS on a Modal Server with sticky sessions, and the facts of the Modal session API it calls: `START_PATH`, `TERMINATE_PATH`, `SESSION_HEADER`, `IDLE_TIMEOUT_HEADER`, `IDEMPOTENCY_KEY_HEADER`, `TIMESTAMP_HEADER`, `SESSION_TOKEN_HEADER`, `START_ANSWER_TOKEN`, `IDLE_TIMEOUT`, `START_REQUEST_TIMEOUT`, `START_DEADLINE`, `TERMINATE_TIMEOUT`, `MAX_ANSWER_BYTES` |
@@ -78,6 +78,14 @@ leaves out on the members that carry one.
   server refuses with 403 and nothing else answers 403 there. The gRPC wire calls `PROBE_PATH`,
   which a server that is up answers `UNIMPLEMENTED`. The roboarena wire opens the root and reads the
   frame the server announces itself with.
+- `probe_public(address, headers, open_timeout)` — `probe`, of a server on the public internet alone. It
+  resolves the host once and dials the addresses that lookup answered, under the host's own name in the
+  handshake and in TLS, so a second lookup cannot answer another address. Before any dial it raises
+  `NotPublic` for a name under `TAILNET_DOMAIN` and for a name that resolves to any address that is not
+  public: a private, loopback, link-local, shared (`100.64.0.0/10`), multicast or reserved address, or an
+  IPv6 address that carries one of these IPv4 addresses. `websocket_unix` always raises `NotPublic`, and
+  `modal_websocket_tls` raises `ProbeUnsupported`, as its `probe` does. A service that probes an endpoint
+  that a user names, from a host on a private network, calls this verb instead of `probe`.
 - `keepalive(address, headers, timeout)` — resets the server's idle timer outside a session, and
   returns the seconds the server stays alive after the call, or `None` for a server with no idle
   timeout. `timeout` bounds the whole call. The websocket members send `POST` to `KEEPALIVE_PATH`, and
@@ -139,8 +147,8 @@ parks and ends them.
   start. A caller retries them as it retries any `COLD`.
 - `keepalive` starts a session when the wire holds none, and so a container. Only the process that manages the
   endpoint calls it.
-- `probe` raises `ProbeUnsupported`. A caller that waits for a server asks `keepalive` instead, as
-  `InferenceClient.wait_for_server` does.
+- `probe` and `probe_public` raise `ProbeUnsupported`. A caller that waits for a server asks `keepalive` instead,
+  as `InferenceClient.wait_for_server` does.
 
 ## Whether a policy server is up
 
@@ -148,6 +156,7 @@ parks and ends them.
 timeout is one wall-clock deadline over the name lookup, every address the name resolves to, and every
 read, so a server the caller did not write cannot hold the call past it. Both open their own socket, so
 they ignore a proxy the environment names, where `dial` goes through it.
+`probe_public` reads its answer as `probe` does, under the same deadline, and takes no proxy on any member.
 
 | What came back | Means |
 |---|---|
@@ -174,6 +183,7 @@ most 16 KiB of a keepalive body, and the roboarena member one frame of at most `
 |---|---|---|
 | A rig client, and `positronic` itself | Every verb, the session protocol, the policy stack | `positronic`, which pins `positronic-wire` exactly |
 | A coordinator that probes an endpoint and warms it | `registry.client_wire`, `probe`, `PROBE_PATH`, the routes | `positronic-wire[websocket,grpc]`, or just the required transport extra |
+| A service on a private network that asks an endpoint a user names whether it answers | `registry.client_wire`, `probe_public`, `NotPublic` | `positronic-wire[websocket,grpc]`, or just the required transport extra |
 | A service that validates an endpoint record | `registry.CLIENT_WIRES` | `positronic-wire` with the transport extras it accepts |
 | A host that runs a policy server and waits for it before it sends sessions | `keepalive`, `probe` | `positronic-wire[websocket,grpc]`, or just the required transport extra |
 | A native model server | The shared server and its transports | `positronic-model-server[websocket,grpc]`, or just the required transport extra |

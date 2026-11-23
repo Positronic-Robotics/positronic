@@ -2,6 +2,7 @@
 
 import dataclasses
 import errno
+import ipaddress
 import json
 import socket
 import ssl
@@ -634,3 +635,160 @@ def test_a_close_with_no_timeout_keeps_the_wires_bound():
 
 def test_a_close_timeout_bounds_a_close_the_wire_left_unbounded():
     assert _seconds_to_close(None, timeout=_SHORT_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S
+
+
+# ─── a probe of a public address ─────────────────────────────────────────────
+
+# Addresses off the public internet, and IPv6 addresses that carry a private IPv4 one.
+_NOT_PUBLIC = [
+    '10.0.0.1',
+    '172.16.0.1',
+    '192.168.1.1',
+    '127.0.0.1',
+    '::1',
+    '169.254.169.254',
+    'fe80::1',
+    '100.64.0.1',
+    '100.100.100.100',
+    'fd7a:115c:a1e0::1',
+    '0.0.0.0',
+    '224.0.0.1',
+    'ff02::1',
+    '::ffff:10.0.0.1',
+    '64:ff9b::a00:1',
+    '2002:a00:1::1',
+]
+_PUBLIC = ['8.8.8.8', '2606:4700::1111', '::ffff:8.8.8.8', '64:ff9b::808:808', '2002:808:808::1']
+
+
+def _resolving_to(*hosts: str, port: int = 8000) -> list[tuple]:
+    """What ``socket.getaddrinfo`` answers for a name with ``hosts`` as its addresses."""
+    return [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, '', (host, port, 0, 0))
+        if ':' in host
+        else (socket.AF_INET, socket.SOCK_STREAM, 6, '', (host, port))
+        for host in hosts
+    ]
+
+
+def _public_alone(*hosts: str):
+    """``wire.is_public`` for a test whose server is on loopback: ``hosts`` are public, and nothing else is."""
+    return lambda ip: ip in {ipaddress.ip_address(host) for host in hosts}
+
+
+@pytest.mark.parametrize('ip', _PUBLIC)
+def test_an_address_on_the_public_internet_is_public(ip):
+    assert wire.is_public(ipaddress.ip_address(ip))
+
+
+@pytest.mark.parametrize('ip', _NOT_PUBLIC)
+def test_an_address_off_the_public_internet_is_not_public(ip):
+    assert not wire.is_public(ipaddress.ip_address(ip))
+
+
+@pytest.mark.parametrize('ip', _NOT_PUBLIC)
+def test_a_public_probe_dials_no_address_off_the_public_internet(ip, monkeypatch):
+    dialled = []
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *_args, **_kwargs: _resolving_to(ip))
+    monkeypatch.setattr(socket.socket, 'connect', lambda _sock, address: dialled.append(address))
+    with pytest.raises(wire.NotPublic, match='policy.example'):
+        _WEBSOCKET.probe_public(_at('policy.example', 8000), None, 2.0)
+    assert dialled == []
+
+
+@pytest.mark.parametrize('host', ['policy.tail1234.ts.net', 'POLICY.TS.NET.', 'ts.net'])
+def test_a_public_probe_looks_up_no_tailnet_name(host, monkeypatch):
+    looked_up = []
+    monkeypatch.setattr(
+        socket, 'getaddrinfo', lambda *args, **_kwargs: looked_up.append(args) or _resolving_to('8.8.8.8')
+    )
+    with pytest.raises(wire.NotPublic, match='tailnet'):
+        _WEBSOCKET.probe_public(_at(host, 8000), None, 2.0)
+    assert looked_up == []
+
+
+def test_a_public_probe_dials_no_name_that_also_resolves_off_the_public_internet(monkeypatch):
+    asked: list[bytes] = []
+    host, port = _served(_answering(b'HTTP/1.1 403 Forbidden', asked))
+    monkeypatch.setattr(wire, 'is_public', _public_alone(host))
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *_args, **_kwargs: _resolving_to(host, '127.0.0.2', port=port))
+    with pytest.raises(wire.NotPublic, match='127.0.0.2'):
+        _WEBSOCKET.probe_public(_at('policy.example', port), None, 2.0)
+    assert asked == []
+
+
+def test_a_public_probe_dials_the_address_its_one_lookup_answered_under_the_hosts_name(monkeypatch):
+    """A second lookup can answer another address, so the probe makes none."""
+    asked: list[bytes] = []
+    host, port = _served(_answering(b'HTTP/1.1 403 Forbidden', asked))
+    looked_up = []
+
+    def look_up(name, *_args, **_kwargs):
+        looked_up.append(name)
+        return _resolving_to(host, port=port)
+
+    monkeypatch.setattr(socket, 'getaddrinfo', look_up)
+    monkeypatch.setattr(wire, 'is_public', _public_alone(host))
+    assert _WEBSOCKET.probe_public(_at('policy.example', port), dict([_HEADER]), 5.0) is None
+    assert looked_up == ['policy.example']
+    assert asked[0].startswith(b'GET / HTTP/1.1\r\n')
+    assert f'Host: policy.example:{port}\r\n'.encode() in asked[0]
+    assert f'{_HEADER[0]}: {_HEADER[1]}\r\n'.encode() in asked[0]
+
+
+def test_a_public_probe_reads_each_status_as_a_probe_does(monkeypatch):
+    host, port = _served(_answering(b'HTTP/1.1 503 Service Unavailable', []))
+    monkeypatch.setattr(wire, 'is_public', _public_alone(host))
+    assert _WEBSOCKET.probe_public(_at(host, port), None, 5.0) is wire.Refusal.COLD
+
+
+def test_a_public_probe_of_a_port_nothing_answers_on_is_no_answer(monkeypatch):
+    host, port = _unbound()
+    monkeypatch.setattr(wire, 'is_public', _public_alone(host))
+    assert _WEBSOCKET.probe_public(_at(host, port), None, 1.0) is wire.Refusal.SILENT
+
+
+@pytest.mark.parametrize(
+    ('errno_', 'refusal'),
+    [(socket.EAI_AGAIN, wire.Refusal.UNRESOLVED), (socket.EAI_NONAME, wire.Refusal.FINAL)],
+    ids=['the-resolver-timed-out', 'no-such-host'],
+)
+def test_a_public_probe_reads_a_failed_name_lookup_as_a_probe_does(errno_, refusal, monkeypatch):
+    def failed_lookup(*_args, **_kwargs):
+        raise socket.gaierror(errno_, 'lookup failed')
+
+    monkeypatch.setattr(socket, 'getaddrinfo', failed_lookup)
+    assert _WEBSOCKET.probe_public(_at('a-host.example', 8000), None, 2.0) is refusal
+
+
+def test_a_public_probe_whose_name_lookup_outlasts_the_timeout_is_no_answer_in_time(monkeypatch):
+    def slow_lookup(*_args, **_kwargs):
+        time.sleep(3.0)
+        return _resolving_to('8.8.8.8')
+
+    monkeypatch.setattr(socket, 'getaddrinfo', slow_lookup)
+    started = time.monotonic()
+    assert _WEBSOCKET.probe_public(_at('slow.example', 8000), None, 0.3) is wire.Refusal.SILENT
+    assert time.monotonic() - started < 2.0, 'the timeout did not cover the lookup'
+
+
+def test_the_tls_member_probes_a_public_address_over_tls_under_the_hosts_name():
+    """websockets opens TLS on the socket it is given, and names the URL's host to the server."""
+    with (
+        patch('positronic_wire.websocket.public_socket') as public_socket,
+        patch('positronic_wire.websocket.connect', side_effect=_refused_upgrade(HTTPStatus.FORBIDDEN)) as connect,
+    ):
+        assert websocket.WebsocketTlsClientWire().probe_public(_ADDRESS, None, 3.0) is None
+    assert public_socket.call_args.args == ('localhost', 8000, 3.0)
+    assert connect.call_args.args == ('wss://localhost:8000',)
+    assert connect.call_args.kwargs['sock'] is public_socket.return_value
+
+
+def test_a_socket_is_never_public(tmp_path):
+    address = wire.UnixSocketAddress(tmp_path / 'policy.sock', wire.SESSION_PATH, '')
+    with (
+        patch('positronic_wire.websocket.unix_connect') as dialled,
+        pytest.raises(wire.NotPublic, match='this machine'),
+    ):
+        websocket.WebsocketUnixClientWire().probe_public(address, None, 1.0)
+    dialled.assert_not_called()

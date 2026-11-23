@@ -363,6 +363,17 @@ class _ReasonBearing(BaseModel):
         return self
 
 
+class EndpointWarning(BaseModel):
+    """An endpoint of a filed plan that the platform could not confirm at filing, and why.
+
+    The endpoint did not answer, answered that it is not ready, or the platform did not ask it. The plan
+    is filed either way.
+    """
+
+    endpoint: str
+    message: str
+
+
 class SubmissionCreateResponse(_ReasonBearing):
     """`submissions.create` — covers a fresh create, an idempotent replay, and an unpullable image.
 
@@ -375,6 +386,7 @@ class SubmissionCreateResponse(_ReasonBearing):
     # A rig plan as it will run. None on a plan the simulator runs, which names an eval.
     resolved: ResolvedPlan | None = None
     billing: RequestBilling | None = None
+    endpoint_warnings: list[EndpointWarning] = Field(default_factory=list)
 
 
 class SubmissionListRow(_ReasonBearing):

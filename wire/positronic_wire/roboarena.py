@@ -1,12 +1,13 @@
 """The client side of the roboarena wire: each frame carried as bytes, on a websocket at the root."""
 
 import dataclasses
+import socket
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Self
 
 from positronic_wire import wire
-from positronic_wire.websocket import WebsocketClientConnection, connected_socket, refusal_of
+from positronic_wire.websocket import WebsocketClientConnection, connected_socket, public_socket, refusal_of
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 from websockets.sync.client import connect
 
@@ -104,9 +105,25 @@ class RoboarenaClientWire(wire.ClientWire[RoboarenaAddress]):
 
         ``open_timeout`` bounds the whole call: the name lookup, the handshake and the announcement.
         """
+        return self._probe_on(connected_socket, address, headers, open_timeout)
+
+    def probe_public(
+        self, address: RoboarenaAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        """``probe``, on a ``public_socket``. Raises ``TextAnswer`` as ``probe`` does."""
+        return self._probe_on(public_socket, address, headers, open_timeout)
+
+    def _probe_on(
+        self,
+        open_socket: Callable[[str, int, float], socket.socket],
+        address: RoboarenaAddress,
+        headers: Mapping[str, str] | None,
+        open_timeout: float,
+    ) -> wire.Refusal | None:
+        """``probe``'s read of the announcement, on the socket ``open_socket`` opens within ``open_timeout``."""
         deadline = time.monotonic() + open_timeout
         try:
-            sock = connected_socket(address.host, address.port, open_timeout)
+            sock = open_socket(address.host, address.port, open_timeout)
             # The probe has nothing to finish, so it does not wait for the server's close.
             connection = self._open(address, headers, max(0.0, deadline - time.monotonic()), sock=sock, close_timeout=0)
         except OSError as e:

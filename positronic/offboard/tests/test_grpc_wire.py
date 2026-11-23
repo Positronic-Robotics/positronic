@@ -7,6 +7,7 @@ import ipaddress
 import logging
 import pathlib
 import queue
+import socket
 import ssl
 import tempfile
 import threading
@@ -257,7 +258,11 @@ EDGE_HOST = '127.0.0.1'
 
 
 def _self_signed(host: str) -> tuple[bytes, bytes]:
-    """A certificate and key for ``host``, PEM encoded, valid from yesterday."""
+    """A certificate and key for ``host``, an address or a name, PEM encoded, valid from yesterday."""
+    try:
+        covered: x509.GeneralName = x509.IPAddress(ipaddress.ip_address(host))
+    except ValueError:
+        covered = x509.DNSName(host)
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
     day = datetime.timedelta(days=1)
@@ -271,7 +276,7 @@ def _self_signed(host: str) -> tuple[bytes, bytes]:
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - day)
         .not_valid_after(now + day)
-        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host))]), critical=False)
+        .add_extension(x509.SubjectAlternativeName([covered]), critical=False)
         .sign(key, hashes.SHA256())
     )
     private = key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption())
@@ -387,6 +392,40 @@ def test_a_tls_edge_session_without_the_token_is_refused(authed_server, edged, m
     assert refused.value.refusal is wire.Refusal.FORBIDDEN
 
 
+# A name no resolver answers. A public probe of it dials the edge, which a test gives as the name's address.
+_EDGE_NAME = 'policy.invalid'
+
+
+def _probed_publicly(monkeypatch, port: int) -> wire.Refusal | None:
+    """A public probe of ``_EDGE_NAME`` on ``port``, which resolves to the edge, a loopback address taken as public."""
+    look_up = socket.getaddrinfo
+
+    def resolve_the_edge_name(host, *args, **kwargs):
+        if host == _EDGE_NAME:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (EDGE_HOST, port))]
+        return look_up(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, 'getaddrinfo', resolve_the_edge_name)
+    monkeypatch.setattr(wire, 'is_public', lambda ip: ip == ipaddress.ip_address(EDGE_HOST))
+    address = wire.HostPortAddress(_EDGE_NAME, port, wire.SESSION_PATH, '')
+    return client_grpc.GrpcTlsClientWire().probe_public(address, None, 5.0)
+
+
+def test_a_public_probe_reaches_a_tls_edge_on_the_address_it_resolved_under_the_hosts_name(
+    both_wires, tls_edge, monkeypatch
+):
+    """gRPC resolves nothing, and verifies the edge's certificate against the name in the address."""
+    port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, certificate_host=_EDGE_NAME)
+    _trust_only(monkeypatch, root)
+    assert _probed_publicly(monkeypatch, port) is None
+
+
+def test_a_public_probe_of_an_edge_whose_certificate_names_another_host_is_final(both_wires, tls_edge, monkeypatch):
+    port, root = tls_edge(both_wires[0].host, both_wires[0].grpc_port, certificate_host='another.invalid')
+    _trust_only(monkeypatch, root)
+    assert _probed_publicly(monkeypatch, port) is wire.Refusal.FINAL
+
+
 def test_a_grpc_session_names_the_session_port_alone(both_wires):
     served, _policy = both_wires
     client = InferenceClient(*served.grpc())
@@ -455,6 +494,9 @@ def test_a_refused_handshake_closes_the_connection(both_wires):
 
         def probe(self, address, headers, open_timeout):
             return client_wire.probe(address, headers, open_timeout)
+
+        def probe_public(self, address, headers, open_timeout):
+            return client_wire.probe_public(address, headers, open_timeout)
 
     client._wire = _Recording()
     with pytest.raises(RuntimeError):

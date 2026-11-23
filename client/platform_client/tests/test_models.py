@@ -85,6 +85,7 @@ from platform_client.responses import (
     CancelResponse,
     DataBackedReplayLink,
     EndpointOutcome,
+    EndpointWarning,
     EpisodeCounts,
     ErroredSubmissionView,
     EvalView,
@@ -274,6 +275,12 @@ MODELS: list[BaseModel] = [
         submission_id=SUB, status=SubmissionStatus.errored, reason_code=ReasonCode.image_unpullable
     ),
     SubmissionCreateResponse(submission_id=SUB, status=SubmissionStatus.pending, resolved=RESOLVED),
+    SubmissionCreateResponse(
+        submission_id=SUB,
+        status=SubmissionStatus.pending,
+        resolved=RESOLVED,
+        endpoint_warnings=[EndpointWarning(endpoint='policy-a', message='no server answered at policy.example:8000')],
+    ),
     SubmissionListResponse(),
     SubmissionListResponse(
         submissions=[
@@ -588,6 +595,10 @@ def test_an_errored_row_keeps_its_reason_and_a_clean_one_needs_none():
     assert SubmissionCreateResponse.model_validate({'submission_id': '1f', 'status': 'pending'}).reason_code is None
     # An errored submission need not say why — the taxonomy is optional, the pairing is not.
     assert SubmissionCreateResponse.model_validate({'submission_id': '1f', 'status': 'errored'}).reason_code is None
+
+
+def test_an_answer_that_names_no_warning_carries_none():
+    assert SubmissionCreateResponse.model_validate({'submission_id': '1f', 'status': 'pending'}).endpoint_warnings == []
 
 
 def test_a_board_slug_that_could_never_be_one_is_refused():

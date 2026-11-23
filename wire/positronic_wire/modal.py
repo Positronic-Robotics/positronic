@@ -112,8 +112,8 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
     close does not wait for the edge's answer. A dropped connection keeps
     its session for ``idle_timeout``, so a reconnect reaches the same container. ``keepalive`` carries the token
     of a held session or of the spare, and starts the spare when there is none: on a cold app that wakes the
-    container the next dial takes. ``probe`` raises ``wire.ProbeUnsupported``. The wire ends every session it holds
-    when the process exits.
+    container the next dial takes. ``probe`` and ``probe_public`` raise ``wire.ProbeUnsupported``. The wire ends
+    every session it holds when the process exits.
 
     A pickled wire holds none of these sessions.
     """
@@ -203,6 +203,12 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
     ) -> wire.Refusal | None:
         """Raises ``wire.ProbeUnsupported``."""
         raise wire.ProbeUnsupported(f'{self.NAME} carries no probe; ask keepalive whether the server is up')
+
+    def probe_public(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        """Raises ``wire.ProbeUnsupported``, as ``probe`` does."""
+        raise wire.ProbeUnsupported(f'{self.NAME} carries no probe')
 
     def end_all(self) -> None:
         """End every Modal session this wire holds, and wait for the ends that already run."""

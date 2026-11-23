@@ -2,6 +2,7 @@
 
 import dataclasses
 import queue
+import socket
 import threading
 import time
 from typing import cast
@@ -167,6 +168,78 @@ def test_the_tls_member_opens_a_secure_channel(monkeypatch):
     _probing(monkeypatch, None)
     assert client_grpc.GrpcTlsClientWire().probe(_ADDRESS, None, 1.0) is None
     assert opened == [('gpu-host:9000', 'roots')]
+
+
+def _resolving_to(*hosts: str, port: int = 9000) -> list[tuple]:
+    """What ``socket.getaddrinfo`` answers for a name with ``hosts`` as its addresses."""
+    return [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, '', (host, port, 0, 0))
+        if ':' in host
+        else (socket.AF_INET, socket.SOCK_STREAM, 6, '', (host, port))
+        for host in hosts
+    ]
+
+
+def _secure_channels(monkeypatch) -> list[tuple]:
+    """Record the target, the credentials and the options of each secure channel, and open none."""
+    opened = []
+    monkeypatch.setattr(grpc, 'ssl_channel_credentials', lambda: 'roots')
+    monkeypatch.setattr(
+        grpc,
+        'secure_channel',
+        lambda target, credentials, options: opened.append((target, credentials, dict(options))) or MagicMock(),
+    )
+    return opened
+
+
+@pytest.mark.parametrize(
+    ('resolved', 'pinned'),
+    [
+        (['8.8.8.8'], 'ipv4:8.8.8.8:9000'),
+        (['8.8.8.8', '2606:4700::1111', '8.8.4.4'], 'ipv4:8.8.8.8:9000,8.8.4.4:9000'),
+        (['2606:4700::1111'], 'ipv6:[2606:4700::1111]:9000'),
+    ],
+)
+def test_a_public_probe_dials_the_addresses_its_one_lookup_answered_under_the_hosts_name(resolved, pinned, monkeypatch):
+    """gRPC resolves nothing: a second lookup can answer another address. The edge's certificate names the host."""
+    looked_up = []
+    monkeypatch.setattr(
+        socket, 'getaddrinfo', lambda name, *_args, **_kwargs: looked_up.append(name) or _resolving_to(*resolved)
+    )
+    opened = _secure_channels(monkeypatch)
+    sent = _probing(monkeypatch, _status(grpc.StatusCode.UNIMPLEMENTED))
+    assert client_grpc.GrpcTlsClientWire().probe_public(_ADDRESS, {'X-Caller': 'k'}, 2.0) is None
+    assert looked_up == ['gpu-host']
+    [(target, credentials, options)] = opened
+    assert (target, credentials) == (pinned, 'roots')
+    assert options['grpc.default_authority'] == 'gpu-host:9000'
+    assert options['grpc.ssl_target_name_override'] == 'gpu-host'
+    assert options['grpc.enable_http_proxy'] == 0
+    assert sent[0][1] == (('x-caller', 'k'),)
+
+
+@pytest.mark.parametrize('ip', ['10.0.0.1', '127.0.0.1', '100.64.0.1', 'fd7a:115c:a1e0::1', '169.254.169.254'])
+def test_a_public_probe_opens_no_channel_to_an_address_off_the_public_internet(ip, monkeypatch):
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *_args, **_kwargs: _resolving_to(ip))
+    opened = _secure_channels(monkeypatch)
+    with pytest.raises(wire.NotPublic, match='gpu-host'):
+        client_grpc.GrpcTlsClientWire().probe_public(_ADDRESS, None, 2.0)
+    assert opened == []
+
+
+@pytest.mark.parametrize(
+    ('errno_', 'refusal'),
+    [(socket.EAI_AGAIN, wire.Refusal.UNRESOLVED), (socket.EAI_NONAME, wire.Refusal.FINAL)],
+    ids=['the-resolver-timed-out', 'no-such-host'],
+)
+def test_a_public_probe_reads_a_failed_name_lookup_as_the_websocket_wire_does(errno_, refusal, monkeypatch):
+    def failed_lookup(*_args, **_kwargs):
+        raise socket.gaierror(errno_, 'lookup failed')
+
+    monkeypatch.setattr(socket, 'getaddrinfo', failed_lookup)
+    opened = _secure_channels(monkeypatch)
+    assert client_grpc.GrpcTlsClientWire().probe_public(_ADDRESS, None, 2.0) is refusal
+    assert opened == []
 
 
 @pytest.mark.parametrize(

@@ -4,7 +4,6 @@ import abc
 import errno
 import json
 import os
-import queue
 import socket
 import ssl
 import stat
@@ -62,34 +61,19 @@ def _status_refusal(status_code: int) -> wire.Refusal:
     return wire.Refusal.FINAL
 
 
-# The resolver's authoritative answers that the host has no address. A resolver that timed out answers
-# ``EAI_AGAIN``, which a later lookup can clear: a name can start resolving, where a misspelt one never does.
-_NO_SUCH_HOST_ERRNOS = (socket.EAI_NONAME, socket.EAI_NODATA)
-
-
 def refusal_of(raised: OSError | InvalidHandshake | ConnectionClosed) -> wire.Refusal:
     """What a handshake that did not open says about the server."""
     if isinstance(raised, InvalidStatus):
         return _status_refusal(raised.response.status_code)
     if isinstance(raised, ssl.SSLCertVerificationError):
         return wire.Refusal.FINAL
-    if isinstance(raised, socket.gaierror) and raised.errno in _NO_SUCH_HOST_ERRNOS:
-        return wire.Refusal.FINAL
-    if isinstance(raised, socket.gaierror) and raised.errno == socket.EAI_AGAIN:
-        return wire.Refusal.UNRESOLVED
+    if isinstance(raised, socket.gaierror):
+        return wire.lookup_refusal(raised)
     if isinstance(raised, InvalidHandshake) and not isinstance(raised, InvalidMessage):
         # An answer that is not a valid upgrade: a backend that is not ready.
         return wire.Refusal.COLD
     # A refused connect, a timed-out one, a reset TLS handshake, a connection that closed before an answer.
     return wire.Refusal.SILENT
-
-
-def _seconds_until(deadline: float) -> float:
-    """Raises ``TimeoutError`` once ``deadline`` has passed, as a socket that timed out does."""
-    left = deadline - time.monotonic()
-    if left <= 0:
-        raise TimeoutError('the call spent its timeout')
-    return left
 
 
 class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
@@ -194,12 +178,21 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
         credential answers 401. So 403 is the server, and every other status reads as ``dial`` reads it.
         ``open_timeout`` bounds the whole call, the name lookup included.
         """
-        root = address.at_root()
+        return self._probe_on(self._open_socket, address.at_root(), headers, open_timeout)
+
+    def _probe_on(
+        self,
+        open_socket: Callable[[wire.AddressT, float], socket.socket],
+        root: wire.AddressT,
+        headers: Mapping[str, str] | None,
+        open_timeout: float,
+    ) -> wire.Refusal | None:
+        """``probe``'s handshake on the socket ``open_socket`` opens to ``root`` within ``open_timeout``."""
         deadline = time.monotonic() + open_timeout
         try:
             # websockets closes `sock` where the handshake fails, and caps the answer it reads. The probe does not
             # wait for the server's close.
-            sock = self._open_socket(root, open_timeout)
+            sock = open_socket(root, open_timeout)
             websocket = self._connect(
                 root,
                 sock=sock,
@@ -217,28 +210,20 @@ class _WebsocketWire(wire.ClientWire[wire.AddressT], Generic[wire.AddressT]):
         return None
 
 
-def _addresses(host: str, port: int, deadline: float) -> list[tuple[Any, ...]]:
-    """The addresses ``host`` resolves to, before ``deadline``.
-
-    ``getaddrinfo`` takes no timeout. A lookup past the deadline ends in its own thread, which the resolver
-    configuration bounds (``timeout`` x ``attempts`` per nameserver), and nothing reads its answer.
-    """
-    found: queue.SimpleQueue[list[tuple[Any, ...]] | OSError] = queue.SimpleQueue()
-
-    def look_up() -> None:
+def _connected_to(host: str, resolved: list[tuple[Any, ...]], deadline: float) -> socket.socket:
+    """A TCP socket connected to the first of the addresses ``host`` ``resolved`` to that takes a connect."""
+    failure = OSError(f'{host} resolves to no address')
+    for family, kind, proto, _name, address in resolved:
+        sock = socket.socket(family, kind, proto)
         try:
-            found.put(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
-        except OSError as failed:
-            found.put(failed)
-
-    threading.Thread(target=look_up, name='wire-lookup', daemon=True).start()
-    try:
-        addresses = found.get(timeout=_seconds_until(deadline))
-    except queue.Empty:
-        raise TimeoutError(f'{host} did not resolve in time') from None
-    if isinstance(addresses, OSError):
-        raise addresses
-    return addresses
+            sock.settimeout(wire.seconds_until(deadline))
+            sock.connect(address)
+        except OSError as e:
+            sock.close()
+            failure = e
+        else:
+            return sock
+    raise failure
 
 
 def connected_socket(host: str, port: int, timeout: float) -> socket.socket:
@@ -247,18 +232,13 @@ def connected_socket(host: str, port: int, timeout: float) -> socket.socket:
     FOOTGUN: ``socket.create_connection`` arms its timeout once per address, and gives the lookup none.
     """
     deadline = time.monotonic() + timeout
-    failure = OSError(f'{host} resolves to no address')
-    for family, kind, proto, _name, address in _addresses(host, port, deadline):
-        sock = socket.socket(family, kind, proto)
-        try:
-            sock.settimeout(_seconds_until(deadline))
-            sock.connect(address)
-        except OSError as e:
-            sock.close()
-            failure = e
-        else:
-            return sock
-    raise failure
+    return _connected_to(host, wire.addresses(host, port, deadline), deadline)
+
+
+def public_socket(host: str, port: int, timeout: float) -> socket.socket:
+    """``connected_socket``, to the addresses of a public host alone (``wire.public_addresses``)."""
+    deadline = time.monotonic() + timeout
+    return _connected_to(host, wire.public_addresses(host, port, deadline), deadline)
 
 
 class _HTTPConnectionOn(HTTPConnection):
@@ -273,7 +253,7 @@ class _HTTPConnectionOn(HTTPConnection):
         self._deadline = deadline
 
     def connect(self) -> None:
-        self.sock = self._open_socket(_seconds_until(self._deadline))
+        self.sock = self._open_socket(wire.seconds_until(self._deadline))
 
 
 def tls_socket(host: str, port: int, timeout: float) -> socket.socket:
@@ -282,7 +262,7 @@ def tls_socket(host: str, port: int, timeout: float) -> socket.socket:
     deadline = time.monotonic() + timeout
     sock = connected_socket(host, port, timeout)
     try:
-        sock.settimeout(_seconds_until(deadline))
+        sock.settimeout(wire.seconds_until(deadline))
         # No context named: the socket verifies the edge against the system's own roots.
         return ssl.create_default_context().wrap_socket(sock, server_hostname=host)
     except BaseException:
@@ -359,6 +339,14 @@ class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
     def _api_connection(self, address: wire.HostPortAddress, deadline: float) -> HTTPConnection:
         return _HTTPConnectionOn(wire.netloc(address, self.DEFAULT_PORT), partial(self._open_socket, address), deadline)
 
+    def probe_public(
+        self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        """``probe``'s handshake on a ``public_socket``, which names the host in the handshake and in TLS."""
+        return self._probe_on(
+            lambda root, timeout: public_socket(root.host, root.port, timeout), address.at_root(), headers, open_timeout
+        )
+
 
 class WebsocketTlsClientWire(WebsocketClientWire):
     """The websocket wire over TLS: the same session behind an edge that terminates it."""
@@ -407,6 +395,12 @@ class WebsocketUnixClientWire(_WebsocketWire[wire.UnixSocketAddress]):
     def _api_connection(self, address: wire.UnixSocketAddress, deadline: float) -> HTTPConnection:
         """The HTTP API answers on the session's own socket, beside the sessions."""
         return _HTTPConnectionOn(self.STANDS_FOR_THE_SERVER, partial(self._open_socket, address), deadline)
+
+    def probe_public(
+        self, address: wire.UnixSocketAddress, headers: Mapping[str, str] | None, open_timeout: float
+    ) -> wire.Refusal | None:
+        """Raises ``wire.NotPublic``: a socket is on this machine."""
+        raise wire.NotPublic(f'{self.session_url(address)} is a socket on this machine')
 
     @staticmethod
     def _a_retry_can_reach_it(uds: Path, raised: OSError) -> bool:
