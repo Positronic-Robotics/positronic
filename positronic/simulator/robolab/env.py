@@ -18,8 +18,9 @@ The wire contract:
   clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
   touches it (for the YAM, any finger of either hand); and RoboLab's progress through each condition chain of the
   current subtask.
-- ``--task-lib`` adds a task library (``task_catalog``) to a DROID server: its tasks run by name beside the
-  benchmark, and the camera sets its ``cameras.py`` returns join RoboLab's presets for ``--cameras``.
+- ``--task-lib`` adds a task library (``task_catalog``) to the server: its tasks run by name beside the
+  benchmark. On a DROID server, the camera sets its ``cameras.py`` returns join RoboLab's presets for ``--cameras``;
+  the YAM renders its own three cameras.
 """
 
 import argparse
@@ -97,8 +98,6 @@ AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
 args.cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
 keys.camera_set(args.robot, args.cameras)
-if args.task_lib and args.robot != keys.DROID:
-    parser.error(f'task libraries hold tasks for the {keys.DROID} robot, not for the {args.robot} robot')
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
 simulation_app = AppLauncher(args).app
 
@@ -725,7 +724,8 @@ class YamEnv(RobolabEnv):
         self._pose_refusals = yam_spec.PoseRefusals(0)
 
     def _register(self, task: str) -> None:
-        self._register_envs([task])
+        # A library task registers by its file path, and keeps the YAM stand fixture.
+        self._register_envs([self._catalog.register_target(task)])
 
     def _bind_robot(self) -> None:
         names = self._robot.data.joint_names
