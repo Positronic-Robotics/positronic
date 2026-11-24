@@ -25,6 +25,7 @@ import yam_spec
 # Importing ``env`` launches the Isaac app — a precondition for every isaaclab/robolab import below.
 from env import DroidEnv, RobolabEnv, YamEnv, args, simulation_app
 from isaaclab.utils.math import matrix_from_quat, quat_apply, quat_inv, quat_mul
+from pxr import Usd, UsdPhysics  # pyright: ignore[reportMissingImports]
 
 from robolab.core.sensors.contact_sensor_utils import (  # pyright: ignore[reportMissingImports]
     get_batch_contact_sensor,
@@ -426,6 +427,20 @@ def _check_the_listing_refuses_an_unknown_phrasing(env: DroidEnv) -> None:
         print(f'  listing: OK (default, vague and specific list; a typo is refused: {e})')
         return
     raise AssertionError('the listing accepted the phrasing vauge')
+
+
+def _check_the_disabled_colliders_do_not_collide(env: DroidEnv) -> None:
+    """A scene that holds RoboLab's orange1 builds with its stem collider out of the physics."""
+    _reset(env, {**_TOKEN, keys.TOKEN_TASK: 'FruitsMovingOrangeOrLimeTask'})
+    found = [
+        prim
+        for prim in Usd.PrimRange(env._env.sim.stage.GetPrimAtPath(env._env.scene.env_ns))
+        if str(prim.GetPath()).endswith(env._DISABLED_COLLIDERS)
+    ]
+    assert found, f'the scene holds no collider of {env._DISABLED_COLLIDERS}'
+    colliding = [str(p.GetPath()) for p in found if UsdPhysics.CollisionAPI(p).GetCollisionEnabledAttr().Get()]
+    assert not colliding, f'these colliders still collide: {colliding}'
+    print(f'  disabled colliders: OK ({len(found)} out of the physics)')
 
 
 def _check_a_clone_that_faults(env: DroidEnv) -> None:
@@ -835,6 +850,7 @@ def main() -> None:
     _check_cartesian_delta(env)
     _check_an_episode_length_replaces_the_budget(env)
     _check_a_command_that_is_not_finite_holds(env)
+    _check_the_disabled_colliders_do_not_collide(env)
     _check_a_clone_that_faults(env)
     env.close()
     if args.max_envs > 1:
