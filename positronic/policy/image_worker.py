@@ -231,6 +231,7 @@ class ImageWorker:
 
     def call(self, function: Callable[..., Any], tree: Any, /, *args: Any) -> Any:
         """``function(tree, *args)``, run in the worker process. ``function`` and ``args`` must pickle."""
+        # The process and both blocks serve one call at a time; the two timeouts bound the hold.
         with self._lock:
             if self._process is None:
                 self._start()
