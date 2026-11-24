@@ -533,8 +533,7 @@ class FinishedSubmissionView(_TaggedView):
     replay: ReplayLink | None = None
     report: ReportLink | None = None
     outcome: PlanOutcome | None = None
-    # When the run started. A run can finish between two reads of `submissions.get`, so a reader that
-    # never saw `running` learns from this that the run did run.
+    # When the run started. None where the platform recorded no start.
     started_at: AwareDatetime | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.finished
 
