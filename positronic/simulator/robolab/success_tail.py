@@ -22,27 +22,39 @@ RESET_IN_PLACE_STEPS = 2
 class SuccessTail:
     """Per scene clone, whether a success term fired in this episode, and the control steps since the first one.
 
-    A success stays a success. Its episode ends ``TAIL_SEC`` after the first success, or at the time limit when that
-    comes first.
+    A success stays a success, and the tail does not change the verdict. Its episode ends ``TAIL_SEC`` after the first
+    success, or earlier at the time limit or at a fault of the clone's arm state.
     """
 
     def __init__(self, num_envs: int, control_dt: float):
         self._tail_steps = math.ceil(round(TAIL_SEC / control_dt, 9))
         self._succeeded = np.zeros(num_envs, dtype=bool)
+        self._succeeded_earlier = np.zeros(num_envs, dtype=bool)
         self._steps_since = np.zeros(num_envs, dtype=np.int64)
 
     def reset(self) -> None:
         self._succeeded[:] = False
+        self._succeeded_earlier[:] = False
         self._steps_since[:] = 0
 
-    def step(self, fired: np.ndarray, timed_out: np.ndarray, episode_steps: np.ndarray) -> np.ndarray:
+    def step(
+        self, fired: np.ndarray, timed_out: np.ndarray, faulted: np.ndarray, episode_steps: np.ndarray
+    ) -> np.ndarray:
         """Per clone, whether RoboLab ends its episode as a success at this step.
 
         ``fired`` is whether a success term fires at this step, ``timed_out`` whether the time limit ends the episode
-        at this step, and ``episode_steps`` the control steps of the episode so far. A success term that fires within
-        ``RESET_IN_PLACE_STEPS`` passes through, so that RoboLab resets the clone in place.
+        at this step, ``faulted`` whether the clone's arm state has a fault, and ``episode_steps`` the control steps
+        of the episode so far. A success term that fires within ``RESET_IN_PLACE_STEPS`` passes through, so that
+        RoboLab resets the clone in place.
         """
         artifact = fired & (episode_steps <= RESET_IN_PLACE_STEPS)
+        self._succeeded_earlier[:] = self._succeeded
         self._steps_since[self._succeeded] += 1
         self._succeeded |= fired & ~artifact
-        return artifact | (self._succeeded & ((self._steps_since >= self._tail_steps) | timed_out))
+        tail_over = (self._steps_since >= self._tail_steps) | timed_out | faulted
+        return artifact | (self._succeeded & tail_over)
+
+    def verdict_faults(self, faults: list[str | None]) -> list[str | None]:
+        """Per clone, the fault of its arm state at the last step, or ``None`` when its success came at an earlier
+        step: such a fault only ends the tail."""
+        return [None if earlier else fault for fault, earlier in zip(faults, self._succeeded_earlier, strict=True)]

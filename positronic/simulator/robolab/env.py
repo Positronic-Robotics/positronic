@@ -13,8 +13,9 @@ The wire contract:
   (``yam_spec.ROOT_IN_RIG_WORLD``), and ``robot_meta`` carries the arm mounts in that frame.
 - The reset token names the RoboLab env and the instruction variant, and carries no seed: RoboLab's eval path has no
   seed hook. A reset rebuilds the scene only when the task key or the clone count changes.
-- A success ends its episode ``success_tail.TAIL_SEC`` later, or at the time limit, so that the video shows the
-  result. The clone runs on under its client's commands until then, and the success stays.
+- A success ends its episode ``success_tail.TAIL_SEC`` later, or earlier at the time limit or at a fault of its arm
+  state, so that the video shows the result. The clone runs on under its client's commands until then, and the
+  success stays.
 - A clone that terminates freezes, with a zero action, on its verdict until the slowest clone of the batch ends.
 - ``gt_state`` (``keys.GT_STATE``) holds per slot, for each contact object but the table, its pose (position in the
   clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
@@ -163,7 +164,8 @@ class RobolabEnv(EnvProtocol):
     events, or restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
     forwarded commands into its row of the robot's action and reports, per slot, ``done`` (episode over)
     and ``success`` (the task's success termination fired). A slot whose arm state has a fault
-    (``arm_fault.arm_faults``) ends its episode as a failure with ``fault``, and the other slots continue.
+    (``arm_fault.arm_faults``) ends its episode as a failure with ``fault``, and the other slots continue. A fault
+    after the step of a success only ends the tail of that success.
 
     The scene clones, one per slot and at most ``max_envs``, share one task, one sim and one ``env.step``; the whole
     batch reruns the same task on every reset, since RoboLab clones a single registered env.
@@ -349,6 +351,7 @@ class RobolabEnv(EnvProtocol):
             ended = self._success_tail.step(
                 terminations.terminated.cpu().numpy(),
                 terminations.time_outs.cpu().numpy(),
+                np.array([fault is not None for fault in self._arm_faults()]),
                 self._env.episode_length_buf.cpu().numpy(),
             )
             terminations.terminated[:] = torch.as_tensor(ended, device=terminations.terminated.device)
@@ -412,16 +415,19 @@ class RobolabEnv(EnvProtocol):
     @telemetry.traced(telemetry.SPAN_ENV_STEP)
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         assert self._env is not None  # step is only served after a reset built the env
+        assert self._success_tail is not None  # built with the env
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
             self._kit_app.update()
         obs, _reward, _term, _trunc, _info = self._env.step(self._action(actions))
-        self._faults = [first or now for first, now in zip(self._faults, self._arm_faults(), strict=True)]
+        now = self._success_tail.verdict_faults(self._arm_faults())
+        self._faults = [first or fault for first, fault in zip(self._faults, now, strict=True)]
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps
         # running (never frozen, no verdict), while a real success/time-out freezes the env and records one. A
-        # success freezes at the end of its tail. A faulted slot is done too, with no success.
+        # success freezes at the end of its tail. A faulted slot is done too, with no success. A fault after the step of
+        # a success ends the tail, and the success stays.
         frozen = self._frozen_slots()
         results = self._env.get_env_results()
         observed = self._observe(obs, self._subtask_progress(), reset=False)

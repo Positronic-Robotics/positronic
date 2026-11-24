@@ -14,7 +14,7 @@ def _run(fired: list[list[bool]], time_limit: int = 1000, start: int = 3) -> lis
     ended = []
     for step, row in enumerate(fired, start=start):
         steps = np.full(len(row), step)
-        ended.append(tail.step(np.array(row), steps >= time_limit, steps).tolist())
+        ended.append(tail.step(np.array(row), steps >= time_limit, np.zeros(len(row), dtype=bool), steps).tolist())
     return ended
 
 
@@ -54,7 +54,39 @@ def test_each_clone_runs_its_own_tail():
 
 def test_a_reset_clears_the_success_of_the_last_episode():
     tail = success_tail.SuccessTail(1, _CONTROL_DT)
-    tail.step(np.array([True]), np.array([False]), np.array([3]))
+    tail.step(np.array([True]), np.array([False]), np.array([False]), np.array([3]))
     tail.reset()
-    ended = [tail.step(np.array([False]), np.array([False]), np.array([s])) for s in range(4, 40)]
+    ended = [tail.step(np.array([False]), np.array([False]), np.array([False]), np.array([s])) for s in range(4, 40)]
     assert not any(e.any() for e in ended)
+
+
+_FAULT = 'arm out of range'
+
+
+def _run_faulted(fired: list[bool], faulted: list[bool]) -> tuple[list[bool], list[str | None]]:
+    """Per control step of one clone, whether RoboLab ends it as a success, and the fault that decides the verdict."""
+    tail = success_tail.SuccessTail(1, _CONTROL_DT)
+    ended, faults = [], []
+    for step, (fire, fault) in enumerate(zip(fired, faulted, strict=True), start=3):
+        ended.append(bool(tail.step(np.array([fire]), np.array([False]), np.array([fault]), np.array([step]))[0]))
+        faults.append(tail.verdict_faults([_FAULT if fault else None])[0])
+    return ended, faults
+
+
+def test_an_arm_fault_inside_the_tail_ends_it_and_the_success_stays():
+    # RoboLab's result and its recorder both read the success of an ended clone from the buffer that ``step`` returns.
+    ended, faults = _run_faulted([True] + [False] * 9, [False] * 5 + [True] * 5)
+    assert ended == [False] * 5 + [True] * 5
+    assert faults == [None] * 10
+
+
+def test_an_arm_fault_with_no_earlier_success_decides_the_verdict():
+    ended, faults = _run_faulted([False] * 5, [False, False, True, True, True])
+    assert ended == [False] * 5
+    assert faults == [None, None, _FAULT, _FAULT, _FAULT]
+
+
+def test_an_arm_fault_at_the_step_of_the_first_success_decides_the_verdict():
+    ended, faults = _run_faulted([False, True], [False, True])
+    assert ended == [False, True]
+    assert faults == [None, _FAULT]
