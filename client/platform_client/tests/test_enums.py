@@ -109,11 +109,11 @@ START_POSE_VALUES = {
     'nominal': 1,
     'droid_reset': 2,
     'abc_init': 3,
-    'abc_put_plastic_bottles_in_bin': 4,
-    'abc_put_screwdriver_in_bin': 5,
-    'abc_unload_plates_from_dish_rack': 6,
-    'abc_sweep_away_paper_scraps': 7,
-    'abc_turn_mug_right_side_up': 8,
+    'yam_near_raised': 4,
+    'yam_far_low': 5,
+    'yam_near_high': 6,
+    'yam_mid_low': 7,
+    'yam_far_raised': 8,
 }
 
 PERSISTED_ENUMS: list[tuple[type[IntEnum], dict[str, int]]] = [
