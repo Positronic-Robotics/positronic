@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Evals
+- The public evals `molmo.franka_pick_mini_strict` and `molmo.franka_pick_mini_strict_smoke` run the episodes of `molmo.franka_pick_mini` and `molmo.franka_pick_mini_smoke` under the `strict_v1` success profile. They are for practice on your machine: `positronic eval run --eval=molmo.franka_pick_mini_strict`. `positronic-evals` goes to 0.2.20, and `positronic-platform-client` goes to 0.47.37 and pins it
+
 ## [0.4.6] - 2026-11-12
 
 This release publishes `positronic-platform-client` 0.47.24, and `positronic` requires that version. A submission view lists what it shows for each of its evals, and `positronic eval status` prints that list for a submission of several evals. An `image` endpoint can state the params of its session URL. A session opening of `InferenceClient` and `RoboarenaClient` ends by the connect deadline. The Progress chart of the replay plots the stage and count marks of every channel. The Dream-1 vendor caps the hand speed at 0.3 m/s.
