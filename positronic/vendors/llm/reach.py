@@ -5,6 +5,7 @@ from typing import Any, NamedTuple, Protocol
 
 import configuronic as cfn
 import numpy as np
+from pydantic import BaseModel
 
 from positronic import geom
 from positronic.drivers.roboarm.yam.kinematics import YamKinematics, within_ik_tolerance
@@ -33,8 +34,19 @@ class Box(NamedTuple):
         return enter <= leave
 
 
+class ReachReport(BaseModel):
+    """What the IK of an arm says about its measured joints and about the previous target of its hand.
+
+    ``target_refusal`` says why the arm cannot reach that target, as a refusal of the target does.
+    """
+
+    joints_at_limit: list[str]
+    target_in_reach: bool | None = None
+    target_refusal: str | None = None
+
+
 class Reach(Protocol):
-    """Why a hand cannot follow its poses."""
+    """Why a hand cannot follow its poses, and where the arm base of a hand is."""
 
     def refusal(
         self,
@@ -46,6 +58,18 @@ class Reach(Protocol):
         """The index of the first pose of ``poses`` that a hand at ``hand`` with its arm at ``joints`` cannot follow
         in order, and why; or ``None``. ``held`` is the target that the hand holds when the hand is within the
         tracking error of it, else ``None``."""
+        ...
+
+    def base(self, joints: np.ndarray, hand: geom.Transform3D) -> geom.Transform3D:
+        """The pose of the arm base, in the frame of ``hand``, for an arm at ``joints``."""
+        ...
+
+    def fact(self) -> str:
+        """What the prompt states about where a hand can go, in the frame of its arm base."""
+        ...
+
+    def report(self, joints: np.ndarray, hand: geom.Transform3D, target: geom.Transform3D | None) -> ReachReport:
+        """The joints of an arm at ``joints`` that sit at a limit, and whether the arm can reach ``target``."""
         ...
 
     def meta(self) -> dict[str, Any]: ...
@@ -60,6 +84,20 @@ class YamReach:
     ``max_joint_step`` (rad) from the pose before it: the driver would then swing the arm to another posture.
     """
 
+    # Offsets from the base, in metres, where the IK finds joints inside the ranges at every y from the base to `INWARD`
+    # toward the other arm. A hand that points straight down reaches up to each height, as far as each distance
+    # forward; joint 4, the wrist pitch, sets it.
+    TOP_DOWN_CEILING = ((0.10, 0.19), (0.25, 0.15), (0.30, 0.11), (0.35, 0.05))
+    # A hand 45 degrees down, between these distances forward and up to this height.
+    TILTED_FROM, TILTED_TO, TILTED_CEILING = 0.15, 0.45, 0.20
+    # A horizontal approach needs at least this distance forward and this height.
+    SIDE_FROM, SIDE_ABOVE = 0.25, 0.14
+    # The farthest a horizontal hand reaches, at each height: in line with the base, and `INWARD` toward the other arm.
+    SIDE_TO = ((0.29, 0.70, 0.62), (0.39, 0.64, 0.54))
+    INWARD = 0.30
+    # A measured joint this close to a range bound, in radians, sits at the bound.
+    LIMIT_MARGIN = 0.02
+
     # TODO: the station owns the joint ranges (its chain reports them), and they reach no policy. The check uses the
     # MJCF ranges, which equal the ranges of a chain on i2rt's own limits. Read them from the station at the next pin
     # roll of the platform.
@@ -70,6 +108,48 @@ class YamReach:
 
     def meta(self) -> dict[str, Any]:
         return {'type': 'yam', 'max_joint_step': self._max_joint_step}
+
+    def base(self, joints: np.ndarray, hand: geom.Transform3D) -> geom.Transform3D:
+        return hand * self._kinematics.fk(joints).inv
+
+    def fact(self) -> str:
+        ceilings = ', '.join(f'z {up:.2f} up to x {ahead:.2f}' for ahead, up in self.TOP_DOWN_CEILING)
+        (up, inline, inward), *higher = self.SIDE_TO
+        far = (
+            f'A horizontal hand reaches at most x {inline:.2f} in line with its base and x {inward:.2f} at '
+            f'{self.INWARD:.2f} m toward the other arm, up to z {up:.2f}'
+        )
+        far += ''.join(f'; at z {up:.2f}, at most x {inline:.2f} and x {inward:.2f}' for up, inline, inward in higher)
+        return (
+            f'In the frame of its arm base, a hand that points straight down (roll 3.1416, pitch 0) reaches at most '
+            f'{ceilings}, and lower further out. Above that the wrist cannot bend far enough, so hover lower or tilt '
+            'the hand. Its yaw works from 0.52 rad below to 3.67 rad above the direction from the base to the hand; '
+            'yaw 1.5708 works for every arm. A hand 45 degrees down (roll 2.3562, pitch 0, yaw 1.5708) works from '
+            f'x {self.TILTED_FROM:.2f} to x {self.TILTED_TO:.2f}, up to z {self.TILTED_CEILING:.2f}. A horizontal '
+            f'approach (roll 1.5708) needs x of at least {self.SIDE_FROM:.2f} and z of at least {self.SIDE_ABOVE:.2f}. '
+            f'{far}. Each of these bounds holds up to {self.INWARD:.2f} m toward the other arm; past that the hand '
+            'reaches less far. '
+        )
+
+    def report(self, joints: np.ndarray, hand: geom.Transform3D, target: geom.Transform3D | None) -> ReachReport:
+        kinematics = self._kinematics
+        lower, upper = kinematics.lower, kinematics.upper
+        at_limit = [
+            f'joint {joint + 1} is at its {side} limit ({round(limit, 2) + 0.0:.2f} rad)'
+            for joint in range(len(joints))
+            for side, limit, near in (
+                ('lower', lower[joint], joints[joint] <= lower[joint] + self.LIMIT_MARGIN),
+                ('upper', upper[joint], joints[joint] >= upper[joint] - self.LIMIT_MARGIN),
+            )
+            if near
+        ]
+        if target is None:
+            return ReachReport(joints_at_limit=at_limit)
+        goal = self.base(joints, hand).inv * target
+        if within_ik_tolerance(target, hand) or kinematics.ik(goal, joints, lower, upper) is not None:
+            return ReachReport(joints_at_limit=at_limit, target_in_reach=True)
+        refusal = self._limit_refusal(goal, joints, lower, upper)
+        return ReachReport(joints_at_limit=at_limit, target_in_reach=False, target_refusal=refusal)
 
     def _limit_refusal(self, target: geom.Transform3D, joints: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> str:
         free = self._kinematics.ik(target, joints, np.full(len(joints), -np.inf), np.full(len(joints), np.inf))
@@ -111,7 +191,7 @@ class YamReach:
         poses: Sequence[geom.Transform3D],
     ) -> tuple[int, str] | None:
         kinematics = self._kinematics
-        base = hand * kinematics.fk(joints).inv
+        base = self.base(joints, hand)
         lower, upper = kinematics.lower, kinematics.upper
         staying = True
         for index, pose in enumerate(poses):

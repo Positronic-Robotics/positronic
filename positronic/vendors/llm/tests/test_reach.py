@@ -162,3 +162,59 @@ def test_a_hand_that_leaves_and_comes_back_where_the_ik_fails_is_refused():
     index, reason = YamReach().refusal(at, hand, held, away + back)
     assert index == len(away + back) - 1
     assert reason.startswith('joint 4 is at its lower limit (-1.69 rad)')
+
+
+def ik_reaches(xyz: tuple[float, float, float], rpy: tuple[float, float, float]) -> bool:
+    """Whether the IK finds joints inside the ranges for a hand at ``xyz`` and ``rpy`` in the frame of its arm base."""
+    target = geom.Transform3D(np.array(xyz), geom.Rotation.from_euler(rpy))
+    lower, upper = KINEMATICS.lower, KINEMATICS.upper
+    return any(KINEMATICS.ik(target, start, lower, upper) is not None for start in (TOP_DOWN, SIDE_ON))
+
+
+DOWN, TILTED, SIDE = (np.pi, 0.0, np.pi / 2), (2.3562, 0.0, 1.5708), (1.5708, 0.0, 1.5708)
+# From the base toward the other arm, on either side of the base.
+SIDEWAYS = (-YamReach.INWARD, -YamReach.INWARD / 2, 0.0, YamReach.INWARD / 2, YamReach.INWARD)
+
+
+@pytest.mark.parametrize('ahead,up', YamReach.TOP_DOWN_CEILING)
+def test_a_hand_that_points_down_reaches_the_stated_ceiling_and_4_cm_above_it_fails(ahead, up):
+    assert all(ik_reaches((ahead, y, up), DOWN) for y in SIDEWAYS)
+    assert not ik_reaches((ahead, YamReach.INWARD, up + 0.04), DOWN)
+
+
+def test_a_tilted_hand_and_a_side_approach_reach_where_the_fact_says():
+    tilted = (YamReach.TILTED_FROM, YamReach.TILTED_TO)
+    assert all(ik_reaches((x, y, z), TILTED) for x in tilted for y in SIDEWAYS for z in (0.0, YamReach.TILTED_CEILING))
+    assert all(ik_reaches((YamReach.SIDE_FROM, y, YamReach.SIDE_ABOVE), SIDE) for y in SIDEWAYS)
+
+
+@pytest.mark.parametrize(('up', 'inline', 'inward'), YamReach.SIDE_TO)
+def test_a_horizontal_hand_reaches_as_far_as_the_fact_says_and_not_much_farther(up, inline, inward):
+    assert ik_reaches((inline, 0.0, up), SIDE)
+    assert all(ik_reaches((inward, y, up), SIDE) for y in SIDEWAYS)
+    assert not ik_reaches((inline + 0.06, 0.0, up), SIDE)
+    assert not ik_reaches((inward + 0.06, YamReach.INWARD, up), SIDE)
+
+
+def test_the_fact_states_the_bounds_in_the_frame_of_the_arm_base():
+    fact = YamReach().fact()
+    assert fact.startswith('In the frame of its arm base, a hand that points straight down')
+    assert 'z 0.19 up to x 0.10' in fact
+    assert f'x of at least {YamReach.SIDE_FROM:.2f}' in fact
+
+
+def test_the_report_names_each_joint_at_a_limit():
+    at = sagged(3, -0.01)
+    assert YamReach().report(at, hand_at(at), None).joints_at_limit == ['joint 4 is at its lower limit (-1.69 rad)']
+    assert YamReach().report(SIDE_ON, hand_at(SIDE_ON), None).joints_at_limit == []
+
+
+def test_the_report_says_whether_the_arm_reaches_the_target_and_why_not():
+    reach = YamReach()
+    near = hand_at(SIDE_ON + [0, 0, 0, 0.1, 0, 0])
+    assert reach.report(SIDE_ON, hand_at(SIDE_ON), near).target_in_reach
+    path = lift(hand_at(TOP_DOWN), 0.3, 50)
+    index, _ = refusal(TOP_DOWN, path)
+    report = reach.report(TOP_DOWN, hand_at(TOP_DOWN), path[index])
+    assert report.target_in_reach is False
+    assert report.target_refusal.startswith('joint 4 is at its lower limit (-1.69 rad)')

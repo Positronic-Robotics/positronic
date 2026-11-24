@@ -50,6 +50,14 @@ class Images(StrEnum):
     ON_DEMAND = 'on_demand'
 
 
+class Frames(StrEnum):
+    """The frame of the measured pose and the targets of each hand: the frame the rig reports, which all hands share,
+    or the frame of the arm base of each hand."""
+
+    SHARED = 'shared'
+    ARM = 'arm'
+
+
 class Tool(StrEnum):
     MOVE_PATH = 'move_path'
     REVEAL_FRAMES = 'reveal_frames'
@@ -141,6 +149,10 @@ class _Hand:
         }
 
 
+def _joints(obs: Mapping[str, Any], arm: str | None) -> np.ndarray:
+    return np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'], float)
+
+
 @dataclass
 class _Observation:
     hands: dict[str | None, _Hand]
@@ -161,13 +173,33 @@ class _Observation:
             images[name] = frame
         return cls(hands, str(obs[keys.TASK]), time_ns, images)
 
-    def state(self, targets: Targets) -> dict[str, Any]:
-        """The state the model reads: the hand of one arm at the top level, the hands of named arms under ``arms``."""
+    def state(
+        self,
+        targets: Targets,
+        bases: Mapping[str | None, geom.Transform3D],
+        reports: Mapping[str | None, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """The state the model reads: the hand of one arm at the top level, the hands of named arms under ``arms``.
+
+        A hand of an arm in ``bases`` is stated in the frame of that base, else in the frame of the measured pose.
+        ``reports`` holds what each arm reports beside its hand.
+        """
+
+        def arm(name: str | None, hand: _Hand) -> tuple[dict[str, Any], dict[str, Any]]:
+            target = targets.get(name)
+            if (base := bases.get(name)) is not None:
+                hand = replace(hand, pose=base.inv * hand.pose)
+                target = None if target is None else target.moved(base.inv)
+            return hand.measured(), hand.progress(target) | reports.get(name, {})
+
         state = {'task': self.task, policy_keys.OBS_TIME_NS: self.time_ns}
         cameras = {'cameras': list(self.images)}
         if (hand := self.hands.get(None)) is not None:
-            return state | hand.measured() | cameras | hand.progress(targets.get(None))
-        arms = {arm: hand.measured() | hand.progress(targets.get(arm)) for arm, hand in self.hands.items()}
+            measured, progress = arm(None, hand)
+            return state | measured | cameras | progress
+        arms = {
+            name: measured | progress for name, hand in self.hands.items() for measured, progress in [arm(name, hand)]
+        }
         return state | {'arms': arms} | cameras
 
     def frames(self, cameras: list[str], image_size: int) -> ModelRequest:
@@ -205,6 +237,8 @@ class Conversation:
         self._failures = 0
         self._calls = 0
         self._targets: dict[str | None, Waypoint] = {}
+        # With `Frames.ARM`, the arm base of each hand, in the frame of the measured pose, from the first observation.
+        self._bases: dict[str | None, geom.Transform3D] = {}
 
     def _record(self, event: dict[str, Any]) -> None:
         self._transcript.append(event)
@@ -217,8 +251,8 @@ class Conversation:
             f'Control the robot arms {", ".join(map(str, arms))} through exactly one tool call per response. '
             if named
             else 'Control one robot arm through exactly one tool call per response. ',
-            'Use absolute hand targets in the coordinate frame of the measured pose. ',
-            'All hands share this frame. A waypoint maps the name of an arm to its hand target. '
+            self._frames_fact(),
+            'A waypoint maps the name of an arm to its hand target. '
             'An arm that a waypoint leaves out holds its previous target. All arms reach a waypoint together. '
             if named
             else '',
@@ -265,6 +299,14 @@ class Conversation:
             'joint would turn too far at once. '
             if self._policy.reach is not None
             else '',
+            self._policy.reach.fact() if self._policy.reach is not None and self._policy.frames is Frames.ARM else '',
+            'Each observation reports, under reach for each hand, the joints that sit at a limit and whether the arm '
+            'can reach the previous target, with the reason when it cannot. remaining_translation_m and '
+            'remaining_rotation_rad give how far the hand is from that target, for example when the arm sags under '
+            'a load. '
+            if self._policy.report
+            else '',
+            *(f'{fact} ' for fact in self._policy.facts),
             f'Motion limits: {json.dumps(asdict(self._policy.motion))}. '
             f'API call budget, including corrections and pictures: {self._policy.max_calls}.',
         ])
@@ -275,11 +317,47 @@ class Conversation:
         })
         return ModelRequest([SystemPromptPart(prompt)])
 
+    def _frames_fact(self) -> str:
+        if self._policy.frames is Frames.SHARED:
+            all_hands = 'All hands share this frame. ' if self._policy.arms != keys.ONE_ARM else ''
+            return f'Use absolute hand targets in the coordinate frame of the measured pose. {all_hands}'
+        sentences = [
+            'Use absolute hand targets.',
+            'The measured pose and the targets of each hand are in the frame of its arm base.',
+        ]
+        for (arm, base), (other, other_base) in itertools.permutations(self._bases.items(), 2):
+            offset = base.inv * other_base
+            position = [round(float(v), 3) + 0.0 for v in offset.translation]
+            rotation = [round(float(v), 3) + 0.0 for v in offset.rotation.as_euler]
+            sentences.append(
+                f'In the frame of arm {arm}, the base of arm {other} is at {position} m, turned by '
+                f'roll/pitch/yaw {rotation} rad.'
+            )
+        return ' '.join(sentences) + ' '
+
+    def _reports(self, raw: Mapping[str, Any], hands: Mapping[str | None, _Hand]) -> dict[str | None, dict[str, Any]]:
+        """For each arm, the reach report and the angle from the hand to its previous target."""
+        reach = self._policy.reach
+        if not self._policy.report or reach is None:
+            return {}
+        reports = {}
+        for arm, hand in hands.items():
+            target = self._targets.get(arm)
+            report = reach.report(_joints(raw, arm), hand.pose, None if target is None else target.pose)
+            reports[arm] = {'reach': report.model_dump(exclude_none=True)}
+            if target is not None:
+                reports[arm]['remaining_rotation_rad'] = float((hand.pose.rotation.inv * target.pose.rotation).angle)
+        return reports
+
     def _observe(self, raw: Mapping[str, Any], time_ns: int) -> None:
         self._obs = _Observation.read(raw, self._policy.arms, self._policy.camera_keys, time_ns)
+        if self._policy.frames is Frames.ARM and not self._bases:
+            assert self._policy.reach is not None
+            reach = self._policy.reach
+            self._bases = {arm: reach.base(_joints(raw, arm), hand.pose) for arm, hand in self._obs.hands.items()}
         if not self._messages:
             self._messages.append(self._initial())
-        state = self._obs.state(self._targets)
+        state = self._obs.state(self._targets, self._bases, self._reports(raw, self._obs.hands))
         self._record({'event': 'observation', **state})
         self._messages.append(ModelRequest.user_text_prompt(json.dumps(state, allow_nan=False)))
         self._frames.append([])
@@ -321,6 +399,8 @@ class Conversation:
                     raise ValueError(
                         f'Unknown arms {sorted(map(str, unknown))}; the arms are {list(self._policy.arms)}'
                     )
+                if self._bases:
+                    path = [{arm: w.moved(self._bases[arm]) for arm, w in waypoint.items()} for waypoint in path]
                 return path
             case Finish():
                 return data
@@ -540,8 +620,9 @@ class Conversation:
                 )
         if policy.reach is None:
             return None
-        joints = np.asarray(obs[f'{keys.arm_channel(keys.ROBOT_STATE, arm)}{keys.JOINTS_SUFFIX}'], float)
-        refusal = policy.reach.refusal(joints, hand.pose, held.pose if near else None, [pose for _, pose in samples])
+        refusal = policy.reach.refusal(
+            _joints(obs, arm), hand.pose, held.pose if near else None, [pose for _, pose in samples]
+        )
         if refusal is None:
             return None
         sample, reason = refusal
@@ -583,7 +664,7 @@ class Conversation:
             return [[]]
         self._targets = dict(bounded[-1])
         result = {
-            'waypoints': [self._dump(targets) for targets in bounded],
+            'waypoints': [self._dump(self._in_arm_frames(targets)) for targets in bounded],
             'clamped': clamped,
             'duration_s': (sum(map(len, parts)) + 1) / self._policy.motion.fps,
             'feedback': 'Path scheduled. Check the next measured observation for actual arrival.',
@@ -591,6 +672,12 @@ class Conversation:
         self._messages.append(ModelRequest([ToolReturnPart(call.tool_name, result, tool_call_id=call.tool_call_id)]))
         self._record({'event': 'accepted', 'call': self._calls, 'time_ns': time_ns, **result})
         return parts
+
+    def _in_arm_frames(self, targets: Targets) -> Targets:
+        """``targets`` in the frame that the model reads for each hand."""
+        if not self._bases:
+            return targets
+        return {arm: target.moved(self._bases[arm].inv) for arm, target in targets.items()}
 
     @staticmethod
     def _dump(targets: Targets) -> dict[str, Any]:
@@ -608,6 +695,9 @@ class LLMPolicy(Policy):
     ``arms`` is ``keys.ONE_ARM`` or the names of the arms. ``min_hand_distance``, ``max_tracking_error`` and
     ``min_hand_height`` are in metres. A path is rejected when a hand goes below ``min_hand_height``, into a box of
     ``keep_out``, or where ``reach`` refuses it. ``camera_mounts`` states the cameras attached to a hand in the prompt.
+    ``frames`` sets the frame of each hand that the model reads and commands; ``Frames.ARM`` takes the arm base from
+    ``reach`` and states the reach fact of ``reach``. ``report`` adds the reach report of each hand to each
+    observation. ``facts`` are sentences about the installation that the prompt states as given.
     """
 
     def __init__(
@@ -622,8 +712,11 @@ class LLMPolicy(Policy):
         min_hand_height: float | None = None,
         keep_out: tuple[Box, ...] = (),
         reach: Reach | None = None,
+        frames: Frames = Frames.SHARED,
+        report: bool = False,
         camera_keys: tuple[str, ...] = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
         camera_mounts: tuple[CameraMount, ...] = (),
+        facts: tuple[str, ...] = (),
         image_size: int = 640,
         image_horizon: int = 3,
         max_calls: int = 100,
@@ -643,6 +736,12 @@ class LLMPolicy(Policy):
             corners = np.array([box.low, box.high], dtype=float)
             if corners.shape != (2, 3) or not np.all(np.isfinite(corners)) or not np.all(corners[0] < corners[1]):
                 raise ValueError(f'A keep-out box must have finite xyz corners with low below high: {box}')
+        if (frames is Frames.ARM or report) and reach is None:
+            raise ValueError('frames=arm and report need a reach')
+        if frames is Frames.ARM and (min_hand_height is not None or keep_out):
+            raise ValueError(
+                'min_hand_height and keep_out are in the frame of the measured pose, so frames=arm refuses them'
+            )
         if min(image_size, image_horizon, max_calls, max_invalid) < 1:
             raise ValueError('Image size, image horizon, call budget and invalid-reply limit must be positive')
         if not camera_keys or len(set(camera_keys)) != len(camera_keys):
@@ -665,7 +764,8 @@ class LLMPolicy(Policy):
             raise ValueError(f'settings must not configure provider caching: {caching}')
         self.endpoint, self.motion, self.images = endpoint, motion, images
         self.camera_keys, self.image_size, self.image_horizon = camera_keys, image_size, image_horizon
-        self.camera_mounts = camera_mounts
+        self.camera_mounts, self.facts = camera_mounts, facts
+        self.frames, self.report = frames, report
         self.max_calls, self.max_invalid, self.cache_ttl = max_calls, max_invalid, cache_ttl
         self.arms, self.min_hand_distance, self.max_tracking_error = arms, min_hand_distance, max_tracking_error
         self.min_hand_height, self.keep_out, self.reach = min_hand_height, keep_out, reach
@@ -701,6 +801,9 @@ class LLMPolicy(Policy):
             'min_hand_height': self.min_hand_height,
             'keep_out': [[list(box.low), list(box.high)] for box in self.keep_out],
             'reach': None if self.reach is None else self.reach.meta(),
+            'frames': self.frames.value,
+            'report': self.report,
+            'facts': list(self.facts),
             'max_calls': self.max_calls,
             'max_invalid': self.max_invalid,
             'timeout': self.endpoint.timeout,
@@ -764,8 +867,11 @@ class LLMPolicy(Policy):
     min_hand_height=None,
     keep_out=(),
     reach=None,
+    frames=Frames.SHARED.value,
+    report=False,
     camera_keys=(keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE),
     camera_mounts=(),
+    facts=(),
     image_size=640,
     image_horizon=3,
     max_calls=100,
@@ -785,8 +891,11 @@ def llm(
     min_hand_height: float | None,
     keep_out: Sequence[tuple[Sequence[float], Sequence[float]]],
     reach: Reach | None,
+    frames: str,
+    report: bool,
     camera_keys: tuple[str, ...],
     camera_mounts: Sequence[Mapping[str, Any]],
+    facts: Sequence[str],
     image_size: int,
     image_horizon: int,
     max_calls: int,
@@ -806,8 +915,11 @@ def llm(
         min_hand_height=min_hand_height,
         keep_out=tuple(Box(tuple(map(float, low)), tuple(map(float, high))) for low, high in keep_out),
         reach=reach,
+        frames=Frames(frames),
+        report=report,
         camera_keys=tuple(camera_keys),
         camera_mounts=tuple(CameraMount.model_validate(mount) for mount in camera_mounts),
+        facts=tuple(facts),
         image_size=image_size,
         image_horizon=image_horizon,
         max_calls=max_calls,

@@ -38,6 +38,10 @@ class Waypoint(BaseModel):
     def pose(self) -> geom.Transform3D:
         return geom.Transform3D([self.x, self.y, self.z], geom.Rotation.from_euler([self.roll, self.pitch, self.yaw]))
 
+    def moved(self, transform: geom.Transform3D) -> 'Waypoint':
+        """This waypoint with its pose ``transform * pose``, as when its frame changes."""
+        return Waypoint.at(transform * self.pose, self.gripper)
+
 
 class MovePath(BaseModel):
     """Move the hand through absolute waypoints in order, without an observation between them."""

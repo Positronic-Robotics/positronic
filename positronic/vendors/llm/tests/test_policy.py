@@ -33,7 +33,7 @@ from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.vendors.llm.client import Endpoint
 from positronic.vendors.llm.motion import Motion, MoveArmsPath, MovePath
-from positronic.vendors.llm.policy import Conversation, Images, LLMPolicy, Tool, llm, llm_bimanual
+from positronic.vendors.llm.policy import Conversation, Frames, Images, LLMPolicy, Tool, llm, llm_bimanual
 from positronic.vendors.llm.reach import Box, YamReach
 
 
@@ -1034,6 +1034,85 @@ def test_an_arm_that_trails_its_target_past_a_joint_limit_holds_it_while_the_oth
     moved = geom.Transform3D(left.translation + [0.03, 0, 0], left.rotation)
     trailing = yam_observation({keys.LEFT_ARM: side_on, keys.RIGHT_ARM: sagged})
     assert decide(conversation, trailing, move_hands({keys.LEFT_ARM: moved})) != [[]], rejection(metadata)
+
+
+YAM_SIDE_ON = np.array([0.0, 1.2, 1.0, 0.0, 0.3, 0.0])
+
+
+def arm_frames(metadata, **settings) -> Conversation:
+    """A conversation of YAM arms that read and command their hands in the frames of their arm bases."""
+    policy = llm_bimanual(model='test', image_size=8, reach=YamReach(), frames=Frames.ARM.value, **settings)
+    return Conversation(policy, metadata.__setitem__)
+
+
+def observations(metadata) -> list[dict]:
+    return [e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'observation']
+
+
+def test_with_arm_frames_a_hand_reads_and_commands_its_pose_in_the_frame_of_its_arm_base():
+    metadata = {}
+    conversation = arm_frames(metadata)
+    local = YAM_KINEMATICS.fk(YAM_SIDE_ON)
+    target = geom.Transform3D(local.translation + [0.02, 0, 0], local.rotation)
+    obs = yam_observation({keys.LEFT_ARM: YAM_SIDE_ON, keys.RIGHT_ARM: YAM_SIDE_ON})
+    parts = decide(conversation, obs, move_hands({keys.RIGHT_ARM: target}))
+    measured = observations(metadata)[0]['arms']
+    for arm in keys.BIMANUAL_ARMS:
+        np.testing.assert_allclose(measured[arm]['position_m'], local.translation, atol=1e-9)
+    np.testing.assert_allclose(right_hand(parts)[-1], (YAM_MOUNTS[keys.RIGHT_ARM] * target).translation, atol=1e-9)
+    accepted = next(e for e in metadata[policy_keys.TRANSCRIPT] if e['event'] == 'accepted')
+    assert accepted['waypoints'][-1][keys.RIGHT_ARM]['x'] == pytest.approx(target.translation[0])
+
+
+def test_with_arm_frames_the_prompt_states_where_each_other_base_is_and_the_reach_of_a_hand():
+    metadata = {}
+    conversation = arm_frames(metadata)
+    conversation.request(yam_observation({keys.LEFT_ARM: YAM_SIDE_ON, keys.RIGHT_ARM: YAM_SIDE_ON}), 0)
+    prompt = metadata[policy_keys.TRANSCRIPT][0]['prompt']
+    assert 'In the frame of arm left, the base of arm right is at [0.0, -0.61, 0.0] m' in prompt
+    assert 'In the frame of arm right, the base of arm left is at [0.0, 0.61, 0.0] m' in prompt
+    assert YamReach().fact() in prompt
+    assert 'All hands share this frame' not in prompt
+
+
+def test_the_report_gives_the_joints_at_a_limit_and_whether_the_arm_reaches_the_previous_target():
+    metadata = {}
+    conversation = arm_frames(metadata, report=True)
+    on_limit = np.array([0.0, 1.9, 1.9, YAM_KINEMATICS.lower[3], 0.0, 0.0])
+    obs = yam_observation({keys.LEFT_ARM: YAM_SIDE_ON, keys.RIGHT_ARM: on_limit})
+    local = YAM_KINEMATICS.fk(YAM_SIDE_ON)
+    target = geom.Transform3D(local.translation + [0.02, 0, 0], local.rotation)
+    assert decide(conversation, obs, move_hands({keys.LEFT_ARM: target})) != [[]]
+    first = observations(metadata)[0]['arms']
+    assert first[keys.RIGHT_ARM]['reach'] == {'joints_at_limit': ['joint 4 is at its lower limit (-1.69 rad)']}
+    assert first[keys.LEFT_ARM]['reach'] == {'joints_at_limit': []}
+    conversation.request(obs, 0)
+    trailing = observations(metadata)[1]['arms'][keys.LEFT_ARM]
+    assert trailing['reach'] == {'joints_at_limit': [], 'target_in_reach': True}
+    np.testing.assert_allclose(trailing['remaining_translation_m'], [0.02, 0, 0], atol=1e-9)
+    assert trailing['remaining_rotation_rad'] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_the_installation_facts_are_stated_in_the_prompt():
+    metadata = {}
+    Conversation(llm(model='test', image_size=8, facts=('The table top is at z 0.',)), metadata.__setitem__).request(
+        observation(), 0
+    )
+    assert 'The table top is at z 0.' in metadata[policy_keys.TRANSCRIPT][0]['prompt']
+
+
+@pytest.mark.parametrize(
+    'settings,match',
+    [
+        ({'frames': Frames.ARM}, 'need a reach'),
+        ({'report': True}, 'need a reach'),
+        ({'frames': Frames.ARM, 'reach': YamReach(), 'min_hand_height': 0.0}, 'frames=arm refuses'),
+        ({'frames': Frames.ARM, 'reach': YamReach(), 'keep_out': (Box((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),)}, 'refuses'),
+    ],
+)
+def test_arm_frames_and_the_report_need_a_reach_and_no_setting_in_the_frame_of_the_measured_pose(settings, match):
+    with pytest.raises(ValueError, match=match):
+        LLMPolicy(Endpoint('test'), Motion(), **{'arms': keys.BIMANUAL_ARMS, **settings})
 
 
 @pytest.mark.parametrize('measured_z,accepted', [(0.104, True), (0.106, False)])
