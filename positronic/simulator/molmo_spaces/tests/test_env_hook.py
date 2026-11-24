@@ -124,3 +124,9 @@ def test_a_hook_file_that_changed_after_its_digest_was_recorded_is_refused(hook_
 
     with pytest.raises(ValueError, match='changed after the eval recorded its digest'):
         env_hook.load(hook_path, digest)
+
+
+@pytest.mark.parametrize('grip', [0.0, 0.5, 1.0, 2.0])
+def test_the_default_hook_sends_the_grip_command_as_molmospaces_does(grip):
+    hook, _ = env_hook.load(None)
+    assert hook.grip_actuator(grip) == mapping.grip_command_to_actuator(grip)
