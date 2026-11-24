@@ -15,6 +15,17 @@ else:
     import keys  # pyright: ignore[reportMissingImports]
 
 
+def _arm_fault(joint_pos: np.ndarray, joint_vel: np.ndarray, pos_limits: np.ndarray, control_dt: float) -> str | None:
+    if not (np.isfinite(joint_pos).all() and np.isfinite(joint_vel).all()):
+        return keys.FAULT_NONFINITE_ARM
+    lower, upper = pos_limits[:, 0], pos_limits[:, 1]
+    joint_range = upper - lower
+    past_limit = (joint_pos < lower - joint_range) | (joint_pos > upper + joint_range)
+    if past_limit.any() or (np.abs(joint_vel) * control_dt > joint_range).any():
+        return keys.FAULT_ARM_OUT_OF_RANGE
+    return None
+
+
 def arm_faults(
     joint_pos: np.ndarray, joint_vel: np.ndarray, pos_limits: np.ndarray, control_dt: float
 ) -> list[str | None]:
@@ -28,14 +39,3 @@ def arm_faults(
     return [
         _arm_fault(q, dq, limits, control_dt) for q, dq, limits in zip(joint_pos, joint_vel, pos_limits, strict=True)
     ]
-
-
-def _arm_fault(joint_pos: np.ndarray, joint_vel: np.ndarray, pos_limits: np.ndarray, control_dt: float) -> str | None:
-    if not (np.isfinite(joint_pos).all() and np.isfinite(joint_vel).all()):
-        return keys.FAULT_NONFINITE_ARM
-    lower, upper = pos_limits[:, 0], pos_limits[:, 1]
-    joint_range = upper - lower
-    past_limit = (joint_pos < lower - joint_range) | (joint_pos > upper + joint_range)
-    if past_limit.any() or (np.abs(joint_vel) * control_dt > joint_range).any():
-        return keys.FAULT_ARM_OUT_OF_RANGE
-    return None
