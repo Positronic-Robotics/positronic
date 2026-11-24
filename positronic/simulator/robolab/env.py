@@ -111,6 +111,7 @@ from isaaclab.utils.math import (  # noqa: E402
     quat_mul,
     subtract_frame_transforms,
 )
+from pxr import Usd, UsdPhysics  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 import robolab.constants  # noqa: E402
 from robolab.core.environments.config import parse_env_cfg  # noqa: E402  # pyright: ignore[reportMissingImports]
@@ -172,6 +173,9 @@ class RobolabEnv(EnvProtocol):
     _TABLE = 'table'
     # The env origin in the world frame that the server reports every pose in.
     _ENV_IN_WORLD = np.zeros(3, dtype=np.float32)
+    # Asset colliders out of the physics, by prim path tail. orange1's stem is 2 mm thick and stands 8.5 mm out of
+    # the fruit, and a gripper finger that pins it blows the solver up.
+    _DISABLED_COLLIDERS = ('/Orange_01/OrangeStem',)
 
     def __init__(self, max_envs: int = 1):
         if max_envs < 1:
@@ -270,6 +274,7 @@ class RobolabEnv(EnvProtocol):
         self._env, self._env_cfg = create_env(
             scene, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
         )
+        self._disable_colliders()
         self._control_dt = self._env_cfg.sim.dt * self._env_cfg.decimation
         # The sim context's physics ``step`` and ``render`` are the two native phases inside ``env.step``;
         # re-wrapped per build (a fresh env brings a fresh SimulationContext) so their spans nest under the
@@ -291,6 +296,12 @@ class RobolabEnv(EnvProtocol):
         self._objects = [name for name in self._env_cfg.contact_object_list if name != self._TABLE]
         # None for a task without subtasks: RoboLab adds no term for it.
         self._subtask_recorder = self._env.recorder_manager.get_term(SubtaskCompletionRecorderTerm)
+
+    def _disable_colliders(self) -> None:
+        """Take each collider of ``_DISABLED_COLLIDERS`` in every scene clone out of the physics."""
+        for prim in Usd.PrimRange(self._env.sim.stage.GetPrimAtPath(self._env.scene.env_ns)):
+            if str(prim.GetPath()).endswith(self._DISABLED_COLLIDERS) and prim.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Set(False)
 
     @abstractmethod
     def _register(self, task: str) -> None:
