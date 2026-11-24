@@ -18,6 +18,7 @@ from positronic_model_server.tree import map_leaves, update_at
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.gui.video_stream import AnnexBEncoder
+from positronic.policy.image_worker import image_worker_in_use
 from positronic.utils import check_positive_int
 
 from .base import Codec
@@ -50,6 +51,10 @@ class EncodeImages(Codec):
         return value
 
     def encode(self, data: dict) -> dict:
+        worker = image_worker_in_use()
+        return self._encode_here(data) if worker is None else worker.call(self._encode_here, data)
+
+    def _encode_here(self, data: dict) -> dict:
         return map_leaves(data, self._encode_value) if self._images is None else encode_images(data, self._images)
 
     def decode(self, data: Any) -> Any:
@@ -181,6 +186,10 @@ class TransformImages(Codec):
         return data
 
     def encode(self, data):
+        worker = image_worker_in_use()
+        return self._transform_here(data) if worker is None else worker.call(self._transform_here, data)
+
+    def _transform_here(self, data):
         frames: list[np.ndarray] = []
 
         def collect(value: np.ndarray) -> np.ndarray:

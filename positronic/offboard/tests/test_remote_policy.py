@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from positronic_model_server import keys as offboard_keys
-from positronic_model_server import protocol, spec, websocket_wire
+from positronic_model_server import protocol, serialization, spec, websocket_wire
 from positronic_wire import grpc, registry, websocket, wire
 
 from positronic import keys, telemetry, telemetry_keys
@@ -65,6 +65,7 @@ from positronic.policy.codecs import (
     TransformImages,
 )
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.image_worker import ImageWorker
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
     ChunkedSchedule,
@@ -1620,6 +1621,43 @@ def test_compression_follows_the_handshake(runtime, compressed):
         runtime.close()
         run.close()
     session.close.assert_called_once()
+
+
+class _RecordingImageWorker(ImageWorker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.functions: list[str] = []
+
+    def call(self, function, tree, /, *args):
+        self.functions.append(function.__name__)
+        return super().call(function, tree, *args)
+
+
+@pytest.mark.timeout(120)
+def test_an_image_worker_prepares_the_images_of_each_call_and_the_server_gets_the_same_request():
+    resize = {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 24}}
+    meta = {'local_stack': {'seq': [CHUNKED_STACK['local_stack'], resize]}, policy_keys.COMPRESS_IMAGES: True}
+    image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
+    sent = []
+    with _RecordingImageWorker() as worker:
+        for image_worker in (None, worker):
+            session = _mock_session(meta)
+            session.infer.return_value = [{'value': 42}]
+            policy = RemotePolicy('websocket', _address('localhost', 0), image_worker=image_worker)
+            policy._client = MagicMock()
+            policy._client.new_session.return_value = session
+            runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+            run = runtime.start(policy)
+            try:
+                run.send({'image': image})
+                assert runtime.wait(timeout_sec=30).status is WaitStatus.ANSWERS_READY
+            finally:
+                runtime.close()
+                run.close()
+            sent.append(session.infer.call_args.args[0])
+    assert worker.functions == ['_transform_here', 'prepare_obs']
+    assert sent[1] == sent[0]
+    assert serialization.deserialise(serialization.serialise(sent[1]))['image'].shape == (24, 32, 3)
 
 
 def test_the_configured_jpeg_quality_reaches_the_encoder(runtime, monkeypatch):

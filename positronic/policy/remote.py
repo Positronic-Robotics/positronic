@@ -34,6 +34,7 @@ from .codecs import PolicyCommandError
 from .codecs.action import JointPositionAction
 from .compatibility import from_v1_spec
 from .executor import ExecutionRuntime
+from .image_worker import ImageWorker, use_image_worker
 from .spec import from_spec
 
 
@@ -69,13 +70,18 @@ def round_trip(
     obs: cabc.Mapping[str, Any],
     compress_images: bool,
     jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+    image_worker: ImageWorker | None = None,
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
-    Image preparation has its own span; the inference span covers only the server round trip.
+    Image preparation has its own span, and runs in ``image_worker`` when one is given. The inference span covers
+    only the server round trip.
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
-        prepared = prepare_obs(obs, compress_images, jpeg_quality)
+        if compress_images and image_worker is not None:
+            prepared = image_worker.call(prepare_obs, obs, compress_images, jpeg_quality)
+        else:
+            prepared = prepare_obs(obs, compress_images, jpeg_quality)
     with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
         try:
             return session.infer(prepared)
@@ -157,7 +163,8 @@ class RemotePolicy(Policy):
 
     ``wire`` names the transport and ``address`` is the address it dials. ``open_timeout``, ``connect_deadline`` and
     ``unresolved_host_deadline`` bound the connect, as in ``InferenceClient``. ``jpeg_quality`` sets the JPEG quality
-    of images sent to a server that asks for compressed images.
+    of images sent to a server that asks for compressed images. ``image_worker`` runs the image codecs of the declared
+    stack and that JPEG encoding of each call in its process; None runs them in this process.
     Each run owns a server session and its connection. Submitted calls finish before the harness
     closes the generator; closing the session waits for the server to release its state, then closes the
     connection, and the run waits for that close only up to a bound. The declared stack determines when client
@@ -180,6 +187,7 @@ class RemotePolicy(Policy):
         unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+        image_worker: ImageWorker | None = None,
     ):
         self._client = InferenceClient(
             registry.client_wire(wire),
@@ -191,6 +199,7 @@ class RemotePolicy(Policy):
             infer_timeout=infer_timeout,
         )
         self._jpeg_quality = jpeg_quality
+        self._image_worker = image_worker
 
     def meta(self) -> dict[str, Any]:
         return {policy_keys.TYPE: 'remote'}
@@ -258,7 +267,7 @@ class RemotePolicy(Policy):
 
             def infer(obs: cabc.Mapping[str, Any]) -> list[dict[str, Any]] | dict[str, Any]:
                 nonlocal answered_session_id
-                answer = round_trip(session, obs, compress_images, self._jpeg_quality)
+                answer = round_trip(session, obs, compress_images, self._jpeg_quality, self._image_worker)
                 answered_session_id = session.session_id
                 return answer
 
@@ -266,7 +275,8 @@ class RemotePolicy(Policy):
             obs = yield
             while True:
                 try:
-                    step = run.send(obs)
+                    with use_image_worker(self._image_worker):
+                        step = run.send(obs)
                     if isinstance(step, Step):
                         self._require_robot_commands(step)
                 except StopIteration as end:
