@@ -20,63 +20,56 @@ from positronic_model_server.spec import component, parallel, sequence
 
 from positronic import keys, telemetry, telemetry_keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
-from positronic.drivers.roboarm import command
+from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.policy.arrival import transform_frames_on_arrival
 from positronic.policy.base import Processor
-from positronic.policy.codecs import TASK_FIELD
+from positronic.policy.codecs import TASK_FIELD, SetControlMode, TransformImages
+from positronic.policy.codecs.action import AbsolutePositionAction
+from positronic.policy.codecs.observation import SelectObservationFields
+from positronic.policy.compatibility import CHUNKED_SCHEDULE, PauseOnUnavailable, RTCScheduleV1, restrict_image_size_v1
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.keys import RTC
+from positronic.policy.processors import TemporalStack
 from positronic.policy.spec import from_spec
 
 logger = logging.getLogger(__name__)
 
 FPS = 15.0
-IMPEDANCE = command.to_wire(DROID_IMPEDANCE)
 DROID_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE_2)
 BIMANUAL_CAMERAS = (keys.EXTERIOR_IMAGE, keys.WRIST_LEFT_IMAGE, keys.WRIST_RIGHT_IMAGE)
 
 
-def _offsets(count: int) -> list[float]:
-    return [-i / FPS for i in reversed(range(count))]
+def _offsets(count: int) -> tuple[float, ...]:
+    return tuple(-i / FPS for i in reversed(range(count)))
 
 
 def three_camera_history() -> dict:
     """Four history frames of three cameras, a real-time-chunking schedule, and a stretch to 640x360 at each call."""
     return sequence(
-        component('temporal_stack', version=2, keys=list(DROID_CAMERAS), offsets_sec=_offsets(4)),
-        component('rtc_schedule', fps=FPS, call_after_sec=0.53, latency_estimate=0.3),
+        TemporalStack(DROID_CAMERAS, _offsets(4)).to_spec(),
+        RTCScheduleV1(FPS, call_after_sec=0.53, latency_estimate=0.3).to_spec(),
         parallel(
-            component(
-                'select_observation_fields', mapping={**{name: name for name in DROID_CAMERAS}, TASK_FIELD: TASK_FIELD}
-            ),
+            SelectObservationFields({**{name: name for name in DROID_CAMERAS}, TASK_FIELD: TASK_FIELD}).to_spec(),
             sequence(
-                component('set_control_mode', mode=IMPEDANCE),
-                component(
-                    'absolute_position_action',
-                    tgt_ee_pose_key=keys.TARGET_EE_POSE,
-                    tgt_grip_key=keys.TARGET_GRIP,
-                    rotation_rep='quat',
-                    commands_path=['action_prefix', 'actions'],
-                ),
+                SetControlMode(DROID_IMPEDANCE).to_spec(),
+                AbsolutePositionAction(
+                    keys.TARGET_EE_POSE, keys.TARGET_GRIP, commands_path=(RTC.ACTION_PREFIX, RTC.PREFIX_ACTIONS)
+                ).to_spec(),
             ),
         ),
-        component(
-            'transform_images',
-            width=640,
-            height=360,
-            mode='stretch',
-            resample='area',
-            paths=[[name] for name in DROID_CAMERAS],
-        ),
+        TransformImages(
+            640, 360, mode=ResizeMode.STRETCH, resample=Resample.AREA, paths=[[name] for name in DROID_CAMERAS]
+        ).to_spec(),
     )
 
 
 def bimanual_bounded_history() -> dict:
     """25 history frames of three cameras, a chunked schedule, and a 416x416 bound at each call."""
     return sequence(
-        component('stop_on_fault'),
-        component('temporal_stack', keys=list(BIMANUAL_CAMERAS), offsets_sec=_offsets(25), pad_start=False),
-        component('chunked_schedule', fps=FPS),
-        component('restrict_image_size', width=416, height=416),
+        PauseOnUnavailable().to_spec(),
+        TemporalStack(BIMANUAL_CAMERAS, _offsets(25), pad_start=False).to_spec(),
+        component(CHUNKED_SCHEDULE, fps=FPS),
+        restrict_image_size_v1(width=416, height=416),
     )
 
 

@@ -5,11 +5,15 @@ from positronic_model_server.spec import component, parallel, sequence
 from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset.transforms import image
-from positronic.drivers.roboarm import command
+from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.policy.arrival import transform_frames_on_arrival
 from positronic.policy.base import Processor
-from positronic.policy.codecs import TASK_FIELD, TransformImages
+from positronic.policy.codecs import TASK_FIELD, SetControlMode, TransformImages
+from positronic.policy.codecs.action import AbsolutePositionAction
+from positronic.policy.codecs.observation import SelectObservationFields
+from positronic.policy.compatibility import CHUNKED_SCHEDULE, PauseOnUnavailable, RTCScheduleV1, restrict_image_size_v1
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.keys import RTC
 from positronic.policy.processors import ChunkedSchedule, TemporalStack
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
@@ -19,51 +23,42 @@ FPS = 15.0
 STEPS = 30
 # A camera frame much larger than the transform's size, as a rig camera is.
 FRAME_SHAPE = (72, 128, 3)
-
-
-IMPEDANCE = command.to_wire(DROID_IMPEDANCE)
+# A field name that a select gives to the wrist frame.
+RENAMED_WRIST = 'wrist'
 
 
 def _history(offsets: int) -> dict:
-    return component(
-        'temporal_stack', version=2, keys=list(CAMERAS), offsets_sec=[-i / FPS for i in reversed(range(offsets))]
-    )
+    return TemporalStack(CAMERAS, tuple(-i / FPS for i in reversed(range(offsets)))).to_spec()
 
 
 def _stacked_transform_spec() -> dict:
     """A history of every camera, a schedule, and a bound on the image size at each call."""
     return sequence(
-        component('stop_on_fault'),
+        PauseOnUnavailable().to_spec(),
         _history(25),
-        component('chunked_schedule', fps=FPS),
-        component('restrict_image_size', width=32, height=32),
+        component(CHUNKED_SCHEDULE, fps=FPS),
+        restrict_image_size_v1(width=32, height=32),
     )
 
 
 def _three_camera_history_spec() -> dict:
     """Four history frames of three cameras, field selection beside the action codecs, then the image transform."""
     return sequence(
-        component('temporal_stack', version=2, keys=[keys.JOINTS, keys.GRIP], offsets_sec=[-0.2, -0.1, 0.0]),
+        TemporalStack((keys.JOINTS, keys.GRIP), (-0.2, -0.1, 0.0)).to_spec(),
         _history(4),
-        component('rtc_schedule', fps=FPS, call_after_sec=0.2, latency_estimate=0.1),
+        RTCScheduleV1(FPS, call_after_sec=0.2, latency_estimate=0.1).to_spec(),
         parallel(
-            component(
-                'select_observation_fields', mapping={**{name: name for name in CAMERAS}, TASK_FIELD: TASK_FIELD}
-            ),
+            SelectObservationFields({**{name: name for name in CAMERAS}, TASK_FIELD: TASK_FIELD}).to_spec(),
             sequence(
-                component('set_control_mode', mode=IMPEDANCE),
-                component(
-                    'absolute_position_action',
-                    tgt_ee_pose_key=keys.TARGET_EE_POSE,
-                    tgt_grip_key=keys.TARGET_GRIP,
-                    rotation_rep='quat',
-                    commands_path=['action_prefix', 'actions'],
-                ),
+                SetControlMode(DROID_IMPEDANCE).to_spec(),
+                AbsolutePositionAction(
+                    keys.TARGET_EE_POSE, keys.TARGET_GRIP, commands_path=(RTC.ACTION_PREFIX, RTC.PREFIX_ACTIONS)
+                ).to_spec(),
             ),
         ),
-        component(
-            'transform_images', width=40, height=24, mode='stretch', resample='area', paths=[[name] for name in CAMERAS]
-        ),
+        TransformImages(
+            40, 24, mode=ResizeMode.STRETCH, resample=Resample.AREA, paths=[[name] for name in CAMERAS]
+        ).to_spec(),
     )
 
 
@@ -181,9 +176,7 @@ def _compare(declared: Processor, monkeypatch: pytest.MonkeyPatch) -> tuple[int,
 
 def test_a_transform_in_front_of_the_history_keeps_its_resizes(monkeypatch):
     declared = _declared(
-        sequence(
-            component('restrict_image_size', width=32, height=32), _history(4), component('chunked_schedule', fps=FPS)
-        )
+        sequence(restrict_image_size_v1(width=32, height=32), _history(4), component(CHUNKED_SCHEDULE, fps=FPS))
     )
 
     as_given, moved = _compare(declared, monkeypatch)
@@ -195,9 +188,9 @@ def test_a_camera_field_renamed_before_the_transform_is_resized_at_the_call(monk
     declared = _declared(
         sequence(
             _history(4),
-            component('chunked_schedule', fps=FPS),
-            component('select_observation_fields', mapping={'wrist': keys.WRIST_IMAGE}),
-            component('transform_images', width=32, height=32, mode='pad', paths=[['wrist']]),
+            component(CHUNKED_SCHEDULE, fps=FPS),
+            SelectObservationFields({RENAMED_WRIST: keys.WRIST_IMAGE}).to_spec(),
+            TransformImages(32, 32, mode=ResizeMode.PAD, paths=[[RENAMED_WRIST]]).to_spec(),
         )
     )
 
@@ -210,13 +203,13 @@ def test_only_the_camera_fields_that_reach_the_transform_unchanged_are_resized_o
     declared = _declared(
         sequence(
             _history(4),
-            component('chunked_schedule', fps=FPS),
-            component(
-                'select_observation_fields',
-                # The wrist frame takes a new name, and the second exterior frame goes.
-                mapping={'wrist': keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE},
-            ),
-            component('transform_images', width=32, height=32, mode='pad', paths=[['wrist'], [keys.EXTERIOR_IMAGE]]),
+            component(CHUNKED_SCHEDULE, fps=FPS),
+            # The wrist frame takes a new name, and the second exterior frame goes.
+            SelectObservationFields({
+                RENAMED_WRIST: keys.WRIST_IMAGE,
+                keys.EXTERIOR_IMAGE: keys.EXTERIOR_IMAGE,
+            }).to_spec(),
+            TransformImages(32, 32, mode=ResizeMode.PAD, paths=[[RENAMED_WRIST], [keys.EXTERIOR_IMAGE]]).to_spec(),
         )
     )
 
@@ -230,7 +223,7 @@ def test_a_transform_of_a_camera_outside_the_history_keeps_its_resizes(monkeypat
     declared = Sequential(
         TemporalStack((keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE), (-0.2, 0.0)),
         ChunkedSchedule(FPS),
-        TransformImages(32, 32, mode=image.ResizeMode.PAD, paths=[[keys.EXTERIOR_IMAGE_2]]),
+        TransformImages(32, 32, mode=ResizeMode.PAD, paths=[[keys.EXTERIOR_IMAGE_2]]),
     )
 
     as_given, moved = _compare(declared, monkeypatch)
@@ -243,7 +236,7 @@ def test_a_later_history_of_other_fields_lets_the_camera_frames_move(monkeypatch
         TemporalStack(CAMERAS, (-0.2, 0.0)),
         TemporalStack((keys.JOINTS,), (-0.1, 0.0)),
         ChunkedSchedule(FPS),
-        TransformImages(32, 32, mode=image.ResizeMode.PAD, paths=[[name] for name in CAMERAS]),
+        TransformImages(32, 32, mode=ResizeMode.PAD, paths=[[name] for name in CAMERAS]),
     )
 
     as_given, moved = _compare(declared, monkeypatch)
@@ -255,8 +248,8 @@ def test_each_camera_moves_with_the_transform_that_selects_it(monkeypatch):
     declared = Sequential(
         TemporalStack(CAMERAS, (-0.2, 0.0)),
         ChunkedSchedule(FPS),
-        TransformImages(32, 32, mode=image.ResizeMode.PAD, paths=[[keys.WRIST_IMAGE]]),
-        TransformImages(48, 48, mode=image.ResizeMode.BOUND, paths=[[name] for name in CAMERAS]),
+        TransformImages(32, 32, mode=ResizeMode.PAD, paths=[[keys.WRIST_IMAGE]]),
+        TransformImages(48, 48, mode=ResizeMode.BOUND, paths=[[name] for name in CAMERAS]),
     )
 
     as_given, moved = _compare(declared, monkeypatch)
