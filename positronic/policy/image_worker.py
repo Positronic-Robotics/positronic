@@ -1,8 +1,7 @@
-"""Run the image work of a policy call in a child process.
+"""Run the image work of a policy call in a child process, which holds its own interpreter lock.
 
 The arrays and bytes of a call pass through shared memory. The pipe carries only the function, its small arguments
-and the layout of the shared memory. A control loop in the parent process then keeps its interpreter lock while a
-call resizes and encodes camera frames.
+and the layout of the shared memory.
 """
 
 import multiprocessing as mp
