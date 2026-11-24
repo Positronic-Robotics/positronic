@@ -165,10 +165,8 @@ def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
     each task instruction in `prompts`. The client shrinks each view to fit the view size, or twice that size for a
     cropped view.
 
-    The client plays each chunk at 30 Hz from the time of its observation, and asks for the next chunk
-    `ACTIONS_PER_REQUEST` actions after that time. The arm plays the old chunk while the next one is on the way. The new
-    chunk replaces the old one at its action that is due when it arrives, so the arm skips the actions that the round
-    trip made late. With an answer that takes no time, each chunk plays its first `ACTIONS_PER_REQUEST` actions."""
+    The client asks for a chunk once per `ACTIONS_PER_REQUEST` actions. The README tells how a new chunk joins the old
+    one."""
     try:
         crop_set = codecs.Crop(crop)
     except ValueError:
