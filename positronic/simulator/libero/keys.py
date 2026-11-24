@@ -2,7 +2,7 @@
 
 SIM_STATE = 'sim_state'
 
-# The environment variable LIBERO reads its config dir from. The launcher sets it, and the env server locks beside it.
+# The environment variable LIBERO reads its config dir from.
 CONFIG_PATH_ENV = 'LIBERO_CONFIG_PATH'
 
 # The scene a trial runs: the task, as ``task_params`` names it from the env's task records, plus the render
