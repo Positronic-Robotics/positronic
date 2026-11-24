@@ -368,6 +368,48 @@ def test_the_native_profile_takes_the_task_verdict_and_ends_at_the_first_success
     assert task.calls == calls
 
 
+_AFTER_STEPS = 16  # 1 s at 66 ms
+
+
+def _run_native_tail(verdicts: list[bool], task: _Task | None = None) -> list[sp.Judged]:
+    task = task or _Task()
+    judge = sp.MolmoNativeTailJudge(task, _CONTROL_DT)
+    judged = []
+    for verdict in verdicts:
+        task.success = verdict
+        judged.append(judge.step({}))
+    return judged
+
+
+def test_the_native_tail_profile_succeeds_at_the_task_verdict_and_records_a_second_more():
+    judged = _run_native_tail([False] * 3 + [True] * 40)
+    assert [j.success for j in judged].index(True) == 3
+    assert [j.done for j in judged].index(True) == 3 + _AFTER_STEPS
+
+
+def test_a_native_tail_success_stays_after_the_task_verdict_breaks():
+    judged = _run_native_tail([True] + [False] * 40)
+    assert all(j.success for j in judged)
+    assert not any(j.done for j in judged[:_AFTER_STEPS])
+    assert judged[_AFTER_STEPS].done
+
+
+def test_the_task_end_ends_a_native_tail_episode_before_and_after_a_success():
+    assert _run_native_tail([False], _Task(done=True)) == [sp.Judged(False, True, {})]
+    assert _run_native_tail([True], _Task(done=True)) == [sp.Judged(True, True, {})]
+
+
+def test_the_native_tail_profile_keeps_the_native_call_sequence():
+    task = _Task()
+    _run_native_tail([False, True], task)
+    assert task.calls == ['judge_success', 'is_done'] * 2
+
+
+def test_a_native_tail_episode_refuses_a_task_that_ends_at_its_own_native_success():
+    with pytest.raises(ValueError, match='terminate_upon_success'):
+        sp.MolmoNativeTailJudge(_Task(terminate_upon_success=True), _CONTROL_DT)
+
+
 class _Scripted:
     """A check whose predicate holds at each step as ``holds`` lists."""
 
@@ -389,9 +431,6 @@ _HOLD_STEPS = 16  # 1 s at 66 ms
 def test_a_predicate_held_one_step_short_of_a_second_is_no_success():
     judged = _run([True] * (_HOLD_STEPS - 1) + [False] * 40)
     assert not any(j.success or j.done for j in judged)
-
-
-_AFTER_STEPS = 16
 
 
 def test_a_predicate_held_for_a_second_succeeds_and_the_episode_records_a_second_more():

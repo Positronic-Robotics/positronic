@@ -140,9 +140,11 @@ def benchmarks(
     after another, with one episode at a time, until Ctrl-C stops it.
 
     ``success_profile`` is a ``SuccessProfile`` or its value: how the server judges success and when it ends a trial.
-    ``molmo_native`` is MolmoSpaces' own verdict, and the trial ends at the first step where it is true. ``strict_v1``
-    needs its predicate to hold for 1 s, and records 1 s more after the verdict. Every trial records the profile under
-    ``molmo.success_profile``. Scores of two profiles are not comparable.
+    ``molmo_native`` is MolmoSpaces' own verdict, and the trial ends at the first step where it is true.
+    ``molmo_native_tail_v1`` takes the same verdict and records 1 s more after it, so its scores equal those of
+    ``molmo_native``. ``strict_v1`` needs its predicate to hold for 1 s, and records 1 s more after the verdict. Every
+    trial records the profile under ``molmo.success_profile``. A ``strict_v1`` score is not comparable with a native
+    one.
     """
     if trial_count < 1:
         raise ValueError(f'--eval.trial_count must be at least 1, got {trial_count}')
