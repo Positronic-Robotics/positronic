@@ -41,8 +41,13 @@ The codec takes the task instruction that ABC's sim reports, and sends the promp
 the task folder name of the ABC-130k release, with underscores as spaces. The session metadata names the prompt of
 each instruction under `pi05_abc.prompts`.
 
-The client plays the first 15 actions of each chunk at 30 Hz, and then asks for the next chunk, as the author's
-evaluation does. The gripper outputs can go outside 0 to 1.
+The client plays each chunk at 30 Hz from the time of its observation. It asks for the next chunk 15 actions after that
+time, as often as the author's evaluation does, and the arm plays the old chunk while the next one is on the way. The
+new chunk replaces the old one at its action that is due when it arrives. So the arm does not stop between chunks, and
+it skips the actions that the round trip made late: with an answer 197 ms after its observation, the arm skips the
+first 5 actions of the new chunk. With an answer that takes no time, as in a simulation that does not charge the
+inference time, each chunk plays its first 15 actions, as in the author's evaluation. The new chunk joins the old one
+with no blend. The gripper outputs can go outside 0 to 1.
 
 ABC's cameras are RealSense D405s at 640x480. A session picks the crop of the yambox views with the `crop` query
 parameter, as for ABC-DiT: `none`, `yambox` or `yambox_wide_top` (the default). The [ABC-DiT README](../abc_dit/README.md)
