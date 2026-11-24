@@ -78,6 +78,26 @@ def test_the_board_eval_runs_the_first_twenty_benchmark_episodes_past_episode_6_
     assert definition.time_limit_s == 7200
 
 
+STRICT_COUNTERPARTS = {
+    EvalRef('molmo.franka_pick_mini_strict'): BOARD,
+    EvalRef('molmo.franka_pick_mini_strict_smoke'): SMOKE,
+}
+
+
+def test_the_native_molmo_evals_take_the_success_profile_of_the_config():
+    assert 'success_profile' not in public_eval(BOARD).args
+    assert 'success_profile' not in public_eval(SMOKE).args
+
+
+@pytest.mark.parametrize(('strict', 'native'), STRICT_COUNTERPARTS.items())
+def test_a_strict_molmo_eval_runs_its_native_counterpart_under_the_strict_profile(strict: EvalRef, native: EvalRef):
+    strict_definition, native_definition = public_eval(strict), public_eval(native)
+    strict_args = {**native_definition.args, 'success_profile': 'strict_v1'}
+
+    assert 'args' in EvalDefinition.model_fields
+    assert strict_definition == native_definition.model_copy(update={'args': strict_args})
+
+
 @pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == MOLMO_CONFIG])
 def test_a_molmo_definition_runs_each_episode_its_arguments_name_trial_count_times(name: EvalRef):
     definition = public_eval(name)
