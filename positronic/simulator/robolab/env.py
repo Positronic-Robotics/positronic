@@ -13,6 +13,8 @@ The wire contract:
   (``yam_spec.ROOT_IN_RIG_WORLD``), and ``robot_meta`` carries the arm mounts in that frame.
 - The reset token names the RoboLab env and the instruction variant, and carries no seed: RoboLab's eval path has no
   seed hook. A reset rebuilds the scene only when the task key or the clone count changes.
+- A success ends its episode ``success_tail.TAIL_SEC`` later, or at the time limit, so that the video shows the
+  result. The clone runs on under its client's commands until then, and the success stays.
 - A clone that terminates freezes, with a zero action, on its verdict until the slowest clone of the batch ends.
 - ``gt_state`` (``keys.GT_STATE``) holds per slot, for each contact object but the table, its pose (position in the
   clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
@@ -41,6 +43,7 @@ import keys
 import numpy as np
 import pose_ik
 import protocol  # pyright: ignore[reportMissingImports]
+import success_tail
 import torch
 import yam_spec
 from isaaclab.app import AppLauncher
@@ -200,6 +203,7 @@ class RobolabEnv(EnvProtocol):
         self._gripper = ''  # the contact gripper label that the gripper contact of the ``gt_state`` reads
         self._objects: list[str] = []
         self._subtask_recorder: Any = None
+        self._success_tail: success_tail.SuccessTail | None = None
         self._shown_chains: list[Any] = []  # each slot's chain machine at the last frame
         self._episode = 0  # the number of the current episode, counted by resets
         self._episode_task = ''  # the task of the current episode
@@ -265,7 +269,7 @@ class RobolabEnv(EnvProtocol):
             scene.episode_length_s = episode_length_s
             # RoboLab takes a time-out within two control steps for a physics artifact and resets the clone in
             # place, so such an episode never ends.
-            if math.ceil(episode_length_s / (scene.sim.dt * scene.decimation)) <= 2:
+            if math.ceil(episode_length_s / (scene.sim.dt * scene.decimation)) <= success_tail.RESET_IN_PLACE_STEPS:
                 raise ValueError(f'an episode of {episode_length_s} s is too short for RoboLab to end it')
         self._env, self._env_cfg = create_env(
             scene, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
@@ -277,6 +281,9 @@ class RobolabEnv(EnvProtocol):
         if telemetry.active():
             self._env.sim.step = self._timed_phase(self._env.sim.step, 'physics')
             self._env.sim.render = self._timed_phase(self._env.sim.render, 'render')
+        self._success_tail = success_tail.SuccessTail(self._num_envs, self._control_dt)
+        terminations = self._env.termination_manager
+        terminations.compute = self._tailed(terminations.compute)
         # ``META_INSTRUCTION`` is the instruction text in the phrasing of the reset: ``create_env`` keeps the selected
         # phrasings as a ``{phrasing: text}`` dict. The rest names the task.
         self._meta = {
@@ -328,6 +335,27 @@ class RobolabEnv(EnvProtocol):
             self._control_dt,
         )
 
+    def _tailed(self, compute: Callable[[], torch.Tensor]) -> Callable[[], torch.Tensor]:
+        """The termination manager's ``compute``, with each success termination held back for its replay tail.
+
+        RoboLab counts every termination that is not a time-out as a success. ``terminated`` is the manager's own
+        buffer, which ``env.step`` and RoboLab's freeze and recorders read after ``compute``.
+        """
+        terminations = self._env.termination_manager
+
+        def tailed() -> torch.Tensor:
+            compute()
+            assert self._success_tail is not None  # built with the env, before its first step
+            ended = self._success_tail.step(
+                terminations.terminated.cpu().numpy(),
+                terminations.time_outs.cpu().numpy(),
+                self._env.episode_length_buf.cpu().numpy(),
+            )
+            terminations.terminated[:] = torch.as_tensor(ended, device=terminations.terminated.device)
+            return terminations.dones
+
+        return tailed
+
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
         num_envs = self._max_envs if slots is None else slots
@@ -349,6 +377,8 @@ class RobolabEnv(EnvProtocol):
             assert self._env is not None  # the else runs only when a prior reset built the cached env
             self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
         assert self._env is not None  # built above (key change) or already live (cached)
+        assert self._success_tail is not None  # built with the env
+        self._success_tail.reset()
         self._grip.zero_()
         self._shown_chains = [None] * self._num_envs
         # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
@@ -391,7 +421,7 @@ class RobolabEnv(EnvProtocol):
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps
         # running (never frozen, no verdict), while a real success/time-out freezes the env and records one. A
-        # faulted slot is done too, with no success.
+        # success freezes at the end of its tail. A faulted slot is done too, with no success.
         frozen = self._frozen_slots()
         results = self._env.get_env_results()
         observed = self._observe(obs, self._subtask_progress(), reset=False)
