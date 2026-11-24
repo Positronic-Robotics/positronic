@@ -18,7 +18,7 @@ from positronic_model_server.tree import map_leaves, update_at
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.gui.video_stream import AnnexBEncoder
-from positronic.policy.image_worker import image_worker_in_use
+from positronic.policy.image_worker import ImageWorker
 from positronic.utils import check_positive_int
 
 from .base import Codec
@@ -29,15 +29,26 @@ class EncodeImages(Codec):
     """JPEG-encode uint8 RGB observations recursively, or restrict encoding to explicit paths.
 
     Automatic selection matches ``(..., H, W, 3)`` arrays with positive height and width. ``paths=[]``
-    selects nothing. Decoded native results pass through unchanged.
+    selects nothing. Decoded native results pass through unchanged. ``image_worker`` runs ``encode`` in its
+    process; None runs it in this process.
     """
 
     WIRE_NAME = 'encode_images'
 
-    def __init__(self, paths: list[list[str | int]] | None = None, quality: int = DEFAULT_JPEG_QUALITY):
+    def __init__(
+        self,
+        paths: list[list[str | int]] | None = None,
+        quality: int = DEFAULT_JPEG_QUALITY,
+        image_worker: ImageWorker | None = None,
+    ):
         check_int_range(quality, 0, 100, 'JPEG quality')
         self._images = None if paths is None else tuple(JpegEncoding(tuple(path), quality) for path in paths)
         self._quality = quality
+        self._image_worker = image_worker
+
+    def __getstate__(self) -> dict[str, Any]:
+        # The copy that the image worker runs does its work in place.
+        return {**self.__dict__, '_image_worker': None}
 
     def _encode_value(self, value: Any) -> Any:
         if (
@@ -51,8 +62,9 @@ class EncodeImages(Codec):
         return value
 
     def encode(self, data: dict) -> dict:
-        worker = image_worker_in_use()
-        return self._encode_here(data) if worker is None else worker.call(self._encode_here, data)
+        if self._image_worker is None:
+            return self._encode_here(data)
+        return self._image_worker.call(self._encode_here, data)
 
     def _encode_here(self, data: dict) -> dict:
         return map_leaves(data, self._encode_value) if self._images is None else encode_images(data, self._images)
@@ -115,7 +127,8 @@ class TransformImages(Codec):
     ``paths=None`` finds arrays automatically. Each explicit path must select an RGB image or a stack
     of equally sized frames in the input. All selections must be valid before resizing; use separate
     codecs when one transformation depends on another.
-    Other values, field names and decoded results pass through unchanged.
+    Other values, field names and decoded results pass through unchanged. ``image_worker`` runs ``encode`` in its
+    process; None runs it in this process.
     """
 
     WIRE_NAME = 'transform_images'
@@ -131,6 +144,7 @@ class TransformImages(Codec):
         mode: ResizeMode,
         resample: Resample = Resample.BILINEAR,
         paths: list[list[str | int]] | None = None,
+        image_worker: ImageWorker | None = None,
     ):
         check_positive_int(width, 'width')
         check_positive_int(height, 'height')
@@ -141,6 +155,11 @@ class TransformImages(Codec):
         self._mode = mode
         self._resample = resample
         self._paths = None if paths is None else tuple(tuple(path) for path in paths)
+        self._image_worker = image_worker
+
+    def __getstate__(self) -> dict[str, Any]:
+        # The copy that the image worker runs does its work in place.
+        return {**self.__dict__, '_image_worker': None}
 
     @classmethod
     def from_spec_args(cls, **args: Any) -> Self:
@@ -186,8 +205,9 @@ class TransformImages(Codec):
         return data
 
     def encode(self, data):
-        worker = image_worker_in_use()
-        return self._transform_here(data) if worker is None else worker.call(self._transform_here, data)
+        if self._image_worker is None:
+            return self._transform_here(data)
+        return self._image_worker.call(self._transform_here, data)
 
     def _transform_here(self, data):
         frames: list[np.ndarray] = []

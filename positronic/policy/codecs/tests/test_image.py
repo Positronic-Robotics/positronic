@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image as PilImage
 from positronic_model_server import serialization
-from positronic_model_server.spec import LATEST, NAME, component
+from positronic_model_server.spec import LATEST, NAME, SEQ, component
 
 from pimm.time import RECEIVED_WALL, RECEIVED_WORLD
 from positronic import keys
@@ -25,6 +25,7 @@ from positronic.policy.codecs import (
     ResizeMode,
     TransformImages,
 )
+from positronic.policy.image_worker import ImageWorker
 from positronic.policy.keys import RTC
 from positronic.policy.processors import EndOnField
 from positronic.policy.sequential import Sequential
@@ -523,3 +524,28 @@ class TestEncodeVideo:
     def test_a_bit_rate_or_frame_rate_that_is_not_a_positive_integer_is_refused(self, name, value):
         with pytest.raises(ValueError, match=f'{name} must be a positive integer'):
             EncodeVideo([['cam']], **{'bitrate': 500_000, 'fps': 15, name: value})
+
+
+class _CountingImageWorker(ImageWorker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def call(self, function, tree, /, *args):
+        self.calls += 1
+        return super().call(function, tree, *args)
+
+
+@pytest.mark.timeout(120)
+def test_each_declared_image_codec_runs_in_the_image_worker_that_from_spec_is_given():
+    declared = {SEQ: [TransformImages(32, 24, mode=ResizeMode.BOUND).to_spec(), EncodeImages().to_spec()]}
+    data = {'image': np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)}
+
+    here = spec.from_spec(declared)
+    with _CountingImageWorker() as worker:
+        in_worker = spec.from_spec(declared, image_worker=worker)
+        assert isinstance(here, Codec) and isinstance(in_worker, Codec)
+        encoded = in_worker.encode(data)
+
+    assert worker.calls == 2
+    assert encoded == here.encode(data)

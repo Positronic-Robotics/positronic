@@ -49,6 +49,7 @@ from positronic.policy.compatibility import (
     restrict_image_size_v1,
     unpack_action_chunk_v1,
 )
+from positronic.policy.image_worker import ImageWorker
 from positronic.policy.processors import EndOnField, InferenceSchedule, Periodic, TemporalStack, TrajectoryPlayer
 from positronic.policy.sequential import Sequential
 from positronic.utils.versions import Version, resolve_version
@@ -104,10 +105,14 @@ COMPONENTS[RTCScheduleV1.WIRE_NAME] = {1: Version(RTCScheduleV1.from_spec_args)}
 COMPONENTS[FlipGrip.WIRE_NAME][FlipGrip.ONE_ARM_VERSION] = Version(lambda: FlipGrip())
 
 
-def from_spec(node: dict[str, Any]) -> Processor | Codec:
+_RUN_IN_IMAGE_WORKER = frozenset({EncodeImages.WIRE_NAME, TransformImages.WIRE_NAME})
+
+
+def from_spec(node: dict[str, Any], image_worker: ImageWorker | None = None) -> Processor | Codec:
     """Resolve versioned components and expand config translations before constructing their replacements.
 
-    Missing versions mean v1; deprecations warn once per component version in this stack.
+    Missing versions mean v1; deprecations warn once per component version in this stack. Each ``encode_images`` and
+    ``transform_images`` component runs its image work in ``image_worker``; None runs it in this process.
     """
     selected: dict[str, dict[int, ComponentFactory]] = {}
 
@@ -136,7 +141,10 @@ def from_spec(node: dict[str, Any]) -> Processor | Codec:
         if type(version) is not int or version not in versions:
             factory = resolve_version(COMPONENTS[name], version, f'component {name!r}')
             versions[version] = factory
-        result = versions[version](**node.get(ARGS, {}))
+        args = node.get(ARGS, {})
+        if image_worker is not None and name in _RUN_IN_IMAGE_WORKER:
+            args = {**args, 'image_worker': image_worker}
+        result = versions[version](**args)
         return build(result) if isinstance(result, dict) else result
 
     return build(node)

@@ -8,9 +8,8 @@ import multiprocessing as mp
 import os
 import threading
 import weakref
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager, suppress
-from contextvars import ContextVar
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
@@ -189,7 +188,9 @@ class ImageWorker:
 
     A call waits ``timeout_sec`` for its answer, and the first call also waits ``start_timeout_sec`` for the
     process to start. A process that ends or does not answer in time is stopped and the call raises
-    ``ImageWorkerError``. The next call starts a new process.
+    ``ImageWorkerError``. The next call starts a new process. The process imports the main module of this
+    process, as the ``spawn`` start method does, so a main module must guard its work with
+    ``if __name__ == '__main__'``.
     """
 
     def __init__(self, timeout_sec: float = 10.0, start_timeout_sec: float = 60.0) -> None:
@@ -269,21 +270,3 @@ class ImageWorker:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
-
-
-_in_use: ContextVar[ImageWorker | None] = ContextVar('positronic_image_worker', default=None)
-
-
-@contextmanager
-def use_image_worker(worker: ImageWorker | None) -> Iterator[None]:
-    """Run the image codecs in ``worker`` inside the block, and in each policy call that the block submits."""
-    token = _in_use.set(worker)
-    try:
-        yield
-    finally:
-        _in_use.reset(token)
-
-
-def image_worker_in_use() -> ImageWorker | None:
-    """The worker that ``use_image_worker`` set for this context, or None to run the image codecs here."""
-    return _in_use.get()

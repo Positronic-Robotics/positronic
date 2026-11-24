@@ -34,7 +34,7 @@ from .codecs import PolicyCommandError
 from .codecs.action import JointPositionAction
 from .compatibility import from_v1_spec
 from .executor import ExecutionRuntime
-from .image_worker import ImageWorker, use_image_worker
+from .image_worker import ImageWorker
 from .spec import from_spec
 
 
@@ -91,19 +91,22 @@ def round_trip(
             telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing), **alone)
 
 
-def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:
+def declared_stack(
+    meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion, image_worker: ImageWorker | None = None
+) -> Processor:
     """The client stack a server's handshake declares, in the form ``protocol_version`` runs.
 
-    Raise ``PolicyCommandError`` when this client cannot build that stack.
+    Its image codecs run in ``image_worker``, as ``from_spec`` builds them. Raise ``PolicyCommandError`` when this
+    client cannot build that stack.
     """
     declared = meta.get(offboard_keys.LOCAL_STACK)
     if declared is None:
         raise PolicyCommandError('Server declares no client processor stack')
     try:
         if protocol_version is ProtocolVersion.V1:
-            stack = from_v1_spec(declared, meta, from_spec)
+            stack = from_v1_spec(declared, meta, partial(from_spec, image_worker=image_worker))
         else:
-            stack = from_spec(declared)
+            stack = from_spec(declared, image_worker)
     except Exception as e:
         raise PolicyCommandError(f'This client cannot build the client stack that the server declares: {e!r}') from e
     if not isinstance(stack, Processor):
@@ -235,7 +238,7 @@ class RemotePolicy(Policy):
         try:
             try:
                 server_meta = dict(session.metadata)
-                stack = declared_stack(server_meta, session.protocol_version)
+                stack = declared_stack(server_meta, session.protocol_version, self._image_worker)
                 execution = ExecutionRuntime(runtime, max_in_flight=1 if stack.ordered else session.max_in_flight)
                 stack_meta = dict(stack.meta())
                 # The declared stack runs on this client under every protocol, so its frames count for each server.
@@ -275,8 +278,7 @@ class RemotePolicy(Policy):
             obs = yield
             while True:
                 try:
-                    with use_image_worker(self._image_worker):
-                        step = run.send(obs)
+                    step = run.send(obs)
                     if isinstance(step, Step):
                         self._require_robot_commands(step)
                 except StopIteration as end:
