@@ -1782,6 +1782,17 @@ def test_server_metadata_this_client_cannot_use_fails_as_a_policy_command_error_
     session.close.assert_called_once()
 
 
+def test_server_frames_that_do_not_parse_fail_the_run_as_a_policy_command_error_that_quotes_the_parse_error(runtime):
+    # An offset takes a translation and a rotation: seven numbers, not three.
+    unparsable = {roboarm_keys.EE_FRAMES: {keys.EE_POSE: {'site': GRIPPER_SITE, 'offset': [0.0, 0.0, 0.0]}}}
+    policy, session = _mock_remote_policy({**CHUNKED_STACK, **unparsable})
+    session.protocol_version = protocol.ProtocolVersion.V3
+    with pytest.raises(PolicyCommandError, match='Quaternion must be non-zero'):
+        runtime.start(policy)
+    session.infer.assert_not_called()
+    session.close.assert_called_once()
+
+
 def test_a_server_whose_metadata_repeats_the_frame_of_its_stack_records_that_frame(runtime):
     policy, _ = _v3_policy_framing_each_pose(1, ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)}))
     assert _recorded_frames(policy, runtime)[keys.EE_POSE] == GRIPPER_SITE
