@@ -1,3 +1,4 @@
+import copy
 import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -46,10 +47,6 @@ class EncodeImages(Codec):
         self._quality = quality
         self._image_worker = image_worker
 
-    def __getstate__(self) -> dict[str, Any]:
-        # The copy that the image worker runs does its work in place.
-        return {**self.__dict__, '_image_worker': None}
-
     def _encode_value(self, value: Any) -> Any:
         if (
             isinstance(value, np.ndarray)
@@ -64,7 +61,9 @@ class EncodeImages(Codec):
     def encode(self, data: dict) -> dict:
         if self._image_worker is None:
             return self._encode_here(data)
-        return self._image_worker.call(self._encode_here, data)
+        in_place = copy.copy(self)
+        in_place._image_worker = None
+        return self._image_worker.call(in_place._encode_here, data)
 
     def _encode_here(self, data: dict) -> dict:
         return map_leaves(data, self._encode_value) if self._images is None else encode_images(data, self._images)
@@ -157,10 +156,6 @@ class TransformImages(Codec):
         self._paths = None if paths is None else tuple(tuple(path) for path in paths)
         self._image_worker = image_worker
 
-    def __getstate__(self) -> dict[str, Any]:
-        # The copy that the image worker runs does its work in place.
-        return {**self.__dict__, '_image_worker': None}
-
     @classmethod
     def from_spec_args(cls, **args: Any) -> Self:
         args['resample'] = Resample(args.get('resample', Resample.BILINEAR.value))
@@ -207,7 +202,9 @@ class TransformImages(Codec):
     def encode(self, data):
         if self._image_worker is None:
             return self._transform_here(data)
-        return self._image_worker.call(self._transform_here, data)
+        in_place = copy.copy(self)
+        in_place._image_worker = None
+        return self._image_worker.call(in_place._transform_here, data)
 
     def _transform_here(self, data):
         frames: list[np.ndarray] = []
