@@ -429,18 +429,19 @@ def _check_the_listing_refuses_an_unknown_phrasing(env: DroidEnv) -> None:
     raise AssertionError('the listing accepted the phrasing vauge')
 
 
-def _check_the_disabled_colliders_do_not_collide(env: DroidEnv) -> None:
+def _check_the_orange1_stem_does_not_collide(env: DroidEnv) -> None:
     """A scene that holds RoboLab's orange1 builds with its stem collider out of the physics."""
+    stem = '/Orange_01/OrangeStem'
     _reset(env, {**_TOKEN, keys.TOKEN_TASK: 'FruitsMovingOrangeOrLimeTask'})
     found = [
         prim
         for prim in Usd.PrimRange(env._env.sim.stage.GetPrimAtPath(env._env.scene.env_ns))
-        if str(prim.GetPath()).endswith(env._DISABLED_COLLIDERS)
+        if str(prim.GetPath()).endswith(stem)
     ]
-    assert found, f'the scene holds no collider of {env._DISABLED_COLLIDERS}'
+    assert found, f'the scene holds no {stem}'
     colliding = [str(p.GetPath()) for p in found if UsdPhysics.CollisionAPI(p).GetCollisionEnabledAttr().Get()]
     assert not colliding, f'these colliders still collide: {colliding}'
-    print(f'  disabled colliders: OK ({len(found)} out of the physics)')
+    print(f'  orange1 stem: OK ({len(found)} out of the physics)')
 
 
 def _check_a_clone_that_faults(env: DroidEnv) -> None:
@@ -850,7 +851,7 @@ def main() -> None:
     _check_cartesian_delta(env)
     _check_an_episode_length_replaces_the_budget(env)
     _check_a_command_that_is_not_finite_holds(env)
-    _check_the_disabled_colliders_do_not_collide(env)
+    _check_the_orange1_stem_does_not_collide(env)
     _check_a_clone_that_faults(env)
     env.close()
     if args.max_envs > 1:
