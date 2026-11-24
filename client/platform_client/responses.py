@@ -510,7 +510,7 @@ class ErroredSubmissionView(_TaggedView):
     id: SubmissionId
     reason_code: Slugged[ReasonCode] | None = None
     reason: str | None = None
-    # When the run started. None where the run failed before it started.
+    # When the run started. None where the platform recorded no start.
     started_at: AwareDatetime | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.errored
 
@@ -559,7 +559,7 @@ class CancelledSubmissionView(_TaggedView):
 
     id: SubmissionId
     cancelled_at: AwareDatetime | None = None
-    # When the run started. None where the caller cancelled it before it started.
+    # When the run started. None where the platform recorded no start.
     started_at: AwareDatetime | None = None
     status: Slugged[SubmissionStatus] = SubmissionStatus.cancelled
 
