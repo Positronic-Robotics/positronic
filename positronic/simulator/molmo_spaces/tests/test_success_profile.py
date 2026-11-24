@@ -399,7 +399,7 @@ def test_the_task_end_ends_a_native_tail_episode_before_and_after_a_success():
     assert _run_native_tail([True], _Task(done=True)) == [sp.Judged(True, True, {})]
 
 
-def test_the_native_tail_profile_keeps_the_native_call_sequence():
+def test_the_native_tail_profile_asks_judge_success_before_is_done_at_each_step():
     task = _Task()
     _run_native_tail([False, True], task)
     assert task.calls == ['judge_success', 'is_done'] * 2
