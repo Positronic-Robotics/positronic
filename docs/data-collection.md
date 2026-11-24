@@ -1,112 +1,68 @@
 # Data Collection Guide
 
-Positronic provides unified data collection for simulation (MuJoCo) and hardware (Franka, Kinova, SO101, DROID). All demonstrations are recorded as immutable raw datasets that can be projected to any model format using [codecs](../positronic/policy/codecs/README.md).
+A person records demonstrations through the teleop service, `positronic teleop`, and an ordinary `eval run`. For the
+run, the person is the policy `cfg.policy.teleop`. So a demonstration records the same data as a model trial: an
+immutable raw dataset that [codecs](../positronic/policy/codecs/README.md) project to any model format.
 
-## Quick Start
+The [Teleoperation Guide](../positronic/teleop/README.md) gives the commands, the devices and the controls:
+- [Collect demonstrations in MuJoCo](../positronic/teleop/README.md#collect-demonstrations-in-mujoco)
+- [Collect demonstrations in MolmoSpaces](../positronic/teleop/README.md#collect-demonstrations-in-molmospaces)
+- [Collect demonstrations on the bimanual YAM in ABC](../positronic/teleop/README.md#collect-demonstrations-on-the-bimanual-yam-in-abc)
 
-```bash
-uv run positronic-data-collection sim \
-    --output_dir=~/datasets/stack_cubes_raw \
-    --sound=None \
-    --webxr=.iphone \
-    --operator_position=.BACK
-```
+## Meta Quest
 
-Loads MuJoCo scene, starts DearPyGui visualization, launches WebXR server for phone teleoperation (port 5005), and records to `~/datasets/stack_cubes_raw`. Press `Ctrl+C` to stop.
+Open Oculus Browser, and go to `https://<host-ip>:5005/`. The browser shows a "Dangerous connection" warning, because
+the certificate is self-signed. Click Advanced → Proceed. Click "Enter AR" and approve the permissions.
 
-![Data collection GUI](../positronic/assets/docs/dc_gui.png)
+## Phones
 
-## Phone Teleoperation (WebXR)
+If "Enter AR" does not appear, try a different browser, or set `--webxr.use_https=True` or `False`. For jittery
+tracking, use good light and hold the phone steady. If the phone cannot reach the service, open port 5005 in the
+firewall.
 
-### iPhone
-```bash
-uv run positronic-data-collection sim \
-    --output_dir=~/datasets/my_task \
-    --webxr=.iphone
-```
+## Hardware
 
-Install **XR Browser** or **WebXR Viewer** on iPhone. The script prints the URL in console. Open in browser, tap **Enter AR**, grant permissions. Hold phone upright (reticle = virtual controller). Use HUD: **Track** (start/stop positional tracking), **Record** (start/stop episode), **Reset** (abort recording, return the arm to its start pose; in sim the scene is drawn again too), **Gripper slider** (0-1).
+A Franka Panda needs FCI, a gripper and cameras. Install the extras with `uv sync --locked --extra hardware --extra
+franka` (Linux only). The `franka` extra builds against libfranka, which the machine must already carry: 0.15.3 for a
+robot system version from 5.7.2 up to, not including, 5.9.0, and 0.21.3 for 5.9.0 and later. Configure the network
+connection and the udev rules (see [Drivers](../positronic/drivers/)).
 
-### Android
-```bash
-uv run positronic-data-collection sim \
-    --output_dir=~/datasets/my_task \
-    --webxr=.android
-```
+Add a hardware config in `positronic/cfg/hardware/`.
 
-Use Chrome browser (WebXR built-in). Connect to `https://<host-ip>:5005`, enter AR, control as above.
+**S3 support:** Positronic uses [pos3](https://github.com/Positronic-Robotics/pos3) for S3. `--output_dir` takes an
+`s3://` path too. The data is cached locally and synced.
 
-**Troubleshooting:** If "Enter AR" doesn't appear, try different browser or toggle `--webxr.use_https=True/False`. For jittery tracking, ensure good lighting and hold phone steady when pressing Track. Check firewall allows port 5005 if server is unreachable.
+## Best practices
 
-## VR Teleoperation (Meta Quest)
-
-```bash
-uv run positronic-data-collection sim \
-    --output_dir=~/datasets/my_task \
-    --webxr=.oculus
-```
-
-Open Oculus Browser, navigate to `https://<host-ip>:5005/`. Browser shows "Dangerous connection" warning (expected with self-signed certificates) – click Advanced → Proceed. Click "Enter AR" and approve permissions.
-
-**Controls:** Right B (start/stop recording), Right A (toggle tracking), Right stick press (abort recording, return the arm to its start pose; in sim the scene is drawn again too), Right trigger (gripper).
-
-## Collection Workflow
-
-Press **Track** (or Right A) to enable controller. Press **Record** (or Right B) to start episode. Perform task (e.g., grasp cube, move, place). Press **Record** again to save. Press **Reset** (or Right stick press) to ready the rig for the next episode: the arm goes back to a start pose, and in sim the scene is drawn again. Teleoperation is held until every device is there. Press **Reset** during recording to abort and discard.
-
-**Best practices:** Record calibration runs first and review in the dataset viewer (`uv run positronic-dataset-viewer --dataset.path=~/datasets/my_task`). Collect 50+ demonstrations for single-task scenarios (minimum 30, multi-task needs 100-500+). Randomize object positions, vary approach angles, keep episodes short (10-30s), demonstrate successful and near-failure cases (not catastrophic failures).
-
-## Hardware Platforms
-
-### Franka Panda
-```bash
-uv run positronic-data-collection real \
-    --output_dir=~/datasets/franka_logistics \
-    --webxr=.oculus
-```
-
-Requires Franka Panda with FCI, gripper, cameras. Install extras: `uv sync --locked --extra hardware --extra franka` (Linux only). The `franka` extra builds against libfranka, which the machine must already carry: 0.15.3 for a robot system version from 5.7.2 up to, not including, 5.9.0, and 0.21.3 for 5.9.0 and later. Configure network connection and udev rules (see [Drivers](../positronic/drivers/)).
-
-### Other Platforms
-- **Kinova Gen3**: Add `--robot_arm=@positronic.cfg.hardware.roboarm.kinova --nominal_joints=[0.0,0.0,0.5,-1.5,0.0,-0.5,1.5708]` — the start pose the right stick puts the arm at belongs to the arm, so it is named with it
-- **SO101**: Use `positronic-data-collection so101` (bimanual setup)
-- **DROID**: Use `positronic-data-collection droid` (joint-space control)
-
-## Configuration
-
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `--output_dir` | Dataset location | `~/datasets/my_task`, `s3://bucket/datasets/task` |
-| `--webxr` | Teleoperation | `.iphone`, `.android`, `.oculus`, `.psvr2`, `None` |
-| `--sound` | Audio feedback | `None` (disable), default (enable) |
-| `--operator_position` | Camera viewpoint | `.FRONT`, `.BACK`, `.LEFT`, `.RIGHT` |
-
-**S3 support:** Positronic relies on [pos3](https://github.com/Positronic-Robotics/pos3) for S3 integration. Data is cached locally and synced automatically.
-
-**Custom configs:** Add hardware configs in `positronic/cfg/hardware/`, reference with `--robot_arm=@positronic.cfg.hardware.roboarm.my_custom_arm`.
+Record calibration runs first, and review them in the dataset viewer. Collect 50+ demonstrations for a single task
+(minimum 30; a multi-task set needs 100-500+). Randomize the object positions, vary the approach angles, keep the
+episodes short (10-30 s), and show successful and near-failure cases (not catastrophic failures).
 
 ## Reviewing Data
 
-Launch viewer:
+Launch the viewer:
 ```bash
 uv run positronic-dataset-viewer \
     --dataset.path=~/datasets/my_task \
     --port=5001
 ```
 
-Open `http://localhost:5001` to browse episodes, view camera feeds, check timestamps. Delete low-quality episodes manually: `rm -rf ~/datasets/my_task/000000000000/000000000042/`.
+Open `http://localhost:5001` to browse the episodes, view the camera feeds and check the timestamps. Delete a
+low-quality episode by hand: `rm -rf ~/datasets/my_task/000000000000/000000000042/`.
 
 ![Dataset viewer](../positronic/assets/docs/server_screenshot.png)
 
 ## Next Steps
 
-After collection: **Review** data in server → **Curate** by removing failures → **Convert** with codecs ([Training Workflow](training-workflow.md)) → **Train** policy ([Model Selection](model-selection.md)) → **Evaluate** ([Inference Guide](inference.md)).
+After collection: **Review** the data in the viewer → **Curate** by removing failures → **Convert** with codecs
+([Training Workflow](training-workflow.md)) → **Train** a policy ([Model Selection](model-selection.md)) →
+**Evaluate** ([Inference Guide](inference.md)).
 
 ## See Also
 
-- [Training Workflow](training-workflow.md) – Converting and training
-- [Codecs Guide](../positronic/policy/codecs/README.md) – Format projection
-- [Inference Guide](inference.md) – Policy deployment
-- [Teleoperation Guide](../positronic/teleop/README.md) – A human trial in VR through an eval
-- [Dataset Library](../positronic/dataset/README.md) – Raw storage
-- [Drivers](../positronic/drivers/) – Hardware integration
+- [Teleoperation Guide](../positronic/teleop/README.md) – the teleop service, the devices and the controls
+- [Training Workflow](training-workflow.md) – converting and training
+- [Codecs Guide](../positronic/policy/codecs/README.md) – format projection
+- [Inference Guide](inference.md) – policy deployment
+- [Dataset Library](../positronic/dataset/README.md) – raw storage
+- [Drivers](../positronic/drivers/) – hardware integration

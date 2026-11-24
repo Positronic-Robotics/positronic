@@ -1,0 +1,265 @@
+import asyncio
+import collections
+import contextlib
+import json
+import logging
+import socket
+import time
+import types
+from collections.abc import Iterator
+from typing import cast
+
+import av
+import httpx
+import numpy as np
+import psutil
+import pytest
+from fastapi import FastAPI
+from websockets.sync import client as ws_client
+
+import pimm
+from positronic import keys, utils
+from positronic.cfg import webxr as cfg_webxr
+from positronic.drivers import webxr
+from positronic.drivers.webxr import Frontend, SessionMode, WebXR
+from positronic.geom import Rotation, Transform3D
+from positronic.gui.video_stream import DecoderConfig
+from positronic.tests.testing_coutils import RecordingEmitter
+from positronic.tests.testing_inference import free_port
+
+
+@pytest.fixture
+def world():
+    with pimm.World(virtual_time=True) as w:
+        yield w
+
+
+def test_the_headset_video_skips_a_lost_camera_and_resumes_on_its_next_frame(world):
+    webxr = WebXR(port=0)
+    emitter, receiver = world.local_pipe()
+    webxr.frame._bind(receiver)
+
+    emitter.emit('frame 1')
+    first = webxr._next_frame(None)
+    assert first is not None and first.data == 'frame 1'
+
+    emitter.emit(pimm.SignalError('camera lost'))
+    assert webxr._next_frame(first.time) is None
+
+    emitter.emit('frame 2')
+    second = webxr._next_frame(first.time)
+    assert second is not None and second.data == 'frame 2'
+
+
+@contextlib.contextmanager
+def _served_webxr(frontend: Frontend = Frontend.HEADSET, webxr: WebXR | None = None) -> Iterator[str]:
+    """A ``WebXR`` server of ``frontend`` on a free port, or ``webxr`` when given, and its base URL once it answers."""
+    if webxr is None:
+        webxr = WebXR(port=free_port(), frontend=frontend, use_https=False)
+    port = webxr.port
+    stop = types.SimpleNamespace(value=False)
+    run = webxr.run(cast(pimm.SignalReceiver, stop), cast(pimm.Clock, None))
+    next(run)
+    base = f'http://127.0.0.1:{port}'
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                httpx.get(base + '/core.js', timeout=1.0)
+                break
+            except httpx.TransportError:
+                assert time.monotonic() < deadline, 'the headset page never answered'
+                time.sleep(0.05)
+        yield base
+    finally:
+        stop.value = True
+        list(run)
+
+
+def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_send():
+    app = FastAPI()
+    WebXR(port=free_port())._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
+    incoming = iter([{'type': 'websocket.connect'}, {'type': 'websocket.disconnect', 'code': 1000}])
+
+    async def receive():
+        return next(incoming)
+
+    async def send(message):
+        pass
+
+    scope = {'type': 'websocket', 'path': '/video', 'headers': [], 'query_string': b'', 'root_path': ''}
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=5))
+
+
+@pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
+def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
+    monkeypatch.chdir(tmp_path)
+    with _served_webxr() as base:
+        assert httpx.get(base + route, timeout=1.0).status_code == 200
+
+
+def test_the_headset_server_logs_through_the_process_handlers():
+    root = logging.getLogger()
+    handlers = list(root.handlers)
+    with _served_webxr():
+        assert root.handlers == handlers
+
+
+def test_the_phone_page_for_teleop_redirects_to_its_teleop_query():
+    with _served_webxr(Frontend.IPHONE_TELEOP) as base:
+        bare = httpx.get(base + '/', timeout=1.0)
+        assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
+        assert httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0).status_code == 200
+
+
+@pytest.mark.parametrize(('preset', 'session'), [(cfg_webxr.oculus, 'immersive-ar'), (cfg_webxr.psvr2, 'immersive-vr')])
+def test_the_headset_page_serves_the_session_mode_of_its_preset(preset, session):
+    served = preset.override(port=free_port(), use_https=False).instantiate()
+    with _served_webxr(webxr=served) as base:
+        assert httpx.get(base + '/', timeout=1.0).status_code == 200
+        script = httpx.get(base + '/session-mode.js', timeout=1.0)
+        assert script.headers['content-type'].startswith('text/javascript')
+        assert script.text == f'export const SESSION_MODE = "{session}";\n'
+
+
+def test_the_headset_page_drops_a_query():
+    with _served_webxr() as base:
+        stale = httpx.get(f'{base}/?mode=vr', timeout=1.0)
+        assert stale.status_code == 307 and stale.headers['location'] == '/'
+
+
+def test_a_vr_session_on_the_phone_page_is_refused():
+    with pytest.raises(ValueError, match='session_mode VR needs the headset frontend'):
+        WebXR(port=free_port(), frontend=Frontend.IPHONE, session_mode=SessionMode.VR)
+
+
+def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
+    address = collections.namedtuple('address', 'family address')
+    interfaces = {
+        'lo0': [address(socket.AF_INET, '127.0.0.1')],
+        'en0': [address(socket.AF_INET6, 'fe80::1'), address(socket.AF_INET, '10.0.0.5')],
+        'utun3': [address(socket.AF_INET, '100.64.0.2')],
+    }
+    monkeypatch.setattr(psutil, 'net_if_addrs', lambda: interfaces)
+    assert utils.interface_ipv4_addresses() == [('en0', '10.0.0.5'), ('utun3', '100.64.0.2')]
+
+
+@pytest.mark.parametrize('bitrate', [0, -1, 4e6])
+def test_a_video_bitrate_that_is_not_a_positive_integer_is_refused(bitrate):
+    with pytest.raises(ValueError, match='video_bitrate must be a positive integer'):
+        WebXR(port=free_port(), video_bitrate=bitrate)
+
+
+@pytest.mark.parametrize('fps', [0, -1, 30.0])
+def test_a_video_rate_that_is_not_a_positive_integer_is_refused(fps):
+    with pytest.raises(ValueError, match='video_fps must be a positive integer'):
+        WebXR(port=free_port(), video_fps=fps)
+
+
+def test_the_page_state_is_empty_until_something_sends_one(world):
+    served = WebXR(port=free_port(), frontend=Frontend.IPHONE_TELEOP, use_https=False)
+    emitter, receiver = world.local_pipe()
+    served.page_state._bind(receiver)
+    with _served_webxr(webxr=served) as base:
+        assert httpx.get(base + '/state', timeout=1.0).json() == {}
+        emitter.emit({'phase': 'running', 'control': True})
+        assert httpx.get(base + '/state', timeout=1.0).json() == {'phase': 'running', 'control': True}
+
+
+def test_the_page_input_emits_each_object_that_the_page_posts(world):
+    """The teleoperator chooses on the page, such as the camera of the headset. A page on another site cannot."""
+    served = WebXR(port=free_port(), use_https=False)
+    inputs = RecordingEmitter()
+    served.page_input._bind(inputs, clock=world.clock)
+    with _served_webxr(webxr=served) as base:
+        assert httpx.post(base + '/input', json={'headset_camera': keys.WRIST_IMAGE}, timeout=1.0).status_code == 200
+        assert httpx.post(base + '/input', json=['not', 'an', 'object'], timeout=1.0).status_code == 422
+        assert httpx.post(base + '/input', content=b'not json', timeout=1.0).status_code == 422
+        foreign = {'origin': 'https://elsewhere.example'}
+        assert httpx.post(base + '/input', json={}, headers=foreign, timeout=1.0).status_code == 403
+        other_scheme = {'origin': base.replace('http://', 'https://')}
+        assert httpx.post(base + '/input', json={}, headers=other_scheme, timeout=1.0).status_code == 403
+        assert httpx.post(base + '/input', json={'x': 1}, headers={'origin': base}, timeout=1.0).status_code == 200
+    assert [data for _, data in inputs.emitted] == [{'headset_camera': keys.WRIST_IMAGE}, {'x': 1}]
+
+
+def test_a_controller_message_parses_back_to_its_poses_and_buttons():
+    pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
+    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0, 0.0, 1.0, 0.0]})
+    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
+    assert positions[webxr.LEFT] is None and buttons[webxr.LEFT] is None
+    right, right_buttons = positions[webxr.RIGHT], buttons[webxr.RIGHT]
+    assert right is not None and right_buttons is not None
+    np.testing.assert_allclose(right.translation, pose.translation)
+    np.testing.assert_allclose(right.rotation.as_quat, pose.rotation.as_quat)
+    np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0, 0.0, 1.0, 0.0])
+
+
+def _hand_message(values: list[float]) -> dict:
+    """A page message of a right hand that the headset tracks with no controller in it, with ``values``."""
+    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
+    message['controllers'][webxr.RIGHT]['buttons'] = values
+    return message
+
+
+@pytest.mark.parametrize('values', [[], [0.0, 1.0]], ids=['no values', 'too few values'])
+def test_a_hand_with_too_few_button_values_parses_as_a_controller_that_is_not_tracked(values):
+    positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(_hand_message(values))))
+    assert positions[webxr.RIGHT] is None and buttons[webxr.RIGHT] is None
+
+
+def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(world):
+    served = WebXR(port=free_port(), use_https=False)
+    positions, buttons = RecordingEmitter(), RecordingEmitter()
+    served.controller_positions._bind(positions, clock=world.clock)
+    served.buttons._bind(buttons, clock=world.clock)
+    controller = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
+    hand = _hand_message([])
+    with (
+        _served_webxr(webxr=served) as base,
+        ws_client.connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as ws,
+    ):
+        ws.send(json.dumps(controller))
+        ws.send(json.dumps(hand))
+        deadline = time.monotonic() + 5
+        while len(positions.emitted) < 2 or len(buttons.emitted) < 2:
+            assert time.monotonic() < deadline, 'the stream emitted no sample of the hand'
+            time.sleep(0.01)
+    assert positions.emitted[0][1][webxr.RIGHT] is not None
+    assert positions.emitted[1][1] == {webxr.LEFT: None, webxr.RIGHT: None}
+    assert buttons.emitted[1][1] == {webxr.LEFT: None, webxr.RIGHT: None}
+
+
+def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
+    with pytest.raises(ValueError, match='positions and buttons must name the same controllers'):
+        webxr.controller_message({webxr.RIGHT: Transform3D()}, {})
+
+
+def test_a_controller_message_refuses_a_controller_with_fewer_button_values_than_a_controller_has():
+    with pytest.raises(ValueError, match='at least 6 button values'):
+        webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 5})
+
+
+def test_the_plain_phone_page_drops_the_teleop_query():
+    with _served_webxr(Frontend.IPHONE) as base:
+        assert httpx.get(base + '/', timeout=1.0).status_code == 200
+        stale = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
+        assert stale.status_code == 307 and stale.headers['location'] == '/'
+
+
+def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binary_at_the_video_rate(world):
+    served = WebXR(port=free_port(), use_https=False, video_fps=15)
+    emitter, receiver = world.local_pipe()
+    served.frame._bind(receiver)
+    with _served_webxr(webxr=served) as base, ws_client.connect(base.replace('http', 'ws') + '/video') as video:
+        emitter.emit(np.zeros((48, 64, 3), np.uint8))
+        config = DecoderConfig.model_validate_json(video.recv(timeout=5))
+        key = video.recv(timeout=5)
+        emitter.emit(np.full((48, 64, 3), 9, np.uint8))
+        delta = video.recv(timeout=5)
+    assert (config.width, config.height) == (64, 48) and config.codec.startswith('avc1.')
+    assert isinstance(key, bytes) and isinstance(delta, bytes), 'each frame is a binary access unit'
+    decoder = av.CodecContext.create('h264', 'r')
+    for unit in (key, delta):
+        decoder.decode(av.Packet(unit))
+    assert decoder.framerate == 15

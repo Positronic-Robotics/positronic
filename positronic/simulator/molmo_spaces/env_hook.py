@@ -44,11 +44,15 @@ class EnvHook:
         """
 
     def grip(self, gripper_qpos: Any) -> float:
-        """The grip observation for the joint positions of the gripper move group.
-
-        It maps the observation only: the server sends the grip command to the 2F-85 actuator as MolmoSpaces does.
-        """
+        """The grip observation for the joint positions of the gripper move group."""
         return mapping.normalize_grip_qpos(gripper_qpos)
+
+    def grip_actuator(self, grip_command: float) -> float:
+        """The 2F-85 actuator command (0 to 255) for the policy's grip command.
+
+        A hook that reports the grip on another scale in ``grip`` maps the command from that scale here.
+        """
+        return mapping.grip_command_to_actuator(grip_command)
 
 
 class LoadedHook(NamedTuple):
