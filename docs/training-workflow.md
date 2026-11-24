@@ -248,8 +248,9 @@ See [Inference Guide](inference.md) for detailed deployment and evaluation patte
 ### Experiment Workflow
 
 ```bash
-# 1. Collect demonstrations
-uv run positronic-data-collection sim --output_dir=~/datasets/my_task
+# 1. Collect demonstrations (with `positronic teleop` running, see the Teleoperation Guide)
+uv run positronic eval run --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect \
+  --policy=@positronic.cfg.policy.teleop_collect --output_dir=~/datasets/my_task
 
 # 2. Review in viewer
 uv run positronic-dataset-viewer --dataset.path=~/datasets/my_task

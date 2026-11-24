@@ -252,6 +252,16 @@ def test_inference_error_keeps_the_session_usable(start):
     peer.close()
 
 
+def test_an_answer_times_its_encode_and_stamps_its_receipt_and_its_send(start):
+    peer = start().session()
+    before_ns = time.time_ns()
+    timing = peer.infer({})[protocol.TIMING]
+    after_ns = time.time_ns()
+    assert before_ns <= timing[protocol.TIMING_RECEIVED_NS] <= timing[protocol.TIMING_SENT_NS] <= after_ns
+    assert timing[protocol.TIMING_ENCODE] >= 0
+    peer.close()
+
+
 def test_a_wrong_session_id_closes_only_the_requesting_session(start):
     running = start()
     first, second = running.session(), running.session()

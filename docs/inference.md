@@ -79,7 +79,7 @@ uv run positronic eval run --eval=.sim.positronic.stack_cubes \
   --output_dir=~/datasets/inference_logs/exp_v1
 ```
 
-**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default), and `--policy.connect_deadline` bounds the whole session opening with its retries (900 s). No connect, status wait or retry lasts past the deadline. Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` and a `connect_deadline` as long as the cold start: one dial then waits through it.
+**A slow-starting endpoint takes a longer dial.** `--policy.open_timeout` bounds one connect (10 s by default), and `--policy.connect_deadline` bounds the whole session opening with its retries (900 s). No connect, status wait or retry lasts past the deadline. Inside it, `--policy.unresolved_host_deadline` bounds the retries while the resolver has no answer for the host name (300 s). Some endpoints hold a connect while they start a backend, and start one more backend for each connect the client gave up on. Give them an `open_timeout` and a `connect_deadline` as long as the cold start: one dial then waits through it.
 
 ```bash
 uv run positronic eval run --eval=.sim.positronic.stack_cubes \
@@ -152,6 +152,7 @@ Anything richer — a foot pedal, a rig UI — is a driver of its own rather tha
 - `RemotePolicy`, when that stack, or its check of a step, raises a `KeyError`, `TypeError`, `ValueError`, `IndexError` or `AttributeError` on an answer or an observation. Example: a v3 answer whose command channel name is bytes.
 - `RemotePolicy`, when a step from that stack puts no command object at a robot command channel.
 - The harness, when a step names a channel that the embodiment does not take.
+- The harness, when a policy sends a pose command on a channel and states no `ee_frames` entry for the pose of that channel.
 
 An error that the policy itself raises reaches the caller unchanged, and so does a server's error answer, a timeout or a lost connection.
 

@@ -38,7 +38,7 @@ import socket
 import threading
 import time
 import uuid
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -91,6 +91,13 @@ STAT_CPU_PROC_PCT = 'cpu_proc_pct'
 STAT_RSS_PROC_B = 'rss_proc_b'
 STAT_GPU_COUNT = 'gpu_count'
 STAT_GPUS = 'gpus'
+STAT_PROCS = 'procs'
+
+# The fields of one ``STAT_PROCS`` entry: one process of the sampled tree.
+PROC_NAME = 'name'
+PROC_PID = 'pid'
+PROC_CPU_PCT = 'cpu_pct'
+PROC_RSS_B = 'rss_b'
 
 # The per-device fields of one ``STAT_GPUS`` entry.
 GPU_INDEX = 'i'
@@ -117,6 +124,10 @@ _active_span: ContextVar[Span | None] = ContextVar('positronic_active_span', def
 # The unbound fallback is a PRIVATE no-op, never ``trace.get_tracer``: a host application embedding this code
 # may have configured OTel's global provider, and an untimed run must not export spans through it.
 _NOOP_TRACER = trace.NoOpTracer()
+
+# The load of a Tegra integrated GPU (a Jetson), in tenths of a percent, at its path on an Orin. Other Jetson models
+# put the file elsewhere, so `StatsSampler` takes the path as an argument.
+TEGRA_GPU_LOAD_PATH = Path('/sys/devices/platform/gpu.0/load')
 
 # NVML's uint64 "value not available" sentinel. On a driver that cannot attribute a process's GPU memory, the
 # query succeeds and pynvml surfaces this raw value in ``usedGpuMemory`` rather than ``None``.
@@ -230,6 +241,22 @@ def bind_from_env(process: str) -> Iterator[None]:
             # would not also lose the episodes.
             logger.warning('recording no telemetry: the sidecar %s did not open: %s', path, error)
         yield
+
+
+@contextmanager
+def one_run_id() -> Iterator[None]:
+    """Hold one run id in the environment while the block runs, so this process and each process it spawns bind
+    under the same id. A non-empty run id set before the block is kept. The environment is restored on exit."""
+    previous = os.environ.get(ENV_RUN_ID)
+    if not previous:
+        os.environ[ENV_RUN_ID] = uuid.uuid4().hex
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(ENV_RUN_ID, None)
+        else:
+            os.environ[ENV_RUN_ID] = previous
 
 
 def force_flush() -> None:
@@ -566,15 +593,66 @@ class _Nvml:
                 pass
 
 
+class _TegraGpu:
+    """The load of a Jetson's integrated GPU, from sysfs. Absent on any other box. The GPU shares the host's memory and
+    has no power sensor of its own, so only its load is a reading."""
+
+    def __init__(self, path: Path) -> None:
+        self._path: Path | None = path if os.access(path, os.R_OK) else None
+        self._warned = False
+
+    @property
+    def device_count(self) -> int:
+        return 0 if self._path is None else 1
+
+    def sample(self) -> list[dict[str, Any]]:
+        if self._path is None:
+            return []
+        try:
+            load = int(self._path.read_text())
+        except (OSError, ValueError) as error:
+            # A stats sample must not stop the run it measures; one error per process keeps the log readable.
+            if not self._warned:
+                logger.error(
+                    'telemetry: Tegra GPU load at %s unreadable (%r); GPU sample left empty', self._path, error
+                )
+                self._warned = True
+            return []
+        return [
+            {
+                GPU_INDEX: 0,
+                GPU_UTIL_PCT: load / 10.0,
+                GPU_MEM_USED_B: None,
+                GPU_MEM_TOTAL_B: None,
+                GPU_POWER_W: None,
+                GPU_PROC_MEM_B: None,
+                GPU_PROC_UTIL_PCT: None,
+            }
+        ]
+
+
 class StatsSampler:
     """A daemon thread sampling host CPU/memory, this process tree's CPU/memory, and per-GPU load at ``hz``,
     writing one JSON line per sample to ``out_path`` (flushed per line, so a crash keeps every prior sample).
     It free-runs on wall time — no span context, no episode boundary — so no sample is lost at a phase edge.
     It runs as an in-process daemon thread, not a subprocess: ``os.getpid()`` gives exact process-tree
     attribution and the lifecycle stays trivial, at the cost of going blind if the harness itself hard-hangs —
-    load-of-a-hang forensics this profiling does not need."""
+    load-of-a-hang forensics this profiling does not need.
 
-    def __init__(self, out_path: Path | str, hz: float = 1.0) -> None:
+    Each sample also lists every process of the tree by name. ``process_names`` maps a pid to a name for it; a pid
+    it omits takes the OS process name. It is called from the sampler thread, so it reads only state that is safe
+    to read from another thread.
+
+    A box with a readable ``tegra_gpu_load_path`` is a Jetson: its GPU sample comes from that file, because a
+    Jetson's NVML refuses every utilisation query. Every other box samples its GPUs through NVML."""
+
+    def __init__(
+        self,
+        out_path: Path | str,
+        hz: float = 1.0,
+        process_names: Callable[[], Mapping[int, str]] | None = None,
+        tegra_gpu_load_path: Path = TEGRA_GPU_LOAD_PATH,
+    ) -> None:
         global psutil, pynvml
         try:  # the sampler's probes ship in the optional `telemetry` extra
             import psutil  # noqa: PLC0415
@@ -586,8 +664,10 @@ class StatsSampler:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name='telemetry-stats', daemon=True)
         self._nvml = _Nvml()
+        self._tegra = _TegraGpu(tegra_gpu_load_path)
         self._self = psutil.Process(os.getpid())
         self._proc_cache: dict[int, psutil.Process] = {}
+        self._process_names = process_names
         psutil.cpu_percent(interval=None)  # prime the host CPU counter so the first sample is a real delta
 
     def __enter__(self) -> 'StatsSampler':
@@ -599,9 +679,9 @@ class StatsSampler:
         self._thread.join(timeout=5)
         self._nvml.shutdown()
 
-    def _tree(self) -> tuple[set[int], float, int]:
-        """This process tree's pids, summed CPU percent, and summed RSS. Process objects are cached across
-        samples so ``cpu_percent`` reads a real interval delta; dead processes are dropped."""
+    def _tree(self) -> tuple[set[int], list[dict[str, Any]]]:
+        """This process tree's pids, and one ``PROC_*`` reading per live process. Process objects are cached
+        across samples so ``cpu_percent`` reads a real interval delta; dead processes are dropped."""
         try:
             processes = [self._self, *self._self.children(recursive=True)]
         except psutil.Error:
@@ -610,35 +690,40 @@ class StatsSampler:
         for pid in list(self._proc_cache):
             if pid not in pids:
                 del self._proc_cache[pid]
-        cpu_pct = 0.0
-        rss = 0
+        names = self._process_names() if self._process_names is not None else {}
+        readings = []
         for proc in processes:
             try:
                 if proc.pid not in self._proc_cache:
                     self._proc_cache[proc.pid] = proc
                     proc.cpu_percent(interval=None)  # prime; the first read is meaningless
                 cached = self._proc_cache[proc.pid]
-                cpu_pct += cached.cpu_percent(interval=None)
-                rss += cached.memory_info().rss
+                readings.append({
+                    PROC_NAME: names.get(proc.pid) or cached.name(),
+                    PROC_PID: proc.pid,
+                    PROC_CPU_PCT: cached.cpu_percent(interval=None),
+                    PROC_RSS_B: cached.memory_info().rss,
+                })
             except psutil.NoSuchProcess:
                 self._proc_cache.pop(proc.pid, None)
             except psutil.Error as error:
                 logger.error('telemetry: dropping pid %d from the process-tree sample: %r', proc.pid, error)
                 self._proc_cache.pop(proc.pid, None)
-        return pids, cpu_pct, rss
+        return pids, readings
 
     def _sample(self) -> dict[str, Any]:
         cpu_times = psutil.cpu_times_percent(interval=None)
-        tree_pids, cpu_proc_pct, rss_proc_b = self._tree()
+        tree_pids, procs = self._tree()
         return {
             STAT_T_NS: time.time_ns(),
             STAT_CPU_SYS_PCT: psutil.cpu_percent(interval=None),
             STAT_IOWAIT_PCT: float(getattr(cpu_times, 'iowait', 0.0)),
             STAT_MEM_SYS_USED_B: int(psutil.virtual_memory().used),
-            STAT_CPU_PROC_PCT: cpu_proc_pct,
-            STAT_RSS_PROC_B: rss_proc_b,
-            STAT_GPU_COUNT: self._nvml.device_count,
-            STAT_GPUS: self._nvml.sample(tree_pids),
+            STAT_CPU_PROC_PCT: sum(proc[PROC_CPU_PCT] for proc in procs),
+            STAT_RSS_PROC_B: sum(proc[PROC_RSS_B] for proc in procs),
+            STAT_GPU_COUNT: self._tegra.device_count or self._nvml.device_count,
+            STAT_GPUS: self._tegra.sample() if self._tegra.device_count else self._nvml.sample(tree_pids),
+            STAT_PROCS: procs,
         }
 
     def _loop(self) -> None:

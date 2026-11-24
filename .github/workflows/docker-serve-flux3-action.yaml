@@ -9,6 +9,7 @@ on:
     paths:
       - docker/Dockerfile.serve-flux3-action
       - docker/Makefile
+      - docker/install-model-server-deps.sh
       - .dockerignore
       - pyproject.toml
       - uv.lock

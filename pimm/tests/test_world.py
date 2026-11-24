@@ -12,9 +12,10 @@ import time
 import traceback
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import ProcessPoolExecutor
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from multiprocessing.context import SpawnProcess
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
@@ -331,6 +332,28 @@ def test_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_coll
     _in_a_fresh_process(_check_a_world_that_starts_while_another_world_ends_keeps_the_heap_out_of_collections)
 
 
+class HeapReporter(ControlSystem):
+    """Holds 50,000 objects, and writes how many objects a full collection in its process would scan."""
+
+    def __init__(self, scanned):
+        self._scanned = scanned
+        self._heap = [[i] for i in range(50_000)]
+
+    def run(self, should_stop, clock):
+        self._scanned.value = len(gc.get_objects())
+        yield Sleep(0.01)
+
+
+def test_a_full_collection_in_a_background_process_skips_the_heap_made_before_its_loop():
+    """A full collection stops the loop of a background process too, so the scan there must stay short."""
+    scanned = mp.get_context('spawn').Value('q', -1)
+
+    with World() as world:
+        world.run(StopWatcher(mp.Value('i', 0)), HeapReporter(scanned))
+
+    assert 0 <= scanned.value < 5_000
+
+
 def test_a_world_starts_its_loops_without_a_full_collection(monkeypatch):
     """A full collection stops the process while it scans, so the first loop step must not wait for one."""
     collections = Mock()
@@ -434,6 +457,54 @@ def heartbeat_loop(emitter, stop_reader, clock):
     while not stop_reader.read().data:
         emitter.emit('beat')
         yield Sleep(0.01)
+
+
+# Module scope, for the same reason: `World` pickles the process scope into every child it spawns.
+SCOPE_DIR_ENV = 'PIMM_TEST_SCOPE_DIR'
+
+
+@contextmanager
+def mark_scope(name: str) -> Iterator[None]:
+    """Write a file named after the process while the scope is open, and one more when it closes."""
+    directory = Path(os.environ[SCOPE_DIR_ENV])
+    (directory / f'{name}.entered').write_text(str(os.getpid()))
+    try:
+        yield
+    finally:
+        (directory / f'{name}.exited').write_text(str(os.getpid()))
+
+
+def idle_loop(stop_reader, clock):
+    while not stop_reader.read().data:
+        yield Sleep(0.01)
+
+
+def _wait_for(paths: list[Path]) -> None:
+    deadline = time.monotonic() + 30
+    while not all(path.exists() for path in paths):
+        assert time.monotonic() < deadline, f'never written: {[p.name for p in paths if not p.exists()]}'
+        time.sleep(0.01)
+
+
+class TestProcessScope:
+    def test_each_background_process_runs_inside_the_scope_under_its_own_name(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(SCOPE_DIR_ENV, str(tmp_path))
+        with World(process_scope=mark_scope) as world:
+            world.start_in_subprocess(idle_loop)
+            _wait_for([tmp_path / 'idle_loop.entered'])
+            pid = int((tmp_path / 'idle_loop.entered').read_text())
+        assert pid not in (os.getpid(), 0)
+        _wait_for([tmp_path / 'idle_loop.exited'])
+
+    def test_two_background_processes_of_one_name_get_two_names(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(SCOPE_DIR_ENV, str(tmp_path))
+        with World(process_scope=mark_scope) as world:
+            world.start_in_subprocess(idle_loop, idle_loop)
+            names = [process.name for process in world.background_processes]
+            _wait_for([tmp_path / f'{name}.entered' for name in names])
+        assert names == ['idle_loop', 'idle_loop.2']
+        pids = {(tmp_path / f'{name}.entered').read_text() for name in names}
+        assert len(pids) == 2
 
 
 class TestWorld:

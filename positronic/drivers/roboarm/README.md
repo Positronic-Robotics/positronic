@@ -24,11 +24,9 @@ A policy trained in some other end-effector frame carries the constant transform
 checkpoint run on any embodiment that keeps the contract. At the start of each episode the harness compares the
 policy's `ee_frames` with the rig's. A remote policy gets its `ee_frames` from its server when its session opens, so
 the harness compares them then, before the first observation goes to the server. A policy observes only the poses it
-states at the rig's site. A policy that names another site is refused. A policy that states none observes each pose at
-the rig's legacy point, the point the rig reported before `gripper`, and its pose commands go back from that point. The
-legacy point is `end_effector` (`models.EE_LINK`) on a model that names it, as the FR3, the MuJoCo panda and YAM do,
-and the rig site on any other model, such as SO-101. The harness reads it from the rig's model and logs a warning for
-each such session. This fallback is transitional (#550).
+states at the rig's site. A policy that names another site is refused. The harness fails the episode at a pose command on
+a channel whose pose the policy does not state: `robot_command.pose` is the pose of the `robot_command` channel. So a
+policy that states none speaks joints only, and it observes no pose signal.
 
 `Impedance.frame` is the stiffness point, measured from the rig site. The Franka driver accepts an offset only, and
 refuses a turned frame. `DROID_IMPEDANCE` puts it at the flange.
@@ -54,7 +52,8 @@ pins the YAM constant to poses of the earlier model.
 | --- | --- | --- |
 | Franka FR3 (`franka.py`) | `gripper` | The driver publishes the flange pose times the 2F-85 grip offset, and solves IK at the flange. The `F_T_EE` setting in Desk changes no pose. |
 | MuJoCo panda (`simulator/mujoco/sim.py`) | `gripper` | The site in `panda.xml` and `franka_table.xml`. The sim adds it to an older scene that lacks it. |
-| RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
+| RoboLab (`simulator/robolab/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at `robolab_eef`; `RobolabDroidAdapter` converts, and `robolab/validate.py` checks that conversion against RoboLab's own scene. |
+| RoboLab YAM (`simulator/robolab/yam_spec.py`) | `gripper` | Each arm of the two-arm model carries a `<side>_gripper` link at the site of the i2rt model. The env reports every pose in the world frame of the rig recordings. |
 | MolmoSpaces (`simulator/molmo_spaces/`) | `gripper` | Ships the FR3 model unchanged. The env measures and drives at the 2F-85 grasp site, in the arm base `fr3_link0`. MolmoSpaces' own robot base is at the bottom of the stand below it. |
 | LIBERO (`simulator/libero/`) | `gripper` | `LiberoAdapter` takes the env's grip site to be the panda's `end_effector` (`PANDA_HAND_FRAME`); it is not ([#557](https://github.com/Positronic-Robotics/positronic/issues/557)). |
 | YAM (`yam/driver.py`) | `gripper` | The site in `yam.xml` and the link in the bundled URDF, 40.8 mm off the wrist axis, where the fingertips of the crank gripper meet. The linear gripper of the model closes on the axis. Each mount puts the arm-base frame 9.5 mm below the one of ABC's arm, so the same joints report the same `ee_pose` in both. The single arm is mounted there too, and records its mount. |
@@ -74,9 +73,9 @@ An arm whose controller runs settings of its own emits the values that the contr
 that emitter in `arm_meta_sources`, keyed by the arm's joint signal, and the harness records each key as
 `{key: {joint signal: value}}`.
 
-A remote benchmark env that measures somewhere else is wrapped, not excused: give `WireCommandAdapter` an
+For a remote benchmark env that measures somewhere else, give `WireCommandAdapter` an
 `env_control_frame` — the transform from `gripper` to what the env uses — and it converts both paths
-(`RobolabAdapter`).
+(`RobolabDroidAdapter`).
 
 An arm mounted away from the world origin reports poses in its own base frame, and the model carries no base
 pose, so nothing downstream can reconcile the two. Keep the report and the URDF in the same frame.

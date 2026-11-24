@@ -23,6 +23,9 @@ Key ideas
   Playback uses `harness.world` when present and otherwise `recorded`.
   Replay of data collection recordings requires an explicit `received.world` timeline.
   Pass `--timeline=received.world` to `positronic/replay_record.py` for these recordings.
+- `positronic.dataset.transforms.quality.cmd_delay_ms` gives the delay of the measured arm pose behind its
+  commands. On `emitted.wall` it holds the transfer of the command, the driver's loop and the motion of the arm.
+  On `harness.wall` it also holds the transfer of the pose to the harness.
 
 `Serializer` is a pure function that know how to translate the incoming data into a format that `SignalWriter` can accept:
 - A serializer receives the latest value for the input and can return:

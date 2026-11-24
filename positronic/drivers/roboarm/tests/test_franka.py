@@ -12,13 +12,14 @@ import pytest
 
 import pimm
 from pimm.tests.testing import MockClock, wire_call
-from positronic import geom
+from positronic import geom, telemetry
 from positronic.drivers.faults import DeviceFault, FaultKind
 from positronic.drivers.roboarm import RobotStatus, command, franka
 from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.models import DROID_EE_FRAME
 from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.utils import MoveAbandoned, RecoveryOutcome, RecoveryStep
+from positronic.telemetry_keys import ATTR_COMMAND_SYNC, SPAN_DRIVER_COMMAND
 from positronic.tests.testing_coutils import ManualCommandReceiver, RecordingEmitter
 
 PARK = np.array([0.0, -0.31, 0.0, -1.65, 0.0, 1.522, 0.0])
@@ -3776,3 +3777,63 @@ def test_a_failure_that_is_not_libfranka_ends_the_run(desk, world):
 
     with pytest.raises(ValueError, match='a bug in the driver'):
         next(loop)
+
+
+def test_each_command_the_arm_takes_is_timed_and_a_refused_one_is_not(desk, world, tmp_path):
+    """A streamed setpoint and a sync move each record one span in the driver's file. A NaN target never reaches
+    the arm, so it records none."""
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), MockClock())
+
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        for _ in range(3):
+            next(loop)  # init + the opening move, which nobody asked for
+        feed.push(command.JointPosition(positions=np.full(7, np.nan), mode=IMPEDANCE))
+        feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+        for _ in range(3):
+            next(loop)
+        answer = move(command.JointPosition(positions=PARK))
+        for _ in range(20):
+            if answer.done():
+                break
+            next(loop)
+
+    spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [False, True]
+
+
+def test_a_move_held_through_an_arm_error_is_timed_from_its_first_read_and_a_jog_dropped_meanwhile_is_not(
+    desk, world, tmp_path
+):
+    arm = FakeArm(PARK)
+    driver = _driver(arm)
+    clock = MockClock()
+    driver.state._bind(RecordingEmitter(), clock=clock)
+    feed = ManualCommandReceiver()
+    driver.commands._bind(feed)
+    move = _mover(world, driver)
+    loop = driver.run(StopFlag(), clock)
+
+    with telemetry.bind(tmp_path, 'arm', 'run'):
+        for _ in range(3):  # init + the opening move
+            next(loop)
+        arm.error = 1
+        answer = move(command.JointPosition(PARK))
+        next(loop)  # the call is held
+        feed.push(command.JointPosition(positions=JOGGED, mode=IMPEDANCE))
+        next(loop)
+        cleared_ns = time.time_ns()
+        arm.error = 0
+        for _ in range(20):
+            if answer.done():
+                break
+            next(loop)
+        answer.result()
+
+    spans = [s for s in telemetry.read_spans(telemetry.spans_path(tmp_path, 'arm')) if s.name == SPAN_DRIVER_COMMAND]
+    assert [s.attrs[ATTR_COMMAND_SYNC] for s in spans] == [True]
+    assert spans[0].start_ns < cleared_ns <= spans[0].end_ns

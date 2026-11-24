@@ -7,11 +7,11 @@ DreamAPI enforces no motion limit, and the terms of its API make the client resp
 
 from dataclasses import dataclass
 
-import mujoco as mj
 import numpy as np
 
-from positronic.drivers.roboarm.models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_JOINTS, YAM_MJCF_PATH
-from positronic.utils import check_finite_nonnegative, package_assets_path
+from positronic.drivers.roboarm.models import YAM_JOINTS
+from positronic.drivers.roboarm.yam.kinematics import YamKinematics
+from positronic.utils import check_finite_nonnegative
 
 
 @dataclass(frozen=True)
@@ -51,28 +51,22 @@ class LimitReport:
 class YamChunkLimiter:
     """Applies `ChunkLimits` to chunks of YAM rows at `fps`. A row holds 6 joints and then the gripper opening.
 
-    Each chunk starts from the measured state of the arm. The hand speed comes from forward kinematics at
-    `GRIPPER_SITE` of the vendored YAM model, and the joint range from the same model.
+    Each chunk starts from the measured state of the arm. The hand speed and the joint range come from the driver's
+    kinematics (`YamKinematics`).
     """
 
-    # TODO(#517): take FK and the joint range from the shared driver kinematics once it exists.
     def __init__(self, limits: ChunkLimits, fps: float):
         self._limits = limits
         self._fps = fps
-        self._model = mj.MjModel.from_xml_path(package_assets_path(YAM_MJCF_PATH))
-        self._data = mj.MjData(self._model)
-        self._site = mj.mj_name2id(self._model, mj.mjtObj.mjOBJ_SITE, GRIPPER_SITE)
-        self._qpos = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
-        ranges = np.array([self._model.joint(name).range for name in YAM_JOINT_NAMES])
+        self._kinematics = YamKinematics()
+        lower, upper = self._kinematics.lower, self._kinematics.upper
         margin = limits.joint_margin_rad
-        if np.any(ranges[:, 1] - ranges[:, 0] <= 2 * margin):
+        if np.any(upper - lower <= 2 * margin):
             raise ValueError(f'joint_margin_rad {margin} leaves no room inside the range of some YAM joint')
-        self._lower, self._upper = ranges[:, 0] + margin, ranges[:, 1] - margin
+        self._lower, self._upper = lower + margin, upper - margin
 
     def _hand(self, joints: np.ndarray) -> np.ndarray:
-        self._data.qpos[self._qpos] = joints
-        mj.mj_kinematics(self._model, self._data)
-        return self._data.site_xpos[self._site].copy()
+        return self._kinematics.fk(joints).translation
 
     def limit(self, rows: np.ndarray, measured: np.ndarray, elapsed_s: float) -> tuple[np.ndarray, LimitReport]:
         """`rows` of one arm, limited, as a `(count, 7)` array, and what each limit changed.

@@ -10,7 +10,9 @@ Run on a box with the asset packs (a GPU-less one uses mesa software EGL)::
         uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_replay.py --no-cov
 """
 
+import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 import mujoco as mj
@@ -76,11 +78,35 @@ _OPEN_BENCHMARK = mapping.BenchmarkPath(
 )
 
 
-# Episode 246 opens a drawer that is part of an iThor scene and is in no object package.
-# Episode 236 opens a fridge from the thor object library.
-@pytest.mark.parametrize('episode_index', [246, 236], ids=['ithor_scene_drawer', 'thor_library_fridge'])
-def test_an_open_episode_resets_its_articulated_object(episode_index: int):
+def _assets_without_grasps(tmp_path: Path, uids: list[str]) -> Path:
+    """A copy of the asset packs, made of links, where no grasp library holds grasps for ``uids``."""
+    assets = Path(os.environ[mapping.ASSETS_DIR_ENV])
+    copy = tmp_path / 'assets'
+    copy.mkdir()
+    for entry in assets.iterdir():
+        if entry.name != 'grasps':
+            (copy / entry.name).symlink_to(entry)
+    for library in (assets / 'grasps').iterdir():
+        (copy / 'grasps' / library.name).mkdir(parents=True)
+        for obj in library.iterdir():
+            if obj.name not in uids:
+                (copy / 'grasps' / library.name / obj.name).symlink_to(obj)
+    return copy
+
+
+# Episode 246 opens a drawer, on a slide joint, that is part of an iThor scene and is in no object package.
+# Episode 236 opens the door of a fridge from the thor object library, on a hinge.
+# The values are the asset ids of their objects.
+_OPEN_EPISODES = {246: 'Drawer_fbe3655c', 236: 'Fridge_21'}
+
+
+@pytest.mark.parametrize('episode_index', list(_OPEN_EPISODES), ids=['ithor_scene_drawer', 'thor_library_fridge'])
+def test_an_open_episode_resets_an_articulated_object_that_has_no_joint_grasp_file(
+    episode_index: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     _skip_unless_present(_OPEN_BENCHMARK)
+    assets = _assets_without_grasps(tmp_path, list(_OPEN_EPISODES.values()))
+    monkeypatch.setenv(mapping.ASSETS_DIR_ENV, str(assets))
     with launcher.serve_molmo_spaces() as (host, port):
         conn = EnvConnection(host, port)
         try:
@@ -127,6 +153,69 @@ def test_an_episode_without_the_right_shoulder_serves_the_left_shoulder_alone():
     assert any(name in obs for name in mapping.LEFT_SHOULDER_CAMERAS) and mapping.RIGHT_SHOULDER_CAMERA not in obs
 
 
+def test_a_hooked_server_reports_the_grip_of_its_hook(tmp_path):
+    _skip_unless_present(_HARD_BENCHMARK)
+    hook = tmp_path / 'site_hook.py'
+    hook.write_text(
+        'from env_hook import EnvHook\n\n'
+        'class FixedGrip(EnvHook):\n'
+        '    def grip(self, gripper_qpos):\n'
+        '        return 0.25\n\n'
+        'HOOK = FixedGrip()\n'
+    )
+    spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: [1], mapping.WITH_RIGHT_SHOULDER: False}
+    token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: False}
+    with launcher.serve_molmo_spaces(hook=hook) as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            [listed] = conn.tasks(spec)
+            obs = conn.reset(token)[protocol.FRAME_OBS]
+        finally:
+            conn.close()
+    assert obs[protocol.OBS_GRIP] == np.float32(0.25)
+    assert listed[mapping.TASK_ENV_HOOK] == f'site_hook.py@sha256:{hashlib.sha256(hook.read_bytes()).hexdigest()}'
+
+
+def test_a_script_that_imports_the_server_answers_help_with_its_own_flags():
+    _skip_unless_present(_HARD_BENCHMARK)
+    validate = Path(__file__).with_name('validate.py')
+    result = subprocess.run(
+        [str(launcher.ensure_molmo_venv()), str(validate), '-h'],
+        env=launcher.molmo_subprocess_env(),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert '--benchmark' in result.stdout
+    assert '--right-view-blocked' not in result.stdout
+
+
+def test_a_hook_sees_the_right_shoulder_camera_when_the_server_lists_and_when_it_builds(tmp_path):
+    _skip_unless_present(_HARD_BENCHMARK)
+    seen = tmp_path / 'seen.txt'
+    hook = tmp_path / 'camera_hook.py'
+    hook.write_text(
+        'from env_hook import EnvHook\n\n'
+        'class Cameras(EnvHook):\n'
+        '    def eval_config(self, cfg, episode):\n'
+        f'        with open({str(seen)!r}, "a") as f:\n'
+        '            f.write(" ".join(camera.name for camera in episode.cameras) + "\\n")\n\n'
+        'HOOK = Cameras()\n'
+    )
+    spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: [1], mapping.WITH_RIGHT_SHOULDER: True}
+    token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: True}
+    with launcher.serve_molmo_spaces(hook=hook) as (host, port):
+        conn = EnvConnection(host, port)
+        try:
+            conn.tasks(spec)
+            conn.reset(token)
+        finally:
+            conn.close()
+    listed, built = seen.read_text().splitlines()
+    assert listed == built
+    assert mapping.RIGHT_SHOULDER_CAMERA in built.split()
+
+
 def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
     _skip_unless_present(_HARD_BENCHMARK)
     blocked = sorted(mapping.load_right_view_blocked(RIGHT_VIEW_BLOCKED_PATH)[_HARD_BENCHMARK])
@@ -143,7 +232,7 @@ def test_a_selection_without_the_right_shoulder_keeps_the_episodes_it_hides():
 
 
 # The model the MolmoSpaces eval records beside every episode.
-_RECORDED_MODEL = MolmoAdapter(camera_dict([ShoulderSide.LEFT])).robot_model
+_RECORDED_MODEL = MolmoAdapter(camera_dict([ShoulderSide.LEFT]), with_right_shoulder=False).robot_model
 # The MolmoSpaces FR3 and the recorded FR3 differ slightly: their grasp sites are less than 1 mm and 0.1 degrees apart.
 _FK_POS_ATOL = 1e-3  # metres
 _FK_ROT_ATOL = 5e-3  # radians
@@ -165,7 +254,7 @@ def _recorded_model_fk(q: np.ndarray) -> geom.Transform3D:
 
 
 def _adapter() -> MolmoAdapter:
-    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]))
+    return MolmoAdapter(camera_dict([ShoulderSide.LEFT]), with_right_shoulder=False)
 
 
 def _reported_ee_pose(obs: dict) -> geom.Transform3D:

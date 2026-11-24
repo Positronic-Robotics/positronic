@@ -12,6 +12,9 @@ from typing import Any, cast
 import msgpack
 import numpy as np
 
+# How long either end waits for a pong, in seconds. A native scene load can block the server's heartbeat for minutes.
+HEARTBEAT_TIMEOUT_S = 600.0
+
 CMD = 'cmd'
 OK = 'ok'
 TASKS = 'tasks'
@@ -19,6 +22,8 @@ SPEC = 'spec'
 TOKEN = 'token'
 ACTION = 'action'
 ERROR = 'error'
+# How many slots the batch has, in the reset that starts a batch.
+BATCH_SIZE = 'batch_size'
 # The text the policy gets for a task, in each record an env answers ``tasks`` with.
 TASK_INSTRUCTION = 'instruction'
 

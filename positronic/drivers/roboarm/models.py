@@ -16,9 +16,9 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 
 FLANGE_LINK = 'link8'
 ROBOLAB_EEF_LINK = 'robolab_eef'
-# The point a bundled model reported at before ``GRIPPER_SITE``, as a URDF link: the FR3's ``F_T_EE``, the old grasp
-# site of the sim panda, the grasp site of the earlier YAM model. A policy that states no frame observes its poses
-# there.
+# The hand point of each bundled model, as a URDF link: the FR3's ``F_T_EE``, the grasp site of the sim panda, the
+# grasp site of the earlier YAM model. The ``default`` and ``grasp_site`` sites that a recording with no ``ee_frames``
+# names sit here.
 EE_LINK = 'end_effector'
 # The grip point every bundled model names, with z along the approach axis. Every embodiment reports its poses here,
 # and every codec transform is measured from here.
@@ -86,9 +86,9 @@ def parse_ee_frames(entry: Any) -> dict[str, EEFrame]:
     return _EE_FRAMES_SCHEMA.validate_python(entry)
 
 
-# Seat the gripper on the flange, rotated about the approach axis to match the real 2F-85 coupler
-# (a +45deg Z, i.e. 90deg off the franka ``end_effector`` frame).
-_2F85_MOUNT_RPY = '0 0 0.7853981634'
+# Seat the gripper on the flange as the real 2F-85 coupler sits: +90deg about the approach axis, so the pads close
+# along flange y, which is y of ``GRIPPER_SITE``.
+_2F85_MOUNT_RPY = '0 0 1.5707963268'
 
 
 class _UrdfRow(NamedTuple):
@@ -106,6 +106,11 @@ class _UrdfRow(NamedTuple):
     axis: str | None
     mesh: str | None
     visual_xyz: str | None
+
+
+def _2f85_pad(side: str) -> str:
+    """The link of the 2F-85 pad on ``side`` (``left`` or ``right``)."""
+    return f'{side}_pad'
 
 
 def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
@@ -153,10 +158,13 @@ def _2f85_finger(side: str, sign: int, base_rpy: str) -> list[_UrdfRow]:
             'follower.stl',
             '0 0.018 -0.0065',
         ),
-        _UrdfRow(f'{side}_pad', f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
-        _UrdfRow(f'{side}_silicone_pad', f'{side}_pad', None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
+        _UrdfRow(_2f85_pad(side), f'{side}_follower', None, '0 -0.0009 0.00702', '0 0 0', None, 'pad.stl', None),
+        _UrdfRow(f'{side}_silicone_pad', _2f85_pad(side), None, '0 0 0', '0 0 0', None, 'silicone_pad.stl', None),
     ]
 
+
+# The links of the two 2F-85 pads.
+ROBOTIQ_2F85_PADS = (_2f85_pad('left'), _2f85_pad('right'))
 
 # The 2F-85's closed pads meet 155 mm along the flange approach axis.
 GRIPPER_2F85_XYZ = '0 0 0.155'
@@ -215,7 +223,11 @@ def _bundled_robotiq_2f85() -> dict:
     return {
         'subtree': subtree,
         roboarm_keys.MESHES: {f.name: f.read_bytes() for f in sorted(mesh_dir.glob('*.stl'))},
-        roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': _2F85_GRIP_ACTUATED_JOINTS, 'travel': 0.8},
+        roboarm_keys.GRIPPER: {
+            roboarm_keys.GRIPPER_SIGNAL: keys.GRIP,
+            roboarm_keys.GRIPPER_JOINTS: _2F85_GRIP_ACTUATED_JOINTS,
+            roboarm_keys.GRIPPER_TRAVEL: 0.8,
+        },
     }
 
 
@@ -306,5 +318,9 @@ def bundled_panda_model() -> dict:
         roboarm_keys.MESHES: {name: (mesh_dir / name).read_bytes() for name in sorted(mesh_files)},
         roboarm_keys.JOINT_NAMES: [f'joint{i}' for i in range(1, 8)],
         # ``grip`` is recorded in [0, 1] (open→closed); each finger slides 0..0.04 m along its axis.
-        roboarm_keys.GRIPPER: {'signal': keys.GRIP, 'joints': ['finger_joint1', 'finger_joint2'], 'travel': 0.04},
+        roboarm_keys.GRIPPER: {
+            roboarm_keys.GRIPPER_SIGNAL: keys.GRIP,
+            roboarm_keys.GRIPPER_JOINTS: ['finger_joint1', 'finger_joint2'],
+            roboarm_keys.GRIPPER_TRAVEL: 0.04,
+        },
     }

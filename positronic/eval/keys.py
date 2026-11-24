@@ -7,8 +7,6 @@ from eval_vocabulary.episode import BENCHMARK_TASK
 # ``SUCCESS``, which a failure can leave absent, ``ENDED_BY``, who ended it when the env did not, and ``POLICY_END``,
 # what the policy said when it ended it.
 from eval_vocabulary.episode import ENDED_BY as ENDED_BY
-from eval_vocabulary.episode import ENDED_BY_OPERATOR as ENDED_BY_OPERATOR
-from eval_vocabulary.episode import ENDED_BY_POLICY as ENDED_BY_POLICY
 from eval_vocabulary.episode import POLICY_END as POLICY_END
 from eval_vocabulary.episode import SUCCESS as SUCCESS
 from eval_vocabulary.episode import TERMINATED as TERMINATED
@@ -60,8 +58,11 @@ SCHEDULE = 'eval.schedule'
 SCHEDULED = 'scheduled'
 EMITTED = 'emitted'
 DROPPED = 'dropped'
-# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk.
+# Milliseconds. ``GAP_MAX_MS`` is the largest time between two emits of one chunk. ``HOLD_SUM_MS`` and
+# ``HOLD_MAX_MS`` are the total and the longest time that the arm holds its last target between two chunks.
 LATE_P50_MS = 'late_p50_ms'
 LATE_P90_MS = 'late_p90_ms'
 LATE_MAX_MS = 'late_max_ms'
 GAP_MAX_MS = 'gap_max_ms'
+HOLD_SUM_MS = 'hold_sum_ms'
+HOLD_MAX_MS = 'hold_max_ms'

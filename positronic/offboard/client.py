@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from enum import Enum
 from threading import Condition, Lock, local
-from typing import Any, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 from positronic_model_server import protocol, serialization
 from positronic_wire import wire
@@ -28,6 +28,10 @@ DEFAULT_INFER_TIMEOUT = 180.0
 # One transport handshake, whichever the wire makes, and the retries until a cold backend answers.
 DEFAULT_OPEN_TIMEOUT = 10.0
 DEFAULT_CONNECT_DEADLINE = 900.0
+# How long one session opening retries a host name the resolver has no answer for, inside the connect deadline.
+DEFAULT_UNRESOLVED_HOST_DEADLINE = 300.0
+# How often a pause between connect attempts asks the caller's cancel.
+CANCEL_POLL_S = 0.1
 # How long ``infer`` retries to rebuild a connection that dropped before its first answer.
 # FOOTGUN: the arm holds its last setpoint throughout, and an attended trial (``timeout_sec=None``) has no
 # episode deadline behind this one to end that stall.
@@ -41,10 +45,26 @@ def time_left(deadline: float) -> float:
     return max(0.0, deadline - time.monotonic())
 
 
-# What ``wire_timing`` reports: the uplink, and the wait that follows it. The link and the receiver
+class SessionOpeningCancelled(Exception):
+    """The caller cancelled a session opening before the server answered. The last refused attempt is the cause."""
+
+
+# What ``wire_timing`` reports: the send, and the wait that follows it. The link and the receiver
 # cost the two minus ``served_ms``, because the server's own span sits inside the second one.
 SEND_MS = 'send_ms'
 RECV_MS = 'recv_ms'
+# From the start of the send to the server's read of the request, and from the server's send to the receipt here. Only
+# a server that stamps the two gives them, and only for a call sent with no other call in flight: a server reads a
+# request after it answers the one before. Each one holds the offset between the two clocks; their sum does not.
+UPLINK_MS = 'uplink_ms'
+DOWNLINK_MS = 'downlink_ms'
+
+
+class Dial(NamedTuple):
+    """The dial that opened a connection: the URL it dialed, and its milliseconds."""
+
+    endpoint: str
+    connect_ms: float
 
 
 class InferenceSession:
@@ -52,7 +72,8 @@ class InferenceSession:
 
     ``reopen`` returns a new session on the same server. A connection that drops before the server's first
     answer reconnects through it, once, and sends the observation again. ``ready_by`` is the
-    ``time.monotonic()`` instant past which the status handshake waits for no further update.
+    ``time.monotonic()`` instant past which the status handshake waits for no further update. ``dial`` is the
+    dial that opened ``conn``, which the first send records.
     """
 
     def __init__(
@@ -62,8 +83,11 @@ class InferenceSession:
         *,
         ready_by: float = math.inf,
         reopen: Callable[[], 'InferenceSession'] | None = None,
+        dial: Dial | None = None,
     ):
         self._conn = conn
+        self._dial = dial
+        self._sent_on_conn = False
         self._infer_timeout = infer_timeout
         self._reopen = reopen
         ready = self._handshake(ready_by)
@@ -84,6 +108,16 @@ class InferenceSession:
         self._pending: deque[object] = deque()
         self._timings = local()
         self.served_timing = self.wire_timing = {}
+        self.sent_alone = None
+
+    @property
+    def sent_alone(self) -> bool | None:
+        """Whether this thread's latest call went with no earlier call in flight; ``None`` before it sends."""
+        return self._timings.alone
+
+    @sent_alone.setter
+    def sent_alone(self, value: bool | None) -> None:
+        self._timings.alone = value
 
     @property
     def served_timing(self) -> Mapping[str, float]:
@@ -96,7 +130,7 @@ class InferenceSession:
 
     @property
     def wire_timing(self) -> Mapping[str, float]:
-        """Send and response-wait timings of this thread's latest call."""
+        """Send, response-wait and one-way timings of this thread's latest call."""
         return self._timings.wire
 
     @wire_timing.setter
@@ -167,6 +201,7 @@ class InferenceSession:
         lose queued observations.
         """
         self.served_timing = self.wire_timing = {}
+        self.sent_alone = None
         with self._startup:
             if not self._answered:
                 return self._first_call(obs)
@@ -212,6 +247,7 @@ class InferenceSession:
         with self._send_lock:
             if not self._closing:
                 self._conn, self._session_id, self._closed = reopened._conn, reopened.session_id, False
+                self._dial, self._sent_on_conn = reopened._dial, False
                 return
         reopened.close()
         raise RuntimeError('The inference session is closing')
@@ -227,7 +263,7 @@ class InferenceSession:
             serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
         )
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
-        wire_bytes = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        send_attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
         token = object()
         try:
@@ -239,11 +275,14 @@ class InferenceSession:
                         raise RuntimeError('The inference session is closing')
                     with self._responses:
                         self._pending.append(token)
+                        sent_alone = len(self._pending) == 1
+                    self.sent_alone = sent_alone
+                    send_attrs.update(self._connection_attrs())
                     self._conn.send(serialised)
             finally:
                 # A send that raises gets timed too, so the span is recorded on the way out.
                 sent = time.time_ns()
-                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **wire_bytes)
+                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **send_attrs)
             try:
                 deadline = time.monotonic() + self._infer_timeout
                 with self._responses:
@@ -258,8 +297,14 @@ class InferenceSession:
             finally:
                 answered = time.time_ns()
                 telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
-            self.wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
-            return self._decode_answer(received)
+            wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
+            self.wire_timing = wire_timing
+            result = self._decode_answer(received)
+            served = self.served_timing
+            if sent_alone and protocol.TIMING_RECEIVED_NS in served and protocol.TIMING_SENT_NS in served:
+                wire_timing[UPLINK_MS] = (served[protocol.TIMING_RECEIVED_NS] - send_started) / 1e6
+                wire_timing[DOWNLINK_MS] = (answered - served[protocol.TIMING_SENT_NS]) / 1e6
+            return result
         except TimeoutError:
             # The observation is in flight but unanswered; the server's late response would sit in the socket and
             # the next ``recv`` would pair it with a future observation. Close so the desynced session can't be
@@ -278,6 +323,17 @@ class InferenceSession:
                 if token in self._pending:
                     self._pending.remove(token)
                 self._responses.notify_all()
+
+    def _connection_attrs(self) -> dict[str, Any]:
+        """The connection's attributes of the send about to go out on it. Call it under the send lock."""
+        if self._sent_on_conn:
+            return {telemetry_keys.ATTR_WIRE_NEW_CONNECTION: False}
+        self._sent_on_conn = True
+        attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_NEW_CONNECTION: True}
+        if self._dial is not None:
+            attrs[telemetry_keys.ATTR_WIRE_ENDPOINT] = self._dial.endpoint
+            attrs[telemetry_keys.ATTR_WIRE_CONNECT_MS] = self._dial.connect_ms
+        return attrs
 
     def _decode_answer(self, received: bytes) -> Any:
         self._answered = True
@@ -340,22 +396,37 @@ class ConnectRetries:
     """The retry policy over one run of refused connect attempts.
 
     ``COLD`` and ``SILENT`` retry to the deadline. A ``FORBIDDEN`` refusal means a cold backend or a refused
-    credential, and gets ``MAX_FORBIDDEN_ATTEMPTS`` attempts.
+    credential, and gets ``MAX_FORBIDDEN_ATTEMPTS`` attempts. An ``UNRESOLVED`` host name retries for
+    ``unresolved_host_deadline`` seconds from the first of an unbroken run of them, and an attempt at that limit is
+    its last.
     """
 
     MAX_FORBIDDEN_ATTEMPTS = 3
 
-    def __init__(self) -> None:
+    def __init__(self, unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE) -> None:
         self._forbidden_attempts = 0
+        self._unresolved_host_deadline = unresolved_host_deadline
+        # The ``time.monotonic()`` instant the current run of ``UNRESOLVED`` refusals surfaces at.
+        self._unresolved_until: float | None = None
 
     def take(self, refusal: wire.Refusal) -> ConnectOutcome:
         """Spend a refused connect against the budget."""
+        if refusal is not wire.Refusal.UNRESOLVED:
+            self._unresolved_until = None
         if refusal is wire.Refusal.FORBIDDEN:
             self._forbidden_attempts += 1
             again = self._forbidden_attempts < self.MAX_FORBIDDEN_ATTEMPTS
+        elif refusal is wire.Refusal.UNRESOLVED:
+            if self._unresolved_until is None:
+                self._unresolved_until = time.monotonic() + self._unresolved_host_deadline
+            again = time_left(self._unresolved_until) > 0
         else:
             again = refusal in (wire.Refusal.COLD, wire.Refusal.SILENT)
         return ConnectOutcome.RETRY if again else ConnectOutcome.SURFACE
+
+    def longest_pause(self) -> float:
+        """The longest pause before the next attempt that lets it begin by the limit of a refusal run."""
+        return math.inf if self._unresolved_until is None else time_left(self._unresolved_until)
 
 
 T = TypeVar('T')
@@ -366,9 +437,10 @@ class InferenceClient:
 
     ``headers`` carry the credentials; the address carries none. ``open_timeout`` bounds one transport
     handshake, whichever the wire makes — a TCP or TLS one, or a connect to a Unix socket —
-    ``connect_deadline`` one session opening with its retries while a backend is cold, ``infer_timeout`` one
-    inference round trip, and ``reconnect_deadline`` the rebuild of a connection that drops before its first
-    answer. No dial, status wait or pause lasts past a deadline.
+    ``connect_deadline`` one session opening with its retries while a backend is cold, ``unresolved_host_deadline``
+    the retries inside it while the resolver has no answer for the host name, ``infer_timeout`` one inference round
+    trip, and ``reconnect_deadline`` the rebuild of a connection that drops before its first answer. No dial, status
+    wait or pause lasts past a deadline.
 
     An edge that holds a dial while it starts a backend wants an ``open_timeout`` and a ``connect_deadline`` as
     long as the cold start: one dial then waits through it. A shorter one makes the client re-dial, and such an
@@ -383,6 +455,7 @@ class InferenceClient:
         headers: dict[str, str] | None = None,
         open_timeout: float = DEFAULT_OPEN_TIMEOUT,
         connect_deadline: float = DEFAULT_CONNECT_DEADLINE,
+        unresolved_host_deadline: float = DEFAULT_UNRESOLVED_HOST_DEADLINE,
         infer_timeout: float = DEFAULT_INFER_TIMEOUT,
         reconnect_deadline: float = DEFAULT_RECONNECT_DEADLINE,
     ):
@@ -397,6 +470,7 @@ class InferenceClient:
         self.headers = dict(headers) if headers else None
         self.open_timeout = open_timeout
         self.connect_deadline = connect_deadline
+        self.unresolved_host_deadline = unresolved_host_deadline
         self.infer_timeout = infer_timeout
         self.reconnect_deadline = reconnect_deadline
 
@@ -410,19 +484,28 @@ class InferenceClient:
         A refusal sent as a protocol frame (a rejected session param) raises past every
         transport handler, and a connection may hold a reader thread until it is closed.
         """
+        dial_started = time.monotonic()
         conn = self._wire.dial(self._address, self.headers, open_timeout)
+        dial = Dial(self.session_url, (time.monotonic() - dial_started) * 1000.0)
         try:
-            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen)
+            return InferenceSession(conn, infer_timeout=self.infer_timeout, ready_by=ready_by, reopen=reopen, dial=dial)
         except BaseException:
             conn.close(timeout=time_left(ready_by))
             raise
 
-    def new_session(self) -> InferenceSession:
+    def new_session(self, cancelled: Callable[[], bool] | None = None) -> InferenceSession:
         """Creates a new inference session on the server's model.
 
-        Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it.
+        Raises ``wire.ConnectRefused`` when the wire refuses the session and no retry clears it. ``cancelled`` lets
+        another thread or process end the opening: it is asked before each attempt and every ``CANCEL_POLL_S`` of
+        each pause, and once it answers True no attempt begins and ``SessionOpeningCancelled`` is raised. An attempt
+        in flight finishes first, and its dial waits ``open_timeout`` at most.
         """
-        return self._connect(self.connect_deadline, reopen=lambda: self._connect(self.reconnect_deadline, reopen=None))
+        return self._connect(
+            self.connect_deadline,
+            reopen=lambda: self._connect(self.reconnect_deadline, reopen=None),
+            cancelled=cancelled,
+        )
 
     def wait_for_server(self) -> None:
         """Return once a server answers on the address, without opening a session.
@@ -443,19 +526,42 @@ class InferenceClient:
 
         self._retry(time.monotonic() + self.connect_deadline, probe)
 
-    def _connect(self, deadline_sec: float, reopen: Callable[[], InferenceSession] | None) -> InferenceSession:
+    def _connect(
+        self,
+        deadline_sec: float,
+        reopen: Callable[[], InferenceSession] | None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> InferenceSession:
         """A session on the server, retrying a cold backend, by ``deadline_sec`` of wall clock from now."""
         deadline = time.monotonic() + deadline_sec
-        return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout))
+        return self._retry(deadline, lambda open_timeout: self._open_session(deadline, reopen, open_timeout), cancelled)
 
-    def _retry(self, deadline: float, attempt: Callable[[float], T]) -> T:
+    @staticmethod
+    def _pause(seconds: float, cancelled: Callable[[], bool] | None) -> None:
+        """Sleep ``seconds``, or less once ``cancelled`` answers True. It is asked every ``CANCEL_POLL_S``."""
+        if cancelled is None:
+            time.sleep(seconds)
+            return
+        until = time.monotonic() + seconds
+        while (left := time_left(until)) > 0 and not cancelled():
+            time.sleep(min(CANCEL_POLL_S, left))
+
+    def _retry(self, deadline: float, attempt: Callable[[float], T], cancelled: Callable[[], bool] | None = None) -> T:
         """``attempt``, retried while the server is cold, until the ``time.monotonic()`` instant ``deadline``.
 
         ``attempt`` takes the seconds its dial may wait: ``open_timeout`` or the time left, whichever is shorter.
+        ``cancelled`` ends the retries as ``new_session`` says.
         """
         pauses = wire.retry_pauses()
-        retries = ConnectRetries()
+        retries = ConnectRetries(self.unresolved_host_deadline)
+        not_ready: Exception | None = None
         while True:
+            if cancelled is not None and cancelled():
+                raise SessionOpeningCancelled(
+                    f'The caller cancelled the session opening: {self._naming_the_url(not_ready)}'
+                ) from not_ready
+            if not_ready is not None and time_left(deadline) <= 0:
+                raise TimeoutError(self._naming_the_url(not_ready)) from not_ready
             open_timeout = min(self.open_timeout, time_left(deadline))
             try:
                 return attempt(open_timeout)
@@ -468,9 +574,14 @@ class InferenceClient:
                 raise not_ready
             pause = next(pauses)
             logger.info('Server not ready (cold start?): %s; retrying in %.0fs', not_ready, pause)
-            time.sleep(min(pause, time_left(deadline)))
-            if time_left(deadline) <= 0:
-                raise TimeoutError(f'{not_ready} (connecting to {self.session_url})') from not_ready
+            self._pause(min(pause, retries.longest_pause(), time_left(deadline)), cancelled)
+
+    def _naming_the_url(self, failure: Exception | None) -> str:
+        """What ``failure`` says, with the session URL where it does not name the URL itself."""
+        if failure is None:
+            return f'no attempt began (connecting to {self.session_url})'
+        said = str(failure)
+        return said if self.session_url in said else f'{said} (connecting to {self.session_url})'
 
     def keepalive(self) -> int | None:
         """Reset the server's idle timer, outside any session. Returns the seconds the server stays alive after
