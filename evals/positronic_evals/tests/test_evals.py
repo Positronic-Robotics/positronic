@@ -92,9 +92,10 @@ def test_the_native_molmo_evals_take_the_success_profile_of_the_config():
 @pytest.mark.parametrize(('strict', 'native'), STRICT_COUNTERPARTS.items())
 def test_a_strict_molmo_eval_runs_its_native_counterpart_under_the_strict_profile(strict: EvalRef, native: EvalRef):
     strict_definition, native_definition = public_eval(strict), public_eval(native)
+    strict_args = {**native_definition.args, 'success_profile': 'strict_v1'}
 
-    assert strict_definition.args == {**native_definition.args, 'success_profile': 'strict_v1'}
-    assert strict_definition.model_dump(exclude={'args'}) == native_definition.model_dump(exclude={'args'})
+    assert 'args' in EvalDefinition.model_fields
+    assert strict_definition == native_definition.model_copy(update={'args': strict_args})
 
 
 @pytest.mark.parametrize('name', [name for name in PUBLIC_EVALS if public_eval(name).config == MOLMO_CONFIG])
