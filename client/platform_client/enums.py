@@ -240,10 +240,16 @@ class StartPose(IntEnum):
     """Where the arm starts each episode.
 
     `nominal` is the rig's own pose. `droid_reset` is the reset pose of the DROID data collection, a
-    Franka pose. `abc_init` is the start pose of the ABC sim, a two-arm YAM pose.
+    Franka pose. `abc_init` is the start pose of the ABC sim, a two-arm YAM pose. Each `yam_<reach>_<height>`
+    is a two-arm YAM pose, named by how far forward and how high the grippers sit.
     """
 
     INVALID = 0
     nominal = 1
     droid_reset = 2
     abc_init = 3
+    yam_near_raised = 4
+    yam_far_low = 5
+    yam_near_high = 6
+    yam_mid_low = 7
+    yam_far_raised = 8
