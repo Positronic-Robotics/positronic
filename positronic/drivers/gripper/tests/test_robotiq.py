@@ -851,6 +851,26 @@ def test_a_failed_write_keeps_the_files_of_the_closes_before_it(monkeypatch, tmp
     assert {name: (tmp_path / name).read_bytes() for name in before} == before
 
 
+def test_the_grip_probe_prints_each_close_once(monkeypatch, capsys, tmp_path):
+    bus = FakeBus(object_at=OBJECT)
+    monkeypatch.setattr(robotiq, 'ModbusClient', SimpleNamespace(ModbusSerialClient=lambda **_kwargs: bus))
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'\n\n')
+    os.close(write_fd)
+    monkeypatch.setattr('sys.stdin', SimpleNamespace(fileno=lambda: read_fd))
+    argv = ['probe', '--port', '/dev/null', '--label', 'pen', '--out', str(tmp_path), '--repeats', '2']
+    monkeypatch.setattr('sys.argv', [*argv, '--record-s', '0.05'])
+    try:
+        robotiq_grip_probe.main()
+    finally:
+        os.close(read_fd)
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines.count(robotiq_grip_probe.HEADER) == 1
+    assert sum('MOVING>CONTACT_CLOSING' in line for line in lines) == 2
+    assert lines[-1] == 'pen: gOBJ is CONTACT_CLOSING at the end of 2 of 2 closes'
+
+
 @pytest.mark.parametrize('name', ['pen.json', 'pen.csv', 'pen.txt'])
 def test_the_grip_probe_refuses_to_overwrite_any_of_its_files(monkeypatch, tmp_path, name):
     (tmp_path / name).write_text('earlier')

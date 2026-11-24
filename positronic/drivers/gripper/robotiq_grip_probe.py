@@ -131,11 +131,15 @@ def row(label: str, close: Close) -> str:
     )
 
 
-def table(record: GripRecord) -> str:
-    """A line for each close, and a line that counts the closes with an object detected."""
+def total(record: GripRecord) -> str:
+    """The line that counts the closes with an object detected."""
     detected = sum(close.outcome.detected for close in record.closes)
-    total = f'{record.label}: gOBJ is CONTACT_CLOSING at the end of {detected} of {len(record.closes)} closes'
-    return '\n'.join([HEADER, *(row(record.label, close) for close in record.closes), total]) + '\n'
+    return f'{record.label}: gOBJ is CONTACT_CLOSING at the end of {detected} of {len(record.closes)} closes'
+
+
+def table(record: GripRecord) -> str:
+    """A line for each close, and the total line."""
+    return '\n'.join([HEADER, *(row(record.label, close) for close in record.closes), total(record)]) + '\n'
 
 
 def _replace(path: Path, text: str) -> None:
@@ -298,7 +302,7 @@ def main() -> None:
     record = GripRecord(label=args.label, speed=args.speed, force=args.force, record_s=args.record_s)
     with pimm.World() as world:
         world.run(RobotiqGripProbe(args.port, record, args.repeats, args.out, sys.stdin.fileno()))
-    print(table(record), end='')
+    print(total(record))
 
 
 if __name__ == '__main__':
