@@ -21,11 +21,6 @@ from typing import Any, Self
 import numpy as np
 from positronic_model_server.tree import map_leaves
 
-# A core that the control loop and the worker both want goes to the control loop.
-_NICENESS = 10
-_ALIGNMENT = 64
-_GROWTH = 1.5
-
 
 class ImageWorkerError(RuntimeError):
     """The image worker process ended, or did not answer in time."""
@@ -82,6 +77,10 @@ class _Failure:
 @dataclass(frozen=True)
 class _Ready:
     pass
+
+
+_ALIGNMENT = 64
+_GROWTH = 1.5
 
 
 class _Writer:
@@ -159,6 +158,10 @@ def _answer(call: _Call, inputs: _Reader, outputs: _Writer) -> _Answer | _Failur
         return _Answer(*outputs.write(call.function(inputs.read(call.block, call.layout, copy=False), *call.args)))
     except Exception as error:
         return _Failure(error)
+
+
+# A core that the control loop and the worker both want goes to the control loop.
+_NICENESS = 10
 
 
 def _serve(conn: Connection) -> None:

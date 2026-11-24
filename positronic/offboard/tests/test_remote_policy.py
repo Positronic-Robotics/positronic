@@ -1626,17 +1626,20 @@ def test_compression_follows_the_handshake(runtime, compressed):
 class _RecordingImageWorker(ImageWorker):
     def __init__(self) -> None:
         super().__init__()
-        self.functions: list[str] = []
+        self.frame_shapes: list[tuple[int, ...]] = []
 
     def call(self, function, tree, /, *args):
-        self.functions.append(function.__name__)
+        self.frame_shapes.append(tree['image'].shape)
         return super().call(function, tree, *args)
 
 
 @pytest.mark.timeout(120)
 def test_an_image_worker_prepares_the_images_of_each_call_and_the_server_gets_the_same_request():
-    resize = {'name': 'restrict_image_size', 'args': {'width': 32, 'height': 24}}
-    meta = {'local_stack': {'seq': [CHUNKED_STACK['local_stack'], resize]}, policy_keys.COMPRESS_IMAGES: True}
+    resize = TransformImages(32, 24, mode=ResizeMode.BOUND).to_spec()
+    meta = {
+        offboard_keys.LOCAL_STACK: spec.sequence(CHUNKED_STACK[offboard_keys.LOCAL_STACK], resize),
+        policy_keys.COMPRESS_IMAGES: True,
+    }
     image = np.random.default_rng(0).integers(0, 256, (48, 64, 3), dtype=np.uint8)
     sent = []
     with _RecordingImageWorker() as worker:
@@ -1655,7 +1658,7 @@ def test_an_image_worker_prepares_the_images_of_each_call_and_the_server_gets_th
                 runtime.close()
                 run.close()
             sent.append(session.infer.call_args.args[0])
-    assert worker.functions == ['_transform_here', 'prepare_obs']
+    assert set(worker.frame_shapes) == {(48, 64, 3), (24, 32, 3)}
     assert sent[1] == sent[0]
     assert serialization.deserialise(serialization.serialise(sent[1]))['image'].shape == (24, 32, 3)
 

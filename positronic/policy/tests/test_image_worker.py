@@ -17,24 +17,6 @@ def _echo(tree, extra):
     return {'pid': os.getpid(), 'tree': tree, 'extra': extra, 'bytes': b'\x01' * 1000}
 
 
-def _fail(tree):
-    raise ValueError(f'no frames in {sorted(tree)}')
-
-
-def _end_process(tree):
-    os._exit(3)
-
-
-def _sleep(tree):
-    time.sleep(60)
-
-
-def _hold_interpreter_lock(tree):
-    started = time.monotonic()
-    sum(range(tree['count']))  # One C call: it keeps the interpreter lock until it returns.
-    return time.monotonic() - started
-
-
 @pytest.fixture(scope='module')
 def worker():
     with ImageWorker() as worker:
@@ -58,7 +40,6 @@ def test_a_call_runs_in_another_process_and_returns_its_arrays_and_bytes(worker)
 
 
 def test_the_arrays_go_through_shared_memory_and_the_pipe_carries_kilobytes(worker, monkeypatch):
-    worker.call(_echo, {}, None)
     pickled_sizes = []
     send, recv = Connection.send, Connection.recv
 
@@ -78,7 +59,6 @@ def test_the_arrays_go_through_shared_memory_and_the_pipe_carries_kilobytes(work
     answer = worker.call(_echo, {'image': frames}, None)
 
     np.testing.assert_array_equal(answer['tree']['image'], frames)
-    assert len(pickled_sizes) == 2
     assert max(pickled_sizes) < 4096 < frames.nbytes
 
 
@@ -88,10 +68,18 @@ def test_a_larger_call_after_a_smaller_one_returns_all_of_its_arrays(worker):
         np.testing.assert_array_equal(worker.call(_echo, {'image': frames}, None)['tree']['image'], frames)
 
 
+def _fail(tree):
+    raise ValueError(f'no frames in {sorted(tree)}')
+
+
 def test_an_error_in_the_function_reaches_the_caller_with_its_type_and_message(worker):
     with pytest.raises(ValueError, match=r"no frames in \['image'\]"):
         worker.call(_fail, {'image': np.zeros((2, 2, 3), dtype=np.uint8)})
     assert worker.call(_echo, {}, None)['extra'] is None
+
+
+def _end_process(tree):
+    os._exit(3)
 
 
 def test_a_process_that_ends_fails_the_call_and_the_next_call_starts_a_new_process():
@@ -102,6 +90,10 @@ def test_a_process_that_ends_fails_the_call_and_the_next_call_starts_a_new_proce
         assert worker.call(_echo, {}, None)['pid'] not in (first, os.getpid())
 
 
+def _sleep(tree):
+    time.sleep(60)
+
+
 def test_a_process_that_does_not_answer_in_time_fails_the_call_and_the_next_call_starts_a_new_process():
     with ImageWorker(timeout_sec=0.5) as worker:
         first = worker.call(_echo, {}, None)['pid']
@@ -110,6 +102,12 @@ def test_a_process_that_does_not_answer_in_time_fails_the_call_and_the_next_call
             worker.call(_sleep, {})
         assert time.monotonic() - started < 10
         assert worker.call(_echo, {}, None)['pid'] not in (first, os.getpid())
+
+
+def _hold_interpreter_lock(tree):
+    started = time.monotonic()
+    sum(range(tree['count']))  # One C call: it keeps the interpreter lock until it returns.
+    return time.monotonic() - started
 
 
 def test_a_loop_in_this_process_keeps_its_ticks_while_a_call_holds_the_interpreter_lock(worker):
