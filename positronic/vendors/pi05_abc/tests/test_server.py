@@ -20,6 +20,10 @@ from positronic.offboard import roboarena
 from positronic.offboard import server as offboard_server
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
+from positronic.policy import spec
+from positronic.policy.base import Step
+from positronic.policy.executor import Executor
+from positronic.policy.tests.fakes import DueAnswer
 from positronic.vendors import pi05_abc
 from positronic.vendors.pi05_abc import codecs, server
 from positronic.vendors.pi05_abc.tests import author_server_stand_in
@@ -272,3 +276,97 @@ def test_the_default_backend_port_is_free_for_the_standard_wires():
     backend_port = server.pi05_abc_model.kwargs['port']
     wires = (offboard_server.websocket, offboard_server.grpc)
     assert backend_port not in {served.kwargs['served_address'].kwargs['port'] for served in wires}
+
+
+# One inference of the rig round trip: 72 ms in the model and about 125 ms on the network.
+ROUND_TRIP_NS = 197_000_000
+PERIOD_NS = round(1e9 / codecs.FPS)
+MOTOR = 'motor'
+
+
+class _Answer(DueAnswer):
+    """A `DueAnswer` that knows whether its result was read."""
+
+    read = False
+
+    def result(self):
+        self.read = True
+        return super().result()
+
+
+class _Model:
+    """Answers each call with a 50-action chunk after `latency_ns`, and records when each call read its observation.
+
+    Action `i` of call `c` is `(c, i)`."""
+
+    def __init__(self, runtime: Executor, latency_ns: int):
+        self._runtime = runtime
+        self._latency_ns = latency_ns
+        self._answers: list[_Answer] = []
+        self.observed_ns: list[int] = []
+
+    def submit(self, function, obs):
+        call = len(self.observed_ns)
+        self.observed_ns.append(self._runtime.time_ns)
+        chunk = [{MOTOR: (call, i)} for i in range(len(author_server_stand_in.CHUNK))]
+        self._answers.append(_Answer(self._runtime, chunk, self._runtime.time_ns + self._latency_ns))
+        return self._answers[-1]
+
+    def has_ready_answers(self) -> bool:
+        return any(answer.done() and not answer.read for answer in self._answers)
+
+
+def _play(latency_ns: int, duration_ns: int = 3_000_000_000) -> tuple[list[tuple[int, Any]], _Model]:
+    """The command that the arm holds after each millisecond, while the rig runs the stack that a session declares.
+
+    The stack goes through its wire description, as on the rig. As the harness does, the clock steps by 1 ms, a ready
+    answer calls the stack again at the same time, and of two commands at one time the arm keeps the second."""
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    model = _Model(runtime, latency_ns)
+    runtime.submit = model.submit
+    runtime.has_ready_answers = model.has_ready_answers
+    run = runtime.start(spec.from_spec(server.pipeline(crop='none').local.to_spec()), lambda obs: [])
+    emitted: dict[int, Any] = {}
+    try:
+        for now[0] in range(0, duration_ns, 1_000_000):
+            step = run.send({})
+            while model.has_ready_answers():
+                step = Step({**step.commands, **run.send({}).commands}, step.resume_at_ns)
+            if MOTOR in step.commands:
+                emitted[now[0]] = step.commands[MOTOR]
+    finally:
+        run.close()
+        runtime.close()
+    return sorted(emitted.items()), model
+
+
+def test_the_arm_never_waits_for_the_next_chunk_on_a_rig_round_trip():
+    emitted, model = _play(ROUND_TRIP_NS)
+
+    gaps = np.diff([time for time, _ in emitted])
+    assert gaps.max() <= PERIOD_NS + 1_000_000
+    # One request for each 15 actions, as the author's evaluation asks.
+    assert set(np.diff(model.observed_ns[1:]).tolist()) == {round(server.ACTIONS_PER_REQUEST / codecs.FPS * 1e9)}
+
+
+def test_each_action_of_a_later_chunk_plays_at_its_time_after_the_observation():
+    emitted, model = _play(ROUND_TRIP_NS)
+
+    later = [(time, call, index) for time, (call, index) in emitted if call > 0]
+    assert later
+    for time, call, index in later:
+        assert 0 <= time - (model.observed_ns[call] + index * PERIOD_NS) < PERIOD_NS
+    # The actions that the round trip made stale are skipped: a new chunk starts at the action due when it arrives.
+    firsts = {call: index for _, call, index in reversed(later)}
+    assert set(firsts.values()) == {ROUND_TRIP_NS // PERIOD_NS}
+
+
+def test_an_instant_answer_plays_the_first_actions_of_each_chunk_as_the_authors_evaluation():
+    emitted, _ = _play(latency_ns=0)
+
+    played = [command for _, command in emitted]
+    chunks = len(played) // server.ACTIONS_PER_REQUEST
+    assert played[: chunks * server.ACTIONS_PER_REQUEST] == [
+        (call, index) for call in range(chunks) for index in range(server.ACTIONS_PER_REQUEST)
+    ]

@@ -33,7 +33,7 @@ from positronic.policy import Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import ACTION, ResizeMode, TransformImages
-from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.processors import ConstantDuration, RTCSchedule, TrajectoryPlayer
 from positronic.vendors import pi05_abc
 from positronic.vendors.pi05_abc import codecs
 
@@ -52,8 +52,8 @@ IMAGE_KEY_MAP = f'{pi05_abc.TOP_CAMERA}=image,{pi05_abc.LEFT_CAMERA}=left_wrist,
 FLATTEN_PREFIX = 'observation/'
 # JAX takes most of the GPU at its first use unless this is false, so a second server on that GPU finds none free.
 PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
-# The client plays this many actions of each 50-action chunk, as the author's evaluation does.
-EXECUTED_ACTIONS = 15
+# The client asks for a chunk once per this many actions, as often as the author's evaluation asks.
+ACTIONS_PER_REQUEST = 15
 
 
 class Pi05AbcModel(Model):
@@ -162,8 +162,11 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm
 @cfn.config(crop=codecs.Crop.YAMBOX_WIDE_TOP.value, prompts=codecs.BOTTLES_PROMPTS)
 def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
     """The views cropped by the set `crop` of `codecs.CROPS`, which a session sets in its URL query, and the prompt of
-    each task instruction in `prompts`. The client plays the first actions of each chunk at 30 Hz, and shrinks each
-    view to fit the view size, or twice that size for a cropped view."""
+    each task instruction in `prompts`. The client shrinks each view to fit the view size, or twice that size for a
+    cropped view.
+
+    The client asks for a chunk once per `ACTIONS_PER_REQUEST` actions. The README tells how a new chunk joins the old
+    one."""
     try:
         crop_set = codecs.Crop(crop)
     except ValueError:
@@ -172,7 +175,8 @@ def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
     width, height = codecs.VIEW_SIZE
     upload_size = (2 * width, 2 * height) if crops else codecs.VIEW_SIZE
     schedule = Sequential(
-        TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(codecs.FPS, horizon_sec=EXECUTED_ACTIONS / codecs.FPS)
+        TrajectoryPlayer(replan_on_error=True),
+        RTCSchedule(codecs.FPS, call_after_sec=ACTIONS_PER_REQUEST / codecs.FPS, latency_estimate=ConstantDuration()),
     )
     return PolicyDeployment(
         Sequential(schedule, TransformImages(*upload_size, mode=ResizeMode.BOUND)),
