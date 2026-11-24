@@ -338,14 +338,14 @@ class RobolabEnv(EnvProtocol):
     def _tailed(self, compute: Callable[[], torch.Tensor]) -> Callable[[], torch.Tensor]:
         """The termination manager's ``compute``, with each success termination held back for its replay tail.
 
-        RoboLab counts every termination that is not a time-out as a success. ``terminated`` is the manager's own
-        buffer, which ``env.step`` and RoboLab's freeze and recorders read after ``compute``.
+        RoboLab counts every termination that is not a time-out as a success. The write goes into ``terminated``
+        itself, because it is the manager's own buffer: ``env.step``, RoboLab's freeze and its recorders read it.
         """
         terminations = self._env.termination_manager
 
         def tailed() -> torch.Tensor:
             compute()
-            assert self._success_tail is not None  # built with the env, before its first step
+            assert self._success_tail is not None
             ended = self._success_tail.step(
                 terminations.terminated.cpu().numpy(),
                 terminations.time_outs.cpu().numpy(),
@@ -377,7 +377,7 @@ class RobolabEnv(EnvProtocol):
             assert self._env is not None  # the else runs only when a prior reset built the cached env
             self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
         assert self._env is not None  # built above (key change) or already live (cached)
-        assert self._success_tail is not None  # built with the env
+        assert self._success_tail is not None
         self._success_tail.reset()
         self._grip.zero_()
         self._shown_chains = [None] * self._num_envs

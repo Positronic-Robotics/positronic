@@ -40,7 +40,7 @@ class SuccessTail:
 
         ``fired`` is whether a success term fires at this step, ``timed_out`` whether the time limit ends the episode
         at this step, and ``episode_steps`` the control steps of the episode so far. A success term that fires within
-        ``RESET_IN_PLACE_STEPS`` passes through, so that RoboLab resets the clone as before.
+        ``RESET_IN_PLACE_STEPS`` passes through, so that RoboLab resets the clone in place.
         """
         artifact = fired & (episode_steps <= RESET_IN_PLACE_STEPS)
         self._steps_since[self._succeeded] += 1
