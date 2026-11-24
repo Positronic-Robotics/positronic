@@ -614,6 +614,11 @@ the submitter holds no credential for the bucket. `artifacts` is absent on a run
 `diagnostics` on a run whose record was not written, and `policy_log` on a run whose container
 printed nothing.
 
+A running run reads `running_since`. A finished, failed or cancelled run reads the same time as
+`started_at`, and that field is absent where the platform recorded no start. A short run can start
+and finish between two reads, so `started_at` tells a reader that never saw `running` that the run
+did run.
+
 `evals` lists what the view shows for each eval of the submission, as an `EvalView`: the `eval`, its
 `status`, `scores`, `artifacts`, `episodes` and `runs`. A submission of one eval has one entry. A
 submission of an eval made of several evals has one entry per part, in the order of its parts. The wire
