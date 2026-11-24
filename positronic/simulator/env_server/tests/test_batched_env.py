@@ -12,13 +12,16 @@ import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
+from websockets.frames import OP_PING
 from websockets.sync.client import connect
+from websockets.sync.server import serve as websocket_serve
 
 import pimm
 from positronic.eval import keys as eval_keys
@@ -641,3 +644,32 @@ def test_a_one_scene_benchmark_keeps_the_default_of_one_slot(env_source):
     ]
     members = {node.name for node in env_class.body if isinstance(node, ast.FunctionDef)}
     assert 'num_slots' not in members, f'{env_class.name} serves more than the one slot its single scene holds'
+
+
+class _SlowScene(_ClonedScene):
+    """A scene whose reset takes `load_s` seconds, as a native scene load does."""
+
+    def __init__(self, load_s: float):
+        super().__init__([1])
+        self._load_s = load_s
+
+    def reset(self, token: Any, slots: int | None = None) -> dict[str, Any]:
+        time.sleep(self._load_s)
+        return super().reset(token, slots)
+
+
+@pytest.mark.timeout(10.0)
+def test_a_scene_load_past_the_websockets_ping_timeout_keeps_its_client(monkeypatch):
+    """A native scene load blocks the server's heartbeat, so the server states its own ping timeout. Here the
+    websockets default is 0.05 s, and the client answers no ping."""
+    monkeypatch.setattr(server_module, 'serve', partial(websocket_serve, ping_interval=0.01, ping_timeout=0.05))
+    with serve_env(_SlowScene(load_s=0.5)) as (host, port):
+        conn = EnvConnection(host, port)
+        receive_frame = conn._ws.protocol.recv_frame
+        monkeypatch.setattr(
+            conn._ws.protocol, 'recv_frame', lambda frame: None if frame.opcode == OP_PING else receive_frame(frame)
+        )
+        try:
+            assert protocol.FRAME_OBS in conn.reset(_SCENE)
+        finally:
+            conn.close()

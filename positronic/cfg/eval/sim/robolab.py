@@ -118,8 +118,8 @@ def _robolab_eval(
     Without it, a batch waits for every clone of the server.
 
     ``task_libs`` are task library directories on the env server's host (``positronic.simulator.robolab.task_catalog``);
-    ``task`` may name their tasks, and no category or ``None`` sweep includes them. Only a DROID run takes them. A
-    shared ``env_server`` must serve the same libraries.
+    ``task`` may name their tasks, and no category or ``None`` sweep includes them. A DROID run also takes the
+    camera sets of their ``cameras.py``. A shared ``env_server`` must serve the same libraries.
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
     drives it over the socket and the task name, instruction type and episode length override ride each trial's
