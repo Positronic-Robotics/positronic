@@ -2140,22 +2140,6 @@
         ],
         "./positronic/simulator/libero/env.py": [
             {
-                "code": "reportMissingImports",
-                "range": {
-                    "startColumn": 5,
-                    "endColumn": 18,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportMissingImports",
-                "range": {
-                    "startColumn": 5,
-                    "endColumn": 23,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalMemberAccess",
                 "range": {
                     "startColumn": 25,
