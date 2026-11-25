@@ -180,11 +180,12 @@ class ButtonMap:
             events.append(Event.GIVE_UP)
         return events
 
-    # The trigger value of a Quest 3 controller is about its travel to the power 2.4: 0.05, 0.2 and 0.42 at a quarter,
-    # a half and three quarters of the travel. The grip is open up to the low end of the range and closed from the
-    # high end, and the power bends the value back toward the travel. The CRON arm teleop ran this curve.
-    TRIGGER_RANGE = (0.05, 0.9)
-    TRIGGER_POWER = 0.5
+    # A robot gripper pressed a Quest 3 trigger in steps: the value stays 0 for the first sixth of the travel, then
+    # grows as the rest of the travel to the power 1.45 on a press. The power below makes the grip of a press linear in
+    # that rest. A release reads about 0.1 higher at the same travel. Values up to the low end are noise of a released
+    # trigger.
+    TRIGGER_RANGE = (0.02, 1.0)
+    TRIGGER_POWER = 0.69
 
     @staticmethod
     def grip(buttons: Sequence[float]) -> float:

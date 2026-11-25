@@ -176,15 +176,17 @@ class TestButtonMap:
         [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
         assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
-    @pytest.mark.parametrize(
-        ('value', 'grip'), [(0.0, 0.0), (0.05, 0.0), (0.2, 0.42), (0.42, 0.66), (0.9, 1.0), (1.0, 1.0)]
-    )
-    def test_the_grip_of_the_trigger_values_measured_on_a_quest_3_follows_their_travel(self, value, grip):
-        """A quarter, a half and three quarters of the travel send 0.05, 0.2 and 0.42."""
-        assert ButtonMap.grip(_buttons(trigger=value)) == pytest.approx(grip, abs=0.01)
+    @pytest.mark.parametrize(('value', 'travel'), [(0.114, 0.35), (0.255, 0.5), (0.595, 0.75), (0.766, 0.85)])
+    def test_a_press_measured_on_a_quest_3_asks_for_a_grip_linear_in_the_travel_past_the_dead_zone(self, value, travel):
+        """A robot gripper pressed the trigger to ``travel`` and read ``value``; the trigger reads 0 up to 0.17."""
+        assert ButtonMap.grip(_buttons(trigger=value)) == pytest.approx((travel - 0.17) / (1 - 0.17), abs=0.04)
+
+    @pytest.mark.parametrize(('value', 'grip'), [(0.0, 0.0), (0.02, 0.0), (1.0, 1.0)])
+    def test_a_released_trigger_asks_for_an_open_grip_and_a_full_press_for_a_closed_one(self, value, grip):
+        assert ButtonMap.grip(_buttons(trigger=value)) == grip
 
     def test_a_deeper_trigger_asks_for_a_closer_grip(self):
-        grips = [ButtonMap.grip(_buttons(trigger=value)) for value in np.linspace(0.05, 0.9, 50)]
+        grips = [ButtonMap.grip(_buttons(trigger=value)) for value in np.linspace(0.02, 1.0, 50)]
         assert all(b > a for a, b in itertools.pairwise(grips))
 
     @pytest.mark.parametrize(('value', 'grip'), [(-0.1, 0.0), (1.2, 1.0)])
