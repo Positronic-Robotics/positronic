@@ -94,7 +94,7 @@ class RobolabDroidAdapter(RobolabAdapter):
         eef_pose = geom.Transform3D(
             raw_obs[protocol.OBS_EEF_POS], geom.Rotation.from_quat(raw_obs[protocol.OBS_EEF_QUAT])
         )
-        ee_pose = self._measure(eef_pose)
+        ee_pose = self._measure(eef_pose, raw_obs[protocol.OBS_JOINT_POS])
         state = MujocoFrankaState()
         state.encode(raw_obs[protocol.OBS_JOINT_POS], raw_obs[protocol.OBS_JOINT_VEL], ee_pose)
         return {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs[protocol.OBS_GRIP])}
