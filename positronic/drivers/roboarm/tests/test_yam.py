@@ -37,6 +37,7 @@ from positronic.drivers.roboarm.tests.fakes import StopFlag
 from positronic.drivers.roboarm.yam import driver as yam
 from positronic.drivers.roboarm.yam import kinematics as yam_kinematics
 from positronic.drivers.roboarm.yam.compensation import I2RT_COMPENSATION, Compensation, FrictionFade
+from positronic.drivers.roboarm.yam.grasp import DEFAULT_GRASP, GraspTuning
 from positronic.drivers.roboarm.yam.kinematics import IK_POS_TOL, YamKinematics
 from positronic.drivers.utils import RecoveryOutcome
 from positronic.eval import Embodiment, Task
@@ -212,6 +213,7 @@ class Rig:
         park_after_idle_s=1.0,
         compensation=I2RT_COMPENSATION,
         gripper_force_cap_n=None,
+        grasp_tuning=DEFAULT_GRASP,
         driver: yam.Robot | None = None,
     ):
         self.vendor = FakeYam()
@@ -239,6 +241,7 @@ class Rig:
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning,
             move_tuning=move_tuning,
+            grasp_tuning=grasp_tuning,
             gripper_force_cap_n=gripper_force_cap_n,
         )
         self.clock = MockClock()
@@ -2608,8 +2611,9 @@ def _gripper_torque_nm(force_n: float) -> float:
 class GripperMotors(FakeMotorChain):
     """A ``FakeMotorChain`` whose gripper motor runs the P-D law of a DM motor, one ``STEP_S`` per command.
 
-    It keeps each command and the torque that the P-D loop of the gripper asks for. The motor gives at most
-    ``MAX_TORQUE_NM``, less near ``MAX_SPEED_RAD_S``, against ``FRICTION_NM``. The fingers stop at ``stop_at``.
+    It keeps each command, the torque that the P-D loop of the gripper asks for, and the gripper position after it.
+    The motor gives at most ``MAX_TORQUE_NM``, less near ``MAX_SPEED_RAD_S``, against ``FRICTION_NM``. The fingers
+    stop at ``stop_at``.
     """
 
     STEP_S = 0.001
@@ -2631,6 +2635,7 @@ class GripperMotors(FakeMotorChain):
         self.asked: list[float] = []
         self.efforts: list[float] = []
         self.at_object: list[bool] = []
+        self.positions: list[float] = []
 
     def set_commands(self, torques: np.ndarray, **commands) -> list[types.SimpleNamespace]:
         pos, vel, kp, kd = commands['pos'], commands['vel'], commands['kp'], commands['kd']  # what i2rt passes
@@ -2650,11 +2655,15 @@ class GripperMotors(FakeMotorChain):
         self.eff[6] = torque
         self.efforts.append(torque)
         self.at_object.append(self.pos[6] == self.stop_at)
+        self.positions.append(self.pos[6])
         self.now += self.STEP_S
         return self.read_states()
 
     def closing_torques(self) -> np.ndarray:
         return -np.asarray(self.asked)
+
+    def closing_speeds(self) -> np.ndarray:
+        return -np.diff(self.positions) / self.STEP_S
 
     def first_stall_step(self) -> int | None:
         """The first step by which i2rt's limiter has found a stall: the fingers stood at the object for a window of the
@@ -2674,10 +2683,12 @@ I2RT_GRIPPER_FORCE_LIMIT_N = 50.0  # the gripper force limit that i2rt's get_yam
 
 def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float = GRIPPER_OPEN_RAD):
     """i2rt's hardware chain over ``GripperMotors``, with the gripper force limit of i2rt's ``get_yam_robot``. Its
-    control thread is stopped, so each ``update`` runs one cycle. i2rt's limiter reads the clock of the motors."""
+    control thread is stopped, so each ``update`` runs one cycle. i2rt's limiter and the grasp of a driver read the
+    clock of the motors."""
     motor_chain_robot = pytest.importorskip('i2rt.robots.motor_chain_robot')
     motors = GripperMotors(stop_at, start_at)
     monkeypatch.setattr('i2rt.robots.utils.time', types.SimpleNamespace(time=lambda: motors.now))
+    monkeypatch.setattr(yam, 'time', types.SimpleNamespace(monotonic=lambda: motors.now))
     chain = motor_chain_robot.MotorChainRobot(
         motor_chain=motors,
         use_gravity_comp=False,
@@ -2694,10 +2705,12 @@ def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float 
     return chain, motors
 
 
-def _opened_by_a_driver(chain, gripper_force_cap_n: float | None) -> yam.Robot:
-    """A driver with ``gripper_force_cap_n`` that opened ``chain`` and stopped before a park, which the arm of the
-    stopped chain never ends. The driver caps the chain before it yields for the first time."""
-    rig = Rig(gripper_force_cap_n=gripper_force_cap_n)
+def _opened_by_a_driver(
+    chain, gripper_force_cap_n: float | None, grasp_tuning: GraspTuning = DEFAULT_GRASP
+) -> yam.Robot:
+    """A driver with ``gripper_force_cap_n`` and ``grasp_tuning`` that opened ``chain`` and stopped before a park,
+    which the arm of the stopped chain never ends. The driver limits the gripper before it yields for the first time."""
+    rig = Rig(gripper_force_cap_n=gripper_force_cap_n, grasp_tuning=grasp_tuning)
     rig.driver._connect = lambda channel, sim, compensation: chain
     next(rig.loop)
     rig.loop.close()
@@ -2719,57 +2732,113 @@ def _squeeze(monkeypatch, gripper_force_cap_n: float | None) -> tuple[Any, Gripp
     return chain, motors
 
 
-def test_the_gripper_force_cap_holds_before_and_after_i2rt_finds_a_stall(monkeypatch):
+def _i2rt_alone(monkeypatch, grip: float, **gripper) -> GripperMotors:
+    """Run ``grip`` for a second on a chain from ``_gripper_chain(**gripper)`` that no driver opened."""
+    chain, motors = _gripper_chain(monkeypatch, **gripper)
+    _run(chain, motors, grip, seconds=1.0)
+    return motors
+
+
+def test_after_a_touch_the_hold_force_caps_the_closing_torque_before_and_after_i2rt_finds_a_stall(monkeypatch):
     """i2rt's limiter replaces the gripper target once it finds a stall, so a cap on the target sent to i2rt is lost."""
     _, motors = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    held = motors.at_object.index(True) + 3  # the hold starts not more than 3 steps after the first step at the object
     stall = motors.first_stall_step()
     assert stall is not None, 'the squeeze did not reach the stall of i2rt'
+    assert held < stall
     closing = motors.closing_torques()
-    assert np.max(closing[:stall]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+    assert np.max(closing[held:stall]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
     assert np.max(closing[stall:]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
 
 
-def test_the_gripper_force_cap_leaves_the_commands_of_the_arm_motors_alone(monkeypatch):
-    _, capped = _squeeze(monkeypatch, SQUEEZE_CAP_N)
-    _, plain = _squeeze(monkeypatch, None)
-    assert np.max(plain.closing_torques()) > _gripper_torque_nm(SQUEEZE_CAP_N)
-    np.testing.assert_array_equal(np.stack(capped.commands)[:, :, :6], np.stack(plain.commands)[:, :, :6])
+def test_the_grasp_leaves_the_commands_of_the_arm_motors_alone(monkeypatch):
+    _, held = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    plain = _i2rt_alone(monkeypatch, CHAIN_CLOSED)
+    np.testing.assert_array_equal(np.stack(held.commands)[:, :, :6], np.stack(plain.commands)[:, :, :6])
 
 
-def test_a_gripper_force_cap_of_zero_sends_the_commands_of_i2rt(monkeypatch):
-    _, zero = _squeeze(monkeypatch, 0.0)
-    plain, motors = _gripper_chain(monkeypatch)
-    _run(plain, motors, CHAIN_CLOSED, seconds=1.0)
-    np.testing.assert_array_equal(np.stack(zero.commands), np.stack(motors.commands))
+@pytest.mark.parametrize('cap_n', [None, 0.0])
+def test_with_no_gripper_force_cap_i2rt_holds_an_object_with_its_own_force_limit(monkeypatch, cap_n):
+    _, motors = _squeeze(monkeypatch, cap_n)
+    assert motors.first_stall_step() is not None, 'the squeeze did not reach the stall of i2rt'
+    hold_nm = _gripper_torque_nm(I2RT_GRIPPER_FORCE_LIMIT_N)
+    assert motors.closing_torques()[-1] == pytest.approx(hold_nm, rel=0.02)
 
 
-def test_the_gripper_force_cap_leaves_an_opening_gripper_alone(monkeypatch):
-    commands = []
-    for cap in (SQUEEZE_CAP_N, None):
-        chain, motors = _gripper_chain(monkeypatch, stop_at=0.0, start_at=0.0)
-        _opened_by_a_driver(chain, cap)
-        _run(chain, motors, CHAIN_OPEN, seconds=0.5)
-        assert np.max(-motors.closing_torques()) > _gripper_torque_nm(SQUEEZE_CAP_N)
-        commands.append(np.stack(motors.commands))
-    np.testing.assert_array_equal(*commands)
+def test_the_grasp_leaves_an_opening_gripper_alone(monkeypatch):
+    chain, opened = _gripper_chain(monkeypatch, stop_at=0.0, start_at=0.0)
+    _opened_by_a_driver(chain, SQUEEZE_CAP_N)
+    _run(chain, opened, CHAIN_OPEN, seconds=1.0)
+    assert np.max(-opened.closing_torques()) > _gripper_torque_nm(SQUEEZE_CAP_N)
+    plain = _i2rt_alone(monkeypatch, CHAIN_OPEN, stop_at=0.0, start_at=0.0)
+    np.testing.assert_array_equal(np.stack(opened.commands), np.stack(plain.commands))
 
 
-def _free_close_s(monkeypatch, gripper_force_cap_n: float | None) -> float:
-    """How long the gripper takes from open to 0.05 rad short of closed, with nothing between the fingers."""
+def _free_close(
+    monkeypatch, gripper_force_cap_n: float | None, grasp_tuning: GraspTuning = DEFAULT_GRASP
+) -> GripperMotors:
+    """Close the gripper from open with nothing between the fingers, for 1.5 s, through a driver with
+    ``gripper_force_cap_n`` and ``grasp_tuning``."""
     chain, motors = _gripper_chain(monkeypatch, stop_at=0.0)
-    _opened_by_a_driver(chain, gripper_force_cap_n)
-    chain.command_joint_pos(np.append(ARM_TARGET, CHAIN_CLOSED))
-    for steps in range(10_000):
-        if motors.pos[6] <= 0.05:
-            return steps * motors.STEP_S
-        chain.update()
-    raise AssertionError('the gripper did not close')
+    _opened_by_a_driver(chain, gripper_force_cap_n, grasp_tuning)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.5)
+    return motors
 
 
-def test_a_capped_gripper_closes_on_nothing_about_as_fast_as_an_uncapped_one(monkeypatch):
-    """The cap limits the sum of the position torque and the damping torque. A cap on the position torque alone lets
-    the damping of a fast close take most of the drive."""
-    assert _free_close_s(monkeypatch, SQUEEZE_CAP_N) <= 1.1 * _free_close_s(monkeypatch, None)
+@pytest.mark.parametrize('rate', [1.0, 2.0])
+def test_a_gripper_closes_on_nothing_in_about_a_stroke_over_its_close_rate(monkeypatch, rate):
+    motors = _free_close(monkeypatch, SQUEEZE_CAP_N, GraspTuning(close_rate_per_s=rate))
+    shut = np.flatnonzero(np.asarray(motors.positions) <= 0.05)
+    assert shut.size, 'the gripper did not close'
+    assert (shut[0] + 1) * motors.STEP_S == pytest.approx(1 / rate, rel=0.15)
+
+
+@pytest.mark.parametrize('cap_n', [SQUEEZE_CAP_N, None])
+def test_a_closing_gripper_motor_runs_not_much_faster_than_the_close_rate(monkeypatch, cap_n):
+    tuning = GraspTuning(close_rate_per_s=2.0)
+    rate_rad_s = tuning.close_rate_per_s * GRIPPER_OPEN_RAD
+    assert np.max(_free_close(monkeypatch, cap_n, tuning).closing_speeds()) <= 1.05 * rate_rad_s
+    assert np.max(_i2rt_alone(monkeypatch, CHAIN_CLOSED, stop_at=0.0).closing_speeds()) > 1.3 * rate_rad_s
+
+
+# A close from rest of GripperMotors at the default rate has a closing effort above 0.4 Nm for its first 20 ms, with
+# a peak of 0.53 Nm, and 0.32 Nm or less after that. With these values, only the launch can show a touch, and only the
+# launch asks for more than the hold torque.
+LAUNCH_TOUCH = GraspTuning(touch_effort_nm=0.4)
+LAUNCH_HOLD_N = 10.0  # 0.45 Nm
+
+
+def test_the_effort_of_a_launch_from_rest_does_not_read_as_a_touch(monkeypatch):
+    uncapped = np.stack(_free_close(monkeypatch, None, LAUNCH_TOUCH).commands)
+    capped = np.stack(_free_close(monkeypatch, LAUNCH_HOLD_N, LAUNCH_TOUCH).commands)
+    np.testing.assert_array_equal(capped, uncapped)
+    no_launch = dataclasses.replace(LAUNCH_TOUCH, launch_s=0.0)
+    assert not np.array_equal(np.stack(_free_close(monkeypatch, LAUNCH_HOLD_N, no_launch).commands), uncapped)
+
+
+def _close_again_on_nothing(monkeypatch, gripper_force_cap_n: float | None) -> np.ndarray:
+    """Close the gripper on an object and open it, through a driver with ``gripper_force_cap_n`` and
+    ``LAUNCH_TOUCH``. Then take the object away, close the gripper again, and return the commands of that close."""
+    chain, motors = _gripper_chain(monkeypatch)
+    _opened_by_a_driver(chain, gripper_force_cap_n, LAUNCH_TOUCH)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.0)
+    _run(chain, motors, CHAIN_OPEN, seconds=1.0)
+    motors.stop_at, start = 0.0, len(motors.commands)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.5)
+    return np.stack(motors.commands[start:])
+
+
+def test_an_opened_gripper_closes_again_with_no_hold_cap_until_a_new_touch(monkeypatch):
+    np.testing.assert_array_equal(
+        _close_again_on_nothing(monkeypatch, LAUNCH_HOLD_N), _close_again_on_nothing(monkeypatch, None)
+    )
+
+
+@pytest.mark.parametrize('field', ['close_rate_per_s', 'touch_effort_nm', 'launch_s'])
+@pytest.mark.parametrize('value', [-1.0, math.nan, math.inf])
+def test_a_grasp_tuning_value_that_is_negative_or_not_finite_is_refused(field, value):
+    with pytest.raises(ValueError, match=field):
+        GraspTuning(**{field: value})
 
 
 def test_a_gripper_force_cap_from_its_input_is_in_force_before_the_next_command(monkeypatch):
@@ -2778,7 +2847,7 @@ def test_a_gripper_force_cap_from_its_input_is_in_force_before_the_next_command(
     rig = Rig(gripper_force_cap_n=None)
     rig.driver._connect = lambda channel, sim, compensation: chain
     next(rig.loop)
-    _run(chain, motors, CHAIN_CLOSED, seconds=0.3)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.0)
     assert motors.closing_torques()[-1] > _gripper_torque_nm(SQUEEZE_CAP_N)
     send = chain.command_joint_pos
 

@@ -12,6 +12,7 @@ polarity, joint ranges, the mount pose (``base_pose``), teleop latency, and the 
 import contextlib
 import functools
 import logging
+import time
 from collections import deque
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import asdict, dataclass
@@ -40,6 +41,7 @@ from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
 from ..models import YAM_JOINT_NAMES, bundled_yam_model
 from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
+from .grasp import DEFAULT_GRASP, Grasp, GraspTuning
 from .kinematics import YamKinematics
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
@@ -145,6 +147,7 @@ def _set_coulomb_friction(chain: Any, compensation: Compensation, sim: bool) -> 
 
 class _JointReadings(_JointSpeeds, Protocol):
     pos: np.ndarray  # per motor; the gripper reads 0 closed and 1 open
+    eff: np.ndarray  # Nm per motor
 
 
 class _MotorSpace(Protocol):
@@ -157,9 +160,10 @@ class _MotorSpace(Protocol):
 
 @runtime_checkable
 class _GripperLoop(Protocol):
-    """What the gripper force cap reads and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update`` ends in
-    ``_update_joint_state(motor_torques, joint_commands)``, which sends each motor its torque and its P-D command. The
-    gripper force limiter of i2rt sets the gripper target and ``_last_gripper_command_qpos`` before that call.
+    """What the gripper close limit reads and wraps on i2rt's hardware chain, ``MotorChainRobot``: each ``update``
+    ends in ``_update_joint_state(motor_torques, joint_commands)``, which sends each motor its torque and its P-D
+    command. The gripper force limiter of i2rt sets the gripper target and ``_last_gripper_command_qpos`` before that
+    call.
 
     HACK: these members are private to i2rt, which takes a gripper force limit only when it opens the chain.
     """
@@ -178,13 +182,14 @@ _GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
 _GRIPPER_FRICTION_NM = 0.3
 
 
-def _cap_gripper_force(chain: Any, cap_n: Callable[[], float | None]) -> None:
-    """Cap the closing torque that the P-D loop of the gripper motor asks for, in each ``update`` of i2rt's hardware
-    ``chain``, after its gripper force limiter. The cap is the torque at which that limiter holds a stalled gripper with
-    ``cap_n()`` newtons. None sets no cap. The arm motors and an opening gripper keep the commands of i2rt.
+def _limit_gripper_close(chain: Any, tuning: GraspTuning, hold_n: Callable[[], float | None]) -> None:
+    """Run a ``Grasp`` with ``tuning`` on the gripper motor in each ``update`` of i2rt's hardware ``chain``, after its
+    gripper force limiter. After a touch, the grasp caps the closing torque that the P-D loop of the motor asks for.
+    The cap is the torque at which that limiter holds a stalled gripper with ``hold_n()`` newtons. None sets no cap.
+    The arm motors and an opening gripper keep the commands of i2rt.
 
-    The control thread of i2rt calls ``cap_n`` once per update. A chain that reports no gripper force limit, such as
-    i2rt's sim chain, has no limiter and gets no cap. A chain that lacks a member of ``_GripperLoop`` raises before
+    The control thread of i2rt calls ``hold_n`` once per update. A chain that reports no gripper force limit, such as
+    i2rt's sim chain, has no limiter and gets no limit. A chain that lacks a member of ``_GripperLoop`` raises before
     anything changes.
     """
     with _chain_call():
@@ -192,27 +197,31 @@ def _cap_gripper_force(chain: Any, cap_n: Callable[[], float | None]) -> None:
     if _LIMIT_GRIPPER_EFFORT not in info:
         return
     if not isinstance(chain, _GripperLoop):
-        raise TypeError(f'{type(chain).__name__} lacks a member of _GripperLoop, which the gripper force cap needs')
-    gripper, (closed, opened) = info[_GRIPPER_INDEX], info[_GRIPPER_LIMITS]
-    closing = np.sign(closed - opened)  # the sign of a closing move in motor radians
+        raise TypeError(f'{type(chain).__name__} lacks a member of _GripperLoop, which the gripper close limit needs')
+    gripper: int = info[_GRIPPER_INDEX]
+    grasp = Grasp(tuning, *info[_GRIPPER_LIMITS])
     *_, force_to_torque = info[_GRIPPER_TYPE].get_gripper_limiter_params(info[_ARM_TYPE])
     send = chain._update_joint_state
 
-    def capped_send(motor_torques: np.ndarray, joint_commands: Any, *args: Any) -> None:
-        newtons, kp = cap_n(), joint_commands.kp[gripper]
+    def limited_send(motor_torques: np.ndarray, joint_commands: Any, *args: Any) -> None:
+        readings, request = chain._joint_state, joint_commands.pos[gripper]
+        q = chain.remapper.to_robot_joint_pos_space(readings.pos)[gripper]
+        newtons, kp = hold_n(), joint_commands.kp[gripper]
+        hold_limit = None
         if newtons is not None and kp > 0:
-            q = chain.remapper.to_robot_joint_pos_space(chain._joint_state.pos)[gripper]
-            dq = chain.remapper.to_robot_joint_vel_space(chain._joint_state.vel)[gripper]
-            cap_nm = force_to_torque(gripper_force=newtons, current_angle=q) + _GRIPPER_FRICTION_NM
+            dq = chain.remapper.to_robot_joint_vel_space(readings.vel)[gripper]
+            hold_nm = force_to_torque(gripper_force=newtons, current_angle=q) + _GRIPPER_FRICTION_NM
             feedforward_and_damping = motor_torques[gripper] + joint_commands.kd[gripper] * (
                 joint_commands.vel[gripper] - dq
             )
-            if closing * (feedforward_and_damping + kp * (joint_commands.pos[gripper] - q)) > cap_nm:
-                joint_commands.pos[gripper] = q + (closing * cap_nm - feedforward_and_damping) / kp
-                chain._last_gripper_command_qpos = joint_commands.pos[gripper]  # the limiter reads the target sent
+            hold_limit = q + (grasp.closing * hold_nm - feedforward_and_damping) / kp
+        target = grasp.target(time.monotonic(), q, request, readings.eff[gripper], hold_limit)
+        if target != request:
+            joint_commands.pos[gripper] = target
+            chain._last_gripper_command_qpos = target  # the limiter reads the target sent
         send(motor_torques, joint_commands, *args)
 
-    chain._update_joint_state = capped_send
+    chain._update_joint_state = limited_send
 
 
 def _connect(channel: str, sim: bool, compensation: Compensation):
@@ -838,6 +847,7 @@ class Robot(pimm.ControlSystem):
         park_after_idle_s: float | None = 60.0,
         park_tuning: SettleTuning = PARK_SETTLE,
         move_tuning: SettleTuning = MOVE_SETTLE,
+        grasp_tuning: GraspTuning = DEFAULT_GRASP,
         gripper_force_cap_n: float | None = None,
         connect: Callable = _connect,
     ) -> None:
@@ -851,9 +861,10 @@ class Robot(pimm.ControlSystem):
             None disables idle parking; the driver still parks on shutdown.
         :param park_tuning: How the park settles on this arm.
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
-        :param gripper_force_cap_n: The most force in newtons that the gripper closes with, until the
-            ``gripper_force_cap_n`` input carries another cap. None or 0 sets no cap. i2rt's own limiter still holds a
-            stalled gripper with its force limit, which the arm meta names. i2rt's sim chain runs no cap.
+        :param grasp_tuning: How the gripper closes on an object on this arm. i2rt's sim chain does not run it.
+        :param gripper_force_cap_n: The most force in newtons that the gripper holds an object with after a touch,
+            until the ``gripper_force_cap_n`` input carries another cap. None or 0 sets no cap. i2rt's own limiter still
+            holds a stalled gripper with its force limit, which the arm meta names. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
@@ -871,6 +882,7 @@ class Robot(pimm.ControlSystem):
         self._park_after_idle_s = park_after_idle_s
         self._park_tuning = park_tuning
         self._move_tuning = move_tuning
+        self._grasp_tuning = grasp_tuning
         self._channel = channel
         self._base_pose = base_pose if base_pose is not None else geom.Transform3D.identity
         self._sim = sim
@@ -993,7 +1005,7 @@ class Robot(pimm.ControlSystem):
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 _set_coulomb_friction(vendor, self._compensation, self._sim)
-                _cap_gripper_force(vendor, lambda: self._gripper_force_cap_n)
+                _limit_gripper_close(vendor, self._grasp_tuning, lambda: self._gripper_force_cap_n)
                 self.robot_meta.emit(meta)
                 arm.emit_meta()
                 joints, grip, missed = yield from arm.go_to_start()
