@@ -1,9 +1,8 @@
-"""Serve an ASPIRE CapApi program over the offboard protocol, one run of the program per session.
+"""Serve ASPIRE CapApi programs over the offboard protocol. Each session names the program it runs.
 
-uv run --locked python -m positronic.vendors.aspire.server --program=path/to/program.py
+uv run --locked python -m positronic.vendors.aspire.server --programs_dir=path/to/programs
 """
 
-import hashlib
 import logging
 from dataclasses import asdict
 from functools import partial
@@ -26,50 +25,70 @@ from positronic.policy.processors import ChunkedSchedule, EndOnField, Trajectory
 from positronic.policy.sequential import Sequential
 from positronic.utils import flatten_dict
 
-from .bridge import BridgeSettings, CapBridge, ProgramOutcome
+from .bridge import BridgeSettings, CallTrace, CapBridge, Program
 
 logger = logging.getLogger(__name__)
 
 POLICY_TYPE = 'aspire_program'
+# The session parameter that names the program, relative to the server's programs directory.
+PARAM_PROGRAM = 'program'
 META_PROGRAM = 'program'
 META_PROGRAM_SHA256 = 'program_sha256'
+META_SESSION_RECORD = 'session_record'
 META_SETTINGS = 'settings'
+EXAMPLES_DIR = Path(__file__).parent / 'examples'
 
 
 class SessionRecord(BaseModel):
-    """What ``<sessions_dir>/<session_id>.json`` holds: how the session's program ended, and its traceback."""
+    """What ``<sessions_dir>/<session_id>.json`` holds: the program, how it ended, and each CapApi call it made."""
 
     session_id: str
+    program: str
     program_sha256: str
+    program_source: str
     end: PolicyEnd | None
     error: str | None
+    calls: list[CallTrace]
 
 
 class CapProgramModel(Model):
-    """One program, run once per session in a ``CapBridge`` of its own.
+    """Runs the program each session names, in a ``CapBridge`` of the session's own.
 
     A session writes its record when its program ends, and again when the session ends. A record of a session that
     ended before its program has no ``end``.
     """
 
-    def __init__(self, program: Path, settings: BridgeSettings, sessions_dir: Path):
-        source = program.read_text()
-        self._code = compile(source, str(program), 'exec')
-        self._program_name = program.name
-        self._program_sha256 = hashlib.sha256(source.encode()).hexdigest()
+    def __init__(self, programs_dir: Path, settings: BridgeSettings, sessions_dir: Path):
+        self._programs_dir = programs_dir.resolve()
         self._settings = settings
         self._sessions_dir = sessions_dir
         self._bridges: dict[str, CapBridge] = {}
         self._recorded: set[str] = set()
 
+    def parameters(self) -> dict[str, Any]:
+        return {PARAM_PROGRAM: None}
+
+    def open_session(self, session_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        name = params[PARAM_PROGRAM]
+        if not isinstance(name, str) or not name:
+            raise ValueError(f'Name the program with the session parameter {PARAM_PROGRAM!r}')
+        path = (self._programs_dir / name).resolve()
+        if not path.is_relative_to(self._programs_dir) or not path.is_file():
+            raise ValueError(f'{name!r} names no program in the programs directory')
+        program = Program(name, path.read_text())
+        self._bridges[session_id] = CapBridge(program, self._settings)
+        return {
+            META_PROGRAM: program.name,
+            META_PROGRAM_SHA256: program.sha256,
+            META_SESSION_RECORD: self._record_path(session_id).name,
+        }
+
     def __call__(self, obs: Obs, *, session_id: str) -> list[dict[str, Any]]:
-        bridge = self._bridges.get(session_id)
-        if bridge is None:
-            bridge = self._bridges[session_id] = CapBridge(self._code, self._settings)
+        bridge = self._bridges[session_id]
         chunk = bridge.answer(obs)
         if bridge.outcome is not None and session_id not in self._recorded:
             self._recorded.add(session_id)
-            self._write(session_id, bridge.outcome)
+            self._write(session_id, bridge)
         return chunk
 
     def end_session(self, session_id: str) -> None:
@@ -78,16 +97,23 @@ class CapProgramModel(Model):
             return
         bridge.close()
         self._recorded.discard(session_id)
-        self._write(session_id, bridge.outcome)
+        self._write(session_id, bridge)
 
-    def _write(self, session_id: str, outcome: ProgramOutcome | None) -> None:
+    def _record_path(self, session_id: str) -> Path:
+        return self._sessions_dir / f'{session_id}.json'
+
+    def _write(self, session_id: str, bridge: CapBridge) -> None:
+        outcome = bridge.outcome
         record = SessionRecord(
             session_id=session_id,
-            program_sha256=self._program_sha256,
+            program=bridge.program.name,
+            program_sha256=bridge.program.sha256,
+            program_source=bridge.program.source,
             end=None if outcome is None else outcome.end,
             error=None if outcome is None else outcome.error,
+            calls=bridge.calls,
         )
-        path = self._sessions_dir / f'{session_id}.json'
+        path = self._record_path(session_id)
         pending = path.with_suffix('.json.tmp')
         pending.write_text(record.model_dump_json())
         pending.replace(path)
@@ -98,12 +124,7 @@ class CapProgramModel(Model):
             f'{keys.arm_channel(keys.ROBOT_COMMAND, arm)}{keys.POSE_SUFFIX}' for arm in keys.BIMANUAL_ARMS
         ]
         frames = ee_frames_entry(dict.fromkeys(signals, EEFrame(site=GRIPPER_SITE)))
-        return frames | flatten_dict({
-            policy_keys.TYPE: POLICY_TYPE,
-            META_PROGRAM: self._program_name,
-            META_PROGRAM_SHA256: self._program_sha256,
-            META_SETTINGS: asdict(self._settings),
-        })
+        return frames | flatten_dict({policy_keys.TYPE: POLICY_TYPE, META_SETTINGS: asdict(self._settings)})
 
     def close(self) -> None:
         for session_id in list(self._bridges):
@@ -118,6 +139,7 @@ def deployment(settings: BridgeSettings) -> PolicyDeployment:
 
 
 @cfn.config(
+    programs_dir=str(EXAMPLES_DIR),
     settings=cfn.Config(BridgeSettings),
     sessions_dir='aspire_sessions',
     websocket=offboard_server.websocket,
@@ -125,23 +147,24 @@ def deployment(settings: BridgeSettings) -> PolicyDeployment:
     idle_timeout_min=None,
 )
 def serve(
-    program: str,
+    programs_dir: str,
     settings: BridgeSettings,
     sessions_dir: str,
     websocket: server_wire.Wire | None,
     grpc: server_wire.Wire | None,
     idle_timeout_min: float | None,
 ):
-    """Serve the CapApi program at ``program`` to bimanual sessions, with one run of the program per session.
+    """Serve the CapApi programs in ``programs_dir`` to bimanual sessions.
 
-    ``--settings.*`` sets the pacing and how the bridge decides that a move ended. Each session's record goes to
-    ``sessions_dir``, relative to the working directory unless absolute. The wire flags are those of the offboard
-    ``serve``.
+    Each session names its program with the session parameter ``program``, a path relative to ``programs_dir``, and
+    runs the file as it reads at the session's start. ``--settings.*`` sets the pacing and how the bridge decides that
+    a move ended. Each session's record goes to ``sessions_dir``, relative to the working directory unless absolute.
+    The wire flags are those of the offboard ``serve``.
     """
     directory = Path(sessions_dir).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     logger.info('Session records go to %s', directory)
-    build = partial(CapProgramModel, Path(program), settings, directory)
+    build = partial(CapProgramModel, Path(programs_dir), settings, directory)
     wires = [w for w in (websocket, grpc) if w is not None]
     serve_model(build, deployment(settings), wires, idle_timeout_min)
 

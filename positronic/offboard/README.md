@@ -120,7 +120,8 @@ session.
 #### Session parameters
 
 Query params on the session URL tune the served policy pipeline for that one session.
-With `PolicyServer`, each key is a dotted path into the pipeline config, applied before the session is built.
+With `PolicyServer`, a key that the model declares in `Model.parameters()` goes to `Model.open_session`, and each other
+key is a dotted path into the pipeline config, applied before the session is built.
 `ModelServer` accepts only the parameters declared by its model:
 
 ```

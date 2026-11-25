@@ -106,6 +106,8 @@ def make_mock_model():
         model = MagicMock(spec=Model)
         model.return_value = action
         model.meta.return_value = meta
+        model.parameters.return_value = {}
+        model.open_session.return_value = {}
         return model
 
     return make

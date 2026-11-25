@@ -10,7 +10,14 @@ from positronic import geom, keys
 from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
 from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
-from positronic.vendors.aspire.bridge import BridgeSettings, CapBridge
+from positronic.vendors.aspire.bridge import (
+    DIAGNOSTIC_ACCEPTED,
+    DIAGNOSTIC_MOVE_END,
+    BridgeSettings,
+    CapBridge,
+    MoveEnd,
+    Program,
+)
 from positronic.vendors.aspire.contracts import EnvironmentAdapter
 
 ARMS = keys.BIMANUAL_ARMS
@@ -85,7 +92,7 @@ def run(settings):
     bridges = []
 
     def run(program: str, rig: Rig | None = None) -> tuple[CapBridge, list[list[dict]]]:
-        bridge = CapBridge(compile(dedent(program), 'program.py', 'exec'), settings)
+        bridge = CapBridge(Program('program.py', dedent(program)), settings)
         bridges.append(bridge)
         return bridge, drive(bridge, rig or Rig())
 
@@ -100,7 +107,7 @@ def completed(bridge: CapBridge) -> None:
 
 
 def test_bridge_is_an_aspire_environment_adapter(settings):
-    assert isinstance(CapBridge(compile('pass', 'program.py', 'exec'), settings), EnvironmentAdapter)
+    assert isinstance(CapBridge(Program('program.py', 'pass'), settings), EnvironmentAdapter)
 
 
 def test_two_arm_program_plays_its_targets_and_ends_complete(run):
@@ -246,6 +253,7 @@ def test_a_raising_program_gives_up_and_records_its_error(run):
         ('segment_text("exterior", "cup")', 'NotImplementedError'),
         ('import os', 'ImportError'),
         ('open("/etc/hostname")', 'NameError'),
+        ('move_to_joints(', 'SyntaxError'),
     ],
 )
 def test_a_program_outside_the_contract_gives_up(run, program, error):
@@ -301,8 +309,48 @@ def test_get_observation_carries_the_rgb_views(run):
 
 def test_close_stops_a_waiting_program(settings):
     before = set(threading.enumerate())
-    bridge = CapBridge(compile('move_to_joints([1, 1, 1, 1, 1, 1], arm="left")', 'program.py', 'exec'), settings)
+    bridge = CapBridge(Program('program.py', 'move_to_joints([1, 1, 1, 1, 1, 1], arm="left")'), settings)
     bridge.answer(Rig().obs())
     bridge.close()
     assert bridge.outcome is None
     assert set(threading.enumerate()) <= before
+
+
+def test_the_trace_records_each_call_with_its_arguments_result_and_end(run, settings):
+    bridge, _ = run("""
+        get_robot_state()
+        close_gripper(arm='left')
+        move_to_joints([0.5] * 6, arm='right')
+        step(RobotAction(arms={'left': ArmCommand(mode='joint_position', target=[0.0] * 6)}))
+        try:
+            segment_text('exterior', 'cup')
+        except Exception:
+            pass
+    """)
+    completed(bridge)
+    calls = bridge.calls
+    assert [call.name for call in calls] == [
+        'get_robot_state',
+        'close_gripper',
+        'move_to_joints',
+        'step',
+        'segment_text',
+    ]
+    state, grip_call, move, period, unsupported = calls
+    assert state.result['gripper_positions'] == {'left': 1.0, 'right': 1.0}
+    assert grip_call.kwargs == {'arm': 'left'}
+    assert grip_call.result['diagnostics'][DIAGNOSTIC_MOVE_END] == MoveEnd.ARRIVED
+    assert move.args == [[0.5] * 6] and move.result['ok'] and move.result['diagnostics'][DIAGNOSTIC_ACCEPTED]
+    assert move.result['final_observation']['cameras'] == {}
+    assert period.result['diagnostics'][DIAGNOSTIC_MOVE_END] == MoveEnd.PERIOD
+    assert unsupported.result is None and 'NotImplementedError' in unsupported.raised
+    assert move.ended_robot_s - move.started_robot_s == pytest.approx(settings.round_s)
+    assert all(a.ended_wall_s <= b.started_wall_s for a, b in zip(calls, calls[1:], strict=False))
+
+
+def test_the_trace_records_a_call_that_the_bridge_refused(run):
+    bridge, _ = run("move_to_joints([1.0] * 5, arm='left')")
+    completed(bridge)
+    (call,) = bridge.calls
+    assert not call.result['ok'] and not call.result['diagnostics'][DIAGNOSTIC_ACCEPTED]
+    assert DIAGNOSTIC_MOVE_END not in call.result['diagnostics']

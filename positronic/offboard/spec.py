@@ -10,10 +10,24 @@ from positronic.policy.codecs import Codec
 
 
 class Model(ABC):
-    """A loaded inference callable and the resources it owns."""
+    """A loaded inference callable and the resources it owns.
+
+    ``parameters`` names the session parameters the model takes, with their defaults. The server passes their resolved
+    values to ``open_session`` before the session's first call.
+    """
 
     @abstractmethod
     def __call__(self, obs: Obs, *, session_id: str) -> Any: ...
+
+    def parameters(self) -> dict[str, Any]:
+        return {}
+
+    def open_session(self, session_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Prepare one session from its resolved ``parameters``; return the metadata of that session only.
+
+        Inference of every other session waits for it, so it must stay short.
+        """
+        return {}
 
     def end_session(self, session_id: str) -> None:
         """Release one session's state after its calls finish; keep the loaded model available."""
