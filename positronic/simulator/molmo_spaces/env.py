@@ -376,10 +376,13 @@ class MolmoSpacesEnv(EnvProtocol):
         )
         obs, infos = self._task.reset()  # One observation dict and one info dict per environment.
         # The checks of a strict judge take the start poses of the task's bodies, so they come after the task reset.
-        if profile is success_profile.SuccessProfile.STRICT_V1:
-            self._judge = success_profile.StrictJudge(self._task, self._strict_check(), control_dt)
-        else:
-            self._judge = success_profile.MolmoNativeJudge(self._task)
+        match profile:
+            case success_profile.SuccessProfile.STRICT_V1:
+                self._judge = success_profile.StrictJudge(self._task, self._strict_check(), control_dt)
+            case success_profile.SuccessProfile.MOLMO_NATIVE_TAIL_V1:
+                self._judge = success_profile.MolmoNativeTailJudge(self._task, control_dt)
+            case success_profile.SuccessProfile.MOLMO_NATIVE:
+                self._judge = success_profile.MolmoNativeJudge(self._task)
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
         metrics = self._task_metrics(self._task.get_reward(), infos, self._judge.observe(infos[0]))

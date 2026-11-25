@@ -4,6 +4,7 @@
 
 ### Evals
 - The public evals `molmo.franka_pick_mini_strict` and `molmo.franka_pick_mini_strict_smoke` run the episodes of `molmo.franka_pick_mini` and `molmo.franka_pick_mini_smoke` under the `strict_v1` success profile. They are for practice on your machine: `positronic eval run --eval=molmo.franka_pick_mini_strict`. `positronic-evals` goes to 0.2.20, and `positronic-platform-client` goes to 0.47.38 and pins it ([#1346](https://github.com/Positronic-Robotics/positronic/pull/1346))
+- A MolmoSpaces eval can set `success_profile='molmo_native_tail_v1'`. The profile takes the verdict of `molmo_native`, and the episode runs 1 s more after a success, so that its video shows the result. The scores equal the `molmo_native` scores ([#1353](https://github.com/Positronic-Robotics/positronic/pull/1353))
 - A RoboLab episode runs 1 s more after a success, so that its video shows the result. The success stays, and the episode does not run past the time limit of its task ([#1352](https://github.com/Positronic-Robotics/positronic/pull/1352))
 
 ## [0.4.6] - 2026-11-12
