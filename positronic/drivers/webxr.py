@@ -150,6 +150,15 @@ def _build_access_url(host: str, port: int, use_https: bool) -> str:
     return f'{scheme}://{host}:{port}/'
 
 
+def _file_route(path):
+    """A route handler that serves the file at ``path``."""
+
+    async def serve():
+        return FileResponse(path)
+
+    return serve
+
+
 class WebXR(pimm.ControlSystem):
     """WebXR server for a headset or an iPhone AR controller.
 
@@ -228,7 +237,7 @@ class WebXR(pimm.ControlSystem):
             return None
         return msg
 
-    def _add_page_routes(self, app: FastAPI) -> None:  # noqa: C901
+    def _add_page_routes(self, app: FastAPI) -> None:
         """The page and its scripts, from the package assets."""
 
         @app.get('/')
@@ -262,33 +271,17 @@ class WebXR(pimm.ControlSystem):
             self.page_input.emit(body)
             return JSONResponse({})
 
-        @app.get('/three.min.js')
-        async def three_min():
-            return FileResponse(utils.package_assets_path('assets/webxr/three.min.js'))
-
-        @app.get('/webxr-button.js')
-        async def webxr_button():
-            return FileResponse(utils.package_assets_path('assets/webxr/webxr-button.js'))
-
-        @app.get('/core.js')
-        async def webxr_core():
-            return FileResponse(utils.package_assets_path('assets/webxr/core.js'))
+        scripts = ['three.min.js', 'webxr-button.js', 'core.js']
+        if self.frontend is Frontend.HEADSET:
+            scripts += ['video-player.js', 'quest-trigger.js']
+        for script in scripts:
+            app.get(f'/{script}')(_file_route(utils.package_assets_path(f'assets/webxr/{script}')))
 
         @app.get('/session-mode.js')
         async def session_mode():
             return Response(
                 f'export const SESSION_MODE = {json.dumps(self.session_mode.value)};\n', media_type='text/javascript'
             )
-
-        if self.frontend is Frontend.HEADSET:
-
-            @app.get('/video-player.js')
-            async def video_player():
-                return FileResponse(utils.package_assets_path('assets/webxr/video-player.js'))
-
-            @app.get('/quest-trigger.js')
-            async def quest_trigger():
-                return FileResponse(utils.package_assets_path('assets/webxr/quest-trigger.js'))
 
     def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
         """``/video``: each new frame as H.264. Each socket has its own encoder, so its stream starts at a key frame."""
