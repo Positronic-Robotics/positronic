@@ -1,4 +1,7 @@
-"""Move a declared image transform in front of the temporal stack that feeds it."""
+"""Move a declared image transform into the temporal stack that feeds it."""
+
+import functools
+import operator
 
 from positronic.keys import IMAGE_PREFIX
 from positronic.policy.base import FieldUse, Processor
@@ -20,14 +23,14 @@ def transform_frames_on_arrival(stack: Processor) -> Processor:
     components = stack.components
     result: list[Component] = []
     for index, component in enumerate(components):
-        if isinstance(component, TemporalStack):
-            result.extend(_arrivals(component, components[index + 1 :]))
+        if isinstance(component, TemporalStack) and (arrivals := _arrivals(component, components[index + 1 :])):
+            component = component.with_arrival(functools.reduce(operator.or_, arrivals).encode)
         result.append(component)
-    return stack if len(result) == len(components) else Sequential(*result)
+    return stack if all(new is old for new, old in zip(result, components, strict=True)) else Sequential(*result)
 
 
 def _arrivals(stack: TemporalStack, inner: tuple[Component, ...]) -> list[Codec]:
-    """The transforms of ``stack``'s camera fields that ``inner`` lets run in front of ``stack``.
+    """The transforms of ``stack``'s camera fields that ``inner`` lets ``stack`` apply as each frame arrives.
 
     A field stops at the first transform that selects it: a second one sees what the first made.
     """

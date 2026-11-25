@@ -25,6 +25,8 @@ STEPS = 30
 FRAME_SHAPE = (72, 128, 3)
 # A field name that a select gives to the wrist frame.
 RENAMED_WRIST = 'wrist'
+# The time of the simulated clock in ns. A test can move it forward inside a step.
+_CLOCK = [0]
 
 
 def _history(offsets: int) -> dict:
@@ -96,13 +98,12 @@ def _run(stack: Processor, frames: list[dict[str, np.ndarray]]) -> list[dict[str
         calls.append({name: np.array(value) for name, value in obs.items() if isinstance(value, np.ndarray)})
         return None
 
-    now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge_inference_time=False)
     run = runtime.start(stack, infer)
     try:
         for step, cameras in enumerate(frames):
-            now[0] = round(step * 1e9 / FPS)
-            runtime.start_tick(now[0])
+            _CLOCK[0] = round(step * 1e9 / FPS)
+            runtime.start_tick(_CLOCK[0])
             obs = {
                 **cameras,
                 keys.JOINTS: np.zeros(7),
@@ -255,3 +256,27 @@ def test_each_camera_moves_with_the_transform_that_selects_it(monkeypatch):
     as_given, moved = _compare(declared, monkeypatch)
 
     assert moved == STEPS * len(CAMERAS) < as_given
+
+
+def test_a_frame_keeps_its_arrival_time_when_its_resize_takes_time(monkeypatch):
+    """A resize that takes time does not change which history frame the policy gets."""
+    original = image.transform_frame
+    resizes = [0]
+
+    def slow(frame, *args, **kwargs):
+        # Every second resize takes 20 ms, so the time that each step spends on resizes varies.
+        resizes[0] += 1
+        if resizes[0] % 2:
+            _CLOCK[0] += 20_000_000
+        return original(frame, *args, **kwargs)
+
+    monkeypatch.setattr(image, 'transform_frame', slow)
+    frames = _camera_frames(STEPS)
+
+    before = _run(_declared(_stacked_transform_spec()), frames)
+    after = _run(transform_frames_on_arrival(_declared(_stacked_transform_spec())), frames)
+
+    assert len(after) == len(before) > 1
+    for old, new in zip(before, after, strict=True):
+        for name in CAMERAS:
+            np.testing.assert_array_equal(new[name], old[name])

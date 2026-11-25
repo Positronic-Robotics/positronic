@@ -1061,15 +1061,25 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
 
     With ``pad_start=True``, missing history repeats the oldest sample. Otherwise unavailable offsets
     are omitted, and the stack grows until the full window has been observed.
+
+    ``on_arrival`` changes the selected channels of each observation after the stack reads the time, so the time
+    it takes does not move the sample. It has no wire form.
     """
 
     WIRE_NAME = 'temporal_stack'
     WIRE_VERSION = 2
 
-    def __init__(self, keys: tuple[str, ...], offsets_sec: tuple[float, ...], pad_start: bool = True) -> None:
+    def __init__(
+        self,
+        keys: tuple[str, ...],
+        offsets_sec: tuple[float, ...],
+        pad_start: bool = True,
+        on_arrival: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> None:
         self._keys = tuple(keys)
         self._offsets_sec = tuple(offsets_sec)
         self._pad_start = pad_start
+        self._on_arrival = on_arrival
         self._stacks_camera_frames = any(key.startswith(IMAGE_PREFIX) for key in self._keys)
         assert pad_start or 0.0 in self._offsets_sec, (
             'pad_start=False requires 0.0 in offsets_sec: with only past offsets the first observation has no '
@@ -1080,6 +1090,10 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
     def keys(self) -> tuple[str, ...]:
         return self._keys
 
+    def with_arrival(self, on_arrival: Callable[[dict[str, Any]], dict[str, Any]]) -> 'TemporalStack':
+        """This stack, with ``on_arrival`` applied to each observation after the stack reads the time."""
+        return TemporalStack(self._keys, self._offsets_sec, self._pad_start, on_arrival)
+
     def field_use(self, field: str) -> FieldUse:
         return FieldUse.OTHER if field in self._keys else FieldUse.FORWARDED
 
@@ -1089,7 +1103,8 @@ class TemporalStack(Processor[Obs, OutputT, ReturnT]):
         while True:
             now_sec = runtime.time_ns / 1e9
             step_observed_ns = runtime.observed_ns
-            buffer.append(now_sec, step_observed_ns, {k: obs[k] for k in self._keys})
+            values = {k: obs[k] for k in self._keys}
+            buffer.append(now_sec, step_observed_ns, self._on_arrival(values) if self._on_arrival else values)
             stacked_observed_ns = buffer.newest_observed_ns(now_sec)
             if self._stacks_camera_frames and step_observed_ns is not None and stacked_observed_ns is not None:
                 runtime.observed_ns = min(step_observed_ns, stacked_observed_ns)
