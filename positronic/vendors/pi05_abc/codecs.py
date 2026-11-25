@@ -11,7 +11,9 @@ import numpy as np
 from positronic import keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
-from positronic.policy.codecs import BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
+from positronic.dataset.transforms.episode import EpisodeTransform, Identity
+from positronic.policy import keys as policy_keys
+from positronic.policy.codecs import ACTION, BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
 from positronic.utils import check_rgb_frame
 from positronic.vendors import pi05_abc
 
@@ -57,6 +59,8 @@ ABC4_PROMPTS = {
         'load plates into tabletop dish rack',
     )
 }
+# The commands of the plan in an observation: the command that the arm holds now, and then the commands after it.
+PLAN_COMMANDS = (policy_keys.RTC.ACTION_PREFIX, policy_keys.RTC.PREFIX_ACTIONS)
 # The session metadata fields that name the crop box of each view, in fractions of the frame, and the prompt of each
 # task instruction.
 CROPS_META = 'pi05_abc.crops'
@@ -159,9 +163,39 @@ class Crop(StrEnum):
 CROPS = {Crop.NONE: {}, Crop.YAMBOX: YAMBOX_CROPS, Crop.YAMBOX_WIDE_TOP: YAMBOX_WIDE_TOP_CROPS}
 
 
-@cfn.config(prompts=BOTTLES_PROMPTS, crops=None)
-def abc(prompts: dict[str, str], crops: dict[str, CropBox] | None):
-    """The codec of a checkpoint, with each arm's grip in the gripper width (1 = open) that it speaks."""
+class LastCommandState(Codec):
+    """Adds the last command that the arms got to an encoded request, as its `last_command`.
+
+    The last command is the first command of the plan at the observation: the command that the arm holds now. The
+    action codec encodes the plan to the layout of the state before this codec reads it. With no plan, as at the first
+    request of a session, the last command is the state, as at the first frame of a training episode. A plan that
+    ended before the observation also leaves no command, and the last command is then the state too.
+    """
+
+    def encode(self, data: dict) -> dict:
+        request = {key: value for key, value in data.items() if key != policy_keys.RTC.ACTION_PREFIX}
+        prefix = data.get(policy_keys.RTC.ACTION_PREFIX)
+        plan = prefix[policy_keys.RTC.PREFIX_ACTIONS] if prefix else []
+        request[pi05_abc.LAST_COMMAND] = np.asarray(plan[0][ACTION] if plan else data[pi05_abc.STATE], np.float32)
+        return request
+
+    def decode(self, data: Any) -> Any:
+        return data
+
+    @property
+    def training_encoder(self) -> EpisodeTransform:
+        return Identity()
+
+
+@cfn.config(prompts=BOTTLES_PROMPTS, crops=None, last_command=False)
+def abc(prompts: dict[str, str], crops: dict[str, CropBox] | None, last_command: bool):
+    """The codec of a checkpoint, with each arm's grip in the gripper width (1 = open) that it speaks.
+
+    With `last_command`, each request also holds the last command that the arms got, for a checkpoint with the last
+    command as its state input. The client must then send its plan in the observation."""
+    plan = PLAN_COMMANDS if last_command else None
     obs = AbcObservationCodec(prompts=prompts, crops=crops)
-    pair = codecs.compose(obs=obs, action=BimanualJointsAction(num_joints=YAM_JOINTS), training_fps=FPS)
-    return FlipGrip(arms=keys.BIMANUAL_ARMS) | pair
+    action = BimanualJointsAction(num_joints=YAM_JOINTS, commands_path=plan)
+    pair = codecs.compose(obs=obs, action=action, training_fps=FPS)
+    codec = FlipGrip(arms=keys.BIMANUAL_ARMS, commands_path=plan) | pair
+    return codec | LastCommandState() if last_command else codec

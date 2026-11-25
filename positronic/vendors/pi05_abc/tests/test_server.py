@@ -1,5 +1,6 @@
 """The pi0.5 bottles server, run against a stand-in for the author's openpi server in the fork's interpreter."""
 
+import bisect
 import json
 import os
 import socket
@@ -20,6 +21,7 @@ from positronic.offboard import roboarena
 from positronic.offboard import server as offboard_server
 from positronic.offboard.client import InferenceClient
 from positronic.offboard.server import PolicyServer
+from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Step
 from positronic.policy.executor import Executor
@@ -202,6 +204,9 @@ MULTI_TASK_COMMANDS = {
     'abc4_30k': _multi_task_command('abc4_30k', ABC4_INSTRUCTION_PROMPTS, 'assets/abc4_yam/norm_stats.json'),
     'abc11_30k': _multi_task_command('abc11_30k', ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam/norm_stats.json'),
     'abc15_30k': _multi_task_command('abc15_30k', ABC15_INSTRUCTION_PROMPTS, 'assets/abc15_yam/norm_stats.json'),
+    'abc15_last_command': _multi_task_command(
+        'abc15_last_command', ABC15_INSTRUCTION_PROMPTS, 'assets/abc15_yam/norm_stats.json'
+    ),
 }
 COMMAND_PROMPTS = [
     (name, instruction, prompt)
@@ -304,10 +309,12 @@ class _Model:
         self._latency_ns = latency_ns
         self._answers: list[_Answer] = []
         self.observed_ns: list[int] = []
+        self.plans: list[Any] = []
 
     def submit(self, function, obs):
         call = len(self.observed_ns)
         self.observed_ns.append(self._runtime.time_ns)
+        self.plans.append(obs.get(policy_keys.RTC.ACTION_PREFIX))
         chunk = [{MOTOR: (call, i)} for i in range(len(author_server_stand_in.CHUNK))]
         self._answers.append(_Answer(self._runtime, chunk, self._runtime.time_ns + self._latency_ns))
         return self._answers[-1]
@@ -316,7 +323,9 @@ class _Model:
         return any(answer.done() and not answer.read for answer in self._answers)
 
 
-def _play(latency_ns: int, duration_ns: int = 3_000_000_000) -> tuple[list[tuple[int, Any]], _Model]:
+def _play(
+    latency_ns: int, duration_ns: int = 3_000_000_000, *, last_command: bool = False
+) -> tuple[list[tuple[int, Any]], _Model]:
     """The command that the arm holds after each millisecond, while the rig runs the stack that a session declares.
 
     The stack goes through its wire description, as on the rig. As the harness does, the clock steps by 1 ms, a ready
@@ -326,7 +335,8 @@ def _play(latency_ns: int, duration_ns: int = 3_000_000_000) -> tuple[list[tuple
     model = _Model(runtime, latency_ns)
     runtime.submit = model.submit
     runtime.has_ready_answers = model.has_ready_answers
-    run = runtime.start(spec.from_spec(server.pipeline(crop='none').local.to_spec()), lambda obs: [])
+    local = server.pipeline(crop='none', last_command=last_command).local
+    run = runtime.start(spec.from_spec(local.to_spec()), lambda obs: [])
     emitted: dict[int, Any] = {}
     try:
         for now[0] in range(0, duration_ns, 1_000_000):
@@ -370,3 +380,50 @@ def test_an_instant_answer_plays_the_first_actions_of_each_chunk_as_the_authors_
     assert played[: chunks * server.ACTIONS_PER_REQUEST] == [
         (call, index) for call in range(chunks) for index in range(server.ACTIONS_PER_REQUEST)
     ]
+
+
+def test_a_last_command_session_sends_the_state_as_the_last_command_before_the_first_chunk(tmp_path):
+    command = server.COMMANDS['abc15_last_command'].kwargs
+    checkpoint, port = tmp_path / 'checkpoint', _free_port()
+    model = command['model'].override(checkpoint=str(checkpoint), fork=str(_fork(tmp_path)), port=port)
+
+    _infer_in_a_session(PolicyServer(model, command['pipeline'], auth_token=TOKEN), _obs(), 'crop=none')
+
+    started, warm, request = _log(tmp_path)
+    # rules-allow: hardcoded-keys — the field and the flags of the author's server as its code spells them.
+    state = request[author_server_stand_in.REQUEST]['state']
+    assert request[author_server_stand_in.REQUEST]['last_command'] == state
+    assert warm[author_server_stand_in.REQUEST]['last_command'] == [0.0] * codecs.BIMANUAL_SIZE
+    flags = started[author_server_stand_in.ARGV][1:]
+    options = dict(zip(flags[::2], flags[1::2], strict=True))
+    assert options['--config'] == 'pi05_abc130k_last_command'
+    assert options['--last-command-key'] == 'observation/last_command'
+
+
+def test_a_command_without_the_last_command_does_not_send_it(tmp_path):
+    port = _free_port()
+    model = server.pi05_abc_model.override(checkpoint=str(tmp_path / 'c'), fork=str(_fork(tmp_path)), port=port)
+
+    _infer_in_a_session(PolicyServer(model, server.pipeline, auth_token=TOKEN), _obs(), 'crop=none')
+
+    started, warm, request = _log(tmp_path)
+    assert pi05_abc.LAST_COMMAND not in request[author_server_stand_in.REQUEST]
+    assert pi05_abc.LAST_COMMAND not in warm[author_server_stand_in.REQUEST]
+    assert '--last-command-key' not in started[author_server_stand_in.ARGV]
+
+
+def test_the_plan_of_each_later_request_starts_with_the_command_that_the_arm_holds_at_its_observation():
+    emitted, model = _play(ROUND_TRIP_NS, last_command=True)
+
+    times = [time for time, _ in emitted]
+    later = list(zip(model.observed_ns, model.plans, strict=True))[1:]
+    assert later
+    for observed_ns, plan in later:
+        held = emitted[bisect.bisect_right(times, observed_ns) - 1][1]
+        assert plan[policy_keys.RTC.PREFIX_ACTIONS][0] == {MOTOR: held}
+
+
+def test_without_the_last_command_the_client_sends_no_plan():
+    _, model = _play(ROUND_TRIP_NS)
+
+    assert model.plans == [None] * len(model.plans)

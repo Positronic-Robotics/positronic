@@ -2,6 +2,9 @@ import numpy as np
 import pytest
 
 from positronic import keys
+from positronic.drivers.roboarm import command
+from positronic.policy import keys as policy_keys
+from positronic.policy.codecs import ACTION
 from positronic.vendors import pi05_abc
 from positronic.vendors.pi05_abc import codecs
 
@@ -37,3 +40,59 @@ def test_the_yambox_crop_sends_each_cropped_view_without_pad():
 def test_a_crop_box_for_an_unknown_camera_is_refused():
     with pytest.raises(ValueError, match='name no camera'):
         codecs.AbcObservationCodec(codecs.BOTTLES_PROMPTS, crops={'image.side': codecs.FULL_FRAME})
+
+
+def _views() -> dict[str, np.ndarray]:
+    return dict.fromkeys(codecs.AbcObservationCodec.CAMERAS.values(), np.zeros((300, 400, 3), dtype=np.uint8))
+
+
+def _planned(left: float, right: float) -> dict:
+    """A planned command: each arm's joints at `left` or `right` plus 0..5, the left grip at 0.25, the right open."""
+    planned = {}
+    for arm, base, grip in ((keys.LEFT_ARM, left, 0.25), (keys.RIGHT_ARM, right, 0.0)):
+        planned[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=base + np.arange(6))
+        planned[keys.arm_channel(keys.TARGET_GRIP, arm)] = grip
+    return planned
+
+
+def _with_plan(obs: dict, plan: list[dict]) -> dict:
+    prefix = {
+        policy_keys.RTC.PREFIX_ACTIONS: plan,
+        policy_keys.RTC.CHUNK_OFFSET_SEC: 0.5,
+        policy_keys.RTC.OBSERVATION_OFFSET_SEC: 0.0,
+    }
+    return {**obs, policy_keys.RTC.ACTION_PREFIX: prefix}
+
+
+def test_the_last_command_is_the_command_that_the_arm_holds_in_the_layout_of_the_state():
+    request = codecs.abc(last_command=True).encode(_with_plan(_obs(_views()), [_planned(10, 20), _planned(30, 40)]))
+
+    # Per arm the joints, then the gripper width, as in the state: 1 - 0.25 for the left grip, 1 - 0 for the right.
+    expected = [*range(10, 16), 0.75, *range(20, 26), 1.0]
+    np.testing.assert_allclose(request[pi05_abc.LAST_COMMAND], expected)
+    assert set(request) == {pi05_abc.STATE, pi05_abc.IMAGES, pi05_abc.PROMPT, pi05_abc.LAST_COMMAND}
+
+
+@pytest.mark.parametrize('plan', [None, []], ids=['no plan', 'an ended plan'])
+def test_with_no_command_in_the_plan_the_last_command_is_the_state(plan):
+    obs = _obs(_views()) if plan is None else _with_plan(_obs(_views()), plan)
+    request = codecs.abc(last_command=True).encode(obs)
+
+    np.testing.assert_array_equal(request[pi05_abc.LAST_COMMAND], request[pi05_abc.STATE])
+
+
+def test_a_codec_without_the_last_command_sends_neither_it_nor_the_plan():
+    request = codecs.abc().encode(_with_plan(_obs(_views()), [_planned(10, 20)]))
+
+    assert set(request) == {pi05_abc.STATE, pi05_abc.IMAGES, pi05_abc.PROMPT}
+
+
+def test_the_last_command_does_not_change_how_a_chunk_decodes():
+    chunk = [{ACTION: np.arange(14, dtype=np.float32) / 100 + i} for i in range(3)]
+
+    plain, with_last = codecs.abc().decode(chunk), codecs.abc(last_command=True).decode(chunk)
+
+    for a, b in zip(plain, with_last, strict=True):
+        assert a.keys() == b.keys()
+        for key in a:
+            np.testing.assert_array_equal(getattr(a[key], 'positions', a[key]), getattr(b[key], 'positions', b[key]))

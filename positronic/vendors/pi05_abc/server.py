@@ -8,6 +8,9 @@ Commands
   abc4_30k     A checkpoint fine-tuned on the real data of four ABC tasks, with the prompt of each task.
   abc11_30k    A checkpoint fine-tuned on the real data of eleven ABC tasks, with the prompt of each task.
   abc15_30k    A checkpoint fine-tuned on the real data of fifteen ABC tasks, with the prompt of each task.
+  abc15_last_command
+               A checkpoint of the fifteen tasks that reads the last command that the arms got as its state. It needs
+               a fork with the server flag `--last-command-key`.
 
 Usage
   python -m positronic.vendors.pi05_abc.server <command> --model.checkpoint=<checkpoint dir> --model.fork=<fork>
@@ -50,6 +53,9 @@ FORK_OPENPI = Path('third_party/policy/openpi')
 # `observation/state`; the server snapshot renames the camera roles to these keys.
 IMAGE_KEY_MAP = f'{pi05_abc.TOP_CAMERA}=image,{pi05_abc.LEFT_CAMERA}=left_wrist,{pi05_abc.RIGHT_CAMERA}=right_wrist'
 FLATTEN_PREFIX = 'observation/'
+# The fork's config with the last command as its state, and the key where its `YamStateInput` reads the last command.
+LAST_COMMAND_CONFIG = 'pi05_abc130k_last_command'
+LAST_COMMAND_KEY = f'{FLATTEN_PREFIX}last_command'
 # JAX takes most of the GPU at its first use unless this is false, so a second server on that GPU finds none free.
 PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
 # The client asks for a chunk once per this many actions, as often as the author's evaluation asks.
@@ -80,15 +86,18 @@ class Pi05AbcModel(Model):
             self._backend.wait()
 
 
-def _warm_observation() -> dict[str, Any]:
-    """Black views and a zero state, in the fields of the author's server."""
+def _warm_observation(last_command: bool) -> dict[str, Any]:
+    """Black views and a zero state, in the fields of the author's server. With `last_command`, also a zero last
+    command."""
     width, height = codecs.VIEW_SIZE
     view = np.zeros((3, height, width), dtype=np.uint8)
     cameras = (pi05_abc.TOP_CAMERA, pi05_abc.LEFT_CAMERA, pi05_abc.RIGHT_CAMERA)
+    state = np.zeros(codecs.BIMANUAL_SIZE, dtype=np.float32)
     return {
-        pi05_abc.STATE: np.zeros(codecs.BIMANUAL_SIZE, dtype=np.float32),
+        pi05_abc.STATE: state,
         pi05_abc.IMAGES: dict.fromkeys(cameras, view),
         pi05_abc.PROMPT: codecs.TASK,
+        **({pi05_abc.LAST_COMMAND: state} if last_command else {}),
     }
 
 
@@ -97,10 +106,13 @@ def _exit_status(process: subprocess.Popen) -> tuple[bool, int | None]:
     return code is not None, code
 
 
-@cfn.config(config_name='pi05_abc130k', port=9000, norm_stats=BOTTLES_NORM_STATS)
-def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm_stats: Path) -> Model:
+@cfn.config(config_name='pi05_abc130k', port=9000, norm_stats=BOTTLES_NORM_STATS, last_command=False)
+def pi05_abc_model(
+    checkpoint: str, fork: str, config_name: str, port: int, norm_stats: Path, last_command: bool
+) -> Model:
     """The checkpoint directory `checkpoint`, served by the author's server in the fork checkout `fork`, with the norm
-    stats file `norm_stats` of the checkpoint directory.
+    stats file `norm_stats` of the checkpoint directory. With `last_command`, the author's server passes the last
+    command of each request to the config `config_name`.
 
     The author's server loads the checkpoint and compiles the model before it listens.
     """
@@ -128,6 +140,7 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm
         FLATTEN_PREFIX,
         '--state-key',
         f'{FLATTEN_PREFIX}state',
+        *(['--last-command-key', LAST_COMMAND_KEY] if last_command else []),
     ]
     # Refuse a port another server holds: the readiness probe would reach that server, not this checkpoint.
     with socket.socket() as port_check:
@@ -152,18 +165,19 @@ def pi05_abc_model(checkpoint: str, fork: str, config_name: str, port: int, norm
             max_wait=WARMUP_DEADLINE_S,
         )
         # The author's server swallows a failed warm-up of its own, so this one proves that the policy answers.
-        warmup(model, _warm_observation())
+        warmup(model, _warm_observation(last_command))
     except Exception:
         model.close()
         raise
     return model
 
 
-@cfn.config(crop=codecs.Crop.YAMBOX_WIDE_TOP.value, prompts=codecs.BOTTLES_PROMPTS)
-def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
+@cfn.config(crop=codecs.Crop.YAMBOX_WIDE_TOP.value, prompts=codecs.BOTTLES_PROMPTS, last_command=False)
+def pipeline(crop: str, prompts: dict[str, str], last_command: bool) -> PolicyDeployment:
     """The views cropped by the set `crop` of `codecs.CROPS`, which a session sets in its URL query, and the prompt of
     each task instruction in `prompts`. The client shrinks each view to fit the view size, or twice that size for a
-    cropped view.
+    cropped view. With `last_command`, the client sends its plan in each observation, and each request holds the last
+    command that the arms got.
 
     The client asks for a chunk once per `ACTIONS_PER_REQUEST` actions. The README tells how a new chunk joins the old
     one."""
@@ -175,12 +189,12 @@ def pipeline(crop: str, prompts: dict[str, str]) -> PolicyDeployment:
     width, height = codecs.VIEW_SIZE
     upload_size = (2 * width, 2 * height) if crops else codecs.VIEW_SIZE
     schedule = Sequential(
-        TrajectoryPlayer(replan_on_error=True),
+        TrajectoryPlayer(plan_key=policy_keys.PLAN if last_command else None, replan_on_error=True),
         RTCSchedule(codecs.FPS, call_after_sec=ACTIONS_PER_REQUEST / codecs.FPS, latency_estimate=ConstantDuration()),
     )
     return PolicyDeployment(
         Sequential(schedule, TransformImages(*upload_size, mode=ResizeMode.BOUND)),
-        codecs.abc.override(prompts=prompts, crops=crops).instantiate(),
+        codecs.abc.override(prompts=prompts, crops=crops, last_command=last_command).instantiate(),
     )
 
 
@@ -197,6 +211,10 @@ COMMANDS = {
     'abc15_30k': serve.override(
         model=pi05_abc_model.override(norm_stats=ABC15_NORM_STATS),
         pipeline=pipeline.override(prompts=codecs.ABC15_PROMPTS),
+    ),
+    'abc15_last_command': serve.override(
+        model=pi05_abc_model.override(config_name=LAST_COMMAND_CONFIG, norm_stats=ABC15_NORM_STATS, last_command=True),
+        pipeline=pipeline.override(prompts=codecs.ABC15_PROMPTS, last_command=True),
     ),
 }
 
