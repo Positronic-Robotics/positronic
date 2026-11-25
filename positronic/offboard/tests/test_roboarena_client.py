@@ -1,5 +1,6 @@
 """The roboarena client, driven against a fake connection."""
 
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -9,6 +10,7 @@ from positronic_wire import roboarena as roboarena_wire
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosedError
 
+from positronic import telemetry, telemetry_keys
 from positronic.offboard import roboarena
 from positronic.offboard.client import ConnectRetries
 
@@ -20,6 +22,14 @@ def _client(connection) -> roboarena.RoboarenaClient:
 
 
 _ANNOUNCEMENT = serialize({'resolution': [180, 320]})
+
+
+def _dialing(*connections):
+    """The roboarena wire, patched to open each of ``connections`` in turn. Each one announces a config first."""
+    for connection in connections:
+        connection.recv.side_effect = [_ANNOUNCEMENT, *connection.recv.side_effect]
+    return patch.object(roboarena_wire.RoboarenaClientWire, 'dial', side_effect=list(connections))
+
 
 # Each way an exchange on an open connection fails, as the connection raises it.
 _FAILURES = {
@@ -158,11 +168,10 @@ def test_a_client_given_no_headers_sends_none():
 
 
 def test_an_inference_with_no_connection_dials_one_and_keeps_it():
-    connection = MagicMock(**{'recv.side_effect': [_ANNOUNCEMENT, serialize([0.0] * 8)]})
+    connection = MagicMock(**{'recv.side_effect': [serialize([0.0] * 8)]})
     client = roboarena.RoboarenaClient('a-partner-host', 8000)
 
-    with patch.object(client, '_wire') as client_wire:
-        client_wire.dial.return_value = connection
+    with _dialing(connection):
         assert client.infer({}) == [0.0] * 8
 
     assert client._connection is connection
@@ -356,3 +365,94 @@ def test_a_server_that_answers_gives_the_next_forbidden_refusals_their_full_atte
     results = _probes_at(client, *forbidden, (0.0, None), *forbidden)
 
     assert not any(isinstance(result, wire.ConnectRefused) for result in results)
+
+
+def _wire_sends(tmp_path) -> list:
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
+    return sorted((s for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND), key=lambda s: s.start_ns)
+
+
+def _connection_marks(send) -> tuple:
+    return (
+        send.attrs[telemetry_keys.ATTR_WIRE_NEW_CONNECTION],
+        send.attrs.get(telemetry_keys.ATTR_WIRE_ENDPOINT),
+        telemetry_keys.ATTR_WIRE_CONNECT_MS in send.attrs,
+    )
+
+
+def test_each_inference_records_its_send_and_its_wait_for_the_answer(tmp_path):
+    answer = serialize([0.0] * 8)
+    connection = MagicMock(**{'recv.side_effect': [answer]})
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    with _dialing(connection), telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-roboarena-wire'):
+        client.infer({'prompt': 'pick'})
+
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    [send] = [s for s in spans if s.name == telemetry_keys.SPAN_WIRE_SEND]
+    [recv] = [s for s in spans if s.name == telemetry_keys.SPAN_WIRE_RECV]
+    assert send.attrs[telemetry_keys.ATTR_WIRE_BYTES] == len(connection.send.call_args.args[0])
+    assert send.end_ns == recv.start_ns
+
+
+def test_only_the_first_send_on_a_roboarena_connection_carries_the_dialed_endpoint_and_connect_time(tmp_path):
+    answer = serialize([0.0] * 8)
+    first = MagicMock(**{'recv.side_effect': [answer, answer]})
+    second = MagicMock(**{'recv.side_effect': [answer]})
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    with _dialing(first, second), telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-roboarena-connection'):
+        client.infer({})
+        client.infer({})
+        client.close()
+        client.infer({})
+
+    assert [_connection_marks(send) for send in _wire_sends(tmp_path)] == [
+        (True, client.url, True),
+        (False, None, False),
+        (True, client.url, True),
+    ]
+
+
+def test_an_inference_sent_while_another_waits_for_its_answer_is_not_sent_alone():
+    """The first call waits for its answer until the second has sent, so the second goes out behind it."""
+    first_waiting, second_sent, release = threading.Event(), threading.Event(), threading.Event()
+    sends = []
+    answer = serialize([0.0] * 8)
+
+    def send(data):
+        sends.append(data)
+        if len(sends) == 2:
+            second_sent.set()
+
+    def recv(timeout):
+        first_waiting.set()
+        assert release.wait(timeout=5)
+        return answer
+
+    client = _client(MagicMock(**{'send.side_effect': send, 'recv.side_effect': recv}))
+    marks = {}
+
+    def call(name):
+        client.infer({})
+        marks[name] = client.sent_alone
+
+    first = threading.Thread(target=call, args=('first',))
+    first.start()
+    assert first_waiting.wait(timeout=5)
+    second = threading.Thread(target=call, args=('second',))
+    second.start()
+    assert second_sent.wait(timeout=5)
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert marks == {'first': True, 'second': False}
+
+
+def test_an_inference_that_fails_before_its_send_carries_no_alone_mark():
+    client = roboarena.RoboarenaClient('a-partner-host', 8000)
+    with patch.object(client, '_wire') as client_wire:
+        client_wire.dial.side_effect = wire.ConnectRefused(wire.Refusal.COLD, 'refused')
+        with pytest.raises(wire.ConnectRefused):
+            client.infer({})
+
+    assert client.sent_alone is None

@@ -67,6 +67,18 @@ class Dial(NamedTuple):
     connect_ms: float
 
 
+def connection_attrs(dial: Dial | None, new_connection: bool) -> dict[str, Any]:
+    """The ``wire.send`` attributes of a send on the connection that ``dial`` opened.
+
+    Only the first send on the connection carries the dial.
+    """
+    attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_NEW_CONNECTION: new_connection}
+    if new_connection and dial is not None:
+        attrs[telemetry_keys.ATTR_WIRE_ENDPOINT] = dial.endpoint
+        attrs[telemetry_keys.ATTR_WIRE_CONNECT_MS] = dial.connect_ms
+    return attrs
+
+
 class InferenceSession:
     """One connection using the protocol declared by its server. Finish inference before closing it.
 
@@ -263,41 +275,12 @@ class InferenceSession:
             serialization.serialise(request) if self._protocol is protocol.ProtocolVersion.V3 else serialise(request)
         )
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
-        send_attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
-        send_started = time.time_ns()
         # The send counts toward the answer's timeout: a peer that stops reading stalls the write, not the read.
         deadline = time.monotonic() + self._infer_timeout
         token = object()
         try:
-            try:
-                with self._send_lock:
-                    if self._closed:
-                        raise wire.PeerDisconnected('The inference session is closed')
-                    if self._closing:
-                        raise RuntimeError('The inference session is closing')
-                    with self._responses:
-                        self._pending.append(token)
-                        sent_alone = len(self._pending) == 1
-                    self.sent_alone = sent_alone
-                    send_attrs.update(self._connection_attrs())
-                    self._conn.send(serialised, timeout=time_left(deadline))
-            finally:
-                # A send that raises gets timed too, so the span is recorded on the way out.
-                sent = time.time_ns()
-                telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **send_attrs)
-            try:
-                with self._responses:
-                    ready = self._responses.wait_for(
-                        lambda: self._closed or self._pending[0] is token, timeout=max(0.0, deadline - time.monotonic())
-                    )
-                    if self._closed:
-                        raise wire.PeerDisconnected('The inference session is closed')
-                    if not ready:
-                        raise TimeoutError()
-                received = self._conn.recv(timeout=max(0.0, deadline - time.monotonic()))
-            finally:
-                answered = time.time_ns()
-                telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
+            send_started, sent, sent_alone = self._send(serialised, token, deadline)
+            received, answered = self._await_answer(token, sent, deadline)
             wire_timing = {SEND_MS: (sent - send_started) / 1e6, RECV_MS: (answered - sent) / 1e6}
             self.wire_timing = wire_timing
             result = self._decode_answer(received)
@@ -325,16 +308,56 @@ class InferenceSession:
                     self._pending.remove(token)
                 self._responses.notify_all()
 
+    def _send(self, serialised: bytes, token: object, deadline: float) -> tuple[int, int, bool]:
+        """Queue ``token`` and send its request, timed as the ``wire.send`` span.
+
+        The send ends by the ``time.monotonic()`` instant ``deadline``. Returns the start and the end of the send,
+        and whether it went with no earlier call in flight.
+        """
+        send_attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
+        send_started = time.time_ns()
+        try:
+            with self._send_lock:
+                if self._closed:
+                    raise wire.PeerDisconnected('The inference session is closed')
+                if self._closing:
+                    raise RuntimeError('The inference session is closing')
+                with self._responses:
+                    self._pending.append(token)
+                    sent_alone = len(self._pending) == 1
+                self.sent_alone = sent_alone
+                send_attrs.update(self._connection_attrs())
+                self._conn.send(serialised, timeout=time_left(deadline))
+        finally:
+            # A send that raises gets timed too, so the span is recorded on the way out.
+            sent = time.time_ns()
+            telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **send_attrs)
+        return send_started, sent, sent_alone
+
+    def _await_answer(self, token: object, sent: int, deadline: float) -> tuple[bytes, int]:
+        """Wait for ``token``'s turn and read its answer, timed from ``sent`` as the ``wire.recv`` span.
+
+        The read ends by the ``time.monotonic()`` instant ``deadline``. Returns the answer and the time it arrived.
+        """
+        try:
+            with self._responses:
+                ready = self._responses.wait_for(
+                    lambda: self._closed or self._pending[0] is token, timeout=max(0.0, deadline - time.monotonic())
+                )
+                if self._closed:
+                    raise wire.PeerDisconnected('The inference session is closed')
+                if not ready:
+                    raise TimeoutError()
+            received = self._conn.recv(timeout=max(0.0, deadline - time.monotonic()))
+        finally:
+            answered = time.time_ns()
+            telemetry.record_span(telemetry_keys.SPAN_WIRE_RECV, sent, answered)
+        return received, answered
+
     def _connection_attrs(self) -> dict[str, Any]:
         """The connection's attributes of the send about to go out on it. Call it under the send lock."""
-        if self._sent_on_conn:
-            return {telemetry_keys.ATTR_WIRE_NEW_CONNECTION: False}
-        self._sent_on_conn = True
-        attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_NEW_CONNECTION: True}
-        if self._dial is not None:
-            attrs[telemetry_keys.ATTR_WIRE_ENDPOINT] = self._dial.endpoint
-            attrs[telemetry_keys.ATTR_WIRE_CONNECT_MS] = self._dial.connect_ms
-        return attrs
+        new_connection, self._sent_on_conn = not self._sent_on_conn, True
+        return connection_attrs(self._dial, new_connection)
 
     def _decode_answer(self, received: bytes) -> Any:
         self._answered = True
