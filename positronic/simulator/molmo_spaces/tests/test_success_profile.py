@@ -91,7 +91,8 @@ class _Scene:
     def open_joint(self, name: str, opening: float) -> None:
         joint = self.joint(name)
         low, high = self.model.jnt_range[joint]
-        self.data.qpos[self.model.jnt_qposadr[joint]] = math.copysign(opening * (high - low), low + high)
+        # A negative ``opening`` is past the closed position.
+        self.data.qpos[self.model.jnt_qposadr[joint]] = opening * (high - low) * math.copysign(1.0, low + high)
         mujoco.mj_forward(self.model, self.data)
 
     def touch_side(self, name: str) -> None:
@@ -231,7 +232,7 @@ class _Task:
 
 def test_a_place_released_over_the_edge_of_the_rim_never_succeeds(scene):
     # The cube is let go with its center 1.5 cm past the rim and its bottom 0.2 mm into the rim's top.
-    judge = sp.StrictJudge(_Task(), _place(scene), _CONTROL_DT)
+    judge = sp.StrictJudge(sp.SuccessProfile.STRICT_V1, _Task(), _place(scene), _CONTROL_DT)
     rim_top = scene.data.xpos[scene.body('tray')][2] + 0.035
     scene.place('cube', (0.595, 0.0, rim_top + _CUBE_HALF - 0.0002))
     first = judge.step({})
@@ -312,9 +313,13 @@ def test_a_next_to_place_holds_once_released_beside_the_target(scene):
     assert not check.facts({sp.MOLMO_INFO_SUCCESS: False}).holds
 
 
+_STRICT_PROFILES = [sp.SuccessProfile.STRICT_V1, sp.SuccessProfile.STRICT_V2]
+
+
+@pytest.mark.parametrize('profile', _STRICT_PROFILES)
 @pytest.mark.parametrize(('opening', 'holds'), [(0.25, False), (0.35, True)])
-def test_an_open_holds_from_thirty_percent_of_the_named_joint(scene, opening, holds):
-    check = sp.Open(scene.data, scene.joint('hinge_a'))
+def test_an_open_holds_from_thirty_percent_of_the_named_joint(scene, opening, holds, profile):
+    check = sp.Open(scene.data, scene.joint('hinge_a'), profile)
     scene.open_joint('hinge_a', opening)
     facts = check.facts({})
     assert facts.opening == pytest.approx(opening)
@@ -322,8 +327,9 @@ def test_an_open_holds_from_thirty_percent_of_the_named_joint(scene, opening, ho
     assert facts.holds is holds
 
 
-def test_an_open_of_another_door_of_the_same_cabinet_does_not_hold(scene):
-    check = sp.Open(scene.data, scene.joint('hinge_a'))
+@pytest.mark.parametrize('profile', _STRICT_PROFILES)
+def test_an_open_of_another_door_of_the_same_cabinet_does_not_hold(scene, profile):
+    check = sp.Open(scene.data, scene.joint('hinge_a'), profile)
     scene.open_joint('hinge_b', 0.8)
     facts = check.facts({})
     assert facts.opening == 0.0 and not facts.holds
@@ -335,7 +341,8 @@ _KNOCKED_DOOR = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0035, 0.0479, 0.1317, 0.1437, 0.124,
 
 
 def test_a_door_knocked_open_beside_the_named_one_never_succeeds(scene):
-    judge = sp.StrictJudge(_Task(), sp.Open(scene.data, scene.joint('hinge_a')), _CONTROL_DT)
+    profile = sp.SuccessProfile.STRICT_V1
+    judge = sp.StrictJudge(profile, _Task(), sp.Open(scene.data, scene.joint('hinge_a'), profile), _CONTROL_DT)
     judged = []
     for opening in _KNOCKED_DOOR + [_KNOCKED_DOOR[-1]] * 40:
         scene.open_joint('hinge_b', opening)
@@ -344,11 +351,35 @@ def test_a_door_knocked_open_beside_the_named_one_never_succeeds(scene):
     assert {j.metrics['strict_v1.opening'] for j in judged} == {0.0}
 
 
+@pytest.mark.parametrize('profile', _STRICT_PROFILES)
 @pytest.mark.parametrize(('opening', 'holds'), [(0.10, False), (0.06, False), (0.04, True), (0.0, True)])
-def test_a_close_holds_from_ninety_five_percent_closed(scene, opening, holds):
-    check = sp.Close(scene.data, scene.joint('hinge_b'))
+def test_a_close_holds_from_ninety_five_percent_closed(scene, opening, holds, profile):
+    check = sp.Close(scene.data, scene.joint('hinge_b'), profile)
     scene.open_joint('hinge_b', opening)
     assert check.facts({}).holds is holds
+
+
+# A push can take a joint past its closed position, as far as the softness of its limit lets it go.
+@pytest.mark.parametrize('joint', ['hinge_a', 'hinge_b'])
+@pytest.mark.parametrize('past', [0.06, 0.4])
+def test_a_joint_pushed_past_its_closed_position_reads_closed_under_strict_v2(scene, joint, past):
+    profile = sp.SuccessProfile.STRICT_V2
+    scene.open_joint(joint, -past)
+    opened = sp.Open(scene.data, scene.joint(joint), profile).facts({})
+    assert opened.opening == pytest.approx(-past)
+    assert not opened.holds
+    assert sp.Close(scene.data, scene.joint(joint), profile).facts({}).holds
+
+
+@pytest.mark.parametrize('joint', ['hinge_a', 'hinge_b'])
+def test_strict_v1_reads_a_joint_pushed_past_its_closed_position_by_its_distance_from_closed(scene, joint):
+    profile = sp.SuccessProfile.STRICT_V1
+    scene.open_joint(joint, -0.4)
+    opened = sp.Open(scene.data, scene.joint(joint), profile).facts({})
+    assert opened.opening == pytest.approx(0.4)
+    assert opened.holds
+    scene.open_joint(joint, -0.06)
+    assert not sp.Close(scene.data, scene.joint(joint), profile).facts({}).holds
 
 
 @pytest.mark.parametrize(
@@ -421,7 +452,7 @@ class _Scripted:
 
 
 def _run(holds: list[bool], task: _Task | None = None) -> list[sp.Judged]:
-    judge = sp.StrictJudge(task or _Task(), _Scripted(holds), _CONTROL_DT)
+    judge = sp.StrictJudge(sp.SuccessProfile.STRICT_V1, task or _Task(), _Scripted(holds), _CONTROL_DT)
     return [judge.step({}) for _ in holds]
 
 
@@ -461,24 +492,25 @@ def test_the_task_end_ends_the_episode_before_and_after_a_success():
     assert judged[-1].success and judged[-1].done
 
 
-def test_a_strict_episode_records_each_fact_with_its_hold_count_and_verdict():
-    judge = sp.StrictJudge(_Task(), _Scripted([True, True]), _CONTROL_DT)
+@pytest.mark.parametrize('profile', _STRICT_PROFILES)
+def test_a_strict_episode_records_each_fact_under_its_profile_with_its_hold_count_and_verdict(profile):
+    judge = sp.StrictJudge(profile, _Task(), _Scripted([True, True]), _CONTROL_DT)
     assert judge.observe({}) == {
-        'strict_v1.holds': True,
-        'strict_v1.joint': 3,
-        'strict_v1.opening': 0.5,
-        'strict_v1.held_steps': 0,
-        'strict_v1.success': False,
+        f'{profile}.holds': True,
+        f'{profile}.joint': 3,
+        f'{profile}.opening': 0.5,
+        f'{profile}.held_steps': 0,
+        f'{profile}.success': False,
     }
-    assert judge.step({}).metrics['strict_v1.held_steps'] == 1
+    assert judge.step({}).metrics[f'{profile}.held_steps'] == 1
 
 
 def test_the_native_task_verdict_is_not_asked_by_a_strict_episode():
     task = _Task(success=True)
-    sp.StrictJudge(task, _Scripted([True]), _CONTROL_DT).step({})
+    sp.StrictJudge(sp.SuccessProfile.STRICT_V1, task, _Scripted([True]), _CONTROL_DT).step({})
     assert task.calls == ['is_done']
 
 
 def test_a_strict_episode_refuses_a_task_that_ends_at_its_own_native_success():
     with pytest.raises(ValueError, match='terminate_upon_success'):
-        sp.StrictJudge(_Task(terminate_upon_success=True), _Scripted([]), _CONTROL_DT)
+        sp.StrictJudge(sp.SuccessProfile.STRICT_V1, _Task(terminate_upon_success=True), _Scripted([]), _CONTROL_DT)
