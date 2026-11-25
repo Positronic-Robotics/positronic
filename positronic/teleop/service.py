@@ -180,14 +180,17 @@ class ButtonMap:
             events.append(Event.GIVE_UP)
         return events
 
-    # The trigger value of a Quest 3 controller is about its travel to this power: 0.05, 0.2 and 0.42 at a quarter, a
-    # half and three quarters of the travel
-    TRIGGER_CURVE = 2.4
+    # The trigger value of a Quest 3 controller is about its travel to the power 2.4: 0.05, 0.2 and 0.42 at a quarter,
+    # a half and three quarters of the travel. The grip is open up to the low end of the range and closed from the
+    # high end, and the power bends the value back toward the travel. The CRON arm teleop ran this curve.
+    TRIGGER_RANGE = (0.05, 0.9)
+    TRIGGER_POWER = 0.5
 
     @staticmethod
     def grip(buttons: Sequence[float]) -> float:
-        """The grip that the trigger asks for, linear in the travel of the trigger."""
-        return min(max(float(buttons[Button.TRIGGER]), 0.0), 1.0) ** (1 / ButtonMap.TRIGGER_CURVE)
+        """The grip that the trigger asks for."""
+        low, high = ButtonMap.TRIGGER_RANGE
+        return min(max((float(buttons[Button.TRIGGER]) - low) / (high - low), 0.0), 1.0) ** ButtonMap.TRIGGER_POWER
 
 
 class Phase(StrEnum):
