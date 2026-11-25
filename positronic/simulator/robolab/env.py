@@ -38,6 +38,7 @@ from typing import Any
 import arm_fault
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import keys
+import link_pose
 import numpy as np
 import pose_ik
 import protocol  # pyright: ignore[reportMissingImports]
@@ -203,6 +204,7 @@ class RobolabEnv(EnvProtocol):
         self._world: Any = None
         self._gripper = ''  # the contact gripper label that the gripper contact of the ``gt_state`` reads
         self._objects: list[str] = []
+        self._links: dict[str, tuple[str, str]] = {}  # ``link_pose.articulation_links`` of the world
         self._subtask_recorder: Any = None
         self._shown_chains: list[Any] = []  # each slot's chain machine at the last frame
         self._episode = 0  # the number of the current episode, counted by resets
@@ -294,6 +296,7 @@ class RobolabEnv(EnvProtocol):
         self._bind_robot()
         self._world = get_world(self._env)
         self._objects = [name for name in self._env_cfg.contact_object_list if name != self._TABLE]
+        self._links = link_pose.articulation_links(self._world)
         # None for a task without subtasks: RoboLab adds no term for it.
         self._subtask_recorder = self._env.recorder_manager.get_term(SubtaskCompletionRecorderTerm)
 
@@ -448,7 +451,7 @@ class RobolabEnv(EnvProtocol):
         """Every slot's ``keys.GT_STATE`` entry: a flat dict from a recorded suffix to its value."""
         states: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
         for name in self._objects:
-            pos, quat = self._world.get_pose(name, is_relative=True)
+            pos, quat = link_pose.object_pose(self._world, name, self._links)
             poses = torch.cat([pos, quat], dim=-1).cpu().numpy().astype(np.float32)
             poses[:, :3] += self._ENV_IN_WORLD
             for slot, pose in enumerate(poses):
