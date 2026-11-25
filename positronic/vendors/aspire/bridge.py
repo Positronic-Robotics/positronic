@@ -284,12 +284,12 @@ class CapBridge:
 
     def answer(self, obs: Obs) -> list[dict[str, Any]]:
         observation = self._observe(obs)
+        if self._thread is None:
+            self._start(observation)
         # Each step under the lock is bounded by the arm count; `wait_for` releases it.
         with self._turn:
             previous, self._observation = self._observation, observation
-            if self._thread is None:
-                self._start(observation.robot_state)
-            elif self._call is not None and self._call.deadline_s is not None and self._call.end is None:
+            if self._call is not None and self._call.deadline_s is not None and self._call.end is None:
                 assert previous is not None
                 self._judge(self._call, previous.robot_state, observation)
             self._turn.notify_all()
@@ -335,7 +335,9 @@ class CapBridge:
         task = TaskContext(TASK_SUITE, 0, language, language, TASK_FAMILY)
         return Observation(cameras, state, task)
 
-    def _start(self, state: RobotState) -> None:
+    def _start(self, observation: Observation) -> None:
+        # No program thread exists yet, so nothing else reads this state until `start` publishes it.
+        self._observation, state = observation, observation.robot_state
         for arm in keys.BIMANUAL_ARMS:
             self._home[arm] = state.joint_positions[arm]
             self._targets[arm] = _ArmTarget(
