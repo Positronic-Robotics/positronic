@@ -606,7 +606,10 @@ class CapBridge:
                 grip = held[arm].grip if grippers is None else 1.0 - float(grippers[arm][index])
                 targets[arm] = _ArmTarget(JointPosition(joints[index]), grip)
             path.append(targets)
-        goals = {arm: _Goal(JointPosition(joints[-1])) for arm, joints in waypoints.items()}
+        goals = {
+            arm: _Goal(JointPosition(joints[-1]), None if grippers is None else 1.0 - float(grippers[arm][-1]))
+            for arm, joints in waypoints.items()
+        }
         return self._result(self._await(_Call(path, goals)), self._settings.joint_tolerance_rad)
 
     @_refusal_is_a_result

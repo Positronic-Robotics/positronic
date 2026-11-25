@@ -291,6 +291,25 @@ def test_trajectory_plays_its_waypoints_at_the_chunk_rate(run, settings):
     assert [element[grip('right')] for element in played[::2]] == [0.0, 0.0, 1.0, 1.0, 1.0]
 
 
+def test_a_trajectory_waits_for_its_final_gripper_target(run):
+    rig = Rig()
+    rig.grip_limit['right'] = 0.6
+    bridge, _ = run(
+        """
+        state = get_robot_state()
+        start = [float(v) for v in state.joint_positions['right']]
+        path = Trajectory(joint_positions=[start, [v + 0.1 for v in start]], dt_s=0.2,
+                          joint_names=state.joint_names['right'], planner='test', collision_aware=False,
+                          expected_start=state, arm='primary', gripper_positions=[1.0, 0.0])
+        result = execute_trajectory(path)
+        assert result.diagnostics['move_end'] == 'stopped' and not result.diagnostics['arrived'], result
+        assert abs(result.final_observation.robot_state.gripper_positions['right'] - 0.4) < 1e-9, result
+    """,
+        rig,
+    )
+    completed(bridge)
+
+
 def test_get_observation_carries_the_rgb_views(run):
     bridge, _ = run("""
         view = get_observation('exterior').cameras['exterior']
