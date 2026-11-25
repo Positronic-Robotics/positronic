@@ -92,8 +92,8 @@ The span names are the contract:
 | `reset` | `episode` | — | scene reset (the harness readying the rig + the producer publishing what it drew) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
-| `record.io` | `episode` | — | the recorder's serialize + append |
-| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation` | one harness step: it reads the observations, calls the policy and emits the commands |
+| `record.io` | `episode` | — | the recorder's serialize + append, at a step and at the open and close of the recording. A sample between two steps records no span: the next `harness.step` carries its time as `step.record_wait_ms` |
+| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation`, `step.record_wait_ms` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
@@ -144,13 +144,17 @@ A `harness.step` span holds the durations of one step in milliseconds, and one c
   starts at the start of the rollout, so it covers the opening of the recording.
 - `step.gc_ms`: the garbage-collection time of the process inside the step.
 - `step.gc_generation`: the highest generation that a collection in either window reached, from 0 to 2.
+- `step.record_wait_ms`: the time that the samples between the previous step and this step spent in their appends.
+  The harness samples the observations at its recording rate between two steps, and each sample appends the new
+  messages to the recording. These samples record no `record.io` span, because on a rig they give most of the
+  spans of the harness. The value is present only when a sample appended a message in that time.
 
 The three collection values are present only when a collection ran in one of the two windows. A collection in any
 thread stops the harness thread too, so each value counts all threads. The harness counts collections only while
 telemetry records.
 
 A step can find a required observation missing, for example while a camera starts. That step calls no policy,
-so its span has only `step.late_ms`, the observe values and the collection values.
+so its span has only `step.late_ms`, the observe values, the collection values and `step.record_wait_ms`.
 
 The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
 producers run in other processes, and each writes its own sidecar. Their cost reaches a step only as CPU
@@ -238,7 +242,8 @@ Reduces the sidecars under `<run_dir>/telemetry/` into a pass report and writes 
 the input (`<run_dir>` may be an `s3://` URI). It reports:
 
 - the **wall split** — each phase's share of the report's wall window (reset / env.step / policy wait / record
-  IO / overhead / between-episodes), summing to 1; the policy-wait share also carries the sizing figure derived
+  IO / overhead / between-episodes), summing to 1. Record IO is the `record.io` spans plus the `step.record_wait_ms`
+  of the steps; the policy-wait share also carries the sizing figure derived
   from it, how many such evals one policy server could keep fed;
 - the **env-step split** — physics / render / server-other (the env server's own decomposition), plus the wire
   and materialisation shares of the client step; absent for a native sim, which reports no server decomposition;
