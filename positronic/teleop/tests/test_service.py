@@ -114,6 +114,11 @@ ARM_TARGET_GRIPS = {arm: keys.arm_channel(keys.TARGET_GRIP, arm) for arm in keys
 HOLD_SEC = 0.2
 
 
+def _trigger_at(travel: float) -> float:
+    """The value that a Quest 3 trigger sends at ``travel`` of its full travel."""
+    return travel**ButtonMap.TRIGGER_CURVE
+
+
 def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0) -> list[float]:
     """The values that the headset page sends for a controller."""
     values = [0.0] * (max(Button) + 1)
@@ -172,8 +177,17 @@ class TestButtonMap:
         [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
         assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
-    def test_the_trigger_is_the_grip(self):
-        assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
+    @pytest.mark.parametrize('travel', [0.0, 0.25, 0.5, 0.75, 1.0])
+    def test_the_grip_is_linear_in_the_travel_of_the_trigger(self, travel):
+        assert ButtonMap.grip(_buttons(trigger=_trigger_at(travel))) == pytest.approx(travel)
+
+    @pytest.mark.parametrize(('value', 'grip'), [(0.05, 0.29), (0.2, 0.51), (0.42, 0.70)])
+    def test_the_grip_of_the_trigger_values_measured_on_a_quest_3_follows_their_travel(self, value, grip):
+        assert ButtonMap.grip(_buttons(trigger=value)) == pytest.approx(grip, abs=0.01)
+
+    @pytest.mark.parametrize(('value', 'grip'), [(-0.1, 0.0), (1.2, 1.0)])
+    def test_a_trigger_value_outside_zero_to_one_gives_the_nearest_grip(self, value, grip):
+        assert ButtonMap.grip(_buttons(trigger=value)) == grip
 
     def test_a_hold_does_not_count_the_time_the_controller_is_not_tracked(self):
         buttons = ButtonMap(HOLD_SEC)
@@ -398,7 +412,7 @@ def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         headset.press(a=1.0)
-        headset.buttons = _buttons(trigger=0.8)
+        headset.buttons = _buttons(trigger=_trigger_at(0.8))
         held = _drive_until(run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(0.8))
         headset.buttons = []
         headset.pose = _raised(HAND)
@@ -446,7 +460,7 @@ def test_in_a_bimanual_session_each_controller_drives_its_arm_from_where_its_con
 
         headset.press_left(a=1.0)
         _drive_until(run, lambda _: service.state().control, obs=BIMANUAL_OBS)
-        headset.left_pose, headset.left_buttons = _raised(LEFT_HAND), _buttons(trigger=0.8)
+        headset.left_pose, headset.left_buttons = _raised(LEFT_HAND), _buttons(trigger=_trigger_at(0.8))
         headset.pose = _raised(HAND)
         left = keys.LEFT_ARM
         moved = _drive_until(run, lambda step: _arm_moved(step, left, ARM_POSES[left]), obs=BIMANUAL_OBS)

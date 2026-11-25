@@ -180,9 +180,14 @@ class ButtonMap:
             events.append(Event.GIVE_UP)
         return events
 
+    # The trigger value of a Quest 3 controller is about its travel to this power: 0.05, 0.2 and 0.42 at a quarter, a
+    # half and three quarters of the travel
+    TRIGGER_CURVE = 2.4
+
     @staticmethod
     def grip(buttons: Sequence[float]) -> float:
-        return float(buttons[Button.TRIGGER])
+        """The grip that the trigger asks for, linear in the travel of the trigger."""
+        return min(max(float(buttons[Button.TRIGGER]), 0.0), 1.0) ** (1 / ButtonMap.TRIGGER_CURVE)
 
 
 class Phase(StrEnum):
