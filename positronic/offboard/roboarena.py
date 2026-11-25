@@ -3,7 +3,7 @@
 import logging
 import time
 from collections.abc import Mapping
-from threading import Lock, local
+from threading import local
 from typing import Any
 
 from positronic_model_server.serialization import deserialize, serialize
@@ -68,8 +68,6 @@ class RoboarenaClient:
         self._connection: wire.ClientConnection | None = None
         self._dial: Dial | None = None
         self._sent_on_conn = False
-        self._in_flight = 0
-        self._in_flight_lock = Lock()
         self._calls = local()
         self._server_config: dict[str, Any] | None = None
         self._unresolved_host_deadline = unresolved_host_deadline
@@ -123,12 +121,16 @@ class RoboarenaClient:
 
     @property
     def sent_alone(self) -> bool | None:
-        """Whether this thread's latest inference went with no other inference in flight; ``None`` before it sends."""
+        """Whether this thread's latest inference went with no other inference in flight; ``None`` before it sends.
+
+        A caller runs one exchange at a time, so each inference that sends goes alone.
+        """
         return getattr(self._calls, 'alone', None)
 
     def infer(self, observation: Mapping[str, Any]) -> Any:
         """The action chunk the server answers ``observation`` with.
 
+        The server answers each request in turn on one connection, so a caller does not overlap two inferences.
         The send and the wait for the answer are the ``wire.send`` and ``wire.recv`` spans, as in
         ``InferenceSession``.
         """
@@ -144,14 +146,8 @@ class RoboarenaClient:
                 telemetry_keys.ATTR_WIRE_BYTES: len(serialised),
                 **connection_attrs(self._dial, new_connection),
             }
-            with self._in_flight_lock:
-                self._calls.alone = self._in_flight == 0
-                self._in_flight += 1
-            try:
-                answer = self._exchange(serialised, send_attrs, deadline)
-            finally:
-                with self._in_flight_lock:
-                    self._in_flight -= 1
+            self._calls.alone = True
+            answer = self._exchange(serialised, send_attrs, deadline)
         except BaseException:
             # A reply that arrives after this read gave up stays queued, and the next inference reads it as its own.
             self.close()

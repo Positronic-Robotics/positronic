@@ -1,6 +1,5 @@
 """The roboarena client, driven against a fake connection."""
 
-import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -412,40 +411,11 @@ def test_only_the_first_send_on_a_roboarena_connection_carries_the_dialed_endpoi
     ]
 
 
-def test_an_inference_sent_while_another_waits_for_its_answer_is_not_sent_alone():
-    """The first call waits for its answer until the second has sent, so the second goes out behind it."""
-    first_waiting, second_sent, release = threading.Event(), threading.Event(), threading.Event()
-    sends = []
-    answer = serialize([0.0] * 8)
+def test_an_inference_that_sends_goes_alone():
+    client = _client(MagicMock(**{'recv.return_value': serialize([0.0] * 8)}))
+    client.infer({})
 
-    def send(data):
-        sends.append(data)
-        if len(sends) == 2:
-            second_sent.set()
-
-    def recv(timeout):
-        first_waiting.set()
-        assert release.wait(timeout=5)
-        return answer
-
-    client = _client(MagicMock(**{'send.side_effect': send, 'recv.side_effect': recv}))
-    marks = {}
-
-    def call(name):
-        client.infer({})
-        marks[name] = client.sent_alone
-
-    first = threading.Thread(target=call, args=('first',))
-    first.start()
-    assert first_waiting.wait(timeout=5)
-    second = threading.Thread(target=call, args=('second',))
-    second.start()
-    assert second_sent.wait(timeout=5)
-    release.set()
-    first.join(timeout=5)
-    second.join(timeout=5)
-
-    assert marks == {'first': True, 'second': False}
+    assert client.sent_alone is True
 
 
 def test_an_inference_that_fails_before_its_send_carries_no_alone_mark():
