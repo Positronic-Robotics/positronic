@@ -180,18 +180,9 @@ class ButtonMap:
             events.append(Event.GIVE_UP)
         return events
 
-    # A robot gripper pressed a Quest 3 trigger in steps: the value stays 0 for the first sixth of the travel, then
-    # grows as the rest of the travel to the power 1.45 on a press. The power below makes the grip of a press linear in
-    # that rest. A release reads about 0.1 higher at the same travel. Values up to the low end are noise of a released
-    # trigger.
-    TRIGGER_RANGE = (0.02, 1.0)
-    TRIGGER_POWER = 0.69
-
     @staticmethod
     def grip(buttons: Sequence[float]) -> float:
-        """The grip that the trigger asks for."""
-        low, high = ButtonMap.TRIGGER_RANGE
-        return min(max((float(buttons[Button.TRIGGER]) - low) / (high - low), 0.0), 1.0) ** ButtonMap.TRIGGER_POWER
+        return float(buttons[Button.TRIGGER])
 
 
 class Phase(StrEnum):

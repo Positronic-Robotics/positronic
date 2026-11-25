@@ -1,4 +1,3 @@
-import itertools
 import json
 import logging
 import os
@@ -123,9 +122,6 @@ def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0) -> list[float]:
     return values
 
 
-PRESSED_GRIP = ButtonMap.grip(_buttons(trigger=0.8))  # the grip of a trigger at 0.8
-
-
 class TestButtonMap:
     def test_b_and_the_stick_answer_the_wait_for_ready(self):
         assert ButtonMap(HOLD_SEC).ready_answer(_buttons(b=1.0), 0) is ReadyAnswer.READY
@@ -176,22 +172,8 @@ class TestButtonMap:
         [layout] = re.findall(r'const BUTTON = \{ trigger: (\d+), stick: (\d+), a: (\d+), b: (\d+) \};', page)
         assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
-    @pytest.mark.parametrize(('value', 'travel'), [(0.114, 0.35), (0.255, 0.5), (0.595, 0.75), (0.766, 0.85)])
-    def test_a_press_measured_on_a_quest_3_asks_for_a_grip_linear_in_the_travel_past_the_dead_zone(self, value, travel):
-        """A robot gripper pressed the trigger to ``travel`` and read ``value``; the trigger reads 0 up to 0.17."""
-        assert ButtonMap.grip(_buttons(trigger=value)) == pytest.approx((travel - 0.17) / (1 - 0.17), abs=0.04)
-
-    @pytest.mark.parametrize(('value', 'grip'), [(0.0, 0.0), (0.02, 0.0), (1.0, 1.0)])
-    def test_a_released_trigger_asks_for_an_open_grip_and_a_full_press_for_a_closed_one(self, value, grip):
-        assert ButtonMap.grip(_buttons(trigger=value)) == grip
-
-    def test_a_deeper_trigger_asks_for_a_closer_grip(self):
-        grips = [ButtonMap.grip(_buttons(trigger=value)) for value in np.linspace(0.02, 1.0, 50)]
-        assert all(b > a for a, b in itertools.pairwise(grips))
-
-    @pytest.mark.parametrize(('value', 'grip'), [(-0.1, 0.0), (1.2, 1.0)])
-    def test_a_trigger_value_outside_zero_to_one_gives_the_nearest_grip(self, value, grip):
-        assert ButtonMap.grip(_buttons(trigger=value)) == grip
+    def test_the_trigger_is_the_grip(self):
+        assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
 
     def test_a_hold_does_not_count_the_time_the_controller_is_not_tracked(self):
         buttons = ButtonMap(HOLD_SEC)
@@ -417,9 +399,7 @@ def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds
         run = _readied_run(service, headset, runtime, socket_path)
         headset.press(a=1.0)
         headset.buttons = _buttons(trigger=0.8)
-        held = _drive_until(
-            run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(PRESSED_GRIP)
-        )
+        held = _drive_until(run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(0.8))
         headset.buttons = []
         headset.pose = _raised(HAND)
         _drive_until(run, lambda _: not service.state().control)
@@ -428,7 +408,7 @@ def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds
         assert end is None and _moves(steps)
         for step in _moves(steps):
             np.testing.assert_allclose(_target(step).translation, _target(held).translation, atol=1e-6)
-            assert step.commands[keys.TARGET_GRIP] == pytest.approx(PRESSED_GRIP)
+            assert step.commands[keys.TARGET_GRIP] == pytest.approx(0.8)
         run.close()
 
 
@@ -472,7 +452,7 @@ def test_in_a_bimanual_session_each_controller_drives_its_arm_from_where_its_con
         moved = _drive_until(run, lambda step: _arm_moved(step, left, ARM_POSES[left]), obs=BIMANUAL_OBS)
         shift = _arm_target(moved, left).translation - ARM_POSES[left].translation
         np.testing.assert_allclose(np.linalg.norm(shift), 0.05, atol=1e-6)
-        assert moved.commands[ARM_TARGET_GRIPS[left]] == pytest.approx(PRESSED_GRIP)
+        assert moved.commands[ARM_TARGET_GRIPS[left]] == pytest.approx(0.8)
         # Control of the right arm is off, so the right arm holds while the right hand moves.
         np.testing.assert_allclose(
             _arm_target(moved, keys.RIGHT_ARM).translation, ARM_POSES[keys.RIGHT_ARM].translation
@@ -1461,6 +1441,22 @@ def test_the_headset_page_names_the_routes_the_page_state_fields_and_the_input_f
     routes_and_inputs = [STATE_PATH, INPUT_PATH, command.HEADSET_CAMERA, command.TEXT_ONLY]
     contract = [*routes_and_inputs, *command.PageState.__dataclass_fields__]
     assert [name for name in contract if not re.search(f"""['"]{re.escape(name)}['"]""", page)] == []
+
+
+@pytest.mark.parametrize(('value', 'travel'), [(0.114, 0.35), (0.255, 0.5), (0.595, 0.75), (0.766, 0.85)])
+def test_the_headset_page_sends_a_quest_trigger_press_linear_in_the_travel_past_the_dead_zone(value, travel):
+    """A robot gripper pressed a Quest 3 trigger to ``travel`` and read ``value``; the trigger reads 0 up to 0.17."""
+    page = Path(package_assets_path('assets/webxr/index.html')).read_text()
+    [(floor, power)] = re.findall(r'const QUEST_TRIGGER = \{ index: 0, floor: ([\d.]+), power: ([\d.]+) \};', page)
+    sent = min(max(value - float(floor), 0) / (1 - float(floor)), 1) ** float(power)
+    assert sent == pytest.approx((travel - 0.17) / (1 - 0.17), abs=0.04)
+
+
+def test_the_headset_page_bends_the_trigger_of_a_quest_controller_only():
+    page = Path(package_assets_path('assets/webxr/index.html')).read_text()
+    [profile] = re.findall(r'const QUEST_PROFILE = /(.+)/;', page)
+    assert re.match(profile, 'meta-quest-touch-plus') and re.match(profile, 'oculus-touch-v3')
+    assert not re.match(profile, 'sony-playstation-vr2') and not re.match(profile, 'generic-trigger-squeeze')
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
