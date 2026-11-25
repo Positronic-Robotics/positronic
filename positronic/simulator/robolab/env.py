@@ -210,8 +210,6 @@ class RobolabEnv(EnvProtocol):
         self._objects: list[str] = []
         self._subtask_recorder: Any = None
         self._success_tail: success_tail.SuccessTail | None = None
-        # Set by the termination compute inside each ``env.step``, and read by ``step`` after it.
-        self._tail_step: success_tail.TailStep | None = None
         self._shown_chains: list[Any] = []  # each slot's chain machine at the last frame
         self._episode = 0  # the number of the current episode, counted by resets
         self._episode_task = ''  # the task of the current episode
@@ -361,13 +359,13 @@ class RobolabEnv(EnvProtocol):
         def tailed() -> torch.Tensor:
             compute()
             assert self._success_tail is not None
-            self._tail_step = self._success_tail.step(
+            ended = self._success_tail.step(
                 terminations.terminated.cpu().numpy(),
                 terminations.time_outs.cpu().numpy(),
                 np.array([fault is not None for fault in self._arm_faults()]),
                 self._env.episode_length_buf.cpu().numpy(),
             )
-            terminations.terminated[:] = torch.as_tensor(self._tail_step.ended, device=terminations.terminated.device)
+            terminations.terminated[:] = torch.as_tensor(ended, device=terminations.terminated.device)
             return terminations.dones
 
         return tailed
@@ -395,7 +393,6 @@ class RobolabEnv(EnvProtocol):
         assert self._env is not None  # built above (key change) or already live (cached)
         assert self._success_tail is not None
         self._success_tail.reset()
-        self._tail_step = None
         self._grip.zero_()
         self._shown_chains = [None] * self._num_envs
         # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
@@ -434,9 +431,9 @@ class RobolabEnv(EnvProtocol):
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
             self._kit_app.update()
+        succeeded_earlier = self._success_tail.succeeded()
         obs, _reward, _term, _trunc, _info = self._env.step(self._action(actions))
-        assert self._tail_step is not None  # set by the termination compute inside env.step
-        now = self._tail_step.verdict_faults(self._arm_faults())
+        now = success_tail.verdict_faults(self._arm_faults(), succeeded_earlier)
         self._faults = [first or fault for first, fault in zip(self._faults, now, strict=True)]
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps

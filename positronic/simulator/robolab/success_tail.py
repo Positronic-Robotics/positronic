@@ -9,7 +9,6 @@ This module must work in RoboLab's isolated interpreter without Positronic insta
 """
 
 import math
-from typing import NamedTuple
 
 import numpy as np
 
@@ -20,17 +19,10 @@ TAIL_SEC = 1.0
 RESET_IN_PLACE_STEPS = 2
 
 
-class TailStep(NamedTuple):
-    """Per scene clone, at one control step: whether RoboLab ends the episode as a success, and whether a success term
-    fired at an earlier step of the episode."""
-
-    ended: np.ndarray
-    succeeded_earlier: np.ndarray
-
-    def verdict_faults(self, faults: list[str | None]) -> list[str | None]:
-        """Per clone, the fault of its arm state at this step, or ``None`` when its success came at an earlier
-        step: such a fault only ends the tail."""
-        return [None if earlier else fault for fault, earlier in zip(faults, self.succeeded_earlier, strict=True)]
+def verdict_faults(faults: list[str | None], succeeded_earlier: np.ndarray) -> list[str | None]:
+    """Per clone, the fault of its arm state, or ``None`` when its success came at an earlier step: such a fault only
+    ends the tail."""
+    return [None if earlier else fault for fault, earlier in zip(faults, succeeded_earlier, strict=True)]
 
 
 class SuccessTail:
@@ -51,8 +43,8 @@ class SuccessTail:
 
     def step(
         self, fired: np.ndarray, timed_out: np.ndarray, faulted: np.ndarray, episode_steps: np.ndarray
-    ) -> TailStep:
-        """Per clone, whether RoboLab ends its episode as a success at this step, and whether it succeeded earlier.
+    ) -> np.ndarray:
+        """Per clone, whether RoboLab ends its episode as a success at this step.
 
         ``fired`` is whether a success term fires at this step, ``timed_out`` whether the time limit ends the episode
         at this step, ``faulted`` whether the clone's arm state has a fault, and ``episode_steps`` the control steps
@@ -60,8 +52,11 @@ class SuccessTail:
         RoboLab resets the clone in place.
         """
         artifact = fired & (episode_steps <= RESET_IN_PLACE_STEPS)
-        succeeded_earlier = self._succeeded.copy()
         self._steps_since[self._succeeded] += 1
         self._succeeded |= fired & ~artifact
         tail_over = (self._steps_since >= self._tail_steps) | timed_out | faulted
-        return TailStep(ended=artifact | (self._succeeded & tail_over), succeeded_earlier=succeeded_earlier)
+        return artifact | (self._succeeded & tail_over)
+
+    def succeeded(self) -> np.ndarray:
+        """Per clone, whether a success term fired in this episode so far."""
+        return self._succeeded.copy()
