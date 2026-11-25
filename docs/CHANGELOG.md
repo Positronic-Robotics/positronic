@@ -13,6 +13,9 @@
 ### Vendors
 - The OpenPI and Galaxea servers wait `WARMUP_DEADLINE_S` (1800 s) for their model subprocess to start. The OpenPI server waited 300 s, so a start on a slow disk ended the server before the published deadline.
 
+### Robots
+- The YAM driver takes an `engaged` input. Off, it opens no chain and refuses moves. An open chain parks the arm first and cuts the torque only after the park is verified. `engaged=False` on `yam.Robot` or `cfg.embodiment.yam_bimanual` starts the arms that way, so a console can connect them at a later point
+
 ## [0.4.6] - 2026-11-12
 
 This release publishes `positronic-platform-client` 0.47.24, and `positronic` requires that version. A submission view lists what it shows for each of its evals, and `positronic eval status` prints that list for a submission of several evals. An `image` endpoint can state the params of its session URL. A session opening of `InferenceClient` and `RoboarenaClient` ends by the connect deadline. The Progress chart of the replay plots the stage and count marks of every channel. The Dream-1 vendor caps the hand speed at 0.3 m/s.
