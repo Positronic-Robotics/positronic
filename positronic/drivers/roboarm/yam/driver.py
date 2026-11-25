@@ -206,16 +206,23 @@ def _limit_gripper_close(chain: Any, tuning: GraspTuning, hold_n: Callable[[], f
     def limited_send(motor_torques: np.ndarray, joint_commands: Any, *args: Any) -> None:
         readings, request = chain._joint_state, joint_commands.pos[gripper]
         q = chain.remapper.to_robot_joint_pos_space(readings.pos)[gripper]
-        newtons, kp = hold_n(), joint_commands.kp[gripper]
-        hold_limit = None
-        if newtons is not None and kp > 0:
-            dq = chain.remapper.to_robot_joint_vel_space(readings.vel)[gripper]
+        dq = chain.remapper.to_robot_joint_vel_space(readings.vel)[gripper]
+        newtons = hold_n()
+        hold_nm = None
+        if newtons is not None:
             hold_nm = force_to_torque(gripper_force=newtons, current_angle=q) + _GRIPPER_FRICTION_NM
-            feedforward_and_damping = motor_torques[gripper] + joint_commands.kd[gripper] * (
-                joint_commands.vel[gripper] - dq
-            )
-            hold_limit = q + (grasp.closing * hold_nm - feedforward_and_damping) / kp
-        target = grasp.target(time.monotonic(), q, request, readings.eff[gripper], hold_limit)
+        feedforward_and_damping = motor_torques[gripper] + joint_commands.kd[gripper] * (
+            joint_commands.vel[gripper] - dq
+        )
+        target = grasp.target(
+            time.monotonic(),
+            q,
+            request,
+            readings.eff[gripper],
+            joint_commands.kp[gripper],
+            feedforward_and_damping,
+            hold_nm,
+        )
         if target != request:
             joint_commands.pos[gripper] = target
             chain._last_gripper_command_qpos = target  # the limiter reads the target sent

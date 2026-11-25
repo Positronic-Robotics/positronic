@@ -2752,13 +2752,39 @@ def _i2rt_alone(monkeypatch, grip: float, **gripper) -> GripperMotors:
 def test_after_a_touch_the_hold_force_caps_the_closing_torque_before_and_after_i2rt_finds_a_stall(monkeypatch):
     """i2rt's limiter replaces the gripper target once it finds a stall, so a cap on the target sent to i2rt is lost."""
     _, motors = _squeeze(monkeypatch, SQUEEZE_CAP_N)
-    held = motors.at_object.index(True) + 3  # the hold starts not more than 3 steps after the first step at the object
+    held = motors.at_object.index(True) + round(0.01 / motors.STEP_S)  # 10 ms after the fingers meet the object
     stall = motors.first_stall_step()
     assert stall is not None, 'the squeeze did not reach the stall of i2rt'
     assert held < stall
     closing = motors.closing_torques()
     assert np.max(closing[held:stall]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
     assert np.max(closing[stall:]) <= _gripper_torque_nm(SQUEEZE_CAP_N) + 1e-9
+
+
+# The most closing torque that a close may ask for when it starts at an object: the touch effort in the launch, and
+# the hold torque after a touch. A touch shows in the effort one step late, and one step of the close rate asks
+# 0.26 Nm more.
+START_AT_OBJECT_NM = max(DEFAULT_GRASP.touch_effort_nm, _gripper_torque_nm(SQUEEZE_CAP_N)) + 0.3
+
+
+def test_a_close_again_after_a_hold_squeezes_the_object_no_harder_than_the_touch_effort_or_the_hold(monkeypatch):
+    chain, motors = _squeeze(monkeypatch, SQUEEZE_CAP_N)
+    _run(chain, motors, (OBJECT_AT_RAD + 0.02) / GRIPPER_OPEN_RAD, seconds=0.1)  # open the grip a little
+    again = len(motors.asked)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.0)
+    closing = motors.closing_torques()[again:]
+    assert np.max(closing) <= START_AT_OBJECT_NM
+    assert closing[-1] == pytest.approx(_gripper_torque_nm(SQUEEZE_CAP_N))
+
+
+@pytest.mark.parametrize('away_rad', [0.02, 0.3])  # the fingers meet the object in the launch
+def test_a_first_close_near_an_object_squeezes_it_no_harder_than_the_touch_effort_or_the_hold(monkeypatch, away_rad):
+    chain, motors = _gripper_chain(monkeypatch, start_at=OBJECT_AT_RAD + away_rad)
+    _opened_by_a_driver(chain, SQUEEZE_CAP_N)
+    _run(chain, motors, CHAIN_CLOSED, seconds=1.0)
+    closing = motors.closing_torques()
+    assert np.max(closing) <= START_AT_OBJECT_NM
+    assert closing[-1] == pytest.approx(_gripper_torque_nm(SQUEEZE_CAP_N))
 
 
 def test_the_grasp_leaves_the_commands_of_the_arm_motors_alone(monkeypatch):
@@ -2811,9 +2837,21 @@ def test_a_closing_gripper_motor_runs_not_much_faster_than_the_close_rate(monkey
     assert np.max(_i2rt_alone(monkeypatch, CHAIN_CLOSED, stop_at=0.0).closing_speeds()) > 1.3 * rate_rad_s
 
 
+def test_a_stalled_control_thread_moves_the_gripper_target_10_ms_of_the_close_rate_at_most_when_it_wakes(monkeypatch):
+    """i2rt warns when its control loop runs below 100 Hz. So a step moves the target by not more than 10 ms of the
+    close rate."""
+    chain, motors = _gripper_chain(monkeypatch, stop_at=0.0)
+    _opened_by_a_driver(chain, SQUEEZE_CAP_N)
+    _run(chain, motors, CHAIN_CLOSED, seconds=0.1)
+    motors.now += 0.2  # the control thread of i2rt stalls
+    chain.update()
+    before, after = np.stack(motors.commands)[-2:, 1, 6]
+    assert before - after <= DEFAULT_GRASP.close_rate_per_s * GRIPPER_OPEN_RAD * 0.01 + 1e-9
+
+
 # A close from rest of GripperMotors at the default rate has a closing effort above 0.4 Nm for its first 20 ms, with
-# a peak of 0.53 Nm, and 0.32 Nm or less after that. With these values, only the launch can show a touch, and only the
-# launch asks for more than the hold torque.
+# a peak of 0.53 Nm, and 0.32 Nm or less after that. With these values, only the launch can show a touch. The hold
+# torque is less than that peak, so a touch in the launch changes the commands.
 LAUNCH_TOUCH = GraspTuning(touch_effort_nm=0.4)
 LAUNCH_HOLD_N = 10.0  # 0.45 Nm
 
@@ -3045,7 +3083,7 @@ def test_the_yam_package_hands_out_the_driver():
     assert yam_package.Robot is yam.Robot
 
 
-@pytest.mark.parametrize('module', ['kinematics', 'settle', 'compensation'])
+@pytest.mark.parametrize('module', ['kinematics', 'settle', 'grasp', 'compensation'])
 def test_the_modules_beside_the_driver_import_without_it(module):
     loaded = subprocess.run(
         [sys.executable, '-c', f'import sys, positronic.drivers.roboarm.yam.{module}; print(sorted(sys.modules))'],
