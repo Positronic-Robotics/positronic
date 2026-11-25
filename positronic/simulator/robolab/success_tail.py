@@ -9,6 +9,7 @@ This module must work in RoboLab's isolated interpreter without Positronic insta
 """
 
 import math
+from typing import NamedTuple
 
 import numpy as np
 
@@ -17,6 +18,19 @@ TAIL_SEC = 1.0
 # RoboLab resets a clone in place, and records no verdict, when it terminates within this many control steps: such a
 # termination is a physics artifact (``robolab.core.environments.env.RobolabEnv._reset_idx``).
 RESET_IN_PLACE_STEPS = 2
+
+
+class TailStep(NamedTuple):
+    """Per scene clone, at one control step: whether RoboLab ends the episode as a success, and whether a success term
+    fired at an earlier step of the episode."""
+
+    ended: np.ndarray
+    succeeded_earlier: np.ndarray
+
+    def verdict_faults(self, faults: list[str | None]) -> list[str | None]:
+        """Per clone, the fault of its arm state at this step, or ``None`` when its success came at an earlier
+        step: such a fault only ends the tail."""
+        return [None if earlier else fault for fault, earlier in zip(faults, self.succeeded_earlier, strict=True)]
 
 
 class SuccessTail:
@@ -29,18 +43,16 @@ class SuccessTail:
     def __init__(self, num_envs: int, control_dt: float):
         self._tail_steps = math.ceil(round(TAIL_SEC / control_dt, 9))
         self._succeeded = np.zeros(num_envs, dtype=bool)
-        self._succeeded_earlier = np.zeros(num_envs, dtype=bool)
         self._steps_since = np.zeros(num_envs, dtype=np.int64)
 
     def reset(self) -> None:
         self._succeeded[:] = False
-        self._succeeded_earlier[:] = False
         self._steps_since[:] = 0
 
     def step(
         self, fired: np.ndarray, timed_out: np.ndarray, faulted: np.ndarray, episode_steps: np.ndarray
-    ) -> np.ndarray:
-        """Per clone, whether RoboLab ends its episode as a success at this step.
+    ) -> TailStep:
+        """Per clone, whether RoboLab ends its episode as a success at this step, and whether it succeeded earlier.
 
         ``fired`` is whether a success term fires at this step, ``timed_out`` whether the time limit ends the episode
         at this step, ``faulted`` whether the clone's arm state has a fault, and ``episode_steps`` the control steps
@@ -48,13 +60,8 @@ class SuccessTail:
         RoboLab resets the clone in place.
         """
         artifact = fired & (episode_steps <= RESET_IN_PLACE_STEPS)
-        self._succeeded_earlier[:] = self._succeeded
+        succeeded_earlier = self._succeeded.copy()
         self._steps_since[self._succeeded] += 1
         self._succeeded |= fired & ~artifact
         tail_over = (self._steps_since >= self._tail_steps) | timed_out | faulted
-        return artifact | (self._succeeded & tail_over)
-
-    def verdict_faults(self, faults: list[str | None]) -> list[str | None]:
-        """Per clone, the fault of its arm state at the last step, or ``None`` when its success came at an earlier
-        step: such a fault only ends the tail."""
-        return [None if earlier else fault for fault, earlier in zip(faults, self._succeeded_earlier, strict=True)]
+        return TailStep(ended=artifact | (self._succeeded & tail_over), succeeded_earlier=succeeded_earlier)

@@ -14,7 +14,9 @@ def _run(fired: list[list[bool]], time_limit: int = 1000, start: int = 3) -> lis
     ended = []
     for step, row in enumerate(fired, start=start):
         steps = np.full(len(row), step)
-        ended.append(tail.step(np.array(row), steps >= time_limit, np.zeros(len(row), dtype=bool), steps).tolist())
+        ended.append(
+            tail.step(np.array(row), steps >= time_limit, np.zeros(len(row), dtype=bool), steps).ended.tolist()
+        )
     return ended
 
 
@@ -56,7 +58,9 @@ def test_a_reset_clears_the_success_of_the_last_episode():
     tail = success_tail.SuccessTail(1, _CONTROL_DT)
     tail.step(np.array([True]), np.array([False]), np.array([False]), np.array([3]))
     tail.reset()
-    ended = [tail.step(np.array([False]), np.array([False]), np.array([False]), np.array([s])) for s in range(4, 40)]
+    ended = [
+        tail.step(np.array([False]), np.array([False]), np.array([False]), np.array([s])).ended for s in range(4, 40)
+    ]
     assert not any(e.any() for e in ended)
 
 
@@ -68,8 +72,9 @@ def _run_faulted(fired: list[bool], faulted: list[bool]) -> tuple[list[bool], li
     tail = success_tail.SuccessTail(1, _CONTROL_DT)
     ended, faults = [], []
     for step, (fire, fault) in enumerate(zip(fired, faulted, strict=True), start=3):
-        ended.append(bool(tail.step(np.array([fire]), np.array([False]), np.array([fault]), np.array([step]))[0]))
-        faults.append(tail.verdict_faults([_FAULT if fault else None])[0])
+        result = tail.step(np.array([fire]), np.array([False]), np.array([fault]), np.array([step]))
+        ended.append(bool(result.ended[0]))
+        faults.append(result.verdict_faults([_FAULT if fault else None])[0])
     return ended, faults
 
 
