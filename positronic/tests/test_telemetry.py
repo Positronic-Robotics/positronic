@@ -107,17 +107,6 @@ def test_nested_spans_round_trip(tmp_path):
     assert spans['inner'].end_ns >= spans['inner'].start_ns
 
 
-def test_active_attrs_reach_the_innermost_scoped_span(tmp_path):
-    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'active-attrs'):
-        telemetry.set_active_attrs(ignored=1)
-        with telemetry.span('parent'):
-            with telemetry.span('child'):
-                telemetry.set_active_attrs(stamped=7)
-    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
-    assert spans['child'].attrs == {'stamped': 7}
-    assert spans['parent'].attrs == {}
-
-
 def test_scoped_spans_nest_without_an_episode_anchor(tmp_path):
     with telemetry.bind(tmp_path, HARNESS_PROCESS, 'scoped'):
         with telemetry.span('parent'):

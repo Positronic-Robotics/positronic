@@ -1029,14 +1029,14 @@ def test_a_chunk_that_opens_with_an_empty_waypoint_counts_the_hold_to_its_first_
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 100.0
 
 
-def test_each_hold_records_a_span_with_its_length_and_the_call_of_the_next_chunk(execution, tmp_path):
+def test_each_hold_records_a_span_as_long_as_the_hold(execution, tmp_path):
     runtime, clock = execution
     inner = Mock(
         send=Mock(
             side_effect=[
-                Step(_trajectory(range(3), call_id=0), 450_000_000),
-                Step(_trajectory(range(3), 450_000_000, call_id=1), 600_000_000),
-                Step(_trajectory(range(3), 600_000_000, call_id=2), 1_000_000_000),
+                Step(_trajectory(range(3)), 450_000_000),
+                Step(_trajectory(range(3), 450_000_000), 600_000_000),
+                Step(_trajectory(range(3), 600_000_000), 1_000_000_000),
                 Step(_trajectory(range(3), 1_000_000_000), 2_000_000_000),
             ]
         )
@@ -1051,15 +1051,12 @@ def test_each_hold_records_a_span_with_its_length_and_the_call_of_the_next_chunk
             run.close()
     spans = telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS))
     holds = [s for s in spans if s.name == telemetry_keys.SPAN_WAYPOINTS_HOLD]
-    # The chunk of call 2 ends no hold, and the last chunk comes from no call.
-    assert [(s.end_ns - s.start_ns, s.attrs) for s in holds] == [
-        (150_000_000, {telemetry_keys.ATTR_CALL_ID: 1}),
-        (100_000_000, {}),
-    ]
+    # The third chunk starts where the second ends, so it ends no hold.
+    assert [s.end_ns - s.start_ns for s in holds] == [150_000_000, 100_000_000]
     assert runtime.metadata_snapshot()[f'{eval_keys.SCHEDULE}.{eval_keys.HOLD_SUM_MS}'] == 250.0
 
 
-def test_a_hold_span_and_the_submit_span_of_its_call_carry_one_call_id(periodic_execution, tmp_path):
+def test_a_hold_span_under_a_schedule_ends_at_the_first_command_of_the_next_answer(periodic_execution, tmp_path):
     runtime, now = periodic_execution
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-call'):
         run = runtime.start(Sequential(TrajectoryPlayer(), ChunkedSchedule(fps=10)), lambda obs: [{MOTOR: 1}])
@@ -1075,12 +1072,9 @@ def test_a_hold_span_and_the_submit_span_of_its_call_carry_one_call_id(periodic_
         finally:
             run.close()
     spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
-    submits = [s for s in spans if s.name == telemetry_keys.SPAN_POLICY_SUBMIT]
-    assert sorted(s.attrs[telemetry_keys.ATTR_CALL_ID] for s in submits) == [0, 1]
     [hold] = [s for s in spans if s.name == telemetry_keys.SPAN_WAYPOINTS_HOLD]
     # The plan ends at 100 ms, and the answer of call 1 sends its first command at 130 ms.
     assert hold.end_ns - hold.start_ns == 30_000_000
-    assert hold.attrs[telemetry_keys.ATTR_CALL_ID] == 1
 
 
 @pytest.mark.parametrize(
@@ -1204,10 +1198,10 @@ class SlowModel:
         self._pending = None
 
 
-def _trajectory(values, start_ns=0, *, fps=10, call_id=None):
+def _trajectory(values, start_ns=0, *, fps=10):
     commands = [{MOTOR: value} for value in values]
     end_ns = start_ns + round(len(commands) / fps * 1e9)
-    return asdict(Trajectory(commands, start_ns, fps, end_ns, call_id), recurse=False)
+    return asdict(Trajectory(commands, start_ns, fps, end_ns), recurse=False)
 
 
 def test_player_waypoint_wakeups_do_not_advance_the_inner_run(execution):
@@ -1491,7 +1485,7 @@ def test_existing_codecs_decode_wire_arrays_and_timing_for_the_player(execution)
         | PackFields(decode_layout={'joints': ['joints'], 'grip': ['grip']})
     )
     timing_keys = ('start_ns', 'fps', 'end_ns')
-    assert {field.name for field in fields(Trajectory)} == {'commands', 'call_id', *timing_keys}
+    assert {field.name for field in fields(Trajectory)} == {'commands', *timing_keys}
     codec = spec.from_spec((commands & PackFields(decode_layout={key: [key] for key in timing_keys})).to_spec())
     assert isinstance(codec, Codec)
     response = {
@@ -1747,7 +1741,7 @@ def test_chunked_schedule_starts_the_first_trajectory_when_the_answer_is_read(ex
         model.answer_with(chunk)
         clock.advance_to_ns(350_000_000)
         step = run.send({POSITION: 43})
-        assert Trajectory(**step.commands) == Trajectory(chunk, 350_000_000, 10, 550_000_000, call_id=0)
+        assert Trajectory(**step.commands) == Trajectory(chunk, 350_000_000, 10, 550_000_000)
         assert step.resume_at_ns == 550_000_000
         assert model.requests == [{**obs, CALL_ID: 0, CALL_TIMINGS: []}]
     finally:

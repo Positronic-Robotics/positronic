@@ -310,12 +310,6 @@ def set_attrs(span: Span, **attrs: Any) -> None:
     span.set_attributes(_encode_attrs(attrs))
 
 
-def set_active_attrs(**attrs: Any) -> None:
-    """Stamp attributes on the span that ``span`` made active in this context. Inert when no span is active."""
-    if (active := _active_span.get()) is not None:
-        set_attrs(active, **attrs)
-
-
 _timing_sink: ContextVar[Callable[[str, int, int], None] | None] = ContextVar('timing_sink', default=None)
 
 
