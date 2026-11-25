@@ -64,7 +64,6 @@ _LIMIT_GRIPPER_EFFORT = 'limit_gripper_effort'  # the force limit of i2rt's grip
 _YAM_EXTRA_HINT = 'Re-run with the yam extra:\n  uv run --locked --extra yam ...\n'
 _LOOP_STOPPED = 'the control loop of the chain stopped, so its motors take no commands'
 _RELEASED_UNPARKED = f'Releasing the arm with no park and no hold: {_LOOP_STOPPED}'
-_NOT_ENGAGED = 'The YAM arm is not engaged: the driver holds no chain until the engaged input turns on'
 
 
 class ChainFault(RuntimeError):
@@ -1045,8 +1044,9 @@ class Robot(pimm.ControlSystem):
                 self._answer_start_calls(asked, missed)
                 asked = []
                 serving = _Serving(joints, grip, missed, idle_since=clock.now())
-                if (yield from self._serve_until_parked(arm, serving, should_stop, clock)):
-                    return None
+                yield from self._serve_until_parked(arm, serving, should_stop, clock)
+                if not should_stop.value:
+                    return None  # parked for ``engaged`` off, so the chain closes with no shutdown park
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
                 lost = self._report_lost(exc)
@@ -1064,20 +1064,19 @@ class Robot(pimm.ControlSystem):
 
     def _serve_until_parked(
         self, arm: _Arm, serving: _Serving, should_stop: pimm.SignalReceiver, clock: pimm.Clock
-    ) -> Generator[pimm.Command, None, bool]:
-        """Serve the arm until ``should_stop``, or until ``engaged`` turns off and a park is verified. Return True
-        after the verified park, and False after ``should_stop``."""
+    ) -> Generator[pimm.Command, None, None]:
+        """Serve the arm until ``should_stop``, or until ``engaged`` turns off and a park is verified."""
         while True:
             yield from self._serve(arm, serving, should_stop, clock)
             if should_stop.value:
-                return False
+                return
             logger.info('The engaged input turned off: parking the arm before the torque goes off')
             serving.q_target, serving.grip_target, failure = yield from arm.park(
                 arm.read_grip(arm.observations()), interrupt_on_stop=False
             )
             if failure is None:
                 logger.info('The arm is parked; the torque goes off until the engaged input turns on')
-                return True
+                return
             serving.failed_move, serving.park_failed = failure, True
             logger.critical('Parking failed; the arm stays powered until the engaged input turns on and off again')
 
@@ -1089,7 +1088,9 @@ class Robot(pimm.ControlSystem):
         logger.info('The arm is not engaged: the driver opens the chain when the engaged input turns on')
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
         refused = self._refused_moves()
-        fault = DeviceFault(_NOT_ENGAGED, FaultKind.ARM)
+        fault = DeviceFault(
+            'The YAM arm is not engaged: the driver holds no chain until the engaged input turns on', FaultKind.ARM
+        )
         while not should_stop.value and not self.engaged.value:
             self._refuse(refused, fault)
             asked = [*asked, *self.ready.incoming(), *self._recoveries()]
