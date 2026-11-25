@@ -194,8 +194,7 @@ class _GcSteps:
 class _RecordWait:
     """Sum the time that the samples between two steps spend in the recorder, and stamp it on the next step span.
 
-    A sample between steps records no span of its own. On a rig these samples give most of the spans, and the export of
-    each batch stops the step loop.
+    A sample between steps records no span of its own.
     """
 
     def __init__(self) -> None:
