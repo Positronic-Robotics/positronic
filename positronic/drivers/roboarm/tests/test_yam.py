@@ -683,16 +683,26 @@ def test_an_arm_whose_fingers_read_off_is_tuned_not_edited(world, monkeypatch, g
 def test_the_hardware_configs_give_each_arm_its_own_tuning():
     wide = dataclasses.replace(DEFAULT_TUNING, max_correction_rad=0.2)
     slow = dataclasses.replace(yam.MOVE_SETTLE, max_speed_rad_s=0.2)
+    gentle = dataclasses.replace(DEFAULT_GRASP, close_rate_per_s=1.0)
     arm = roboarm_cfg.yam.override(**{
         'park_tuning.max_correction_rad': 0.2,
         'move_tuning.max_speed_rad_s': 0.2,
+        'grasp_tuning.close_rate_per_s': 1.0,
     }).instantiate()
-    assert (arm._park_tuning, arm._move_tuning) == (wide, slow)
+    assert (arm._park_tuning, arm._move_tuning, arm._grasp_tuning) == (wide, slow, gentle)
     bimanual = embodiment_cfg.yam_bimanual.override(
-        cameras={}, **{'park_tuning.left.max_correction_rad': 0.2, 'move_tuning.right.max_speed_rad_s': 0.2}
+        cameras={},
+        **{
+            'park_tuning.left.max_correction_rad': 0.2,
+            'move_tuning.right.max_speed_rad_s': 0.2,
+            'grasp_tuning.right.close_rate_per_s': 1.0,
+        },
     )
     arms = [system for system in bimanual.instantiate().control_systems if isinstance(system, yam.Robot)]
-    assert [(arm._park_tuning, arm._move_tuning) for arm in arms] == [(wide, yam.MOVE_SETTLE), (DEFAULT_TUNING, slow)]
+    assert [(arm._park_tuning, arm._move_tuning, arm._grasp_tuning) for arm in arms] == [
+        (wide, yam.MOVE_SETTLE, DEFAULT_GRASP),
+        (DEFAULT_TUNING, slow, gentle),
+    ]
 
 
 def test_the_bimanual_embodiment_states_a_frame_for_each_pose_signal_of_both_arms():

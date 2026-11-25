@@ -13,6 +13,7 @@ from positronic.eval import keys as eval_keys
 
 if TYPE_CHECKING:
     from positronic.drivers.roboarm.yam.compensation import Compensation
+    from positronic.drivers.roboarm.yam.grasp import GraspTuning
     from positronic.drivers.roboarm.yam.settle import SettleTuning
 
 
@@ -99,6 +100,10 @@ def yam(robot_arm, cameras):
         keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
         keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_move_tuning,
     },
+    grasp_tuning={
+        keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_grasp_tuning,
+        keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_grasp_tuning,
+    },
     # World-frame arm-base mount positions of the sim scene the training data uses: the arms at (0.30, ±0.305),
     # facing +x, on the 0.011 base plate of the 0.30 tabletop. z is 9.5mm below the top of the plate: the base frame
     # of the i2rt model is 9.5mm below the base frame of the sim arm.
@@ -124,6 +129,7 @@ def yam_bimanual(
     park_after_idle_s: float | None,
     park_tuning: dict[str, 'SettleTuning'],
     move_tuning: dict[str, 'SettleTuning'],
+    grasp_tuning: dict[str, 'GraspTuning'],
 ):
     """Real bimanual i2rt YAM on two CAN chains.
 
@@ -132,7 +138,7 @@ def yam_bimanual(
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
     signal that drives it. ``compensation[side]`` is the gravity model and the friction that i2rt adds to the PD of
-    that arm. ``gripper_force_cap_n`` is the force cap of both grippers (see ``yam.Robot``). Each arm's meta
+    that arm. ``gripper_force_cap_n`` is the hold force cap of both grippers (see ``yam.Robot``). Each arm's meta
     carries the settings that its chain reports.
     """
     from positronic import geom
@@ -146,6 +152,7 @@ def yam_bimanual(
             park_after_idle_s=park_after_idle_s,
             park_tuning=park_tuning[side],
             move_tuning=move_tuning[side],
+            grasp_tuning=grasp_tuning[side],
             gripper_force_cap_n=gripper_force_cap_n,
         )
         for side, channel in zip(keys.BIMANUAL_ARMS, (left_channel, right_channel), strict=True)
