@@ -879,6 +879,34 @@ def test_a_park_that_fails_for_disengaging_keeps_the_torque_on_until_the_input_t
     rig.finish()
 
 
+def test_a_disengaged_arm_whose_park_failed_refuses_a_move_and_holds_where_it_stopped(world, rig):
+    rig.raise_arm()
+    rig.vendor.stuck = True
+    rig.engaged.push(False)
+    rig.tick(60)
+    move = _sync_caller(world, rig)(command.JointPosition(PARK))
+    _until_answered(rig, move)
+    rig.tick(1)
+
+    with pytest.raises(DeviceFault, match='not engaged') as refused:
+        move.result()
+    assert refused.value.kind is FaultKind.ARM
+    np.testing.assert_allclose(rig.vendor.targets[-1][:6], RAISED, atol=0.005)
+    rig.vendor.stuck = False
+    rig.finish()
+
+
+def test_a_ready_call_made_while_disengaged_fails_when_the_world_stops(world):
+    rig = Rig(engaged=False)
+    ready = _readier(world, rig)(None)
+    rig.tick(1)
+    rig.finish()
+
+    with pytest.raises(DeviceFault, match='not engaged'):
+        ready.result()
+    assert rig.connects == 0
+
+
 def test_stop_during_a_move_answers_the_caller_and_parks(world, rig):
     rig.rest()
     caller = pimm.calls.ControlSystemCaller[command.CommandType, None](rig.driver)

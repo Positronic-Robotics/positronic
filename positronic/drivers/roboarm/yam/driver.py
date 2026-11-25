@@ -839,7 +839,7 @@ class _Serving:
     # Why a start or idle park did not arrive; None once the arm reaches the start pose
     failed_move: Exception | None
     idle_since: float | None = None
-    # A park for ``engaged`` off failed, so the arm stays under torque until the input turns on again
+    # A park for ``engaged`` off failed, so the arm holds under torque and refuses moves until the input turns on
     park_failed: bool = False
     parking: Generator[pimm.Command, None, tuple[np.ndarray, float, Exception | None]] | None = None
 
@@ -888,7 +888,8 @@ class Robot(pimm.ControlSystem):
             no force cap, but a ``grasp_tuning`` still caps the launch at its ``touch_effort_nm``. i2rt's own limiter
             still holds a stalled gripper with its force limit, which the arm meta names. i2rt's sim chain runs no cap.
         :param engaged: The value of the ``engaged`` input until a message carries another. False opens no chain and
-            moves no arm until the input turns on.
+            moves no arm until the input turns on. Off parks an open chain once the move in progress ends, so it is not
+            a stop.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
@@ -1082,7 +1083,7 @@ class Robot(pimm.ControlSystem):
         self, asked: list[pimm.calls.Call[None, None]], should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, list[pimm.calls.Call[None, None]]]:
         """Refuse every move, and keep each ready and recover call with ``asked``, until ``engaged`` turns on or the
-        world stops. Return the calls kept, for the start move to answer."""
+        world stops. Return the calls kept, for the start move to answer. A stop fails them."""
         logger.info('The arm is not engaged: the driver opens the chain when the engaged input turns on')
         limiter = pimm.RateLimiter(clock, hz=_CONTROL_HZ)
         refused = self._refused_moves()
@@ -1093,6 +1094,10 @@ class Robot(pimm.ControlSystem):
             self._refuse(refused, fault)
             asked = [*asked, *self.ready.incoming(), *self._recoveries()]
             yield limiter.wait()
+        if should_stop.value:
+            for call in asked:
+                call.set_exception(fault)
+            return []
         return asked
 
     def _refused_moves(self) -> tuple[Moves[command.CommandType], Moves[float]]:
@@ -1166,7 +1171,8 @@ class Robot(pimm.ControlSystem):
         self, arm: _Arm, serving: _Serving, should_stop: pimm.SignalReceiver, clock: pimm.Clock
     ) -> Generator[pimm.Command, None, None]:
         """Hold the targets of ``serving``, then answer calls and commands and park when idle until ``should_stop``, or
-        until ``engaged`` is off. After a failed park for ``engaged``, it serves until the input turns on and off."""
+        until ``engaged`` is off. After a failed park for ``engaged``, it holds the arm and refuses moves until the
+        input turns on."""
         try:
             with Moves[float](self.sync_grip, self.target_grip) as fingers, self._answer_failed_grip_move(fingers):
                 while not should_stop.value:
@@ -1174,6 +1180,9 @@ class Robot(pimm.ControlSystem):
                         serving.park_failed = False
                     elif not serving.park_failed:
                         return
+                    else:
+                        yield self._hold_unparked(arm, serving, fingers)
+                        continue
                     if ready := list(self.ready.incoming()):
                         yield from self._serve_start_calls(
                             arm, serving, ready, clock, move=serving.failed_move is not None
@@ -1192,6 +1201,14 @@ class Robot(pimm.ControlSystem):
         finally:
             if serving.parking is not None:
                 serving.parking.close()
+
+    def _hold_unparked(self, arm: _Arm, serving: _Serving, fingers: Moves[float]) -> pimm.Command:
+        """Refuse every move, and hold the arm where the failed park left it, for one control tick."""
+        error = DeviceFault('The YAM arm is not engaged, and its park failed: it refuses moves', FaultKind.ARM)
+        self._refuse((arm.moves, fingers), error)
+        arm.command_step_toward(serving.q_target, serving.grip_target)
+        arm.publish(arm.observations())
+        return arm.limiter.wait()
 
     @staticmethod
     @contextlib.contextmanager
