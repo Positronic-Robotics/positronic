@@ -91,7 +91,9 @@ def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_
     asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=5))
 
 
-@pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
+@pytest.mark.parametrize(
+    'route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js', '/quest-trigger.js']
+)
 def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
     monkeypatch.chdir(tmp_path)
     with _served_webxr() as base:
