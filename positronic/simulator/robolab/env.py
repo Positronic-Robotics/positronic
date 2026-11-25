@@ -13,6 +13,9 @@ The wire contract:
   (``yam_spec.ROOT_IN_RIG_WORLD``), and ``robot_meta`` carries the arm mounts in that frame.
 - The reset token names the RoboLab env and the instruction variant, and carries no seed: RoboLab's eval path has no
   seed hook. A reset rebuilds the scene only when the task key or the clone count changes.
+- A success ends its episode ``success_tail.TAIL_SEC`` later, or earlier at the time limit or at a fault of its arm
+  state, so that the video shows the result. The clone runs on under its client's commands until then, and the
+  success stays.
 - A clone that terminates freezes, with a zero action, on its verdict until the slowest clone of the batch ends.
 - ``gt_state`` (``keys.GT_STATE``) holds per slot, for each contact object but the table, its pose (position in the
   clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
@@ -35,11 +38,14 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
+import arm_fault
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import keys
+import link_pose
 import numpy as np
 import pose_ik
 import protocol  # pyright: ignore[reportMissingImports]
+import success_tail
 import torch
 import yam_spec
 from isaaclab.app import AppLauncher
@@ -110,6 +116,7 @@ from isaaclab.utils.math import (  # noqa: E402
     quat_mul,
     subtract_frame_transforms,
 )
+from pxr import Usd, UsdPhysics  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 import robolab.constants  # noqa: E402
 from robolab.core.environments.config import parse_env_cfg  # noqa: E402  # pyright: ignore[reportMissingImports]
@@ -158,8 +165,9 @@ class RobolabEnv(EnvProtocol):
     and cached; ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's own reset
     events, or restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
     forwarded commands into its row of the robot's action and reports, per slot, ``done`` (episode over)
-    and ``success`` (the task's success termination fired). A slot whose arm state stops being finite is
-    faulted: its episode ends as a failure with ``fault``, and the other slots continue.
+    and ``success`` (the task's success termination fired). A slot whose arm state has a fault
+    (``arm_fault.arm_faults``) ends its episode as a failure with ``fault``, and the other slots continue. A fault
+    after the step of a success only ends the tail of that success.
 
     The scene clones, one per slot and at most ``max_envs``, share one task, one sim and one ``env.step``; the whole
     batch reruns the same task on every reset, since RoboLab clones a single registered env.
@@ -171,6 +179,9 @@ class RobolabEnv(EnvProtocol):
     _TABLE = 'table'
     # The env origin in the world frame that the server reports every pose in.
     _ENV_IN_WORLD = np.zeros(3, dtype=np.float32)
+    # Asset colliders out of the physics, by prim path tail. orange1's stem is 2 mm thick and stands 8.5 mm out of
+    # the fruit, and a gripper finger that pins it blows the solver up.
+    _DISABLED_COLLIDERS = ('/Orange_01/OrangeStem',)
 
     def __init__(self, max_envs: int = 1):
         if max_envs < 1:
@@ -194,11 +205,13 @@ class RobolabEnv(EnvProtocol):
         self._robot: Any = None
         self._joint_ids: Any = None  # every arm joint of the robot, in the order of the wire arms
         self._grip: Any = None  # each slot's latest grip command per arm, which an arm with no command holds
-        self._faulted: Any = None  # per slot, whether its arm state stopped being finite in this episode
+        self._faults: list[str | None] = []  # per slot, the first fault of its arm state in this episode
         self._world: Any = None
         self._gripper = ''  # the contact gripper label that the gripper contact of the ``gt_state`` reads
         self._objects: list[str] = []
+        self._links: dict[str, tuple[str, str]] = {}  # ``link_pose.articulation_links`` of the world
         self._subtask_recorder: Any = None
+        self._success_tail: success_tail.SuccessTail | None = None
         self._shown_chains: list[Any] = []  # each slot's chain machine at the last frame
         self._episode = 0  # the number of the current episode, counted by resets
         self._episode_task = ''  # the task of the current episode
@@ -264,11 +277,12 @@ class RobolabEnv(EnvProtocol):
             scene.episode_length_s = episode_length_s
             # RoboLab takes a time-out within two control steps for a physics artifact and resets the clone in
             # place, so such an episode never ends.
-            if math.ceil(episode_length_s / (scene.sim.dt * scene.decimation)) <= 2:
+            if math.ceil(episode_length_s / (scene.sim.dt * scene.decimation)) <= success_tail.RESET_IN_PLACE_STEPS:
                 raise ValueError(f'an episode of {episode_length_s} s is too short for RoboLab to end it')
         self._env, self._env_cfg = create_env(
             scene, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
         )
+        self._disable_colliders()
         self._control_dt = self._env_cfg.sim.dt * self._env_cfg.decimation
         # The sim context's physics ``step`` and ``render`` are the two native phases inside ``env.step``;
         # re-wrapped per build (a fresh env brings a fresh SimulationContext) so their spans nest under the
@@ -276,6 +290,9 @@ class RobolabEnv(EnvProtocol):
         if telemetry.active():
             self._env.sim.step = self._timed_phase(self._env.sim.step, 'physics')
             self._env.sim.render = self._timed_phase(self._env.sim.render, 'render')
+        self._success_tail = success_tail.SuccessTail(self._num_envs, self._control_dt)
+        terminations = self._env.termination_manager
+        terminations.compute = self._tailed(terminations.compute)
         # ``META_INSTRUCTION`` is the instruction text in the phrasing of the reset: ``create_env`` keeps the selected
         # phrasings as a ``{phrasing: text}`` dict. The rest names the task.
         self._meta = {
@@ -288,8 +305,15 @@ class RobolabEnv(EnvProtocol):
         self._bind_robot()
         self._world = get_world(self._env)
         self._objects = [name for name in self._env_cfg.contact_object_list if name != self._TABLE]
+        self._links = link_pose.articulation_links(self._world)
         # None for a task without subtasks: RoboLab adds no term for it.
         self._subtask_recorder = self._env.recorder_manager.get_term(SubtaskCompletionRecorderTerm)
+
+    def _disable_colliders(self) -> None:
+        """Take each collider of ``_DISABLED_COLLIDERS`` in every scene clone out of the physics."""
+        for prim in Usd.PrimRange(self._env.sim.stage.GetPrimAtPath(self._env.scene.env_ns)):
+            if str(prim.GetPath()).endswith(self._DISABLED_COLLIDERS) and prim.HasAPI(UsdPhysics.CollisionAPI):
+                UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Set(False)
 
     @abstractmethod
     def _register(self, task: str) -> None:
@@ -316,10 +340,38 @@ class RobolabEnv(EnvProtocol):
     def _end_episode(self) -> None:
         """Report what the episode that ends has to report."""
 
-    def _nonfinite_arms(self) -> torch.Tensor:
-        """Per slot, whether its arm joints or joint velocities hold a value that is not finite, ``(num_envs,)``."""
-        joints = torch.cat([self._measured_q(), self._robot.data.joint_vel[:, self._joint_ids]], dim=1)
-        return ~torch.isfinite(joints).all(dim=1)
+    def _arm_faults(self) -> list[str | None]:
+        """Per slot, the fault of its arm state now, or ``None``."""
+        assert self._control_dt is not None  # set by the build that a reset runs first
+        data = self._robot.data
+        return arm_fault.arm_faults(
+            self._measured_q().cpu().numpy(),
+            data.joint_vel[:, self._joint_ids].cpu().numpy(),
+            data.joint_pos_limits[:, self._joint_ids].cpu().numpy(),
+            self._control_dt,
+        )
+
+    def _tailed(self, compute: Callable[[], torch.Tensor]) -> Callable[[], torch.Tensor]:
+        """The termination manager's ``compute``, with each success termination held back for its replay tail.
+
+        RoboLab counts every termination that is not a time-out as a success. The write goes into ``terminated``
+        itself, because it is the manager's own buffer: ``env.step``, RoboLab's freeze and its recorders read it.
+        """
+        terminations = self._env.termination_manager
+
+        def tailed() -> torch.Tensor:
+            compute()
+            assert self._success_tail is not None
+            ended = self._success_tail.step(
+                terminations.terminated.cpu().numpy(),
+                terminations.time_outs.cpu().numpy(),
+                np.array([fault is not None for fault in self._arm_faults()]),
+                self._env.episode_length_buf.cpu().numpy(),
+            )
+            terminations.terminated[:] = torch.as_tensor(ended, device=terminations.terminated.device)
+            return terminations.dones
+
+        return tailed
 
     @telemetry.traced(telemetry.SPAN_ENV_RESET)
     def reset(self, token: dict[str, Any], slots: int | None = None) -> dict[str, Any]:
@@ -342,6 +394,8 @@ class RobolabEnv(EnvProtocol):
             assert self._env is not None  # the else runs only when a prior reset built the cached env
             self._env.reset_eval_state()  # unfreeze terminated envs so the next trial runs on the cached env
         assert self._env is not None  # built above (key change) or already live (cached)
+        assert self._success_tail is not None
+        self._success_tail.reset()
         self._grip.zero_()
         self._shown_chains = [None] * self._num_envs
         # RoboLab's own episode runner resets twice — the first randomizes, the second settles the freshly
@@ -357,7 +411,7 @@ class RobolabEnv(EnvProtocol):
             # objects for contact sensing after the shipped demos were recorded).
             merged = self._merged_state(self._env.scene.get_state(is_relative=True), state)
             obs, _extras = self._env.reset_to(merged, None, is_relative=True)
-        self._faulted = self._nonfinite_arms()
+        self._faults = self._arm_faults()
         # Zero progress: the recorder's infos still hold the prior trial until a step refreshes them.
         observed = self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32), reset=True)
         return {
@@ -375,29 +429,32 @@ class RobolabEnv(EnvProtocol):
     @telemetry.traced(telemetry.SPAN_ENV_STEP)
     def step(self, actions: dict[int, dict[str, Any]]) -> dict[str, Any]:
         assert self._env is not None  # step is only served after a reset built the env
+        assert self._success_tail is not None  # built with the env
         # Isaac pauses its timeline while assets stream in; stepping a paused sim stalls, so pump the kit
         # update loop until it plays again (robolab's episode loop does the same before every step).
         while not self._timeline.is_playing():
             self._kit_app.update()
+        succeeded_earlier = self._success_tail.succeeded()
         obs, _reward, _term, _trunc, _info = self._env.step(self._action(actions))
-        self._faulted |= self._nonfinite_arms()
+        now = success_tail.verdict_faults(self._arm_faults(), succeeded_earlier)
+        self._faults = [first or fault for first, fault in zip(self._faults, now, strict=True)]
         # ``done``/``success`` key off RoboLab's frozen-env accounting, not the raw term/trunc flags: a
         # termination within the first two steps is a physics artifact its env resets in place and keeps
         # running (never frozen, no verdict), while a real success/time-out freezes the env and records one. A
-        # faulted slot is done too, with no success.
+        # success freezes at the end of its tail. A faulted slot is done too, with no success. A fault after the step of
+        # a success ends the tail, and the success stays.
         frozen = self._frozen_slots()
-        faulted = self._faulted.tolist()
         results = self._env.get_env_results()
         observed = self._observe(obs, self._subtask_progress(), reset=False)
         return {
             protocol.SLOTS: [
                 {
                     protocol.FRAME_OBS: observed[slot],
-                    protocol.FRAME_DONE: frozen[slot] or faulted[slot],
-                    protocol.FRAME_SUCCESS: frozen[slot] and not faulted[slot] and bool(results[slot]['success']),
-                    **({keys.FRAME_FAULT: keys.FAULT_NONFINITE_ARM} if faulted[slot] else {}),
+                    protocol.FRAME_DONE: frozen[slot] or fault is not None,
+                    protocol.FRAME_SUCCESS: frozen[slot] and fault is None and bool(results[slot]['success']),
+                    **({keys.FRAME_FAULT: fault} if fault is not None else {}),
                 }
-                for slot in range(self._num_envs)
+                for slot, fault in enumerate(self._faults)
             ],
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
@@ -431,7 +488,7 @@ class RobolabEnv(EnvProtocol):
         """Every slot's ``keys.GT_STATE`` entry: a flat dict from a recorded suffix to its value."""
         states: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
         for name in self._objects:
-            pos, quat = self._world.get_pose(name, is_relative=True)
+            pos, quat = link_pose.object_pose(self._world, name, self._links)
             poses = torch.cat([pos, quat], dim=-1).cpu().numpy().astype(np.float32)
             poses[:, :3] += self._ENV_IN_WORLD
             for slot, pose in enumerate(poses):
@@ -631,13 +688,13 @@ class DroidEnv(RobolabEnv):
                 case other:
                     raise ValueError(f'unknown command type {other!r}')
         if pose_slots:
-            # ``pose_ik`` cannot solve from joints or towards a pose that is not finite, so such a slot holds.
-            finite = torch.isfinite(pose_pos).all(dim=1) & torch.isfinite(pose_quat).all(dim=1) & ~self._faulted
-            solvable = [slot for slot in pose_slots if finite[slot]]
+            # ``pose_ik`` cannot solve from a faulted arm state or towards a pose that is not finite, so the slot holds.
+            finite = torch.isfinite(pose_pos).all(dim=1) & torch.isfinite(pose_quat).all(dim=1)
+            solvable = [slot for slot in pose_slots if finite[slot] and self._faults[slot] is None]
             if solvable:
                 targets[solvable] = self._solve_ik(pose_pos, pose_quat, solvable)
         # The rig's driver refuses a command that is not finite. Holding it here keeps the clone's physics finite.
-        # The row of a faulted slot stays not finite, because its measured joints are not finite.
+        # The row of a slot with a nonfinite fault stays not finite, because its measured joints are not finite.
         refused = ~torch.isfinite(targets).all(dim=1)
         targets[refused] = measured[refused]
         return targets

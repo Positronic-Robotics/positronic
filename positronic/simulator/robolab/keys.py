@@ -28,6 +28,8 @@ FRAME_FAULT = 'fault'
 FAULT = 'robolab.fault'
 # The fault of a clone whose arm joints or joint velocities hold a value that is not finite.
 FAULT_NONFINITE_ARM = 'nonfinite_arm_state'
+# The fault of a clone whose finite arm state is far outside what the arm can have (``arm_fault.arm_faults``).
+FAULT_ARM_OUT_OF_RANGE = 'arm_state_out_of_range'
 
 # The fields of a reset token. The episode length is absent when the task sets it, the state when the scene randomizes.
 TOKEN_TASK = 'task'

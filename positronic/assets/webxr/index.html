@@ -69,6 +69,7 @@
     </section>
     <script type="module">
         import { PANEL_MODE, WebXRVideoPlayer } from './video-player.js';
+        import { bendQuestTrigger } from './quest-trigger.js';
         import { startXRApp } from '/core.js';
 
         // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
@@ -167,7 +168,8 @@
               if (!gripPose) continue;
               const pos = gripPose.transform.position;
               const orient = gripPose.transform.orientation;
-              const buttons = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
+              const values = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
+              const buttons = bendQuestTrigger(values, inputSource.profiles);
               controllers[inputSource.handedness] = {
                 position: [pos.x, pos.y, pos.z],
                 orientation: [orient.w, orient.x, orient.y, orient.z],
