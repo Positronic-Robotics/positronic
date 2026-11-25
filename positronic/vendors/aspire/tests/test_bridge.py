@@ -11,7 +11,7 @@ from positronic.drivers.roboarm.command import CartesianPosition, JointPosition
 from positronic.policy.base import PolicyEnd
 from positronic.policy.keys import END
 from positronic.vendors.aspire.bridge import BridgeSettings, CapBridge
-from positronic.vendors.aspire.contracts import EnvironmentAdapter
+from positronic.vendors.aspire.contracts import EnvironmentAdapter, Pose, RobotState, SynchronizedTrajectory, Trajectory
 
 ARMS = keys.BIMANUAL_ARMS
 QUAT = geom.Rotation.Representation.QUAT
@@ -308,6 +308,47 @@ def test_a_trajectory_waits_for_its_final_gripper_target(run):
         rig,
     )
     completed(bridge)
+
+
+def test_a_trajectory_with_joint_names_other_than_the_measured_ones_is_refused(run):
+    bridge, chunks = run("""
+        state = get_robot_state()
+        start = state.joint_positions['right']
+        names = list(reversed(state.joint_names['right']))
+        one = Trajectory(joint_positions=[start], dt_s=0.2, joint_names=names, planner='test', collision_aware=False,
+                         expected_start=state, arm='primary')
+        single = execute_trajectory(one)
+        assert single.error.code == 'invalid_request' and not single.diagnostics['accepted'], single
+        both = SynchronizedTrajectory(joint_positions={'left': [state.joint_positions['left']], 'right': [start]},
+                                      dt_s=0.2, joint_names={'left': state.joint_names['left'], 'right': names},
+                                      planner='test', collision_aware=False, expected_start=state)
+        synchronized = execute_trajectory(both)
+        assert synchronized.error.code == 'invalid_request' and not synchronized.diagnostics['accepted'], synchronized
+    """)
+    completed(bridge)
+    assert all(isinstance(element[command('right')], JointPosition) for chunk in chunks for element in chunk)
+
+
+def a_trajectory(kind: type, dt_s: float) -> Trajectory | SynchronizedTrajectory:
+    pose = Pose(position=np.zeros(3), quaternion_wxyz=np.array([1.0, 0.0, 0.0, 0.0]), frame='world')
+    state = RobotState({'right': np.zeros(6)}, {'right': np.zeros(6)}, {'right': pose}, {'right': 1.0}, 'world')
+    common = {'dt_s': dt_s, 'planner': 'test', 'collision_aware': False, 'expected_start': state}
+    names = state.joint_names['right']
+    if kind is Trajectory:
+        return Trajectory(joint_positions=[np.zeros(6)], joint_names=names, arm='right', **common)
+    return SynchronizedTrajectory(joint_positions={'right': [np.zeros(6)]}, joint_names={'right': names}, **common)
+
+
+@pytest.mark.parametrize('kind', [Trajectory, SynchronizedTrajectory])
+@pytest.mark.parametrize('dt_s', [0.0, -0.2, math.nan, math.inf])
+def test_a_trajectory_refuses_a_period_that_is_not_finite_and_positive(kind, dt_s):
+    with pytest.raises(ValueError, match='dt_s'):
+        a_trajectory(kind, dt_s)
+
+
+@pytest.mark.parametrize('kind', [Trajectory, SynchronizedTrajectory])
+def test_a_trajectory_takes_the_smallest_positive_period(kind):
+    assert a_trajectory(kind, math.ulp(0.0)).dt_s == math.ulp(0.0)
 
 
 def test_get_observation_carries_the_rgb_views(run):

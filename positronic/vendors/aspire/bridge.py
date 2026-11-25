@@ -582,17 +582,23 @@ class CapBridge:
         if isinstance(trajectory, Trajectory):
             arm = self._arm(trajectory.arm)
             waypoints = {arm: trajectory.joint_positions}
+            names = {arm: trajectory.joint_names}
             grippers = None if trajectory.gripper_positions is None else {arm: trajectory.gripper_positions}
         else:
             waypoints = {self._arm(name): joints for name, joints in trajectory.joint_positions.items()}
+            names = {self._arm(name): joint_names for name, joint_names in trajectory.joint_names.items()}
             grippers = None
             if trajectory.gripper_positions is not None:
                 grippers = {self._arm(name): values for name, values in trajectory.gripper_positions.items()}
-        measured = self.get_robot_state().joint_positions
+        state = self.get_robot_state()
         start = trajectory.expected_start.joint_positions
         for arm in waypoints:
+            if arm not in names or tuple(names[arm]) != state.joint_names[arm]:
+                raise ApiError(
+                    ErrorCode.INVALID_REQUEST, f'the joint names of {arm!r} are not the measured joint names'
+                )
             planned = start.get(arm)
-            if planned is None or np.max(np.abs(measured[arm] - planned)) > TRAJECTORY_START_TOLERANCE_RAD:
+            if planned is None or np.max(np.abs(state.joint_positions[arm] - planned)) > TRAJECTORY_START_TOLERANCE_RAD:
                 raise ApiError(ErrorCode.STALE_PLAN, f'the trajectory of {arm!r} does not start at the measured joints')
         count = len(next(iter(waypoints.values())))
         ticks = max(1, round(count * trajectory.dt_s * self._settings.fps))

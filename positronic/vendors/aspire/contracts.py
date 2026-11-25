@@ -5,6 +5,7 @@ License 2.0 (see ``NOTICE``); the field names, defaults and result semantics are
 RGB only: its depth, intrinsics and pose are ``None``, because the rig sends no calibrated depth.
 """
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -282,8 +283,8 @@ class Trajectory:
         positions = _vector(self.joint_positions, 'joint_positions', (None, JOINT_DIMENSION))
         if positions.shape[0] == 0:
             raise ValueError('joint_positions must contain at least one waypoint')
-        if not self.dt_s > 0:
-            raise ValueError('dt_s must be positive')
+        if not math.isfinite(self.dt_s) or self.dt_s <= 0:
+            raise ValueError('dt_s must be finite and positive')
         object.__setattr__(self, 'joint_positions', positions)
         if self.gripper_positions is not None:
             grippers = _vector(self.gripper_positions, 'gripper_positions', (positions.shape[0],))
@@ -317,8 +318,8 @@ class SynchronizedTrajectory:
         lengths = {value.shape[0] for value in positions.values()}
         if len(lengths) != 1 or lengths == {0}:
             raise ValueError('all synchronized arms must have the same nonzero waypoint count')
-        if not self.dt_s > 0:
-            raise ValueError('dt_s must be positive')
+        if not math.isfinite(self.dt_s) or self.dt_s <= 0:
+            raise ValueError('dt_s must be finite and positive')
         object.__setattr__(self, 'joint_positions', MappingProxyType(positions))
         if self.gripper_positions is not None:
             if set(self.gripper_positions) != set(positions):
