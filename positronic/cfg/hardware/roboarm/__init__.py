@@ -163,7 +163,7 @@ def yam_friction_fade(zero_below_rad_s: float, full_from_rad_s: float) -> 'Frict
     park_tuning=yam_park_tuning,
     move_tuning=yam_move_tuning,
     grasp_tuning=yam_grasp_tuning,
-    gripper_force_cap_n=None,
+    gripper_force_cap_n=20.0,
 )
 def yam(
     channel: str,

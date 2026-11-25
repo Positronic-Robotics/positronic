@@ -848,7 +848,7 @@ class Robot(pimm.ControlSystem):
         park_tuning: SettleTuning = PARK_SETTLE,
         move_tuning: SettleTuning = MOVE_SETTLE,
         grasp_tuning: GraspTuning = DEFAULT_GRASP,
-        gripper_force_cap_n: float | None = None,
+        gripper_force_cap_n: float | None = 20.0,
         connect: Callable = _connect,
     ) -> None:
         """

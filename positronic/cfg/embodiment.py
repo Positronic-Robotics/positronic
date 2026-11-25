@@ -112,7 +112,7 @@ def yam(robot_arm, cameras):
         keys.LEFT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
         keys.RIGHT_ARM: positronic.cfg.hardware.roboarm.yam_compensation,
     },
-    gripper_force_cap_n=None,
+    gripper_force_cap_n=20.0,
     cameras={
         keys.EXTERIOR_IMAGE: positronic.cfg.hardware.camera.zed_x_top.override(resolution='svga', fps=30),
         keys.WRIST_LEFT_IMAGE: positronic.cfg.hardware.camera.zed_x_one_left.override(resolution='svga', fps=30),
