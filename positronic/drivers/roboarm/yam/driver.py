@@ -931,9 +931,7 @@ class Robot(pimm.ControlSystem):
         # The driver puts a new cap in force before its next command to the chain, also in a move. None or 0 sets no
         # cap. The park on shutdown does not read it.
         self.gripper_force_cap_n = pimm.DefaultingReceiver[float | None](self, default=self._gripper_force_cap_n)
-        # Off, the driver opens no chain. Where a chain is open, it parks the arm, and cuts the torque only after the
-        # park is verified. A park that fails holds the arm under torque until the input turns on and off again. Moves
-        # are refused, and ready and recover calls wait for the start move after the input turns on.
+        # Off: no chain. An open chain parks, and the torque goes off only after a verified park.
         self.engaged = pimm.DefaultingReceiver[bool](self, default=engaged)
 
     @property
