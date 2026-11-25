@@ -88,7 +88,18 @@ class BridgeSettings:
     )
 
     def __post_init__(self) -> None:
-        for name in ('fps', 'round_s', 'call_timeout_s', 'think_timeout_s'):
+        for name in (
+            'fps',
+            'round_s',
+            'call_timeout_s',
+            'think_timeout_s',
+            'position_tolerance_m',
+            'rotation_tolerance_rad',
+            'joint_tolerance_rad',
+            'grip_tolerance',
+            'still_joint_rad',
+            'still_grip',
+        ):
             check_finite_positive(getattr(self, name), name)
         if self.still_rounds < 1:
             raise ValueError('still_rounds must be at least 1')

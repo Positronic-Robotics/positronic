@@ -1,3 +1,4 @@
+import math
 import threading
 from pathlib import Path
 from textwrap import dedent
@@ -143,6 +144,28 @@ def test_each_answer_holds_at_least_one_round(run, settings):
 @pytest.mark.parametrize(('round_s', 'fps', 'ticks'), [(0.25, 10.0, 3), (1.1, 50.0, 55), (0.01, 10.0, 1)])
 def test_a_round_holds_at_least_round_s_and_no_extra_tick(round_s, fps, ticks):
     assert BridgeSettings(fps=fps, round_s=round_s).round_ticks == ticks
+
+
+MOTION_THRESHOLDS = (
+    'position_tolerance_m',
+    'rotation_tolerance_rad',
+    'joint_tolerance_rad',
+    'grip_tolerance',
+    'still_joint_rad',
+    'still_grip',
+)
+
+
+@pytest.mark.parametrize('name', MOTION_THRESHOLDS)
+@pytest.mark.parametrize('value', [0.0, -0.01, math.nan, math.inf])
+def test_settings_refuse_a_motion_threshold_that_is_not_finite_and_positive(name, value):
+    with pytest.raises(ValueError, match=name):
+        BridgeSettings(**{name: value})
+
+
+@pytest.mark.parametrize('name', MOTION_THRESHOLDS)
+def test_settings_take_the_smallest_positive_motion_threshold(name):
+    assert getattr(BridgeSettings(**{name: math.ulp(0.0)}), name) == math.ulp(0.0)
 
 
 def test_a_refused_call_was_not_accepted_and_moves_nothing(run):
