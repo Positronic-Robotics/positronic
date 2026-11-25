@@ -150,15 +150,6 @@ def _build_access_url(host: str, port: int, use_https: bool) -> str:
     return f'{scheme}://{host}:{port}/'
 
 
-def _file_route(path):
-    """A route handler that serves the file at ``path``."""
-
-    async def serve():
-        return FileResponse(path)
-
-    return serve
-
-
 class WebXR(pimm.ControlSystem):
     """WebXR server for a headset or an iPhone AR controller.
 
@@ -237,6 +228,15 @@ class WebXR(pimm.ControlSystem):
             return None
         return msg
 
+    @staticmethod
+    def _file_route(path):
+        """A route handler that serves the file at ``path``."""
+
+        async def serve():
+            return FileResponse(path)
+
+        return serve
+
     def _add_page_routes(self, app: FastAPI) -> None:
         """The page and its scripts, from the package assets."""
 
@@ -275,7 +275,7 @@ class WebXR(pimm.ControlSystem):
         if self.frontend is Frontend.HEADSET:
             scripts += ['video-player.js', 'quest-trigger.js']
         for script in scripts:
-            app.get(f'/{script}')(_file_route(utils.package_assets_path(f'assets/webxr/{script}')))
+            app.get(f'/{script}')(self._file_route(utils.package_assets_path(f'assets/webxr/{script}')))
 
         @app.get('/session-mode.js')
         async def session_mode():

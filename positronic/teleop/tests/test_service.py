@@ -1445,7 +1445,7 @@ def test_the_headset_page_names_the_routes_the_page_state_fields_and_the_input_f
     assert [name for name in contract if not re.search(f"""['"]{re.escape(name)}['"]""", page)] == []
 
 
-# The part of the travel of a Quest 3 trigger that reads 0, measured by a robot gripper
+# The part of the travel of a Quest 3 trigger that reads 0
 DEAD_ZONE = 0.17
 QUEST_3 = ['meta-quest-touch-plus', 'oculus-touch-v3', 'oculus-touch', 'generic-trigger-squeeze-thumbstick']
 needs_node = pytest.mark.skipif(shutil.which('node') is None, reason='node runs the modules of the headset page')
