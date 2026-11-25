@@ -69,6 +69,7 @@
     </section>
     <script type="module">
         import { PANEL_MODE, WebXRVideoPlayer } from './video-player.js';
+        import { bendQuestTrigger } from './quest-trigger.js';
         import { startXRApp } from '/core.js';
 
         // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
@@ -88,11 +89,6 @@
         const CAMERA_BUTTON = 5;
         const CAMERA_HOLD_MS = 1000;
         const STATE_POLL_MS = 500;
-        // A Quest 3 trigger pressed by a robot gripper read 0 for the first sixth of its travel, then about the rest of
-        // the travel to the power 1.45 on a press. The page sends it bent back, so the grip of a press follows the
-        // travel. Values up to the floor are noise of a released trigger. Other controllers send the trigger as is.
-        const QUEST_TRIGGER = { index: 0, floor: 0.02, power: 0.69 };
-        const QUEST_PROFILE = /^(meta-quest-touch|oculus-touch)/;
 
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
@@ -172,11 +168,8 @@
               if (!gripPose) continue;
               const pos = gripPose.transform.position;
               const orient = gripPose.transform.orientation;
-              const buttons = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
-              if (buttons.length > QUEST_TRIGGER.index && inputSource.profiles.some(p => QUEST_PROFILE.test(p))) {
-                const value = Math.max(buttons[QUEST_TRIGGER.index] - QUEST_TRIGGER.floor, 0) / (1 - QUEST_TRIGGER.floor);
-                buttons[QUEST_TRIGGER.index] = Math.min(value, 1) ** QUEST_TRIGGER.power;
-              }
+              const values = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
+              const buttons = bendQuestTrigger(values, inputSource.profiles);
               controllers[inputSource.handedness] = {
                 position: [pos.x, pos.y, pos.z],
                 orientation: [orient.w, orient.x, orient.y, orient.z],

@@ -173,7 +173,7 @@ class WebXR(pimm.ControlSystem):
     - `/video`           -> optional H.264 video (server to client): a JSON ``DecoderConfig`` text message before
                             each key frame, and each frame as a binary Annex B access unit
     - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`, `/session-mode.js`
-    - Headset-only: `/video-player.js`
+    - Headset-only: `/video-player.js`, `/quest-trigger.js`
 
     Parameters
     - port: TCP port to bind.
@@ -228,7 +228,7 @@ class WebXR(pimm.ControlSystem):
             return None
         return msg
 
-    def _add_page_routes(self, app: FastAPI) -> None:
+    def _add_page_routes(self, app: FastAPI) -> None:  # noqa: C901
         """The page and its scripts, from the package assets."""
 
         @app.get('/')
@@ -285,6 +285,10 @@ class WebXR(pimm.ControlSystem):
             @app.get('/video-player.js')
             async def video_player():
                 return FileResponse(utils.package_assets_path('assets/webxr/video-player.js'))
+
+            @app.get('/quest-trigger.js')
+            async def quest_trigger():
+                return FileResponse(utils.package_assets_path('assets/webxr/quest-trigger.js'))
 
     def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
         """``/video``: each new frame as H.264. Each socket has its own encoder, so its stream starts at a key frame."""

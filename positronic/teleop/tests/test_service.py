@@ -2,7 +2,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import socket
+import subprocess
 import threading
 import time
 import types
@@ -1443,20 +1445,68 @@ def test_the_headset_page_names_the_routes_the_page_state_fields_and_the_input_f
     assert [name for name in contract if not re.search(f"""['"]{re.escape(name)}['"]""", page)] == []
 
 
-@pytest.mark.parametrize(('value', 'travel'), [(0.114, 0.35), (0.255, 0.5), (0.595, 0.75), (0.766, 0.85)])
-def test_the_headset_page_sends_a_quest_trigger_press_linear_in_the_travel_past_the_dead_zone(value, travel):
-    """A robot gripper pressed a Quest 3 trigger to ``travel`` and read ``value``; the trigger reads 0 up to 0.17."""
-    page = Path(package_assets_path('assets/webxr/index.html')).read_text()
-    [(floor, power)] = re.findall(r'const QUEST_TRIGGER = \{ index: 0, floor: ([\d.]+), power: ([\d.]+) \};', page)
-    sent = min(max(value - float(floor), 0) / (1 - float(floor)), 1) ** float(power)
-    assert sent == pytest.approx((travel - 0.17) / (1 - 0.17), abs=0.04)
+# The part of the travel of a Quest 3 trigger that reads 0, measured by a robot gripper
+DEAD_ZONE = 0.17
+QUEST_3 = ['meta-quest-touch-plus', 'oculus-touch-v3', 'oculus-touch', 'generic-trigger-squeeze-thumbstick']
+needs_node = pytest.mark.skipif(shutil.which('node') is None, reason='node runs the modules of the headset page')
 
 
-def test_the_headset_page_bends_the_trigger_of_a_quest_controller_only():
-    page = Path(package_assets_path('assets/webxr/index.html')).read_text()
-    [profile] = re.findall(r'const QUEST_PROFILE = /(.+)/;', page)
-    assert re.match(profile, 'meta-quest-touch-plus') and re.match(profile, 'oculus-touch-v3')
-    assert not re.match(profile, 'sony-playstation-vr2') and not re.match(profile, 'generic-trigger-squeeze')
+def _bend_quest_trigger(cases: list[dict]) -> list[list[float]]:
+    script = """
+    const { bendQuestTrigger } = await import(process.argv[1]);
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    console.log(JSON.stringify(JSON.parse(input).map(c => bendQuestTrigger(c.buttons, c.profiles))));
+    """
+    module = Path(package_assets_path('assets/webxr/quest-trigger.js')).as_uri()
+    node = subprocess.run(
+        ['node', '--input-type=module', '-e', script, module],
+        input=json.dumps(cases),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(node.stdout)
+
+
+def _quest_grip(raw_values: list[float]) -> list[float]:
+    return [buttons[0] for buttons in _bend_quest_trigger([{'buttons': [v], 'profiles': QUEST_3} for v in raw_values])]
+
+
+@needs_node
+@pytest.mark.parametrize(('raw_value', 'travel'), [(0.114, 0.35), (0.255, 0.5), (0.595, 0.75), (0.766, 0.85)])
+def test_the_headset_page_sends_a_quest_trigger_press_linear_in_the_travel_past_the_dead_zone(raw_value, travel):
+    assert _quest_grip([raw_value]) == [pytest.approx((travel - DEAD_ZONE) / (1 - DEAD_ZONE), abs=0.04)]
+
+
+@needs_node
+def test_the_headset_page_sends_a_released_and_a_full_quest_trigger_as_is_and_clamps_values_out_of_range():
+    assert _quest_grip([0.0, 1.0, -0.1, 1.2]) == [0.0, 1.0, 0.0, 1.0]
+
+
+@needs_node
+def test_the_headset_page_sends_a_deeper_quest_trigger_as_a_closer_grip():
+    grips = _quest_grip([i / 20 for i in range(21)])
+    assert all(a < b for a, b in zip(grips, grips[1:], strict=False))
+
+
+@needs_node
+@pytest.mark.parametrize(
+    ('case', 'bent'),
+    [
+        ({'profiles': QUEST_3}, True),
+        ({'profiles': ['oculus-touch-v3', 'oculus-touch', 'generic-trigger-squeeze-thumbstick']}, True),
+        ({'profiles': ['oculus-touch', 'generic-trigger-squeeze']}, False),
+        ({'profiles': ['hp-mixed-reality', 'oculus-touch', 'generic-trigger-squeeze-thumbstick']}, False),
+        ({'profiles': ['valve-index']}, False),
+        ({'profiles': []}, False),
+        ({}, False),
+    ],
+)
+def test_the_headset_page_bends_only_the_trigger_of_a_quest_controller(case, bent):
+    [buttons] = _bend_quest_trigger([{'buttons': [0.255, 0.255, 0.5], **case}])
+    trigger = pytest.approx((0.5 - DEAD_ZONE) / (1 - DEAD_ZONE), abs=0.04) if bent else 0.255
+    assert buttons == [trigger, 0.255, 0.5]
 
 
 def test_the_headset_bridge_sends_the_phase_and_the_control_for_the_phone_page(socket_path):
