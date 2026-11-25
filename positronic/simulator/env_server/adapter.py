@@ -170,6 +170,16 @@ class WireCommandAdapter(EnvAdapter):
                 self._held[name] = msg.data
         return {name: self._channel_payload(name) for name in commands}
 
+    @staticmethod
+    def _joint_target(measured: _Measured | None, delta: np.ndarray) -> np.ndarray:
+        """The absolute joint target of ``delta`` applied at the measured joints."""
+        if measured is None:
+            raise ValueError('a JointDelta needs the measured joints first')
+        delta = np.asarray(delta, dtype=np.float64)
+        if delta.shape != measured.joints.shape:
+            raise ValueError(f'joint delta {delta.shape} vs measured joints {measured.joints.shape}')
+        return measured.joints + delta
+
     def _channel_payload(self, name: str) -> Any:
         if not keys.is_robot_command(name):
             return self._held.get(name, 0.0)
@@ -181,19 +191,9 @@ class WireCommandAdapter(EnvAdapter):
             case roboarm_command.JointDelta(velocities, mode):
                 # The driver's target ``q + delta`` holds until the next command, so a gap between commands
                 # does not move the arm under a torque the target does not balance.
-                cmd = self._held[name] = roboarm_command.JointPosition(_joint_target(measured, velocities), mode)
+                cmd = self._held[name] = roboarm_command.JointPosition(self._joint_target(measured, velocities), mode)
             case roboarm_command.CartesianDelta():
                 # A one-shot relative motion, forwarded once then dropped: after it the arm holds its measured pose.
                 self._held.pop(name)
         pose = None if measured is None else measured.pose
         return _wire_command(_in_env_control_frame(cmd, self.env_control_frame, pose))
-
-
-def _joint_target(measured: _Measured | None, delta: np.ndarray) -> np.ndarray:
-    """The absolute joint target of ``delta`` applied at the measured joints."""
-    if measured is None:
-        raise ValueError('a JointDelta needs the measured joints first')
-    delta = np.asarray(delta, dtype=np.float64)
-    if delta.shape != measured.joints.shape:
-        raise ValueError(f'joint delta {delta.shape} vs measured joints {measured.joints.shape}')
-    return measured.joints + delta
