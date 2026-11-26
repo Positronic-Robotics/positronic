@@ -53,6 +53,9 @@ TEXT_ONLY = 'headset_text_only'
 class _Headset(pimm.ControlSystem):
     """Pass the samples of the headset to the service, and the view of the service to the headset."""
 
+    # How often the bridge logs the camera feeds that reach the service.
+    FEED_LOG_SEC = 10.0
+
     def __init__(self, service: TeleopService, view_fps: float = 30.0):
         check_finite_positive(view_fps, 'view_fps')
         self._service = service
@@ -66,8 +69,18 @@ class _Headset(pimm.ControlSystem):
         # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemEmitter(self)
 
+    def _log_feeds(self) -> None:
+        feeds = self._service.camera_feeds()
+        if feeds:
+            parts = [f'{name} at {f.rate_hz:.1f} Hz, the last {f.age_sec:.2f} s ago' for name, f in feeds.items()]
+            logger.info('Camera images: %s', '; '.join(parts))
+
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
+        next_log = clock.now() + self.FEED_LOG_SEC
         while not should_stop.value:
+            if clock.now() >= next_log:
+                next_log = clock.now() + self.FEED_LOG_SEC
+                self._log_feeds()
             positions = pimm.read_updated(self.controller_positions)
             if positions is not None:
                 buttons = self.buttons.read()
