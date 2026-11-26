@@ -325,6 +325,8 @@ class TeleopService:
         # The `time.monotonic()` instants of the last images of each camera, under `_feed_lock`.
         self._arrivals: dict[str, deque[float]] = {}
         self._feed_lock = threading.Lock()
+        # The images of the shown camera that the service took. A new one changes the view.
+        self._shown_image_count = 0
         # The cameras that the session of this trial sends, from the wait for Ready on
         self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
@@ -471,16 +473,23 @@ class TeleopService:
     def take_images(self, images: Mapping[str, np.ndarray]) -> None:
         """Take camera images of the run, by camera name. Only a running trial takes them."""
         now = time.monotonic()
-        # Atomic with the phase check: one entry of each of two dicts for each camera of the session.
+        # Atomic with the phase check: one entry of each of two dicts for each camera, and one count increment.
         with self._changed:
             if self._phase is not Phase.RUNNING:
                 return
             self._images.update(images)
             self._seen.update(dict.fromkeys(images, now))
+            if self._shown_camera() in images:
+                self._shown_image_count += 1
         # One append for each camera, to a deque of at most `FEED_MAX_IMAGES`.
         with self._feed_lock:
             for name in images:
                 self._arrivals.setdefault(name, deque(maxlen=self.FEED_MAX_IMAGES)).append(now)
+
+    def shown_image_count(self) -> int:
+        """The count of the images of the shown camera that the service took. It changes with each new one."""
+        with self._changed:  # One int read, ordered with the increment in `take_images`.
+            return self._shown_image_count
 
     def camera_feeds(self) -> dict[str, CameraFeed]:
         """The feed of each camera whose images reached the service in the last ``FEED_SEC``."""

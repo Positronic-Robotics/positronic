@@ -1329,13 +1329,14 @@ def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(sock
     bridge.buttons._bind(ManualCommandReceiver())
     page_input = ManualCommandReceiver()
     bridge.page_input._bind(page_input)
-    stop = types.SimpleNamespace(value=False)
-    loop = bridge.run(cast(pimm.SignalReceiver, stop), SystemClock())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
     next(loop)
-    page_input.push({command.TEXT_ONLY: True})
-    next(loop)
-    page_input.push({command.TEXT_ONLY: False})
-    next(loop)
+    for text_only in (True, False):
+        page_input.push({command.TEXT_ONLY: text_only})
+        now[0] += 1 / 16
+        next(loop)
     assert asked == [True, False, True]
 
 
@@ -1359,6 +1360,70 @@ def test_the_headset_bridge_logs_the_camera_feeds_once_each_log_span(socket_path
     assert [record.getMessage() for record in caplog.records] == [
         f'Camera images: {keys.EXTERIOR_IMAGE} at 9.5 Hz, the last 0.04 s ago'
     ]
+
+
+def _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps):
+    """A headset bridge at ``view_fps`` on a fake clock, the time of that clock, the count of the images of the shown
+    camera, and the views that the bridge sends."""
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
+    image_count = [0]
+    monkeypatch.setattr(service, 'shown_image_count', lambda: image_count[0])
+    bridge = command._Headset(service, view_fps=view_fps)
+    views = RecordingEmitter[np.ndarray]()
+    bridge.view._bind(views, clock=SystemClock())
+    bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
+    for receiver in (bridge.controller_positions, bridge.buttons, bridge.page_input):
+        receiver._bind(ManualCommandReceiver())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
+    return loop, now, image_count, views
+
+
+def test_the_headset_bridge_sends_a_new_image_of_the_shown_camera_at_the_next_view_slot(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=8.0)
+    sent = []
+    # One view period is 1/8 s, and the bridge sends the view again after two periods with no new image.
+    for at, new_image in [(0, 0), (10, 1), (11, 1), (14, 0), (18, 0), (25, 0), (33, 0), (34, 0)]:
+        now[0] = at / 64
+        image_count[0] += new_image
+        next(loop)
+        sent.append(len(views.emitted))
+    assert sent == [1, 2, 2, 2, 3, 3, 3, 4]
+
+
+def test_the_headset_bridge_sends_at_most_one_view_each_view_period_under_a_burst_of_images(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=8.0)
+    for poll in range(256):
+        now[0] = poll / 256
+        image_count[0] += 1
+        next(loop)
+    assert len(views.emitted) == 8
+
+
+def test_the_headset_bridge_sends_the_view_at_the_view_rate_under_a_steady_stream_of_images(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=30.0)
+    sent_at = []
+    sleep = next(loop)
+    while now[0] < 1.0:
+        now[0] += sleep.seconds
+        image_count[0] += 1
+        sleep = next(loop)
+        if len(views.emitted) > len(sent_at) + 1:
+            sent_at.append(now[0])
+    assert len(sent_at) >= 29
+    np.testing.assert_allclose(np.diff(sent_at), 1 / 30)
+
+
+def test_the_service_counts_only_the_images_of_the_shown_camera(service, socket_path, connect):
+    query = session_query(cameras=[keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE], headset_camera=keys.WRIST_IMAGE)
+    _readied_connection(service, socket_path, connect, query)
+    image = OBS[keys.EXTERIOR_IMAGE]
+    before = service.shown_image_count()
+    service.take_images({keys.EXTERIOR_IMAGE: image})
+    assert service.shown_image_count() == before
+    service.take_images({keys.EXTERIOR_IMAGE: image, keys.WRIST_IMAGE: image})
+    assert service.shown_image_count() == before + 1
 
 
 def test_a_camera_that_neither_the_run_nor_the_station_has_cannot_be_chosen(socket_path):
