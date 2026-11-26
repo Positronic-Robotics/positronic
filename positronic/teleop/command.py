@@ -51,10 +51,15 @@ TEXT_ONLY = 'headset_text_only'
 
 
 class _Headset(pimm.ControlSystem):
-    """Pass the samples of the headset to the service, and the view of the service to the headset."""
+    """Pass the samples of the headset to the service, and the view of the service to the headset.
+
+    The bridge sends the view at once when the shown camera has a new image, and else once each view period.
+    """
 
     # How often the bridge logs the camera feeds that reach the service.
     FEED_LOG_SEC = 10.0
+    # How often the bridge reads the headset and looks for a new image of the shown camera.
+    POLL_SEC = 0.005
 
     def __init__(self, service: TeleopService, view_fps: float = 30.0):
         check_finite_positive(view_fps, 'view_fps')
@@ -77,6 +82,7 @@ class _Headset(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         next_log = clock.now() + self.FEED_LOG_SEC
+        next_view, shown_images = clock.now(), None
         while not should_stop.value:
             if clock.now() >= next_log:
                 next_log = clock.now() + self.FEED_LOG_SEC
@@ -97,14 +103,18 @@ class _Headset(pimm.ControlSystem):
                         logger.warning('The headset page chose no camera: %s', refused)
             if page_input is not None and TEXT_ONLY in page_input.data:
                 self._text_only = page_input.data[TEXT_ONLY] is True
-            self.view.emit(self._service.view(camera=not self._text_only))
-            state, cameras = self._service.state(), self._service.cameras()
-            self.page_state.emit(
-                asdict(
-                    PageState(state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen)
-                )
-            )
-            yield pimm.Sleep(self._view_period_sec)
+            images = self._service.shown_images()
+            if images != shown_images or clock.now() >= next_view:
+                next_view, shown_images = clock.now() + self._view_period_sec, images
+                self._send_view()
+            yield pimm.Sleep(self.POLL_SEC)
+
+    def _send_view(self) -> None:
+        self.view.emit(self._service.view(camera=not self._text_only))
+        state, cameras = self._service.state(), self._service.cameras()
+        self.page_state.emit(
+            asdict(PageState(state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen))
+        )
 
 
 class Notice(Protocol):

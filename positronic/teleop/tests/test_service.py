@@ -1361,6 +1361,41 @@ def test_the_headset_bridge_logs_the_camera_feeds_once_each_log_span(socket_path
     ]
 
 
+def test_the_headset_bridge_sends_the_view_at_once_on_a_new_image_of_the_shown_camera(socket_path, monkeypatch):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
+    shown_images = [0]
+    monkeypatch.setattr(service, 'shown_images', lambda: shown_images[0])
+    bridge = command._Headset(service, view_fps=10.0)
+    views = RecordingEmitter[np.ndarray]()
+    bridge.view._bind(views, clock=SystemClock())
+    bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
+    for receiver in (bridge.controller_positions, bridge.buttons, bridge.page_input):
+        receiver._bind(ManualCommandReceiver())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
+    sent = []
+    for step in ['start', 'no change', 'new image', 'no change', 'view period']:
+        if step == 'new image':
+            shown_images[0] += 1
+        if step == 'view period':
+            now[0] += 0.1
+        next(loop)
+        sent.append(len(views.emitted))
+    assert sent == [1, 1, 2, 2, 3]
+
+
+def test_the_service_counts_only_the_images_of_the_shown_camera(service, socket_path, connect):
+    query = session_query(cameras=[keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE], headset_camera=keys.WRIST_IMAGE)
+    _readied_connection(service, socket_path, connect, query)
+    image = OBS[keys.EXTERIOR_IMAGE]
+    before = service.shown_images()
+    service.take_images({keys.EXTERIOR_IMAGE: image})
+    assert service.shown_images() == before
+    service.take_images({keys.EXTERIOR_IMAGE: image, keys.WRIST_IMAGE: image})
+    assert service.shown_images() == before + 1
+
+
 def test_a_camera_that_neither_the_run_nor_the_station_has_cannot_be_chosen(socket_path):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE])
     with pytest.raises(ValueError, match='no camera'):

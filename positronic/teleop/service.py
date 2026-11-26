@@ -325,6 +325,8 @@ class TeleopService:
         # The `time.monotonic()` instants of the last images of each camera, under `_feed_lock`.
         self._arrivals: dict[str, deque[float]] = {}
         self._feed_lock = threading.Lock()
+        # The images of the shown camera that the service took. A new one changes the view.
+        self._shown_images = 0
         # The cameras that the session of this trial sends, from the wait for Ready on
         self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
@@ -477,10 +479,17 @@ class TeleopService:
                 return
             self._images.update(images)
             self._seen.update(dict.fromkeys(images, now))
+            if self._shown_camera() in images:
+                self._shown_images += 1
         # One append for each camera, to a deque of at most `FEED_MAX_IMAGES`.
         with self._feed_lock:
             for name in images:
                 self._arrivals.setdefault(name, deque(maxlen=self.FEED_MAX_IMAGES)).append(now)
+
+    def shown_images(self) -> int:
+        """The count of the images of the shown camera that the service took. It changes with each new one."""
+        with self._changed:
+            return self._shown_images
 
     def camera_feeds(self) -> dict[str, CameraFeed]:
         """The feed of each camera whose images reached the service in the last ``FEED_SEC``."""
