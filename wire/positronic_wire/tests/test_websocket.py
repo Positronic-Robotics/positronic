@@ -5,6 +5,7 @@ import errno
 import json
 import socket
 import ssl
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -583,8 +584,8 @@ def test_a_probe_ignores_a_proxy_the_environment_names(monkeypatch):
     assert via_proxy == []
 
 
-def _upgrade_then_ignore_the_close(conn: socket.socket) -> None:
-    """Answer the upgrade with 101, then read every frame and answer none, not even a close."""
+def _answer_the_upgrade(conn: socket.socket) -> None:
+    """Read the upgrade request and answer it with 101."""
     request = b''
     while b'\r\n\r\n' not in request and (chunk := conn.recv(4096)):
         request += chunk
@@ -597,6 +598,11 @@ def _upgrade_then_ignore_the_close(conn: socket.socket) -> None:
         b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
         b'Sec-WebSocket-Accept: ' + accept_key(key).encode() + b'\r\n\r\n'
     )
+
+
+def _upgrade_then_ignore_the_close(conn: socket.socket) -> None:
+    """Answer the upgrade with 101, then read every frame and answer none, not even a close."""
+    _answer_the_upgrade(conn)
     while conn.recv(4096):
         pass
 
@@ -634,3 +640,43 @@ def test_a_close_with_no_timeout_keeps_the_wires_bound():
 
 def test_a_close_timeout_bounds_a_close_the_wire_left_unbounded():
     assert _seconds_to_close(None, timeout=_SHORT_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S
+
+
+# More than the send and receive buffers of a loopback connection hold, so the write waits for the peer to read.
+_BUFFER_FILLING_BYTES = 64 * 1024 * 1024
+# The kernel checks the limit on its own retransmit timer, so a stalled write ends some time after it.
+_SEND_LIMIT_S = 1.0
+
+
+def _upgrade_then_read_nothing(released: threading.Event) -> Callable[[socket.socket], None]:
+    def handler(conn: socket.socket) -> None:
+        _answer_the_upgrade(conn)
+        released.wait(_LONG_CLOSE_S)
+
+    return handler
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='only Linux limits how long sent data stays unacknowledged')
+def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout():
+    released = threading.Event()
+    host, port = _served(_upgrade_then_read_nothing(released))
+    connection = websocket.WebsocketClientConnection(connect(f'ws://{host}:{port}/', max_size=None))
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
+        assert time.monotonic() - started < _SEND_LIMIT_S + _CLOSE_SLACK_S
+    finally:
+        released.set()
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='only Linux limits how long sent data stays unacknowledged')
+def test_a_send_inside_its_timeout_leaves_the_socket_with_the_kernels_limit():
+    host, port = _served(_upgrade_then_ignore_the_close)
+    connection = websocket.WebsocketClientConnection(connect(f'ws://{host}:{port}/', close_timeout=_SHORT_CLOSE_S))
+    try:
+        connection.send(b'observation', timeout=_LONG_CLOSE_S)
+        sock = connection._websocket.socket
+        assert sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT) == 0
+    finally:
+        connection.close()

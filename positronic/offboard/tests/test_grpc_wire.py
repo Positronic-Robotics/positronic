@@ -548,6 +548,26 @@ def test_a_timed_out_session_refuses_the_next_inference(both_wires):
         session.infer({'image': 'test'})
 
 
+def test_a_frame_grpc_does_not_write_fails_the_inference_at_the_infer_timeout(both_wires, monkeypatch):
+    unblock = threading.Event()
+    requests = client_grpc.GrpcClientConnection._requests
+
+    def stalled_observation(connection):
+        for message in requests(connection):
+            yield message
+            if protocol.OBSERVATION in legacy_protocol.deserialise(message):
+                assert unblock.wait(10)
+
+    monkeypatch.setattr(client_grpc.GrpcClientConnection, '_requests', stalled_observation)
+    served, _policy = both_wires
+    session = InferenceClient(*served.grpc(), infer_timeout=0.5).new_session()
+    try:
+        with pytest.raises(TimeoutError, match='No inference response within 0.5s'):
+            session.infer({'image': 'test'})
+    finally:
+        unblock.set()
+
+
 def test_a_status_after_the_first_frame_surfaces_as_a_lost_peer(both_wires):
     """A stream that ends after frames have crossed raises a lost peer, which the connect retry reads as cold."""
     served, _policy = both_wires

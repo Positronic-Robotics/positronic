@@ -719,7 +719,7 @@ class _ReadyWaitOnAFakeClock(wire.ClientConnection):
         self._next_waiting = clock.now
         self._sent: list[bytes] = []
 
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
         assert self._clock.now >= self._ready_at, 'the opening sends nothing before Ready'
         self._sent.append(message)
 

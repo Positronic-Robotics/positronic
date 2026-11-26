@@ -3,14 +3,17 @@
 import abc
 import errno
 import json
+import math
 import os
 import queue
 import socket
 import ssl
 import stat
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from functools import partial
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException
@@ -22,6 +25,9 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidMes
 from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
 
+# Only Linux limits how long sent data stays unacknowledged. Elsewhere a write keeps the kernel's own bound.
+_LIMITS_UNACKNOWLEDGED_DATA = sys.platform == 'linux'
+
 
 class WebsocketClientConnection(wire.ClientConnection):
     """A client's end of one websocket session."""
@@ -29,11 +35,30 @@ class WebsocketClientConnection(wire.ClientConnection):
     def __init__(self, websocket: Connection):
         self._websocket = websocket
 
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
+        # The socket blocks, so a write to a peer that acknowledges nothing waits until the kernel gives up on the
+        # connection, many minutes later. TLS retries a write that a send timeout stops, so the bound is TCP's own.
+        bounded = (
+            timeout is not None and _LIMITS_UNACKNOWLEDGED_DATA and self._websocket.socket.family != socket.AF_UNIX
+        )
+        if bounded:
+            self._set_unacknowledged_limit(timeout)
         try:
             self._websocket.send(message)
         except ConnectionClosed as e:
+            if isinstance(e.__cause__, TimeoutError):
+                raise TimeoutError(f'The peer acknowledged no more of the message within {timeout}s') from e
             raise wire.PeerDisconnected(str(e)) from e
+        finally:
+            if bounded:
+                with suppress(OSError):  # the socket is closed when the write failed
+                    self._set_unacknowledged_limit(None)
+
+    def _set_unacknowledged_limit(self, seconds: float | None) -> None:
+        """Let sent data stay unacknowledged for at most ``seconds``, or for the kernel's default with ``None``.
+        Zero is the kernel's default, so a limit already spent is one millisecond."""
+        millis = 0 if seconds is None else max(1, math.ceil(seconds * 1000))
+        self._websocket.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, millis)
 
     def recv(self, timeout: float | None = None) -> bytes:
         try:

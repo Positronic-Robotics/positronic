@@ -544,6 +544,31 @@ def test_session_reads_capacity_separately_from_metadata(version, limit):
     assert protocol.MAX_IN_FLIGHT not in session.metadata
 
 
+class TestTheInferTimeoutCoversTheSend:
+    """A peer that stops reading stalls the write of an observation. The infer timeout counts from before the write."""
+
+    def test_a_send_that_never_ends_fails_the_inference_at_the_infer_timeout(self, fake_clock):
+        conn = fake_clock.connection((0.0, _ready('stalled')), send_s=_NEVER)
+        session = InferenceClient(_FakeWire(conn), _ADDRESS, infer_timeout=15.0).new_session()
+        sent_at = fake_clock.now
+        with pytest.raises(TimeoutError, match='No inference response within 15.0s'):
+            session.infer({})
+        assert fake_clock.now - sent_at == 15.0
+
+    def test_a_slow_send_leaves_the_answer_only_the_rest_of_the_infer_timeout(self, fake_clock):
+        conn = fake_clock.connection((0.0, _ready('slow')), (6.0, _answer(None)), send_s=10.0)
+        session = InferenceClient(_FakeWire(conn), _ADDRESS, infer_timeout=15.0).new_session()
+        sent_at = fake_clock.now
+        with pytest.raises(TimeoutError):
+            session.infer({})
+        assert fake_clock.now - sent_at == 15.0
+
+    def test_a_send_and_an_answer_inside_the_infer_timeout_return_the_answer(self, fake_clock):
+        conn = fake_clock.connection((0.0, _ready('quick')), (4.0, _answer([{'action': [1]}])), send_s=10.0)
+        session = InferenceClient(_FakeWire(conn), _ADDRESS, infer_timeout=15.0).new_session()
+        assert session.infer({}) == [{'action': [1]}]
+
+
 class TestADroppedConnectionReconnects:
     """A connection that drops before the server's first answer opens a new session and sends the observation
     again. A new session holds no state, so this is safe only while the dropped one had answered nothing."""

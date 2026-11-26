@@ -57,7 +57,7 @@ class FakeConnection(wire.ClientConnection):
         self.token = token
         self.dropped = False
 
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
         if self.dropped:
             raise wire.PeerDisconnected('dropped')
 
