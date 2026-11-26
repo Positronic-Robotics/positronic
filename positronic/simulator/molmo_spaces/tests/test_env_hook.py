@@ -180,3 +180,16 @@ def test_a_second_digest_of_a_loaded_hook_file_name_is_refused(hook_path):
 
     with pytest.raises(ValueError, match='rename the hook file'):
         hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
+
+
+@pytest.mark.parametrize('broken', ['raise ImportError("no such pack")\n', 'HOOK = None\n'], ids=['raises', 'no-hook'])
+def test_a_hook_file_that_failed_to_load_loads_after_it_is_fixed(hook_path, broken):
+    hook_path.write_text(broken)
+    hooks = env_hook.Hooks()
+    with pytest.raises((ImportError, ValueError)):
+        hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
+    hook_path.write_text(_GRIP_HOOK)
+
+    fixed = hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
+
+    assert fixed.hook.grip([0.0]) == 0.5

@@ -9,6 +9,7 @@ server loads a hook file after MolmoSpaces, at the first reset token or selectio
 import hashlib
 import importlib.util
 import sys
+import types
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -81,11 +82,21 @@ def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
     module = importlib.util.module_from_spec(spec)
     # A dataclass finds the globals of its module in sys.modules.
     sys.modules[spec.name] = module
+    try:
+        hook = _run(module, source, path)
+    except BaseException:
+        # A hook file that failed to load can load again after a fix.
+        del sys.modules[spec.name]
+        raise
+    return LoadedHook(hook, mapping.HookFile(str(path), digest).record)
+
+
+def _run(module: types.ModuleType, source: bytes, path: Path) -> EnvHook:
     exec(compile(source, str(path), 'exec'), module.__dict__)
     hook = getattr(module, HOOK_NAME, None)
     if not isinstance(hook, EnvHook):
         raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')
-    return LoadedHook(hook, mapping.HookFile(str(path), digest).record)
+    return hook
 
 
 class Hooks:
