@@ -60,13 +60,14 @@ from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
-from positronic.policy.codecs import EncodeImages, EncodeVideo, EndCommand
+from positronic.policy.codecs import Codec, EncodeImages, EncodeVideo, EndCommand
 from positronic.policy.codecs.metadata import ACTION
 from positronic.policy.executor import Executor
 from positronic.policy.keys import END
 from positronic.policy.processors import ChunkedSchedule, EndOnField, InferenceSchedule, RequestTiming, TrajectoryPlayer
 from positronic.policy.remote import RemotePolicy, declared_stack
 from positronic.policy.sequential import Sequential
+from positronic.policy.spec import from_spec
 from positronic.teleop import command, protocol, scripted_headset
 from positronic.teleop import service as service_module
 from positronic.teleop.clutch import OperatorPosition
@@ -95,7 +96,12 @@ OBS = {
     keys.TASK: 'pick up the cube',
     keys.EXTERIOR_IMAGE: np.full((48, 64, 3), 128, dtype=np.uint8),
 }
-FRAME_REQUEST = {protocol.TASK: OBS[keys.TASK], protocol.EE_POSE: OBS[keys.EE_POSE], protocol.GRIP: [OBS[keys.GRIP]]}
+FRAME_REQUEST = {
+    protocol.TASK: OBS[keys.TASK],
+    protocol.EE_POSE: OBS[keys.EE_POSE],
+    protocol.GRIP: [OBS[keys.GRIP]],
+    protocol.CALL_ID: 0,
+}
 ARM_POSES = {
     keys.LEFT_ARM: geom.Transform3D(np.array([0.3, 0.3, 0.4]), geom.Rotation.from_quat([0.0, 1.0, 0.0, 0.0])),
     keys.RIGHT_ARM: geom.Transform3D(np.array([0.3, -0.3, 0.4]), geom.Rotation.from_quat([0.0, 1.0, 0.0, 0.0])),
@@ -774,6 +780,13 @@ def test_the_client_stack_sends_the_camera_images_as_jpeg_or_with_a_video_bit_ra
     assert {'name': last['name'], 'args': last['args']} == encoder
 
 
+def test_the_client_stack_sends_the_call_id_of_each_frame_request():
+    stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.EXTERIOR_IMAGE,)))
+    codec = from_spec(stack['seq'][-1])
+    assert isinstance(codec, Codec)
+    assert codec.encode({**OBS, policy_keys.CALL_ID: 7})[protocol.CALL_ID] == 7
+
+
 class _BlankRenderer:
     """A MuJoCo renderer that draws black images, so the test needs no GL."""
 
@@ -1006,6 +1019,13 @@ def _readied_connection(service: TeleopService, socket_path: Path, connect, quer
 def test_a_session_lets_the_client_keep_calls_in_flight_open_at_a_time(service, socket_path, connect, calls):
     connection = _readied_connection(service, socket_path, connect, session_query(calls_in_flight=calls))
     assert connection.session.max_in_flight == calls
+
+
+def test_a_session_answers_no_frame_request_older_than_one_that_it_answered(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect, session_query(calls_in_flight=2))
+    connection.frame({**FRAME_REQUEST, protocol.CALL_ID: 1})
+    assert connection.session.infer({**FRAME_REQUEST, protocol.CALL_ID: 0}) is None
+    connection.frame({**FRAME_REQUEST, protocol.CALL_ID: 2})
 
 
 def test_a_hold_of_b_completes_in_one_frame(service, socket_path, connect):

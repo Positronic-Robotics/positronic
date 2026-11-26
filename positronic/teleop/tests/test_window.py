@@ -37,6 +37,7 @@ FRAME_REQUEST = {
     protocol.TASK: 'pick up the cube',
     protocol.EE_POSE: geom.Transform3D().as_vector(geom.Rotation.Representation.QUAT),
     protocol.GRIP: [0.0],
+    protocol.CALL_ID: 0,
 }
 
 

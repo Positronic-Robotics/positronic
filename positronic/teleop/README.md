@@ -270,7 +270,7 @@ one service serves runs with different parameters. A parameter that the run does
 | `jpeg_quality` | the JPEG quality of the camera images | 90 |
 | `video_bitrate` | the bit rate of the camera images as H.264, in bits per second, or `None` for JPEG | `None` |
 | `video_fps` | the frame rate that the H.264 encoder spreads `video_bitrate` over, and the rate of the frame requests with `calls_in_flight` above 1 | 30 |
-| `calls_in_flight` | the most frame requests that the client has open at a time. Above 1, the client asks for a frame each `1 / video_fps` s, and does not wait for each answer. Only JPEG images: a `video_bitrate` refuses it | 1 |
+| `calls_in_flight` | the most frame requests that the client has open at a time. Above 1, the client asks for a frame each `1 / video_fps` s, and does not wait for each answer. A request that reaches the service after a newer one gets no frame. Only JPEG images: a `video_bitrate` refuses it | 1 |
 
 `positronic.teleop.protocol.session_query` builds the query. In `positronic.cfg.policy`, `teleop_query` is the query
 of `teleop` and `teleop_network`, and `teleop_collect_query`, `teleop_molmo_query` and `teleop_yam_query` are the

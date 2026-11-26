@@ -42,6 +42,7 @@ from positronic.policy.codecs import (
     EncodeImages,
     EncodeVideo,
     EndCommand,
+    SelectObservationFields,
     StateObservationCodec,
 )
 from positronic.policy.codecs.image import image_observation
@@ -59,7 +60,7 @@ from positronic.policy.sequential import Sequential
 from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES, Tracker
-from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, Arms, SessionParams, camera_names
+from .protocol import CALL_ID, EE_POSE, GRIP, TASK, VIEW_SIZE, Arms, SessionParams, camera_names
 
 logger = logging.getLogger(__name__)
 
@@ -705,8 +706,13 @@ class TeleopSession(Session):
         self._on_close = on_close
         # The decoder of each camera stream, for a client that sends H.264
         self._decoders = {} if settings.video_bitrate is None else {name: AnnexBDecoder() for name in settings.cameras}
+        self._answered_call_id = -1
 
-    def infer(self, observation: Any) -> list[dict[str, Any]]:
+    def infer(self, observation: Any) -> list[dict[str, Any]] | None:
+        # Answers play in call order, so a frame for an older call would play a newer hand sample before an older one.
+        if observation[CALL_ID] < self._answered_call_id:
+            return None
+        self._answered_call_id = observation[CALL_ID]
         images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
         return [self._service.next_frame({**observation, **images}, self._cameras)]
 
@@ -769,8 +775,10 @@ class TeleopModel(Model):
             state[keys.arm_channel(EE_POSE, arm)] = {pose: 7}
             state[keys.arm_channel(GRIP, arm)] = {keys.arm_channel(keys.GRIP, arm): 1}
             poses += [pose, f'{command}{keys.POSE_SUFFIX}', command]
-        observation = StateObservationCodec(state, task_field=TASK) & (
-            image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
+        observation = (
+            StateObservationCodec(state, task_field=TASK)
+            & image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
+            & SelectObservationFields({CALL_ID: policy_keys.CALL_ID})
         )
         match settings.arms:
             case Arms.ONE:

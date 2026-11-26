@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 from positronic_model_server.serialization import DEFAULT_JPEG_QUALITY, check_int_range
 
 from positronic import geom, keys
+from positronic.policy import keys as policy_keys
 from positronic.utils import check_positive_int
 
 from .clutch import OperatorPosition
@@ -29,6 +30,8 @@ TASK = 'task'
 EE_POSE = 'ee_pose'
 # The grip of an arm. The service holds it until control comes on. A field of each arm, as `EE_POSE` is.
 GRIP = 'grip'
+# The index of the request in the run, which the client counts up from 0 in the order that it asks.
+CALL_ID = policy_keys.CALL_ID
 
 
 class Arms(Enum):
@@ -108,7 +111,7 @@ class SessionParams:
                 f'calls_in_flight must be 1 with a video_bitrate, got {self.calls_in_flight}: the H.264 client sends '
                 'one frame request at a time, because each frame of the stream needs the one before'
             )
-        if fields := {TASK, *self.arms.arm_fields()} & set(self.cameras):
+        if fields := {TASK, CALL_ID, *self.arms.arm_fields()} & set(self.cameras):
             raise ValueError(f'a camera name must not be a field of a frame request, got {sorted(fields)}')
         if self.headset_camera is not None and self.headset_camera not in self.cameras:
             raise ValueError(
