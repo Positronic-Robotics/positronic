@@ -146,7 +146,6 @@ class HookFile(NamedTuple):
 
     @classmethod
     def of(cls, request: dict[str, Any]) -> 'HookFile | None':
-        """The hook file that a selection or a reset token names, or None where it names none."""
         return cls(*(request[field] for field in cls._fields)) if cls._fields[0] in request else None
 
     @property

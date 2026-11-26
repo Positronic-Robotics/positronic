@@ -48,7 +48,6 @@ class MolmoAdapter(WireCommandAdapter):
         with_object_image_points: bool = True,
         hook_file: mapping.HookFile | None = None,
     ):
-        """``hook_file`` is the hook file that each reset token names, or None for the default hook."""
         # The env measures and drives at the 2F-85 grip point of this model, ``GRIPPER_SITE``, as the rig does.
         self.robot_model = bundled_franka_model()
         super().__init__()

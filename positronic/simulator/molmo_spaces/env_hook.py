@@ -1,6 +1,5 @@
-"""Site changes to the MolmoSpaces episodes that a server runs, loaded from a file.
-
-This module must work in MolmoSpaces' isolated interpreter without Positronic installed.
+"""Site changes to the MolmoSpaces episodes that a server runs: this module loads them from a file, and it must work
+in MolmoSpaces' isolated interpreter without Positronic installed.
 
 A hook file defines ``HOOK``, an ``EnvHook``, and imports the base class as ``from env_hook import EnvHook``. The
 server loads a hook file after MolmoSpaces, at the first reset token or selection that names its path and digest.
@@ -110,7 +109,6 @@ class Hooks:
         self._loaded: dict[mapping.HookFile, LoadedHook] = {}
 
     def of(self, request: dict[str, Any]) -> LoadedHook:
-        """The hook that a selection or a reset token names, or the default hook where it names none."""
         hook_file = mapping.HookFile.of(request)
         if hook_file is None:
             return self._default
