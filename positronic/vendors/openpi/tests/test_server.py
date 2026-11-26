@@ -27,6 +27,7 @@ from positronic.vendors.openpi import codecs
 pytest.importorskip('openpi_client')
 
 from openpi_client import msgpack_numpy
+from platform_client.policy_container import WARMUP_DEADLINE_S
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
@@ -228,3 +229,14 @@ def test_other_server_presets_preserve_native_predictions(preset):
         chunk = model({}, session_id='test')
 
     np.testing.assert_array_equal(np.stack([record[ACTION] for record in chunk]), predictions, strict=True)
+
+
+def test_the_subprocess_gets_the_whole_published_start_deadline(monkeypatch):
+    waits = []
+    monkeypatch.setattr(openpi.server, 'wait_for_subprocess_ready', lambda *args, **kwargs: waits.append(kwargs))
+    subprocess = OpenpiSubprocess(checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_droid', infer_timeout=120.0)
+    subprocess.process = mock.Mock()
+
+    subprocess._wait_for_ready()
+
+    assert waits == [{'max_wait': WARMUP_DEADLINE_S}]
