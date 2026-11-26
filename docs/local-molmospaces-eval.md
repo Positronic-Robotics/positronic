@@ -11,6 +11,9 @@ under the same name, and scores them with the same rule.
 Both evals run the DROID Franka in MolmoSpaces scenes, one trial for each episode. The competition eval
 scores other episodes, and its episodes are not public.
 
+Two more evals run the same episodes under a strict success check, for practice on your machine. See
+[Score under the strict success check](#score-under-the-strict-success-check).
+
 With no GPU of your own, [score on Nebius Serverless](#score-on-nebius-serverless-with-no-gpu-of-your-own).
 
 ## Before you start
@@ -80,8 +83,8 @@ score 0.600 over 5 episodes, 0 unscored
 - `unscored` counts the episodes that the scoring rule cannot read. The score does not count them.
 - The output directory keeps every episode. A second run into the same directory adds its episodes, and
   its score counts only its own episodes.
-- The command warns when your `positronic` is not the commit that the platform runs the eval at. The two
-  runs can then differ.
+- The command warns when your `positronic` is not the commit that the eval names. The two runs can then
+  differ.
 
 To run the simulator with no GPU, render on the CPU. It is slower:
 
@@ -98,6 +101,31 @@ positronic-dataset-viewer --dataset.path=~/evals/molmo_smoke --ep_table_cfg=@pos
 ```
 
 Open https://localhost:8400. The server makes a self-signed certificate, so the browser asks you to accept it.
+
+## Score under the strict success check
+
+| Eval | Episodes | Its counterpart |
+|---|---|---|
+| `molmo.franka_pick_mini_strict_smoke` | 5 | `molmo.franka_pick_mini_smoke` |
+| `molmo.franka_pick_mini_strict` | 20 | `molmo.franka_pick_mini` |
+
+A strict eval runs the same episodes as its counterpart. It judges each episode by the `strict_v1` success
+profile, and not by the MolmoSpaces verdict:
+
+- A pick succeeds when the object is 3 cm or more above its start, the robot touches the object, and the
+  scene does not support it.
+- This state must hold for 1 s. The trial then runs for 1 s more, so that its video shows the result.
+
+Run it as in step 4, with the name of the strict eval:
+
+```bash
+positronic eval run --eval=molmo.franka_pick_mini_strict \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
+  --output_dir=~/evals/molmo_strict
+```
+
+- Each episode records its profile under `molmo.success_profile`. A score under one profile does not
+  compare with a score under the other.
 
 ## Test this guide
 

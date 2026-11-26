@@ -17,6 +17,9 @@ MOLMO_GRASP_SITE = 'gripper/grasp_site'
 
 ASSETS_DIR_ENV = 'MLSPACES_ASSETS_DIR'
 ASSETS_BENCHMARKS_DIR = 'benchmarks'
+ASSETS_GRASPS_DIR = 'grasps'
+# The lock file that the MolmoSpaces resource manager takes in the assets directory.
+ASSETS_LOCK_FILE = '.lock'
 # Scene sets that MolmoSpaces does not package. MolmoSpaces installs every scene under its own `scenes` directory
 # from an archive, so a scene set there fails to load.
 ASSETS_USER_SCENES_DIR = 'user_scenes'

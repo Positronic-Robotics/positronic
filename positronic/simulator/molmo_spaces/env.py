@@ -301,8 +301,8 @@ class MolmoSpacesEnv(EnvProtocol):
         }
         return cfg.policy_dt_ms / 1000.0
 
-    def _strict_check(self) -> success_profile.Check:
-        """The ``strict_v1`` check of the sampled task, which must be of a family that the profile judges."""
+    def _strict_check(self, profile: success_profile.SuccessProfile) -> success_profile.Check:
+        """The ``profile`` check of the sampled task, which must be of a family that the profile judges."""
         cfg = self._task.config.task_config
         data = self._robot_view.mj_data
         robot = self._robot_view.root_body_id
@@ -313,12 +313,12 @@ class MolmoSpacesEnv(EnvProtocol):
         # A subclass of a family's task is of that family, so the more derived classes come first.
         if isinstance(self._task, OpeningTask):
             if cfg.joint_index is None:
-                raise ValueError(f'{success_profile.SuccessProfile.STRICT_V1} needs the joint that the task names')
+                raise ValueError(f'{profile} needs the joint that the task names')
             target = self._task.env.object_managers[0].get_object_by_name(cfg.pickup_obj_name)
             joint = target.joint_ids[cfg.joint_index]
             if self._task.config.task_type == 'close':
-                return success_profile.Close(data, joint)
-            return success_profile.Open(data, joint)
+                return success_profile.Close(data, joint, profile)
+            return success_profile.Open(data, joint, profile)
         if isinstance(self._task, PickAndPlaceNextToTask):
             return success_profile.PlaceNextTo(data, body(cfg.pickup_obj_name), body(cfg.place_receptacle_name), robot)
         if isinstance(self._task, PickAndPlaceTask):
@@ -331,7 +331,7 @@ class MolmoSpacesEnv(EnvProtocol):
             )
         if isinstance(self._task, PickTask):
             return success_profile.Pick(data, body(cfg.pickup_obj_name), robot)
-        raise ValueError(f'{success_profile.SuccessProfile.STRICT_V1} judges no {type(self._task).__name__}')
+        raise ValueError(f'{profile} judges no {type(self._task).__name__}')
 
     def tasks(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         """Selected episode records, with names, reset parameters and horizons in seconds."""
@@ -376,10 +376,13 @@ class MolmoSpacesEnv(EnvProtocol):
         )
         obs, infos = self._task.reset()  # One observation dict and one info dict per environment.
         # The checks of a strict judge take the start poses of the task's bodies, so they come after the task reset.
-        if profile is success_profile.SuccessProfile.STRICT_V1:
-            self._judge = success_profile.StrictJudge(self._task, self._strict_check(), control_dt)
-        else:
-            self._judge = success_profile.MolmoNativeJudge(self._task)
+        match profile:
+            case success_profile.SuccessProfile.STRICT_V1 | success_profile.SuccessProfile.STRICT_V2:
+                self._judge = success_profile.StrictJudge(profile, self._task, self._strict_check(profile), control_dt)
+            case success_profile.SuccessProfile.MOLMO_NATIVE_TAIL_V1:
+                self._judge = success_profile.MolmoNativeTailJudge(self._task, control_dt)
+            case success_profile.SuccessProfile.MOLMO_NATIVE:
+                self._judge = success_profile.MolmoNativeJudge(self._task)
         env_obs = obs[0]
         self._camera_names = [k for k, v in env_obs.items() if mapping.is_rgb_frame(v)]
         metrics = self._task_metrics(self._task.get_reward(), infos, self._judge.observe(infos[0]))
