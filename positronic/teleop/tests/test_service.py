@@ -1421,6 +1421,21 @@ def test_a_view_with_no_camera_shows_the_text_on_black(socket_path, connect):
         connection.close()
 
 
+def test_a_view_with_no_task_shows_the_control_line_and_not_the_task(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: 'Pick the cube.'})
+    with_task, no_task = service.view(), service.view(task=False)
+    other_task = {**FRAME_REQUEST, protocol.TASK: 'Open the drawer and put the cup in it.'}
+    connection.frame(other_task)
+    assert not np.array_equal(service.view(), with_task), 'the view with the task shows the new task'
+    np.testing.assert_array_equal(service.view(task=False), no_task, 'the view with no task shows no task')
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(other_task)
+    assert service.state().control
+    assert not np.array_equal(service.view(task=False), no_task), 'the view with no task shows the control line'
+
+
 def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, connect):
     query = session_query(cameras=[keys.WRIST_IMAGE])
     width, height = VIEW_SIZE
@@ -1433,6 +1448,40 @@ def test_the_bottom_of_the_view_names_the_camera_and_the_use_of_y(socket_path, c
     # One line of the hint while no camera shows, and the camera above it while one does
     assert idle[height - 26 :].any() and not idle[height - 48 : height - 30].any()
     assert running[height - 48 : height - 30].any()
+
+
+def test_a_long_task_wraps_to_the_width_of_the_main_camera(service, socket_path, connect):
+    def text_bottom(view: np.ndarray) -> int:
+        """The lowest row of the text at the top of a view on black."""
+        return int(np.flatnonzero(view[: view.shape[0] // 2].any(axis=(1, 2))).max())
+
+    task = 'Pick each cube from the left bin and place it in the right bin, then close the lid of the box.'
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: 'Pick the cube.'})
+    short = service.view()
+    connection.frame({**FRAME_REQUEST, protocol.TASK: task})
+    long = service.view()
+    assert not long[:, -8:].any(), 'no text reaches the right margin of the view'
+    assert text_bottom(long) > text_bottom(short), 'the long task takes more rows'
+
+
+# A word of 43 letters just fits a row, so a row of it with '...' after it does not
+@pytest.mark.parametrize(
+    'task', ['Pick the ' + 'a' * 120 + ' cube.', ' '.join(['a' * 43] * 5)], ids=['a long word', 'a long line']
+)
+def test_each_row_of_a_long_task_fits_the_width_of_the_main_camera(service, socket_path, connect, task):
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: task})
+    assert not service.view()[:, -8:].any(), 'no text reaches the right margin of the view'
+
+
+def test_a_task_of_many_rows_leaves_the_state_of_the_trial_at_the_top_of_the_view(service, socket_path, connect):
+    task = ' '.join(['Pick each cube from the left bin and place it in the right bin.'] * 6)
+    connection = _readied_connection(service, socket_path, connect)
+    connection.frame({**FRAME_REQUEST, protocol.TASK: task})
+    view = service.view()
+    middle = view.shape[0] // 2
+    assert not view[middle : middle + 30].any(), 'the task, the control line and the line of the ends stay at the top'
 
 
 def test_a_camera_of_the_run_that_the_station_does_not_name_stays_listed_and_live_between_trials(socket_path, connect):
@@ -1464,10 +1513,15 @@ def test_a_camera_stays_live_between_trials_and_not_longer_than_the_live_window(
         assert service.cameras().live == ()
 
 
-def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(socket_path, monkeypatch):
+def test_the_headset_bridge_takes_the_view_that_the_page_asks_for(socket_path, monkeypatch):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
     asked = []
-    monkeypatch.setattr(service, 'view', lambda camera=True: asked.append(camera) or np.zeros((2, 2, 3), np.uint8))
+
+    def view(camera: bool = True, task: bool = True) -> np.ndarray:
+        asked.append((camera, task))
+        return np.zeros((2, 2, 3), np.uint8)
+
+    monkeypatch.setattr(service, 'view', view)
     bridge = command._Headset(service)
     bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
     bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
@@ -1479,16 +1533,16 @@ def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(sock
     clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
     loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
     next(loop)
-    for text_only in (True, False):
-        page_input.push({command.TEXT_ONLY: text_only})
+    for text_only, task_hidden in ((False, True), (True, False), (False, False)):
+        page_input.push({command.TEXT_ONLY: text_only, command.TASK_HIDDEN: task_hidden})
         now[0] += 1 / 16
         next(loop)
-    assert asked == [True, False, True]
+    assert asked == [(True, True), (True, False), (False, True), (True, True)]
 
 
 def test_the_headset_bridge_logs_the_camera_feeds_once_each_log_span(socket_path, monkeypatch, caplog):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
-    monkeypatch.setattr(service, 'view', lambda camera=True: np.zeros((2, 2, 3), np.uint8))
+    monkeypatch.setattr(service, 'view', lambda camera=True, task=True: np.zeros((2, 2, 3), np.uint8))
     monkeypatch.setattr(service, 'camera_feeds', lambda: {keys.EXTERIOR_IMAGE: service_module.CameraFeed(9.5, 0.04)})
     bridge = command._Headset(service)
     bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
@@ -1740,7 +1794,7 @@ def test_the_phone_page_reads_fields_of_the_page_state():
 
 def test_the_headset_page_names_the_routes_the_page_state_fields_and_the_input_fields_of_the_service():
     page = Path(package_assets_path('assets/webxr/index.html')).read_text()
-    routes_and_inputs = [STATE_PATH, INPUT_PATH, command.HEADSET_CAMERA, command.TEXT_ONLY]
+    routes_and_inputs = [STATE_PATH, INPUT_PATH, command.HEADSET_CAMERA, command.TEXT_ONLY, command.TASK_HIDDEN]
     contract = [*routes_and_inputs, *command.PageState.__dataclass_fields__]
     assert [name for name in contract if not re.search(f"""['"]{re.escape(name)}['"]""", page)] == []
 

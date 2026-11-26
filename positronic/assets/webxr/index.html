@@ -70,7 +70,7 @@
       <p id="camera-hint">
         A green dot: the run sent images of this camera in the last 30 s. In the headset, Y on the left controller
         (Triangle on the PlayStation VR2): a press shows the next camera, and a hold of 1 s cycles the panel (on black,
-        only the text over the room, hidden).
+        on black with no task, only the text over the room, hidden).
       </p>
     </section>
     <script type="module">
@@ -85,9 +85,12 @@
           phase: 'phase', control: 'control', cameras: 'cameras', live: 'live', shown: 'shown', chosen: 'chosen',
           tracked: 'tracked',
         };
-        // The fields of an input: the camera of the headset, a name or null for the camera of the session; and whether
-        // the view comes with no camera image, so that the clear panel shows only the text
-        const INPUT_FIELD = { headsetCamera: 'headset_camera', textOnly: 'headset_text_only' };
+        // The fields of an input: the camera of the headset, a name or null for the camera of the session; whether
+        // the view comes with no camera image, so that the clear panel shows only the text; and whether it comes with
+        // no task
+        const INPUT_FIELD = {
+          headsetCamera: 'headset_camera', textOnly: 'headset_text_only', taskHidden: 'headset_task_hidden',
+        };
         const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
         const PHASE_TEXT = {
           [PHASE.idle]: 'Waiting for a trial', [PHASE.readyWait]: 'A trial waits for Ready',
@@ -204,7 +207,7 @@
             cameraHeld = false;
           } else if (cameraPressed && !cameraHeld && now - cameraDownAt >= CAMERA_HOLD_MS) {
             cameraHeld = true;
-            if (videoPlayer) sendInput({ [INPUT_FIELD.textOnly]: videoPlayer.cycleMode() === PANEL_MODE.CLEAR_BLACK });
+            if (videoPlayer) sendPanelMode(videoPlayer.cycleMode());
           } else if (!cameraPressed && cameraDownAt !== null) {
             if (!cameraHeld) showNextCamera();
             cameraDownAt = null;
@@ -271,6 +274,13 @@
           pollState();
         }
 
+        // Ask for the view that the panel `mode` shows
+        function sendPanelMode(mode) {
+          sendInput({
+            [INPUT_FIELD.textOnly]: mode === PANEL_MODE.CLEAR_BLACK, [INPUT_FIELD.taskHidden]: mode === PANEL_MODE.NO_TASK,
+          });
+        }
+
         function choose(name) {
           sendInput({ [INPUT_FIELD.headsetCamera]: name });
         }
@@ -297,8 +307,8 @@
         }
 
         setInterval(pollState, STATE_POLL_MS);
-        // A page that loads shows the panel on black, so the view comes with its camera
-        sendInput({ [INPUT_FIELD.textOnly]: false });
+        // A page that loads shows the panel on black, so the view comes with its camera and its task
+        sendPanelMode(PANEL_MODE.ON_BLACK);
 
         // Start the XR application and WebSocket connection using shared core
         startXRApp({ onInit, onFrame, onEveryFrame: ({ session }) => countPresses(session, pressCounters) });
