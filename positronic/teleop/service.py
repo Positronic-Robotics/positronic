@@ -215,11 +215,22 @@ class TrialState:
 
 # The use of Y on the left controller, at the bottom of the view
 CAMERA_HINT = 'Y: next camera. Hold Y: panel'
+# The RGB colour behind the control line of an arm whose control is on, and off: the colours of the phone page
+CONTROL_ON_COLOUR = (6, 214, 160)
+CONTROL_OFF_COLOUR = (255, 209, 102)
 # The width of the column of the view that shows the other cameras of the session, half the width of the main camera
 OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
 # The controller that drives each arm, by the arm name of its channels. The one arm of a one-arm session has none.
 ARM_CONTROLLERS: dict[str | None, str] = {None: RIGHT, keys.LEFT_ARM: LEFT, keys.RIGHT_ARM: RIGHT}
+
+
+@dataclass(frozen=True)
+class Badge:
+    """A line of the view in black on a box of ``colour``, an RGB colour."""
+
+    text: str
+    colour: tuple[int, int, int]
 
 
 @dataclass(frozen=True)
@@ -504,15 +515,23 @@ class TeleopService:
         cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
 
+    @staticmethod
+    def _badge(view: np.ndarray, origin: tuple[int, int], badge: Badge, scale: float) -> None:
+        (width, height), baseline = cv2.getTextSize(badge.text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+        x, y = origin
+        cv2.rectangle(view, (x - 6, y - height - 5), (x + width + 6, y + baseline), badge.colour, cv2.FILLED)
+        cv2.putText(view, badge.text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 2, cv2.LINE_AA)
+
     @classmethod
     def _view(
         cls,
         image: np.ndarray | None,
-        lines: Sequence[str],
+        lines: Sequence[str | Badge],
         footer: Sequence[str] = (),
         others: Sequence[tuple[str, np.ndarray | None]] = (),
     ) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom.
+        """``image``, or a black image, with ``lines`` of text or badges at its top and the smaller ``footer`` at its
+        bottom.
 
         With ``others``, the view has a column on its right with one named cell for each of them, and ``image`` fits
         the left part of the view size.
@@ -538,7 +557,10 @@ class TeleopService:
             view = np.array(image, dtype=np.uint8, order='C')
         bottom = view.shape[0]
         for row, line in enumerate(lines):
-            cls._text(view, (10, 26 + 30 * row), line, 0.75)
+            if isinstance(line, Badge):
+                cls._badge(view, (10, 26 + 30 * row), line, 0.75)
+            else:
+                cls._text(view, (10, 26 + 30 * row), line, 0.75)
         for row, line in enumerate(reversed(footer)):
             cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
@@ -564,19 +586,22 @@ class TeleopService:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
-        control = self._control_line()
-        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer, others)
+        lines = [state.task, *self._control_lines(), 'Hold B: Complete. Hold the stick: Give up']
+        return self._view(image, lines, footer, others)
 
-    def _control_line(self) -> str:
-        """The state of the clutch of each arm, and the button that changes it."""
+    def _control_lines(self) -> list[Badge]:
+        """The state of the clutch of each arm and the button that changes it, on the colour of the state."""
         clutch_labels = {LEFT: 'X', RIGHT: 'A'}
-        parts = []
+        lines = []
         with self._changed:
             for arm, tracker in self._trackers.items():
                 name = 'Control' if arm is None else arm.capitalize()
                 clutch = clutch_labels[ARM_CONTROLLERS[arm]]
-                parts.append(f'{name} on ({clutch}: off)' if tracker.on else f'{name} off ({clutch}: on)')
-        return '. '.join(parts)
+                if tracker.on:
+                    lines.append(Badge(f'{name} on ({clutch}: off)', CONTROL_ON_COLOUR))
+                else:
+                    lines.append(Badge(f'{name} off ({clutch}: on)', CONTROL_OFF_COLOUR))
+        return lines
 
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""

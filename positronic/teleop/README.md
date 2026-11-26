@@ -89,8 +89,9 @@ controller, as for one arm.
 | Each phase | press or hold Y | | the camera and the panel (see Cameras) |
 
 When the left controller is not tracked for 0.5 s, control of the left arm goes off. The right arm does the same with
-the right controller. The headset video shows the control state of each arm, for example `Left on (X: off). Right off
-(A: on)`. The window and the phone page show "Control on" while control of at least one arm is on.
+the right controller. The headset video shows the control state of each arm on its own line, for example
+`Left on (X: off)` and `Right off (A: on)`. The window and the phone page show "Control on" while control of at least
+one arm is on.
 
 The phone is one controller, so a phone drives only a one-arm session. In a one-arm session, the left controller
 drives no arm.
@@ -100,8 +101,8 @@ off. The B button is labelled with what it does: Ready, or Complete while the tr
 trial waits for Ready, and it is green while the trial runs. At each new trial and at each end the page opens the grip
 slider, so a closed gripper does not close again at the next Control.
 
-The Quest shows the phase, the task and the control state on its video. The window on the laptop shows the same state,
-and the control state.
+The Quest shows the phase, the task and the control state on its video. The control state of an arm is on green while
+control is on, and on yellow while it is off. The window on the laptop shows the same state, and the control state.
 
 While a trial waits for Ready, the service shows a dialog with a sound on the screen of its computer. The dialog
 comes also when the window is not open, and the service closes it when the wait ends. On macOS the service uses
