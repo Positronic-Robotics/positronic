@@ -247,6 +247,30 @@ def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(
     assert buttons.emitted[1][1] == {webxr.LEFT: None, webxr.RIGHT: None}
 
 
+def test_a_press_that_the_page_counted_while_its_socket_was_closed_does_not_count(world):
+    served = WebXR(port=free_port(), use_https=False)
+    buttons = RecordingEmitter()
+    served.controller_positions._bind(RecordingEmitter(), clock=world.clock)
+    served.buttons._bind(buttons, clock=world.clock)
+
+    def message(presses_of_a: int) -> str:
+        state = webxr.ControllerButtons((0.0,) * 6, (0, 0, 0, 0, presses_of_a, 0))
+        return json.dumps(webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: state}))
+
+    with _served_webxr(webxr=served) as base:
+        # The page counts 3 presses of A while it is not connected
+        for counts in ([1, 2], [5, 6]):
+            with ws_client.connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as ws:
+                sent = len(buttons.emitted) + len(counts)
+                for count in counts:
+                    ws.send(message(count))
+                deadline = time.monotonic() + 5
+                while len(buttons.emitted) < sent:
+                    assert time.monotonic() < deadline, 'the stream emitted no sample'
+                    time.sleep(0.01)
+    assert [sample[webxr.RIGHT].presses[4] for _, sample in buttons.emitted] == [0, 1, 0, 1]
+
+
 def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
     with pytest.raises(ValueError, match='positions and buttons must name the same controllers'):
         webxr.controller_message({webxr.RIGHT: Transform3D()}, {})

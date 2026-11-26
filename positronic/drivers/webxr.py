@@ -7,7 +7,7 @@ import tempfile
 import threading
 import traceback
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
@@ -170,6 +170,24 @@ class SessionMode(StrEnum):
 def _build_access_url(host: str, port: int, use_https: bool) -> str:
     scheme = 'https' if use_https else 'http'
     return f'{scheme}://{host}:{port}/'
+
+
+class _ConnectionPresses:
+    """The press counts of one connection on ``/ws``, from the counts in the first message of each controller in it.
+    So a press that the page counted before it connected, as while its socket was closed, does nothing."""
+
+    def __init__(self) -> None:
+        self._first: dict[str, tuple[int, ...]] = {}
+
+    def since_first(self, side: str, buttons: ControllerButtons) -> ControllerButtons:
+        """``buttons`` of the controller ``side`` with the presses since its first message. Counts that go down, or a
+        new number of counts, start the counts again."""
+        first = self._first.setdefault(side, buttons.presses)
+        if len(first) != len(buttons.presses) or any(
+            now < then for now, then in zip(buttons.presses, first, strict=True)
+        ):
+            first = self._first[side] = buttons.presses
+        return replace(buttons, presses=tuple(now - then for now, then in zip(buttons.presses, first, strict=True)))
 
 
 class WebXR(pimm.ControlSystem):
@@ -346,6 +364,7 @@ class WebXR(pimm.ControlSystem):
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
             logger.info('WebSocket connection accepted')
+            presses = _ConnectionPresses()
             try:
                 fps = pimm.utils.RateCounter('Websocket')
                 while not should_stop.value:
@@ -353,6 +372,10 @@ class WebXR(pimm.ControlSystem):
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
                         controller_positions, buttons = parse_controller_message(data)
+                        buttons = {
+                            side: None if state is None else presses.since_first(side, state)
+                            for side, state in buttons.items()
+                        }
 
                         # apply scaling
                         for transform in controller_positions.values():
