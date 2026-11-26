@@ -1793,19 +1793,20 @@ def test_the_headset_page_counts_each_press_of_a_button_once():
     assert _press_counts(frames) == [[0, 0], [1, 0], [1, 0], [1, 1], [2, 1], [2, 1]]
 
 
-def _controller_frames(frames: list[dict]) -> list[dict | None]:
-    """What the headset page reads of a right controller in each of ``frames``: each frame gives ``pressed``, the state
-    of each button, and ``pose``, whether the controller has a grip pose in it."""
+def _presses_in_frames(frames: list[tuple[list[bool], bool]]) -> list[list[int] | None]:
+    """The press counts that the headset page reads of a right controller in each of ``frames``, or ``None`` for a
+    frame with no controller. Each frame gives the state of each button, and whether the controller has a pose in it."""
     script = """
     const { PressCounter, controllerInFrame } = await import(process.argv[1]);
     let input = '';
     for await (const chunk of process.stdin) input += chunk;
     const counter = new PressCounter();
     const identity = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
-    const read = JSON.parse(input).map(({ pressed, pose }) => {
+    const read = JSON.parse(input).map(([pressed, posed]) => {
       const gamepad = { buttons: pressed.map(down => ({ pressed: down, value: down ? 1 : 0 })) };
-      const frame = { getPose: () => (pose ? { transform: identity } : null) };
-      return controllerInFrame({ gamepad, gripSpace: {}, handedness: 'right' }, frame, {}, counter);
+      const frame = { getPose: () => (posed ? { transform: identity } : null) };
+      const controller = controllerInFrame({ gamepad, gripSpace: {}, handedness: 'right' }, frame, {}, counter);
+      return controller === null ? null : controller.presses;
     });
     console.log(JSON.stringify(read));
     """
@@ -1814,15 +1815,9 @@ def _controller_frames(frames: list[dict]) -> list[dict | None]:
 
 @needs_node
 def test_the_headset_page_sends_a_press_from_a_frame_with_no_pose_with_the_next_pose():
-    frames = [
-        {'pressed': [False], 'pose': True},
-        {'pressed': [True], 'pose': False},
-        {'pressed': [False], 'pose': True},
-    ]
-    before, lost, after = _controller_frames(frames)
-    assert lost is None, 'a frame with no pose sends no controller'
-    assert before is not None and after is not None
-    assert (before['presses'], after['presses']) == ([0], [1])
+    # A press in a frame of a tracking loss, and a release in the next frame with a pose
+    frames = [([False], True), ([True], False), ([False], True)]
+    assert _presses_in_frames(frames) == [[0], None, [1]]
 
 
 def _quest_grip(raw_values: list[float]) -> list[float]:
