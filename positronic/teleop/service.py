@@ -273,6 +273,8 @@ class TeleopService:
     RESUME_LIMIT_SEC = DEFAULT_RECONNECT_DEADLINE
     # The span over which `camera_feeds` counts the images of a camera.
     FEED_SEC = 2.0
+    # The most recent images of one camera that `camera_feeds` counts.
+    FEED_MAX_IMAGES = 512
 
     def __init__(
         self,
@@ -312,8 +314,9 @@ class TeleopService:
         self._images: dict[str, np.ndarray] = {}
         # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
         self._seen: dict[str, float] = {}
-        # The `time.monotonic()` instants of the images of each camera within the last `FEED_SEC`.
+        # The `time.monotonic()` instants of the last images of each camera, under `_feed_lock`.
         self._arrivals: dict[str, deque[float]] = {}
+        self._feed_lock = threading.Lock()
         # The cameras that the session of this trial sends, from the wait for Ready on
         self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
@@ -460,27 +463,30 @@ class TeleopService:
     def take_images(self, images: Mapping[str, np.ndarray]) -> None:
         """Take camera images of the run, by camera name. Only a running trial takes them."""
         now = time.monotonic()
+        # Atomic with the phase check: one entry of each of two dicts for each camera of the session.
         with self._changed:
             if self._phase is not Phase.RUNNING:
                 return
             self._images.update(images)
+            self._seen.update(dict.fromkeys(images, now))
+        # One append for each camera, to a deque of at most `FEED_MAX_IMAGES`.
+        with self._feed_lock:
             for name in images:
-                self._seen[name] = now
-                arrivals = self._arrivals.setdefault(name, deque())
-                arrivals.append(now)
-                while arrivals[0] <= now - self.FEED_SEC:
-                    arrivals.popleft()
+                self._arrivals.setdefault(name, deque(maxlen=self.FEED_MAX_IMAGES)).append(now)
 
     def camera_feeds(self) -> dict[str, CameraFeed]:
         """The feed of each camera whose images reached the service in the last ``FEED_SEC``."""
         now = time.monotonic()
-        with self._changed:
-            feeds = {}
-            for name, arrivals in self._arrivals.items():
-                count = sum(1 for arrived in arrivals if arrived > now - self.FEED_SEC)
-                if count:
-                    feeds[name] = CameraFeed(count / self.FEED_SEC, now - arrivals[-1])
-            return feeds
+        since = now - self.FEED_SEC
+        # Drops each camera with no image since `since`, then copies at most `FEED_MAX_IMAGES` instants per camera.
+        with self._feed_lock:
+            for name in [name for name, arrivals in self._arrivals.items() if arrivals[-1] <= since]:
+                del self._arrivals[name]
+            recent = {name: tuple(arrivals) for name, arrivals in self._arrivals.items()}
+        return {
+            name: CameraFeed(sum(arrived > since for arrived in arrivals) / self.FEED_SEC, now - arrivals[-1])
+            for name, arrivals in recent.items()
+        }
 
     def cancel_ready_wait(self) -> None:
         """Cancel the trial that waits for Ready, from the window on the station screen.
