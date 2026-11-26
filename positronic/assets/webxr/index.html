@@ -252,11 +252,12 @@
           }
         }
 
-        // The phases in which the service reads the buttons of the controllers
-        const INPUT_PHASES = [PHASE.readyWait, PHASE.running];
+        // The phases in which the page shows the notice when the service gets no controller data
+        const MISSING_DATA_NOTICE_PHASES = [PHASE.readyWait, PHASE.running];
 
         function showControllerData(state) {
-          const missing = INPUT_PHASES.includes(state[STATE_FIELD.phase]) && state[STATE_FIELD.tracked] === false;
+          const missing =
+            MISSING_DATA_NOTICE_PHASES.includes(state[STATE_FIELD.phase]) && state[STATE_FIELD.tracked] === false;
           document.getElementById('no-controller-data').hidden = !missing;
         }
 
