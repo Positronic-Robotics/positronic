@@ -1736,10 +1736,13 @@ def test_the_headset_bridge_sends_whether_the_service_gets_controller_data(socke
     bridge.controller_positions._bind(positions)
     bridge.buttons._bind(buttons)
     bridge.page_input._bind(ManualCommandReceiver())
-    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), SystemClock())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
     next(loop)
     positions.push({webxr.RIGHT: HAND})
     buttons.push({webxr.RIGHT: _buttons()})
+    now[0] += 1.0
     next(loop)
     assert [state['tracked'] for _, state in sent.emitted] == [False, True]
 
