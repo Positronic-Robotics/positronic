@@ -155,6 +155,10 @@ class ButtonMap:
             if buttons.presses[button] > previous[button]
         }
 
+    def reset_press_counts(self) -> None:
+        """Take the press counts of the next sample as the counts to count from, so its presses do nothing."""
+        self._presses = None
+
     def observe(self, buttons: ControllerButtons, now_ns: int) -> None:
         """Record the state of the buttons, outside a trial. A press here does nothing, and a button that is down here
         does not hold in the next."""
@@ -180,8 +184,10 @@ class ButtonMap:
         return None
 
     def events(self, buttons: ControllerButtons, now_ns: int) -> list[Event]:
+        """The events of the sample ``buttons``. An even number of presses of A since the previous sample turns control
+        on and off again, so it gives no clutch event."""
         new_presses = self._new_presses(buttons, now_ns)
-        events = [Event.CLUTCH] * new_presses.get(Button.A, 0)
+        events = [Event.CLUTCH] if new_presses.get(Button.A, 0) % 2 else []
         if self._is_held(Button.B, now_ns):
             self._used.add(Button.B)
             events.append(Event.COMPLETE)
@@ -279,7 +285,8 @@ class TeleopService:
     directory of this user only.
 
     ``take_sample`` takes each sample of the controllers. A frame request answers at once with the newest sample.
-    When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The
+    When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. A
+    press that the page counted between two samples further apart than ``silence_limit`` does nothing. The
     preparation of a session waits for Ready or Cancel up to ``ready_limit``.
     """
 
@@ -430,6 +437,10 @@ class TeleopService:
         }
         poses = {name: pose for name, pose in poses.items() if name in tracked}
         with self._changed:
+            # After a silence, as when the page connects again, the presses that the page counted in it do nothing
+            if now_ns - self._sample.taken_ns > self.silence_limit * 1e9:
+                for button_map in self._buttons.values():
+                    button_map.reset_press_counts()
             self._sample = _Sample(now_ns, poses, tracked)
             if tracked:
                 self._tracked_at_ns = now_ns

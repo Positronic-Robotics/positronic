@@ -186,9 +186,16 @@ class TestButtonMap:
         buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
 
-    def test_each_press_between_two_samples_is_one_event(self):
+    def test_an_even_number_of_presses_between_two_samples_leaves_control_as_it_is(self):
         buttons = _map(HOLD_SEC)
-        assert buttons.events(_buttons(presses={Button.A: 2}), 0) == [Event.CLUTCH, Event.CLUTCH]
+        assert buttons.events(_buttons(presses={Button.A: 2}), 0) == []
+        assert buttons.events(_buttons(presses={Button.A: 5}), 10) == [Event.CLUTCH]
+
+    def test_after_a_reset_of_the_press_counts_the_presses_of_the_next_sample_do_nothing(self):
+        buttons = _map(HOLD_SEC)
+        buttons.reset_press_counts()
+        assert buttons.events(_buttons(presses={Button.A: 1}), 0) == []
+        assert buttons.events(_buttons(presses={Button.A: 2}), 10) == [Event.CLUTCH]
 
     def test_the_first_sample_sets_the_press_counts_and_presses_nothing(self):
         buttons = ButtonMap(HOLD_SEC)
@@ -198,7 +205,7 @@ class TestButtonMap:
     def test_a_press_count_that_goes_down_presses_nothing(self):
         """A page that loads again counts from 0."""
         buttons = _map(HOLD_SEC)
-        assert buttons.events(_buttons(presses={Button.A: 3}), 0) == [Event.CLUTCH] * 3
+        assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
         assert buttons.events(_buttons(presses={Button.A: 0}), 10) == []
         assert buttons.events(_buttons(presses={Button.A: 1}), 20) == [Event.CLUTCH]
 
@@ -1127,6 +1134,20 @@ def test_a_press_of_a_that_went_down_and_up_between_two_samples_turns_control_on
         connection = _readied_connection(served, socket_path, connect)
         # No sample shows A down: only the press count of A steps
         _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        connection.close()
+
+
+def test_a_press_that_the_page_counted_in_a_silence_of_its_samples_does_not_turn_control_on(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=0.3, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        time.sleep(served.silence_limit + 0.05)
+        # The first sample after the page connects again counts the press of A from while it was away
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert not served.state().control
+        _take(served, _buttons(presses={Button.A: 2}))
         connection.frame(FRAME_REQUEST)
         assert served.state().control
         connection.close()
