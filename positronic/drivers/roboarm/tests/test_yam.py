@@ -891,6 +891,20 @@ def test_a_stop_during_the_park_for_disengaging_parks_the_arm_once(engaged_rig, 
     assert rig.vendor.closed
 
 
+def test_disengaging_lets_a_grip_move_in_flight_arrive_before_the_park(world, engaged_rig):
+    rig = engaged_rig
+    rig.raise_arm()
+    answer = _gripper(world, rig)(0.8)
+    rig.tick()
+    assert not answer.done(), 'the grip move ended before the input turned off'
+    rig.engaged.push(False)
+    _until_answered(rig, answer)
+
+    assert answer.result() is None
+    rig.tick(15)
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+
+
 def test_a_park_that_fails_for_disengaging_keeps_the_torque_on_until_the_input_turns_on_and_off(engaged_rig, caplog):
     rig = engaged_rig
     rig.raise_arm()

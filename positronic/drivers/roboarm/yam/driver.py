@@ -932,8 +932,7 @@ class Robot(pimm.ControlSystem):
         # The driver puts a new cap in force before its next command to the chain, also in a move. None or 0 sets no
         # cap. The park on shutdown does not read it.
         self.gripper_force_cap_n = pimm.DefaultingReceiver[float | None](self, default=self._gripper_force_cap_n)
-        # Read only with ``engage_on_input``. Off: no chain. An open chain parks, and the torque goes off only after a
-        # verified park.
+        # Read only with ``engage_on_input``. Off parks the arm, and the torque goes off only after a verified park.
         self._engage_on_input = engage_on_input
         self.engaged = pimm.DefaultingReceiver[bool](self, default=False)
 
@@ -1184,7 +1183,10 @@ class Robot(pimm.ControlSystem):
                     if self._is_engaged():
                         serving.park_failed = False
                     elif not serving.park_failed:
-                        return
+                        if not fingers.busy:
+                            return
+                        yield self._finish_grip_move(arm, serving, fingers, clock)
+                        continue
                     else:
                         yield self._hold_unparked(arm, serving, fingers)
                         continue
@@ -1206,6 +1208,20 @@ class Robot(pimm.ControlSystem):
         finally:
             if serving.parking is not None:
                 serving.parking.close()
+
+    def _finish_grip_move(self, arm: _Arm, serving: _Serving, fingers: Moves[float], clock: pimm.Clock) -> pimm.Command:
+        """Refuse every new move, and serve the grip move in flight, for one control tick."""
+        self._refuse(
+            (arm.moves, fingers),
+            DeviceFault('The YAM arm is not engaged: it parks once the grip move in progress ends', FaultKind.ARM),
+        )
+        if fingers.active:
+            grip = grip_setpoint(fingers, arm.read_grip(arm.observations()), clock.now())
+            serving.grip_target = serving.grip_target if grip is None else grip
+        arm.command_step_toward(serving.q_target, serving.grip_target)
+        arm.publish(arm.observations())
+        fingers.answer()
+        return arm.limiter.wait()
 
     def _hold_unparked(self, arm: _Arm, serving: _Serving, fingers: Moves[float]) -> pimm.Command:
         """Refuse every move, and hold the arm where the failed park left it, for one control tick."""
