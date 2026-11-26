@@ -1329,13 +1329,14 @@ def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(sock
     bridge.buttons._bind(ManualCommandReceiver())
     page_input = ManualCommandReceiver()
     bridge.page_input._bind(page_input)
-    stop = types.SimpleNamespace(value=False)
-    loop = bridge.run(cast(pimm.SignalReceiver, stop), SystemClock())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
     next(loop)
-    page_input.push({command.TEXT_ONLY: True})
-    next(loop)
-    page_input.push({command.TEXT_ONLY: False})
-    next(loop)
+    for text_only in (True, False):
+        page_input.push({command.TEXT_ONLY: text_only})
+        now[0] += 1 / 16
+        next(loop)
     assert asked == [True, False, True]
 
 
@@ -1361,11 +1362,13 @@ def test_the_headset_bridge_logs_the_camera_feeds_once_each_log_span(socket_path
     ]
 
 
-def test_the_headset_bridge_sends_the_view_at_once_on_a_new_image_of_the_shown_camera(socket_path, monkeypatch):
+def _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps):
+    """A headset bridge at ``view_fps`` on a fake clock, the time of that clock, the count of the images of the shown
+    camera, and the views that the bridge sends."""
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
     image_count = [0]
     monkeypatch.setattr(service, 'shown_image_count', lambda: image_count[0])
-    bridge = command._Headset(service, view_fps=10.0)
+    bridge = command._Headset(service, view_fps=view_fps)
     views = RecordingEmitter[np.ndarray]()
     bridge.view._bind(views, clock=SystemClock())
     bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
@@ -1374,15 +1377,28 @@ def test_the_headset_bridge_sends_the_view_at_once_on_a_new_image_of_the_shown_c
     now = [0.0]
     clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
     loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
+    return loop, now, image_count, views
+
+
+def test_the_headset_bridge_sends_a_new_image_of_the_shown_camera_at_the_next_view_slot(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=8.0)
     sent = []
-    for step in ['start', 'no change', 'new image', 'no change', 'view period']:
-        if step == 'new image':
-            image_count[0] += 1
-        if step == 'view period':
-            now[0] += 0.1
+    # One view period is 1/8 s, and the bridge sends the view again after two periods with no new image.
+    for at, new_image in [(0, 0), (10, 1), (11, 1), (14, 0), (18, 0), (25, 0), (33, 0), (34, 0)]:
+        now[0] = at / 64
+        image_count[0] += new_image
         next(loop)
         sent.append(len(views.emitted))
-    assert sent == [1, 1, 2, 2, 3]
+    assert sent == [1, 2, 2, 2, 3, 3, 3, 4]
+
+
+def test_the_headset_bridge_sends_at_most_one_view_each_view_period_under_a_burst_of_images(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=8.0)
+    for poll in range(256):
+        now[0] = poll / 256
+        image_count[0] += 1
+        next(loop)
+    assert len(views.emitted) == 8
 
 
 def test_the_service_counts_only_the_images_of_the_shown_camera(service, socket_path, connect):
