@@ -377,7 +377,7 @@ def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_w
 ):
     def colours() -> set[str]:
         view = service.view()
-        shown = {'on': service_module.CONTROL_ON_COLOUR, 'off': service_module.CONTROL_OFF_COLOUR}
+        shown = {'on': TeleopService.CONTROL_ON_COLOUR, 'off': TeleopService.CONTROL_OFF_COLOUR}
         return {name for name, colour in shown.items() if (view == colour).all(axis=-1).any()}
 
     with _Headset(service) as headset:
