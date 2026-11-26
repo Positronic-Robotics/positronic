@@ -137,6 +137,16 @@ def test_a_library_camera_set_joins_the_presets(tmp_path):
     assert sets == {'wrist_left': ['left', 'wrist'], 'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']}
 
 
+def test_one_server_holds_the_benchmark_and_a_library_with_the_camera_sets_of_both(benchmark, library):
+    _cameras(library, {'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']})
+
+    catalog = TaskCatalog.load(benchmark, [library], CATEGORIES)
+    sets = camera_sets([library], {'wrist_left': ['left', 'wrist']}, SELECTABLE)
+
+    assert [t.name for t in catalog.select(['CountTask', 'LabTask'])] == ['CountTask', 'LabTask']
+    assert sorted(sets) == ['exterior_pair_wrist', 'wrist_left']
+
+
 def test_a_library_camera_set_may_not_replace_a_preset(tmp_path):
     lib = _cameras(tmp_path / 'lib', {'wrist_left': ['ext', 'wrist']})
 

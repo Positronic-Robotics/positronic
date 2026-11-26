@@ -79,6 +79,7 @@ def _replay_episode(
     out = conn.reset({
         robolab_keys.TOKEN_TASK: task,
         robolab_keys.TOKEN_INSTRUCTION_TYPE: _INSTRUCTION_TYPE,
+        robolab_keys.TOKEN_CAMERAS: robolab_keys.WRIST_LEFT,
         robolab_keys.TOKEN_STATE: initial_state,
     })
     resolved = out[protocol.FRAME_META][robolab_keys.META_INSTRUCTION]
@@ -118,7 +119,7 @@ def run_replay(fixture_path: str, *, task: str) -> float:
     episodes = _load_fixture(fixture_path)
     successes = 0
     seen: set[str] = set()
-    with serve_robolab(robolab_keys.WRIST_LEFT) as (host, port):
+    with serve_robolab() as (host, port):
         conn = EnvConnection(host, port)
         try:
             instruction = _check_task_list(conn, task)
