@@ -1793,19 +1793,23 @@ def test_the_headset_page_counts_each_press_of_a_button_once():
     assert _press_counts(frames) == [[0, 0], [1, 0], [1, 0], [1, 1], [2, 1], [2, 1]]
 
 
-def _presses_in_frames(frames: list[tuple[list[bool], bool]]) -> list[list[int] | None]:
-    """The press counts that the headset page reads of a right controller in each of ``frames``, or ``None`` for a
-    frame with no controller. Each frame gives the state of each button, and whether the controller has a pose in it."""
+def _presses_in_frames(frames: list[tuple[list[bool], str]]) -> list[list[int] | None]:
+    """The press counts that the headset page sends for a right controller in each of ``frames``, or ``None`` for a
+    frame that sends no controller. Each frame gives the state of each button, and ``'pose'``, ``'no_grip_pose'`` (the
+    controller has no pose) or ``'no_viewer_pose'`` (the headset has no pose, so the page draws no frame)."""
     script = """
-    const { PressCounter, controllerInFrame } = await import(process.argv[1]);
+    const { PressCounter, controllerInFrame, countPresses } = await import(process.argv[1]);
     let input = '';
     for await (const chunk of process.stdin) input += chunk;
-    const counter = new PressCounter();
+    const counters = { left: new PressCounter(), right: new PressCounter() };
     const identity = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
-    const read = JSON.parse(input).map(([pressed, posed]) => {
+    const read = JSON.parse(input).map(([pressed, pose]) => {
       const gamepad = { buttons: pressed.map(down => ({ pressed: down, value: down ? 1 : 0 })) };
-      const frame = { getPose: () => (posed ? { transform: identity } : null) };
-      const controller = controllerInFrame({ gamepad, gripSpace: {}, handedness: 'right' }, frame, {}, counter);
+      const inputSource = { gamepad, gripSpace: {}, handedness: 'right' };
+      countPresses({ inputSources: [inputSource] }, counters);
+      if (pose === 'no_viewer_pose') return null;
+      const frame = { getPose: () => (pose === 'pose' ? { transform: identity } : null) };
+      const controller = controllerInFrame(inputSource, frame, {}, counters.right);
       return controller === null ? null : controller.presses;
     });
     console.log(JSON.stringify(read));
@@ -1815,9 +1819,15 @@ def _presses_in_frames(frames: list[tuple[list[bool], bool]]) -> list[list[int] 
 
 @needs_node
 def test_the_headset_page_sends_a_press_from_a_frame_with_no_pose_with_the_next_pose():
-    # A press in a frame of a tracking loss, and a release in the next frame with a pose
-    frames = [([False], True), ([True], False), ([False], True)]
-    assert _presses_in_frames(frames) == [[0], None, [1]]
+    # A press while the controller has no pose, and one while the headset has none, each released with a pose
+    frames = [
+        ([False], 'pose'),
+        ([True], 'no_grip_pose'),
+        ([False], 'pose'),
+        ([True], 'no_viewer_pose'),
+        ([False], 'pose'),
+    ]
+    assert _presses_in_frames(frames) == [[0], None, [1], None, [2]]
 
 
 def _quest_grip(raw_values: list[float]) -> list[float]:

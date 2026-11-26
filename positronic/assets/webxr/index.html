@@ -76,7 +76,7 @@
     <script type="module">
         import { PANEL_MODE, WebXRVideoPlayer } from './video-player.js';
         import { bendQuestTrigger } from './quest-trigger.js';
-        import { PressCounter, controllerInFrame } from './press-count.js';
+        import { PressCounter, controllerInFrame, countPresses } from './press-count.js';
         import { controllerSample, startXRApp } from '/core.js';
 
         // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
@@ -300,7 +300,7 @@
         sendInput({ [INPUT_FIELD.textOnly]: false });
 
         // Start the XR application and WebSocket connection using shared core
-        startXRApp({ onInit, onFrame });
+        startXRApp({ onInit, onFrame, onEveryFrame: ({ session }) => countPresses(session, pressCounters) });
       </script>
   </body>
 </html>

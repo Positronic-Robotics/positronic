@@ -10,7 +10,7 @@ export function controllerSample(position, orientation, buttons, presses) {
   return { position, orientation, buttons, presses };
 }
 
-export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
+export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
   let websocket = null;
   let xrButton = null;
   let xrRefSpace = null;
@@ -72,6 +72,8 @@ export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverl
 
   function onXRFrame(t, frame) {
     const session = frame.session;
+    // Each frame, also one with no viewer pose, so that the page sees each change of its input
+    if (typeof onEveryFrame === 'function') onEveryFrame({ frame, session, refSpace: xrRefSpace });
     const pose = frame.getViewerPose(xrRefSpace);
     if (pose) {
       const glLayer = session.renderState.baseLayer;
