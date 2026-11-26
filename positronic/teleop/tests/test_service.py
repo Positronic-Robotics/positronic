@@ -55,7 +55,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers import webxr
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
-from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, WebXR
+from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, ControllerButtons, WebXR
 from positronic.eval import keys as eval_keys
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
@@ -116,23 +116,34 @@ ARM_TARGET_GRIPS = {arm: keys.arm_channel(keys.TARGET_GRIP, arm) for arm in keys
 HOLD_SEC = 0.2
 
 
-def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0) -> list[float]:
-    """The values that the headset page sends for a controller."""
+def _buttons(trigger=0.0, stick=0.0, a=0.0, b=0.0, presses: dict[Button, int] | None = None) -> ControllerButtons:
+    """The buttons that the headset page sends for a controller. With no ``presses``, each button that is down has a
+    press count of 1 and the others of 0. So a sample with a button down after a sample with it up is one press."""
     values = [0.0] * (max(Button) + 1)
     for button, value in ((Button.TRIGGER, trigger), (Button.STICK, stick), (Button.A, a), (Button.B, b)):
         values[button] = value
-    return values
+    counts = [int(value >= 0.5) for value in values] if presses is None else [0] * len(values)
+    for button, count in (presses or {}).items():
+        counts[button] = count
+    return ControllerButtons(tuple(values), tuple(counts))
+
+
+def _map(*args, **kwargs) -> ButtonMap:
+    """A ``ButtonMap`` that took one sample with no button down, as a page sends before the first press."""
+    button_map = ButtonMap(*args, **kwargs)
+    button_map.observe(_buttons(), 0)
+    return button_map
 
 
 class TestButtonMap:
     def test_b_and_the_stick_answer_the_wait_for_ready(self):
-        assert ButtonMap(HOLD_SEC).ready_answer(_buttons(b=1.0), 0) is ReadyAnswer.READY
-        assert ButtonMap(HOLD_SEC).ready_answer(_buttons(stick=1.0), 0) is ReadyAnswer.CANCELLED
-        assert ButtonMap(HOLD_SEC).ready_answer(_buttons(), 0) is None
+        assert _map(HOLD_SEC).ready_answer(_buttons(b=1.0), 0) is ReadyAnswer.READY
+        assert _map(HOLD_SEC).ready_answer(_buttons(stick=1.0), 0) is ReadyAnswer.CANCELLED
+        assert _map(HOLD_SEC).ready_answer(_buttons(), 0) is None
 
     @pytest.mark.parametrize('threshold', [0.0, -0.1, float('nan'), 1.5])
-    def test_a_press_threshold_outside_zero_to_one_is_refused(self, threshold):
-        with pytest.raises(ValueError, match='press_threshold must be in'):
+    def test_a_hold_threshold_outside_zero_to_one_is_refused(self, threshold):
+        with pytest.raises(ValueError, match='hold_threshold must be in'):
             ButtonMap(HOLD_SEC, threshold)
 
     @pytest.mark.parametrize('hold_sec', [0.0, float('nan'), float('inf')])
@@ -141,33 +152,64 @@ class TestButtonMap:
             ButtonMap(hold_sec)
 
     def test_a_turns_control_on_or_off_at_each_press(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(a=1.0), 0) == [Event.CLUTCH]
         assert buttons.events(_buttons(a=1.0), 10) == []
         assert buttons.events(_buttons(), 20) == []
         assert buttons.events(_buttons(a=1.0), 30) == [Event.CLUTCH]
 
     def test_a_hold_of_b_completes_once(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(b=1.0), 0) == []
         assert buttons.events(_buttons(b=1.0), 300_000_000) == [Event.COMPLETE]
         assert buttons.events(_buttons(b=1.0), 600_000_000) == []
 
     def test_the_b_press_of_ready_does_not_complete(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         buttons.ready_answer(_buttons(b=1.0), 0)
         assert buttons.events(_buttons(b=1.0), 1_000_000_000) == []
 
     def test_a_hold_of_the_stick_gives_up_once(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(stick=1.0), 0) == []
         assert buttons.events(_buttons(stick=1.0), 300_000_000) == [Event.GIVE_UP]
         assert buttons.events(_buttons(stick=1.0), 600_000_000) == []
 
-    def test_a_value_below_the_press_threshold_presses_nothing(self):
-        buttons = ButtonMap(HOLD_SEC, press_threshold=0.9)
-        assert buttons.events(_buttons(a=0.8), 0) == []
-        assert buttons.events(_buttons(a=0.95), 10) == [Event.CLUTCH]
+    def test_a_value_below_the_hold_threshold_holds_nothing(self):
+        buttons = _map(HOLD_SEC, hold_threshold=0.9)
+        assert buttons.events(_buttons(b=0.8), 0) == []
+        assert buttons.events(_buttons(b=0.8), 300_000_000) == []
+        assert buttons.events(_buttons(b=0.95), 310_000_000) == []
+        assert buttons.events(_buttons(b=0.95), 610_000_000) == [Event.COMPLETE]
+
+    def test_a_press_that_went_down_and_up_between_two_samples_turns_control_on(self):
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
+
+    def test_an_odd_number_of_presses_between_two_samples_is_one_clutch_and_an_even_number_two(self):
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.A: 2}), 0) == [Event.CLUTCH] * 2
+        assert buttons.events(_buttons(presses={Button.A: 5}), 10) == [Event.CLUTCH]
+        assert buttons.events(_buttons(presses={Button.A: 105}), 20) == [Event.CLUTCH] * 2
+
+    def test_the_first_sample_sets_the_press_counts_and_presses_nothing(self):
+        buttons = ButtonMap(HOLD_SEC)
+        assert buttons.ready_answer(_buttons(presses={Button.B: 7}), 0) is None
+        assert buttons.ready_answer(_buttons(presses={Button.B: 8}), 10) is ReadyAnswer.READY
+
+    def test_a_press_count_that_goes_down_presses_nothing(self):
+        """A page that loads again counts from 0."""
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
+        assert buttons.events(_buttons(presses={Button.A: 0}), 10) == []
+        assert buttons.events(_buttons(presses={Button.A: 1}), 20) == [Event.CLUTCH]
+
+    def test_a_sample_with_any_count_that_went_down_sets_all_the_counts_to_count_from(self):
+        """A page that loads again counts each button from 0, and can count a press of A before its first sample."""
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.TRIGGER: 4}), 0) == []
+        assert buttons.events(_buttons(presses={Button.A: 1}), 10) == []
+        assert buttons.events(_buttons(presses={Button.A: 2}), 20) == [Event.CLUTCH]
 
     def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
         page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
@@ -175,10 +217,10 @@ class TestButtonMap:
         assert tuple(map(int, layout)) == (Button.TRIGGER, Button.STICK, Button.A, Button.B)
 
     def test_the_trigger_is_the_grip(self):
-        assert ButtonMap.grip(_buttons(trigger=0.7)) == 0.7
+        assert ButtonMap.grip(_buttons(trigger=0.7).values) == 0.7
 
     def test_a_hold_does_not_count_the_time_the_controller_is_not_tracked(self):
-        buttons = ButtonMap(HOLD_SEC)
+        buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(b=1.0), 0) == []
         buttons.cancel_holds()
         assert buttons.events(_buttons(b=1.0), 300_000_000) == []
@@ -187,7 +229,7 @@ class TestButtonMap:
         assert buttons.events(_buttons(b=1.0), 620_000_000) == [Event.COMPLETE]
 
     def test_the_map_of_the_left_controller_reads_only_x(self):
-        buttons = ButtonMap(HOLD_SEC, buttons=(Button.X,))
+        buttons = _map(HOLD_SEC, buttons=(Button.X,))
         assert buttons.ready_answer(_buttons(b=1.0), 0) is None
         assert buttons.ready_answer(_buttons(stick=1.0), 10) is None
         assert buttons.events(_buttons(a=1.0, b=1.0, stick=1.0), 20) == [Event.CLUTCH]
@@ -218,24 +260,52 @@ def _client(socket_path: Path, query: str = '') -> InferenceClient:
     return InferenceClient(registry.client_wire('websocket_unix'), address, infer_timeout=5, connect_deadline=5)
 
 
-def _take(service: TeleopService, buttons: list[float]) -> None:
+def _take(service: TeleopService, buttons: ControllerButtons) -> None:
     """Pass one sample of the right controller at ``HAND`` with ``buttons`` to ``service``."""
     service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: buttons})
 
 
+def _pressed_after(previous: ControllerButtons, buttons: ControllerButtons) -> ControllerButtons:
+    """The values of ``buttons`` with the press counts that a page sends after ``previous``: each button that goes down
+    counts one press more."""
+    if len(buttons.values) != len(previous.values):
+        return buttons
+    counts = tuple(
+        count + int(value >= 0.5 > before)
+        for count, value, before in zip(previous.presses, buttons.values, previous.values, strict=True)
+    )
+    return ControllerButtons(buttons.values, counts)
+
+
 class _Headset:
-    """A headset that sends one sample of both controllers every 10 ms, with the poses and the buttons that a test
-    sets. ``pose`` and ``buttons`` are of the right controller."""
+    """A headset that sends one sample of both controllers every 10 ms, with the poses and the button values that a
+    test sets. It counts the presses as the page does. ``pose`` and ``buttons`` are of the right controller."""
 
     def __init__(self, service: TeleopService):
         self._service = service
         self.pose: geom.Transform3D | None = HAND
-        self.buttons = _buttons()
+        self._buttons = _buttons()
         self.left_pose: geom.Transform3D | None = LEFT_HAND
-        self.left_buttons = _buttons()
+        self._left_buttons = _buttons()
         self.sent = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._send, daemon=True)
+
+    @property
+    def buttons(self) -> ControllerButtons:
+        return self._buttons
+
+    @buttons.setter
+    def buttons(self, buttons: ControllerButtons) -> None:
+        self._buttons = _pressed_after(self._buttons, buttons)
+
+    @property
+    def left_buttons(self) -> ControllerButtons:
+        return self._left_buttons
+
+    @left_buttons.setter
+    def left_buttons(self, buttons: ControllerButtons) -> None:
+        self._left_buttons = _pressed_after(self._left_buttons, buttons)
 
     def _send(self) -> None:
         while not self._stop.is_set():
@@ -260,16 +330,16 @@ class _Headset:
             assert time.monotonic() < deadline, 'the headset sent no sample'
             time.sleep(0.005)
 
-    def press(self, **buttons: float) -> None:
-        """Press ``buttons`` of the right controller for a few samples, and release them."""
-        self.buttons = _buttons(**buttons)
+    def press(self, trigger=0.0, stick=0.0, a=0.0, b=0.0) -> None:
+        """Press the buttons of the right controller for a few samples, and release them."""
+        self.buttons = _buttons(trigger, stick, a, b)
         self._samples(3)
         self.buttons = _buttons()
         self._samples(3)
 
-    def press_left(self, **buttons: float) -> None:
-        """Press ``buttons`` of the left controller for a few samples, and release them. X is at the index of A."""
-        self.left_buttons = _buttons(**buttons)
+    def press_left(self, trigger=0.0, stick=0.0, a=0.0, b=0.0) -> None:
+        """Press the buttons of the left controller for a few samples, and release them. X is at the index of A."""
+        self.left_buttons = _buttons(trigger, stick, a, b)
         self._samples(3)
         self.left_buttons = _buttons()
         self._samples(3)
@@ -420,7 +490,7 @@ def test_a_controller_with_too_few_buttons_turns_control_off_and_the_robot_holds
         headset.press(a=1.0)
         headset.buttons = _buttons(trigger=0.8)
         held = _drive_until(run, lambda step: _is_move(step) and step.commands[keys.TARGET_GRIP] == pytest.approx(0.8))
-        headset.buttons = []
+        headset.buttons = ControllerButtons((), ())
         headset.pose = _raised(HAND)
         _drive_until(run, lambda _: not service.state().control)
         headset._samples(3)
@@ -581,11 +651,11 @@ def test_a_sample_that_tracks_no_controller_is_no_controller_data(socket_path):
     service = TeleopService(ServedUnixSocket(socket_path), ready_limit=0.2, silence_limit=60.0, hold_sec=HOLD_SEC)
     no_controller = {webxr.LEFT: None, webxr.RIGHT: None}
     service.take_sample(no_controller, no_controller)
-    service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: [1.0]})
+    service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: ControllerButtons((1.0,), (0,))})
     assert not service.state().tracked
     headset = _Headset(service)
     headset.pose = headset.left_pose = None
-    headset.buttons = headset.left_buttons = []
+    headset.buttons = headset.left_buttons = ControllerButtons((), ())
     with headset, pytest.raises(service_module.TrialNotStarted) as raised:
         service.wait_for_ready(protocol.SessionParams(), threading.Event())
     assert 'no controller data came in the wait' in str(raised.value)
@@ -927,6 +997,7 @@ def _raw_session(service: TeleopService, socket_path: Path):
     """A websocket on the service whose session the teleoperator readied, and the ID of its session."""
     websocket = _raw_connection(socket_path)
     _until_phase(service, Phase.READY_WAIT)
+    _take(service, _buttons())
     _take(service, _buttons(b=1.0))
     _take(service, _buttons())
     while (message := deserialise(websocket.recv(5)))[STATUS] != ServerStatus.READY:
@@ -1041,6 +1112,7 @@ def _readied_connection(service: TeleopService, socket_path: Path, connect, quer
     """A test session with ``query`` that the teleoperator readied from the headset."""
     connection = connect(socket_path, query)
     _until_phase(service, Phase.READY_WAIT)
+    _take(service, _buttons())
     _take(service, _buttons(b=1.0))
     _take(service, _buttons())
     connection.wait_open()
@@ -1084,6 +1156,43 @@ def test_a_frame_answers_at_once_with_the_newest_sample(socket_path, connect):
         connection.frame(FRAME_REQUEST)
         assert time.monotonic() - started < 1.0
         assert served.state().control
+        connection.close()
+
+
+def test_a_press_of_a_that_went_down_and_up_between_two_samples_turns_control_on(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        # No sample shows A down: only the press count of A steps
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        connection.close()
+
+
+def test_a_press_of_a_while_the_controller_is_not_tracked_turns_control_on_when_it_is_tracked_again(
+    socket_path, connect
+):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        served.take_sample({webxr.RIGHT: None}, {webxr.RIGHT: None})
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        connection.close()
+
+
+def test_two_presses_of_a_between_two_samples_take_control_again_from_the_new_place_of_the_hand(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        # A goes off and on again while the hand moves 5 cm
+        moved = geom.Transform3D(HAND.translation + np.array([0.0, 0.0, 0.05]), HAND.rotation)
+        served.take_sample({webxr.RIGHT: moved}, {webxr.RIGHT: _buttons(presses={Button.A: 3})})
+        reply = connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        np.testing.assert_allclose(reply[ACTION][:3], OBS[keys.EE_POSE][:3], atol=1e-6)
         connection.close()
 
 
@@ -1546,16 +1655,12 @@ class _PagePassingASampleAtEachPoll:
             positions, buttons = webxr.parse_controller_message(self._latest)
             right = buttons[webxr.RIGHT]
             if self._passes(right):
-                values = {
-                    side: None if side_buttons is None else side_buttons.tolist()
-                    for side, side_buttons in buttons.items()
-                }
-                self._service.take_sample(positions, values)
+                self._service.take_sample(positions, buttons)
         state = self._service.state()
         self._answered(state.phase)
         return connection.respond(200, json.dumps(asdict(command.PageState(state.phase, state.control))))
 
-    def _passes(self, buttons: np.ndarray | None) -> bool:
+    def _passes(self, buttons: ControllerButtons | None) -> bool:
         return True
 
     def _answered(self, phase: Phase) -> None:
@@ -1572,8 +1677,8 @@ class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
         # The answers of the next Ready wait still to show before a release of B passes, or 0 when it passes.
         self._ready_waits_to_miss = 0
 
-    def _passes(self, buttons: np.ndarray | None) -> bool:
-        return not (self._ready_waits_to_miss and buttons is not None and buttons[Button.B] == 0.0)
+    def _passes(self, buttons: ControllerButtons | None) -> bool:
+        return not (self._ready_waits_to_miss and buttons is not None and buttons.values[Button.B] == 0.0)
 
     def _answered(self, phase: Phase) -> None:
         if self._phase is Phase.RUNNING and phase is not Phase.RUNNING:
@@ -1646,6 +1751,20 @@ QUEST_3 = ['meta-quest-touch-plus', 'oculus-touch-v3', 'oculus-touch', 'generic-
 needs_node = pytest.mark.skipif(shutil.which('node') is None, reason='node runs the modules of the headset page')
 
 
+def _run_page_module(module: str, script: str, data: list) -> list:
+    """The JSON that ``script`` prints under node for ``data`` on its input, with the URL of page ``module`` as its
+    first argument."""
+    url = Path(package_assets_path(f'assets/webxr/{module}')).as_uri()
+    node = subprocess.run(
+        ['node', '--input-type=module', '-e', script, url],
+        input=json.dumps(data),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(node.stdout)
+
+
 def _bend_quest_trigger(cases: list[dict]) -> list[list[float]]:
     script = """
     const { bendQuestTrigger } = await import(process.argv[1]);
@@ -1653,15 +1772,140 @@ def _bend_quest_trigger(cases: list[dict]) -> list[list[float]]:
     for await (const chunk of process.stdin) input += chunk;
     console.log(JSON.stringify(JSON.parse(input).map(c => bendQuestTrigger(c.buttons, c.profiles))));
     """
-    module = Path(package_assets_path('assets/webxr/quest-trigger.js')).as_uri()
-    node = subprocess.run(
-        ['node', '--input-type=module', '-e', script, module],
-        input=json.dumps(cases),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return json.loads(node.stdout)
+    return _run_page_module('quest-trigger.js', script, cases)
+
+
+def _press_counts(frames: list[list[bool]]) -> list[list[int]]:
+    """The press counts that the headset page sends for a controller whose buttons are down as in each of ``frames``."""
+    script = """
+    const { PressCounter } = await import(process.argv[1]);
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const counter = new PressCounter();
+    console.log(JSON.stringify(JSON.parse(input).map(pressed => counter.count(pressed))));
+    """
+    return _run_page_module('press-count.js', script, frames)
+
+
+@needs_node
+def test_the_headset_page_counts_each_press_of_a_button_once():
+    frames = [[False, False], [True, False], [True, False], [False, True], [True, True], [False, False]]
+    assert _press_counts(frames) == [[0, 0], [1, 0], [1, 0], [1, 1], [2, 1], [2, 1]]
+
+
+def _presses_in_frames(frames: list[tuple[list[bool], str]]) -> list[list[int] | None]:
+    """The press counts that the headset page sends for a right controller in each of ``frames``, or ``None`` for a
+    frame that sends no controller. Each frame gives the state of each button, and ``'pose'``, ``'no_grip_pose'`` (the
+    controller has no pose) or ``'no_viewer_pose'`` (the headset has no pose, so the page draws no frame).
+
+    The frame loop of ``startXRApp`` in ``core.js`` runs each frame, in a fake XR session with a fake WebSocket. The
+    page hooks are those of the headset page."""
+    script = """
+    import { register } from 'node:module';
+    const coreUrl = process.argv[1];
+    // The server serves these two modules of core.js; the test has a stand-in for each
+    const served = {
+      '/session-mode.js': 'export const SESSION_MODE = "immersive-ar";',
+      '/webxr-button.js':
+        'export class WebXRButton { constructor(o) { globalThis.xrButton = o; this.domElement = {} } setSession() {} }',
+    };
+    register('data:text/javascript,' + encodeURIComponent(`
+      const served = ${JSON.stringify(served)};
+      export async function resolve(specifier, context, next) {
+        if (specifier in served) {
+          return { url: 'data:text/javascript,' + encodeURIComponent(served[specifier]), shortCircuit: true };
+        }
+        return next(specifier, context);
+      }`));
+
+    const sent = [];
+    globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send(text) { sent.push(JSON.parse(text)); } };
+    const element = () => ({ appendChild() {}, classList: { add() {}, remove() {} } });
+    globalThis.window = { location: { protocol: 'http:', host: 'page' }, innerWidth: 1, innerHeight: 1 };
+    globalThis.document = { body: element(), createElement: element, querySelector: () => null };
+    const matrix = () => ({ fromArray() {} });
+    globalThis.THREE = {
+      Scene: class { add() {} },
+      AmbientLight: class {},
+      PerspectiveCamera: class { matrix = matrix(); projectionMatrix = matrix(); updateMatrixWorld() {} },
+      WebGLRenderer: class {
+        xr = { setSession() {} };
+        domElement = {};
+        setSize() {}
+        setPixelRatio() {}
+        render() {}
+        getContext() { return { bindFramebuffer() {}, viewport() {} }; }
+      },
+    };
+    let nextFrame = null;
+    const session = {
+      inputSources: [],
+      renderState: { baseLayer: { getViewport: () => ({ x: 0, y: 0, width: 1, height: 1 }) } },
+      addEventListener() {},
+      requestReferenceSpace: async () => ({}),
+      requestAnimationFrame: callback => { nextFrame = callback; },
+    };
+    const xr = { isSessionSupported: async () => true, requestSession: async () => session };
+    Object.defineProperty(globalThis, 'navigator', { value: { xr }, configurable: true });
+
+    const { controllerSample, startXRApp } = await import(coreUrl);
+    const { PressCounter, controllerInFrame, countPresses } = await import(new URL('press-count.js', coreUrl));
+    const counters = { left: new PressCounter(), right: new PressCounter() };
+    startXRApp({
+      onEveryFrame: ({ session }) => countPresses(session, counters),
+      onFrame: ({ session, frame, refSpace, everyFrame: presses }) => {
+        const controllers = { left: null, right: null };
+        for (const inputSource of session.inputSources) {
+          const controller = controllerInFrame(inputSource, frame, refSpace);
+          if (controller === null) continue;
+          const hand = inputSource.handedness;
+          controllers[hand] = controllerSample([0, 0, 0], [1, 0, 0, 0], controller.values, presses[hand]);
+        }
+        return controllers;
+      },
+    });
+    await globalThis.xrButton.onRequestSession();
+    await new Promise(resolve => setTimeout(resolve));
+
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const identity = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+    const view = { transform: { matrix: [] }, projectionMatrix: [] };
+    const read = JSON.parse(input).map(([pressed, pose]) => {
+      const gamepad = { buttons: pressed.map(down => ({ pressed: down, value: down ? 1 : 0 })) };
+      session.inputSources = [{ gamepad, gripSpace: {}, handedness: 'right', profiles: [] }];
+      const before = sent.length;
+      nextFrame(0, {
+        session,
+        getViewerPose: () => (pose === 'no_viewer_pose' ? null : { views: [view] }),
+        getPose: () => (pose === 'pose' ? { transform: identity } : null),
+      });
+      const right = sent.length > before ? sent.at(-1).controllers.right : null;
+      return right === null ? null : right.presses;
+    });
+    console.log(JSON.stringify(read));
+    """
+    return _run_page_module('core.js', script, frames)
+
+
+def test_the_teleop_command_refuses_a_stale_limit_of_the_headset_above_its_silence_limit():
+    # A message that comes later than the silence limit finds control off, so its presses must do nothing
+    command_with = command.serve.override(silence_limit=0.1, open_window=False, notice=None)
+    with pytest.raises(ValueError, match='stale_limit of the headset must not exceed silence_limit'):
+        command_with.instantiate()
+
+
+@needs_node
+def test_the_headset_page_sends_a_press_from_a_frame_with_no_pose_with_the_next_pose():
+    # A press while the controller has no pose, and one while the headset has none, each released with a pose
+    frames = [
+        ([False], 'pose'),
+        ([True], 'no_grip_pose'),
+        ([False], 'pose'),
+        ([True], 'no_viewer_pose'),
+        ([False], 'pose'),
+    ]
+    assert _presses_in_frames(frames) == [[0], None, [1], None, [2]]
 
 
 def _quest_grip(raw_values: list[float]) -> list[float]:

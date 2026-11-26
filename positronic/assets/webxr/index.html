@@ -76,7 +76,8 @@
     <script type="module">
         import { PANEL_MODE, WebXRVideoPlayer } from './video-player.js';
         import { bendQuestTrigger } from './quest-trigger.js';
-        import { startXRApp } from '/core.js';
+        import { PressCounter, controllerInFrame, countPresses } from './press-count.js';
+        import { controllerSample, startXRApp } from '/core.js';
 
         // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
         const ROUTES = { state: '/state', input: '/input' };
@@ -100,6 +101,7 @@
 
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
+        const pressCounters = { left: new PressCounter(), right: new PressCounter() };
         // The `performance.now()` instant of the Y press that is down, and whether its hold cycled the panel
         let cameraDownAt = null;
         let cameraHeld = false;
@@ -167,22 +169,19 @@
           videoPlayer.init(scene, camera);
         }
 
-        function onFrame({ session, frame, refSpace }) {
+        // `presses` are the press counts by hand that `countPresses` returned in this frame
+        function onFrame({ session, frame, refSpace, everyFrame: presses }) {
           // Gather controllers from input sources and update axes
           const controllers = { left: null, right: null };
           for (let inputSource of session.inputSources) {
             if (inputSource.gripSpace && (inputSource.handedness === 'left' || inputSource.handedness === 'right')) {
-              const gripPose = frame.getPose(inputSource.gripSpace, refSpace);
-              if (!gripPose) continue;
-              const pos = gripPose.transform.position;
-              const orient = gripPose.transform.orientation;
-              const values = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
+              const controller = controllerInFrame(inputSource, frame, refSpace);
+              if (controller === null) continue;
+              const { position: pos, orientation: orient, values } = controller;
               const buttons = bendQuestTrigger(values, inputSource.profiles);
-              controllers[inputSource.handedness] = {
-                position: [pos.x, pos.y, pos.z],
-                orientation: [orient.w, orient.x, orient.y, orient.z],
-                buttons: buttons
-              };
+              controllers[inputSource.handedness] = controllerSample(
+                [pos.x, pos.y, pos.z], [orient.w, orient.x, orient.y, orient.z], buttons, presses[inputSource.handedness],
+              );
               const axesGroup = controllerAxes[inputSource.handedness];
               if (axesGroup) {
                 axesGroup.visible = true;
@@ -302,7 +301,7 @@
         sendInput({ [INPUT_FIELD.textOnly]: false });
 
         // Start the XR application and WebSocket connection using shared core
-        startXRApp({ onInit, onFrame });
+        startXRApp({ onInit, onFrame, onEveryFrame: ({ session }) => countPresses(session, pressCounters) });
       </script>
   </body>
 </html>
