@@ -51,6 +51,8 @@ HEADSET_CAMERA = 'headset_camera'
 # The field of a page input that asks for the text of the view with no camera image, so that a page that shows black
 # as clear shows only the text: true or false.
 TEXT_ONLY = 'headset_text_only'
+# The field of a page input that asks for the view of a running trial with no task: true or false.
+TASK_HIDDEN = 'headset_task_hidden'
 
 
 class _Headset(pimm.ControlSystem):
@@ -77,6 +79,7 @@ class _Headset(pimm.ControlSystem):
         # What the headset page asks for, as a JSON object
         self.page_input = pimm.ControlSystemReceiver(self)
         self._text_only = False
+        self._task_hidden = False
         self.view = pimm.ControlSystemEmitter(self)
         # The state of the trial, as a `PageState` mapping.
         self.page_state = pimm.ControlSystemEmitter(self)
@@ -110,6 +113,8 @@ class _Headset(pimm.ControlSystem):
                         logger.warning('The headset page chose no camera: %s', refused)
             if page_input is not None and TEXT_ONLY in page_input.data:
                 self._text_only = page_input.data[TEXT_ONLY] is True
+            if page_input is not None and TASK_HIDDEN in page_input.data:
+                self._task_hidden = page_input.data[TASK_HIDDEN] is True
             page_changed = page_changed or page_input is not None
             image_count = self._service.shown_image_count()
             now = clock.now()
@@ -123,7 +128,7 @@ class _Headset(pimm.ControlSystem):
             yield pimm.Sleep(min(self.POLL_SEC, next_slot - now) if next_slot > now else self.POLL_SEC)
 
     def _send_view(self) -> None:
-        self.view.emit(self._service.view(camera=not self._text_only))
+        self.view.emit(self._service.view(camera=not self._text_only, task=not self._task_hidden))
         state, cameras = self._service.state(), self._service.cameras()
         page_state = PageState(
             state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen, state.tracked

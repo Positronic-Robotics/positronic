@@ -101,8 +101,9 @@ off. The B button is labelled with what it does: Ready, or Complete while the tr
 trial waits for Ready, and it is green while the trial runs. At each new trial and at each end the page opens the grip
 slider, so a closed gripper does not close again at the next Control.
 
-The Quest shows the phase, the task and the control state on its video. The control state of an arm is on green while
-control is on, and on yellow while it is off. The window on the laptop shows the same state, and the control state.
+The Quest shows the phase, the task and the control state on its video. While a trial waits for Ready, the video shows
+no task. The control state of an arm is on green while control is on, and on yellow while it is off. The window on the
+laptop shows the same state, and the control state.
 
 The page sends controller data only in VR, so outside VR a press of B does nothing. `tracked` in `GET /status` of the
 window and in the page state is false when no controller data came in the silence limit (0.5 s). While a trial waits
@@ -143,8 +144,10 @@ Conversion for training picks its own keys from the recording.
   images came in the last 30 s (also between trials), and the camera that the headset shows.
 - In the headset, Y on the left controller works the video panel. On the PlayStation VR2 it is Triangle (△). A press
   of Y makes the next camera whose images come now the main camera. A hold of 1 s cycles the panel: on black with the
-  camera, the text alone over the room (the service then sends the view with no camera, and the page shows black as
-  clear), and hidden. The bottom of the view names the camera and the use of Y, with the Quest names as for B and A.
+  camera, on black with the camera and no task (the control line and the hints stay), the text alone over the room
+  (the service then sends the view with no camera, and the page shows black as clear), and hidden. A page that loads
+  starts on black with the task, and the stage holds over the trials. The bottom of the view names the camera and the
+  use of Y, with the Quest names as for B and A.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480, as JPEG. A camera with another aspect gets black bars.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
