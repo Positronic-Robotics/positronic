@@ -105,16 +105,16 @@ def _robolab_eval(
 
     ``cameras`` names the set the run renders, one of ``keys.ROBOT_CAMERA_SETS[robot]``. For the DROID rig: both
     exteriors and the wrist, or one exterior and the wrist. For the YAM: the top camera and both wrists. Without it,
-    the run renders ``keys.DEFAULT_CAMERA_SETS[robot]``. RoboLab bakes the set into the registered task, so a run
-    holds one set.
+    the run renders ``keys.DEFAULT_CAMERA_SETS[robot]``. A run holds one set, and every trial records it under
+    ``robolab.cameras``.
 
     ``horizon_sec`` replaces the episode length of every task of the run, and the default deadline follows it. A
     run with it is not comparable with RoboLab's own scores.
 
     ``env_server`` is the ``host:port`` of a RoboLab env server that already runs, which this eval shares with
-    other evals: each drives one clone of its scene. The server's robot and camera set must be ``robot`` and
-    ``cameras``, and every eval that shares it must set the same ``horizon_sec``. Without it, the eval launches a
-    server of its own.
+    other evals: each drives one clone of its scene. The server's robot must be ``robot``, and the server must render
+    the set ``cameras``. Evals of other camera sets can share it, but each batch holds one set. Every eval that
+    shares it must set the same ``horizon_sec``. Without it, the eval launches a server of its own.
     ``batch_size`` is how many evals start each batch on that server; the server builds that many clones for them.
     Without it, a batch waits for every clone of the server.
     ``refill`` resets this eval's clone alone into the batch that runs on ``env_server``, while the other clones run.
@@ -149,7 +149,7 @@ def _robolab_eval(
     def tasks() -> list[Task]:
         trials = []
         for listed in proxy.tasks(spec(task=task, **{robolab_keys.SELECT_INSTRUCTION_TYPE: instruction_type})):
-            params = listed.params
+            params = {**listed.params, robolab_keys.CAMERAS: cameras}
             if horizon_sec is not None:
                 params = {**params, robolab_keys.EPISODE_LENGTH_OVERRIDE: horizon_sec}
             # RoboLab truncates an episode at its length, so the deadline sits above it and the env's verdict ends a

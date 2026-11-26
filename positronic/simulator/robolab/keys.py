@@ -21,6 +21,8 @@ EPISODE_LENGTH = 'robolab.episode_length'
 EPISODE_LENGTH_OVERRIDE = 'robolab.episode_length_override'
 # The phrasing of the instruction, which the task record states and ``_reset_token`` reads back.
 INSTRUCTION_TYPE = 'robolab.instruction_type'
+# The camera set that the env renders for the trial, which ``_reset_token`` puts in the token.
+CAMERAS = 'robolab.cameras'
 
 # A step frame's field when the env ended a clone's episode because the clone cannot go on. Its value is the fault.
 FRAME_FAULT = 'fault'
@@ -31,11 +33,13 @@ FAULT_NONFINITE_ARM = 'nonfinite_arm_state'
 # The fault of a clone whose finite arm state is far outside what the arm can have (``arm_fault.arm_faults``).
 FAULT_ARM_OUT_OF_RANGE = 'arm_state_out_of_range'
 
-# The fields of a reset token. The episode length is absent when the task sets it, the state when the scene randomizes.
+# The fields of a reset token. The episode length is absent when the task sets it, the state when the scene randomizes,
+# and the camera set when the server renders its first set.
 TOKEN_TASK = 'task'
 TOKEN_INSTRUCTION_TYPE = 'instruction_type'
 TOKEN_EPISODE_LENGTH_S = 'episode_length_s'
 TOKEN_STATE = 'state'
+TOKEN_CAMERAS = 'cameras'
 
 # The instruction text in the phrasing of the reset, in the scene meta of a reset frame.
 META_INSTRUCTION = 'task'
@@ -94,3 +98,13 @@ def camera_set(robot: str, name: str) -> tuple[str, ...]:
     if name not in sets:
         raise ValueError(f'the {robot} robot has the camera sets {sorted(sets)}, not {name!r}')
     return sets[name]
+
+
+def reset_camera_set(token: dict, served: list[str]) -> str:
+    """The camera set that a reset with ``token`` renders on a server of the camera sets ``served``: the set that the
+    token names, or the first set that the server serves. Raises ``ValueError`` for a set that the server does not
+    serve."""
+    cameras = token.get(TOKEN_CAMERAS, served[0])
+    if cameras not in served:
+        raise ValueError(f'this server renders the camera sets {served}, not {cameras!r}')
+    return cameras

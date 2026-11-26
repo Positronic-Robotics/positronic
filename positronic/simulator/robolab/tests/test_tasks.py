@@ -77,13 +77,21 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
     assert params == [
         {eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.EPISODE_LENGTH: 90.0, robolab_keys.INSTRUCTION_TYPE: 'vague'}
     ]
-    token = adapter.reset_token(params[0])
-    assert token == {robolab_keys.TOKEN_TASK: 'AnimalsInBinTask', robolab_keys.TOKEN_INSTRUCTION_TYPE: 'vague'}
+    token = adapter.reset_token({**params[0], robolab_keys.CAMERAS: robolab_keys.WRIST_LEFT})
+    assert token == {
+        robolab_keys.TOKEN_TASK: 'AnimalsInBinTask',
+        robolab_keys.TOKEN_INSTRUCTION_TYPE: 'vague',
+        robolab_keys.TOKEN_CAMERAS: robolab_keys.WRIST_LEFT,
+    }
 
 
 def test_the_reset_token_carries_an_episode_length_only_when_one_replaces_the_budget():
     adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
-    params = {eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.INSTRUCTION_TYPE: 'default'}
+    params = {
+        eval_keys.TASK: 'AnimalsInBinTask',
+        robolab_keys.INSTRUCTION_TYPE: 'default',
+        robolab_keys.CAMERAS: robolab_keys.WRIST_LEFT_RIGHT,
+    }
 
     budget = adapter.reset_token({**params, robolab_keys.EPISODE_LENGTH: 90.0})
     override = adapter.reset_token({
@@ -113,7 +121,21 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
         eval_keys.TASK: 'BananaInBowlTask',
         robolab_keys.EPISODE_LENGTH: 50.0,
         robolab_keys.INSTRUCTION_TYPE: 'specific',
+        robolab_keys.CAMERAS: robolab_keys.WRIST_LEFT_RIGHT,
     }
+
+
+@pytest.mark.parametrize(
+    ('cameras', 'rendered'), [(None, robolab_keys.WRIST_LEFT_RIGHT), (robolab_keys.WRIST_LEFT, robolab_keys.WRIST_LEFT)]
+)
+def test_each_reset_names_the_camera_set_of_its_eval(asked, cameras, rendered):
+    """Evals of two camera sets can share one env server, so each reset names the set that its eval renders."""
+    trials = list(robolab_cfg.visual.override(cameras=cameras).instantiate().tasks())
+    adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
+
+    tokens = [adapter.reset_token(trial.prepare_args[eval_keys.SCENE]) for trial in trials]
+    assert [token[robolab_keys.TOKEN_CAMERAS] for token in tokens] == [rendered, rendered]
+    assert [trial.meta[robolab_keys.CAMERAS] for trial in trials] == [rendered, rendered]
 
 
 def test_the_reset_builds_the_phrasing_that_the_listed_instruction_states(asked):

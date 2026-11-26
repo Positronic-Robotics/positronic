@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from functools import partial
 from pathlib import Path
@@ -50,12 +51,15 @@ def _spawn(
     host: str,
     port: int,
     robot: str,
-    cameras: str,
+    cameras: tuple[str, ...],
     max_envs: int,
     join_deadline: float = DEFAULT_JOIN_DEADLINE,
     task_libs: tuple[Path, ...] = (),
 ) -> subprocess.Popen:
-    keys.camera_set(robot, cameras)
+    if not cameras:
+        raise ValueError('a RoboLab server renders at least one camera set')
+    for name in cameras:
+        keys.camera_set(robot, name)
     # A missing library fails here, before the Isaac boot, rather than in the server after it.
     for lib in task_libs:
         if not (lib / TASK_LIB_METADATA).is_file():
@@ -96,8 +100,7 @@ def _spawn(
         str(port),
         '--robot',
         robot,
-        '--cameras',
-        cameras,
+        *(arg for name in cameras for arg in ('--cameras', name)),
         '--max-envs',
         str(max_envs),
         '--join-deadline',
@@ -118,7 +121,7 @@ def _spawn(
 
 
 def serve_robolab(
-    cameras: str,
+    cameras: str | Sequence[str],
     host: str = 'localhost',
     *,
     robot: str = keys.DROID,
@@ -128,15 +131,17 @@ def serve_robolab(
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
     ``robot`` names the robot that the server puts in the task scenes, one of ``keys.ROBOTS``. ``cameras`` names
-    the set in ``keys.ROBOT_CAMERA_SETS[robot]`` the server renders; RoboLab bakes it into the registered task, so one
-    server serves one set.
+    the set in ``keys.ROBOT_CAMERA_SETS[robot]`` that the server renders, or a list of such sets. Each reset names its
+    set, and a reset that names none renders the first. RoboLab bakes the set into the registered task, so a reset
+    with another set than the last one builds its scene again.
 
     ``max_envs`` is the most clones of the scene the one Isaac process steps together. Each batch of evals gets as
     many clones as the batch size its first reset carries.
 
     ``task_libs`` are task library directories on this host (see ``task_catalog``); their tasks run by name.
     """
-    return serve_subprocess(partial(_spawn, robot=robot, cameras=cameras, max_envs=max_envs, task_libs=task_libs), host)
+    sets = (cameras,) if isinstance(cameras, str) else tuple(cameras)
+    return serve_subprocess(partial(_spawn, robot=robot, cameras=sets, max_envs=max_envs, task_libs=task_libs), host)
 
 
 def main() -> None:
@@ -145,7 +150,9 @@ def main() -> None:
     )
     parser.add_argument('--robot', default=keys.DROID, choices=keys.ROBOTS)
     parser.add_argument(
-        '--cameras', help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; keys.DEFAULT_CAMERA_SETS without it'
+        '--cameras',
+        action='append',
+        help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; repeatable; keys.DEFAULT_CAMERA_SETS without it',
     )
     parser.add_argument('--max-envs', type=int, required=True, help='the most scene clones, one per eval of a batch')
     parser.add_argument(
@@ -160,7 +167,7 @@ def main() -> None:
         '--task-lib', type=Path, action='append', default=[], help='a task library directory; repeatable'
     )
     args = parser.parse_args()
-    cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
+    cameras = tuple(args.cameras or [keys.DEFAULT_CAMERA_SETS[args.robot]])
     proc = _spawn(args.host, args.port, args.robot, cameras, args.max_envs, args.join_deadline, tuple(args.task_lib))
     try:
         sys.exit(proc.wait())

@@ -207,6 +207,30 @@ def test_a_launch_that_names_no_camera_set_serves_the_default_set_of_its_robot(s
     assert _flag(spawned[0], '--cameras') == cameras
 
 
+def test_a_server_of_several_camera_sets_gets_each_of_them(spawned):
+    with launcher.serve_robolab([robolab_keys.WRIST_LEFT, robolab_keys.EXTERIOR_PAIR_WRIST]):
+        pass
+
+    command = spawned[0]
+    sets = [command[i + 1] for i, arg in enumerate(command) if arg == '--cameras']
+    assert sets == [robolab_keys.WRIST_LEFT, robolab_keys.EXTERIOR_PAIR_WRIST]
+
+
+def test_a_reset_that_names_no_camera_set_renders_the_first_set_of_the_server():
+    served = [robolab_keys.WRIST_LEFT, robolab_keys.EXTERIOR_PAIR_WRIST]
+
+    assert robolab_keys.reset_camera_set({}, served) == robolab_keys.WRIST_LEFT
+    token = {robolab_keys.TOKEN_CAMERAS: robolab_keys.EXTERIOR_PAIR_WRIST}
+    assert robolab_keys.reset_camera_set(token, served) == robolab_keys.EXTERIOR_PAIR_WRIST
+
+
+def test_a_reset_of_a_camera_set_that_the_server_does_not_render_fails():
+    token = {robolab_keys.TOKEN_CAMERAS: robolab_keys.WRIST_RIGHT}
+
+    with pytest.raises(ValueError, match='camera sets'):
+        robolab_keys.reset_camera_set(token, [robolab_keys.WRIST_LEFT])
+
+
 def test_a_camera_set_of_another_robot_fails_before_any_spawn(spawned):
     with (
         pytest.raises(ValueError, match='camera sets'),

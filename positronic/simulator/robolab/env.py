@@ -1,7 +1,8 @@
 """RoboLab behind the env-server protocol, in RoboLab's own interpreter, as ``launcher.py`` runs it.
 
 It imports only robolab, isaaclab and the modules beside it, never positronic. One server serves one robot
-(``--robot``) and one camera set (``--cameras``), and steps at most ``--max-envs`` scene clones, one per slot.
+(``--robot``) and one or more camera sets (``--cameras``, repeatable), and steps at most ``--max-envs`` scene clones,
+one per slot. Each reset names its camera set, and a reset that names none renders the first set.
 
 The wire contract:
 
@@ -23,8 +24,8 @@ The wire contract:
   touches it (for the YAM, any finger of either hand); and RoboLab's progress through each condition chain of the
   current subtask.
 - ``--task-lib`` adds a task library (``task_catalog``) to the server: its tasks run by name beside the
-  benchmark. On a DROID server, the camera sets its ``cameras.py`` returns join RoboLab's presets for ``--cameras``;
-  the YAM renders its own three cameras.
+  benchmark. On a DROID server, the camera sets that its ``cameras.py`` returns join RoboLab's presets for
+  ``--cameras``; the YAM renders its own three cameras.
 """
 
 import argparse
@@ -91,7 +92,9 @@ parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
 parser.add_argument('--robot', default=keys.DROID, choices=keys.ROBOTS)
 parser.add_argument(
-    '--cameras', help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; keys.DEFAULT_CAMERA_SETS without it'
+    '--cameras',
+    action='append',
+    help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; repeatable; keys.DEFAULT_CAMERA_SETS without it',
 )
 parser.add_argument('--max-envs', type=int, default=1, help='the most scene clones this server steps at once')
 parser.add_argument(
@@ -103,8 +106,9 @@ parser.add_argument(
 parser.add_argument('--task-lib', type=Path, action='append', default=[], help='a task library directory; repeatable')
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
-args.cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
-keys.camera_set(args.robot, args.cameras)
+args.cameras = args.cameras or [keys.DEFAULT_CAMERA_SETS[args.robot]]
+for name in args.cameras:
+    keys.camera_set(args.robot, name)
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
 simulation_app = AppLauncher(args).app
 
@@ -196,9 +200,9 @@ class RobolabEnv(EnvProtocol):
         self._env_cfg: Any = None
         self._meta = None
         self._control_dt = None
-        # Tasks registered with gymnasium in this process; re-registering rebuilds the cfg class and churns
-        # the registry, so each registers once.
-        self._registered: set[str] = set()
+        # The camera set of each task registered with gymnasium in this process. RoboLab names the env by its task,
+        # so a task registers again only for a reset with another camera set: a registration rebuilds the cfg class.
+        self._registered: dict[str, str] = {}
         self._catalog = TaskCatalog.load(
             Path(robolab.constants.TASK_DIR), args.task_lib, robolab.constants.BENCHMARK_TASK_CATEGORIES
         )
@@ -252,14 +256,16 @@ class RobolabEnv(EnvProtocol):
             for t in selected
         ]
 
-    def _build(self, task: str, instruction_type: str, episode_length_s: float | None, num_envs: int) -> None:
+    def _build(
+        self, task: str, instruction_type: str, episode_length_s: float | None, cameras: str, num_envs: int
+    ) -> None:
         self._key = None  # a build that raises leaves no cached env for the next reset to reuse
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
         self._num_envs = num_envs
-        if task not in self._registered:
-            self._register(task)
-            self._registered.add(task)
+        if self._registered.get(task) != cameras:
+            self._register(task, cameras)
+            self._registered[task] = cameras
         env_name = get_envs(task=task)[0]
         scene: Any = env_name
         if episode_length_s is not None:
@@ -317,8 +323,8 @@ class RobolabEnv(EnvProtocol):
                 UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Set(False)
 
     @abstractmethod
-    def _register(self, task: str) -> None:
-        """Register the RoboLab env of ``task`` with this server's robot and cameras."""
+    def _register(self, task: str, cameras: str) -> None:
+        """Register the RoboLab env of ``task`` with this server's robot and the camera set ``cameras``."""
 
     @abstractmethod
     def _bind_robot(self) -> None:
@@ -420,11 +426,13 @@ class RobolabEnv(EnvProtocol):
 
     @staticmethod
     def _key_of(token: dict[str, Any], num_envs: int) -> tuple[Any, ...]:
-        """The key of the env that ``token`` resets with ``num_envs`` clones."""
+        """The key of the env that ``token`` resets with ``num_envs`` clones. Raises ``ValueError`` for a camera set
+        that this server does not serve."""
         return (
             token[keys.TOKEN_TASK],
             token[keys.TOKEN_INSTRUCTION_TYPE],
             token.get(keys.TOKEN_EPISODE_LENGTH_S),
+            keys.reset_camera_set(token, args.cameras),
             num_envs,
         )
 
@@ -436,7 +444,9 @@ class RobolabEnv(EnvProtocol):
         ``reset`` does. Each per-slot field of this server starts again for the clone.
         """
         if self._env is None or self._key_of(token, self._num_envs) != self._key:
-            raise ValueError('a slot resets alone only with the task, the episode length and the clones of the batch')
+            raise ValueError(
+                'a slot resets alone only with the task, the episode length, the camera set and the clones of the batch'
+            )
         if token.get(keys.TOKEN_STATE) is not None:
             raise ValueError('a slot that resets alone restores no recorded state')
         assert self._success_tail is not None  # built with the env
@@ -644,14 +654,14 @@ class DroidEnv(RobolabEnv):
             keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
         }
         sets = camera_sets(args.task_lib, presets, keys.CAMERA_SETS)
-        if args.cameras not in sets:
-            raise ValueError(f'no task library gives the camera set {args.cameras!r}; this server has {sorted(sets)}')
-        self._cameras = sets[args.cameras]
+        if missing := [name for name in args.cameras if name not in sets]:
+            raise ValueError(f'no task library gives the camera sets {missing}; this server has {sorted(sets)}')
+        self._camera_sets = {name: sets[name] for name in args.cameras}
 
-    def _register(self, task: str) -> None:
+    def _register(self, task: str, cameras: str) -> None:
         # A library task registers by its file path; RoboLab names the env by the Task class in that file.
         with _no_table_fixture() if task in self._catalog.library else nullcontext():
-            auto_register_droid_envs(task=[self._catalog.register_target(task)], cameras=self._cameras)
+            auto_register_droid_envs(task=[self._catalog.register_target(task)], cameras=self._camera_sets[cameras])
 
     def _bind_robot(self) -> None:
         robot = self._robot
@@ -839,8 +849,8 @@ class YamEnv(RobolabEnv):
         self._register_envs = functools.partial(yam_robolab.register_envs, robot_usd=robot_usd, stand_usd=stand_usd)
         self._pose_refusals = yam_spec.PoseRefusals(0)
 
-    def _register(self, task: str) -> None:
-        # A library task registers by its file path, and keeps the YAM stand fixture.
+    def _register(self, task: str, cameras: str) -> None:
+        # A library task registers by its file path, and keeps the YAM stand fixture. The YAM has one camera set.
         self._register_envs([self._catalog.register_target(task)])
 
     def _bind_robot(self) -> None:
