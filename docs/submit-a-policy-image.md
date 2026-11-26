@@ -268,6 +268,11 @@ uv run positronic eval run --eval=<eval> \
    competition run plays up to 12 episodes at the same time, so up to 12 sessions are open at the same
    time. The server must answer all of them, with one state for each session. A plan outside the
    competition can state a lower count ([Session limit](#session-limit)).
+   Each session must open within 15 s, from the first connect to the server's `ready` message
+   ([Session protocol](../positronic/offboard/README.md)). The limit applies while other sessions are
+   open, and while the server loads or switches a model. A session that misses it fails its episode.
+   The platform plays the episode again, and a run whose episodes keep missing the limit fails with
+   `latency_budget_exceeded`.
 7. It fails the run with `policy_setup_crash` if a route refuses the run's own token. The vendor
    servers read `AUTH_TOKEN` and check it. A server of your own may check it or ignore it.
 8. The GPU is one `1g.24gb` slice of an RTX PRO 6000: 24192 MiB of VRAM and a quarter of the card's
@@ -607,7 +612,7 @@ fault is not.
 | `policy_setup_crash` | caller | `policy_log`: the server did not come up, or refused the run's own token |
 | `policy_inference_crash` | caller | `policy_log`: the server died after it served. Or `reason`: the client could not use the declared client stack, or an answer |
 | `policy_oom` | caller | `diagnostics.container_oom_killed`; the model against its slice (`vram_capacity_mib`) |
-| `latency_budget_exceeded` | caller | inference time per step |
+| `latency_budget_exceeded` | caller | inference time per step, and the 15 s that each session has to open |
 | `wall_clock_exceeded` | caller | the run passed its ceiling |
 | `invalid_flags` | caller | the plan the platform recorded |
 | `quota_exceeded` | platform | the platform's own capacity; resubmit, then report it |
