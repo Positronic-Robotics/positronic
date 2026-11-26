@@ -1,24 +1,31 @@
 """The client side of the websocket wire."""
 
 import dataclasses
+import datetime
 import errno
+import ipaddress
 import json
 import socket
 import ssl
-import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from http import HTTPStatus
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from positronic_wire import websocket, wire
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+from positronic_wire import roboarena, websocket, wire
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidMessage, InvalidStatus
 from websockets.http11 import Response
-from websockets.sync.client import connect
+from websockets.sync.client import connect, unix_connect
 from websockets.sync.server import serve
 from websockets.utils import accept_key
 
@@ -644,7 +651,6 @@ def test_a_close_timeout_bounds_a_close_the_wire_left_unbounded():
 
 # More than the send and receive buffers of a loopback connection hold, so the write waits for the peer to read.
 _BUFFER_FILLING_BYTES = 64 * 1024 * 1024
-# The kernel checks the limit on its own retransmit timer, so a stalled write ends some time after it.
 _SEND_LIMIT_S = 1.0
 
 
@@ -656,16 +662,111 @@ def _upgrade_then_read_nothing(released: threading.Event) -> Callable[[socket.so
     return handler
 
 
-@pytest.mark.skipif(sys.platform != 'linux', reason='only Linux limits how long sent data stays unacknowledged')
-def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout():
+def _upgrade_then_read_slowly(released: threading.Event) -> Callable[[socket.socket], None]:
+    """Read 64 KiB each 50 ms: the peer takes the data, but too slowly for the message to fit the timeout."""
+
+    def handler(conn: socket.socket) -> None:
+        _answer_the_upgrade(conn)
+        while not released.is_set() and conn.recv(64 * 1024):
+            time.sleep(0.05)
+
+    return handler
+
+
+def _over_tls(handler: Callable[[socket.socket], None], context: ssl.SSLContext) -> Callable[[socket.socket], None]:
+    def over_tls(conn: socket.socket) -> None:
+        with context.wrap_socket(conn, server_side=True) as tls:
+            handler(tls)
+
+    return over_tls
+
+
+def _tls_contexts(directory: Path) -> tuple[ssl.SSLContext, ssl.SSLContext]:
+    """A server context with a certificate for 127.0.0.1, and a client context that trusts only it."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, '127.0.0.1')])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509
+        .CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_file, key_file = directory / 'cert.pem', directory / 'key.pem'
+    cert_file.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server.load_cert_chain(cert_file, key_file)
+    return server, ssl.create_default_context(cafile=str(cert_file))
+
+
+def _served_on_unix(handler: Callable[[socket.socket], None], path: Path) -> None:
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(1)
+
+    def serve() -> None:
+        with listener, listener.accept()[0] as conn:
+            handler(conn)
+
+    threading.Thread(target=serve, daemon=True).start()
+
+
+@contextmanager
+def _session(transport: str, handler: Callable[[socket.socket], None]) -> Iterator[websocket.WebsocketClientConnection]:
+    """A client session over ``transport`` with a server that runs ``handler`` after the upgrade's socket opens."""
+    # A short directory: a Unix socket path has a length limit.
+    with tempfile.TemporaryDirectory(prefix='ws') as directory:
+        if transport == 'unix':
+            path = Path(directory) / 's'
+            _served_on_unix(handler, path)
+            yield websocket.WebsocketClientConnection(
+                unix_connect(str(path), 'ws://localhost/', max_size=None, open_timeout=_LONG_CLOSE_S)
+            )
+        elif transport == 'tls':
+            server, client = _tls_contexts(Path(directory))
+            host, port = _served(_over_tls(handler, server))
+            yield websocket.WebsocketClientConnection(
+                connect(f'wss://{host}:{port}/', ssl=client, max_size=None, open_timeout=_LONG_CLOSE_S)
+            )
+        else:
+            host, port = _served(handler)
+            # The roboarena connection keeps the websocket send, on its own class.
+            session = (
+                roboarena.RoboarenaClientConnection if transport == 'roboarena' else websocket.WebsocketClientConnection
+            )
+            yield session(connect(f'ws://{host}:{port}/', max_size=None, open_timeout=_LONG_CLOSE_S))
+
+
+@pytest.mark.parametrize('transport', ['tcp', 'tls', 'unix', 'roboarena'])
+def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout(transport):
     released = threading.Event()
-    host, port = _served(_upgrade_then_read_nothing(released))
-    connection = websocket.WebsocketClientConnection(connect(f'ws://{host}:{port}/', max_size=None))
-    started = time.monotonic()
     try:
-        with pytest.raises(TimeoutError):
-            connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
-        assert time.monotonic() - started < _SEND_LIMIT_S + _CLOSE_SLACK_S
+        with _session(transport, _upgrade_then_read_nothing(released)) as connection:
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
+            assert time.monotonic() - started < _SEND_LIMIT_S + _CLOSE_SLACK_S
+    finally:
+        released.set()
+
+
+def test_a_send_to_a_peer_that_reads_slowly_raises_a_timeout_at_its_timeout():
+    released = threading.Event()
+    try:
+        with _session('tcp', _upgrade_then_read_slowly(released)) as connection:
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
+            assert time.monotonic() - started < _SEND_LIMIT_S + _CLOSE_SLACK_S
     finally:
         released.set()
 
@@ -683,7 +784,6 @@ def _read_a_chunk_then_stall(conn: socket.socket) -> None:
         pass
 
 
-@pytest.mark.skipif(sys.platform != 'linux', reason='only Linux limits how long sent data stays unacknowledged')
 def test_a_send_with_no_timeout_outlasts_the_timeout_of_an_earlier_send():
     host, port = _served(_read_a_chunk_then_stall)
     connection = websocket.WebsocketClientConnection(

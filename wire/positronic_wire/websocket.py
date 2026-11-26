@@ -3,17 +3,15 @@
 import abc
 import errno
 import json
-import math
 import os
 import queue
 import socket
 import ssl
 import stat
-import sys
 import threading
 import time
-from collections.abc import Callable, Mapping
-from contextlib import suppress
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from functools import partial
 from http import HTTPStatus
 from http.client import HTTPConnection, HTTPException
@@ -22,12 +20,8 @@ from typing import Any, ClassVar, Generic
 
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidMessage, InvalidStatus
-from websockets.protocol import State
 from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
-
-# Only Linux limits how long sent data stays unacknowledged. Elsewhere a write keeps the kernel's own bound.
-_LIMITS_UNACKNOWLEDGED_DATA = sys.platform == 'linux'
 
 
 class WebsocketClientConnection(wire.ClientConnection):
@@ -37,35 +31,17 @@ class WebsocketClientConnection(wire.ClientConnection):
         self._websocket = websocket
 
     def send(self, message: bytes, timeout: float | None = None) -> None:
-        # The socket blocks, so a write to a peer that acknowledges nothing waits until the kernel gives up on the
-        # connection, many minutes later. TLS retries a write that a send timeout stops, so the bound is TCP's own.
-        bounds_the_write = (
-            _LIMITS_UNACKNOWLEDGED_DATA
-            and self._websocket.state is State.OPEN
-            and self._websocket.socket.family != socket.AF_UNIX
-        )
-        bound = timeout if bounds_the_write else None
-        if bound is not None:
-            self._set_unacknowledged_limit(bound)
-        started = time.monotonic()
-        try:
-            self._websocket.send(message)
-        except ConnectionClosed as e:
-            # The kernel ends the connection at the limit. The read thread can see that error first, and then the
-            # write sees a broken pipe, so the time decides.
-            if bound is not None and time.monotonic() - started >= bound:
-                raise TimeoutError(f'The peer acknowledged no more of the message within {bound}s') from e
-            raise wire.PeerDisconnected(str(e)) from e
-        finally:
-            if bound is not None:
-                with suppress(OSError):  # the socket is closed when the write failed
-                    self._set_unacknowledged_limit(None)
-
-    def _set_unacknowledged_limit(self, seconds: float | None) -> None:
-        """Let sent data stay unacknowledged for at most ``seconds``, or for the kernel's default with ``None``.
-        Zero is the kernel's default, so a limit already spent is one millisecond."""
-        millis = 0 if seconds is None else max(1, math.ceil(seconds * 1000))
-        self._websocket.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, millis)
+        # The socket blocks, so a write to a peer that reads nothing waits until the kernel gives up on the
+        # connection, many minutes later.
+        with _shut_down_after(self._websocket.socket, timeout) as expired:
+            try:
+                self._websocket.send(message)
+            except ConnectionClosed as e:
+                if expired.is_set():
+                    raise TimeoutError(f'The peer took no more of the message within {timeout}s') from e
+                raise wire.PeerDisconnected(str(e)) from e
+        if expired.is_set():
+            raise TimeoutError(f'The peer took the message only after {timeout}s')
 
     def recv(self, timeout: float | None = None) -> bytes:
         try:
@@ -329,6 +305,38 @@ def https_connection(address: wire.HostPortAddress, default_port: int, deadline:
     )
 
 
+@contextmanager
+def _shut_down_after(sock: socket.socket, timeout: float | None) -> Iterator[threading.Event]:
+    """Shut ``sock`` down once ``timeout`` seconds pass, which ends a read or a write blocked on it.
+
+    The event says whether the shutdown came. With ``None`` nothing shuts the socket down.
+    """
+    expired = threading.Event()
+    if timeout is None:
+        yield expired
+        return
+
+    def shut_down() -> None:
+        expired.set()
+        try:
+            # The plain socket's call: `ssl.SSLSocket.shutdown` also drops its TLS state, which a read uses.
+            socket.socket.shutdown(sock, socket.SHUT_RDWR)
+        except OSError as e:
+            # The peer or a close ended the connection first, and with it the read or the write.
+            if e.errno not in (errno.ENOTCONN, errno.EBADF):
+                raise
+
+    timer = threading.Timer(timeout, shut_down)
+    timer.daemon = True
+    timer.start()
+    try:
+        yield expired
+    finally:
+        timer.cancel()
+        # `join` waits out a shutdown already running, so none runs after this returns.
+        timer.join()
+
+
 def post_within(
     connection: HTTPConnection, path: str, headers: Mapping[str, str] | None, deadline: float, max_body_bytes: int
 ) -> tuple[int, bytes]:
@@ -339,30 +347,12 @@ def post_within(
     deadline. A timer shuts the socket down at the deadline instead.
     """
     connection.connect()
-    sock = connection.sock
-
-    def shut_down() -> None:
-        try:
-            # The plain socket's call: `ssl.SSLSocket.shutdown` also drops its TLS state, which a read uses.
-            socket.socket.shutdown(sock, socket.SHUT_RDWR)
-        except OSError as e:
-            # ENOTCONN: the peer ended the connection first, and with it the read.
-            if e.errno != errno.ENOTCONN:
-                raise
-
-    timer = threading.Timer(max(0.0, deadline - time.monotonic()), shut_down)
-    timer.daemon = True
-    timer.start()
-    try:
+    with _shut_down_after(connection.sock, max(0.0, deadline - time.monotonic())):
         connection.request('POST', path, headers=dict(headers or {}))
         # Closed here: the answer holds the socket open past the connection's own close.
         with connection.getresponse() as answer:
             succeeded = HTTPStatus.OK <= answer.status < HTTPStatus.MULTIPLE_CHOICES
             return answer.status, answer.read(max_body_bytes) if succeeded else b''
-    finally:
-        timer.cancel()
-        # `join` waits out a shutdown already running, so none runs after this returns.
-        timer.join()
 
 
 class WebsocketClientWire(_WebsocketWire[wire.HostPortAddress]):
