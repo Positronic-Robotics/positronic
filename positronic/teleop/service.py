@@ -592,16 +592,17 @@ class TeleopService:
 
     def _control_lines(self) -> list[Badge]:
         """The state of the clutch of each arm and the button that changes it, on the colour of the state."""
+        with self._changed:
+            controls = [(arm, tracker.on) for arm, tracker in self._trackers.items()]
         clutch_labels = {LEFT: 'X', RIGHT: 'A'}
         lines = []
-        with self._changed:
-            for arm, tracker in self._trackers.items():
-                name = 'Control' if arm is None else arm.capitalize()
-                clutch = clutch_labels[ARM_CONTROLLERS[arm]]
-                if tracker.on:
-                    lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
-                else:
-                    lines.append(Badge(f'{name} off ({clutch}: on)', self.CONTROL_OFF_COLOUR))
+        for arm, on in controls:
+            name = 'Control' if arm is None else arm.capitalize()
+            clutch = clutch_labels[ARM_CONTROLLERS[arm]]
+            if on:
+                lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
+            else:
+                lines.append(Badge(f'{name} off ({clutch}: on)', self.CONTROL_OFF_COLOUR))
         return lines
 
     def _shown_camera(self) -> str | None:
