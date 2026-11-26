@@ -699,7 +699,7 @@ class TeleopSession(Session):
         client_stack: dict[str, Any],
         on_close: Callable[[], None],
     ):
-        super().__init__(client_stack)
+        super().__init__(client_stack, max_in_flight=settings.calls_in_flight)
         self._service = service
         self._cameras = settings.cameras
         self._on_close = on_close
@@ -722,7 +722,7 @@ class TeleopModel(Model):
     """
 
     # The schedule plays each answer of one element at once. It asks for the next frame at once, or on the frame grid
-    # of an H.264 session.
+    # of an H.264 session or of a session with more than one call in flight.
     FRAME_FPS = 100.0
 
     def __init__(self, service: TeleopService):
@@ -745,7 +745,10 @@ class TeleopModel(Model):
         #  control it. Refuse such a run.
         if settings.video_bitrate is None:
             images = EncodeImages(quality=settings.jpeg_quality)
-            timing = RequestTiming.before_end()
+            if settings.calls_in_flight == 1:
+                timing = RequestTiming.before_end()
+            else:
+                timing = RequestTiming.every(1 / settings.video_fps)
         else:
             images = EncodeVideo([[name] for name in settings.cameras], settings.video_bitrate, settings.video_fps)
             # The encoder gives each call one frame of a stream at `video_fps`, so calls come at most that often.

@@ -77,6 +77,8 @@ class SessionParams:
     ``cameras`` names the cameras that the client sends. ``headset_camera`` names the one that the headset shows;
     ``None`` is the first one. The client sends the camera images as JPEG at ``jpeg_quality``. With a
     ``video_bitrate`` in bits per second, it sends them as H.264 at that bit rate and ``video_fps`` in place of JPEG.
+    ``calls_in_flight`` is the most frame requests that the client has open at a time. Above 1, the client asks for a
+    frame each ``1 / video_fps`` seconds. H.264 refuses it, because each frame of the stream needs the one before.
     """
 
     operator_position: OperatorPosition | None = OperatorPosition.FRONT
@@ -86,6 +88,7 @@ class SessionParams:
     headset_camera: str | None = None
     video_bitrate: int | None = None
     video_fps: int = 30
+    calls_in_flight: int = 1
 
     def __post_init__(self) -> None:
         if self.operator_position is not None and not isinstance(self.operator_position, OperatorPosition):
@@ -99,6 +102,12 @@ class SessionParams:
         if self.video_bitrate is not None:
             check_positive_int(self.video_bitrate, 'video_bitrate')
         check_positive_int(self.video_fps, 'video_fps')
+        check_positive_int(self.calls_in_flight, 'calls_in_flight')
+        if self.video_bitrate is not None and self.calls_in_flight > 1:
+            raise ValueError(
+                f'calls_in_flight must be 1 with a video_bitrate, got {self.calls_in_flight}: the H.264 client sends '
+                'one frame request at a time, because each frame of the stream needs the one before'
+            )
         if fields := {TASK, *self.arms.arm_fields()} & set(self.cameras):
             raise ValueError(f'a camera name must not be a field of a frame request, got {sorted(fields)}')
         if self.headset_camera is not None and self.headset_camera not in self.cameras:

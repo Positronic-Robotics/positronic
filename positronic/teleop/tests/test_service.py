@@ -493,7 +493,9 @@ def test_in_a_one_arm_session_the_left_controller_drives_nothing(service, socket
         run.close()
 
 
-@pytest.mark.parametrize('params', [{}, {'video_bitrate': 2_000_000}], ids=['jpeg', 'h264'])
+@pytest.mark.parametrize(
+    'params', [{}, {'video_bitrate': 2_000_000}, {'calls_in_flight': 3}], ids=['jpeg', 'h264', 'jpeg_calls_in_flight']
+)
 def test_the_service_shows_the_camera_image_of_the_run(service, socket_path, runtime, params):
     width, height = VIEW_SIZE
     with _Headset(service) as headset:
@@ -700,6 +702,10 @@ def test_a_session_query_refuses_a_wrong_value_or_an_unknown_parameter():
         session_query(video_bitrate=0)
     with pytest.raises(ValueError, match='video_fps must be a positive integer'):
         session_query(video_fps=2.5)
+    with pytest.raises(ValueError, match='calls_in_flight must be a positive integer'):
+        session_query(calls_in_flight=0)
+    with pytest.raises(ValueError, match='calls_in_flight must be 1 with a video_bitrate'):
+        session_query(video_bitrate=1_000_000, calls_in_flight=2)
     assert session_query(operator_position=None, cameras=[keys.WRIST_IMAGE]) == (
         'operator_position=null&cameras=%5B%22image.wrist%22%5D'
     )
@@ -734,10 +740,14 @@ def test_the_client_stack_states_the_grip_point_as_the_frame_of_the_pose_and_the
 
 @pytest.mark.parametrize(
     'params, timing',
-    [({}, RequestTiming.before_end()), ({'video_bitrate': 1_000_000, 'video_fps': 15}, RequestTiming.every(1 / 15))],
-    ids=['jpeg', 'h264'],
+    [
+        ({}, RequestTiming.before_end()),
+        ({'video_bitrate': 1_000_000, 'video_fps': 15}, RequestTiming.every(1 / 15)),
+        ({'calls_in_flight': 4, 'video_fps': 20}, RequestTiming.every(1 / 20)),
+    ],
+    ids=['jpeg', 'h264', 'jpeg_calls_in_flight'],
 )
-def test_an_h264_session_asks_for_frames_at_most_at_the_video_frame_rate(params, timing):
+def test_a_session_asks_for_each_frame_after_the_last_or_on_the_video_frame_grid(params, timing):
     stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.WRIST_IMAGE,), **params))
     schedule = stack['seq'][2]
     assert schedule['args']['request_timing'] == timing.to_spec()
@@ -990,6 +1000,12 @@ def _readied_connection(service: TeleopService, socket_path: Path, connect, quer
     _take(service, _buttons())
     connection.wait_open()
     return connection
+
+
+@pytest.mark.parametrize('calls', [1, 3])
+def test_a_session_lets_the_client_keep_calls_in_flight_open_at_a_time(service, socket_path, connect, calls):
+    connection = _readied_connection(service, socket_path, connect, session_query(calls_in_flight=calls))
+    assert connection.session.max_in_flight == calls
 
 
 def test_a_hold_of_b_completes_in_one_frame(service, socket_path, connect):
