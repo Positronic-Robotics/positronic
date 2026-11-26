@@ -76,6 +76,7 @@
     <script type="module">
         import { PANEL_MODE, WebXRVideoPlayer } from './video-player.js';
         import { bendQuestTrigger } from './quest-trigger.js';
+        import { PressCounter } from './press-count.js';
         import { startXRApp } from '/core.js';
 
         // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
@@ -100,6 +101,7 @@
 
         let videoPlayer = null;
         let controllerAxes = { left: null, right: null };
+        const pressCounters = { left: new PressCounter(), right: new PressCounter() };
         // The `performance.now()` instant of the Y press that is down, and whether its hold cycled the panel
         let cameraDownAt = null;
         let cameraHeld = false;
@@ -176,12 +178,14 @@
               if (!gripPose) continue;
               const pos = gripPose.transform.position;
               const orient = gripPose.transform.orientation;
-              const values = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
+              const gamepadButtons = inputSource.gamepad ? inputSource.gamepad.buttons : [];
+              const values = gamepadButtons.map(b => b.value);
               const buttons = bendQuestTrigger(values, inputSource.profiles);
               controllers[inputSource.handedness] = {
                 position: [pos.x, pos.y, pos.z],
                 orientation: [orient.w, orient.x, orient.y, orient.z],
-                buttons: buttons
+                buttons: buttons,
+                presses: pressCounters[inputSource.handedness].count(gamepadButtons.map(b => b.pressed)),
               };
               const axesGroup = controllerAxes[inputSource.handedness];
               if (axesGroup) {

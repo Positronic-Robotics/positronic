@@ -31,7 +31,7 @@ from positronic_model_server.websocket_wire import ServedUnixSocket, WebsocketWi
 from positronic import geom, keys
 from positronic.dataset.transforms.image import Resample, ResizeMode, transform_frame
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
-from positronic.drivers.webxr import LEFT, RIGHT
+from positronic.drivers.webxr import LEFT, RIGHT, ControllerButtons
 from positronic.gui.video_stream import AnnexBDecoder
 from positronic.offboard.client import DEFAULT_RECONNECT_DEADLINE
 from positronic.policy import keys as policy_keys
@@ -112,7 +112,8 @@ class ButtonMap:
     - The stick: Cancel while the service waits for Ready. A hold of the stick is Give up.
     - The trigger: the grip.
 
-    It reads only ``buttons``: the left controller reads only X, because the headset page uses its Y.
+    It reads only ``buttons``: the left controller reads only X, because the headset page uses its Y. A press is a step
+    of the press count of the button, and a hold is a value at the press threshold for ``hold_sec``.
     """
 
     def __init__(
@@ -131,34 +132,44 @@ class ButtonMap:
         self._down_since: dict[Button, int] = {}
         # The buttons whose press did something already, until they go up.
         self._used: set[Button] = set()
+        # The press counts of the previous sample. The first sample sets them, so a page that pressed before it
+        # connected presses nothing.
+        self._presses: tuple[int, ...] | None = None
         self._read = tuple(buttons)
 
-    def _new_presses(self, buttons: Sequence[float], now_ns: int) -> set[Button]:
-        """Record the state of the buttons, and return the buttons that went down since the previous sample."""
-        new_presses = set()
+    def _new_presses(self, buttons: ControllerButtons, now_ns: int) -> dict[Button, int]:
+        """Record the state of the buttons, and return the number of presses of each button since the previous
+        sample. A count that goes down is of a page that loaded again, and presses nothing."""
         for button in self._read:
-            if buttons[button] < self._press_threshold:
+            if buttons.values[button] < self._press_threshold:
                 self._down_since.pop(button, None)
                 self._used.discard(button)
             elif button not in self._down_since:
                 self._down_since[button] = now_ns
-                new_presses.add(button)
-        return new_presses
+        previous, self._presses = self._presses, buttons.presses
+        if previous is None:
+            return {}
+        return {
+            button: buttons.presses[button] - previous[button]
+            for button in self._read
+            if buttons.presses[button] > previous[button]
+        }
 
-    def observe(self, buttons: Sequence[float], now_ns: int) -> None:
-        """Record the state of the buttons, outside a trial. A button that is down here does not press in the next."""
+    def observe(self, buttons: ControllerButtons, now_ns: int) -> None:
+        """Record the state of the buttons, outside a trial. A press here does nothing, and a button that is down here
+        does not hold in the next."""
         self._new_presses(buttons, now_ns)
         self._used.update(self._down_since)
 
     def cancel_holds(self) -> None:
-        """Cancel the holds of the buttons that are down. Each of them presses again only after it goes up."""
+        """Cancel the holds of the buttons that are down. Each of them holds again only after it goes up."""
         self._used.update(self._down_since)
 
     def _is_held(self, button: Button, now_ns: int) -> bool:
         since = self._down_since.get(button)
         return since is not None and button not in self._used and now_ns - since >= self._hold_ns
 
-    def ready_answer(self, buttons: Sequence[float], now_ns: int) -> ReadyAnswer | None:
+    def ready_answer(self, buttons: ControllerButtons, now_ns: int) -> ReadyAnswer | None:
         new_presses = self._new_presses(buttons, now_ns)
         # A button that is down before the trial runs does not hold in it.
         self._used.update(self._down_since)
@@ -168,11 +179,9 @@ class ButtonMap:
             return ReadyAnswer.CANCELLED
         return None
 
-    def events(self, buttons: Sequence[float], now_ns: int) -> list[Event]:
+    def events(self, buttons: ControllerButtons, now_ns: int) -> list[Event]:
         new_presses = self._new_presses(buttons, now_ns)
-        events = []
-        if Button.A in new_presses:
-            events.append(Event.CLUTCH)
+        events = [Event.CLUTCH] * new_presses.get(Button.A, 0)
         if self._is_held(Button.B, now_ns):
             self._used.add(Button.B)
             events.append(Event.COMPLETE)
@@ -252,7 +261,7 @@ class _Sample:
 
     taken_ns: int
     poses: Mapping[str, geom.Transform3D | None]
-    buttons: Mapping[str, Sequence[float] | None]
+    buttons: Mapping[str, ControllerButtons]
 
 
 @dataclass(frozen=True)
@@ -410,30 +419,31 @@ class TeleopService:
         self._thread.join(timeout=10)
 
     def take_sample(
-        self, poses: Mapping[str, geom.Transform3D | None], buttons: Mapping[str, Sequence[float] | None]
+        self, poses: Mapping[str, geom.Transform3D | None], buttons: Mapping[str, ControllerButtons | None]
     ) -> None:
         """Take one sample of the controllers, by ``LEFT`` and ``RIGHT``. A controller that the headset does not track
         is absent or ``None``."""
         now_ns = time.monotonic_ns()
         # A controller with fewer button values than the maps read cannot press the clutch, so it drives no arm
-        controllers = {name for name, values in buttons.items() if values is not None and len(values) > max(Button)}
-        poses = {name: pose for name, pose in poses.items() if name in controllers}
-        buttons = {name: buttons[name] for name in controllers}
+        tracked = {
+            name: state for name, state in buttons.items() if state is not None and len(state.values) > max(Button)
+        }
+        poses = {name: pose for name, pose in poses.items() if name in tracked}
         with self._changed:
-            self._sample = _Sample(now_ns, poses, buttons)
-            if controllers:
+            self._sample = _Sample(now_ns, poses, tracked)
+            if tracked:
                 self._tracked_at_ns = now_ns
             for controller, button_map in self._buttons.items():
-                values = buttons.get(controller)
-                if values is None:
+                state = tracked.get(controller)
+                if state is None:
                     button_map.cancel_holds()
                     continue
                 if self._phase is Phase.READY_WAIT and self._ready is None:
-                    self._ready = button_map.ready_answer(values, now_ns)
+                    self._ready = button_map.ready_answer(state, now_ns)
                 elif self._phase is Phase.RUNNING:
-                    self._events += [(controller, event) for event in button_map.events(values, now_ns)]
+                    self._events += [(controller, event) for event in button_map.events(state, now_ns)]
                 else:
-                    button_map.observe(values, now_ns)
+                    button_map.observe(state, now_ns)
             self._changed.notify_all()
 
     @property
@@ -751,7 +761,7 @@ class TeleopService:
         if target is None and tracker.on:
             tracker.turn_off()
         if tracker.on and target is not None:
-            self._hold[arm] = target, 0.0 if buttons is None else ButtonMap.grip(buttons)
+            self._hold[arm] = target, 0.0 if buttons is None else ButtonMap.grip(buttons.values)
 
     def _hold_element(self) -> dict[str, Any]:
         """The element that sends the hold targets, arm after arm. Hold the lock."""

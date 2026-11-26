@@ -95,6 +95,8 @@
       // touched.
       const TELEOP = new URLSearchParams(window.location.search).get('mode') === 'teleop';
       const buttons = new Array(8).fill(0.0);
+      // The presses of each button since the page loaded
+      const presses = new Array(8).fill(0);
 
       // Gripper slider state
       let gripValue = 0.0;
@@ -295,6 +297,7 @@
           if (st.pressed === pressed) return;
           st.pressed = pressed;
           buttons[cfg.idx] = pressed ? 1.0 : 0.0;
+          if (pressed) presses[cfg.idx] += 1;
           applyVisual(name);
         };
 
@@ -354,7 +357,9 @@
         const btns = buttons.slice();
         const controllers = {
           left: null,
-          right: { position: [p.x, p.y, p.z], orientation: [q.w, q.x, q.y, q.z], buttons: btns }
+          right: {
+            position: [p.x, p.y, p.z], orientation: [q.w, q.x, q.y, q.z], buttons: btns, presses: presses.slice(),
+          }
         };
         return controllers;
       }

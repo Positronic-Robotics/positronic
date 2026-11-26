@@ -6,7 +6,8 @@ import subprocess
 import tempfile
 import threading
 import traceback
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
@@ -30,33 +31,53 @@ STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
 
 # The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
+_PRESSES = 'presses'
 # The button values of a controller in the xr-standard gamepad layout, up to B or Y at index 5
 _CONTROLLER_BUTTONS = 6
 
 
+@dataclass(frozen=True)
+class ControllerButtons:
+    """The value of each button of a controller, and the number of presses of each button that the page counted since
+    it loaded."""
+
+    values: tuple[float, ...]
+    presses: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.presses) != len(self.values):
+            raise ValueError(
+                f'a controller has a press count for each button value, got {len(self.presses)} counts and '
+                f'{len(self.values)} values'
+            )
+        if not all(isinstance(count, int) and count >= 0 for count in self.presses):
+            raise ValueError(f'a press count is an integer of at least 0, got {list(self.presses)}')
+
+
 def parse_controller_message(
     data: Mapping[str, Any],
-) -> tuple[dict[str, geom.Transform3D | None], dict[str, np.ndarray | None]]:
+) -> tuple[dict[str, geom.Transform3D | None], dict[str, ControllerButtons | None]]:
     """The poses and the buttons of the controllers in a message of the page on ``/ws``, the inverse of
     ``controller_message``. A controller that the page does not track has ``None`` for both, and a tracked
     controller has at least ``_CONTROLLER_BUTTONS`` button values."""
     controller_positions: dict[str, geom.Transform3D | None] = {LEFT: None, RIGHT: None}
-    buttons_dict: dict[str, np.ndarray | None] = {LEFT: None, RIGHT: None}
+    buttons_dict: dict[str, ControllerButtons | None] = {LEFT: None, RIGHT: None}
     for side in [RIGHT, LEFT]:
+        controller = data[_CONTROLLERS][side]
         # A hand that the headset tracks with no controller in it has fewer values than a controller, or none. The pose
         # and the buttons go out on two signals, so only here is the pose known to be of the hand.
-        if data[_CONTROLLERS][side] is not None and len(data[_CONTROLLERS][side][_BUTTONS]) >= _CONTROLLER_BUTTONS:
-            translation = np.array(data[_CONTROLLERS][side][_POSITION], dtype=np.float64)
-            rotation = np.array(data[_CONTROLLERS][side][_ORIENTATION], dtype=np.float64)
-            buttons = np.array(data[_CONTROLLERS][side][_BUTTONS], dtype=np.float64)
+        if controller is not None and len(controller[_BUTTONS]) >= _CONTROLLER_BUTTONS:
+            translation = np.array(controller[_POSITION], dtype=np.float64)
+            rotation = np.array(controller[_ORIENTATION], dtype=np.float64)
             controller_positions[side] = geom.Transform3D(translation, geom.Rotation.from_quat(rotation))
-            buttons_dict[side] = buttons
+            values = tuple(float(value) for value in controller[_BUTTONS])
+            buttons_dict[side] = ControllerButtons(values, tuple(controller[_PRESSES]))
 
     return controller_positions, buttons_dict
 
 
 def controller_message(
-    positions: Mapping[str, geom.Transform3D], buttons: Mapping[str, Sequence[float]]
+    positions: Mapping[str, geom.Transform3D], buttons: Mapping[str, ControllerButtons]
 ) -> dict[str, Any]:
     """The message of the page on ``/ws`` for the controllers that ``positions`` and ``buttons`` name. The page
     does not track the others."""
@@ -64,13 +85,14 @@ def controller_message(
         raise ValueError(
             f'positions and buttons must name the same controllers, got {list(positions)}, {list(buttons)}'
         )
-    if short := {side: len(values) for side, values in buttons.items() if len(values) < _CONTROLLER_BUTTONS}:
+    if short := {side: len(state.values) for side, state in buttons.items() if len(state.values) < _CONTROLLER_BUTTONS}:
         raise ValueError(f'a controller has at least {_CONTROLLER_BUTTONS} button values, got {short}')
     tracked = {
         side: {
             _POSITION: pose.translation.tolist(),
             _ORIENTATION: pose.rotation.as_quat.tolist(),
-            _BUTTONS: [float(value) for value in buttons[side]],
+            _BUTTONS: list(buttons[side].values),
+            _PRESSES: list(buttons[side].presses),
         }
         for side, pose in positions.items()
     }
@@ -173,7 +195,7 @@ class WebXR(pimm.ControlSystem):
     - `/video`           -> optional H.264 video (server to client): a JSON ``DecoderConfig`` text message before
                             each key frame, and each frame as a binary Annex B access unit
     - Shared assets: `/three.min.js`, `/webxr-button.js`, `/core.js`, `/session-mode.js`
-    - Headset-only: `/video-player.js`, `/quest-trigger.js`
+    - Headset-only: `/video-player.js`, `/quest-trigger.js`, `/press-count.js`
 
     Parameters
     - port: TCP port to bind.
@@ -273,7 +295,7 @@ class WebXR(pimm.ControlSystem):
 
         scripts = ['three.min.js', 'webxr-button.js', 'core.js']
         if self.frontend is Frontend.HEADSET:
-            scripts += ['video-player.js', 'quest-trigger.js']
+            scripts += ['video-player.js', 'quest-trigger.js', 'press-count.js']
         for script in scripts:
             app.get(f'/{script}')(self._file_route(utils.package_assets_path(f'assets/webxr/{script}')))
 
