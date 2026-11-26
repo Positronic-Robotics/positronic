@@ -695,20 +695,6 @@ def test_the_hardware_configs_give_each_arm_its_own_tuning():
     assert [(arm._park_tuning, arm._move_tuning) for arm in arms] == [(wide, yam.MOVE_SETTLE), (DEFAULT_TUNING, slow)]
 
 
-def test_only_the_yambox_config_gives_each_gripper_a_grasp_tuning_and_a_force_cap():
-    bimanual = embodiment_cfg.yam_bimanual.override(cameras={}).instantiate().control_systems
-    plain = [
-        yam.Robot(),
-        roboarm_cfg.yam.instantiate(),
-        *(system for system in bimanual if isinstance(system, yam.Robot)),
-    ]
-    assert [(arm._grasp_tuning, arm._gripper_force_cap_n) for arm in plain] == [(None, None)] * 4
-    gentle = dataclasses.replace(DEFAULT_GRASP, close_rate_per_s=1.0)
-    yambox = embodiment_cfg.yam_bimanual_yambox.override(cameras={}, **{'grasp_tuning.right.close_rate_per_s': 1.0})
-    arms = [system for system in yambox.instantiate().control_systems if isinstance(system, yam.Robot)]
-    assert [(arm._grasp_tuning, arm._gripper_force_cap_n) for arm in arms] == [(DEFAULT_GRASP, 20.0), (gentle, 20.0)]
-
-
 def test_the_bimanual_embodiment_states_a_frame_for_each_pose_signal_of_both_arms():
     static_meta = embodiment_cfg.yam_bimanual.override(cameras={}).instantiate().static_meta
     frames = ee_frames({**static_meta, roboarm_keys.URDF: bundled_yam_model()[roboarm_keys.URDF]})
@@ -2789,6 +2775,10 @@ def _free_close_s(monkeypatch, gripper_force_cap_n: float | None, grasp_tuning: 
     """How long the gripper takes from open to 0.05 rad short of closed, with nothing between the fingers."""
     chain, motors = _gripper_chain(monkeypatch, stop_at=0.0)
     _opened_by_a_driver(chain, gripper_force_cap_n, grasp_tuning)
+    return _close_s(chain, motors)
+
+
+def _close_s(chain, motors: GripperMotors) -> float:
     chain.command_joint_pos(np.append(ARM_TARGET, CHAIN_CLOSED))
     for steps in range(10_000):
         if motors.pos[6] <= 0.05:
@@ -3091,6 +3081,30 @@ def test_the_yam_configs_give_each_gripper_its_force_cap(monkeypatch):
         rig.tick()
         assert _last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP] == 15.0
         rig.loop.close()
+
+
+def test_only_the_yambox_config_gives_each_gripper_a_rate_limited_close_and_a_force_cap(monkeypatch):
+    bimanual = embodiment_cfg.yam_bimanual.override(cameras={}).instantiate()
+    yambox = embodiment_cfg.yam_bimanual_yambox.override(cameras={}, **{'grasp_tuning.right.close_rate_per_s': 1.0})
+    arms = [
+        yam.Robot(),
+        roboarm_cfg.yam.instantiate(),
+        *(system for system in bimanual.control_systems if isinstance(system, yam.Robot)),
+        *(system for system in yambox.instantiate().control_systems if isinstance(system, yam.Robot)),
+    ]
+    caps, close_s = [], []
+    for arm in arms:
+        chain, motors = _gripper_chain(monkeypatch, stop_at=0.0)
+        rig = Rig(driver=arm)
+        rig.driver._connect = lambda channel, sim, compensation, chain=chain: chain
+        rig.tick()
+        caps.append(_last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP])
+        rig.loop.close()
+        close_s.append(_close_s(chain, motors))
+    i2rt_s = _close_s(*_gripper_chain(monkeypatch, stop_at=0.0))
+    assert caps == [None] * 4 + [20.0] * 2
+    assert close_s[:4] == [i2rt_s] * 4
+    assert close_s[4:] == [pytest.approx(1 / DEFAULT_GRASP.close_rate_per_s, rel=0.15), pytest.approx(1.0, rel=0.15)]
 
 
 @pytest.mark.parametrize(
