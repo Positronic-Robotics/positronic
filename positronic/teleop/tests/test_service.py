@@ -1169,6 +1169,18 @@ def test_a_press_of_a_that_went_down_and_up_between_two_samples_turns_control_on
         connection.close()
 
 
+def test_a_press_of_a_while_the_controller_is_not_tracked_turns_control_on_when_it_is_tracked_again(
+    socket_path, connect
+):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        served.take_sample({webxr.RIGHT: None}, {webxr.RIGHT: None})
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        connection.close()
+
+
 def test_two_presses_of_a_between_two_samples_take_control_again_from_the_new_place_of_the_hand(socket_path, connect):
     with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
         connection = _readied_connection(served, socket_path, connect)
@@ -1779,6 +1791,12 @@ def _press_counts(frames: list[list[bool]]) -> list[list[int]]:
 def test_the_headset_page_counts_each_press_of_a_button_once():
     frames = [[False, False], [True, False], [True, False], [False, True], [True, True], [False, False]]
     assert _press_counts(frames) == [[0, 0], [1, 0], [1, 0], [1, 1], [2, 1], [2, 1]]
+
+
+def test_the_headset_page_counts_the_presses_of_a_frame_in_which_the_controller_has_no_pose():
+    page = Path(package_assets_path('assets/webxr/index.html')).read_text()
+    frame = page[page.index('function onFrame(') :]
+    assert frame.index('pressCounters[inputSource.handedness].count(') < frame.index('if (!gripPose) continue;')
 
 
 def _quest_grip(raw_values: list[float]) -> list[float]:

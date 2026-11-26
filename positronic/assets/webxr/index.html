@@ -174,18 +174,17 @@
           const controllers = { left: null, right: null };
           for (let inputSource of session.inputSources) {
             if (inputSource.gripSpace && (inputSource.handedness === 'left' || inputSource.handedness === 'right')) {
+              const gamepadButtons = inputSource.gamepad ? inputSource.gamepad.buttons : [];
+              // Each frame counts, so a press in a frame with no pose goes out in the next sample that has one
+              const presses = pressCounters[inputSource.handedness].count(gamepadButtons.map(b => b.pressed));
               const gripPose = frame.getPose(inputSource.gripSpace, refSpace);
               if (!gripPose) continue;
               const pos = gripPose.transform.position;
               const orient = gripPose.transform.orientation;
-              const gamepadButtons = inputSource.gamepad ? inputSource.gamepad.buttons : [];
               const values = gamepadButtons.map(b => b.value);
               const buttons = bendQuestTrigger(values, inputSource.profiles);
               controllers[inputSource.handedness] = controllerSample(
-                [pos.x, pos.y, pos.z],
-                [orient.w, orient.x, orient.y, orient.z],
-                buttons,
-                pressCounters[inputSource.handedness].count(gamepadButtons.map(b => b.pressed)),
+                [pos.x, pos.y, pos.z], [orient.w, orient.x, orient.y, orient.z], buttons, presses,
               );
               const axesGroup = controllerAxes[inputSource.handedness];
               if (axesGroup) {
