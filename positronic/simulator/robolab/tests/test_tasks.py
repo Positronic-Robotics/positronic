@@ -114,7 +114,7 @@ def test_each_reset_token_names_the_camera_set_of_its_eval(listing, cameras):
     assert [token[robolab_keys.TOKEN_CAMERAS] for token in tokens] == [cameras, cameras]
 
 
-def test_two_camera_sets_of_one_task_build_two_scenes():
+def test_two_camera_sets_of_one_task_have_two_scene_keys():
     adapter = RobolabDroidAdapter({})
     params = {eval_keys.TASK: 'BananaInBowlTask', robolab_keys.INSTRUCTION_TYPE: 'default'}
 

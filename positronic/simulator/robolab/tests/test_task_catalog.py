@@ -137,7 +137,7 @@ def test_a_library_camera_set_joins_the_presets(tmp_path):
     assert sets == {'wrist_left': ['left', 'wrist'], 'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']}
 
 
-def test_one_server_holds_the_benchmark_and_a_library_with_the_camera_sets_of_both(benchmark, library):
+def test_a_catalog_and_its_camera_sets_hold_the_benchmark_and_a_library(benchmark, library):
     _cameras(library, {'exterior_pair_wrist': ['ext', 'ext_2', 'wrist']})
 
     catalog = TaskCatalog.load(benchmark, [library], CATEGORIES)

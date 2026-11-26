@@ -106,7 +106,7 @@ def _robolab_eval(
     ``cameras`` names the set the run renders, one of ``keys.ROBOT_CAMERA_SETS[robot]``. For the DROID rig: both
     exteriors and the wrist, or one exterior and the wrist. For the YAM: the top camera and both wrists. Without it,
     the run renders ``keys.DEFAULT_CAMERA_SETS[robot]``. The set rides each trial's reset token, so evals of two sets
-    can share one env server.
+    can share one env server. One batch holds one task and one set: the server refuses a batch whose resets differ.
 
     ``horizon_sec`` replaces the episode length of every task of the run, and the default deadline follows it. A
     run with it is not comparable with RoboLab's own scores.
