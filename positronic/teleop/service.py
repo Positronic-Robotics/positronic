@@ -14,6 +14,7 @@ import os
 import stat
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
@@ -236,6 +237,15 @@ class CameraState:
 
 
 @dataclass(frozen=True)
+class CameraFeed:
+    """The images of one camera that reached the service: their rate in Hz over the last ``TeleopService.FEED_SEC``,
+    and the seconds since the last one."""
+
+    rate_hz: float
+    age_sec: float
+
+
+@dataclass(frozen=True)
 class _Sample:
     """What the headset sent last, by controller, and its `time.monotonic_ns()` instant. A controller that the headset
     does not track is absent or ``None``."""
@@ -243,6 +253,14 @@ class _Sample:
     taken_ns: int
     poses: Mapping[str, geom.Transform3D | None]
     buttons: Mapping[str, Sequence[float] | None]
+
+
+@dataclass(frozen=True)
+class Badge:
+    """A line of the view in black on a box of ``colour``, an RGB colour."""
+
+    text: str
+    colour: tuple[int, int, int]
 
 
 class TeleopService:
@@ -263,6 +281,10 @@ class TeleopService:
     LIVE_SEC = 30.0
     # A client opens a session again within its reconnect deadline when the connection drops before its first answer.
     RESUME_LIMIT_SEC = DEFAULT_RECONNECT_DEADLINE
+    # The span over which `camera_feeds` counts the images of a camera.
+    FEED_SEC = 2.0
+    # The most recent images of one camera that `camera_feeds` counts.
+    FEED_MAX_IMAGES = 512
 
     def __init__(
         self,
@@ -304,6 +326,9 @@ class TeleopService:
         self._images: dict[str, np.ndarray] = {}
         # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
         self._seen: dict[str, float] = {}
+        # The `time.monotonic()` instants of the last images of each camera, under `_feed_lock`.
+        self._arrivals: dict[str, deque[float]] = {}
+        self._feed_lock = threading.Lock()
         # The cameras that the session of this trial sends, from the wait for Ready on
         self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
@@ -452,6 +477,34 @@ class TeleopService:
         with self._changed:
             return self._images[name]
 
+    def take_images(self, images: Mapping[str, np.ndarray]) -> None:
+        """Take camera images of the run, by camera name. Only a running trial takes them."""
+        now = time.monotonic()
+        # Atomic with the phase check: one entry of each of two dicts for each camera of the session.
+        with self._changed:
+            if self._phase is not Phase.RUNNING:
+                return
+            self._images.update(images)
+            self._seen.update(dict.fromkeys(images, now))
+        # One append for each camera, to a deque of at most `FEED_MAX_IMAGES`.
+        with self._feed_lock:
+            for name in images:
+                self._arrivals.setdefault(name, deque(maxlen=self.FEED_MAX_IMAGES)).append(now)
+
+    def camera_feeds(self) -> dict[str, CameraFeed]:
+        """The feed of each camera whose images reached the service in the last ``FEED_SEC``."""
+        now = time.monotonic()
+        since = now - self.FEED_SEC
+        # Drops each camera with no image since `since`, then copies at most `FEED_MAX_IMAGES` instants per camera.
+        with self._feed_lock:
+            for name in [name for name, arrivals in self._arrivals.items() if arrivals[-1] <= since]:
+                del self._arrivals[name]
+            recent = {name: tuple(arrivals) for name, arrivals in self._arrivals.items()}
+        return {
+            name: CameraFeed(sum(arrived > since for arrived in arrivals) / self.FEED_SEC, now - arrivals[-1])
+            for name, arrivals in recent.items()
+        }
+
     def cancel_ready_wait(self) -> None:
         """Cancel the trial that waits for Ready, from the window on the station screen.
 
@@ -468,15 +521,23 @@ class TeleopService:
         cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(view, line, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), 2, cv2.LINE_AA)
 
+    @staticmethod
+    def _badge(view: np.ndarray, origin: tuple[int, int], badge: Badge, scale: float) -> None:
+        (width, height), baseline = cv2.getTextSize(badge.text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+        x, y = origin
+        cv2.rectangle(view, (x - 6, y - height - 5), (x + width + 6, y + baseline), badge.colour, cv2.FILLED)
+        cv2.putText(view, badge.text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 2, cv2.LINE_AA)
+
     @classmethod
     def _view(
         cls,
         image: np.ndarray | None,
-        lines: Sequence[str],
+        lines: Sequence[str | Badge],
         footer: Sequence[str] = (),
         others: Sequence[tuple[str, np.ndarray | None]] = (),
     ) -> np.ndarray:
-        """``image``, or a black image, with ``lines`` of text at its top and the smaller ``footer`` at its bottom.
+        """``image``, or a black image, with ``lines`` of text or badges at its top and the smaller ``footer`` at its
+        bottom.
 
         With ``others``, the view has a column on its right with one named cell for each of them, and ``image`` fits
         the left part of the view size.
@@ -502,7 +563,10 @@ class TeleopService:
             view = np.array(image, dtype=np.uint8, order='C')
         bottom = view.shape[0]
         for row, line in enumerate(lines):
-            cls._text(view, (10, 26 + 30 * row), line, 0.75)
+            if isinstance(line, Badge):
+                cls._badge(view, (10, 26 + 30 * row), line, 0.75)
+            else:
+                cls._text(view, (10, 26 + 30 * row), line, 0.75)
         for row, line in enumerate(reversed(footer)):
             cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
@@ -528,19 +592,27 @@ class TeleopService:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
-        control = self._control_line()
-        return self._view(image, [state.task, control, 'Hold B: Complete. Hold the stick: Give up'], footer, others)
+        lines = [state.task, *self._control_lines(), 'Hold B: Complete. Hold the stick: Give up']
+        return self._view(image, lines, footer, others)
 
-    def _control_line(self) -> str:
-        """The state of the clutch of each arm, and the button that changes it."""
-        clutch_labels = {LEFT: 'X', RIGHT: 'A'}
-        parts = []
+    # The RGB colour behind the control line of an arm whose control is on, and off
+    CONTROL_ON_COLOUR = (6, 214, 160)
+    CONTROL_OFF_COLOUR = (255, 209, 102)
+
+    def _control_lines(self) -> list[Badge]:
+        """The state of the clutch of each arm and the button that changes it, on the colour of the state."""
         with self._changed:
-            for arm, tracker in self._trackers.items():
-                name = 'Control' if arm is None else arm.capitalize()
-                clutch = clutch_labels[ARM_CONTROLLERS[arm]]
-                parts.append(f'{name} on ({clutch}: off)' if tracker.on else f'{name} off ({clutch}: on)')
-        return '. '.join(parts)
+            controls = [(arm, tracker.on) for arm, tracker in self._trackers.items()]
+        clutch_labels = {LEFT: 'X', RIGHT: 'A'}
+        lines = []
+        for arm, on in controls:
+            name = 'Control' if arm is None else arm.capitalize()
+            clutch = clutch_labels[ARM_CONTROLLERS[arm]]
+            if on:
+                lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
+            else:
+                lines.append(Badge(f'{name} off ({clutch}: on)', self.CONTROL_OFF_COLOUR))
+        return lines
 
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
@@ -609,9 +681,9 @@ class TeleopService:
             return _Sample(self._sample.taken_ns, {}, {})
         return self._sample
 
-    def next_frame(self, request: Mapping[str, Any], cameras: Sequence[str]) -> dict[str, Any]:
-        """Take the state of the arms and the images of ``cameras`` in ``request``, and answer with the element of the
-        next frame: the target of the teleoperator, with the end of the trial once the teleoperator ends it."""
+    def next_frame(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Take the state of the arms in ``request``, and answer with the element of the next frame: the target of the
+        teleoperator, with the end of the trial once the teleoperator ends it."""
         with self._changed:
             if self._phase is Phase.ENDED:
                 assert self._end is not None
@@ -619,8 +691,6 @@ class TeleopService:
             if self._phase is not Phase.RUNNING:
                 raise ValueError(f'a frame request came in the {self._phase} phase')
             self._task = str(request[TASK])
-            self._images = {name: request[name] for name in cameras}
-            self._seen.update(dict.fromkeys(cameras, time.monotonic()))
             assert self._trackers, 'a running trial has the clutches of its Ready'
             robot = {arm: self._arm_state(request, arm) for arm in self._trackers}
             if not self._hold:
@@ -718,8 +788,12 @@ class TeleopSession(Session):
         self._decoders = {} if settings.video_bitrate is None else {name: AnnexBDecoder() for name in settings.cameras}
 
     def infer(self, observation: Any) -> list[dict[str, Any]]:
-        images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
-        return [self._service.next_frame({**observation, **images}, self._cameras)]
+        if self._decoders:
+            images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
+        else:
+            images = {name: observation[name] for name in self._cameras}
+        self._service.take_images(images)
+        return [self._service.next_frame(observation)]
 
     def close(self) -> None:
         self._service.end_session()

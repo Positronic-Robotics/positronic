@@ -372,6 +372,24 @@ def test_a_teleoperator_readies_takes_control_and_completes_a_trial(service, soc
         _until_cleared(service)
 
 
+def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_while_it_is_on(
+    service, socket_path, runtime
+):
+    def colours() -> set[str]:
+        view = service.view()
+        shown = {'on': TeleopService.CONTROL_ON_COLOUR, 'off': TeleopService.CONTROL_OFF_COLOUR}
+        return {name for name, colour in shown.items() if (view == colour).all(axis=-1).any()}
+
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        _drive_until(run, _is_move)
+        assert colours() == {'off'}
+        headset.press(a=1.0)
+        _drive_until(run, lambda _: service.state().control)
+        assert colours() == {'on'}
+        run.close()
+
+
 def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_target(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
@@ -1088,6 +1106,23 @@ def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, sock
         run.close()
 
 
+def test_the_service_takes_no_camera_image_outside_a_running_trial(service):
+    service.take_images({keys.EXTERIOR_IMAGE: OBS[keys.EXTERIOR_IMAGE]})
+    assert service.state().cameras == () and service.camera_feeds() == {}
+
+
+def test_the_camera_feeds_count_the_images_of_the_last_feed_span(service, socket_path, connect, monkeypatch):
+    _readied_connection(service, socket_path, connect, session_query(cameras=[keys.EXTERIOR_IMAGE]))
+    for _ in range(4):
+        service.take_images({keys.EXTERIOR_IMAGE: OBS[keys.EXTERIOR_IMAGE]})
+    [(name, feed)] = service.camera_feeds().items()
+    assert name == keys.EXTERIOR_IMAGE and service.state().cameras == (keys.EXTERIOR_IMAGE,)
+    assert feed.rate_hz == 4 / TeleopService.FEED_SEC and 0 <= feed.age_sec < 1
+    monkeypatch.setattr(TeleopService, 'FEED_SEC', 0.05)
+    time.sleep(0.1)
+    assert service.camera_feeds() == {}
+
+
 @pytest.mark.parametrize('headset_camera', [None, keys.EXTERIOR_IMAGE])
 def test_the_headset_shows_the_first_camera_or_the_one_that_the_session_names(socket_path, connect, headset_camera):
     images = {
@@ -1336,6 +1371,28 @@ def test_the_headset_bridge_takes_the_text_only_view_that_the_page_asks_for(sock
     assert asked == [True, False, True]
 
 
+def test_the_headset_bridge_logs_the_camera_feeds_once_each_log_span(socket_path, monkeypatch, caplog):
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
+    monkeypatch.setattr(service, 'view', lambda camera=True: np.zeros((2, 2, 3), np.uint8))
+    monkeypatch.setattr(service, 'camera_feeds', lambda: {keys.EXTERIOR_IMAGE: service_module.CameraFeed(9.5, 0.04)})
+    bridge = command._Headset(service)
+    bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
+    bridge.view._bind(RecordingEmitter[np.ndarray](), clock=SystemClock())
+    for receiver in (bridge.controller_positions, bridge.buttons, bridge.page_input):
+        receiver._bind(ManualCommandReceiver())
+    now = [0.0]
+    clock = cast(pimm.Clock, types.SimpleNamespace(now=lambda: now[0]))
+    loop = bridge.run(cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)), clock)
+    with caplog.at_level(logging.INFO, logger=command.__name__):
+        next(loop)
+        now[0] = command._Headset.FEED_LOG_SEC
+        next(loop)
+        next(loop)
+    assert [record.getMessage() for record in caplog.records] == [
+        f'Camera images: {keys.EXTERIOR_IMAGE} at 9.5 Hz, the last 0.04 s ago'
+    ]
+
+
 def test_a_camera_that_neither_the_run_nor_the_station_has_cannot_be_chosen(socket_path):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC, cameras=[keys.WRIST_IMAGE])
     with pytest.raises(ValueError, match='no camera'):
@@ -1463,10 +1520,10 @@ STATION_FRAME_SEC = 1 / 30
 
 def _frames_until_end(service: TeleopService) -> list[dict]:
     """The elements of the frames of one trial, asked for at the pace of a station, the end element last."""
-    elements = [service.next_frame(FRAME_REQUEST, [])]
+    elements = [service.next_frame(FRAME_REQUEST)]
     while END not in elements[-1]:
         time.sleep(STATION_FRAME_SEC)
-        elements.append(service.next_frame(FRAME_REQUEST, []))
+        elements.append(service.next_frame(FRAME_REQUEST))
     return elements
 
 
