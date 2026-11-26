@@ -204,15 +204,15 @@ def test_a_send_that_fails_after_the_close_frame_of_the_page_logs_the_close_of_t
 
 
 @contextlib.contextmanager
-def _served_video_route(served: WebXR, ping_s: float) -> Iterator[None]:
-    """``served``'s ``/video`` route on a uvicorn server that pings each socket after ``ping_s`` of quiet.
+def _served_video_route(served: WebXR) -> Iterator[None]:
+    """``served``'s ``/video`` route on a uvicorn server that pings each socket after 0.2 s of quiet.
 
-    A socket with no pong ``ping_s`` after the ping fails the keepalive.
+    A socket with no pong 0.2 s after the ping fails the keepalive.
     """
     app = FastAPI()
     served._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
     config = uvicorn.Config(
-        app, host='127.0.0.1', port=served.port, log_level='warning', ws_ping_interval=ping_s, ws_ping_timeout=ping_s
+        app, host='127.0.0.1', port=served.port, log_level='warning', ws_ping_interval=0.2, ws_ping_timeout=0.2
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -236,7 +236,7 @@ def test_a_page_that_stops_to_answer_pings_on_the_video_socket_ends_the_stream_a
         'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
     )
     with (
-        _served_video_route(video_with_a_frame, ping_s=0.2),
+        _served_video_route(video_with_a_frame),
         socket.create_connection(('127.0.0.1', video_with_a_frame.port)) as page,
     ):
         page.sendall(handshake.encode())
