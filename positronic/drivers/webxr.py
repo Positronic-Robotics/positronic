@@ -18,6 +18,7 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from websockets.frames import CloseCode
 
 import pimm
 from positronic import geom, utils
@@ -352,6 +353,18 @@ class WebXR(pimm.ControlSystem):
                 f'export const SESSION_MODE = {json.dumps(self.session_mode.value)};\n', media_type='text/javascript'
             )
 
+    @staticmethod
+    def _video_close_line(code: int | None) -> str:
+        """The log line for the end of a ``/video`` socket with the close ``code``, ``None`` if the service ended it."""
+        if code is None:
+            return 'Video WebSocket connection closed'
+        if code == CloseCode.ABNORMAL_CLOSURE:
+            # A keepalive ping timeout gives this code: no close frame comes from the page.
+            return f'The video socket lost the page, which went away or did not answer the keepalive ping (code {code})'
+        if code == CloseCode.SERVICE_RESTART:
+            return f'The server closed the video socket at its shutdown (code {code})'
+        return f'The page closed the video socket (code {code})'
+
     def _add_video_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
         """``/video``: each new frame as H.264. Each socket has its own encoder, so its stream starts at a key frame."""
 
@@ -370,7 +383,6 @@ class WebXR(pimm.ControlSystem):
                 if not closed.done():
                     await send(data)
 
-            dropped = False
             try:
                 encoder = AnnexBEncoder(self.video_fps, self.video_fps, self.video_bitrate)
                 fps = pimm.utils.RateCounter('Video Stream')
@@ -388,15 +400,15 @@ class WebXR(pimm.ControlSystem):
                         await send_unless_closed(websocket.send_bytes, unit.data)
                     fps.tick()
             except WebSocketDisconnect:
-                # The page dropped the connection with no close frame, so the send found it broken.
-                dropped = True
+                # A failed send gives code 1006 also after a close frame of the page. The receive gives the real code.
+                await closed
             except Exception as e:
                 logger.error(f'Video WebSocket error: {e}')
                 logger.error(traceback.format_exc())
             finally:
-                page_closed = dropped or closed.done()
+                close_code = closed.result().get('code') if closed.done() else None
                 closed.cancel()
-                logger.info('The page closed the video socket' if page_closed else 'Video WebSocket connection closed')
+                logger.info(self._video_close_line(close_code))
 
     def _add_controller_route(self, app: FastAPI, should_stop: pimm.SignalReceiver) -> None:
         """``/ws``: the controller stream from the page."""
