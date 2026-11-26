@@ -269,7 +269,8 @@ one service serves runs with different parameters. A parameter that the run does
 | `headset_camera` | the camera of `cameras` that the headset shows | the first one |
 | `jpeg_quality` | the JPEG quality of the camera images | 90 |
 | `video_bitrate` | the bit rate of the camera images as H.264, in bits per second, or `None` for JPEG | `None` |
-| `video_fps` | the frame rate that the H.264 encoder spreads `video_bitrate` over | 30 |
+| `video_fps` | the frame rate that the H.264 encoder spreads `video_bitrate` over, and the rate of the frame requests with `calls_in_flight` above 1 | 30 |
+| `calls_in_flight` | the most frame requests that the client has open at a time. Above 1, the client asks for a frame each `1 / video_fps` s, and does not wait for each answer. A request that reaches the service after a newer one gets no frame. Only JPEG images: a `video_bitrate` refuses it | 1 |
 
 `positronic.teleop.protocol.session_query` builds the query. In `positronic.cfg.policy`, `teleop_query` is the query
 of `teleop` and `teleop_network`, and `teleop_collect_query`, `teleop_molmo_query` and `teleop_yam_query` are the
@@ -309,7 +310,8 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 - A plan file sends the token with `auth_token_file` on the endpoint. See the plan-file section of
   [client/README.md](../../client/README.md). The `websocket`, `grpc` and `roboarena` wires have no TLS, so the token
   travels in clear on them. Keep the service on a private network, such as a tailnet, or put it behind a TLS wire.
-- Each frame waits for one round trip of the network.
+- With `calls_in_flight` 1, each frame waits for one round trip of the network. A higher value lets the frames and the
+  images come at `video_fps` over a slow network, at the cost of more upload: each request carries the JPEG images.
 - `--served_address.port` changes the port. Give `--policy.address.port` the same value.
 - On the Unix socket, the service takes no token, and `AUTH_TOKEN` has no effect.
 

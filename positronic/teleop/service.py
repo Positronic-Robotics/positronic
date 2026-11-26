@@ -42,6 +42,7 @@ from positronic.policy.codecs import (
     EncodeImages,
     EncodeVideo,
     EndCommand,
+    SelectObservationFields,
     StateObservationCodec,
 )
 from positronic.policy.codecs.image import image_observation
@@ -59,7 +60,7 @@ from positronic.policy.sequential import Sequential
 from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES, Tracker
-from .protocol import EE_POSE, GRIP, TASK, VIEW_SIZE, Arms, SessionParams, camera_names
+from .protocol import CALL_ID, EE_POSE, GRIP, TASK, VIEW_SIZE, Arms, SessionParams, camera_names
 
 logger = logging.getLogger(__name__)
 
@@ -699,14 +700,19 @@ class TeleopSession(Session):
         client_stack: dict[str, Any],
         on_close: Callable[[], None],
     ):
-        super().__init__(client_stack)
+        super().__init__(client_stack, max_in_flight=settings.calls_in_flight)
         self._service = service
         self._cameras = settings.cameras
         self._on_close = on_close
         # The decoder of each camera stream, for a client that sends H.264
         self._decoders = {} if settings.video_bitrate is None else {name: AnnexBDecoder() for name in settings.cameras}
+        self._answered_call_id = -1
 
-    def infer(self, observation: Any) -> list[dict[str, Any]]:
+    def infer(self, observation: Any) -> list[dict[str, Any]] | None:
+        # Answers play in call order, so a frame for an older call would play a newer hand sample before an older one.
+        if observation[CALL_ID] < self._answered_call_id:
+            return None
+        self._answered_call_id = observation[CALL_ID]
         images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
         return [self._service.next_frame({**observation, **images}, self._cameras)]
 
@@ -722,7 +728,7 @@ class TeleopModel(Model):
     """
 
     # The schedule plays each answer of one element at once. It asks for the next frame at once, or on the frame grid
-    # of an H.264 session.
+    # of an H.264 session or of a session with more than one call in flight.
     FRAME_FPS = 100.0
 
     def __init__(self, service: TeleopService):
@@ -745,7 +751,10 @@ class TeleopModel(Model):
         #  control it. Refuse such a run.
         if settings.video_bitrate is None:
             images = EncodeImages(quality=settings.jpeg_quality)
-            timing = RequestTiming.before_end()
+            if settings.calls_in_flight == 1:
+                timing = RequestTiming.before_end()
+            else:
+                timing = RequestTiming.every(1 / settings.video_fps)
         else:
             images = EncodeVideo([[name] for name in settings.cameras], settings.video_bitrate, settings.video_fps)
             # The encoder gives each call one frame of a stream at `video_fps`, so calls come at most that often.
@@ -766,8 +775,10 @@ class TeleopModel(Model):
             state[keys.arm_channel(EE_POSE, arm)] = {pose: 7}
             state[keys.arm_channel(GRIP, arm)] = {keys.arm_channel(keys.GRIP, arm): 1}
             poses += [pose, f'{command}{keys.POSE_SUFFIX}', command]
-        observation = StateObservationCodec(state, task_field=TASK) & (
-            image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
+        observation = (
+            StateObservationCodec(state, task_field=TASK)
+            & image_observation({name: (name, VIEW_SIZE) for name in settings.cameras})
+            & SelectObservationFields({CALL_ID: policy_keys.CALL_ID})
         )
         match settings.arms:
             case Arms.ONE:
