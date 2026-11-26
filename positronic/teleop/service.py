@@ -14,6 +14,7 @@ import os
 import stat
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
@@ -234,6 +235,15 @@ class CameraState:
 
 
 @dataclass(frozen=True)
+class CameraFeed:
+    """The images of one camera that reached the service: their rate in Hz over the last ``TeleopService.FEED_SEC``,
+    and the seconds since the last one."""
+
+    rate_hz: float
+    age_sec: float
+
+
+@dataclass(frozen=True)
 class _Sample:
     """What the headset sent last, by controller, and its `time.monotonic_ns()` instant. A controller that the headset
     does not track is absent or ``None``."""
@@ -261,6 +271,8 @@ class TeleopService:
     LIVE_SEC = 30.0
     # A client opens a session again within its reconnect deadline when the connection drops before its first answer.
     RESUME_LIMIT_SEC = DEFAULT_RECONNECT_DEADLINE
+    # The span over which `camera_feeds` counts the images of a camera.
+    FEED_SEC = 2.0
 
     def __init__(
         self,
@@ -300,6 +312,8 @@ class TeleopService:
         self._images: dict[str, np.ndarray] = {}
         # The `time.monotonic()` instant of the last image of each camera that the run sent. It holds over trials.
         self._seen: dict[str, float] = {}
+        # The `time.monotonic()` instants of the images of each camera within the last `FEED_SEC`.
+        self._arrivals: dict[str, deque[float]] = {}
         # The cameras that the session of this trial sends, from the wait for Ready on
         self._trial_cameras: tuple[str, ...] = ()
         # The camera that the session of this trial names for the headset. ``None`` is the first camera of the run.
@@ -442,6 +456,31 @@ class TeleopService:
         """The last image of camera ``name``. Raise ``KeyError`` for a camera that the run does not send."""
         with self._changed:
             return self._images[name]
+
+    def take_images(self, images: Mapping[str, np.ndarray]) -> None:
+        """Take camera images of the run, by camera name. Only a running trial takes them."""
+        now = time.monotonic()
+        with self._changed:
+            if self._phase is not Phase.RUNNING:
+                return
+            self._images.update(images)
+            for name in images:
+                self._seen[name] = now
+                arrivals = self._arrivals.setdefault(name, deque())
+                arrivals.append(now)
+                while arrivals[0] <= now - self.FEED_SEC:
+                    arrivals.popleft()
+
+    def camera_feeds(self) -> dict[str, CameraFeed]:
+        """The feed of each camera whose images reached the service in the last ``FEED_SEC``."""
+        now = time.monotonic()
+        with self._changed:
+            feeds = {}
+            for name, arrivals in self._arrivals.items():
+                count = sum(1 for arrived in arrivals if arrived > now - self.FEED_SEC)
+                if count:
+                    feeds[name] = CameraFeed(count / self.FEED_SEC, now - arrivals[-1])
+            return feeds
 
     def cancel_ready_wait(self) -> None:
         """Cancel the trial that waits for Ready, from the window on the station screen.
@@ -598,9 +637,9 @@ class TeleopService:
             return _Sample(self._sample.taken_ns, {}, {})
         return self._sample
 
-    def next_frame(self, request: Mapping[str, Any], cameras: Sequence[str]) -> dict[str, Any]:
-        """Take the state of the arms and the images of ``cameras`` in ``request``, and answer with the element of the
-        next frame: the target of the teleoperator, with the end of the trial once the teleoperator ends it."""
+    def next_frame(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        """Take the state of the arms in ``request``, and answer with the element of the next frame: the target of the
+        teleoperator, with the end of the trial once the teleoperator ends it."""
         with self._changed:
             if self._phase is Phase.ENDED:
                 assert self._end is not None
@@ -608,8 +647,6 @@ class TeleopService:
             if self._phase is not Phase.RUNNING:
                 raise ValueError(f'a frame request came in the {self._phase} phase')
             self._task = str(request[TASK])
-            self._images = {name: request[name] for name in cameras}
-            self._seen.update(dict.fromkeys(cameras, time.monotonic()))
             assert self._trackers, 'a running trial has the clutches of its Ready'
             robot = {arm: self._arm_state(request, arm) for arm in self._trackers}
             if not self._hold:
@@ -707,8 +744,12 @@ class TeleopSession(Session):
         self._decoders = {} if settings.video_bitrate is None else {name: AnnexBDecoder() for name in settings.cameras}
 
     def infer(self, observation: Any) -> list[dict[str, Any]]:
-        images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
-        return [self._service.next_frame({**observation, **images}, self._cameras)]
+        if self._decoders:
+            images = {name: decoder.decode(observation[name]) for name, decoder in self._decoders.items()}
+        else:
+            images = {name: observation[name] for name in self._cameras}
+        self._service.take_images(images)
+        return [self._service.next_frame(observation)]
 
     def close(self) -> None:
         self._service.end_session()
