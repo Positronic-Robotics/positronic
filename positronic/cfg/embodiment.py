@@ -218,7 +218,6 @@ yam_bimanual_yambox = yam_bimanual.override(
             ),
         ),
     ),
-    # A test on this station checked the hold of 20 N after a touch
     grasp_tuning=dict.fromkeys(keys.BIMANUAL_ARMS, positronic.cfg.hardware.roboarm.yam_grasp_tuning),
     gripper_force_cap_n=20.0,
     cameras={
