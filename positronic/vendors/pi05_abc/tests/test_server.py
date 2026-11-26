@@ -204,8 +204,8 @@ MULTI_TASK_COMMANDS = {
     'abc4_30k': _multi_task_command('abc4_30k', ABC4_INSTRUCTION_PROMPTS, 'assets/abc4_yam/norm_stats.json'),
     'abc11_30k': _multi_task_command('abc11_30k', ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam/norm_stats.json'),
     'abc15_30k': _multi_task_command('abc15_30k', ABC15_INSTRUCTION_PROMPTS, 'assets/abc15_yam/norm_stats.json'),
-    'abc15_last_command': _multi_task_command(
-        'abc15_last_command', ABC15_INSTRUCTION_PROMPTS, 'assets/abc15_yam/norm_stats.json'
+    'abc11_last_command': _multi_task_command(
+        'abc11_last_command', ABC11_INSTRUCTION_PROMPTS, 'assets/abc11_yam_last_command_and_measured/norm_stats.json'
     ),
 }
 COMMAND_PROMPTS = [
@@ -383,7 +383,7 @@ def test_an_instant_answer_plays_the_first_actions_of_each_chunk_as_the_authors_
 
 
 def test_a_last_command_session_sends_the_state_as_the_last_command_before_the_first_chunk(tmp_path):
-    command = server.COMMANDS['abc15_last_command'].kwargs
+    command = server.COMMANDS['abc11_last_command'].kwargs
     checkpoint, port = tmp_path / 'checkpoint', _free_port()
     model = command['model'].override(checkpoint=str(checkpoint), fork=str(_fork(tmp_path)), port=port)
 
@@ -396,7 +396,10 @@ def test_a_last_command_session_sends_the_state_as_the_last_command_before_the_f
     assert warm[author_server_stand_in.REQUEST]['last_command'] == [0.0] * codecs.BIMANUAL_SIZE
     flags = started[author_server_stand_in.ARGV][1:]
     options = dict(zip(flags[::2], flags[1::2], strict=True))
-    assert options['--config'] == 'pi05_abc130k_last_command'
+    assert options['--config'] == 'pi05_abc130k_last_command_and_measured'
+    assert options['--norm-stats-path'] == str(
+        checkpoint.resolve() / 'assets/abc11_yam_last_command_and_measured/norm_stats.json'
+    )
     assert options['--last-command-key'] == 'observation/last_command'
 
 

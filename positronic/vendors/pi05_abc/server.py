@@ -8,9 +8,9 @@ Commands
   abc4_30k     A checkpoint fine-tuned on the real data of four ABC tasks, with the prompt of each task.
   abc11_30k    A checkpoint fine-tuned on the real data of eleven ABC tasks, with the prompt of each task.
   abc15_30k    A checkpoint fine-tuned on the real data of fifteen ABC tasks, with the prompt of each task.
-  abc15_last_command
-               A checkpoint of the fifteen tasks that reads the last command that the arms got as its state. It needs
-               a fork with the server flag `--last-command-key`.
+  abc11_last_command
+               A checkpoint with the prompts of `abc11_30k` that reads the last command that the arms got and then
+               the measured joints as its state. It needs a fork with the server flag `--last-command-key`.
 
 Usage
   python -m positronic.vendors.pi05_abc.server <command> --model.checkpoint=<checkpoint dir> --model.fork=<fork>
@@ -45,6 +45,9 @@ BOTTLES_NORM_STATS = Path('assets/put_the_plastic_bottles_in_the_bin/norm_stats.
 ABC4_NORM_STATS = Path('assets/abc4_yam/norm_stats.json')
 ABC11_NORM_STATS = Path('assets/abc11_yam/norm_stats.json')
 ABC15_NORM_STATS = Path('assets/abc15_yam/norm_stats.json')
+# The state stats of `abc11_yam` twice, for the last command and then the measured joints; the action stats of
+# `abc11_yam`.
+ABC11_LAST_COMMAND_NORM_STATS = Path('assets/abc11_yam_last_command_and_measured/norm_stats.json')
 # The fork's interpreter, the author's server, and the openpi sources where the author runs the server.
 FORK_PYTHON = Path('.venv/bin/python')
 FORK_SERVER = Path('yam_abc_reproduce/deploy/servers/openpi_server.py')
@@ -53,8 +56,9 @@ FORK_OPENPI = Path('third_party/policy/openpi')
 # `observation/state`; the server snapshot renames the camera roles to these keys.
 IMAGE_KEY_MAP = f'{pi05_abc.TOP_CAMERA}=image,{pi05_abc.LEFT_CAMERA}=left_wrist,{pi05_abc.RIGHT_CAMERA}=right_wrist'
 FLATTEN_PREFIX = 'observation/'
-# The fork's config with the last command as its state, and the key where its `YamStateInput` reads the last command.
-LAST_COMMAND_CONFIG = 'pi05_abc130k_last_command'
+# The fork's config with the last command and then the measured joints as its state, and the key where it reads the
+# last command.
+LAST_COMMAND_CONFIG = 'pi05_abc130k_last_command_and_measured'
 LAST_COMMAND_KEY = f'{FLATTEN_PREFIX}last_command'
 # JAX takes most of the GPU at its first use unless this is false, so a second server on that GPU finds none free.
 PREALLOCATE_ENV = 'XLA_PYTHON_CLIENT_PREALLOCATE'
@@ -212,9 +216,11 @@ COMMANDS = {
         model=pi05_abc_model.override(norm_stats=ABC15_NORM_STATS),
         pipeline=pipeline.override(prompts=codecs.ABC15_PROMPTS),
     ),
-    'abc15_last_command': serve.override(
-        model=pi05_abc_model.override(config_name=LAST_COMMAND_CONFIG, norm_stats=ABC15_NORM_STATS, last_command=True),
-        pipeline=pipeline.override(prompts=codecs.ABC15_PROMPTS, last_command=True),
+    'abc11_last_command': serve.override(
+        model=pi05_abc_model.override(
+            config_name=LAST_COMMAND_CONFIG, norm_stats=ABC11_LAST_COMMAND_NORM_STATS, last_command=True
+        ),
+        pipeline=pipeline.override(prompts=codecs.ABC11_PROMPTS, last_command=True),
     ),
 }
 

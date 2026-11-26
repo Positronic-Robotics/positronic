@@ -11,7 +11,7 @@ code is the fork [yam-abc-reproduce](https://github.com/ninghaolu/yam-abc-reprod
 | `abc4_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of four tasks, step 29999 (a local directory) | put the plastic bottles in the bin, sweep away the paper scraps from the table, turn the mug right side up, load the plates into the dish rack | `assets/abc4_yam/norm_stats.json` |
 | `abc11_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of eleven tasks, step 29999 (a local directory) | the four tasks of `abc4_30k`, unload the plates from the dish rack, load the cups into the dish rack, put the screwdriver in the bin, place and organize the fake fruits in the fruit bowl, build the wood block tower, place the snacks into the paper bag, take the snacks out of the paper bag | `assets/abc11_yam/norm_stats.json` |
 | `abc15_30k` | A full fine-tune of `pi05_abc130k` from the pi0.5 base on the real data of fifteen tasks, step 29999 (a local directory) | the eleven tasks of `abc11_30k`, unload the cups from the dish rack, set the dinner table for one person, turn the large container upside down, unscrew the bottle caps | `assets/abc15_yam/norm_stats.json` |
-| `abc15_last_command` | A fine-tune of `pi05_abc130k_last_command` on the real data of the fifteen tasks of `abc15_30k` (a local directory) | the tasks of `abc15_30k` | `assets/abc15_yam/norm_stats.json` |
+| `abc11_last_command` | A fine-tune of `pi05_abc130k_last_command_and_measured` on the real data of ABC, with the norm stats of `abc11_30k` (a local directory) | the tasks of `abc11_30k` | `assets/abc11_yam_last_command_and_measured/norm_stats.json` |
 
 ## Licences
 
@@ -87,16 +87,17 @@ uv run --locked python -m positronic.vendors.pi05_abc.server bottles_16k \
     --model.checkpoint=<dir>/pi05-abc-130k-task-finetune-16000 --model.fork=<yam-abc-reproduce>
 ```
 
-`abc4_30k`, `abc11_30k`, `abc15_30k` and `abc15_last_command` need these files of their checkpoint directory:
+`abc4_30k`, `abc11_30k`, `abc15_30k` and `abc11_last_command` need these files of their checkpoint directory:
 `params/`, the norm stats of the table above and `_CHECKPOINT_METADATA`. The training state is not necessary.
 
 ## The last command as the state
 
-The fork's config `pi05_abc130k_last_command` trains with the last command that the arms got as the model state, in
-place of the measured joints. The last command at a frame is the action of the frame before. At the first frame of an
-episode no command was sent yet, so the last command is the measured state.
+The fork's config `pi05_abc130k_last_command_and_measured` trains with a 28-D model state: the last command that the
+arms got, then the measured joints. Its norm stats hold the 14-D state stats of `abc11_yam` for each half. The last
+command at a frame is the action of the frame before. At the first frame of an episode no command was sent yet, so the
+last command is the measured state.
 
-`abc15_last_command` serves such a checkpoint. The client sends its plan in each observation, and the codec sends the
+`abc11_last_command` serves such a checkpoint. The client sends its plan in each observation, and the codec sends the
 first command of that plan as `last_command`: the command that the arm holds at the observation, per arm the joints
 and then the gripper width. Before the first chunk the plan is empty, and the codec sends the state. A plan that ends
 before the next answer arrives also sends the state. The author's server passes `last_command` to the model with its
