@@ -27,6 +27,18 @@ class GraspTuning:
 DEFAULT_GRASP = GraspTuning()
 
 
+def capped_target(
+    closing: float, q: float, target: float, kp: float, feedforward_and_damping: float, cap_nm: float | None
+) -> float:
+    """``target``, moved back so that the P-D loop of the motor at ``q`` asks for ``cap_nm`` or less of closing torque.
+
+    The loop asks for ``feedforward_and_damping + kp * (target - q)``. None sets no cap.
+    """
+    if cap_nm is not None and kp > 0 and closing * (feedforward_and_damping + kp * (target - q)) > cap_nm:
+        return q + (closing * cap_nm - feedforward_and_damping) / kp
+    return target
+
+
 class _Phase(enum.Enum):
     FREE = enum.auto()  # the gripper does not close
     APPROACH = enum.auto()  # the gripper closes and has not touched an object
@@ -76,9 +88,6 @@ class Grasp:
         step = self._max_speed * min(now - self._sent_at, self._MAX_STEP_S)
         target = request if closing * (request - self._sent) <= step else self._sent + closing * step
         cap_nm = hold_nm if self._phase is _Phase.HELD else tuning.touch_effort_nm if launching else None
-        if cap_nm is not None and kp > 0:
-            farthest = q + (closing * cap_nm - feedforward_and_damping) / kp
-            if closing * (target - farthest) > 0:
-                target = farthest
+        target = capped_target(closing, q, target, kp, feedforward_and_damping, cap_nm)
         self._sent, self._sent_at = target, now
         return target
