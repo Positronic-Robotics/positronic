@@ -271,19 +271,47 @@ def _take(service: TeleopService, buttons: ControllerButtons) -> None:
     service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: buttons})
 
 
+def _pressed_after(previous: ControllerButtons, buttons: ControllerButtons) -> ControllerButtons:
+    """The values of ``buttons`` with the press counts that a page sends after ``previous``: each button that goes down
+    counts one press more."""
+    if len(buttons.values) != len(previous.values):
+        return buttons
+    counts = tuple(
+        count + int(value >= 0.5 > before)
+        for count, value, before in zip(previous.presses, buttons.values, previous.values, strict=True)
+    )
+    return ControllerButtons(buttons.values, counts)
+
+
 class _Headset:
-    """A headset that sends one sample of both controllers every 10 ms, with the poses and the buttons that a test
-    sets. ``pose`` and ``buttons`` are of the right controller."""
+    """A headset that sends one sample of both controllers every 10 ms, with the poses and the button values that a
+    test sets. It counts the presses as the page does. ``pose`` and ``buttons`` are of the right controller."""
 
     def __init__(self, service: TeleopService):
         self._service = service
         self.pose: geom.Transform3D | None = HAND
-        self.buttons = _buttons()
+        self._buttons = _buttons()
         self.left_pose: geom.Transform3D | None = LEFT_HAND
-        self.left_buttons = _buttons()
+        self._left_buttons = _buttons()
         self.sent = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._send, daemon=True)
+
+    @property
+    def buttons(self) -> ControllerButtons:
+        return self._buttons
+
+    @buttons.setter
+    def buttons(self, buttons: ControllerButtons) -> None:
+        self._buttons = _pressed_after(self._buttons, buttons)
+
+    @property
+    def left_buttons(self) -> ControllerButtons:
+        return self._left_buttons
+
+    @left_buttons.setter
+    def left_buttons(self, buttons: ControllerButtons) -> None:
+        self._left_buttons = _pressed_after(self._left_buttons, buttons)
 
     def _send(self) -> None:
         while not self._stop.is_set():
