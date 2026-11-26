@@ -110,6 +110,13 @@ class Hooks:
         self._default = load(None)
         self._loaded: dict[mapping.HookFile, LoadedHook] = {}
 
+    def _under_root(self, path: Path) -> Path:
+        if self._root is None:
+            raise ValueError(f'the server has no hook root, so it loads no hook file and refuses {path}')
+        if not path.resolve().is_relative_to(self._root):
+            raise ValueError(f'{path} is not under the hook root {self._root} of the server')
+        return path
+
     def of(self, request: dict[str, Any]) -> LoadedHook:
         hook_file = mapping.HookFile.of(request)
         if hook_file is None:
@@ -117,10 +124,3 @@ class Hooks:
         if hook_file not in self._loaded:
             self._loaded[hook_file] = load(self._under_root(hook_file.env_hook), hook_file.env_hook_sha256)
         return self._loaded[hook_file]
-
-    def _under_root(self, path: Path) -> Path:
-        if self._root is None:
-            raise ValueError(f'the server has no hook root, so it loads no hook file and refuses {path}')
-        if not path.resolve().is_relative_to(self._root):
-            raise ValueError(f'{path} is not under the hook root {self._root} of the server')
-        return path
