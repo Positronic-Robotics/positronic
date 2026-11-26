@@ -670,13 +670,27 @@ def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout():
         released.set()
 
 
+# Longer than the bound of the first send, so a bound left on the socket would end the second send.
+_STALL_S = 3.0
+
+
+def _read_a_chunk_then_stall(conn: socket.socket) -> None:
+    """Answer the upgrade, read one chunk, read nothing for ``_STALL_S``, then read until the end."""
+    _answer_the_upgrade(conn)
+    conn.recv(4096)
+    time.sleep(_STALL_S)
+    while conn.recv(1 << 20):
+        pass
+
+
 @pytest.mark.skipif(sys.platform != 'linux', reason='only Linux limits how long sent data stays unacknowledged')
-def test_a_send_inside_its_timeout_leaves_the_socket_with_the_kernels_limit():
-    host, port = _served(_upgrade_then_ignore_the_close)
-    connection = websocket.WebsocketClientConnection(connect(f'ws://{host}:{port}/', close_timeout=_SHORT_CLOSE_S))
+def test_a_send_with_no_timeout_outlasts_the_timeout_of_an_earlier_send():
+    host, port = _served(_read_a_chunk_then_stall)
+    connection = websocket.WebsocketClientConnection(
+        connect(f'ws://{host}:{port}/', max_size=None, close_timeout=_SHORT_CLOSE_S)
+    )
     try:
-        connection.send(b'observation', timeout=_LONG_CLOSE_S)
-        sock = connection._websocket.socket
-        assert sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT) == 0
+        connection.send(b'observation', timeout=_SHORT_CLOSE_S)
+        connection.send(bytes(_BUFFER_FILLING_BYTES))
     finally:
         connection.close()

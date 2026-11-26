@@ -1191,7 +1191,7 @@ def test_a_call_sent_behind_another_gives_no_one_way_times():
     conn.recv.side_effect = recv
     session = InferenceSession(conn)
     session.infer({})
-    conn.send.side_effect = lambda _: first_waits.is_set() and second_sent.set()
+    conn.send.side_effect = lambda _message, timeout=None: first_waits.is_set() and second_sent.set()
 
     def one_way_times() -> set[str]:
         session.infer({})
@@ -1223,7 +1223,7 @@ def test_each_call_says_whether_it_went_with_no_earlier_call_in_flight():
     session = InferenceSession(conn)
     session.infer({})
     assert session.sent_alone is True  # a server with no timing marks still gets the mark
-    conn.send.side_effect = lambda _: first_waits.is_set() and second_sent.set()
+    conn.send.side_effect = lambda _message, timeout=None: first_waits.is_set() and second_sent.set()
 
     def sent_alone() -> bool | None:
         session.infer({})

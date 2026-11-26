@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Generic
 
 from positronic_wire import wire
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidMessage, InvalidStatus
+from websockets.protocol import State
 from websockets.sync.client import connect, unix_connect
 from websockets.sync.connection import Connection
 
@@ -38,19 +39,25 @@ class WebsocketClientConnection(wire.ClientConnection):
     def send(self, message: bytes, timeout: float | None = None) -> None:
         # The socket blocks, so a write to a peer that acknowledges nothing waits until the kernel gives up on the
         # connection, many minutes later. TLS retries a write that a send timeout stops, so the bound is TCP's own.
-        bounded = (
-            timeout is not None and _LIMITS_UNACKNOWLEDGED_DATA and self._websocket.socket.family != socket.AF_UNIX
+        bounds_the_write = (
+            _LIMITS_UNACKNOWLEDGED_DATA
+            and self._websocket.state is State.OPEN
+            and self._websocket.socket.family != socket.AF_UNIX
         )
-        if bounded:
-            self._set_unacknowledged_limit(timeout)
+        bound = timeout if bounds_the_write else None
+        if bound is not None:
+            self._set_unacknowledged_limit(bound)
+        started = time.monotonic()
         try:
             self._websocket.send(message)
         except ConnectionClosed as e:
-            if isinstance(e.__cause__, TimeoutError):
-                raise TimeoutError(f'The peer acknowledged no more of the message within {timeout}s') from e
+            # The kernel ends the connection at the limit. The read thread can see that error first, and then the
+            # write sees a broken pipe, so the time decides.
+            if bound is not None and time.monotonic() - started >= bound:
+                raise TimeoutError(f'The peer acknowledged no more of the message within {bound}s') from e
             raise wire.PeerDisconnected(str(e)) from e
         finally:
-            if bounded:
+            if bound is not None:
                 with suppress(OSError):  # the socket is closed when the write failed
                     self._set_unacknowledged_limit(None)
 
