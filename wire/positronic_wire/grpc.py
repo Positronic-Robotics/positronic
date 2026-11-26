@@ -136,8 +136,9 @@ class GrpcClientConnection(wire.ClientConnection):
         try:
             written = self._written.get(timeout=timeout)
         except queue.Empty:
-            # A receipt that comes later would answer the next send.
+            # Cancel the call, so the late frame never leaves and ``close`` does not wait for the server.
             self._ended = True
+            self._responses.cancel()
             raise TimeoutError(f'gRPC wrote no frame to {self._target} within {timeout}s') from None
         if not written:
             self._ended = True
