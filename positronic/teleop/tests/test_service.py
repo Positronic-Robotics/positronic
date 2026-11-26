@@ -372,6 +372,24 @@ def test_a_teleoperator_readies_takes_control_and_completes_a_trial(service, soc
         _until_cleared(service)
 
 
+def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_while_it_is_on(
+    service, socket_path, runtime
+):
+    def colours() -> set[str]:
+        view = service.view()
+        shown = {'on': TeleopService.CONTROL_ON_COLOUR, 'off': TeleopService.CONTROL_OFF_COLOUR}
+        return {name for name, colour in shown.items() if (view == colour).all(axis=-1).any()}
+
+    with _Headset(service) as headset:
+        run = _readied_run(service, headset, runtime, socket_path)
+        _drive_until(run, _is_move)
+        assert colours() == {'off'}
+        headset.press(a=1.0)
+        _drive_until(run, lambda _: service.state().control)
+        assert colours() == {'on'}
+        run.close()
+
+
 def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_target(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
