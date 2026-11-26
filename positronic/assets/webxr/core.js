@@ -73,8 +73,9 @@ export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'lo
 
   function onXRFrame(t, frame) {
     const session = frame.session;
-    // Each frame, also one with no viewer pose, so that the page sees each change of its input
-    if (typeof onEveryFrame === 'function') onEveryFrame({ frame, session, refSpace: xrRefSpace });
+    // Each frame, also one with no viewer pose, so that the page sees each change of its input. `onFrame` gets what it
+    // returns
+    const everyFrame = typeof onEveryFrame === 'function' ? onEveryFrame({ frame, session, refSpace: xrRefSpace }) : undefined;
     const pose = frame.getViewerPose(xrRefSpace);
     if (pose) {
       const glLayer = session.renderState.baseLayer;
@@ -89,7 +90,7 @@ export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'lo
       // Allow page to update scene and compute controllers
       let controllers = null;
       if (typeof onFrame === 'function') {
-        controllers = onFrame({ frame, session, refSpace: xrRefSpace, view, scene, camera, renderer });
+        controllers = onFrame({ frame, session, refSpace: xrRefSpace, view, scene, camera, renderer, everyFrame });
       }
 
       renderer.render(scene, camera);

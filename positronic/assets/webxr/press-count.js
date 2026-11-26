@@ -15,21 +15,21 @@ export class PressCounter {
   }
 }
 
-// Count the presses of each controller of `session` with its counter in `counters`, by hand. A page calls it in each
-// XR frame, also in a frame with no pose, so that no press between two poses is lost
+// Count the presses of each controller of `session` with its counter in `counters`, by hand, and return the counts by
+// hand. A page calls it in each XR frame, also in a frame with no pose, so that no press between two poses is lost
 export function countPresses(session, counters) {
   for (const inputSource of session.inputSources) {
     const counter = counters[inputSource.handedness];
     if (counter && inputSource.gamepad) counter.count(inputSource.gamepad.buttons.map(b => b.pressed));
   }
+  return Object.fromEntries(Object.entries(counters).map(([hand, counter]) => [hand, counter.counts]));
 }
 
-// The grip pose, the button values and the press counts of `counter` for the controller of `inputSource` in `frame`,
-// or null when it has no pose there
-export function controllerInFrame(inputSource, frame, refSpace, counter) {
+// The grip pose and the button values of the controller of `inputSource` in `frame`, or null when it has no pose there
+export function controllerInFrame(inputSource, frame, refSpace) {
   const gripPose = frame.getPose(inputSource.gripSpace, refSpace);
   if (!gripPose) return null;
   const { position, orientation } = gripPose.transform;
   const values = inputSource.gamepad ? inputSource.gamepad.buttons.map(b => b.value) : [];
-  return { position, orientation, values, presses: counter.counts };
+  return { position, orientation, values };
 }

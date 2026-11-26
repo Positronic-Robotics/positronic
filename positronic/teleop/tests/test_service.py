@@ -1806,11 +1806,10 @@ def _presses_in_frames(frames: list[tuple[list[bool], str]]) -> list[list[int] |
     const read = JSON.parse(input).map(([pressed, pose]) => {
       const gamepad = { buttons: pressed.map(down => ({ pressed: down, value: down ? 1 : 0 })) };
       const inputSource = { gamepad, gripSpace: {}, handedness: 'right' };
-      countPresses({ inputSources: [inputSource] }, counters);
+      const presses = countPresses({ inputSources: [inputSource] }, counters);
       if (pose === 'no_viewer_pose') return null;
       const frame = { getPose: () => (pose === 'pose' ? { transform: identity } : null) };
-      const controller = controllerInFrame(inputSource, frame, {}, counters.right);
-      return controller === null ? null : controller.presses;
+      return controllerInFrame(inputSource, frame, {}) === null ? null : presses.right;
     });
     console.log(JSON.stringify(read));
     """

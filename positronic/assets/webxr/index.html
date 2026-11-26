@@ -169,17 +169,18 @@
           videoPlayer.init(scene, camera);
         }
 
-        function onFrame({ session, frame, refSpace }) {
+        // `presses` are the press counts by hand that `countPresses` returned in this frame
+        function onFrame({ session, frame, refSpace, everyFrame: presses }) {
           // Gather controllers from input sources and update axes
           const controllers = { left: null, right: null };
           for (let inputSource of session.inputSources) {
             if (inputSource.gripSpace && (inputSource.handedness === 'left' || inputSource.handedness === 'right')) {
-              const controller = controllerInFrame(inputSource, frame, refSpace, pressCounters[inputSource.handedness]);
+              const controller = controllerInFrame(inputSource, frame, refSpace);
               if (controller === null) continue;
-              const { position: pos, orientation: orient, values, presses } = controller;
+              const { position: pos, orientation: orient, values } = controller;
               const buttons = bendQuestTrigger(values, inputSource.profiles);
               controllers[inputSource.handedness] = controllerSample(
-                [pos.x, pos.y, pos.z], [orient.w, orient.x, orient.y, orient.z], buttons, presses,
+                [pos.x, pos.y, pos.z], [orient.w, orient.x, orient.y, orient.z], buttons, presses[inputSource.handedness],
               );
               const axesGroup = controllerAxes[inputSource.handedness];
               if (axesGroup) {
