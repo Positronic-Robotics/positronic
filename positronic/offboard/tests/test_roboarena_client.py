@@ -50,6 +50,24 @@ def test_a_failed_exchange_drops_the_connection_and_raises(exchange, failure):
 
 
 @pytest.mark.parametrize(
+    ('exchange', 'limit'),
+    [
+        (lambda client: client.infer({}), roboarena.INFER_TIMEOUT_S),
+        (lambda client: client.reset(session_id='an-episode'), roboarena.RESET_TIMEOUT_S),
+    ],
+    ids=['infer', 'reset'],
+)
+def test_the_send_and_the_answer_of_an_exchange_share_its_timeout(exchange, limit, fake_clock):
+    """Each half fits the timeout alone, and the two together do not."""
+    connection = fake_clock.connection((limit * 0.6, serialize({})), send_s=limit * 0.6)
+
+    with pytest.raises(TimeoutError):
+        exchange(_client(connection))
+
+    assert fake_clock.now == limit
+
+
+@pytest.mark.parametrize(
     'failure', [TimeoutError('timed out'), wire.PeerDisconnected('gone'), roboarena_wire.TextAnswer('x')]
 )
 def test_a_handshake_that_fails_closes_the_connection_it_opened_and_raises(failure):

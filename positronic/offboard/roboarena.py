@@ -110,9 +110,10 @@ class RoboarenaClient:
         if self._connection is None:
             self.connect()
         assert self._connection is not None
+        deadline = time.monotonic() + INFER_TIMEOUT_S
         try:
-            self._connection.send(serialize({**observation, ENDPOINT: INFER}))
-            answer = self._connection.recv(timeout=INFER_TIMEOUT_S)
+            self._connection.send(serialize({**observation, ENDPOINT: INFER}), timeout=time_left(deadline))
+            answer = self._connection.recv(timeout=time_left(deadline))
         except BaseException:
             # A reply that arrives after this read gave up stays queued, and the next inference reads it as its own.
             self.close()
@@ -130,9 +131,10 @@ class RoboarenaClient:
         frame: dict[str, Any] = {ENDPOINT: RESET}
         if session_id is not None:
             frame[SESSION_ID] = session_id
+        deadline = time.monotonic() + RESET_TIMEOUT_S
         try:
-            self._connection.send(serialize(frame))
-            self._connection.recv(timeout=RESET_TIMEOUT_S)
+            self._connection.send(serialize(frame), timeout=time_left(deadline))
+            self._connection.recv(timeout=time_left(deadline))
         except roboarena_wire.TextAnswer as e:
             # The peer ends the exchange with any text, so this connection carries nothing more.
             self.close()

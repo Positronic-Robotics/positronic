@@ -76,9 +76,9 @@ class ModalClientConnection(wire.ClientConnection):
         self._release: Callable[[bool], None] | None = release
         self._dropped = False
 
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
         try:
-            self._inner.send(message)
+            self._inner.send(message, timeout)
         except wire.PeerDisconnected:
             self._dropped = True
             raise

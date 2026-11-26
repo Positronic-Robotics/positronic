@@ -59,7 +59,7 @@ MOLMO_CONFIG = '.sim.molmo.benchmarks'
 MOLMO_TASK = 'franka_pick_droid_mini'
 MOLMO_EPISODE_INDEX_KEY = 'molmo.episode_index'
 MOLMO_SCORING = Scoring(labelers=(MOLMO_LABELER,), primary=MeanEpisodeScore())
-MOLMO_POSITRONIC_REVISION = '32cd92e423046e1c58d0190ba1909881ac21db44'
+MOLMO_POSITRONIC_REVISION = 'f3059a85e23c04db3bdba989a334e870d3a1d399'
 # `SuccessProfile.STRICT_V1` of `positronic/simulator/molmo_spaces/success_profile.py`, at that revision.
 MOLMO_STRICT_SUCCESS_PROFILE = 'strict_v1'
 
