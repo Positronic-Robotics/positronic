@@ -108,11 +108,9 @@ def test_the_headset_server_logs_through_the_process_handlers():
         assert root.handlers == handlers
 
 
-def test_the_phone_page_for_teleop_redirects_to_its_teleop_query():
-    with _served_webxr(Frontend.IPHONE_TELEOP) as base:
-        bare = httpx.get(base + '/', timeout=1.0)
-        assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
-        assert httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0).status_code == 200
+def test_the_phone_page_is_served_at_the_root():
+    with _served_webxr(Frontend.PHONE) as base:
+        assert httpx.get(base + '/', timeout=1.0).status_code == 200
 
 
 @pytest.mark.parametrize(('preset', 'session'), [(cfg_webxr.oculus, 'immersive-ar'), (cfg_webxr.psvr2, 'immersive-vr')])
@@ -125,15 +123,16 @@ def test_the_headset_page_serves_the_session_mode_of_its_preset(preset, session)
         assert script.text == f'export const SESSION_MODE = "{session}";\n'
 
 
-def test_the_headset_page_drops_a_query():
-    with _served_webxr() as base:
-        stale = httpx.get(f'{base}/?mode=vr', timeout=1.0)
+@pytest.mark.parametrize('frontend', list(Frontend))
+def test_the_page_drops_a_query(frontend):
+    with _served_webxr(frontend) as base:
+        stale = httpx.get(f'{base}/?mode=teleop', timeout=1.0)
         assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
 def test_a_vr_session_on_the_phone_page_is_refused():
     with pytest.raises(ValueError, match='session_mode VR needs the headset frontend'):
-        WebXR(port=free_port(), frontend=Frontend.IPHONE, session_mode=SessionMode.VR)
+        WebXR(port=free_port(), frontend=Frontend.PHONE, session_mode=SessionMode.VR)
 
 
 def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
@@ -160,7 +159,7 @@ def test_a_video_rate_that_is_not_a_positive_integer_is_refused(fps):
 
 
 def test_the_page_state_is_empty_until_something_sends_one(world):
-    served = WebXR(port=free_port(), frontend=Frontend.IPHONE_TELEOP, use_https=False)
+    served = WebXR(port=free_port(), frontend=Frontend.PHONE, use_https=False)
     emitter, receiver = world.local_pipe()
     served.page_state._bind(receiver)
     with _served_webxr(webxr=served) as base:
@@ -322,13 +321,6 @@ def test_a_controller_message_refuses_a_controller_with_fewer_button_values_than
         webxr.controller_message(
             {webxr.RIGHT: Transform3D()}, {webxr.RIGHT: webxr.ControllerButtons((0.0,) * 5, (0,) * 5)}
         )
-
-
-def test_the_plain_phone_page_drops_the_teleop_query():
-    with _served_webxr(Frontend.IPHONE) as base:
-        assert httpx.get(base + '/', timeout=1.0).status_code == 200
-        stale = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
-        assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
 def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binary_at_the_video_rate(world):
