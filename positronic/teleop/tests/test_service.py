@@ -142,8 +142,8 @@ class TestButtonMap:
         assert _map(HOLD_SEC).ready_answer(_buttons(), 0) is None
 
     @pytest.mark.parametrize('threshold', [0.0, -0.1, float('nan'), 1.5])
-    def test_a_press_threshold_outside_zero_to_one_is_refused(self, threshold):
-        with pytest.raises(ValueError, match='press_threshold must be in'):
+    def test_a_hold_threshold_outside_zero_to_one_is_refused(self, threshold):
+        with pytest.raises(ValueError, match='hold_threshold must be in'):
             ButtonMap(HOLD_SEC, threshold)
 
     @pytest.mark.parametrize('hold_sec', [0.0, float('nan'), float('inf')])
@@ -175,8 +175,8 @@ class TestButtonMap:
         assert buttons.events(_buttons(stick=1.0), 300_000_000) == [Event.GIVE_UP]
         assert buttons.events(_buttons(stick=1.0), 600_000_000) == []
 
-    def test_a_value_below_the_press_threshold_holds_nothing(self):
-        buttons = _map(HOLD_SEC, press_threshold=0.9)
+    def test_a_value_below_the_hold_threshold_holds_nothing(self):
+        buttons = _map(HOLD_SEC, hold_threshold=0.9)
         assert buttons.events(_buttons(b=0.8), 0) == []
         assert buttons.events(_buttons(b=0.8), 300_000_000) == []
         assert buttons.events(_buttons(b=0.95), 310_000_000) == []

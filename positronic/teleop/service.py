@@ -113,21 +113,21 @@ class ButtonMap:
     - The trigger: the grip.
 
     It reads only ``buttons``: the left controller reads only X, because the headset page uses its Y. A press is a step
-    of the press count of the button, and a hold is a value at the press threshold for ``hold_sec``.
+    of the press count of the button, and a hold is a value at ``hold_threshold`` or above for ``hold_sec``.
     """
 
     def __init__(
         self,
         hold_sec: float,
-        press_threshold: float = 0.6,
+        hold_threshold: float = 0.6,
         buttons: Sequence[Button] = (Button.STICK, Button.A, Button.B),
     ):
-        if not 0 < press_threshold <= 1:
-            raise ValueError(f'press_threshold must be in (0, 1], got {press_threshold}')
+        if not 0 < hold_threshold <= 1:
+            raise ValueError(f'hold_threshold must be in (0, 1], got {hold_threshold}')
         check_finite_positive(hold_sec, 'hold_sec')
         self._hold_ns = round(hold_sec * 1e9)
-        # A button whose value is at least this is down.
-        self._press_threshold = press_threshold
+        # A button whose value is at least this is down for a hold. A press comes from the press count alone.
+        self._hold_threshold = hold_threshold
         # The time at which each button went down, while it is down.
         self._down_since: dict[Button, int] = {}
         # The buttons whose press did something already, until they go up.
@@ -142,7 +142,7 @@ class ButtonMap:
         sample. A sample with a count that went down, or with another number of counts, is of a page that loaded
         again: all its counts become the counts to count from, and it presses nothing."""
         for button in self._read:
-            if buttons.values[button] < self._press_threshold:
+            if buttons.values[button] < self._hold_threshold:
                 self._down_since.pop(button, None)
                 self._used.discard(button)
             elif button not in self._down_since:
@@ -312,7 +312,7 @@ class TeleopService:
         ready_limit: float,
         silence_limit: float,
         hold_sec: float,
-        press_threshold: float = 0.6,
+        hold_threshold: float = 0.6,
         auth_token: str | None = None,
         cameras: Sequence[str] = (),
         controller_axes: geom.Rotation | None = CONTROLLER_AXES,
@@ -328,8 +328,8 @@ class TeleopService:
         self.ready_limit = ready_limit
         self.silence_limit = silence_limit
         self._buttons = {
-            RIGHT: ButtonMap(hold_sec, press_threshold),
-            LEFT: ButtonMap(hold_sec, press_threshold, (Button.X,)),
+            RIGHT: ButtonMap(hold_sec, hold_threshold),
+            LEFT: ButtonMap(hold_sec, hold_threshold, (Button.X,)),
         }
         self._changed = threading.Condition()
         self._sample = _Sample(0, {}, {})
