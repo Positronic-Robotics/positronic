@@ -181,13 +181,10 @@ _GRIPPER_TYPE, _ARM_TYPE = 'gripper_type', 'arm_type'
 _GRIPPER_FRICTION_NM = 0.3
 
 
-def _cap_gripper_force(chain: Any, tuning: GraspTuning | None, cap_n: Callable[[], float | None]) -> None:
+def _limit_gripper(chain: Any, grasp_tuning: GraspTuning | None, cap_n: Callable[[], float | None]) -> None:
     """Cap the closing torque that the P-D loop of the gripper motor asks for, in each ``update`` of i2rt's hardware
     ``chain``, after its gripper force limiter. The cap is the torque at which that limiter holds a stalled gripper with
     ``cap_n()`` newtons. None sets no cap. The arm motors and an opening gripper keep the commands of i2rt.
-
-    With no ``tuning``, the cap acts at all times. With a ``tuning``, a ``Grasp`` closes the gripper and applies the cap
-    only after a touch.
 
     The control thread of i2rt calls ``cap_n`` once per update. A chain that reports no gripper force limit, such as
     i2rt's sim chain, has no limiter and gets no cap. A chain that lacks a member of ``_GripperLoop`` raises before
@@ -201,7 +198,7 @@ def _cap_gripper_force(chain: Any, tuning: GraspTuning | None, cap_n: Callable[[
         raise TypeError(f'{type(chain).__name__} lacks a member of _GripperLoop, which the gripper force cap needs')
     gripper, (closed, opened) = info[_GRIPPER_INDEX], info[_GRIPPER_LIMITS]
     closing = np.sign(closed - opened)  # the sign of a closing move in motor radians
-    grasp = None if tuning is None else Grasp(tuning, closed, opened)
+    grasp = None if grasp_tuning is None else Grasp(grasp_tuning, closing, abs(opened - closed))
     *_, force_to_torque = info[_GRIPPER_TYPE].get_gripper_limiter_params(info[_ARM_TYPE])
     send = chain._update_joint_state
 
@@ -869,9 +866,9 @@ class Robot(pimm.ControlSystem):
         :param grasp_tuning: How the gripper closes on an object on this arm. None keeps the close rate of i2rt and
             finds no touch. i2rt's sim chain does not run it.
         :param gripper_force_cap_n: The most force in newtons that the gripper closes with, until the
-            ``gripper_force_cap_n`` input carries another cap. With a ``grasp_tuning``, the cap acts only after a touch.
-            None or 0 sets no cap. i2rt's own limiter still holds a stalled gripper with its force limit, which the arm
-            meta names. i2rt's sim chain runs no cap.
+            ``gripper_force_cap_n`` input carries another cap. With a ``grasp_tuning``, the cap acts in the launch of a
+            close and after a touch. None or 0 sets no cap. i2rt's own limiter still holds a stalled gripper with its
+            force limit, which the arm meta names. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
@@ -1012,7 +1009,7 @@ class Robot(pimm.ControlSystem):
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
                 _set_coulomb_friction(vendor, self._compensation, self._sim)
-                _cap_gripper_force(vendor, self._grasp_tuning, lambda: self._gripper_force_cap_n)
+                _limit_gripper(vendor, self._grasp_tuning, lambda: self._gripper_force_cap_n)
                 self.robot_meta.emit(meta)
                 arm.emit_meta()
                 joints, grip, missed = yield from arm.go_to_start()

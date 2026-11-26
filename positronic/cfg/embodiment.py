@@ -218,8 +218,7 @@ yam_bimanual_yambox = yam_bimanual.override(
             ),
         ),
     ),
-    # On this station, a hold of 20 N after a touch kept a thin plastic cup whole, and held a block and a 0.5 L bottle
-    # against a pull by hand.
+    # A test on this station checked the hold of 20 N after a touch
     grasp_tuning=dict.fromkeys(keys.BIMANUAL_ARMS, positronic.cfg.hardware.roboarm.yam_grasp_tuning),
     gripper_force_cap_n=20.0,
     cameras={
