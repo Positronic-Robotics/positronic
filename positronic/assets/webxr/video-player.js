@@ -22,12 +22,17 @@ export class WebXRVideoPlayer {
         this.watchdog = null;
         this.scene = null;
         this.camera = null;
+        this.xr = null;
+        this.keepSocket = this.keepSocket.bind(this);
+        this.watchSession = this.watchSession.bind(this);
     }
 
-    async init(scene, camera) {
+    // `xr` is the XR manager of the renderer (`renderer.xr`)
+    async init(scene, camera, xr) {
         console.log("Initializing WebXRVideoPlayer");
         this.scene = scene;
         this.camera = camera;
+        this.xr = xr;
 
         // The decoder draws each frame on this canvas, and the plane shows the canvas
         this.canvas = document.createElement('canvas');
@@ -84,10 +89,10 @@ export class WebXRVideoPlayer {
         this.applyMode();
 
 
-        // Connect to video websocket
-        console.log("Connecting to video websocket...");
-        this.connectWebSocket();
-        this.watchdog = setInterval(() => this.replaceLostSocket(), 1000);
+        xr.addEventListener('sessionstart', this.watchSession);
+        xr.addEventListener('sessionend', this.keepSocket);
+        this.keepSocket();
+        this.watchdog = setInterval(this.keepSocket, 1000);
     }
 
     connectWebSocket() {
@@ -164,7 +169,28 @@ export class WebXRVideoPlayer {
         this.videoPlane.scale.x = PANEL_HEIGHT_M * this.canvas.width / this.canvas.height;
     }
 
-    replaceLostSocket() {
+    watchSession() {
+        this.xr.getSession().addEventListener('visibilitychange', this.keepSocket);
+        this.keepSocket();
+    }
+
+    // The page shows the plane only in an XR session. The session is hidden while the user cannot see it, for example
+    // with the headset off
+    showsVideo() {
+        return this.xr.isPresenting && this.xr.getSession().visibilityState !== 'hidden';
+    }
+
+    // The page keeps a socket open only while it shows the video: the service encodes and sends the video for each one
+    keepSocket() {
+        if (!this.showsVideo()) {
+            this.closeSocket();
+            return;
+        }
+        if (this.ws === null) {
+            console.log("Connecting to video websocket...");
+            this.connectWebSocket();
+            return;
+        }
         // The service sends a frame on every view tick. A socket with no frame for this long is lost: the page never
         // sends on it, so a connection that dies with no close frame never closes on the page.
         const frameTimeoutMs = 3000;
@@ -173,6 +199,13 @@ export class WebXRVideoPlayer {
         console.log(`Video WebSocket lost (no frame for ${Math.round(silentMs)} ms), reconnecting...`);
         this.ws.close();
         this.connectWebSocket();
+    }
+
+    closeSocket() {
+        if (this.ws === null) return;
+        console.log("Closing video websocket: the page shows no video");
+        this.ws.close();
+        this.ws = null;
     }
 
     update() {
@@ -223,9 +256,10 @@ export class WebXRVideoPlayer {
 
     dispose() {
         clearInterval(this.watchdog);
-        if (this.ws) {
-            this.ws.close();
-        }
+        this.xr.removeEventListener('sessionstart', this.watchSession);
+        this.xr.removeEventListener('sessionend', this.keepSocket);
+        this.xr.getSession()?.removeEventListener('visibilitychange', this.keepSocket);
+        this.closeSocket();
         if (this.decoder && this.decoder.state !== 'closed') {
             this.decoder.close();
         }

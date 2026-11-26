@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import socket
+import threading
 import time
 import types
 from collections.abc import Callable, Iterator
@@ -14,8 +15,10 @@ import httpx
 import numpy as np
 import psutil
 import pytest
+import uvicorn
 from fastapi import FastAPI
 from uvicorn.protocols.utils import ClientDisconnected
+from websockets.frames import CloseCode
 from websockets.sync import client as ws_client
 
 import pimm
@@ -108,9 +111,12 @@ def video_with_a_frame(world, caplog) -> WebXR:
     return served
 
 
-def _assert_the_page_closed_the_video_socket(caplog) -> None:
+def _video_close_lines(caplog) -> list[str]:
+    """The lines of the driver log after the accept line of the video socket. Fails on an ERROR in the log."""
     assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
-    assert 'The page closed the video socket' in caplog.messages
+    lines = [r.getMessage() for r in caplog.records if r.name == webxr.__name__]
+    assert lines[:1] == ['Video WebSocket connection accepted']
+    return lines[1:]
 
 
 def test_a_page_that_closes_the_video_socket_while_a_frame_waits_ends_the_stream_with_no_error(
@@ -129,7 +135,7 @@ def test_a_page_that_closes_the_video_socket_while_a_frame_waits_ends_the_stream
             raise RuntimeError("Unexpected ASGI message 'websocket.send', after sending 'websocket.close'.")
 
     _run_video_route(video_with_a_frame, receive, send)
-    _assert_the_page_closed_the_video_socket(caplog)
+    assert _video_close_lines(caplog) == ['The page closed the video socket (code 1000)']
 
 
 def test_a_page_that_closes_the_video_socket_during_a_send_of_a_frame_ends_the_stream_with_no_error(
@@ -159,26 +165,94 @@ def test_a_page_that_closes_the_video_socket_during_a_send_of_a_frame_ends_the_s
 
     _run_video_route(video_with_a_frame, receive, send)
     assert len(sent) == 1
-    _assert_the_page_closed_the_video_socket(caplog)
+    assert _video_close_lines(caplog) == ['The page closed the video socket (code 1000)']
 
 
-def test_a_page_that_drops_the_video_socket_with_no_close_frame_ends_the_stream_with_no_error(
-    video_with_a_frame, caplog
-):
+def _run_video_route_whose_send_fails(served: WebXR, close_code: int) -> None:
+    """``served``'s ``/video`` route on a connection whose first send fails. The receive then gives ``close_code``."""
     incoming = iter([{'type': 'websocket.connect'}])
+    send_failed = asyncio.Event()
 
     async def receive():
         message = next(incoming, None)
         if message is None:
-            await asyncio.Event().wait()
+            await send_failed.wait()
+            return {'type': 'websocket.disconnect', 'code': close_code}
         return message
 
     async def send(message):
         if message['type'] == 'websocket.send':
+            send_failed.set()
             raise ClientDisconnected()
 
-    _run_video_route(video_with_a_frame, receive, send)
-    _assert_the_page_closed_the_video_socket(caplog)
+    _run_video_route(served, receive, send)
+
+
+_LOST_PAGE_LINE = 'The video socket lost the page, which went away or did not answer the keepalive ping (code 1006)'
+
+
+def test_a_page_that_drops_the_video_socket_with_no_close_frame_ends_the_stream_as_a_lost_page(
+    video_with_a_frame, caplog
+):
+    _run_video_route_whose_send_fails(video_with_a_frame, CloseCode.ABNORMAL_CLOSURE)
+    assert _video_close_lines(caplog) == [_LOST_PAGE_LINE]
+
+
+def test_a_send_that_fails_after_the_close_frame_of_the_page_logs_the_close_of_the_page(video_with_a_frame, caplog):
+    _run_video_route_whose_send_fails(video_with_a_frame, CloseCode.NORMAL_CLOSURE)
+    assert _video_close_lines(caplog) == ['The page closed the video socket (code 1000)']
+
+
+@contextlib.contextmanager
+def _served_video_route(served: WebXR) -> Iterator[None]:
+    """``served``'s ``/video`` route on a uvicorn server that pings each socket after 0.2 s of quiet.
+
+    A socket with no pong 0.2 s after the ping fails the keepalive.
+    """
+    app = FastAPI()
+    served._add_video_route(app, cast(pimm.SignalReceiver, types.SimpleNamespace(value=False)))
+    config = uvicorn.Config(
+        app, host='127.0.0.1', port=served.port, log_level='warning', ws_ping_interval=0.2, ws_ping_timeout=0.2
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not server.started:
+            assert time.monotonic() < deadline, 'the video server never started'
+            time.sleep(0.05)
+        yield
+    finally:
+        server.should_exit = True
+        thread.join()
+
+
+def test_a_page_that_stops_to_answer_pings_on_the_video_socket_ends_the_stream_as_a_lost_page(
+    video_with_a_frame, caplog
+):
+    handshake = (
+        'GET /video HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
+    )
+    with (
+        _served_video_route(video_with_a_frame),
+        socket.create_connection(('127.0.0.1', video_with_a_frame.port), timeout=5) as page,
+    ):
+        page.sendall(handshake.encode())
+        # The page reads up to the end of the answer to its handshake and then stops, so it answers no ping
+        answer = b''
+        while b'\r\n\r\n' not in answer:
+            chunk = page.recv(4096)
+            assert chunk, 'the server closed the socket during the handshake'
+            answer += chunk
+        assert answer.startswith(b'HTTP/1.1 101 ')
+        # uvicorn waits 10 s for the page to close the TCP connection after the keepalive fails
+        deadline = time.monotonic() + 20
+        while not _video_close_lines(caplog):
+            assert time.monotonic() < deadline, 'the video socket never closed'
+            time.sleep(0.05)
+    assert _video_close_lines(caplog) == [_LOST_PAGE_LINE]
 
 
 @pytest.mark.parametrize(
