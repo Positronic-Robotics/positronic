@@ -66,7 +66,8 @@ export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'lo
 
   function sendControllers(controllers) {
     if (websocket.readyState !== WebSocket.OPEN) return;
-    const payload = { controllers, timestamp: Date.now() };
+    // The timestamp is on the monotonic clock of the page, so that the service can find a message that comes late
+    const payload = { controllers, timestamp: performance.now() };
     websocket.send(JSON.stringify(payload));
   }
 

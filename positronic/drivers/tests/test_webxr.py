@@ -247,28 +247,54 @@ def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(
     assert buttons.emitted[1][1] == {webxr.LEFT: None, webxr.RIGHT: None}
 
 
-def test_a_press_that_the_page_counted_while_its_socket_was_closed_does_not_count(world):
+def _presses_of_a(world, connections: list[list[tuple[int, float]]]) -> list[int]:
+    """The presses of A that the controller stream emits for ``connections``, one after the other. Each message of a
+    connection is the count of A presses on the page and how many milliseconds before it reaches the stream the page
+    sent it. The page clock is far from the clock of the stream."""
     served = WebXR(port=free_port(), use_https=False)
     buttons = RecordingEmitter()
     served.controller_positions._bind(RecordingEmitter(), clock=world.clock)
     served.buttons._bind(buttons, clock=world.clock)
+    page_clock_ms = -1e9
 
-    def message(presses_of_a: int) -> str:
+    def message(presses_of_a: int, delay_ms: float) -> str:
         state = webxr.ControllerButtons((0.0,) * 6, (0, 0, 0, 0, presses_of_a, 0))
-        return json.dumps(webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: state}))
+        sent_ms = time.monotonic() * 1000 + page_clock_ms - delay_ms
+        return json.dumps(webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: state}, sent_ms))
 
     with _served_webxr(webxr=served) as base:
-        # The page counts 3 presses of A while it is not connected
-        for counts in ([1, 2], [5, 6]):
+        for messages in connections:
             with ws_client.connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as ws:
-                sent = len(buttons.emitted) + len(counts)
-                for count in counts:
-                    ws.send(message(count))
+                sent = len(buttons.emitted) + len(messages)
+                for presses_of_a, delay_ms in messages:
+                    ws.send(message(presses_of_a, delay_ms))
                 deadline = time.monotonic() + 5
                 while len(buttons.emitted) < sent:
                     assert time.monotonic() < deadline, 'the stream emitted no sample'
                     time.sleep(0.01)
-    assert [sample[webxr.RIGHT].presses[4] for _, sample in buttons.emitted] == [0, 1, 0, 1]
+    return [sample[webxr.RIGHT].presses[4] for _, sample in buttons.emitted]
+
+
+def test_a_press_that_the_page_counted_while_its_socket_was_closed_does_not_count(world):
+    # The page counts 3 presses of A while it is not connected
+    assert _presses_of_a(world, [[(1, 0), (2, 0)], [(5, 0), (6, 0)]]) == [0, 1, 0, 1]
+
+
+def test_the_presses_of_a_backlog_after_a_stall_of_the_network_do_not_count(world):
+    # The page sends 3 presses during a stall of 3 s, and they all come at once when the stall ends
+    backlog = [(2, 3000), (3, 2000), (4, 1000)]
+    assert _presses_of_a(world, [[(0, 0), (1, 0), *backlog, (5, 0)]]) == [0, 1, 0, 0, 0, 1]
+
+
+def test_a_press_right_after_a_slow_stretch_that_is_not_stale_counts(world):
+    # Each message comes later than the one before, but never more than the stale limit of 500 ms later than the first
+    assert _presses_of_a(world, [[(0, 0), (0, 200), (0, 400), (1, 400)]]) == [0, 0, 0, 1]
+
+
+@pytest.mark.parametrize('limit', [0.0, -0.5, float('inf'), float('nan')])
+def test_a_stale_limit_that_is_not_finite_and_positive_is_refused(limit):
+    with pytest.raises(ValueError, match='stale_limit must be finite and positive'):
+        WebXR(port=free_port(), stale_limit=limit)
 
 
 def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():

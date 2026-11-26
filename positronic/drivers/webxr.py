@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 import traceback
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -29,9 +30,10 @@ LEFT, RIGHT = 'left', 'right'
 # The routes of the page state and of the controller stream.
 STATE_PATH, CONTROLLER_PATH, INPUT_PATH = '/state', '/ws', '/input'
 
-# The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion.
+# The fields of a message of the page on ``/ws``. The orientation is a wxyz quaternion. The timestamp is the time in
+# milliseconds on the monotonic clock of the page at which the page sent the message.
 _CONTROLLERS, _POSITION, _ORIENTATION, _BUTTONS = 'controllers', 'position', 'orientation', 'buttons'
-_PRESSES = 'presses'
+_PRESSES, _TIMESTAMP = 'presses', 'timestamp'
 # The button values of a controller in the xr-standard gamepad layout, up to B or Y at index 5
 _CONTROLLER_BUTTONS = 6
 
@@ -77,10 +79,10 @@ def parse_controller_message(
 
 
 def controller_message(
-    positions: Mapping[str, geom.Transform3D], buttons: Mapping[str, ControllerButtons]
+    positions: Mapping[str, geom.Transform3D], buttons: Mapping[str, ControllerButtons], sent_ms: float | None = None
 ) -> dict[str, Any]:
-    """The message of the page on ``/ws`` for the controllers that ``positions`` and ``buttons`` name. The page
-    does not track the others."""
+    """The message of the page on ``/ws`` for the controllers that ``positions`` and ``buttons`` name, sent at
+    ``sent_ms`` on a monotonic clock in milliseconds, or now. The page does not track the others."""
     if positions.keys() != buttons.keys():
         raise ValueError(
             f'positions and buttons must name the same controllers, got {list(positions)}, {list(buttons)}'
@@ -96,7 +98,8 @@ def controller_message(
         }
         for side, pose in positions.items()
     }
-    return {_CONTROLLERS: {side: tracked.get(side) for side in (LEFT, RIGHT)}}
+    sent = time.monotonic() * 1000 if sent_ms is None else sent_ms
+    return {_CONTROLLERS: {side: tracked.get(side) for side in (LEFT, RIGHT)}, _TIMESTAMP: sent}
 
 
 def _get_or_create_ssl_files(port: int, keyfile: str, certfile: str) -> tuple[str, str]:
@@ -173,21 +176,41 @@ def _build_access_url(host: str, port: int, use_https: bool) -> str:
 
 
 class _ConnectionPresses:
-    """The press counts of one connection on ``/ws``, from the counts in the first message of each controller in it.
-    So a press that the page counted before it connected, as while its socket was closed, does nothing."""
+    """The press counts of one connection on ``/ws``, from a base for each controller.
 
-    def __init__(self) -> None:
-        self._first: dict[str, tuple[int, ...]] = {}
+    The first message of a controller sets its base, so a press that the page counted before it connected does
+    nothing. The delay of a message is its arrival time less its timestamp, so it holds the offset of the two clocks
+    too. A message whose delay is more than ``stale_limit`` seconds above the least delay of the connection is stale,
+    as in a backlog after a stall of the network: its counts become the base, so the presses of the stall do nothing.
+    Only differences of delays count, so the clocks need not agree."""
 
-    def since_first(self, side: str, buttons: ControllerButtons) -> ControllerButtons:
-        """``buttons`` of the controller ``side`` with the presses since its first message. Counts that go down, or a
-        new number of counts, start the counts again."""
-        first = self._first.setdefault(side, buttons.presses)
-        if len(first) != len(buttons.presses) or any(
-            now < then for now, then in zip(buttons.presses, first, strict=True)
+    def __init__(self, stale_limit: float) -> None:
+        self._stale_ms = stale_limit * 1000
+        self._least_delay_ms: float | None = None
+        self._base: dict[str, tuple[int, ...]] = {}
+
+    def counted(
+        self, buttons: Mapping[str, ControllerButtons | None], sent_ms: float, received_ms: float
+    ) -> dict[str, ControllerButtons | None]:
+        """``buttons`` of a message sent at ``sent_ms`` by the page clock and received at ``received_ms``, with the
+        presses since the base of each controller."""
+        delay_ms = received_ms - sent_ms
+        self._least_delay_ms = delay_ms if self._least_delay_ms is None else min(self._least_delay_ms, delay_ms)
+        stale = delay_ms - self._least_delay_ms > self._stale_ms
+        return {
+            side: None if state is None else self._since_base(side, state, stale) for side, state in buttons.items()
+        }
+
+    def _since_base(self, side: str, buttons: ControllerButtons, stale: bool) -> ControllerButtons:
+        """A stale message, counts that go down, or a new number of counts set the base again."""
+        base = self._base.setdefault(side, buttons.presses)
+        if (
+            stale
+            or len(base) != len(buttons.presses)
+            or any(now < then for now, then in zip(buttons.presses, base, strict=True))
         ):
-            first = self._first[side] = buttons.presses
-        return replace(buttons, presses=tuple(now - then for now, then in zip(buttons.presses, first, strict=True)))
+            base = self._base[side] = buttons.presses
+        return replace(buttons, presses=tuple(now - then for now, then in zip(buttons.presses, base, strict=True)))
 
 
 class WebXR(pimm.ControlSystem):
@@ -221,6 +244,8 @@ class WebXR(pimm.ControlSystem):
     - frontend: the page to serve, a ``Frontend``.
     - session_mode: the WebXR session that the page requests, a ``SessionMode``.
     - use_https: enable HTTPS; set False for iPhone dev.
+    - stale_limit: how many seconds later than the least delay of its connection a message on ``/ws`` may come and
+      still count its presses. A later message, as in a backlog after a stall of the network, presses nothing.
     - video_bitrate: the target bit rate of the video stream, in bits per second.
     - video_fps: the frame rate of the frames that ``frame`` receives. The video stream sends a key frame once each
       second.
@@ -235,11 +260,13 @@ class WebXR(pimm.ControlSystem):
         session_mode: SessionMode = SessionMode.AR,
         use_https: bool = True,
         sensitivity: float = 1.0,
+        stale_limit: float = 0.5,
         video_bitrate: int = 4_000_000,
         video_fps: int = 30,
     ):
         utils.check_positive_int(video_bitrate, 'video_bitrate')
         utils.check_positive_int(video_fps, 'video_fps')
+        utils.check_finite_positive(stale_limit, 'stale_limit')
         if session_mode is SessionMode.VR and frontend is not Frontend.HEADSET:
             raise ValueError(f'session_mode VR needs the headset frontend, got {frontend!r}')
         self.port = port
@@ -258,6 +285,7 @@ class WebXR(pimm.ControlSystem):
         self.controller_positions = pimm.ControlSystemEmitter(self)
         self.buttons = pimm.ControlSystemEmitter(self)
         self.sensitivity = sensitivity
+        self.stale_limit = stale_limit
         self.video_bitrate = video_bitrate
         self.video_fps = video_fps
 
@@ -364,18 +392,16 @@ class WebXR(pimm.ControlSystem):
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
             logger.info('WebSocket connection accepted')
-            presses = _ConnectionPresses()
+            presses = _ConnectionPresses(self.stale_limit)
             try:
                 fps = pimm.utils.RateCounter('Websocket')
                 while not should_stop.value:
                     try:
                         # Use asyncio.wait_for with timeout to avoid blocking indefinitely
                         data = await asyncio.wait_for(websocket.receive_json(), timeout=1)
+                        received_ms = time.monotonic() * 1000
                         controller_positions, buttons = parse_controller_message(data)
-                        buttons = {
-                            side: None if state is None else presses.since_first(side, state)
-                            for side, state in buttons.items()
-                        }
+                        buttons = presses.counted(buttons, float(data[_TIMESTAMP]), received_ms)
 
                         # apply scaling
                         for transform in controller_positions.values():
