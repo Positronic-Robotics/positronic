@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import arm_fault
+import contact_sensors
 import cv2  # noqa: F401 -- robolab requires cv2 imported before isaaclab
 import keys
 import link_pose
@@ -110,6 +111,7 @@ simulation_app = AppLauncher(args).app
 
 import omni.kit.app  # noqa: E402
 import omni.timeline  # noqa: E402
+from isaaclab.sensors import ContactSensorCfg  # noqa: E402  # pyright: ignore[reportMissingImports]
 from isaaclab.utils.math import (  # noqa: E402
     matrix_from_quat,
     quat_from_matrix,
@@ -261,25 +263,25 @@ class RobolabEnv(EnvProtocol):
             self._register(task)
             self._registered.add(task)
         env_name = get_envs(task=task)[0]
-        scene: Any = env_name
+        # ``create_env`` parses a named scene with these arguments and builds its registered entry point,
+        # ``RobolabEnv``, from the cfg; a parsed cfg goes to the same class.
+        scene = parse_env_cfg(
+            env_name,
+            device=args.device,
+            seed=0,
+            num_envs=self._num_envs,
+            env_spacing=None,
+            eye=None,
+            lookat=None,
+            use_fabric=True,
+        )
         if episode_length_s is not None:
-            # ``create_env`` parses a named scene with these arguments and builds its registered entry point,
-            # ``RobolabEnv``, from the cfg; a parsed cfg goes to the same class, with the episode length replaced.
-            scene = parse_env_cfg(
-                env_name,
-                device=args.device,
-                seed=0,
-                num_envs=self._num_envs,
-                env_spacing=None,
-                eye=None,
-                lookat=None,
-                use_fabric=True,
-            )
             scene.episode_length_s = episode_length_s
             # RoboLab takes a time-out within two control steps for a physics artifact and resets the clone in
             # place, so such an episode never ends.
             if math.ceil(episode_length_s / (scene.sim.dt * scene.decimation)) <= success_tail.RESET_IN_PLACE_STEPS:
                 raise ValueError(f'an episode of {episode_length_s} s is too short for RoboLab to end it')
+        contact_sensors.make_lazy(scene.scene, ContactSensorCfg)
         self._env, self._env_cfg = create_env(
             scene, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
         )
