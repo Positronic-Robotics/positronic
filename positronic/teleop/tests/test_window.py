@@ -2,6 +2,7 @@ import io
 import re
 import socket
 import time
+from unittest.mock import ANY
 
 import httpx
 import numpy as np
@@ -54,7 +55,21 @@ def waiting(service, socket_path, connect):
 
 
 def test_the_window_says_when_no_trial_waits(window):
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'cameras': []}
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'cameras': [],
+        'tracked': False,
+    }
+
+
+def test_the_status_says_whether_the_service_gets_controller_data(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=60.0, hold_sec=0.2)
+    window = TestClient(window_app(service), base_url='http://127.0.0.1:5006')
+    assert window.get('/status').json()['tracked'] is False
+    service.take_sample({RIGHT: geom.Transform3D()}, {RIGHT: [0.0] * (max(Button) + 1)})
+    assert window.get('/status').json()['tracked'] is True
 
 
 def _ready_from_the_headset(service, waiting) -> None:
@@ -155,7 +170,14 @@ def test_a_policy_that_leaves_mid_trial_leaves_no_old_task_in_the_window(window,
     while service.phase is not Phase.IDLE:
         assert time.monotonic() < deadline, 'the session never ended'
         time.sleep(0.005)
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'cameras': []}
+    # The samples of the trial can be younger than the silence limit.
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'cameras': [],
+        'tracked': ANY,
+    }
 
 
 def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(window, service, waiting):
@@ -175,7 +197,14 @@ def test_the_window_shows_no_trial_after_the_last_session_ends_with_complete(win
     while service.phase is not Phase.IDLE:
         assert time.monotonic() < deadline, 'the session never ended'
         time.sleep(0.005)
-    assert window.get('/status').json() == {'phase': 'idle', 'task': '', 'control': False, 'cameras': []}
+    # The samples of the trial can be younger than the silence limit.
+    assert window.get('/status').json() == {
+        'phase': 'idle',
+        'task': '',
+        'control': False,
+        'cameras': [],
+        'tracked': ANY,
+    }
 
 
 def test_the_window_page_reads_the_fields_of_the_status():

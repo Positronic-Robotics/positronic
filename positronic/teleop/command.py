@@ -41,6 +41,8 @@ class PageState:
     live: tuple[str, ...] = ()
     shown: str | None = None
     chosen: str | None = None
+    # A sample that tracks a controller came within the silence limit of the service
+    tracked: bool = False
 
 
 # The field of a page input that chooses the camera of the headset: a camera name, or null for the camera of the
@@ -123,9 +125,10 @@ class _Headset(pimm.ControlSystem):
     def _send_view(self) -> None:
         self.view.emit(self._service.view(camera=not self._text_only))
         state, cameras = self._service.state(), self._service.cameras()
-        self.page_state.emit(
-            asdict(PageState(state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen))
+        page_state = PageState(
+            state.phase, state.control, cameras.names, cameras.live, cameras.shown, cameras.chosen, state.tracked
         )
+        self.page_state.emit(asdict(page_state))
 
 
 class Notice(Protocol):

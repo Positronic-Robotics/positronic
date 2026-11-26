@@ -211,6 +211,8 @@ class TrialState:
     task: str
     control: bool
     cameras: tuple[str, ...]
+    # A sample that tracks a controller came within the silence limit
+    tracked: bool
 
 
 # The use of Y on the left controller, at the bottom of the view
@@ -311,6 +313,8 @@ class TeleopService:
         }
         self._changed = threading.Condition()
         self._sample = _Sample(0, {}, {})
+        # The `time.monotonic_ns()` instant of the last sample that tracks a controller, or None before the first
+        self._tracked_at_ns: int | None = None
         self._phase = Phase.IDLE
         self._ready: ReadyAnswer | None = None
         # The events since the previous frame, each with the controller that made it
@@ -417,6 +421,8 @@ class TeleopService:
         buttons = {name: buttons[name] for name in controllers}
         with self._changed:
             self._sample = _Sample(now_ns, poses, buttons)
+            if controllers:
+                self._tracked_at_ns = now_ns
             for controller, button_map in self._buttons.items():
                 values = buttons.get(controller)
                 if values is None:
@@ -440,7 +446,10 @@ class TeleopService:
         with self._changed:
             self._forget_an_old_dropped_trial()
             control = any(tracker.on for tracker in self._trackers.values())
-            return TrialState(self._phase, self._task, control, tuple(self._images))
+            tracked = (
+                self._tracked_at_ns is not None and time.monotonic_ns() - self._tracked_at_ns < self.silence_limit * 1e9
+            )
+            return TrialState(self._phase, self._task, control, tuple(self._images), tracked)
 
     def _forget_an_old_dropped_trial(self) -> None:
         """Show no trial once no session can resume it. Hold the lock."""
@@ -649,6 +658,7 @@ class TeleopService:
             self._clear_trial()
             self._phase, self._ready = Phase.READY_WAIT, None
             self._trial_cameras, self._headset_camera = settings.cameras, settings.headset_camera
+            tracked_at_before = self._tracked_at_ns
             while (
                 self._ready is None
                 and not self._stopping
@@ -656,7 +666,7 @@ class TeleopService:
                 and (left := deadline - time.monotonic()) > 0
             ):
                 self._changed.wait(min(left, self.CANCEL_POLL_SEC))
-            ready = self._ready
+            ready, tracked_in_wait = self._ready, self._tracked_at_ns != tracked_at_before
             if ready is ReadyAnswer.READY:
                 self._phase = Phase.RUNNING
                 self._trackers = {
@@ -670,7 +680,8 @@ class TeleopService:
             raise PreparationCancelled('the session closed before the teleoperator was ready')
         if ready is ReadyAnswer.CANCELLED:
             raise TrialNotStarted('the teleoperator cancelled the trial')
-        raise TrialNotStarted('the teleoperator was not ready within the ready limit of the service')
+        not_ready = 'the teleoperator was not ready within the ready limit of the service'
+        raise TrialNotStarted(not_ready if tracked_in_wait else f'{not_ready}, and no controller data came in the wait')
 
     def _newest_sample(self) -> _Sample:
         """The newest sample, or a sample with no pose when the newest is older than the silence limit. Hold the

@@ -104,6 +104,12 @@ slider, so a closed gripper does not close again at the next Control.
 The Quest shows the phase, the task and the control state on its video. The control state of an arm is on green while
 control is on, and on yellow while it is off. The window on the laptop shows the same state, and the control state.
 
+The page sends controller data only in VR, so outside VR a press of B does nothing. `tracked` in `GET /status` of the
+window and in the page state is false when no controller data came in the silence limit (0.5 s). While a trial waits
+for Ready or runs, the window and the headset page show a notice when `tracked` is false. To send controller data again:
+1. On the headset page, press ENTER VR.
+2. If the button shows EXIT VR, press it, reload the page, and press ENTER VR again.
+
 While a trial waits for Ready, the service shows a dialog with a sound on the screen of its computer. The dialog
 comes also when the window is not open, and the service closes it when the wait ends. On macOS the service uses
 `osascript` and `afplay`, and the dialog is in the centre of the screen. On Linux it uses `zenity` on `DISPLAY`, and
@@ -344,7 +350,8 @@ and vary how you come to the object.
 ## Limits
 
 - A Cancel while the trial waits for Ready ends the whole `eval run`. The end of the ready limit does the same. To skip
-  a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up.
+  a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up. When no controller data came in
+  the wait, the error of the ready limit says so.
 - The phone page shows no video. Watch the window on the laptop.
 - MolmoSpaces runs slowly and with jerks on a Mac, and the person feels it.
 - A sim run must charge inference time, as `eval run` does by default. With `--charge_inference_time=False` the sim
