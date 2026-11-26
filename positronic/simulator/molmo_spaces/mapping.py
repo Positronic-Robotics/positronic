@@ -134,8 +134,31 @@ TASK_HORIZON_OVERRIDE_SEC = 'task_horizon_override_sec'
 # The hook file that the server runs, as ``<file name>@sha256:<digest of the bytes it ran>``, or None without one.
 TASK_ENV_HOOK = 'env_hook'
 
+
+class HookFile(NamedTuple):
+    """In a selection and a reset token: a hook file on the server's box, and the SHA-256 digest it must have.
+
+    A selection or a token without these keys gets the default hook, which changes nothing.
+    """
+
+    env_hook: str
+    env_hook_sha256: str
+
+    @classmethod
+    def of(cls, request: dict[str, Any]) -> 'HookFile | None':
+        """The hook file that a selection or a reset token names, or None where it names none."""
+        return cls(*(request[field] for field in cls._fields)) if cls._fields[0] in request else None
+
+    @property
+    def record(self) -> str:
+        """The ``TASK_ENV_HOOK`` value of the hook file."""
+        return f'{Path(self.env_hook).name}@sha256:{self.env_hook_sha256}'
+
+
 META_TASK = 'task'
 META_HOUSE_INDEX = 'house_index'
+# The ``TASK_ENV_HOOK`` value of the hook that the server ran at the reset. A server that predates it states none.
+META_ENV_HOOK = 'env_hook'
 # The ``success_profile.SuccessProfile`` value that judges the episode. A server that predates profiles states none.
 META_SUCCESS_PROFILE = 'success_profile'
 

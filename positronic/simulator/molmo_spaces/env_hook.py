@@ -3,8 +3,9 @@
 This module must work in MolmoSpaces' isolated interpreter without Positronic installed.
 
 A hook file defines ``HOOK``, an ``EnvHook``. The server's interpreter has no positronic, so the file imports the base
-class as ``from env_hook import EnvHook``. The server runs the file before it loads MolmoSpaces, so the file's top level
-can choose the asset packs that MolmoSpaces fetches when it loads.
+class as ``from env_hook import EnvHook``. Each reset token names its hook file, or none for the default hook. The
+server runs a hook file at the first episode that names its digest, after MolmoSpaces has loaded, and keeps the hook
+for each later episode with that digest.
 """
 
 import hashlib
@@ -26,6 +27,9 @@ class EnvHook:
 
     A hook can change the robot only within the bundled FR3 model: its seven arm joints, its kinematics and its 2F-85
     grasp site stay, for example a mount or a gripper detail changes. The eval records the bundled robot model.
+
+    One server runs episodes of several hooks, one episode at a time. A hook changes only the config and the task of
+    its own episode, because the server builds the model, the robot and the renderer of each episode again.
     """
 
     def eval_config(self, cfg: Any, episode: Any) -> None:
@@ -83,4 +87,24 @@ def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
     hook = getattr(module, HOOK_NAME, None)
     if not isinstance(hook, EnvHook):
         raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')
-    return LoadedHook(hook, f'{path.name}@sha256:{digest}')
+    return LoadedHook(hook, mapping.HookFile(str(path), digest).record)
+
+
+class Hooks:
+    """The hooks of a server's episodes: each hook file loads once for each digest, and the server keeps it.
+
+    A server loads one hook file of each name, so two versions of one hook never share the modules they import.
+    """
+
+    def __init__(self) -> None:
+        self._default = load(None)
+        self._loaded: dict[str, LoadedHook] = {}
+
+    def of(self, request: dict[str, Any]) -> LoadedHook:
+        """The hook that a selection or a reset token names, or the default hook where it names none."""
+        hook_file = mapping.HookFile.of(request)
+        if hook_file is None:
+            return self._default
+        if hook_file.env_hook_sha256 not in self._loaded:
+            self._loaded[hook_file.env_hook_sha256] = load(Path(hook_file.env_hook), hook_file.env_hook_sha256)
+        return self._loaded[hook_file.env_hook_sha256]

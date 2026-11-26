@@ -130,3 +130,37 @@ def test_a_hook_file_that_changed_after_its_digest_was_recorded_is_refused(hook_
 def test_the_default_hook_sends_the_grip_command_as_molmospaces_does(grip):
     hook, _ = env_hook.load(None)
     assert hook.grip_actuator(grip) == mapping.grip_command_to_actuator(grip)
+
+
+def _request(path, digest: str) -> dict:
+    return mapping.HookFile(str(path), digest)._asdict()
+
+
+def test_a_request_without_a_hook_file_gets_the_default_hook():
+    hook, record = env_hook.Hooks().of({mapping.TOKEN_EPISODE_INDEX: 0})
+    assert type(hook) is env_hook.EnvHook
+    assert record is None
+
+
+def test_a_hook_file_loads_at_its_first_request_and_later_requests_with_its_digest_get_that_hook(hook_path):
+    hook_path.write_text(_GRIP_HOOK)
+    digest = hashlib.sha256(hook_path.read_bytes()).hexdigest()
+    hooks = env_hook.Hooks()
+
+    first = hooks.of(_request(hook_path, digest))
+    hook_path.write_text('HOOK = None\n')
+    again = hooks.of(_request(hook_path, digest))
+
+    assert again.hook is first.hook
+    assert again.record == f'{hook_path.name}@sha256:{digest}'
+    assert hooks.of({}).record is None
+
+
+def test_a_second_digest_of_a_loaded_hook_file_name_is_refused(hook_path):
+    hook_path.write_text(_GRIP_HOOK)
+    hooks = env_hook.Hooks()
+    hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
+    hook_path.write_text(_GRIP_HOOK.replace('0.5', '0.25'))
+
+    with pytest.raises(ValueError, match='rename the hook file'):
+        hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
