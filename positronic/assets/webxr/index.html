@@ -76,7 +76,7 @@
     <script type="module">
         import { PANEL_MODE, WebXRVideoPlayer } from './video-player.js';
         import { bendQuestTrigger } from './quest-trigger.js';
-        import { PressCounter } from './press-count.js';
+        import { PressCounter, controllerInFrame } from './press-count.js';
         import { controllerSample, startXRApp } from '/core.js';
 
         // The routes of the page and the fields of the page state (`PageState` of `positronic.teleop.command`).
@@ -174,14 +174,9 @@
           const controllers = { left: null, right: null };
           for (let inputSource of session.inputSources) {
             if (inputSource.gripSpace && (inputSource.handedness === 'left' || inputSource.handedness === 'right')) {
-              const gamepadButtons = inputSource.gamepad ? inputSource.gamepad.buttons : [];
-              // Each frame counts, so a press in a frame with no pose goes out in the next sample that has one
-              const presses = pressCounters[inputSource.handedness].count(gamepadButtons.map(b => b.pressed));
-              const gripPose = frame.getPose(inputSource.gripSpace, refSpace);
-              if (!gripPose) continue;
-              const pos = gripPose.transform.position;
-              const orient = gripPose.transform.orientation;
-              const values = gamepadButtons.map(b => b.value);
+              const controller = controllerInFrame(inputSource, frame, refSpace, pressCounters[inputSource.handedness]);
+              if (controller === null) continue;
+              const { position: pos, orientation: orient, values, presses } = controller;
               const buttons = bendQuestTrigger(values, inputSource.profiles);
               controllers[inputSource.handedness] = controllerSample(
                 [pos.x, pos.y, pos.z], [orient.w, orient.x, orient.y, orient.z], buttons, presses,

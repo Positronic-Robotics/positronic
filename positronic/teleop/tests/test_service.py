@@ -1793,10 +1793,36 @@ def test_the_headset_page_counts_each_press_of_a_button_once():
     assert _press_counts(frames) == [[0, 0], [1, 0], [1, 0], [1, 1], [2, 1], [2, 1]]
 
 
-def test_the_headset_page_counts_the_presses_of_a_frame_in_which_the_controller_has_no_pose():
-    page = Path(package_assets_path('assets/webxr/index.html')).read_text()
-    frame = page[page.index('function onFrame(') :]
-    assert frame.index('pressCounters[inputSource.handedness].count(') < frame.index('if (!gripPose) continue;')
+def _controller_frames(frames: list[dict]) -> list[dict | None]:
+    """What the headset page reads of a right controller in each of ``frames``: each frame gives ``pressed``, the state
+    of each button, and ``pose``, whether the controller has a grip pose in it."""
+    script = """
+    const { PressCounter, controllerInFrame } = await import(process.argv[1]);
+    let input = '';
+    for await (const chunk of process.stdin) input += chunk;
+    const counter = new PressCounter();
+    const identity = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+    const read = JSON.parse(input).map(({ pressed, pose }) => {
+      const gamepad = { buttons: pressed.map(down => ({ pressed: down, value: down ? 1 : 0 })) };
+      const frame = { getPose: () => (pose ? { transform: identity } : null) };
+      return controllerInFrame({ gamepad, gripSpace: {}, handedness: 'right' }, frame, {}, counter);
+    });
+    console.log(JSON.stringify(read));
+    """
+    return _run_page_module('press-count.js', script, frames)
+
+
+@needs_node
+def test_the_headset_page_sends_a_press_from_a_frame_with_no_pose_with_the_next_pose():
+    frames = [
+        {'pressed': [False], 'pose': True},
+        {'pressed': [True], 'pose': False},
+        {'pressed': [False], 'pose': True},
+    ]
+    before, lost, after = _controller_frames(frames)
+    assert lost is None, 'a frame with no pose sends no controller'
+    assert before is not None and after is not None
+    assert (before['presses'], after['presses']) == ([0], [1])
 
 
 def _quest_grip(raw_values: list[float]) -> list[float]:
