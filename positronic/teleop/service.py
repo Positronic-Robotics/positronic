@@ -215,7 +215,7 @@ class TrialState:
 
 # The use of Y on the left controller, at the bottom of the view
 CAMERA_HINT = 'Y: next camera. Hold Y: panel'
-# The RGB colour behind the control line of an arm whose control is on, and off: the colours of the phone page
+# The RGB colour behind the control line of an arm whose control is on, and off
 CONTROL_ON_COLOUR = (6, 214, 160)
 CONTROL_OFF_COLOUR = (255, 209, 102)
 # The width of the column of the view that shows the other cameras of the session, half the width of the main camera
@@ -223,14 +223,6 @@ OTHERS_WIDTH = VIEW_SIZE[0] // 2
 
 # The controller that drives each arm, by the arm name of its channels. The one arm of a one-arm session has none.
 ARM_CONTROLLERS: dict[str | None, str] = {None: RIGHT, keys.LEFT_ARM: LEFT, keys.RIGHT_ARM: RIGHT}
-
-
-@dataclass(frozen=True)
-class Badge:
-    """A line of the view in black on a box of ``colour``, an RGB colour."""
-
-    text: str
-    colour: tuple[int, int, int]
 
 
 @dataclass(frozen=True)
@@ -262,6 +254,14 @@ class _Sample:
     taken_ns: int
     poses: Mapping[str, geom.Transform3D | None]
     buttons: Mapping[str, Sequence[float] | None]
+
+
+@dataclass(frozen=True)
+class Badge:
+    """A line of the view in black on a box of ``colour``, an RGB colour."""
+
+    text: str
+    colour: tuple[int, int, int]
 
 
 class TeleopService:
