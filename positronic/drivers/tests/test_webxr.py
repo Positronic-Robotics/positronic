@@ -237,11 +237,16 @@ def test_a_page_that_stops_to_answer_pings_on_the_video_socket_ends_the_stream_a
     )
     with (
         _served_video_route(video_with_a_frame),
-        socket.create_connection(('127.0.0.1', video_with_a_frame.port)) as page,
+        socket.create_connection(('127.0.0.1', video_with_a_frame.port), timeout=5) as page,
     ):
         page.sendall(handshake.encode())
-        # The page reads the start of the answer to its handshake and nothing after it, so it answers no ping
-        assert page.recv(12) == b'HTTP/1.1 101'
+        # The page reads up to the end of the answer to its handshake and then stops, so it answers no ping
+        answer = b''
+        while b'\r\n\r\n' not in answer:
+            chunk = page.recv(4096)
+            assert chunk, 'the server closed the socket during the handshake'
+            answer += chunk
+        assert answer.startswith(b'HTTP/1.1 101 ')
         # uvicorn waits 10 s for the page to close the TCP connection after the keepalive fails
         deadline = time.monotonic() + 20
         while not _video_close_lines(caplog):
