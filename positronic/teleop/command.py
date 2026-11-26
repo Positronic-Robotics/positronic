@@ -61,7 +61,7 @@ class _Headset(pimm.ControlSystem):
 
     # How often the bridge logs the camera feeds that reach the service.
     FEED_LOG_SEC = 10.0
-    # How often the bridge reads the headset and looks for a new image of the shown camera.
+    # How often the bridge reads the headset and looks for a new image of the shown camera. It also wakes at each slot.
     POLL_SEC = 0.005
     # How many view periods the bridge waits with no new image or page change before it sends the view again.
     REFRESH_PERIODS = 2
@@ -110,14 +110,15 @@ class _Headset(pimm.ControlSystem):
                 self._text_only = page_input.data[TEXT_ONLY] is True
             page_changed = page_changed or page_input is not None
             image_count = self._service.shown_image_count()
-            since_view = clock.now() - last_view
+            now = clock.now()
             changed = image_count != sent_count or page_changed
-            if since_view >= self._view_period_sec and (
-                changed or since_view >= self.REFRESH_PERIODS * self._view_period_sec
+            if now >= last_view + self._view_period_sec and (
+                changed or now >= last_view + self.REFRESH_PERIODS * self._view_period_sec
             ):
-                last_view, sent_count, page_changed = clock.now(), image_count, False
+                last_view, sent_count, page_changed = now, image_count, False
                 self._send_view()
-            yield pimm.Sleep(self.POLL_SEC)
+            next_slot = last_view + self._view_period_sec
+            yield pimm.Sleep(min(self.POLL_SEC, next_slot - now) if next_slot > now else self.POLL_SEC)
 
     def _send_view(self) -> None:
         self.view.emit(self._service.view(camera=not self._text_only))

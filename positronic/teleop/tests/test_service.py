@@ -1401,6 +1401,20 @@ def test_the_headset_bridge_sends_at_most_one_view_each_view_period_under_a_burs
     assert len(views.emitted) == 8
 
 
+def test_the_headset_bridge_sends_the_view_at_the_view_rate_under_a_steady_stream_of_images(socket_path, monkeypatch):
+    loop, now, image_count, views = _bridge_on_a_fake_clock(socket_path, monkeypatch, view_fps=30.0)
+    sent_at = []
+    sleep = next(loop)
+    while now[0] < 1.0:
+        now[0] += sleep.seconds
+        image_count[0] += 1
+        sleep = next(loop)
+        if len(views.emitted) > len(sent_at) + 1:
+            sent_at.append(now[0])
+    assert len(sent_at) >= 29
+    np.testing.assert_allclose(np.diff(sent_at), 1 / 30)
+
+
 def test_the_service_counts_only_the_images_of_the_shown_camera(service, socket_path, connect):
     query = session_query(cameras=[keys.EXTERIOR_IMAGE, keys.WRIST_IMAGE], headset_camera=keys.WRIST_IMAGE)
     _readied_connection(service, socket_path, connect, query)
