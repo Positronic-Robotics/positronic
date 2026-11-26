@@ -186,10 +186,11 @@ class TestButtonMap:
         buttons = _map(HOLD_SEC)
         assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
 
-    def test_an_even_number_of_presses_between_two_samples_leaves_control_as_it_is(self):
+    def test_an_odd_number_of_presses_between_two_samples_is_one_clutch_and_an_even_number_two(self):
         buttons = _map(HOLD_SEC)
-        assert buttons.events(_buttons(presses={Button.A: 2}), 0) == []
+        assert buttons.events(_buttons(presses={Button.A: 2}), 0) == [Event.CLUTCH] * 2
         assert buttons.events(_buttons(presses={Button.A: 5}), 10) == [Event.CLUTCH]
+        assert buttons.events(_buttons(presses={Button.A: 105}), 20) == [Event.CLUTCH] * 2
 
     def test_after_a_reset_of_the_press_counts_the_presses_of_the_next_sample_do_nothing(self):
         buttons = _map(HOLD_SEC)
@@ -208,6 +209,13 @@ class TestButtonMap:
         assert buttons.events(_buttons(presses={Button.A: 1}), 0) == [Event.CLUTCH]
         assert buttons.events(_buttons(presses={Button.A: 0}), 10) == []
         assert buttons.events(_buttons(presses={Button.A: 1}), 20) == [Event.CLUTCH]
+
+    def test_a_sample_with_any_count_that_went_down_sets_all_the_counts_to_count_from(self):
+        """A page that loads again counts each button from 0, and can count a press of A before its first sample."""
+        buttons = _map(HOLD_SEC)
+        assert buttons.events(_buttons(presses={Button.TRIGGER: 4}), 0) == []
+        assert buttons.events(_buttons(presses={Button.A: 1}), 10) == []
+        assert buttons.events(_buttons(presses={Button.A: 2}), 20) == [Event.CLUTCH]
 
     def test_the_indices_match_the_buttons_that_the_phone_page_names(self):
         page = Path(package_assets_path('assets/webxr_iphone/index.html')).read_text()
@@ -1136,6 +1144,21 @@ def test_a_press_of_a_that_went_down_and_up_between_two_samples_turns_control_on
         _take(served, _buttons(presses={Button.A: 1}))
         connection.frame(FRAME_REQUEST)
         assert served.state().control
+        connection.close()
+
+
+def test_two_presses_of_a_between_two_samples_take_control_again_from_the_new_place_of_the_hand(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(presses={Button.A: 1}))
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        # A goes off and on again while the hand moves 5 cm
+        moved = geom.Transform3D(HAND.translation + np.array([0.0, 0.0, 0.05]), HAND.rotation)
+        served.take_sample({webxr.RIGHT: moved}, {webxr.RIGHT: _buttons(presses={Button.A: 3})})
+        reply = connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        np.testing.assert_allclose(reply[ACTION][:3], OBS[keys.EE_POSE][:3], atol=1e-6)
         connection.close()
 
 

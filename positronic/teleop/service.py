@@ -139,7 +139,8 @@ class ButtonMap:
 
     def _new_presses(self, buttons: ControllerButtons, now_ns: int) -> dict[Button, int]:
         """Record the state of the buttons, and return the number of presses of each button since the previous
-        sample. A count that goes down is of a page that loaded again, and presses nothing."""
+        sample. A sample with a count that went down, or with another number of counts, is of a page that loaded
+        again: all its counts become the counts to count from, and it presses nothing."""
         for button in self._read:
             if buttons.values[button] < self._press_threshold:
                 self._down_since.pop(button, None)
@@ -147,7 +148,9 @@ class ButtonMap:
             elif button not in self._down_since:
                 self._down_since[button] = now_ns
         previous, self._presses = self._presses, buttons.presses
-        if previous is None:
+        if previous is None or len(previous) != len(buttons.presses):
+            return {}
+        if any(now < before for now, before in zip(buttons.presses, previous, strict=True)):
             return {}
         return {
             button: buttons.presses[button] - previous[button]
@@ -184,10 +187,11 @@ class ButtonMap:
         return None
 
     def events(self, buttons: ControllerButtons, now_ns: int) -> list[Event]:
-        """The events of the sample ``buttons``. An even number of presses of A since the previous sample turns control
-        on and off again, so it gives no clutch event."""
-        new_presses = self._new_presses(buttons, now_ns)
-        events = [Event.CLUTCH] if new_presses.get(Button.A, 0) % 2 else []
+        """The events of the sample ``buttons``. An odd number of presses of A since the previous sample gives one
+        clutch event. An even number gives two, so control that is on turns off and on again, at the new place of the
+        hand."""
+        presses_of_a = self._new_presses(buttons, now_ns).get(Button.A, 0)
+        events = [Event.CLUTCH] * (0 if presses_of_a == 0 else 1 if presses_of_a % 2 else 2)
         if self._is_held(Button.B, now_ns):
             self._used.add(Button.B)
             events.append(Event.COMPLETE)
