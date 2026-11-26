@@ -11,6 +11,7 @@ import numpy as np
 import pos3
 from openpi_client import msgpack_numpy
 from openpi_client.websocket_client_policy import WebsocketClientPolicy
+from platform_client.policy_container import WARMUP_DEADLINE_S
 from websockets.protocol import State
 from websockets.sync.client import ClientConnection, connect
 
@@ -137,7 +138,10 @@ class OpenpiSubprocess:
         assert self.process is not None
         process = self.process
         wait_for_subprocess_ready(
-            self._is_ready, lambda: (process.poll() is not None, process.returncode), 'OpenPI subprocess'
+            self._is_ready,
+            lambda: (process.poll() is not None, process.returncode),
+            'OpenPI subprocess',
+            max_wait=WARMUP_DEADLINE_S,
         )
 
     @property
