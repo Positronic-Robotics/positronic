@@ -2984,7 +2984,7 @@ def test_an_opened_gripper_closes_again_with_no_hold_cap_until_a_new_touch(monke
     )
 
 
-@pytest.mark.parametrize('field', ['close_rate_per_s', 'touch_effort_nm', 'launch_s'])
+@pytest.mark.parametrize('field', ['close_rate_per_s', 'touch_effort_nm', 'launch_s', 'open_margin_rad'])
 @pytest.mark.parametrize('value', [-1.0, math.nan, math.inf])
 def test_a_grasp_tuning_value_that_is_negative_or_not_finite_is_refused(field, value):
     with pytest.raises(ValueError, match=field):

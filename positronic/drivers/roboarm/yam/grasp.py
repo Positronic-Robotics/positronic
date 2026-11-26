@@ -16,11 +16,13 @@ class GraspTuning:
     close_rate_per_s: float = 2.0  # full strokes per second; the motor then meets an object at about 10 rad/s
     touch_effort_nm: float = 0.8  # a free close at that rate peaks at 0.6 Nm; a touch passes 1.9 Nm
     launch_s: float = 0.06  # a close from rest peaks at about 1 Nm in this time
+    open_margin_rad: float = 0.02  # about 0.3 mm of jaw; i2rt's stall limiter can send a target a little behind q
 
     def __post_init__(self) -> None:
         check_finite_positive(self.close_rate_per_s, 'close_rate_per_s')
         check_finite_positive(self.touch_effort_nm, 'touch_effort_nm')
         check_finite_nonnegative(self.launch_s, 'launch_s')
+        check_finite_nonnegative(self.open_margin_rad, 'open_margin_rad')
 
 
 DEFAULT_GRASP = GraspTuning()
@@ -46,7 +48,6 @@ class Grasp:
     """The close of one gripper motor, in motor radians and seconds."""
 
     _MAX_STEP_S = 0.01  # i2rt warns when its control loop runs below 100 Hz
-    _OPEN_MARGIN_RAD = 0.02  # about 0.3 mm of jaw; i2rt's stall limiter can send a target a little behind q
 
     def __init__(self, tuning: GraspTuning, closing_sign: float, stroke_rad: float):
         self._closing_sign = closing_sign
@@ -72,7 +73,7 @@ class Grasp:
         the touch effort and at ``hold_nm``.
         """
         closing_sign, tuning = self._closing_sign, self._tuning
-        margin = 0.0 if self._phase is _Phase.NOT_CLOSING else self._OPEN_MARGIN_RAD
+        margin = 0.0 if self._phase is _Phase.NOT_CLOSING else tuning.open_margin_rad
         if closing_sign * (request - q) <= -margin:
             self._phase = _Phase.NOT_CLOSING
             return request
