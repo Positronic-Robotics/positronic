@@ -41,6 +41,7 @@ class RobolabAdapter(WireCommandAdapter):
         return {
             robolab_keys.TOKEN_TASK: params[eval_keys.TASK],
             robolab_keys.TOKEN_INSTRUCTION_TYPE: params[robolab_keys.INSTRUCTION_TYPE],
+            robolab_keys.TOKEN_CAMERAS: params[robolab_keys.CAMERAS],
             **(
                 {robolab_keys.TOKEN_EPISODE_LENGTH_S: params[robolab_keys.EPISODE_LENGTH_OVERRIDE]}
                 if robolab_keys.EPISODE_LENGTH_OVERRIDE in params
