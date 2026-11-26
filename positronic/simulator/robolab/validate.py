@@ -9,9 +9,10 @@ Run on a RoboLab-capable box the same way the launcher runs ``env.py`` (AppLaunc
     PYTHONPATH=positronic/simulator/env_server \
         uv run --extra isaac50 --project <robolab clone> positronic/simulator/robolab/validate.py --headless
 
-A YAM run takes ``--robot yam``.
+A YAM run takes ``--robot yam``, and ``--cameras`` names the camera set of the resets.
 """
 
+import argparse
 import math
 import sys
 from typing import Any
@@ -32,7 +33,10 @@ from robolab.core.sensors.contact_sensor_utils import (  # pyright: ignore[repor
 )
 from robolab.robots.droid import EEF_OFFSET_ROT
 
-_TOKEN = {keys.TOKEN_TASK: 'BananaInBowlTask', keys.TOKEN_INSTRUCTION_TYPE: 'default'}
+_camera_parser = argparse.ArgumentParser(add_help=False)
+_camera_parser.add_argument('--cameras', help='a camera set of the robot; keys.DEFAULT_CAMERA_SETS without it')
+_CAMERAS = _camera_parser.parse_known_args()[0].cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
+_TOKEN = {keys.TOKEN_TASK: 'BananaInBowlTask', keys.TOKEN_INSTRUCTION_TYPE: 'default', keys.TOKEN_CAMERAS: _CAMERAS}
 _HOLD = protocol.single_arm_action({protocol.COMMAND_TYPE: protocol.HOLD}, 0.0)
 _HOLD_STEPS = 30
 _SETTLE_STEPS = 10
@@ -55,13 +59,13 @@ _FLANGE_TO_EEF_QUAT = (-0.707106781, 0.0, 0.0, -0.707106781)
 _FRAME_POS_TOL = 1e-4  # m — float32 body poses, so well above round-off and far below a real geometry change
 _FRAME_ROT_TOL = math.radians(0.05)
 
-# The cameras follow ``--cameras``, so a run of any set checks the set that run renders.
+# The cameras follow ``_CAMERAS``, so a run of any set checks the set that run renders.
 _OBS_SPECS = {
     protocol.OBS_JOINT_POS: ((7,), np.float32),
     protocol.OBS_JOINT_VEL: ((7,), np.float32),
     protocol.OBS_EEF_POS: ((3,), np.float32),
     protocol.OBS_EEF_QUAT: ((4,), np.float32),
-    **dict.fromkeys(keys.camera_set(args.robot, args.cameras), ((720, 1280, 3), np.uint8)),
+    **dict.fromkeys(keys.camera_set(args.robot, _CAMERAS), ((720, 1280, 3), np.uint8)),
     keys.SUBTASK: ((4,), np.float32),
 }
 
@@ -114,7 +118,7 @@ def _check_obs_contract(env: DroidEnv) -> None:
                 f'{key}: {type(arr).__name__} shape={getattr(arr, "shape", None)} dtype={getattr(arr, "dtype", None)}'
             )
         rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
-        assert rendered == set(keys.CAMERA_SETS[args.cameras]), f'rendered cameras {sorted(rendered)}'
+        assert rendered == set(keys.CAMERA_SETS[_CAMERAS]), f'rendered cameras {sorted(rendered)}'
         grip = obs[protocol.OBS_GRIP]
         assert isinstance(grip, float) and 0.0 <= grip <= 1.0, f'grip {grip!r}'
         quat = obs[protocol.OBS_EEF_QUAT]
@@ -414,6 +418,17 @@ def _check_an_episode_length_replaces_the_budget(env: DroidEnv) -> None:
     print(f'  episode length: OK ({budget} steps by budget, {expected} by token, back to {budget})')
 
 
+def _check_each_camera_set_renders_its_own_cameras(env: DroidEnv) -> None:
+    """A token with another camera set rebuilds the scene with that set, and a token back to the first set
+    renders the first set again."""
+    other = next(name for name in (keys.WRIST_LEFT, keys.WRIST_RIGHT) if name != _CAMERAS)
+    for cameras in (other, _CAMERAS):
+        obs = _reset(env, {**_TOKEN, keys.TOKEN_CAMERAS: cameras})[protocol.FRAME_OBS]
+        rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
+        assert rendered == set(keys.CAMERA_SETS[cameras]), f'{cameras}: rendered cameras {sorted(rendered)}'
+    print(f'  camera sets: OK ({other}, then {_CAMERAS}, each renders its own cameras)')
+
+
 def _check_the_listing_refuses_an_unknown_phrasing(env: DroidEnv) -> None:
     """A phrasing that the task does not have fails at the task listing, before any scene is built, and a phrasing
     that the task has still lists."""
@@ -591,7 +606,7 @@ def _check_yam_obs_contract(env: YamEnv) -> None:
             assert abs(float(np.linalg.norm(quat)) - 1.0) < 1e-3, f'eef_quat.{side} norm {quat}'
             grip = obs[protocol.arm_channel(protocol.OBS_GRIP, side)]
             assert isinstance(grip, float) and 0.0 <= grip <= 1.0, f'grip.{side} {grip!r}'
-        cameras = keys.camera_set(keys.YAM, args.cameras)
+        cameras = keys.camera_set(keys.YAM, _CAMERAS)
         rendered = {k for k, v in obs.items() if isinstance(v, np.ndarray) and v.ndim == 3}
         assert rendered == set(cameras), f'rendered cameras {sorted(rendered)}'
         for camera in cameras:
@@ -850,6 +865,7 @@ def main() -> None:
     failures = _run_cartesian_cases(env)
     _check_cartesian_delta(env)
     _check_an_episode_length_replaces_the_budget(env)
+    _check_each_camera_set_renders_its_own_cameras(env)
     _check_a_command_that_is_not_finite_holds(env)
     _check_the_orange1_stem_does_not_collide(env)
     _check_a_clone_that_faults(env)

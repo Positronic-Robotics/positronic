@@ -52,19 +52,18 @@ def _flag(command: list[str], name: str) -> str:
 
 
 def test_a_run_that_names_no_clone_count_serves_one_scene(spawned):
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+    with launcher.serve_robolab():
         pass
 
     assert _flag(spawned[0], '--max-envs') == '1'
 
 
 def test_the_clone_count_and_the_host_reach_the_env_server(spawned):
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, '0.0.0.0', max_envs=16):
+    with launcher.serve_robolab(host='0.0.0.0', max_envs=16):
         pass
 
     assert _flag(spawned[0], '--max-envs') == '16'
     assert _flag(spawned[0], '--host') == '0.0.0.0'
-    assert _flag(spawned[0], '--cameras') == robolab_keys.WRIST_LEFT
 
 
 def test_the_join_deadline_of_a_shared_server_reaches_the_env_server(spawned, monkeypatch):
@@ -115,7 +114,7 @@ def test_the_setup_installs_the_shipped_lock_and_leaves_the_checkout_as_pinned(m
         lambda command, **kwargs: _StubProcess() if command[:2] == ['uv', 'run'] else popen(command, **kwargs),
     )
 
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+    with launcher.serve_robolab():
         pass
 
     assert (src / '.venv' / 'pyvenv.cfg').is_file()
@@ -134,7 +133,7 @@ def test_the_setup_refuses_a_uv_too_old_for_the_robolab_build_config(monkeypatch
     monkeypatch.setattr(launcher, '_ROBOLAB_SRC', tmp_path / 'robolab')
     monkeypatch.setattr(env_launcher, '_await_bind', lambda *args, **kwargs: None)
 
-    with pytest.raises(RuntimeError, match=r'uv 0\.10\.0 or newer'), launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+    with pytest.raises(RuntimeError, match=r'uv 0\.10\.0 or newer'), launcher.serve_robolab():
         pass
 
     assert 'sync' not in calls.read_text()
@@ -180,41 +179,18 @@ def test_an_eval_with_an_env_server_drives_that_server_and_launches_none(monkeyp
 
 
 def test_a_run_that_names_no_robot_serves_the_droid_rig(spawned):
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+    with launcher.serve_robolab():
         pass
 
     assert _flag(spawned[0], '--robot') == robolab_keys.DROID
 
 
 def test_a_yam_run_serves_the_yam_from_the_same_checkout(spawned):
-    with launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM):
+    with launcher.serve_robolab(robot=robolab_keys.YAM):
         pass
 
     assert _flag(spawned[0], '--robot') == robolab_keys.YAM
-    assert _flag(spawned[0], '--cameras') == robolab_keys.TOP_AND_WRISTS
     assert _flag(spawned[0], '--project') == str(launcher._ROBOLAB_SRC)
-
-
-@pytest.mark.parametrize(
-    ('robot', 'cameras'),
-    [(robolab_keys.DROID, robolab_keys.WRIST_LEFT_RIGHT), (robolab_keys.YAM, robolab_keys.TOP_AND_WRISTS)],
-)
-def test_a_launch_that_names_no_camera_set_serves_the_default_set_of_its_robot(spawned, monkeypatch, robot, cameras):
-    monkeypatch.setattr(sys, 'argv', ['launcher', '--robot', robot, '--max-envs', '1', '--port', '9000'])
-    with pytest.raises(SystemExit):
-        launcher.main()
-
-    assert _flag(spawned[0], '--cameras') == cameras
-
-
-def test_a_camera_set_of_another_robot_fails_before_any_spawn(spawned):
-    with (
-        pytest.raises(ValueError, match='camera sets'),
-        launcher.serve_robolab(robolab_keys.WRIST_LEFT, robot=robolab_keys.YAM),
-    ):
-        pass
-
-    assert spawned == []
 
 
 class _Spawn:
@@ -243,10 +219,10 @@ def spawn(monkeypatch, tmp_path) -> _Spawn:
 
 
 def test_only_a_droid_server_gets_the_droid_rig_model(spawn):
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT):
+    with launcher.serve_robolab():
         pass
     droid = spawn.env
-    with launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM):
+    with launcher.serve_robolab(robot=robolab_keys.YAM):
         pass
 
     assert 'ROBOLAB_ROBOT_META' in droid
@@ -259,7 +235,7 @@ def test_each_task_library_reaches_the_env_server(spawned, tmp_path):
         (lib / '_metadata').mkdir(parents=True)
         (lib / '_metadata' / 'task_metadata.json').write_text('[]')
 
-    with launcher.serve_robolab(robolab_keys.WRIST_LEFT, task_libs=libs):
+    with launcher.serve_robolab(task_libs=libs):
         pass
 
     flags = [spawned[0][i + 1] for i, arg in enumerate(spawned[0]) if arg == '--task-lib']
@@ -268,7 +244,7 @@ def test_each_task_library_reaches_the_env_server(spawned, tmp_path):
 
 def test_a_directory_without_task_metadata_fails_before_any_spawn(spawned, tmp_path):
     with pytest.raises(FileNotFoundError, match='no task library'):
-        with launcher.serve_robolab(robolab_keys.WRIST_LEFT, task_libs=(tmp_path,)):
+        with launcher.serve_robolab(task_libs=(tmp_path,)):
             pass
 
     assert spawned == []
@@ -278,7 +254,7 @@ def test_a_yam_server_gets_its_task_library(spawned, tmp_path):
     (tmp_path / '_metadata').mkdir()
     (tmp_path / '_metadata' / 'task_metadata.json').write_text('[]')
 
-    with launcher.serve_robolab(robolab_keys.TOP_AND_WRISTS, robot=robolab_keys.YAM, task_libs=(tmp_path,)):
+    with launcher.serve_robolab(robot=robolab_keys.YAM, task_libs=(tmp_path,)):
         pass
 
     command = spawned[0]
@@ -291,7 +267,7 @@ def served_libs(monkeypatch) -> list[Any]:
     """The ``task_libs`` each eval hands ``serve_robolab``, with no server launched."""
     served: list[Any] = []
 
-    def serve(cameras, **kwargs):
+    def serve(**kwargs):
         served.append(kwargs['task_libs'])
         return nullcontext(('localhost', 0))
 
