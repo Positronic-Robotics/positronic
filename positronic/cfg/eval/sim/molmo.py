@@ -37,7 +37,7 @@ def _env_server(env_server: str | None) -> AbstractContextManager[tuple[str, int
 
 
 def _hook_file(env_hook: str | None) -> mapping.HookFile | None:
-    """The hook file at ``env_hook``, with the digest of its bytes now, or None without a hook."""
+    """The hook file at ``env_hook``, with the digest of its bytes, or None without a hook."""
     if env_hook is None:
         return None
     path = Path(env_hook).expanduser().resolve()
@@ -129,11 +129,12 @@ def benchmarks(
 
     ``env_hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that the server applies to each episode of
     the eval: for example a task class, a camera model or a grip scale of its own. A hook can change the robot only
-    within the bundled FR3 joints, kinematics and 2F-85 grasp site, for example its mount or a gripper detail, and the
-    eval records the bundled robot model. Each reset token names the file and the SHA-256 digest that the eval reads
-    from it, and the server refuses a file with another digest. The path is a path on the server's box. Every trial
-    records the name and digest of the hook file that the server runs under ``molmo.env_hook``, or None without a hook.
-    A run with a hook or an episode camera is not comparable with stock scores.
+    within the bundled FR3 joints, kinematics and 2F-85 grasp site, for example its mount or a gripper detail, and
+    the eval records the bundled robot model. Each reset token names the file and the SHA-256 digest that the eval
+    reads from it, and the server refuses a file with another digest. The eval and the server read the file at the
+    same path, so a dialed server on another box needs the same file at that path. Every trial records the name and
+    digest of the hook file that the server runs under ``molmo.env_hook``, or None without a hook. A run with a hook
+    or an episode camera is not comparable with stock scores.
 
     ``env_server`` is the ``host:port`` of a MolmoSpaces env server that already runs. Without it, the eval launches
     a server of its own. One server runs the episodes of evals with different hooks, one episode at a time. Start a
