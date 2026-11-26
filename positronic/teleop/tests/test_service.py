@@ -1020,6 +1020,31 @@ def test_each_frame_reply_has_a_target_from_the_first(service, socket_path, conn
     np.testing.assert_allclose(first[ACTION], [*OBS[keys.EE_POSE], OBS[keys.GRIP]])
 
 
+def test_a_frame_answers_at_once_with_the_newest_sample(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=2.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        started = time.monotonic()
+        connection.frame(FRAME_REQUEST)
+        assert time.monotonic() - started < 1.0
+        assert served.state().control
+        connection.close()
+
+
+def test_a_frame_with_no_sample_within_the_silence_limit_has_no_pose_and_turns_control_off(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=1.0, hold_sec=HOLD_SEC) as served:
+        connection = _readied_connection(served, socket_path, connect)
+        _take(served, _buttons(a=1.0))
+        _take(served, _buttons())
+        connection.frame(FRAME_REQUEST)
+        assert served.state().control
+        time.sleep(served.silence_limit + 0.05)
+        connection.frame(FRAME_REQUEST)
+        assert not served.state().control
+        connection.close()
+
+
 def test_the_view_leaves_the_camera_image_of_the_display_unchanged(service, socket_path, runtime):
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path, cameras=[keys.EXTERIOR_IMAGE])
@@ -1399,6 +1424,20 @@ class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
         self._phase = phase
 
 
+# A station asks for a frame about every 33 ms. A frame request answers at once, so a loop with no pause only
+# competes with the headset for the service.
+STATION_FRAME_SEC = 1 / 30
+
+
+def _frames_until_end(service: TeleopService) -> list[dict]:
+    """The elements of the frames of one trial, asked for at the pace of a station, the end element last."""
+    elements = [service.next_frame(FRAME_REQUEST, [])]
+    while END not in elements[-1]:
+        time.sleep(STATION_FRAME_SEC)
+        elements.append(service.next_frame(FRAME_REQUEST, []))
+    return elements
+
+
 @pytest.mark.timeout(30)
 def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(socket_path):
     service = TeleopService(ServedUnixSocket(socket_path), ready_limit=2.0, silence_limit=1.0, hold_sec=HOLD_SEC)
@@ -1407,10 +1446,9 @@ def test_the_scripted_headset_holds_each_press_until_a_slow_service_reads_it(soc
             scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
         )
         service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
-        moves = []
-        while END not in (element := service.next_frame(FRAME_REQUEST, [])):
-            moves.append(element[ACTION][:3])
+        *frames, element = _frames_until_end(service)
         trials.result(timeout=10)
+    moves = [frame[ACTION][:3] for frame in frames]
     assert element[END] == PolicyEnd.COMPLETE.value
     assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
 
@@ -1425,9 +1463,7 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
         ends = []
         for _ in range(2):
             service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
-            while END not in (element := service.next_frame(FRAME_REQUEST, [])):
-                pass
-            ends.append(element[END])
+            ends.append(_frames_until_end(service)[-1][END])
         trials.result(timeout=10)
     assert ends == [PolicyEnd.COMPLETE.value, PolicyEnd.COMPLETE.value]
 

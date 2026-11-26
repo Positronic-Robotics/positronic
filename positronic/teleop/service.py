@@ -235,10 +235,10 @@ class CameraState:
 
 @dataclass(frozen=True)
 class _Sample:
-    """What the headset sent last, by controller, and its number in the order of the samples. A controller that the
-    headset does not track is absent or ``None``."""
+    """What the headset sent last, by controller, and its `time.monotonic_ns()` instant. A controller that the headset
+    does not track is absent or ``None``."""
 
-    number: int
+    taken_ns: int
     poses: Mapping[str, geom.Transform3D | None]
     buttons: Mapping[str, Sequence[float] | None]
 
@@ -249,9 +249,9 @@ class TeleopService:
     With no ``auth_token``, a host and a port serve open to each peer that reaches them. The Unix socket is in a
     directory of this user only.
 
-    ``take_sample`` takes each sample of the controllers. A frame request waits for the next sample. When none comes
-    within ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The preparation of a
-    session waits for Ready or Cancel up to ``ready_limit``.
+    ``take_sample`` takes each sample of the controllers. A frame request answers at once with the newest sample.
+    When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The
+    preparation of a session waits for Ready or Cancel up to ``ready_limit``.
     """
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
@@ -389,7 +389,7 @@ class TeleopService:
         poses = {name: pose for name, pose in poses.items() if name in controllers}
         buttons = {name: buttons[name] for name in controllers}
         with self._changed:
-            self._sample = _Sample(self._sample.number + 1, poses, buttons)
+            self._sample = _Sample(now_ns, poses, buttons)
             for controller, button_map in self._buttons.items():
                 values = buttons.get(controller)
                 if values is None:
@@ -591,17 +591,16 @@ class TeleopService:
             raise TrialNotStarted('the teleoperator cancelled the trial')
         raise TrialNotStarted('the teleoperator was not ready within the ready limit of the service')
 
-    def _next_sample(self, seen: int, deadline: float) -> _Sample:
-        """The sample after sample number ``seen``, or a sample with no pose when none comes before ``deadline``. Hold
-        the lock."""
-        while self._sample.number == seen and not self._stopping and (left := deadline - time.monotonic()) > 0:
-            self._changed.wait(left)
-        return self._sample if self._sample.number != seen else _Sample(seen, {}, {})
+    def _newest_sample(self) -> _Sample:
+        """The newest sample, or a sample with no pose when the newest is older than the silence limit. Hold the
+        lock."""
+        if time.monotonic_ns() - self._sample.taken_ns > self.silence_limit * 1e9:
+            return _Sample(self._sample.taken_ns, {}, {})
+        return self._sample
 
     def next_frame(self, request: Mapping[str, Any], cameras: Sequence[str]) -> dict[str, Any]:
         """Take the state of the arms and the images of ``cameras`` in ``request``, and answer with the element of the
         next frame: the target of the teleoperator, with the end of the trial once the teleoperator ends it."""
-        deadline = time.monotonic() + self.silence_limit
         with self._changed:
             if self._phase is Phase.ENDED:
                 assert self._end is not None
@@ -615,7 +614,7 @@ class TeleopService:
             robot = {arm: self._arm_state(request, arm) for arm in self._trackers}
             if not self._hold:
                 self._hold = dict(robot)
-            sample = self._next_sample(self._sample.number, deadline)
+            sample = self._newest_sample()
             events, self._events = self._events, []
             element = self._apply(sample, events, {arm: pose for arm, (pose, _) in robot.items()})
             self._frames += 1
