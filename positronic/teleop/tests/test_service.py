@@ -651,11 +651,11 @@ def test_a_sample_that_tracks_no_controller_is_no_controller_data(socket_path):
     service = TeleopService(ServedUnixSocket(socket_path), ready_limit=0.2, silence_limit=60.0, hold_sec=HOLD_SEC)
     no_controller = {webxr.LEFT: None, webxr.RIGHT: None}
     service.take_sample(no_controller, no_controller)
-    service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: [1.0]})
+    service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: ControllerButtons((1.0,), (0,))})
     assert not service.state().tracked
     headset = _Headset(service)
     headset.pose = headset.left_pose = None
-    headset.buttons = headset.left_buttons = []
+    headset.buttons = headset.left_buttons = ControllerButtons((), ())
     with headset, pytest.raises(service_module.TrialNotStarted) as raised:
         service.wait_for_ready(protocol.SessionParams(), threading.Event())
     assert 'no controller data came in the wait' in str(raised.value)

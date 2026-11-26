@@ -64,19 +64,19 @@ def test_the_window_says_when_no_trial_waits(window):
     }
 
 
-def test_the_status_says_whether_the_service_gets_controller_data(socket_path):
-    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=60.0, hold_sec=0.2)
-    window = TestClient(window_app(service), base_url='http://127.0.0.1:5006')
-    assert window.get('/status').json()['tracked'] is False
-    service.take_sample({RIGHT: geom.Transform3D()}, {RIGHT: [0.0] * (max(Button) + 1)})
-    assert window.get('/status').json()['tracked'] is True
-
-
 def _b(down: bool, presses: int) -> ControllerButtons:
     """The buttons of the right controller with B ``down`` or up, and ``presses`` presses of B."""
     values, counts = [0.0] * (max(Button) + 1), [0] * (max(Button) + 1)
     values[Button.B], counts[Button.B] = float(down), presses
     return ControllerButtons(tuple(values), tuple(counts))
+
+
+def test_the_status_says_whether_the_service_gets_controller_data(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=5.0, silence_limit=60.0, hold_sec=0.2)
+    window = TestClient(window_app(service), base_url='http://127.0.0.1:5006')
+    assert window.get('/status').json()['tracked'] is False
+    service.take_sample({RIGHT: geom.Transform3D()}, {RIGHT: _b(False, 0)})
+    assert window.get('/status').json()['tracked'] is True
 
 
 def _ready_from_the_headset(service, waiting) -> None:
