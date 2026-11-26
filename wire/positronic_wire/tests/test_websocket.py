@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -26,6 +27,7 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidMessage, InvalidStatus
 from websockets.http11 import Response
 from websockets.sync.client import connect, unix_connect
+from websockets.sync.connection import Connection
 from websockets.sync.server import serve
 from websockets.utils import accept_key
 
@@ -721,36 +723,46 @@ def _served_on_unix(handler: Callable[[socket.socket], None], path: Path) -> Non
 
 
 @contextmanager
-def _session(transport: str, handler: Callable[[socket.socket], None]) -> Iterator[websocket.WebsocketClientConnection]:
-    """A client session over ``transport`` with a server that runs ``handler`` after the upgrade's socket opens."""
+def _tcp_session(
+    handler: Callable[[socket.socket], None],
+    session: Callable[[Connection], websocket.WebsocketClientConnection] = websocket.WebsocketClientConnection,
+) -> Iterator[websocket.WebsocketClientConnection]:
+    host, port = _served(handler)
+    yield session(connect(f'ws://{host}:{port}/', max_size=None, open_timeout=_LONG_CLOSE_S))
+
+
+@contextmanager
+def _tls_session(handler: Callable[[socket.socket], None]) -> Iterator[websocket.WebsocketClientConnection]:
+    with tempfile.TemporaryDirectory() as directory:
+        server, client = _tls_contexts(Path(directory))
+        host, port = _served(_over_tls(handler, server))
+        yield websocket.WebsocketClientConnection(
+            connect(f'wss://{host}:{port}/', ssl=client, max_size=None, open_timeout=_LONG_CLOSE_S)
+        )
+
+
+@contextmanager
+def _unix_session(handler: Callable[[socket.socket], None]) -> Iterator[websocket.WebsocketClientConnection]:
     # A short directory: a Unix socket path has a length limit.
     with tempfile.TemporaryDirectory(prefix='ws') as directory:
-        if transport == 'unix':
-            path = Path(directory) / 's'
-            _served_on_unix(handler, path)
-            yield websocket.WebsocketClientConnection(
-                unix_connect(str(path), 'ws://localhost/', max_size=None, open_timeout=_LONG_CLOSE_S)
-            )
-        elif transport == 'tls':
-            server, client = _tls_contexts(Path(directory))
-            host, port = _served(_over_tls(handler, server))
-            yield websocket.WebsocketClientConnection(
-                connect(f'wss://{host}:{port}/', ssl=client, max_size=None, open_timeout=_LONG_CLOSE_S)
-            )
-        else:
-            host, port = _served(handler)
-            # The roboarena connection keeps the websocket send, on its own class.
-            session = (
-                roboarena.RoboarenaClientConnection if transport == 'roboarena' else websocket.WebsocketClientConnection
-            )
-            yield session(connect(f'ws://{host}:{port}/', max_size=None, open_timeout=_LONG_CLOSE_S))
+        path = Path(directory) / 's'
+        _served_on_unix(handler, path)
+        yield websocket.WebsocketClientConnection(
+            unix_connect(str(path), 'ws://localhost/', max_size=None, open_timeout=_LONG_CLOSE_S)
+        )
 
 
-@pytest.mark.parametrize('transport', ['tcp', 'tls', 'unix', 'roboarena'])
-def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout(transport):
+# The roboarena connection keeps the websocket send, on its own class.
+_roboarena_session = partial(_tcp_session, session=roboarena.RoboarenaClientConnection)
+
+
+@pytest.mark.parametrize(
+    'session', [_tcp_session, _tls_session, _unix_session, _roboarena_session], ids=['tcp', 'tls', 'unix', 'roboarena']
+)
+def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout(session):
     released = threading.Event()
     try:
-        with _session(transport, _upgrade_then_read_nothing(released)) as connection:
+        with session(_upgrade_then_read_nothing(released)) as connection:
             started = time.monotonic()
             with pytest.raises(TimeoutError):
                 connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
@@ -762,7 +774,7 @@ def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout(tra
 def test_a_send_to_a_peer_that_reads_slowly_raises_a_timeout_at_its_timeout():
     released = threading.Event()
     try:
-        with _session('tcp', _upgrade_then_read_slowly(released)) as connection:
+        with _tcp_session(_upgrade_then_read_slowly(released)) as connection:
             started = time.monotonic()
             with pytest.raises(TimeoutError):
                 connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
