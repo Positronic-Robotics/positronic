@@ -1796,24 +1796,103 @@ def test_the_headset_page_counts_each_press_of_a_button_once():
 def _presses_in_frames(frames: list[tuple[list[bool], str]]) -> list[list[int] | None]:
     """The press counts that the headset page sends for a right controller in each of ``frames``, or ``None`` for a
     frame that sends no controller. Each frame gives the state of each button, and ``'pose'``, ``'no_grip_pose'`` (the
-    controller has no pose) or ``'no_viewer_pose'`` (the headset has no pose, so the page draws no frame)."""
+    controller has no pose) or ``'no_viewer_pose'`` (the headset has no pose, so the page draws no frame).
+
+    The frame loop of ``startXRApp`` in ``core.js`` runs each frame, in a fake XR session with a fake WebSocket. The
+    page hooks are those of the headset page."""
     script = """
-    const { PressCounter, controllerInFrame, countPresses } = await import(process.argv[1]);
+    import { register } from 'node:module';
+    const coreUrl = process.argv[1];
+    // The server serves these two modules of core.js; the test has a stand-in for each
+    const served = {
+      '/session-mode.js': 'export const SESSION_MODE = "immersive-ar";',
+      '/webxr-button.js':
+        'export class WebXRButton { constructor(o) { globalThis.xrButton = o; this.domElement = {} } setSession() {} }',
+    };
+    register('data:text/javascript,' + encodeURIComponent(`
+      const served = ${JSON.stringify(served)};
+      export async function resolve(specifier, context, next) {
+        if (specifier in served) {
+          return { url: 'data:text/javascript,' + encodeURIComponent(served[specifier]), shortCircuit: true };
+        }
+        return next(specifier, context);
+      }`));
+
+    const sent = [];
+    globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send(text) { sent.push(JSON.parse(text)); } };
+    const element = () => ({ appendChild() {}, classList: { add() {}, remove() {} } });
+    globalThis.window = { location: { protocol: 'http:', host: 'page' }, innerWidth: 1, innerHeight: 1 };
+    globalThis.document = { body: element(), createElement: element, querySelector: () => null };
+    const matrix = () => ({ fromArray() {} });
+    globalThis.THREE = {
+      Scene: class { add() {} },
+      AmbientLight: class {},
+      PerspectiveCamera: class { matrix = matrix(); projectionMatrix = matrix(); updateMatrixWorld() {} },
+      WebGLRenderer: class {
+        xr = { setSession() {} };
+        domElement = {};
+        setSize() {}
+        setPixelRatio() {}
+        render() {}
+        getContext() { return { bindFramebuffer() {}, viewport() {} }; }
+      },
+    };
+    let nextFrame = null;
+    const session = {
+      inputSources: [],
+      renderState: { baseLayer: { getViewport: () => ({ x: 0, y: 0, width: 1, height: 1 }) } },
+      addEventListener() {},
+      requestReferenceSpace: async () => ({}),
+      requestAnimationFrame: callback => { nextFrame = callback; },
+    };
+    const xr = { isSessionSupported: async () => true, requestSession: async () => session };
+    Object.defineProperty(globalThis, 'navigator', { value: { xr }, configurable: true });
+
+    const { controllerSample, startXRApp } = await import(coreUrl);
+    const { PressCounter, controllerInFrame, countPresses } = await import(new URL('press-count.js', coreUrl));
+    const counters = { left: new PressCounter(), right: new PressCounter() };
+    startXRApp({
+      onEveryFrame: ({ session }) => countPresses(session, counters),
+      onFrame: ({ session, frame, refSpace, everyFrame: presses }) => {
+        const controllers = { left: null, right: null };
+        for (const inputSource of session.inputSources) {
+          const controller = controllerInFrame(inputSource, frame, refSpace);
+          if (controller === null) continue;
+          const hand = inputSource.handedness;
+          controllers[hand] = controllerSample([0, 0, 0], [1, 0, 0, 0], controller.values, presses[hand]);
+        }
+        return controllers;
+      },
+    });
+    await globalThis.xrButton.onRequestSession();
+    await new Promise(resolve => setTimeout(resolve));
+
     let input = '';
     for await (const chunk of process.stdin) input += chunk;
-    const counters = { left: new PressCounter(), right: new PressCounter() };
     const identity = { position: { x: 0, y: 0, z: 0 }, orientation: { x: 0, y: 0, z: 0, w: 1 } };
+    const view = { transform: { matrix: [] }, projectionMatrix: [] };
     const read = JSON.parse(input).map(([pressed, pose]) => {
       const gamepad = { buttons: pressed.map(down => ({ pressed: down, value: down ? 1 : 0 })) };
-      const inputSource = { gamepad, gripSpace: {}, handedness: 'right' };
-      const presses = countPresses({ inputSources: [inputSource] }, counters);
-      if (pose === 'no_viewer_pose') return null;
-      const frame = { getPose: () => (pose === 'pose' ? { transform: identity } : null) };
-      return controllerInFrame(inputSource, frame, {}) === null ? null : presses.right;
+      session.inputSources = [{ gamepad, gripSpace: {}, handedness: 'right', profiles: [] }];
+      const before = sent.length;
+      nextFrame(0, {
+        session,
+        getViewerPose: () => (pose === 'no_viewer_pose' ? null : { views: [view] }),
+        getPose: () => (pose === 'pose' ? { transform: identity } : null),
+      });
+      const right = sent.length > before ? sent.at(-1).controllers.right : null;
+      return right === null ? null : right.presses;
     });
     console.log(JSON.stringify(read));
     """
-    return _run_page_module('press-count.js', script, frames)
+    return _run_page_module('core.js', script, frames)
+
+
+def test_the_teleop_command_refuses_a_stale_limit_of_the_headset_above_its_silence_limit():
+    # A message that comes later than the silence limit finds control off, so its presses must do nothing
+    command_with = command.serve.override(silence_limit=0.1, open_window=False, notice=None)
+    with pytest.raises(ValueError, match='stale_limit of the headset must not exceed silence_limit'):
+        command_with.instantiate()
 
 
 @needs_node

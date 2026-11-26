@@ -253,7 +253,14 @@ def serve(
     ``controller_axes`` turns the axes of the moves of the teleoperator by the heading of the controller, so the way the
     teleoperator faces does not count; it puts the axes of the controller in the frame of the headset.
     ``--controller_axes=None`` counts the moves in the axes of the headset.
+    ``webxr.stale_limit`` must not exceed ``silence_limit``: a message that comes later than the silence limit finds
+    control off, so its presses must do nothing.
     """
+    if webxr.stale_limit > silence_limit:
+        raise ValueError(
+            f'the stale_limit of the headset must not exceed silence_limit, got {webxr.stale_limit:g} s and '
+            f'{silence_limit:g} s'
+        )
     # TODO: Set the ready limit and the silence limit for a rig.
     # The socket is in a directory of this user only, so it takes no token. A token in the environment then does not
     # lock out `cfg.policy.teleop`, which sends none.
