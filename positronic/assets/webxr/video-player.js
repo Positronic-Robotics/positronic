@@ -258,6 +258,7 @@ export class WebXRVideoPlayer {
         clearInterval(this.watchdog);
         this.xr.removeEventListener('sessionstart', this.watchSession);
         this.xr.removeEventListener('sessionend', this.keepSocket);
+        this.xr.getSession()?.removeEventListener('visibilitychange', this.keepSocket);
         this.closeSocket();
         if (this.decoder && this.decoder.state !== 'closed') {
             this.decoder.close();
