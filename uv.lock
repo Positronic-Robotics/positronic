@@ -5881,7 +5881,7 @@ requires-dist = [
 
 [[package]]
 name = "positronic-wire"
-version = "0.12.5"
+version = "0.12.6"
 source = { editable = "wire" }
 
 [package.optional-dependencies]
