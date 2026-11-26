@@ -180,8 +180,7 @@ export class WebXRVideoPlayer {
         return this.xr.isPresenting && this.xr.getSession().visibilityState !== 'hidden';
     }
 
-    // The service encodes and sends the video for each open socket, so the page keeps one open only while it shows the
-    // video
+    // The page keeps a socket open only while it shows the video: the service encodes and sends the video for each one
     keepSocket() {
         if (!this.showsVideo()) {
             this.closeSocket();
