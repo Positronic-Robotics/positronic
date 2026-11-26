@@ -1048,8 +1048,7 @@ class Robot(pimm.ControlSystem):
                 self._answer_start_calls(asked, missed)
                 asked = []
                 serving = _Serving(joints, grip, missed, idle_since=clock.now())
-                yield from self._serve_until_parked(arm, serving, should_stop, clock)
-                if not should_stop.value:
+                if (yield from self._serve_until_parked(arm, serving, should_stop, clock)):
                     return None  # parked for ``engaged`` off, so the chain closes with no shutdown park
             except ChainFault as exc:
                 logger.exception('The chain failed during the run; parking the arm before it lets go')
@@ -1068,19 +1067,20 @@ class Robot(pimm.ControlSystem):
 
     def _serve_until_parked(
         self, arm: _Arm, serving: _Serving, should_stop: pimm.SignalReceiver, clock: pimm.Clock
-    ) -> Generator[pimm.Command, None, None]:
-        """Serve the arm until ``should_stop``, or until ``engaged`` turns off and a park is verified."""
+    ) -> Generator[pimm.Command, None, bool]:
+        """Serve the arm until ``should_stop``, or until ``engaged`` turns off and a park is verified. Return whether
+        that park is verified, also when a stop came during it."""
         while True:
             yield from self._serve(arm, serving, should_stop, clock)
             if should_stop.value:
-                return
+                return False
             logger.info('The engaged input turned off: parking the arm before the torque goes off')
             serving.q_target, serving.grip_target, failure = yield from arm.park(
                 arm.read_grip(arm.observations()), interrupt_on_stop=False
             )
             if failure is None:
                 logger.info('The arm is parked; the torque goes off until the engaged input turns on')
-                return
+                return True
             serving.failed_move, serving.park_failed = failure, True
             logger.critical('Parking failed; the arm stays powered until the engaged input turns on and off again')
 

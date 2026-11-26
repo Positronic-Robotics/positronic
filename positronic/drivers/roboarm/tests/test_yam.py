@@ -870,6 +870,27 @@ def test_disengaging_parks_the_arm_and_cuts_the_torque_only_after_the_park(engag
     rig.finish()
 
 
+def test_a_stop_during_the_park_for_disengaging_parks_the_arm_once(engaged_rig, monkeypatch):
+    rig = engaged_rig
+    rig.raise_arm()
+    parks = []
+    park = yam._Arm.park
+
+    def counted(arm, *args, **kwargs):
+        parks.append(rig.stop.stopped)
+        return (yield from park(arm, *args, **kwargs))
+
+    monkeypatch.setattr(yam._Arm, 'park', counted)
+    rig.engaged.push(False)
+    rig.tick(0.1)
+    assert parks == [False]
+    rig.finish()
+
+    assert parks == [False]
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+    assert rig.vendor.closed
+
+
 def test_a_park_that_fails_for_disengaging_keeps_the_torque_on_until_the_input_turns_on_and_off(engaged_rig, caplog):
     rig = engaged_rig
     rig.raise_arm()
