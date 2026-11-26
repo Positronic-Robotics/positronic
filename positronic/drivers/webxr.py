@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import subprocess
 import tempfile
@@ -175,18 +176,27 @@ def _build_access_url(host: str, port: int, use_https: bool) -> str:
     return f'{scheme}://{host}:{port}/'
 
 
+# How fast the delay base of a connection on ``/ws`` may rise, in ms per ms of arrival time. It is far above the drift
+# of a clock, so the base follows a page clock that runs slow.
+_DELAY_BASE_RISE = 1e-3
+
+
 class _ConnectionPresses:
     """The press counts of one connection on ``/ws``, from a base for each controller.
 
     The first message of a controller sets its base, so a press that the page counted before it connected does
     nothing. The delay of a message is its arrival time less its timestamp, so it holds the offset of the two clocks
-    too. A message whose delay is more than ``stale_limit`` seconds above the least delay of the connection is stale,
-    as in a backlog after a stall of the network: its counts become the base, so the presses of the stall do nothing.
-    Only differences of delays count, so the clocks need not agree."""
+    too. The delay base is the least delay of the connection. It rises at ``_DELAY_BASE_RISE`` with the arrival time,
+    and never above the delay of the newest fresh message. A message whose delay is more than ``stale_limit`` seconds
+    above the delay base is stale, as in a backlog after a stall of the network: its counts become the base, so the
+    presses of the stall do nothing. Only differences of delays count, so the clocks need not agree."""
 
     def __init__(self, stale_limit: float) -> None:
         self._stale_ms = stale_limit * 1000
-        self._least_delay_ms: float | None = None
+        # Infinite until the first message, whose delay then becomes the delay base
+        self._delay_base_ms = math.inf
+        self._fresh_delay_ms = math.inf
+        self._last_received_ms = 0.0
         self._base: dict[str, tuple[int, ...]] = {}
 
     def counted(
@@ -195,8 +205,12 @@ class _ConnectionPresses:
         """``buttons`` of a message sent at ``sent_ms`` by the page clock and received at ``received_ms``, with the
         presses since the base of each controller."""
         delay_ms = received_ms - sent_ms
-        self._least_delay_ms = delay_ms if self._least_delay_ms is None else min(self._least_delay_ms, delay_ms)
-        stale = delay_ms - self._least_delay_ms > self._stale_ms
+        risen_ms = self._delay_base_ms + _DELAY_BASE_RISE * (received_ms - self._last_received_ms)
+        self._delay_base_ms = min(risen_ms, self._fresh_delay_ms, delay_ms)
+        self._last_received_ms = received_ms
+        stale = delay_ms - self._delay_base_ms > self._stale_ms
+        if not stale:
+            self._fresh_delay_ms = delay_ms
         return {
             side: None if state is None else self._since_base(side, state, stale) for side, state in buttons.items()
         }
@@ -244,7 +258,7 @@ class WebXR(pimm.ControlSystem):
     - frontend: the page to serve, a ``Frontend``.
     - session_mode: the WebXR session that the page requests, a ``SessionMode``.
     - use_https: enable HTTPS; set False for iPhone dev.
-    - stale_limit: how many seconds later than the least delay of its connection a message on ``/ws`` may come and
+    - stale_limit: how many seconds later than the delay base of its connection a message on ``/ws`` may come and
       still count its presses. A later message, as in a backlog after a stall of the network, presses nothing.
     - video_bitrate: the target bit rate of the video stream, in bits per second.
     - video_fps: the frame rate of the frames that ``frame`` receives. The video stream sends a key frame once each

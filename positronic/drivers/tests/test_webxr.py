@@ -291,6 +291,21 @@ def test_a_press_right_after_a_slow_stretch_that_is_not_stale_counts(world):
     assert _presses_of_a(world, [[(0, 0), (0, 200), (0, 400), (1, 400)]]) == [0, 0, 0, 1]
 
 
+def test_a_press_at_the_end_of_a_long_connection_counts_while_the_page_clock_runs_slow():
+    # The page sends once each second for 3 hours, and its clock runs 100 ppm slow: the delay grows by 1080 ms
+    presses = webxr._ConnectionPresses(stale_limit=0.5)
+    received = np.arange(3 * 3600 + 1) * 1000.0
+    sent = received * (1 - 100e-6) - 1e9
+    counts = [0] * (len(received) - 1) + [1]
+    seen = []
+    for count, sent_ms, received_ms in zip(counts, sent, received, strict=True):
+        state = webxr.ControllerButtons((0.0,) * 6, (0, 0, 0, 0, count, 0))
+        right = presses.counted({webxr.RIGHT: state}, sent_ms, received_ms)[webxr.RIGHT]
+        assert right is not None
+        seen.append(right.presses[4])
+    assert seen == counts
+
+
 @pytest.mark.parametrize('limit', [0.0, -0.5, float('inf'), float('nan')])
 def test_a_stale_limit_that_is_not_finite_and_positive_is_refused(limit):
     with pytest.raises(ValueError, match='stale_limit must be finite and positive'):
