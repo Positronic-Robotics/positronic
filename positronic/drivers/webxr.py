@@ -378,7 +378,8 @@ class WebXR(pimm.ControlSystem):
 
             async def send_unless_closed(send: Callable[[Any], Awaitable[None]], data: str | bytes) -> None:
                 # The server answers the close frame of the page with its own close and then refuses a send.
-                # No await comes between this check and the send, so the close cannot arrive between them.
+                # No await comes between this check and the send, so the route cannot record the close between them.
+                # A close that comes in that gap makes the send raise `WebSocketDisconnect`.
                 if not closed.done():
                     await send(data)
 
