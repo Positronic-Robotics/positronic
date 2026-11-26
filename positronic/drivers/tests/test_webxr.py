@@ -186,9 +186,6 @@ def test_the_page_input_emits_each_object_that_the_page_posts(world):
     assert [data for _, data in inputs.emitted] == [{'headset_camera': keys.WRIST_IMAGE}, {'x': 1}]
 
 
-RELEASED = webxr.ControllerButtons((0.0,) * 6, (0,) * 6)
-
-
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
     sent = webxr.ControllerButtons((0.5, 0.0, 1.0, 0.0, 1.0, 0.0), (0, 0, 3, 0, 7, 1))
@@ -210,6 +207,9 @@ def test_a_controller_message_parses_back_to_its_poses_and_buttons():
 def test_controller_buttons_refuse_press_counts_that_do_not_match_the_values(presses, match):
     with pytest.raises(ValueError, match=match):
         webxr.ControllerButtons((0.0,) * 6, presses)
+
+
+RELEASED = webxr.ControllerButtons((0.0,) * 6, (0,) * 6)
 
 
 def _hand_message(values: list[float]) -> dict:
