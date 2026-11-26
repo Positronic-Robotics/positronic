@@ -53,7 +53,8 @@ TEXT_ONLY = 'headset_text_only'
 class _Headset(pimm.ControlSystem):
     """Pass the samples of the headset to the service, and the view of the service to the headset.
 
-    The bridge sends the view at once when the shown camera has a new image, and else once each view period.
+    The bridge sends the view at once when the shown camera has a new image or the page asks for a change, and else
+    once each view period.
     """
 
     # How often the bridge logs the camera feeds that reach the service.
@@ -104,7 +105,7 @@ class _Headset(pimm.ControlSystem):
             if page_input is not None and TEXT_ONLY in page_input.data:
                 self._text_only = page_input.data[TEXT_ONLY] is True
             images = self._service.shown_images()
-            if images != shown_images or clock.now() >= next_view:
+            if images != shown_images or page_input is not None or clock.now() >= next_view:
                 next_view, shown_images = clock.now() + self._view_period_sec, images
                 self._send_view()
             yield pimm.Sleep(self.POLL_SEC)
