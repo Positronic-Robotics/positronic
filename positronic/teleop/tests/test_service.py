@@ -35,6 +35,7 @@ from positronic_model_server.protocol import (
 from positronic_model_server.serialization import deserialise, encode_jpeg, serialise
 from positronic_model_server.server import ModelServer
 from positronic_model_server.server_wire import ServedHostPort
+from positronic_model_server.spec import SEQ
 from positronic_model_server.websocket_wire import ServedUnixSocket
 from positronic_wire import registry, wire
 from positronic_wire.websocket import WebsocketUnixClientWire
@@ -782,7 +783,7 @@ def test_the_client_stack_sends_the_camera_images_as_jpeg_or_with_a_video_bit_ra
 
 def test_the_client_stack_sends_the_call_id_of_each_frame_request():
     stack = TeleopModel.client_stack(protocol.SessionParams(cameras=(keys.EXTERIOR_IMAGE,)))
-    codec = from_spec(stack['seq'][-1])
+    codec = from_spec(stack[SEQ][-1])
     assert isinstance(codec, Codec)
     assert codec.encode({**OBS, policy_keys.CALL_ID: 7})[protocol.CALL_ID] == 7
 
