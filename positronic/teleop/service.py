@@ -649,6 +649,8 @@ class TeleopService:
             main = shown if shown in names else next(iter(names), None)
             shows_images = state.phase is Phase.RUNNING and camera
             others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
+            # The task and the state of the arms come with the first frame request.
+            answered = self._frames > 0
         footer = [CAMERA_HINT]
         match state.phase:
             case Phase.IDLE:
@@ -659,6 +661,8 @@ class TeleopService:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
+        if not answered:
+            return self._view(image, ['Trial starting: waiting for the robot'], footer, others)
         lines = [*self._control_lines(), 'Hold B: Complete. Hold the stick: Give up']
         return self._view(image, [state.task, *lines] if task else lines, footer, others)
 

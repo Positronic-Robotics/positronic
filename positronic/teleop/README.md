@@ -102,8 +102,9 @@ trial waits for Ready, and it is green while the trial runs. At each new trial a
 slider, so a closed gripper does not close again at the next Control.
 
 The Quest shows the phase, the task and the control state on its video. While a trial waits for Ready, the video shows
-no task. The control state of an arm is on green while control is on, and on yellow while it is off. The window on the
-laptop shows the same state, and the control state.
+no task. From Ready to the first frame request of the run, the video shows "Trial starting: waiting for the robot" and
+no control state. The control state of an arm is on green while control is on, and on yellow while it is off. The window
+on the laptop shows the same state, and the control state.
 
 The page sends controller data only in VR, so outside VR a press of B does nothing. `tracked` in `GET /status` of the
 window and in the page state is false when no controller data came in the silence limit (0.5 s). While a trial waits
