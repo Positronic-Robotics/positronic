@@ -281,6 +281,7 @@ class RobolabEnv(EnvProtocol):
             # place, so such an episode never ends.
             if math.ceil(episode_length_s / (scene.sim.dt * scene.decimation)) <= success_tail.RESET_IN_PLACE_STEPS:
                 raise ValueError(f'an episode of {episode_length_s} s is too short for RoboLab to end it')
+        # RoboLab reads only the current contact forces, so the sensors need no history.
         contact_sensors.make_lazy(scene.scene, ContactSensorCfg)
         self._env, self._env_cfg = create_env(
             scene, device=args.device, num_envs=self._num_envs, instruction_type=instruction_type
