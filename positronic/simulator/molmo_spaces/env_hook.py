@@ -1,15 +1,14 @@
-"""Site changes to the MolmoSpaces episodes that a server runs, loaded from a file.
+"""Site changes to the MolmoSpaces episodes that a server runs: this module loads them from a file, and it must work
+in MolmoSpaces' isolated interpreter without Positronic installed.
 
-This module must work in MolmoSpaces' isolated interpreter without Positronic installed.
-
-A hook file defines ``HOOK``, an ``EnvHook``. The server's interpreter has no positronic, so the file imports the base
-class as ``from env_hook import EnvHook``. The server runs the file before it loads MolmoSpaces, so the file's top level
-can choose the asset packs that MolmoSpaces fetches when it loads.
+A hook file defines ``HOOK``, an ``EnvHook``, and imports the base class as ``from env_hook import EnvHook``. The
+server loads a hook file after MolmoSpaces, at the first reset token or selection that names its path and digest.
 """
 
 import hashlib
 import importlib.util
 import sys
+import types
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -26,6 +25,9 @@ class EnvHook:
 
     A hook can change the robot only within the bundled FR3 model: its seven arm joints, its kinematics and its 2F-85
     grasp site stay, for example a mount or a gripper detail changes. The eval records the bundled robot model.
+
+    One server runs episodes of several hooks, one episode at a time. A hook changes only the config and the task of
+    its own episode, because the server builds the model, the robot and the renderer of each episode again.
     """
 
     def eval_config(self, cfg: Any, episode: Any) -> None:
@@ -60,6 +62,14 @@ class LoadedHook(NamedTuple):
     record: str | None  # The ``mapping.TASK_ENV_HOOK`` value of the hook: None for the default hook.
 
 
+def _run(module: types.ModuleType, source: bytes, path: Path) -> EnvHook:
+    exec(compile(source, str(path), 'exec'), module.__dict__)
+    hook = getattr(module, HOOK_NAME, None)
+    if not isinstance(hook, EnvHook):
+        raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')
+    return hook
+
+
 def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
     """The ``HOOK`` of the file at ``path``, or the default hook when ``path`` is None.
 
@@ -79,8 +89,38 @@ def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
     module = importlib.util.module_from_spec(spec)
     # A dataclass finds the globals of its module in sys.modules.
     sys.modules[spec.name] = module
-    exec(compile(source, str(path), 'exec'), module.__dict__)
-    hook = getattr(module, HOOK_NAME, None)
-    if not isinstance(hook, EnvHook):
-        raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')
-    return LoadedHook(hook, f'{path.name}@sha256:{digest}')
+    try:
+        hook = _run(module, source, path)
+    except BaseException:
+        # A hook file that failed to load can load again after a fix.
+        del sys.modules[spec.name]
+        raise
+    return LoadedHook(hook, mapping.HookFile(path, digest).record)
+
+
+class Hooks:
+    """The hooks of a server's episodes: each hook file loads once for each path and digest, and the server keeps it.
+
+    The server operator gives ``root``: a request can name only a hook file under it, and without it no hook file.
+    A server loads one hook file of each name, so two versions of one hook never share the modules they import.
+    """
+
+    def __init__(self, root: Path | None) -> None:
+        self._root = None if root is None else root.resolve()
+        self._default = load(None)
+        self._loaded: dict[mapping.HookFile, LoadedHook] = {}
+
+    def _under_root(self, path: Path) -> Path:
+        if self._root is None:
+            raise ValueError(f'the server has no hook root, so it loads no hook file and refuses {path}')
+        if not path.resolve().is_relative_to(self._root):
+            raise ValueError(f'{path} is not under the hook root {self._root} of the server')
+        return path
+
+    def of(self, request: dict[str, Any]) -> LoadedHook:
+        hook_file = mapping.HookFile.of(request)
+        if hook_file is None:
+            return self._default
+        if hook_file not in self._loaded:
+            self._loaded[hook_file] = load(self._under_root(hook_file.env_hook), hook_file.env_hook_sha256)
+        return self._loaded[hook_file]

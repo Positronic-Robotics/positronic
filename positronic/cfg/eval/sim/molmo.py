@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import random
 from contextlib import AbstractContextManager, nullcontext
@@ -29,22 +28,15 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     return mapping.BenchmarkPath.parse(bench), int(index)
 
 
-def _env_server(env_hook: str | None, env_server: str | None) -> AbstractContextManager[tuple[str, int]]:
-    """The env server of the eval: the server at ``env_server``, or one that the eval launches."""
-    if env_server is not None:
-        if env_hook is not None:
-            raise ValueError(
-                '--eval.env_hook applies to a server that the eval launches, so --eval.env_server must be unset'
-            )
-        return nullcontext(env_server_address(env_server))
-    if env_hook is None:
-        return serve_molmo_spaces()
-    hook = Path(env_hook).expanduser().resolve()
-    return serve_molmo_spaces(hook=hook, hook_sha256=hashlib.sha256(hook.read_bytes()).hexdigest())
-
-
 _EPISODE_CAMERA_KEYS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2)
 _SHOULDER_ALIASES = frozenset(camera for cameras in SHOULDER_CAMERAS.values() for camera in cameras)
+
+
+def _env_server(env_server: str | None, hook_path: Path | None) -> AbstractContextManager[tuple[str, int]]:
+    """The env server of the eval: the server at ``env_server``, or one that the eval launches for its hook file."""
+    if env_server is not None:
+        return nullcontext(env_server_address(env_server))
+    return serve_molmo_spaces(hook_root=None if hook_path is None else hook_path.parent)
 
 
 def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str]) -> dict[str, tuple[str, ...]]:
@@ -126,17 +118,18 @@ def benchmarks(
     ``with_right_shoulder=False``, and a shoulder camera is refused. Every trial records the map under
     ``molmo.episode_cameras``. A map that replaces ``image.exterior`` records no ``molmo.exterior_sides``.
 
-    ``env_hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that the server applies to each episode:
-    for example a task class, a camera model or a grip scale of its own. A hook can change the robot only within the
-    bundled FR3 joints, kinematics and 2F-85 grasp site, for example its mount or a gripper detail, and the eval
-    records the bundled robot model. The server checks the file against the digest that the eval passes. Every
-    trial records the name and SHA-256 digest of the hook file that the server runs under ``molmo.env_hook``, or
-    None without a hook. A run with a hook or an episode camera is not comparable with stock scores.
+    ``env_hook`` is a file that defines ``HOOK``, an ``env_hook.EnvHook`` that the server applies to each episode of
+    the eval: for example a task class, a camera model or a grip scale of its own. ``EnvHook`` states what a hook can
+    change. Each reset token names the file and the SHA-256 digest that the eval reads from it, and the server refuses
+    a file with another digest. The eval and the server read the file at the same path, so a dialed server on another
+    box needs the same file at that path. A server loads only the hook files under the hook root of its operator: the
+    eval launches its server with the directory of ``env_hook``, and a dialed server needs a ``--hook-root`` that holds
+    the file. Every trial records the name and digest of the hook file that the server runs under ``molmo.env_hook``,
+    or None without a hook. A run with a hook or an episode camera is not comparable with stock scores.
 
     ``env_server`` is the ``host:port`` of a MolmoSpaces env server that already runs. Without it, the eval launches
-    a server of its own. ``env_hook`` applies only to a server that the eval launches; a dialed server reports its
-    own hook. Start a server to dial with
-    ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook <file>]``: it serves eval runs one
+    a server of its own. Start a server to dial with
+    ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook-root <dir>]``: it serves eval runs one
     after another, with one episode at a time, until Ctrl-C stops it.
 
     ``success_profile`` is a ``SuccessProfile`` or its value: how the server judges success and when it ends a trial.
@@ -161,14 +154,17 @@ def benchmarks(
         bound = [name for name, value in zip(names, values, strict=True) if value is not None]
         if bound:
             raise ValueError(f'--eval.episode_paths names its benchmarks, so --eval.{bound[0]} must be unset')
-    serve = _env_server(env_hook, env_server)
+    hook_path = None if env_hook is None else Path(env_hook).expanduser().resolve()
+    serve = _env_server(env_server, hook_path)
+    hook_file = None if hook_path is None else mapping.HookFile.read(hook_path)
+    hook_selection = hook_file.request() if hook_file is not None else {}
     episode_cameras = episode_cameras or {}
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]
     cameras = _cameras(exterior_sides, episode_cameras)
     sides_record = (
         {} if keys.EXTERIOR_IMAGE in episode_cameras else {molmo_keys.EXTERIOR_SIDES: [s.value for s in exterior_sides]}
     )
-    adapter = MolmoAdapter(cameras, with_right_shoulder, with_object_image_points)
+    adapter = MolmoAdapter(cameras, with_right_shoulder, with_object_image_points, hook_file)
     proxy = RemoteEnvControlSystem(adapter, serve)
     embodiment = remote_embodiment(
         proxy, cameras, descriptor='remote.molmo_spaces.droid', static_meta=adapter.robot_model
@@ -191,6 +187,7 @@ def benchmarks(
                     mapping.SELECT_EPISODES: list(dict.fromkeys(indices)),
                     mapping.SELECT_HORIZON_SEC: horizon_sec,
                     mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
+                    **hook_selection,
                 },
             )
             for entry in proxy.tasks(selection):
@@ -210,6 +207,7 @@ def benchmarks(
                 mapping.SELECT_EPISODES: episodes,
                 mapping.SELECT_HORIZON_SEC: horizon_sec,
                 mapping.WITH_RIGHT_SHOULDER: with_right_shoulder,
+                **hook_selection,
             },
         )
         return proxy.tasks(selection)
