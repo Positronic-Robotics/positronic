@@ -37,8 +37,8 @@ The plain form of the policy works too:
 
 | Device | Browser | Service config | Page |
 |---|---|---|---|
-| iPhone | XR Browser | `--webxr=@positronic.cfg.webxr.iphone_teleop` (http) | `http://<laptop>:5005/?mode=teleop` |
-| Android phone | Chrome | `--webxr=@positronic.cfg.webxr.android_teleop` (https) | `https://<laptop>:5005/?mode=teleop` |
+| iPhone | XR Browser | `--webxr=@positronic.cfg.webxr.iphone` (http) | `http://<laptop>:5005/` |
+| Android phone | Chrome | `--webxr=@positronic.cfg.webxr.android` (https) | `https://<laptop>:5005/` |
 | Meta Quest | Oculus Browser | `--webxr=@positronic.cfg.webxr.oculus` (https, the default) | `https://<laptop>:5005/` |
 | PlayStation VR2 | Chrome on the PC | `--webxr=@positronic.cfg.webxr.psvr2` (https) | `https://localhost:5005/` |
 
@@ -162,7 +162,7 @@ Conversion for training picks its own keys from the recording.
 1. In terminal 1, start the service. For an iPhone:
 
    ```bash
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone
    ```
 
 2. In terminal 2, start a run of 20 trials:
@@ -297,7 +297,7 @@ tunnel. The machine of the run must reach the laptop on port 5007, for example o
 
    ```bash
    export AUTH_TOKEN=<a long random string>
-   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop \
+   uv run positronic teleop --webxr=@positronic.cfg.webxr.iphone \
      --served_address=@positronic.teleop.command.network
    ```
 
