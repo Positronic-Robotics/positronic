@@ -375,17 +375,18 @@ def test_a_teleoperator_readies_takes_control_and_completes_a_trial(service, soc
 def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_while_it_is_on(
     service, socket_path, runtime
 ):
-    def control_colour() -> tuple[int, ...]:
-        # A pixel in the left margin of the box behind the second line, where no letter is
-        return tuple(int(value) for value in service.view()[50, 6])
+    def colours() -> set[str]:
+        view = service.view()
+        shown = {'on': service_module.CONTROL_ON_COLOUR, 'off': service_module.CONTROL_OFF_COLOUR}
+        return {name for name, colour in shown.items() if (view == colour).all(axis=-1).any()}
 
     with _Headset(service) as headset:
         run = _readied_run(service, headset, runtime, socket_path)
         _drive_until(run, _is_move)
-        assert control_colour() == service_module.CONTROL_OFF_COLOUR
+        assert colours() == {'off'}
         headset.press(a=1.0)
         _drive_until(run, lambda _: service.state().control)
-        assert control_colour() == service_module.CONTROL_ON_COLOUR
+        assert colours() == {'on'}
         run.close()
 
 
