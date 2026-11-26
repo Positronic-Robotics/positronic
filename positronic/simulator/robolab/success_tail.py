@@ -37,9 +37,11 @@ class SuccessTail:
         self._succeeded = np.zeros(num_envs, dtype=bool)
         self._steps_since = np.zeros(num_envs, dtype=np.int64)
 
-    def reset(self) -> None:
-        self._succeeded[:] = False
-        self._steps_since[:] = 0
+    def reset(self, slots: list[int] | None = None) -> None:
+        """Clear the clones ``slots``, or every clone."""
+        cleared = slice(None) if slots is None else slots
+        self._succeeded[cleared] = False
+        self._steps_since[cleared] = 0
 
     def step(
         self, fired: np.ndarray, timed_out: np.ndarray, faulted: np.ndarray, episode_steps: np.ndarray

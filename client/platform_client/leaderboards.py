@@ -321,18 +321,27 @@ class Baseline(_Wire):
     publisher: str | None = Field(default=None, min_length=1)
 
 
+class PartReplay(_Wire):
+    """The replay of one part of a submission, and the eval that the part ran."""
+
+    eval: EvalRef
+    replay: DataBackedReplayLink
+
+
 class TeamSubmission(_Wire):
     """The submission that the numbers of a team row come from. `replay` is absent until its page is built.
 
-    A submission that runs in more than one simulator has a replay for each part: `part_replays` holds them, by the
-    metric key of the part's score. A part whose page is not built has no entry, and `replay` is the replay of the
-    first part.
+    A submission that runs in more than one simulator has a replay for each part. `score_replays` holds them by the
+    metric key of the part's score, in part order, so a score of more than one part has a replay for each.
+    `part_replays` holds the replay of the first part of each score. A part whose page is not built has no entry,
+    and `replay` is the replay of the first part.
     """
 
     id: SubmissionId
     submitted_at: AwareDatetime
     replay: DataBackedReplayLink | None = None
     part_replays: dict[MetricKey, DataBackedReplayLink] = Field(default_factory=dict)
+    score_replays: dict[MetricKey, list[PartReplay]] = Field(default_factory=dict)
 
 
 class LeaderboardRow(_Wire):
@@ -479,7 +488,8 @@ class LeaderboardResponse(LeaderboardSummary):
     def _a_row_links_only_parts_named_by_metrics_of_the_descriptor(self) -> Self:
         metrics = {metric.key for metric in self.descriptor.metrics}
         for row in self.rows:
-            parts = set(row.submission.part_replays) if row.submission is not None else set()
+            submission = row.submission
+            parts = {*submission.part_replays, *submission.score_replays} if submission is not None else set()
             if not parts <= metrics:
                 raise ValueError(f'row {row.key!r} links the replay of a part that no metric names: {sorted(parts)}')
         return self

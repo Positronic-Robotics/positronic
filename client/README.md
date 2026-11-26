@@ -522,8 +522,9 @@ place it can take, and the leaderboard lists every row in score order.
 The `submission` of a team row carries `replay`, a page that plays back the camera video of the
 submission, with the task and outcome of each episode. The page opens without a key, and `replay` is
 absent until the platform has built it. A submission that runs in more than one simulator also carries
-`part_replays`: one such page for each part, by the metric key of the part's score. `replay` is then the
-page of the first part.
+`score_replays`: by the metric key of each score, one such page for each part of that score, with the eval
+that the part ran, in part order. `part_replays` holds the page of the first part of each score, by the same
+key. `replay` is then the page of the first part.
 
 `replay.data_url` names the JSON object the page renders from. `about` identifies the submission,
 and each episode carries its values and one absolute URL per camera video. A page on another origin
