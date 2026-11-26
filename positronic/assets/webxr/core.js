@@ -4,6 +4,12 @@
 import { SESSION_MODE } from '/session-mode.js';
 import { WebXRButton } from '/webxr-button.js';
 
+// One controller in a message on `/ws`: its position, its wxyz orientation, the value of each button and the number
+// of presses of each button since the page loaded
+export function controllerSample(position, orientation, buttons, presses) {
+  return { position, orientation, buttons, presses };
+}
+
 export function startXRApp({ onInit, onFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
   let websocket = null;
   let xrButton = null;
