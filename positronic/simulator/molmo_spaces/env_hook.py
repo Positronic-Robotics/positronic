@@ -62,6 +62,14 @@ class LoadedHook(NamedTuple):
     record: str | None  # The ``mapping.TASK_ENV_HOOK`` value of the hook: None for the default hook.
 
 
+def _run(module: types.ModuleType, source: bytes, path: Path) -> EnvHook:
+    exec(compile(source, str(path), 'exec'), module.__dict__)
+    hook = getattr(module, HOOK_NAME, None)
+    if not isinstance(hook, EnvHook):
+        raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')
+    return hook
+
+
 def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
     """The ``HOOK`` of the file at ``path``, or the default hook when ``path`` is None.
 
@@ -88,14 +96,6 @@ def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
         del sys.modules[spec.name]
         raise
     return LoadedHook(hook, mapping.HookFile(path, digest).record)
-
-
-def _run(module: types.ModuleType, source: bytes, path: Path) -> EnvHook:
-    exec(compile(source, str(path), 'exec'), module.__dict__)
-    hook = getattr(module, HOOK_NAME, None)
-    if not isinstance(hook, EnvHook):
-        raise ValueError(f'{path} must define {HOOK_NAME} as an EnvHook, not {type(hook).__name__}')
-    return hook
 
 
 class Hooks:

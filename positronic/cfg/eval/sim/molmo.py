@@ -32,6 +32,13 @@ _EPISODE_CAMERA_KEYS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMA
 _SHOULDER_ALIASES = frozenset(camera for cameras in SHOULDER_CAMERAS.values() for camera in cameras)
 
 
+def _env_server(env_server: str | None, hook_path: Path | None) -> AbstractContextManager[tuple[str, int]]:
+    """The env server of the eval: the server at ``env_server``, or one that the eval launches for its hook file."""
+    if env_server is not None:
+        return nullcontext(env_server_address(env_server))
+    return serve_molmo_spaces(hook_root=None if hook_path is None else hook_path.parent)
+
+
 def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str]) -> dict[str, tuple[str, ...]]:
     """The camera aliases of each image key: the shoulder of each exterior side, then ``episode_cameras``."""
     cameras = camera_dict(exterior_sides)
@@ -48,13 +55,6 @@ def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str]
             )
         cameras[key] = (camera,)
     return cameras
-
-
-def _env_server(env_server: str | None, hook_path: Path | None) -> AbstractContextManager[tuple[str, int]]:
-    """The env server of the eval: the server at ``env_server``, or one that the eval launches for its hook file."""
-    if env_server is not None:
-        return nullcontext(env_server_address(env_server))
-    return serve_molmo_spaces(hook_root=None if hook_path is None else hook_path.parent)
 
 
 @cfn.config(
