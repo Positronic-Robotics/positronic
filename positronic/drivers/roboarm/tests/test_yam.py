@@ -2900,8 +2900,10 @@ def test_the_effort_of_a_launch_from_rest_does_not_read_as_a_touch(monkeypatch):
     capped = _free_close(monkeypatch, LAUNCH_HOLD_N, LAUNCH_TOUCH)
     np.testing.assert_array_equal(np.stack(capped.commands), np.stack(uncapped.commands))
     no_launch = dataclasses.replace(LAUNCH_TOUCH, launch_s=0.0)
-    unguarded = [np.stack(_free_close(monkeypatch, cap_n, no_launch).commands) for cap_n in (None, LAUNCH_HOLD_N)]
-    assert not np.array_equal(*unguarded)
+    uncapped_commands, capped_commands = (
+        np.stack(_free_close(monkeypatch, cap_n, no_launch).commands) for cap_n in (None, LAUNCH_HOLD_N)
+    )
+    assert not np.array_equal(uncapped_commands, capped_commands)
 
 
 HOLD_NM = DEFAULT_GRASP.touch_effort_nm / 2
@@ -2961,6 +2963,7 @@ def test_a_close_that_pauses_and_goes_on_reads_its_new_launch_as_no_touch():
     for _ in range(round(1.0 / step)):
         grasp.target(now, q, paused_at, 0.0, GRIPPER_KP, 0.0, HOLD_NM)
         now += step
+    target = q
     for i in range(LAUNCH_STEPS + 5):
         effort = TOUCHING_EFFORT_NM if i < LAUNCH_STEPS // 2 else 0.0  # the launch from rest, then a free close
         target = grasp.target(now, q, 0.0, effort, GRIPPER_KP, 0.0, HOLD_NM)
@@ -3092,17 +3095,21 @@ def test_only_the_yambox_config_gives_each_gripper_a_rate_limited_close_and_a_fo
         *(system for system in bimanual.control_systems if isinstance(system, yam.Robot)),
         *(system for system in yambox.instantiate().control_systems if isinstance(system, yam.Robot)),
     ]
-    caps, close_s = [], []
+    caps, tunings, close_s = [], [], []
     for arm in arms:
         chain, motors = _gripper_chain(monkeypatch, stop_at=0.0)
         rig = Rig(driver=arm)
         rig.driver._connect = lambda channel, sim, compensation, chain=chain: chain
         rig.tick()
-        caps.append(_last(rig.arm_metas)[roboarm_keys.GRIPPER_FORCE_CAP])
+        meta = _last(rig.arm_metas)
+        caps.append(meta[roboarm_keys.GRIPPER_FORCE_CAP])
+        tunings.append(meta[roboarm_keys.GRIPPER_GRASP_TUNING])
         rig.loop.close()
         close_s.append(_close_s(chain, motors))
     i2rt_s = _close_s(*_gripper_chain(monkeypatch, stop_at=0.0))
     assert caps == [None] * 4 + [20.0] * 2
+    slow_right = dataclasses.replace(DEFAULT_GRASP, close_rate_per_s=1.0)
+    assert tunings == [None] * 4 + [dataclasses.asdict(DEFAULT_GRASP), dataclasses.asdict(slow_right)]
     assert close_s[:4] == [i2rt_s] * 4
     assert close_s[4:] == [pytest.approx(1 / DEFAULT_GRASP.close_rate_per_s, rel=0.15), pytest.approx(1.0, rel=0.15)]
 

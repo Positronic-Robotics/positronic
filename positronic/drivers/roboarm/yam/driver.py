@@ -204,8 +204,8 @@ def _limit_gripper(chain: Any, grasp_tuning: GraspTuning | None, cap_n: Callable
 
     def capped_send(motor_torques: np.ndarray, joint_commands: Any, *args: Any) -> None:
         readings, request, kp = chain._joint_state, joint_commands.pos[gripper], joint_commands.kp[gripper]
-        q = chain.remapper.to_robot_joint_pos_space(readings.pos)[gripper]
-        dq = chain.remapper.to_robot_joint_vel_space(readings.vel)[gripper]
+        q = float(chain.remapper.to_robot_joint_pos_space(readings.pos)[gripper])
+        dq = float(chain.remapper.to_robot_joint_vel_space(readings.vel)[gripper])
         newtons = cap_n()
         cap_nm = None
         if newtons is not None:
@@ -216,7 +216,7 @@ def _limit_gripper(chain: Any, grasp_tuning: GraspTuning | None, cap_n: Callable
         if grasp is None:
             target = capped_target(closing, q, request, kp, feedforward_and_damping, cap_nm)
         else:
-            effort = readings.eff[gripper]
+            effort = float(readings.eff[gripper])
             target = grasp.target(time.monotonic(), q, request, effort, kp, feedforward_and_damping, cap_nm)
         if target != request:
             joint_commands.pos[gripper] = target
@@ -326,6 +326,7 @@ class _Arm(DriverRun[command.CommandType]):
         ee_mass: float | None,
         gripper_force_cap_n: float | None,
         take_gripper_force_cap: Callable[[], float | None],
+        grasp_tuning: GraspTuning | None,
     ):
         super().__init__(sync_move, async_move, should_stop, clock, hz=_CONTROL_HZ)
         self.vendor = vendor
@@ -345,6 +346,7 @@ class _Arm(DriverRun[command.CommandType]):
         self._ee_mass = ee_mass
         self._force_cap_n = gripper_force_cap_n  # the gripper force cap in force
         self._take_gripper_force_cap = take_gripper_force_cap
+        self._grasp_tuning = grasp_tuning
         self._reported_force_cap_n: float | None = None  # the gripper force cap in the last arm meta
 
     @functools.cached_property
@@ -373,6 +375,8 @@ class _Arm(DriverRun[command.CommandType]):
         if _LIMIT_GRIPPER_EFFORT in info:
             meta[roboarm_keys.GRIPPER_FORCE_CAP] = self._reported_force_cap_n
             meta[roboarm_keys.GRIPPER_STALL_FORCE_LIMIT] = float(info[_LIMIT_GRIPPER_EFFORT])
+            tuning = self._grasp_tuning
+            meta[roboarm_keys.GRIPPER_GRASP_TUNING] = None if tuning is None else asdict(tuning)
         if _USE_COULOMB_FRICTION in info:
             meta[roboarm_keys.USE_COULOMB_FRICTION] = bool(info[_USE_COULOMB_FRICTION])
             meta[roboarm_keys.COULOMB_FRICTION] = np.asarray(info[_COULOMB_FRICTION], np.float64).tolist()
@@ -865,9 +869,10 @@ class Robot(pimm.ControlSystem):
         :param move_tuning: How a blocking ``sync_move`` settles on this arm. Streamed commands are not settled.
         :param grasp_tuning: How the gripper closes on an object on this arm. None keeps the close rate of i2rt and
             finds no touch. i2rt's sim chain does not run it.
-        :param gripper_force_cap_n: The most force in newtons that the gripper closes with, until the
-            ``gripper_force_cap_n`` input carries another cap. With a ``grasp_tuning``, the cap acts in the launch of a
-            close and after a touch. None or 0 sets no cap. i2rt's own limiter still holds a stalled gripper with its
+        :param gripper_force_cap_n: The cap in newtons on the force that the gripper closes with, until the
+            ``gripper_force_cap_n`` input carries another cap. Without a ``grasp_tuning`` it acts at all times; with
+            one, only in the launch of a close and after a touch, and the arm meta names that tuning. None or 0 sets
+            no cap. i2rt's own limiter still holds a stalled gripper with its
             force limit, which the arm meta names. i2rt's sim chain runs no cap.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
@@ -1005,6 +1010,7 @@ class Robot(pimm.ControlSystem):
                 self._compensation.ee_mass,
                 self._gripper_force_cap_n,
                 self._take_gripper_force_cap,
+                self._grasp_tuning,
             )
             # rules-allow: swallowed-error — a chain fault comes back, and any other is raised again, after the shutdown
             try:
