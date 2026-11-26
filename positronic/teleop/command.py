@@ -83,7 +83,7 @@ class _Headset(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         next_log = clock.now() + self.FEED_LOG_SEC
-        next_view, shown_images = clock.now(), None
+        next_view, sent_count = clock.now(), None
         while not should_stop.value:
             if clock.now() >= next_log:
                 next_log = clock.now() + self.FEED_LOG_SEC
@@ -104,9 +104,9 @@ class _Headset(pimm.ControlSystem):
                         logger.warning('The headset page chose no camera: %s', refused)
             if page_input is not None and TEXT_ONLY in page_input.data:
                 self._text_only = page_input.data[TEXT_ONLY] is True
-            images = self._service.shown_images()
-            if images != shown_images or page_input is not None or clock.now() >= next_view:
-                next_view, shown_images = clock.now() + self._view_period_sec, images
+            image_count = self._service.shown_image_count()
+            if image_count != sent_count or page_input is not None or clock.now() >= next_view:
+                next_view, sent_count = clock.now() + self._view_period_sec, image_count
                 self._send_view()
             yield pimm.Sleep(self.POLL_SEC)
 
