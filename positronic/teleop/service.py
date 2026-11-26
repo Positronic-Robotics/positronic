@@ -278,6 +278,15 @@ class Badge:
     colour: tuple[int, int, int]
 
 
+@dataclass(frozen=True)
+class ViewText:
+    """The text of the headset view: the lines at its top, each plain text or a badge, and the smaller lines at its
+    bottom."""
+
+    lines: tuple[str | Badge, ...]
+    footer: tuple[str, ...]
+
+
 class TeleopService:
     """Serve one teleop session at a time at ``served_address``, as a model server.
 
@@ -637,34 +646,40 @@ class TeleopService:
             cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
 
-    def view(self, camera: bool = True, task: bool = True) -> np.ndarray:
-        """The image for the headset: the camera image of the run, or black with no ``camera``, with the state of the
-        trial. A running trial shows its task only with ``task``. With more than one camera, a column on the right shows
-        the other cameras."""
+    def view_text(self, task: bool = True) -> ViewText:
+        """The text of the headset view in the state of the trial. A running trial shows its task only with ``task``."""
         with self._changed:
             state = self.state()
             shown = self._shown_camera()
-            image = self._headset_image() if camera else None
-            names = self.cameras().names
-            main = shown if shown in names else next(iter(names), None)
-            shows_images = state.phase is Phase.RUNNING and camera
-            others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
             # The task and the state of the arms come with the first frame request.
             answered = self._frames > 0
-        footer = [CAMERA_HINT]
+        footer = (CAMERA_HINT,)
         match state.phase:
             case Phase.IDLE:
-                return self._view(None, ['Waiting for a trial'], footer, others)
+                return ViewText(('Waiting for a trial',), footer)
             case Phase.READY_WAIT:
-                return self._view(None, ['Human trial', 'B: Ready', 'Stick: Cancel'], footer, others)
+                return ViewText(('Human trial', 'B: Ready', 'Stick: Cancel'), footer)
             case Phase.ENDED:
-                return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
+                return ViewText(('The trial ended', 'Give the verdict on the console'), footer)
         if shown is not None:
-            footer = [f'Camera: {shown}', *footer]
+            footer = (f'Camera: {shown}', *footer)
         if not answered:
-            return self._view(image, ['Trial starting: waiting for the robot'], footer, others)
-        lines = [*self._control_lines(), 'Hold B: Complete. Hold the stick: Give up']
-        return self._view(image, [state.task, *lines] if task else lines, footer, others)
+            return ViewText(('Trial starting: waiting for the robot',), footer)
+        lines = (*self._control_lines(), 'Hold B: Complete. Hold the stick: Give up')
+        return ViewText((state.task, *lines) if task else lines, footer)
+
+    def view(self, camera: bool = True, task: bool = True) -> np.ndarray:
+        """The image for the headset: the camera image of a running trial, or black with no ``camera``, with
+        `view_text` on it. With more than one camera, a column on the right shows the other cameras."""
+        with self._changed:
+            text = self.view_text(task)
+            shows_images = self.state().phase is Phase.RUNNING and camera
+            image = self._headset_image() if shows_images else None
+            shown = self._shown_camera()
+            names = self.cameras().names
+            main = shown if shown in names else next(iter(names), None)
+            others = [(name, self._images.get(name) if shows_images else None) for name in names if name != main]
+        return self._view(image, text.lines, text.footer, others)
 
     # The RGB colour behind the control line of an arm whose control is on, and off
     CONTROL_ON_COLOUR = (6, 214, 160)

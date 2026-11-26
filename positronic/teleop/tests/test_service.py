@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
-import cv2
 import httpx
 import numpy as np
 import pos3
@@ -74,6 +73,7 @@ from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import (
     OTHERS_WIDTH,
+    Badge,
     Button,
     ButtonMap,
     CameraState,
@@ -443,22 +443,6 @@ def test_a_teleoperator_readies_takes_control_and_completes_a_trial(service, soc
         _until_cleared(service)
 
 
-def _drawn_text(monkeypatch, draw: Callable[[], object]) -> list[str]:
-    """Each text that ``draw`` puts on an image, once, in the order of its first draw."""
-    drawn: list[str] = []
-    put_text = cv2.putText
-
-    def record(image, text, *args, **kwargs):
-        if text not in drawn:
-            drawn.append(text)
-        return put_text(image, text, *args, **kwargs)
-
-    with monkeypatch.context() as patched:
-        patched.setattr(cv2, 'putText', record)
-        draw()
-    return drawn
-
-
 def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_while_it_is_on(
     service, socket_path, runtime
 ):
@@ -477,28 +461,23 @@ def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_w
         run.close()
 
 
-def test_the_view_shows_that_the_trial_starts_until_its_first_frame(service, socket_path, connect, monkeypatch):
+def test_the_view_shows_that_the_trial_starts_until_its_first_frame(service, socket_path, connect):
     connection = _readied_connection(service, socket_path, connect)
-    starting = _drawn_text(monkeypatch, service.view)
-    assert 'Trial starting: waiting for the robot' in starting
-    assert not any(text.startswith('Control') for text in starting), 'no control line before the first frame'
+    starting = service.view_text().lines
+    assert starting == ('Trial starting: waiting for the robot',), 'no task and no control line before the first frame'
     connection.frame(FRAME_REQUEST)
-    running = _drawn_text(monkeypatch, service.view)
+    running = service.view_text().lines
     assert OBS[keys.TASK] in running
-    assert 'Control off (A: on)' in running
+    assert Badge('Control off (A: on)', TeleopService.CONTROL_OFF_COLOUR) in running
     assert 'Trial starting: waiting for the robot' not in running
     connection.close()
 
 
-def test_a_dropped_trial_with_no_frame_shows_that_it_starts_until_a_session_resumes_it(
-    service, socket_path, connect, monkeypatch
-):
+def test_a_dropped_trial_with_no_frame_shows_that_it_starts_until_a_session_resumes_it(service, socket_path, connect):
     connection = _readied_connection(service, socket_path, connect)
     connection.close()
     assert service.phase is Phase.RUNNING, 'the dropped trial stays for a session that resumes it'
-    shown = _drawn_text(monkeypatch, service.view)
-    assert 'Trial starting: waiting for the robot' in shown
-    assert not any(text.startswith('Control') for text in shown)
+    assert service.view_text().lines == ('Trial starting: waiting for the robot',)
 
 
 def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_target(service, socket_path, runtime):
