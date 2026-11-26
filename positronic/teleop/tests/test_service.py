@@ -554,6 +554,20 @@ def test_the_state_says_whether_a_sample_came_within_the_silence_limit(socket_pa
     assert not service.state().tracked
 
 
+def test_a_sample_that_tracks_no_controller_is_no_controller_data(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=0.2, silence_limit=60.0, hold_sec=HOLD_SEC)
+    no_controller = {webxr.LEFT: None, webxr.RIGHT: None}
+    service.take_sample(no_controller, no_controller)
+    service.take_sample({webxr.RIGHT: HAND}, {webxr.RIGHT: [1.0]})
+    assert not service.state().tracked
+    headset = _Headset(service)
+    headset.pose = headset.left_pose = None
+    headset.buttons = headset.left_buttons = []
+    with headset, pytest.raises(service_module.TrialNotStarted) as raised:
+        service.wait_for_ready(protocol.SessionParams(), threading.Event())
+    assert 'no controller data came in the wait' in str(raised.value)
+
+
 def test_a_ready_wait_longer_than_the_infer_timeout_still_ends_with_ready(socket_path, runtime):
     """The wait for Ready is the preparation of the session, so the infer timeout does not bound it."""
     with TeleopService(

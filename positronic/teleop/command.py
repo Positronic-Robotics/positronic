@@ -40,7 +40,7 @@ class PageState:
     live: tuple[str, ...] = ()
     shown: str | None = None
     chosen: str | None = None
-    # A sample of the controllers came within the silence limit of the service
+    # A sample that tracks a controller came within the silence limit of the service
     tracked: bool = False
 
 
