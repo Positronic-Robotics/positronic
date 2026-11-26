@@ -1542,7 +1542,7 @@ def test_the_headset_bridge_takes_the_view_that_the_page_asks_for(socket_path, m
 
 def test_the_headset_bridge_logs_the_camera_feeds_once_each_log_span(socket_path, monkeypatch, caplog):
     service = TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC)
-    monkeypatch.setattr(service, 'view', lambda camera=True: np.zeros((2, 2, 3), np.uint8))
+    monkeypatch.setattr(service, 'view', lambda camera=True, task=True: np.zeros((2, 2, 3), np.uint8))
     monkeypatch.setattr(service, 'camera_feeds', lambda: {keys.EXTERIOR_IMAGE: service_module.CameraFeed(9.5, 0.04)})
     bridge = command._Headset(service)
     bridge.page_state._bind(RecordingEmitter[dict](), clock=SystemClock())
