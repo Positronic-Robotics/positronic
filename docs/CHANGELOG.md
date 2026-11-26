@@ -14,7 +14,7 @@
 - The OpenPI and Galaxea servers wait `WARMUP_DEADLINE_S` (1800 s) for their model subprocess to start. The OpenPI server waited 300 s, so a start on a slow disk ended the server before the published deadline.
 
 ### Robots
-- The YAM driver takes an `engaged` input. Off, it opens no chain and refuses moves. An open chain parks the arm first and cuts the torque only after the park is verified. `engaged=False` on `yam.Robot` or `cfg.embodiment.yam_bimanual` starts the arms that way, so a console can connect them at a later point
+- The YAM driver can hold its arm only while an `engaged` input is on. A client opts in with `engage_on_input=True` on `yam.Robot` or `cfg.embodiment.yam_bimanual`. The arm then starts with no chain open and refuses moves until the input turns on. Off on an open chain parks the arm, and the torque goes off only after the park is verified. A driver that does not opt in starts as before and does not read the input
 
 ## [0.4.6] - 2026-11-12
 

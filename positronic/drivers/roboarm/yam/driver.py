@@ -867,7 +867,7 @@ class Robot(pimm.ControlSystem):
         move_tuning: SettleTuning = MOVE_SETTLE,
         grasp_tuning: GraspTuning | None = None,
         gripper_force_cap_n: float | None = None,
-        engaged: bool = True,
+        engage_on_input: bool = False,
         connect: Callable = _connect,
     ) -> None:
         """
@@ -887,9 +887,9 @@ class Robot(pimm.ControlSystem):
             one, only in the launch of a close and after a touch, and the arm meta names that tuning. None or 0 sets
             no force cap, but a ``grasp_tuning`` still caps the launch at its ``touch_effort_nm``. i2rt's own limiter
             still holds a stalled gripper with its force limit, which the arm meta names. i2rt's sim chain runs no cap.
-        :param engaged: The value of the ``engaged`` input until a message carries another. False opens no chain and
-            moves no arm until the input turns on. Off parks an open chain once the move in progress ends, so it is not
-            a stop.
+        :param engage_on_input: True opts in to the ``engaged`` input: the driver opens no chain and moves no arm
+            until the input turns on, and off parks an open chain once the move in progress ends, so it is not a stop.
+            False opens the chain as the driver starts, and the driver does not read ``engaged``.
         :param connect: ``(channel, sim, compensation) -> i2rt Robot`` factory; the fake-mode smoke
             injects ``_FakeYam``.
         """
@@ -932,8 +932,13 @@ class Robot(pimm.ControlSystem):
         # The driver puts a new cap in force before its next command to the chain, also in a move. None or 0 sets no
         # cap. The park on shutdown does not read it.
         self.gripper_force_cap_n = pimm.DefaultingReceiver[float | None](self, default=self._gripper_force_cap_n)
-        # Off: no chain. An open chain parks, and the torque goes off only after a verified park.
-        self.engaged = pimm.DefaultingReceiver[bool](self, default=engaged)
+        # Read only with ``engage_on_input``. Off: no chain. An open chain parks, and the torque goes off only after a
+        # verified park.
+        self._engage_on_input = engage_on_input
+        self.engaged = pimm.DefaultingReceiver[bool](self, default=False)
+
+    def _is_engaged(self) -> bool:
+        return not self._engage_on_input or self.engaged.value
 
     @property
     def base_pose(self) -> geom.Transform3D:
@@ -980,7 +985,7 @@ class Robot(pimm.ControlSystem):
         meta = bundled_yam_model()
         asked: list[pimm.calls.Call[None, None]] = []
         while not should_stop.value:
-            if not self.engaged.value:
+            if not self._is_engaged():
                 asked = yield from self._wait_disengaged(asked, should_stop, clock)
                 continue
             error = yield from self._drive_chain(kinematics, state, meta, asked, should_stop, clock)
@@ -1090,7 +1095,7 @@ class Robot(pimm.ControlSystem):
         fault = DeviceFault(
             'The YAM arm is not engaged: the driver holds no chain until the engaged input turns on', FaultKind.ARM
         )
-        while not should_stop.value and not self.engaged.value:
+        while not should_stop.value and not self._is_engaged():
             self._refuse(refused, fault)
             asked = [*asked, *self.ready.incoming(), *self._recoveries()]
             yield limiter.wait()
@@ -1176,7 +1181,7 @@ class Robot(pimm.ControlSystem):
         try:
             with Moves[float](self.sync_grip, self.target_grip) as fingers, self._answer_failed_grip_move(fingers):
                 while not should_stop.value:
-                    if self.engaged.value:
+                    if self._is_engaged():
                         serving.park_failed = False
                     elif not serving.park_failed:
                         return
