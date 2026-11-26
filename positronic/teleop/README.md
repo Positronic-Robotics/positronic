@@ -101,8 +101,15 @@ off. The B button is labelled with what it does: Ready, or Complete while the tr
 trial waits for Ready, and it is green while the trial runs. At each new trial and at each end the page opens the grip
 slider, so a closed gripper does not close again at the next Control.
 
-The Quest shows the phase, the task and the control state on its video. The control state of an arm is on green while
-control is on, and on yellow while it is off. The window on the laptop shows the same state, and the control state.
+The Quest shows the phase, the task and the control state on its video. While a trial waits for Ready, the video shows
+no task. The control state of an arm is on green while control is on, and on yellow while it is off. The window on the
+laptop shows the same state, and the control state.
+
+The page sends controller data only in VR, so outside VR a press of B does nothing. `tracked` in `GET /status` of the
+window and in the page state is false when no controller data came in the silence limit (0.5 s). While a trial waits
+for Ready or runs, the window and the headset page show a notice when `tracked` is false. To send controller data again:
+1. On the headset page, press ENTER VR.
+2. If the button shows EXIT VR, press it, reload the page, and press ENTER VR again.
 
 While a trial waits for Ready, the service shows a dialog with a sound on the screen of its computer. The dialog
 comes also when the window is not open, and the service closes it when the wait ends. On macOS the service uses
@@ -137,8 +144,10 @@ Conversion for training picks its own keys from the recording.
   images came in the last 30 s (also between trials), and the camera that the headset shows.
 - In the headset, Y on the left controller works the video panel. On the PlayStation VR2 it is Triangle (△). A press
   of Y makes the next camera whose images come now the main camera. A hold of 1 s cycles the panel: on black with the
-  camera, the text alone over the room (the service then sends the view with no camera, and the page shows black as
-  clear), and hidden. The bottom of the view names the camera and the use of Y, with the Quest names as for B and A.
+  camera, on black with the camera and no task (the control line and the hints stay), the text alone over the room
+  (the service then sends the view with no camera, and the page shows black as clear), and hidden. A page that loads
+  starts on black with the task, and the stage holds over the trials. The bottom of the view names the camera and the
+  use of Y, with the Quest names as for B and A.
 - The phone page shows no video.
 - Each frame request carries the camera images at 640 x 480, as JPEG. A camera with another aspect gets black bars.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
@@ -344,7 +353,8 @@ and vary how you come to the object.
 ## Limits
 
 - A Cancel while the trial waits for Ready ends the whole `eval run`. The end of the ready limit does the same. To skip
-  a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up.
+  a trial, tap Ready, and then hold **Hold: Give up**: the episode records a Give up. When no controller data came in
+  the wait, the error of the ready limit says so.
 - The phone page shows no video. Watch the window on the laptop.
 - MolmoSpaces runs slowly and with jerks on a Mac, and the person feels it.
 - A sim run must charge inference time, as `eval run` does by default. With `--charge_inference_time=False` the sim
