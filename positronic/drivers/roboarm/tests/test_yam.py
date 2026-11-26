@@ -870,6 +870,23 @@ def test_disengaging_parks_the_arm_and_cuts_the_torque_only_after_the_park(engag
     rig.finish()
 
 
+def test_a_grip_call_queued_behind_the_last_grip_move_is_refused_once_the_disengage_park_ends(world, engaged_rig):
+    rig = engaged_rig
+    rig.raise_arm()
+    gripper = _gripper(world, rig)
+    first = gripper(0.8)
+    rig.tick()
+    rig.engaged.push(False)
+    queued = gripper(0.2)
+    _until_answered(rig, first)
+    _until_answered(rig, queued, within_s=30.0)
+
+    assert first.result() is None
+    with pytest.raises(DeviceFault, match='not engaged'):
+        queued.result()
+    np.testing.assert_allclose(rig.vendor.released_at[0][:6], PARK, atol=0.005)
+
+
 def test_a_stop_during_the_park_for_disengaging_parks_the_arm_once(engaged_rig, monkeypatch):
     rig = engaged_rig
     rig.raise_arm()
