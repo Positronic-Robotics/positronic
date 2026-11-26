@@ -83,15 +83,15 @@ def _assets_without_grasps(tmp_path: Path, uids: list[str]) -> Path:
     assets = Path(os.environ[mapping.ASSETS_DIR_ENV])
     copy = tmp_path / 'assets'
     copy.mkdir()
-    # filelock refuses a lock file that is a symlink, so the server makes its own ``.lock`` in the copy.
+    # filelock refuses a lock file that is a symlink, so the server makes its own lock file in the copy.
     for entry in assets.iterdir():
-        if entry.name not in ('grasps', '.lock'):
+        if entry.name not in (mapping.ASSETS_GRASPS_DIR, mapping.ASSETS_LOCK_FILE):
             (copy / entry.name).symlink_to(entry)
-    for library in (assets / 'grasps').iterdir():
-        (copy / 'grasps' / library.name).mkdir(parents=True)
+    for library in (assets / mapping.ASSETS_GRASPS_DIR).iterdir():
+        (copy / mapping.ASSETS_GRASPS_DIR / library.name).mkdir(parents=True)
         for obj in library.iterdir():
             if obj.name not in uids:
-                (copy / 'grasps' / library.name / obj.name).symlink_to(obj)
+                (copy / mapping.ASSETS_GRASPS_DIR / library.name / obj.name).symlink_to(obj)
     return copy
 
 
