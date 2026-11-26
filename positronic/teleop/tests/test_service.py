@@ -564,12 +564,17 @@ def test_the_end_of_the_ready_limit_says_when_no_controller_data_came_in_the_wai
 
 
 def test_the_state_says_whether_a_sample_came_within_the_silence_limit(socket_path):
-    service = TeleopService(ServedUnixSocket(socket_path), 1.0, 60.0, HOLD_SEC)
+    silence_limit = 0.5
+    service = TeleopService(ServedUnixSocket(socket_path), 1.0, silence_limit, HOLD_SEC)
     assert not service.state().tracked
+    before_sample = time.monotonic()
     _take(service, _buttons())
     assert service.state().tracked
-    service.silence_limit = 0.0
-    assert not service.state().tracked
+    deadline = before_sample + silence_limit + 5.0
+    while service.state().tracked:
+        assert time.monotonic() < deadline, 'the state stays tracked long after the silence limit'
+        time.sleep(0.01)
+    assert time.monotonic() - before_sample >= silence_limit
 
 
 def test_a_sample_that_tracks_no_controller_is_no_controller_data(socket_path):
