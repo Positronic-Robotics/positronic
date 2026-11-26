@@ -69,10 +69,7 @@ def _spawn(host: str, port: int) -> subprocess.Popen:
 
 
 def serve_molmo_spaces(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """Run a MolmoSpaces server for the context's lifetime and yield its address.
-
-    Each reset token names the hook file of its episode (``mapping.HookFile``), so one server runs every hook.
-    """
+    """Run a MolmoSpaces server for the context's lifetime and yield its address."""
     return serve_subprocess(_spawn, host)
 
 

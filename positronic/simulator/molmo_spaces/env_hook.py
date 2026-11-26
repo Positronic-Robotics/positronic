@@ -2,10 +2,8 @@
 
 This module must work in MolmoSpaces' isolated interpreter without Positronic installed.
 
-A hook file defines ``HOOK``, an ``EnvHook``. The server's interpreter has no positronic, so the file imports the base
-class as ``from env_hook import EnvHook``. Each reset token names its hook file, or none for the default hook. The
-server runs a hook file at the first episode that names its digest, after MolmoSpaces has loaded, and keeps the hook
-for each later episode with that digest.
+A hook file defines ``HOOK``, an ``EnvHook``, and imports the base class as ``from env_hook import EnvHook``. The
+server loads a hook file after MolmoSpaces, at the first reset token or selection that names its path and digest.
 """
 
 import hashlib
@@ -91,20 +89,20 @@ def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
 
 
 class Hooks:
-    """The hooks of a server's episodes: each hook file loads once for each digest, and the server keeps it.
+    """The hooks of a server's episodes: each hook file loads once for each path and digest, and the server keeps it.
 
     A server loads one hook file of each name, so two versions of one hook never share the modules they import.
     """
 
     def __init__(self) -> None:
         self._default = load(None)
-        self._loaded: dict[str, LoadedHook] = {}
+        self._loaded: dict[mapping.HookFile, LoadedHook] = {}
 
     def of(self, request: dict[str, Any]) -> LoadedHook:
         """The hook that a selection or a reset token names, or the default hook where it names none."""
         hook_file = mapping.HookFile.of(request)
         if hook_file is None:
             return self._default
-        if hook_file.env_hook_sha256 not in self._loaded:
-            self._loaded[hook_file.env_hook_sha256] = load(Path(hook_file.env_hook), hook_file.env_hook_sha256)
-        return self._loaded[hook_file.env_hook_sha256]
+        if hook_file not in self._loaded:
+            self._loaded[hook_file] = load(Path(hook_file.env_hook), hook_file.env_hook_sha256)
+        return self._loaded[hook_file]

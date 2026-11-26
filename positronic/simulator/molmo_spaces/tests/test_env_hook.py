@@ -156,6 +156,22 @@ def test_a_hook_file_loads_at_its_first_request_and_later_requests_with_its_dige
     assert hooks.of({}).record is None
 
 
+def test_two_hook_files_with_the_same_bytes_load_as_two_hooks_that_each_record_their_file(tmp_path):
+    other = tmp_path / 'other_hook.py'
+    first = tmp_path / 'first_hook.py'
+    for path in (first, other):
+        path.write_text(_GRIP_HOOK)
+    digest = hashlib.sha256(first.read_bytes()).hexdigest()
+    hooks = env_hook.Hooks()
+    try:
+        records = [hooks.of(_request(path, digest)).record for path in (first, other)]
+    finally:
+        for path in (first, other):
+            sys.modules.pop(path.stem, None)
+
+    assert records == [f'first_hook.py@sha256:{digest}', f'other_hook.py@sha256:{digest}']
+
+
 def test_a_second_digest_of_a_loaded_hook_file_name_is_refused(hook_path):
     hook_path.write_text(_GRIP_HOOK)
     hooks = env_hook.Hooks()
