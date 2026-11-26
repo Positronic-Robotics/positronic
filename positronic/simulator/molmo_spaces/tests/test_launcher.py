@@ -60,12 +60,12 @@ class _Exited:
         return 0
 
 
-def test_the_launcher_command_runs_a_server_on_its_port_until_the_server_exits(tmp_path, monkeypatch):
+def test_the_launcher_command_runs_a_server_on_its_port_and_hook_root_until_the_server_exits(tmp_path, monkeypatch):
     commands: list[list[str]] = []
     monkeypatch.setenv(launcher.mapping.ASSETS_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(launcher, 'ensure_molmo_venv', lambda: Path(sys.executable))
     monkeypatch.setattr(launcher.subprocess, 'Popen', lambda command, env: commands.append(command) or _Exited())
-    monkeypatch.setattr(sys, 'argv', ['launcher', '--port', '8765'])
+    monkeypatch.setattr(sys, 'argv', ['launcher', '--port', '8765', '--hook-root', str(tmp_path)])
 
     with pytest.raises(SystemExit) as exited:
         launcher.main()
@@ -73,3 +73,4 @@ def test_the_launcher_command_runs_a_server_on_its_port_until_the_server_exits(t
     assert exited.value.code == 0
     (command,) = commands
     assert command[command.index('--port') + 1] == '8765'
+    assert command[command.index('--hook-root') + 1] == str(tmp_path)

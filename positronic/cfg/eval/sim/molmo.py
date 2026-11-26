@@ -29,11 +29,11 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     return mapping.BenchmarkPath.parse(bench), int(index)
 
 
-def _env_server(env_server: str | None) -> AbstractContextManager[tuple[str, int]]:
-    """The env server of the eval: the server at ``env_server``, or one that the eval launches."""
+def _env_server(env_server: str | None, hook_file: mapping.HookFile | None) -> AbstractContextManager[tuple[str, int]]:
+    """The env server of the eval: the server at ``env_server``, or one that the eval launches for its hook file."""
     if env_server is not None:
         return nullcontext(env_server_address(env_server))
-    return serve_molmo_spaces()
+    return serve_molmo_spaces(hook_root=None if hook_file is None else Path(hook_file.env_hook).parent)
 
 
 def _hook_file(env_hook: str | None) -> mapping.HookFile | None:
@@ -131,14 +131,15 @@ def benchmarks(
     the eval: for example a task class, a camera model or a grip scale of its own. ``EnvHook`` states what a hook can
     change. Each reset token names the file and the SHA-256 digest that the eval reads from it, and the server refuses
     a file with another digest. The eval and the server read the file at the same path, so a dialed server on another
-    box needs the same file at that path. Every trial records the name and digest of the hook file that the server
-    runs under ``molmo.env_hook``, or None without a hook. A run with a hook or an episode camera is not comparable
-    with stock scores.
+    box needs the same file at that path. A server loads only the hook files under the hook root of its operator: the
+    eval launches its server with the directory of ``env_hook``, and a dialed server needs a ``--hook-root`` that holds
+    the file. Every trial records the name and digest of the hook file that the server runs under ``molmo.env_hook``,
+    or None without a hook. A run with a hook or an episode camera is not comparable with stock scores.
 
     ``env_server`` is the ``host:port`` of a MolmoSpaces env server that already runs. Without it, the eval launches
     a server of its own. Start a server to dial with
-    ``python -m positronic.simulator.molmo_spaces.launcher --port <port>``: it serves eval runs one after another,
-    with one episode at a time, until Ctrl-C stops it.
+    ``python -m positronic.simulator.molmo_spaces.launcher --port <port> [--hook-root <dir>]``: it serves eval runs one
+    after another, with one episode at a time, until Ctrl-C stops it.
 
     ``success_profile`` is a ``SuccessProfile`` or its value: how the server judges success and when it ends a trial.
     ``molmo_native`` is MolmoSpaces' own verdict, and the trial ends at the first step where it is true.
@@ -162,8 +163,8 @@ def benchmarks(
         bound = [name for name, value in zip(names, values, strict=True) if value is not None]
         if bound:
             raise ValueError(f'--eval.episode_paths names its benchmarks, so --eval.{bound[0]} must be unset')
-    serve = _env_server(env_server)
     hook_file = _hook_file(env_hook)
+    serve = _env_server(env_server, hook_file)
     hook_selection = hook_file._asdict() if hook_file is not None else {}
     episode_cameras = episode_cameras or {}
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]

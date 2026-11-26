@@ -137,7 +137,7 @@ def _request(path, digest: str) -> dict:
 
 
 def test_a_request_without_a_hook_file_gets_the_default_hook():
-    hook, record = env_hook.Hooks().of({mapping.TOKEN_EPISODE_INDEX: 0})
+    hook, record = env_hook.Hooks(None).of({mapping.TOKEN_EPISODE_INDEX: 0})
     assert type(hook) is env_hook.EnvHook
     assert record is None
 
@@ -145,7 +145,7 @@ def test_a_request_without_a_hook_file_gets_the_default_hook():
 def test_a_hook_file_loads_at_its_first_request_and_later_requests_with_its_digest_get_that_hook(hook_path):
     hook_path.write_text(_GRIP_HOOK)
     digest = hashlib.sha256(hook_path.read_bytes()).hexdigest()
-    hooks = env_hook.Hooks()
+    hooks = env_hook.Hooks(hook_path.parent)
 
     first = hooks.of(_request(hook_path, digest))
     hook_path.write_text('HOOK = None\n')
@@ -162,7 +162,7 @@ def test_two_hook_files_with_the_same_bytes_load_as_two_hooks_that_each_record_t
     for path in (first, other):
         path.write_text(_GRIP_HOOK)
     digest = hashlib.sha256(first.read_bytes()).hexdigest()
-    hooks = env_hook.Hooks()
+    hooks = env_hook.Hooks(tmp_path)
     try:
         records = [hooks.of(_request(path, digest)).record for path in (first, other)]
     finally:
@@ -174,7 +174,7 @@ def test_two_hook_files_with_the_same_bytes_load_as_two_hooks_that_each_record_t
 
 def test_a_second_digest_of_a_loaded_hook_file_name_is_refused(hook_path):
     hook_path.write_text(_GRIP_HOOK)
-    hooks = env_hook.Hooks()
+    hooks = env_hook.Hooks(hook_path.parent)
     hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
     hook_path.write_text(_GRIP_HOOK.replace('0.5', '0.25'))
 
@@ -185,7 +185,7 @@ def test_a_second_digest_of_a_loaded_hook_file_name_is_refused(hook_path):
 @pytest.mark.parametrize('broken', ['raise ImportError("no such pack")\n', 'HOOK = None\n'], ids=['raises', 'no-hook'])
 def test_a_hook_file_that_failed_to_load_loads_after_it_is_fixed(hook_path, broken):
     hook_path.write_text(broken)
-    hooks = env_hook.Hooks()
+    hooks = env_hook.Hooks(hook_path.parent)
     with pytest.raises((ImportError, ValueError)):
         hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
     hook_path.write_text(_GRIP_HOOK)
@@ -193,3 +193,33 @@ def test_a_hook_file_that_failed_to_load_loads_after_it_is_fixed(hook_path, brok
     fixed = hooks.of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
 
     assert fixed.hook.grip([0.0]) == 0.5
+
+
+def test_a_hook_file_under_the_hook_root_of_the_server_loads(hook_path):
+    hook_path.write_text(_GRIP_HOOK)
+    digest = hashlib.sha256(hook_path.read_bytes()).hexdigest()
+
+    hook, record = env_hook.Hooks(hook_path.parent.parent).of(_request(hook_path, digest))
+
+    assert hook.grip([0.0]) == 0.5
+    assert record == f'{hook_path.name}@sha256:{digest}'
+
+
+def test_a_server_without_a_hook_root_refuses_every_hook_file(hook_path):
+    hook_path.write_text(_GRIP_HOOK)
+    with pytest.raises(ValueError, match='has no hook root'):
+        env_hook.Hooks(None).of(_request(hook_path, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
+    assert hook_path.stem not in sys.modules
+
+
+@pytest.mark.parametrize('link', [False, True], ids=['outside', 'link-out'])
+def test_a_hook_file_outside_the_hook_root_of_the_server_is_refused(hook_path, link):
+    hook_path.write_text(_GRIP_HOOK)
+    root = hook_path.parent / 'hooks'
+    root.mkdir()
+    named = root / hook_path.name if link else hook_path
+    if link:
+        named.symlink_to(hook_path)
+    with pytest.raises(ValueError, match='is not under the hook root'):
+        env_hook.Hooks(root).of(_request(named, hashlib.sha256(hook_path.read_bytes()).hexdigest()))
+    assert hook_path.stem not in sys.modules

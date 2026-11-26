@@ -101,10 +101,12 @@ def _run(module: types.ModuleType, source: bytes, path: Path) -> EnvHook:
 class Hooks:
     """The hooks of a server's episodes: each hook file loads once for each path and digest, and the server keeps it.
 
+    The server operator gives ``root``: a request can name only a hook file under it, and without it no hook file.
     A server loads one hook file of each name, so two versions of one hook never share the modules they import.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, root: Path | None) -> None:
+        self._root = None if root is None else root.resolve()
         self._default = load(None)
         self._loaded: dict[mapping.HookFile, LoadedHook] = {}
 
@@ -113,5 +115,12 @@ class Hooks:
         if hook_file is None:
             return self._default
         if hook_file not in self._loaded:
-            self._loaded[hook_file] = load(Path(hook_file.env_hook), hook_file.env_hook_sha256)
+            self._loaded[hook_file] = load(self._under_root(Path(hook_file.env_hook)), hook_file.env_hook_sha256)
         return self._loaded[hook_file]
+
+    def _under_root(self, path: Path) -> Path:
+        if self._root is None:
+            raise ValueError(f'the server has no hook root, so it loads no hook file and refuses {path}')
+        if not path.resolve().is_relative_to(self._root):
+            raise ValueError(f'{path} is not under the hook root {self._root} of the server')
+        return path

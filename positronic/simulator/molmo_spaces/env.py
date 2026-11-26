@@ -51,6 +51,7 @@ _parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
 _parser.add_argument('--host', default='localhost')
 _parser.add_argument('--port', type=int)
 _parser.add_argument('--right-view-blocked', type=Path)
+_parser.add_argument('--hook-root', type=Path, help='the directory of the hook files that a request can name')
 
 # Loading the runner first avoids a circular import in json_eval_task_sampler.
 import molmo_spaces.evaluation.json_eval_runner  # noqa: E402, F401  # pyright: ignore[reportMissingImports]
@@ -167,10 +168,16 @@ _FR3_ARM_JOINTS = 7
 class MolmoSpacesEnv(EnvProtocol):
     """A MolmoSpaces benchmark environment with one active episode, under the hook that its reset token names."""
 
-    def __init__(self, assets_dir: Path, right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]]) -> None:
+    def __init__(
+        self,
+        assets_dir: Path,
+        right_view_blocked: dict[mapping.BenchmarkPath, frozenset[int]],
+        hook_root: Path | None = None,
+    ) -> None:
+        """``hook_root`` is the directory of the hook files that a request can name; None refuses every hook file."""
         use_fast_objects_on_receptacle()
         self._assets_dir = assets_dir
-        self._hooks = env_hook.Hooks()
+        self._hooks = env_hook.Hooks(hook_root)
         self._hook = self._hooks.of({}).hook  # The hook of the active episode.
         self._found = mapping.discover_benchmarks(assets_dir)
         self._right_view_blocked = right_view_blocked
@@ -484,7 +491,7 @@ def main() -> None:
     assets = os.environ.get(mapping.ASSETS_DIR_ENV)
     if not assets:
         _parser.error(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
-    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(args.right_view_blocked))
+    env = MolmoSpacesEnv(Path(assets), mapping.load_right_view_blocked(args.right_view_blocked), args.hook_root)
     EnvServer(env, args.host, args.port).serve_forever()
 
 

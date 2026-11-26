@@ -5,6 +5,7 @@ CPU rendering on Linux requires OSMesa or software EGL.
 """
 
 import argparse
+import functools
 import os
 import subprocess
 from contextlib import AbstractContextManager
@@ -59,18 +60,25 @@ def molmo_subprocess_env() -> dict[str, str]:
     return mujoco_server_env([_ENV_SERVER_DIR, _MAPPING_DIR])
 
 
-def _spawn(host: str, port: int) -> subprocess.Popen:
+def _spawn(hook_root: Path | None, host: str, port: int) -> subprocess.Popen:
     if not os.environ.get(mapping.ASSETS_DIR_ENV):
         raise ValueError(f'{mapping.ASSETS_DIR_ENV} must point at the MolmoSpaces asset packs')
     python = ensure_molmo_venv()
     command = [str(python), str(_ENV_SCRIPT), '--host', host, '--port', str(port)]
     command += ['--right-view-blocked', str(RIGHT_VIEW_BLOCKED_PATH)]
+    if hook_root is not None:
+        command += ['--hook-root', str(hook_root)]
     return subprocess.Popen(command, env=molmo_subprocess_env())
 
 
-def serve_molmo_spaces(host: str = 'localhost') -> AbstractContextManager[tuple[str, int]]:
-    """Run a MolmoSpaces server for the context's lifetime and yield its address."""
-    return serve_subprocess(_spawn, host)
+def serve_molmo_spaces(
+    host: str = 'localhost', hook_root: Path | None = None
+) -> AbstractContextManager[tuple[str, int]]:
+    """Run a MolmoSpaces server for the context's lifetime and yield its address.
+
+    The server loads only the hook files under ``hook_root``, and none without it.
+    """
+    return serve_subprocess(functools.partial(_spawn, hook_root), host)
 
 
 def main() -> None:
@@ -78,8 +86,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=main.__doc__)
     parser.add_argument('--host', default='localhost')
     parser.add_argument('--port', type=int, required=True)
+    parser.add_argument('--hook-root', type=Path, help='the directory of the hook files that an eval can name')
     args = parser.parse_args()
-    raise SystemExit(_spawn(args.host, args.port).wait())
+    raise SystemExit(_spawn(args.hook_root, args.host, args.port).wait())
 
 
 if __name__ == '__main__':

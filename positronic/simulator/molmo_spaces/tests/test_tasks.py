@@ -3,6 +3,7 @@
 import hashlib
 import logging
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -367,7 +368,7 @@ def test_molmo_eval_carries_observations_commands_and_trial_results(monkeypatch,
     joints = env.observation[protocol.OBS_JOINT_POS]
     policy = StubPolicy(command=JointPosition(joints), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
-        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
         ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, seed=seed, timeout=timeout).instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
@@ -423,7 +424,7 @@ def test_an_eval_without_the_object_image_points_asks_each_reset_to_drop_them(mo
     env = _MolmoObservationEnv(done_after=2)
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
-        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
         ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, with_object_image_points=False).instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
@@ -435,7 +436,7 @@ def test_an_eval_asks_each_reset_for_its_success_profile_and_records_it(monkeypa
     env = _MolmoObservationEnv(done_after=2)
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     with serve_env(env) as address, pos3.mirror():
-        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
         ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, success_profile='strict_v1').instantiate()
         main(policy=policy, evals=[ev], output_dir=tmp_path)
 
@@ -448,7 +449,7 @@ def test_an_eval_refuses_a_success_profile_that_it_does_not_know():
         benchmarks.override(success_profile='strict_v0').instantiate()
 
 
-def _no_launch():
+def _no_launch(hook_root):
     raise AssertionError('the eval launched an env server')
 
 
@@ -487,6 +488,24 @@ def test_an_eval_with_a_hook_names_it_in_each_selection_and_reset_token_of_a_dia
     assert LocalDataset(tmp_path / 'run')[0].static[molmo_keys.ENV_HOOK] == hook_file.record
 
 
+@pytest.mark.timeout(60.0)
+def test_an_eval_with_a_hook_launches_its_server_with_the_directory_of_the_hook_as_its_hook_root(monkeypatch, tmp_path):
+    hook = tmp_path / 'hooks' / 'site_hook.py'
+    hook.parent.mkdir()
+    hook.write_text('HOOK = None\n')
+    hook_roots: list[Path | None] = []
+    env = _MolmoObservationEnv(done_after=2)
+    policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
+    with serve_env(env) as address, pos3.mirror():
+        monkeypatch.setattr(
+            molmo_cfg, 'serve_molmo_spaces', lambda hook_root: hook_roots.append(hook_root) or nullcontext(address)
+        )
+        ev = benchmarks.override(**env.BENCHMARK._asdict(), episodes=3, env_hook=str(hook)).instantiate()
+        main(policy=policy, evals=[ev], output_dir=tmp_path / 'run')
+
+    assert hook_roots == [hook.parent.resolve()]
+
+
 @pytest.mark.parametrize('env_server', ['localhost', 'localhost:port', ':8765'])
 def test_an_env_server_without_a_host_and_a_port_is_refused(env_server):
     with pytest.raises(ValueError, match='--eval.env_server is host:port'):
@@ -504,7 +523,7 @@ def test_an_episode_camera_serves_that_camera_under_its_image_key_and_the_trial_
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     episode_cameras = {keys.EXTERIOR_IMAGE_2: _EPISODE_CAMERA}
     with serve_env(env) as address, pos3.mirror():
-        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda: nullcontext(address))
+        monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', lambda hook_root: nullcontext(address))
         ev = benchmarks.override(
             **env.BENCHMARK._asdict(), episodes=3, with_right_shoulder=False, episode_cameras=episode_cameras
         ).instantiate()
