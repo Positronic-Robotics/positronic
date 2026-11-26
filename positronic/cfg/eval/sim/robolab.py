@@ -85,9 +85,10 @@ def _task_lib_paths(task_libs: str | Path | Sequence[str | Path]) -> tuple[Path,
     env_server=None,
     batch_size=None,
     task_libs=(),
+    refill=False,
 )
 def _robolab_eval(
-    task, instruction_type, trial_count, timeout, horizon_sec, robot, cameras, env_server, batch_size, task_libs
+    task, instruction_type, trial_count, timeout, horizon_sec, robot, cameras, env_server, batch_size, task_libs, refill
 ):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
@@ -116,6 +117,9 @@ def _robolab_eval(
     server of its own.
     ``batch_size`` is how many evals start each batch on that server; the server builds that many clones for them.
     Without it, a batch waits for every clone of the server.
+    ``refill`` resets this eval's clone alone into the batch that runs on ``env_server``, while the other clones run.
+    Its task, its ``horizon_sec`` and its ``batch_size`` must be those of the batch. Only a frozen clone, or a clone
+    whose eval left, takes it.
 
     ``task_libs`` are task library directories on the env server's host (``positronic.simulator.robolab.task_catalog``);
     ``task`` may name their tasks, and no category or ``None`` sweep includes them. A DROID run also takes the
@@ -137,7 +141,9 @@ def _robolab_eval(
         serve = serve_robolab(cameras, robot=robot, task_libs=_task_lib_paths(task_libs))
     else:
         serve = nullcontext(env_server_address(env_server))
-    proxy = RemoteEnvControlSystem(robot_eval.adapter(camera_dict), serve, batch_size)
+    if refill and env_server is None:
+        raise ValueError('refill resets a clone into the batch of a shared env_server, and this eval names none')
+    proxy = RemoteEnvControlSystem(robot_eval.adapter(camera_dict), serve, batch_size, refill=refill)
     embodiment = robot_eval.embodiment(proxy, camera_dict)
 
     def tasks() -> list[Task]:
