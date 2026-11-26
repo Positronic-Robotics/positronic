@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import random
 from contextlib import AbstractContextManager, nullcontext
@@ -29,21 +28,6 @@ def _parse_episode_path(path: str) -> tuple[mapping.BenchmarkPath, int]:
     return mapping.BenchmarkPath.parse(bench), int(index)
 
 
-def _env_server(env_server: str | None, hook_file: mapping.HookFile | None) -> AbstractContextManager[tuple[str, int]]:
-    """The env server of the eval: the server at ``env_server``, or one that the eval launches for its hook file."""
-    if env_server is not None:
-        return nullcontext(env_server_address(env_server))
-    return serve_molmo_spaces(hook_root=None if hook_file is None else Path(hook_file.env_hook).parent)
-
-
-def _hook_file(env_hook: str | None) -> mapping.HookFile | None:
-    """The hook file at ``env_hook``, with the digest of its bytes, or None without a hook."""
-    if env_hook is None:
-        return None
-    path = Path(env_hook).expanduser().resolve()
-    return mapping.HookFile(str(path), hashlib.sha256(path.read_bytes()).hexdigest())
-
-
 _EPISODE_CAMERA_KEYS = (keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE, keys.EXTERIOR_IMAGE_2)
 _SHOULDER_ALIASES = frozenset(camera for cameras in SHOULDER_CAMERAS.values() for camera in cameras)
 
@@ -64,6 +48,13 @@ def _cameras(exterior_sides: list[ShoulderSide], episode_cameras: dict[str, str]
             )
         cameras[key] = (camera,)
     return cameras
+
+
+def _env_server(env_server: str | None, hook_path: Path | None) -> AbstractContextManager[tuple[str, int]]:
+    """The env server of the eval: the server at ``env_server``, or one that the eval launches for its hook file."""
+    if env_server is not None:
+        return nullcontext(env_server_address(env_server))
+    return serve_molmo_spaces(hook_root=None if hook_path is None else hook_path.parent)
 
 
 @cfn.config(
@@ -163,9 +154,10 @@ def benchmarks(
         bound = [name for name, value in zip(names, values, strict=True) if value is not None]
         if bound:
             raise ValueError(f'--eval.episode_paths names its benchmarks, so --eval.{bound[0]} must be unset')
-    hook_file = _hook_file(env_hook)
-    serve = _env_server(env_server, hook_file)
-    hook_selection = hook_file._asdict() if hook_file is not None else {}
+    hook_path = None if env_hook is None else Path(env_hook).expanduser().resolve()
+    serve = _env_server(env_server, hook_path)
+    hook_file = None if hook_path is None else mapping.HookFile.read(hook_path)
+    hook_selection = hook_file.request() if hook_file is not None else {}
     episode_cameras = episode_cameras or {}
     exterior_sides = random.Random(seed).sample(list(ShoulderSide), 2) if with_right_shoulder else [ShoulderSide.LEFT]
     cameras = _cameras(exterior_sides, episode_cameras)

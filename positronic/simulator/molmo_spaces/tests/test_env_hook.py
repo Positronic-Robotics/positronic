@@ -133,7 +133,7 @@ def test_the_default_hook_sends_the_grip_command_as_molmospaces_does(grip):
 
 
 def _request(path, digest: str) -> dict:
-    return mapping.HookFile(str(path), digest)._asdict()
+    return mapping.HookFile(path, digest).request()
 
 
 def test_a_request_without_a_hook_file_gets_the_default_hook():

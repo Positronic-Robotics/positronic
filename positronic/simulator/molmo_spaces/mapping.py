@@ -141,17 +141,29 @@ class HookFile(NamedTuple):
     A selection or a token without these keys gets the default hook, which changes nothing.
     """
 
-    env_hook: str
+    env_hook: Path
     env_hook_sha256: str
 
     @classmethod
+    def read(cls, path: Path) -> 'HookFile':
+        """The hook file at ``path``, with the digest of its bytes."""
+        return cls(path, hashlib.sha256(path.read_bytes()).hexdigest())
+
+    @classmethod
     def of(cls, request: dict[str, Any]) -> 'HookFile | None':
-        return cls(*(request[field] for field in cls._fields)) if cls._fields[0] in request else None
+        if cls._fields[0] not in request:
+            return None
+        path, sha256 = (request[field] for field in cls._fields)
+        return cls(Path(path), sha256)
+
+    def request(self) -> dict[str, str]:
+        """The keys of the hook file in a selection or a reset token, which carries the path as a string."""
+        return {field: str(value) for field, value in self._asdict().items()}
 
     @property
     def record(self) -> str:
         """The ``TASK_ENV_HOOK`` value of the hook file."""
-        return f'{Path(self.env_hook).name}@sha256:{self.env_hook_sha256}'
+        return f'{self.env_hook.name}@sha256:{self.env_hook_sha256}'
 
 
 META_TASK = 'task'

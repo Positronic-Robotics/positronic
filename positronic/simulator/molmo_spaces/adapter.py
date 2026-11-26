@@ -86,7 +86,7 @@ class MolmoAdapter(WireCommandAdapter):
             mapping.WITH_RIGHT_SHOULDER: self._with_right_shoulder,
             mapping.WITH_OBJECT_IMAGE_POINTS: self._with_object_image_points,
             mapping.TOKEN_SUCCESS_PROFILE: params[molmo_keys.SUCCESS_PROFILE],
-            **(self._hook_file._asdict() if self._hook_file is not None else {}),
+            **(self._hook_file.request() if self._hook_file is not None else {}),
         }
 
     def check_reset(self, params: dict[str, Any], frame: dict[str, Any]) -> None:

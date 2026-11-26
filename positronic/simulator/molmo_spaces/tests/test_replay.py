@@ -10,7 +10,6 @@ Run on a box with the asset packs (a GPU-less one uses mesa software EGL)::
         uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_replay.py --no-cov
 """
 
-import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -155,7 +154,7 @@ def test_an_episode_without_the_right_shoulder_serves_the_left_shoulder_alone():
 
 def _hook_file(path: Path, source: str) -> mapping.HookFile:
     path.write_text(source)
-    return mapping.HookFile(str(path), hashlib.sha256(path.read_bytes()).hexdigest())
+    return mapping.HookFile.read(path)
 
 
 def _wrist_frame(frame: dict) -> np.ndarray:
@@ -181,9 +180,9 @@ def test_each_reset_runs_the_hook_of_its_token_and_a_reset_without_one_builds_th
     with launcher.serve_molmo_spaces(hook_root=tmp_path) as (host, port):
         conn = EnvConnection(host, port)
         try:
-            [listed] = conn.tasks({**spec, **hook_file._asdict()})
+            [listed] = conn.tasks({**spec, **hook_file.request()})
             stock = conn.reset(token)
-            hooked = conn.reset({**token, **hook_file._asdict()})
+            hooked = conn.reset({**token, **hook_file.request()})
             again = conn.reset(token)
         finally:
             conn.close()
@@ -227,7 +226,7 @@ def test_a_hook_sees_the_right_shoulder_camera_when_the_server_lists_and_when_it
     )
     spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: [1], mapping.WITH_RIGHT_SHOULDER: True}
     token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: True}
-    spec, token = ({**request, **hook_file._asdict()} for request in (spec, token))
+    spec, token = ({**request, **hook_file.request()} for request in (spec, token))
     with launcher.serve_molmo_spaces(hook_root=tmp_path) as (host, port):
         conn = EnvConnection(host, port)
         try:

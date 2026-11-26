@@ -87,7 +87,7 @@ def load(path: Path | None, sha256: str | None = None) -> LoadedHook:
         # A hook file that failed to load can load again after a fix.
         del sys.modules[spec.name]
         raise
-    return LoadedHook(hook, mapping.HookFile(str(path), digest).record)
+    return LoadedHook(hook, mapping.HookFile(path, digest).record)
 
 
 def _run(module: types.ModuleType, source: bytes, path: Path) -> EnvHook:
@@ -115,7 +115,7 @@ class Hooks:
         if hook_file is None:
             return self._default
         if hook_file not in self._loaded:
-            self._loaded[hook_file] = load(self._under_root(Path(hook_file.env_hook)), hook_file.env_hook_sha256)
+            self._loaded[hook_file] = load(self._under_root(hook_file.env_hook), hook_file.env_hook_sha256)
         return self._loaded[hook_file]
 
     def _under_root(self, path: Path) -> Path:

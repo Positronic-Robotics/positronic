@@ -1,6 +1,5 @@
 """MolmoSpaces trial construction and evaluation through the policy harness."""
 
-import hashlib
 import logging
 from contextlib import nullcontext
 from pathlib import Path
@@ -473,7 +472,7 @@ def test_an_eval_with_a_hook_names_it_in_each_selection_and_reset_token_of_a_dia
 ):
     hook = tmp_path / 'site_hook.py'
     hook.write_text('HOOK = None\n')
-    hook_file = mapping.HookFile(str(hook), hashlib.sha256(hook.read_bytes()).hexdigest())
+    hook_file = mapping.HookFile.read(hook)
     env = _MolmoObservationEnv(done_after=2)
     policy = StubPolicy(command=JointPosition(env.observation[protocol.OBS_JOINT_POS]), target_grip=0.0)
     monkeypatch.setattr(molmo_cfg, 'serve_molmo_spaces', _no_launch)
@@ -570,4 +569,4 @@ def test_the_listing_of_an_eval_with_a_hook_names_the_hook_file_with_the_digest_
     benchmarks.override(env_hook=str(hook)).instantiate().tasks()
 
     (selection,) = asked
-    assert mapping.HookFile.of(selection) == (str(hook), hashlib.sha256(hook.read_bytes()).hexdigest())
+    assert mapping.HookFile.of(selection) == mapping.HookFile.read(hook)

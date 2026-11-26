@@ -254,7 +254,7 @@ def test_a_reset_that_states_the_profile_of_the_trial_is_accepted_beside_fields_
     _adapter().check_reset({molmo_keys.SUCCESS_PROFILE: profile.value}, frame)
 
 
-_HOOK_FILE = mapping.HookFile('/hooks/site_hook.py', 'ab12')
+_HOOK_FILE = mapping.HookFile(Path('/hooks/site_hook.py'), 'ab12')
 
 
 def _hooked_adapter() -> MolmoAdapter:

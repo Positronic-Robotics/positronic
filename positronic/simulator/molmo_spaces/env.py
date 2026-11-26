@@ -265,6 +265,7 @@ class MolmoSpacesEnv(EnvProtocol):
 
     def _build(
         self,
+        hook: env_hook.EnvHook,
         bench: mapping.BenchmarkPath,
         episode_index: int,
         seed: int | None,
@@ -272,12 +273,12 @@ class MolmoSpacesEnv(EnvProtocol):
         with_right_shoulder: bool,
         with_object_image_points: bool = True,
     ) -> float:
-        """Sample the episode's task under the active episode's hook, and return its control period in seconds."""
+        """Sample the episode's task under ``hook``, and return its control period in seconds."""
         if self._sampler is not None:
             self._sampler.close()
         episodes = self._episodes_of(bench)
         episode = self._episode(bench, episode_index, with_right_shoulder)
-        cfg = self._eval_config(bench, episode, self._hook)
+        cfg = self._eval_config(bench, episode, hook)
         cfg.seed = mapping.resolve_episode_seed(episode, episode_index, seed)
         # MolmoSpaces resolves one horizon from the full benchmark, unless an override in steps replaces it.
         cfg.task_horizon = determine_task_horizon(
@@ -286,7 +287,7 @@ class MolmoSpacesEnv(EnvProtocol):
         self._sampler = JsonEvalTaskSampler(cfg, episode)
         # Task sampling places the objects; task.reset() alone does not restore the scene.
         self._task = self._sampler.sample_task(house_index=episode.house_index)
-        self._hook.task_sampled(self._task)
+        hook.task_sampled(self._task)
         if not with_object_image_points:
             # The sensor draws its points from the global NumPy generator, so without it an episode draws other values.
             self._task.sensor_suite.sensors.pop(mapping.MOLMO_OBJECT_IMAGE_POINTS_SENSOR)
@@ -365,8 +366,9 @@ class MolmoSpacesEnv(EnvProtocol):
         profile = success_profile.SuccessProfile(
             token.get(mapping.TOKEN_SUCCESS_PROFILE, success_profile.SuccessProfile.MOLMO_NATIVE)
         )
-        self._hook, hook_record = self._hooks.of(token)
+        hook, hook_record = self._hooks.of(token)
         self._control_dt = control_dt = self._build(
+            hook,
             bench,
             token[mapping.TOKEN_EPISODE_INDEX],
             token.get(mapping.TOKEN_SEED),
@@ -374,6 +376,7 @@ class MolmoSpacesEnv(EnvProtocol):
             token[mapping.WITH_RIGHT_SHOULDER],
             token.get(mapping.WITH_OBJECT_IMAGE_POINTS, True),
         )
+        self._hook = hook
         obs, infos = self._task.reset()  # One observation dict and one info dict per environment.
         # The checks of a strict judge take the start poses of the task's bodies, so they come after the task reset.
         match profile:
