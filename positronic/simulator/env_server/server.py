@@ -276,7 +276,9 @@ class EnvServer:
             raise ValueError(f'the batch that runs has {self._batch_size} slots, but this refill asks for another size')
         if self._joining_batch_size() is not None:
             raise RuntimeError('a slot waits to join the next batch, so this batch takes no refill')
-        in_batch = slot.phase in (_Phase.RUNNING, _Phase.ENDED, _Phase.RESET_FAILED)
+        if slot.phase is _Phase.RUNNING:
+            raise RuntimeError('a refill resets a clone whose episode ended, and this slot still runs its episode')
+        in_batch = slot.phase in (_Phase.ENDED, _Phase.RESET_FAILED)
         env_slot = self._env_slots[index] if in_batch else self._free_env_slot()
         try:
             answer = self._env.reset_slot(token, env_slot)

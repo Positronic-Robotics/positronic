@@ -273,6 +273,16 @@ def test_a_refill_resets_an_ended_slot_while_its_neighbour_runs():
     assert env.stepped == [{0, 1}, {0, 1}]
 
 
+def test_a_refill_of_a_slot_whose_episode_still_runs_is_refused():
+    env = _ClonedScene(ends_at=[5, 5])
+    with _clients(env) as (first, second):
+        _together(lambda: first.reset('scene'), lambda: second.reset('scene'))
+        with pytest.raises(RuntimeError, match='still runs'):
+            first.reset('scene', 2, refill=True)
+
+    assert env.slot_resets == []
+
+
 @pytest.mark.timeout(60.0)
 def test_a_new_client_refills_the_env_slot_that_a_client_left():
     env = _ClonedScene(ends_at=[1, 5])
