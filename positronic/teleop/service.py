@@ -15,7 +15,7 @@ import stat
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from enum import Enum, IntEnum, StrEnum
@@ -553,6 +553,42 @@ class TeleopService:
         cv2.rectangle(view, (x - 6, y - height - 5), (x + width + 6, y + baseline), badge.colour, cv2.FILLED)
         cv2.putText(view, badge.text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 2, cv2.LINE_AA)
 
+    @staticmethod
+    def _wrapped(line: str, scale: float, width: int) -> list[str]:
+        """``line`` in at most three rows that each fit in ``width`` pixels at ``scale``. The rows break between words,
+        and a word wider than ``width`` breaks between its characters. A line that needs more rows ends its third row
+        with '...'."""
+        most_rows = 3
+
+        def fits(text: str) -> bool:
+            return cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 4)[0][0] <= width
+
+        def pieces(word: str) -> Iterator[str]:
+            if fits(word):
+                yield word
+                return
+            piece = ''
+            for char in word:
+                if piece and not fits(piece + char):
+                    yield piece
+                    piece = ''
+                piece += char
+            yield piece
+
+        rows = ['']
+        for piece in (part for word in line.split(' ') for part in pieces(word)):
+            joined = f'{rows[-1]} {piece}' if rows[-1] else piece
+            if rows[-1] and not fits(joined):
+                rows.append(piece)
+            else:
+                rows[-1] = joined
+        if len(rows) <= most_rows:
+            return rows
+        last = rows[most_rows - 1]
+        while last and not fits(last + '...'):
+            last = last.rpartition(' ')[0] if ' ' in last else last[:-1]
+        return [*rows[: most_rows - 1], last + '...']
+
     @classmethod
     def _view(
         cls,
@@ -562,7 +598,7 @@ class TeleopService:
         others: Sequence[tuple[str, np.ndarray | None]] = (),
     ) -> np.ndarray:
         """``image``, or a black image, with ``lines`` of text or badges at its top and the smaller ``footer`` at its
-        bottom.
+        bottom. Each line of text wraps to the width of the main camera.
 
         With ``others``, the view has a column on its right with one named cell for each of them, and ``image`` fits
         the left part of the view size.
@@ -586,19 +622,25 @@ class TeleopService:
         else:
             # A copy: the text goes on the view, not on the image that the service holds.
             view = np.array(image, dtype=np.uint8, order='C')
-        bottom = view.shape[0]
-        for row, line in enumerate(lines):
-            if isinstance(line, Badge):
-                cls._badge(view, (10, 26 + 30 * row), line, 0.75)
+        bottom, main_width = view.shape[0], width if others else view.shape[1]
+        rows = [
+            row
+            for line in lines
+            for row in ([line] if isinstance(line, Badge) else cls._wrapped(line, 0.75, main_width - 20))
+        ]
+        for number, row in enumerate(rows):
+            if isinstance(row, Badge):
+                cls._badge(view, (10, 26 + 30 * number), row, 0.75)
             else:
-                cls._text(view, (10, 26 + 30 * row), line, 0.75)
+                cls._text(view, (10, 26 + 30 * number), row, 0.75)
         for row, line in enumerate(reversed(footer)):
             cls._text(view, (10, bottom - 10 - 22 * row), line, 0.55)
         return view
 
-    def view(self, camera: bool = True) -> np.ndarray:
+    def view(self, camera: bool = True, task: bool = True) -> np.ndarray:
         """The image for the headset: the camera image of the run, or black with no ``camera``, with the state of the
-        trial. With more than one camera, a column on the right shows the other cameras."""
+        trial. A running trial shows its task only with ``task``. With more than one camera, a column on the right shows
+        the other cameras."""
         with self._changed:
             state = self.state()
             shown = self._shown_camera()
@@ -617,8 +659,8 @@ class TeleopService:
                 return self._view(None, ['The trial ended', 'Give the verdict on the console'], footer, others)
         if shown is not None:
             footer = [f'Camera: {shown}', *footer]
-        lines = [state.task, *self._control_lines(), 'Hold B: Complete. Hold the stick: Give up']
-        return self._view(image, lines, footer, others)
+        lines = [*self._control_lines(), 'Hold B: Complete. Hold the stick: Give up']
+        return self._view(image, [state.task, *lines] if task else lines, footer, others)
 
     # The RGB colour behind the control line of an arm whose control is on, and off
     CONTROL_ON_COLOUR = (6, 214, 160)
