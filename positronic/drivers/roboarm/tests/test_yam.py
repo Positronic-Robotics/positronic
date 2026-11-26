@@ -2962,6 +2962,22 @@ def test_a_closing_effort_in_the_launch_does_not_read_as_a_touch():
     assert _asked_nm(grasp, after_launch + GripperMotors.STEP_S, TOUCHING_EFFORT_NM) == pytest.approx(HOLD_NM)
 
 
+def test_a_close_that_pauses_and_goes_on_reads_its_new_launch_as_no_touch():
+    grasp, step = Grasp(DEFAULT_GRASP, closing_sign=-1.0, stroke_rad=GRIPPER_OPEN_RAD), GripperMotors.STEP_S
+    q, now, paused_at = GRIPPER_OPEN_RAD, 0.0, GRIPPER_OPEN_RAD - 1.0
+    while q > paused_at:
+        q = grasp.target(now, q, paused_at, 0.0, GRIPPER_KP, 0.0, HOLD_NM)  # the fingers follow the target
+        now += step
+    for _ in range(round(1.0 / step)):
+        grasp.target(now, q, paused_at, 0.0, GRIPPER_KP, 0.0, HOLD_NM)
+        now += step
+    for i in range(LAUNCH_STEPS + 5):
+        effort = TOUCHING_EFFORT_NM if i < LAUNCH_STEPS // 2 else 0.0  # the launch from rest, then a free close
+        target = grasp.target(now, q, 0.0, effort, GRIPPER_KP, 0.0, HOLD_NM)
+        now += step
+    assert -GRIPPER_KP * (target - q) > HOLD_NM + 1e-9
+
+
 def _close_again_on_nothing(monkeypatch, gripper_force_cap_n: float | None) -> np.ndarray:
     chain, motors = _gripper_chain(monkeypatch)
     _opened_by_a_driver(chain, gripper_force_cap_n, LAUNCH_TOUCH)

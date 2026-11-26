@@ -80,6 +80,8 @@ class Grasp:
             self._phase = _Phase.APPROACH
             self._close_started = self._sent_at = now
             self._sent = q
+        elif self._phase is _Phase.APPROACH and closing_sign * (request - self._sent) <= 0:
+            self._close_started = now  # a target that rests at the request starts a new launch when it moves on
         launching = now - self._close_started <= tuning.launch_s
         if self._phase is _Phase.APPROACH and not launching and closing_sign * effort > tuning.touch_effort_nm:
             self._phase = _Phase.HELD
