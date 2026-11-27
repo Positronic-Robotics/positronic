@@ -28,7 +28,7 @@ class Name(str):
         cls._described_as = described_as if described_as is not None else f'a {cls.__name__}'
 
     def __new__(cls, value: str) -> Self:
-        if not value or any(c.isspace() for c in value):
+        if value.split() != [value]:
             raise ValueError(f'not {cls._described_as}: {value!r}')
         return super().__new__(cls, value)
 

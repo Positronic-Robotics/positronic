@@ -1581,6 +1581,63 @@ def test_the_harness_counts_collections_only_while_telemetry_records(episode_har
     list(h.loop)
 
 
+_SLOW_APPEND_SEC = 0.005
+
+
+class SlowAppendEpisode(MemoryEpisode):
+    def append(self, signal_name, data, timestamps):
+        time.sleep(_SLOW_APPEND_SEC)
+        super().append(signal_name, data, timestamps)
+
+
+class SlowAppendDataset(MemoryDataset):
+    def new_episode(self):
+        episode = SlowAppendEpisode()
+        self.episodes.append(episode)
+        return episode
+
+
+def test_a_sample_between_steps_writes_no_record_span_and_its_time_goes_on_the_next_step(episode_harness, tmp_path):
+    h = episode_harness
+    dataset = SlowAppendDataset()
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-record-wait'):
+        h.observation.emit(0)
+        h.caller(Rollout(Task('sample', None), Positions(), dataset))
+        next(h.loop)
+        h.world.clock.advance_to_ns(1_000_000)
+        h.observation.emit(1)
+        next(h.loop)
+        h.world.clock.advance_to_ns(100_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    assert [data for name, data, _ in dataset.episodes[0].records if name == POSITION] == [0, 1]
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    first, second = sorted((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)[
+        :2
+    ]
+    records = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    assert not [s for s in records if first.end_ns <= s.start_ns < second.start_ns]
+    assert second.attrs[telemetry_keys.ATTR_STEP_RECORD_WAIT_MS] >= _SLOW_APPEND_SEC * 1000
+
+
+def test_a_step_keeps_the_record_spans_of_its_own_samples_and_carries_no_wait_without_a_sample_before_it(
+    episode_harness, tmp_path
+):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-record-in-step'):
+        h.observation.emit(0)
+        h.caller(Rollout(Task('sample', None), Positions(), h.dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    step = next(s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP)
+    records = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    assert [s for s in records if step.start_ns <= s.start_ns and s.end_ns <= step.end_ns]
+    assert telemetry_keys.ATTR_STEP_RECORD_WAIT_MS not in step.attrs
+
+
 def test_the_harness_stops_counting_collections_when_it_stops(episode_harness, tmp_path):
     h = episode_harness
     callbacks = list(gc.callbacks)
