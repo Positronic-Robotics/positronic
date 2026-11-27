@@ -61,6 +61,8 @@ FRAMES = {signal: EEFrame(site=GRIPPER_SITE) for signal in (keys.EE_POSE, keys.T
 
 
 class Phase(Enum):
+    """A sub-goal of the expert, in the order of its path."""
+
     RISE = 'rise'  # up to the approach height, with the grip open
     ABOVE = 'above'  # to the approach pose above the cube
     DOWN = 'down'  # to the grasp pose
@@ -69,7 +71,7 @@ class Phase(Enum):
 
 
 # How far each phase is along the path of the expert. A phase of a lower rank after a phase is a step back.
-RANK = {Phase.RISE: 0, Phase.ABOVE: 1, Phase.DOWN: 2, Phase.CLOSE: 3, Phase.LIFT: 4}
+RANK = {phase: rank for rank, phase in enumerate(Phase)}
 
 
 def _holds(pose: geom.Transform3D, grip: float, cube: np.ndarray, contact: bool) -> bool:
