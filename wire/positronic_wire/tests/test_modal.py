@@ -27,6 +27,7 @@ class FakeEdge:
     def __init__(self) -> None:
         self.starts: list[Mapping[str, str]] = []
         self.ended: list[str] = []
+        self.end_headers: list[Mapping[str, str]] = []
         self.refuse: list[int] = []
         # A start blocks until this is set, as a start on a cold app waits for a container.
         self.container_free = threading.Event()
@@ -42,6 +43,7 @@ class FakeEdge:
         if path == modal.TERMINATE_PATH:
             self.terminate_free.wait()
             self.ended.append(headers[modal.SESSION_TOKEN_HEADER])
+            self.end_headers.append(dict(headers))
             return HTTPStatus.OK, b''
         assert path == modal.START_PATH
         self.starts.append({**headers, 'host': root.host})
@@ -81,6 +83,7 @@ class FakeWire(wire.ClientWire[wire.HostPortAddress]):
 
     def __init__(self) -> None:
         self.dialled: list[str] = []
+        self.dial_headers: list[Mapping[str, str]] = []
         self.called: list[str] = []
         self.ended: set[str] = set()
         self.refusals: list[wire.Refusal] = []
@@ -97,6 +100,7 @@ class FakeWire(wire.ClientWire[wire.HostPortAddress]):
     def dial(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, open_timeout: float):
         token = self._token(headers)
         self.dialled.append(token)
+        self.dial_headers.append(dict(headers or {}))
         if self.refusals:
             raise wire.ConnectRefused(self.refusals.pop(0), 'refused')
         if token in self.ended:
@@ -165,6 +169,19 @@ def test_a_dial_starts_a_session_with_the_credentials_and_dials_its_token(modal_
     assert edge.starts[0]['Modal-Key'] == 'KEY'
     assert edge.starts[0][modal.IDLE_TIMEOUT_HEADER] == str(modal.IDLE_TIMEOUT)
     assert inner.dialled == ['token-1']
+
+
+def test_a_bearer_token_opens_the_session_start_and_end_and_the_dial_carries_only_the_session_token(
+    modal_wire, edge, inner
+):
+    proxy_token = {'Authorization': 'Bearer wk-id.ws-secret'}
+
+    modal_wire.dial(_ADDRESS, proxy_token, 5.0).close()
+    modal_wire._wait_for_ends()
+
+    assert edge.starts[0]['Authorization'] == 'Bearer wk-id.ws-secret'
+    assert edge.end_headers[0]['Authorization'] == 'Bearer wk-id.ws-secret'
+    assert inner.dial_headers == [{modal.SESSION_HEADER: 'Bearer token-1'}]
 
 
 def test_a_send_gives_its_timeout_to_the_wire_under_it(modal_wire, inner):

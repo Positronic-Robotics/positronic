@@ -490,8 +490,8 @@ class _EndpointBase(Cascade):
         self._refuse_off_a_remote_address(
             'a bearer token', "the platform serves this policy and gives it the run's own token"
         )
-        # The session dial of these wires carries no header of the endpoint, so no bearer token reaches the server.
-        if self.wire is Wire.websocket_unix or self.wire is Wire.modal_websocket_tls:
+        # The session dial of this wire carries no header of the endpoint, so no bearer token reaches the server.
+        if self.wire is Wire.websocket_unix:
             raise ValueError(
                 f'endpoint {self.name!r} states a bearer token on the {slug_of(self.wire)} wire, whose session '
                 'carries no endpoint header'
