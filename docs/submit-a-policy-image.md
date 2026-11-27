@@ -592,7 +592,8 @@ client calls it with `list_artifacts`, and `positronic eval` has no command for 
 - `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic
   reads it as a dataset, the same as one a local `positronic eval run` writes
   ([Evaluation](evaluation.md)). The eval's privileged ground-truth is stripped from it.
-- A finished rig plan lists here too, for the account that filed it.
+- A finished rig plan lists here too, for the account that filed it. Its episodes are under the
+  prefix that its `artifacts.result` names ([Eval plans](../client/README.md#eval-plans)).
 
 ### Failure reasons
 
