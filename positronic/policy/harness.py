@@ -215,10 +215,6 @@ class _RecordWait:
         self._ns = None
 
 
-def _record_io_span() -> AbstractContextManager[object]:
-    return telemetry.span(telemetry_keys.SPAN_RECORD_IO)
-
-
 @dataclass(frozen=True)
 class _PolicyEnded:
     """What a policy run returned, and the episode time at which it returned."""
@@ -368,6 +364,10 @@ class Harness(pimm.ControlSystem):
     def _instruction(self, task: Task) -> str:
         """The text the policy gets: the newest goal that this episode read, or the task's instruction before any."""
         return self._goal if self._goal is not None else task.instruction
+
+    @staticmethod
+    def _record_io_span() -> AbstractContextManager[object]:
+        return telemetry.span(telemetry_keys.SPAN_RECORD_IO)
 
     def _append(
         self,

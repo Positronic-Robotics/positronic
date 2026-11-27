@@ -147,7 +147,8 @@ A `harness.step` span holds the durations of one step in milliseconds, and one c
 - `step.record_wait_ms`: the time that the samples between the previous step and this step spent in their appends.
   The harness samples the observations at its recording rate between two steps, and each sample appends the new
   messages to the recording. These samples record no `record.io` span, because on a rig they give most of the
-  spans of the harness. The value is present only when a sample appended a message in that time.
+  spans of the harness. The value is present only when a sample appended a message in that time. The samples after
+  the last step of an episode have no next step, so their time is not recorded.
 
 The three collection values are present only when a collection ran in one of the two windows. A collection in any
 thread stops the harness thread too, so each value counts all threads. The harness counts collections only while
