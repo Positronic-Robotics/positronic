@@ -115,3 +115,19 @@ def test_a_control_mode_follows_the_command_channel_or_its_arm():
     assert not keys.is_control_mode(keys.TARGET_JOINTS)
     assert not keys.is_control_mode(f'{keys.ROBOT_STATE}{mode}.impedance.kq')
     assert not keys.is_control_mode(f'{command_of_left_arm}.joints{mode}')
+
+
+def test_a_command_channel_is_a_robot_command_or_a_grip_target_of_any_arm():
+    assert keys.is_command_channel(keys.TARGET_JOINTS)
+    assert keys.is_command_channel(keys.TARGET_GRIP)
+    assert keys.is_command_channel(keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM))
+    assert not keys.is_command_channel(keys.GRIP)
+    assert not keys.is_command_channel(f'{keys.TARGET_GRIP}_speed')
+
+
+def test_an_observation_is_an_arm_state_a_grip_or_a_camera():
+    assert keys.is_observation(keys.EE_POSE)
+    assert keys.is_observation(keys.arm_channel(keys.GRIP, keys.RIGHT_ARM))
+    assert keys.is_observation(keys.EXTERIOR_IMAGE_2)
+    assert not keys.is_observation(keys.TARGET_GRIP)
+    assert not keys.is_observation(keys.TASK)

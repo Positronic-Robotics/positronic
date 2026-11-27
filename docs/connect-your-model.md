@@ -229,6 +229,7 @@ episode with a `PolicyCommandError` that names the channel.
 ## Debugging with recordings
 
 Pass `--output_dir` on the client to save the full episode as a Positronic dataset, browsable with `positronic-dataset-viewer`.
+To play a recorded episode to a server again, see [On a recorded episode](#on-a-recorded-episode).
 
 ## Implement your own server
 
@@ -312,12 +313,7 @@ Implement `end_session(session_id)` to release that episode's state. It runs aft
 outstanding inference finishes, both on explicit session end and on disconnect.
 The model remains loaded for subsequent episodes.
 
-Test the deployment with the normal client:
-
-```bash
-uv run positronic eval run --eval=.sim.positronic.stack_cubes \
-  --policy=.remote --policy.address.host=localhost --policy.address.port=8000
-```
+Test the deployment as [Test your server](#test-your-server) tells.
 
 ### Serialization
 
@@ -380,6 +376,102 @@ The [Codecs Guide](../positronic/policy/codecs/README.md) lists the other action
 `bimanual_joints_action` for two arms.
 
 The client refuses a mapping at `robot_command` with a `PolicyCommandError`.
+
+## Test your server
+
+Test a server in a simulator first, then on a recorded robot episode. Both tests run the client that runs on a rig.
+
+### In a simulator
+
+Run an eval against the server:
+
+```bash
+uv run positronic eval run --eval=.sim.positronic.stack_cubes \
+  --policy=.remote --policy.address.host=localhost --policy.address.port=8000 \
+  --output_dir=~/evals/stack_cubes
+```
+
+The MuJoCo scene sends `image.exterior`, `image.wrist` and `image.agent_view`. A server that reads
+`image.exterior_2`, such as a `droid_3cam` pipeline, answers each of its observations with an error. MolmoSpaces sends
+both exterior views. For such a server, run `molmo.franka_pick_mini_smoke` as
+[Score a policy on MolmoSpaces on your machine](local-molmospaces-eval.md) tells. Browse the recorded episodes with
+`uv run positronic-dataset-viewer --dataset.path=~/evals/stack_cubes`.
+
+### On a recorded episode
+
+`positronic.offboard.replay_episode` plays the observations of a recorded episode to the server. The client stack that
+the server declares runs as on a rig. The clock of the episode stops during each call. Each command prints beside the
+command that the episode recorded at the same time.
+
+A public episode is at `s3://positronic-public/datasets/droid-3cam-pi05/v1/`. In it, the π0.5 DROID policy of the
+`positro/pi05-droid` image takes a marker out of a mug on a Franka DROID rig, in 90 s. The episode records
+`image.exterior`, `image.exterior_2` and `image.wrist` at 1280 × 720, the arm state, the grip and the policy commands.
+
+Make one call on the observation 10 s into the episode:
+
+```bash
+uv run python -m positronic.offboard.replay_episode \
+  --dataset.path=s3://PUBLIC@positronic-public/datasets/droid-3cam-pi05/v1/ \
+  --policy.address.host=localhost --policy.address.port=8000 \
+  --start_sec=10 --calls=1
+```
+
+`PUBLIC@` reads the bucket with no credentials. The command prints each command of the answer as the client plays it.
+This output comes from a server that holds the arm where it is:
+
+```
+Episode of 89.9 s on harness.world: 'Take the marker out of the mug and put it on the table'
+Observations sent: ['grip', 'image.exterior', 'image.exterior_2', 'image.wrist', 'robot_state.dq', 'robot_state.ee_wrench', 'robot_state.q', 'robot_state.status']
+  10.000 s  call 1 answered in 79 ms
+  10.000 s  robot_command = JointPosition(positions=array([-0.011,  0.497, -0.035, -1.583,  0.104,  1.535,  0.156], dtype=float32), mode=None)
+  10.000 s  target_grip = 0.7372549019607844
+  10.000 s  recorded robot_command.joints = [-0.011  0.504 -0.034 -1.575  0.106  1.526  0.175]
+  10.000 s  recorded target_grip = 1.0
+  10.067 s  robot_command = JointPosition(positions=array([-0.011,  0.497, -0.035, -1.583,  0.104,  1.535,  0.156], dtype=float32), mode=None)
+  ...
+1 calls answered
+```
+
+- Remove `--start_sec` and `--calls` to play the whole episode. `--end_sec` stops the play at that time.
+- `--dataset.path` also takes a local directory, such as the `--output_dir` of an eval. `--episode` selects an
+  episode of a dataset that holds more than one.
+- The server gets `robot_state.ee_pose` only when it states the frame of that pose, as on a rig
+  ([State the end-effector frame](#state-the-end-effector-frame)).
+- Each observation comes from the recording, whatever the server commands.
+- The recorded commands are the commands of π0.5. Compare the type, the size and the range of your commands with them.
+- A step that names a channel other than `robot_command` and `target_grip` stops the play with a
+  `PolicyCommandError`. A rig refuses the same step.
+
+## Expose your server
+
+Positronic can run an eval against a server on your machine ([Four ways to start](evaluation.md#four-ways-to-start)).
+The platform then dials the server over the internet. Prepare the server in three steps:
+
+1. Give the server a public host name or a public IP address.
+2. Put a TLS edge in front of the server, such as a reverse proxy with a certificate for the host name.
+   [Wires](../positronic/offboard/README.md#wires) tells which wire to name behind the edge.
+3. Start the server with a bearer token in `AUTH_TOKEN`
+   ([Authentication](../positronic/offboard/README.md#authentication)).
+
+The endpoint entry of the eval plan names the wire, the address and the file that holds the token
+([Eval plans](../client/README.md#eval-plans)).
+
+Check the endpoint from a machine outside your network. A `401` answer shows that the server is reachable and checks
+the token:
+
+```bash
+curl -X POST https://policy.example.com/api/v1/keepalive
+```
+
+Then play the public episode to the endpoint, with the token in `AUTH_TOKEN`:
+
+```bash
+uv run python -m positronic.offboard.replay_episode \
+  --dataset.path=s3://PUBLIC@positronic-public/datasets/droid-3cam-pi05/v1/ \
+  --policy=@positronic.cfg.policy.authed_remote --policy.wire=websocket_tls \
+  --policy.address.host=policy.example.com --policy.address.port=443 \
+  --start_sec=10 --calls=1
+```
 
 ## See Also
 

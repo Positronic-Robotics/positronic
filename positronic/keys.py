@@ -59,6 +59,16 @@ def is_robot_status(name: str) -> bool:
     return name.startswith(f'{ROBOT_STATE}.') and name.endswith(STATUS_SUFFIX)
 
 
+def is_command_channel(name: str) -> bool:
+    """Whether a rig takes a command on ``name``: the robot-command family, or ``target_grip`` of an arm."""
+    return is_robot_command(name) or name.partition('.')[0] == TARGET_GRIP
+
+
+def is_observation(name: str) -> bool:
+    """Whether ``name`` is a sensor signal an embodiment sends a policy: an arm state, a grip or a camera."""
+    return name.startswith((f'{ROBOT_STATE}.', IMAGE_PREFIX)) or name.partition('.')[0] == GRIP
+
+
 def arm_channel(channel: str, arm: str | None) -> str:
     """``channel`` for ``arm``: the bare channel when the arm is unnamed, ``channel.{arm}`` otherwise."""
     return channel if arm is None else f'{channel}.{arm}'
