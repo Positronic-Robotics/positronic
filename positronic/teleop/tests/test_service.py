@@ -10,7 +10,7 @@ import time
 import types
 from collections.abc import Callable, Generator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -1865,7 +1865,7 @@ def test_a_view_rate_that_is_not_finite_and_positive_is_refused(socket_path, vie
         command._Headset(TeleopService(ServedUnixSocket(socket_path), 1.0, 0.05, HOLD_SEC), view_fps)
 
 
-@pytest.mark.parametrize('name', ['rate_hz', 'view_fps', 'min_hold_sec', 'trial_sec', 'circle_sec'])
+@pytest.mark.parametrize('name', ['rate_hz', 'view_fps', 'stale_limit', 'min_hold_sec', 'trial_sec', 'circle_sec'])
 @pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf')])
 def test_a_scripted_headset_rate_or_time_that_is_not_finite_and_positive_is_refused(name, value):
     with pytest.raises(ValueError, match=f'{name} must be finite and positive'):
@@ -1945,6 +1945,24 @@ class _PageMissingTheReleaseAfterComplete(_PagePassingASampleAtEachPoll):
         self._phase = phase
 
 
+class _PageLosingTheFirstPressOfA(_PagePassingASampleAtEachPoll):
+    """A page that loses the first press of A, as the WebXR driver loses the presses of a stale message: the press
+    counts of that sample become the base of the counts that the page passes."""
+
+    def _take_samples(self, connection: ServerConnection) -> None:
+        base, lost = None, False
+        for message in connection:
+            positions, buttons = webxr.parse_controller_message(json.loads(message))
+            pose, right = positions[webxr.RIGHT], buttons[webxr.RIGHT]
+            assert pose is not None and right is not None, 'the scripted headset tracks its right controller'
+            if base is None:
+                base = right.presses
+            elif not lost and right.presses[Button.A] > base[Button.A]:
+                base, lost = right.presses, True
+            counted = replace(right, presses=tuple(now - then for now, then in zip(right.presses, base, strict=True)))
+            self._latest = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: counted})
+
+
 # A station asks for a frame about every 33 ms. A frame request answers at once, so a loop with no pause only
 # competes with the headset for the service.
 STATION_FRAME_SEC = 1 / 30
@@ -1987,6 +2005,27 @@ def test_the_scripted_headset_presses_ready_again_when_the_service_missed_the_re
             ends.append(_frames_until_end(service)[-1][END])
         trials.result(timeout=10)
     assert ends == [PolicyEnd.COMPLETE.value, PolicyEnd.COMPLETE.value]
+
+
+@pytest.mark.timeout(30)
+def test_the_scripted_headset_presses_a_again_when_the_service_lost_its_press_of_a(socket_path):
+    service = TeleopService(ServedUnixSocket(socket_path), ready_limit=2.0, silence_limit=1.0, hold_sec=HOLD_SEC)
+    with _PageLosingTheFirstPressOfA(service) as page, ThreadPoolExecutor(max_workers=1) as pool:
+        trials = pool.submit(
+            scripted_headset.drive, page=page.url, trials=1, min_hold_sec=0.05, trial_sec=1.0, circle_sec=1.0
+        )
+        service.wait_for_ready(protocol.SessionParams(OperatorPosition.BACK), threading.Event())
+        frames = [service.next_frame(FRAME_REQUEST)]
+        deadline = time.monotonic() + 10.0
+        while END not in frames[-1] and time.monotonic() < deadline:
+            time.sleep(STATION_FRAME_SEC)
+            frames.append(service.next_frame(FRAME_REQUEST))
+        # A trial that does not end lets the scripted headset stop.
+        service.end_session()
+        trials.result(timeout=10)
+    moves = [frame[ACTION][:3] for frame in frames[:-1]]
+    assert frames[-1].get(END) == PolicyEnd.COMPLETE.value
+    assert np.ptp(moves, axis=0).max() > 0.01, f'{len(moves)} moves with no motion'
 
 
 def test_the_phone_page_reads_fields_of_the_page_state():
