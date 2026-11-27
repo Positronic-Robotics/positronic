@@ -592,8 +592,8 @@ client calls it with `list_artifacts`, and `positronic eval` has no command for 
 - `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic
   reads it as a dataset, the same as one a local `positronic eval run` writes
   ([Evaluation](evaluation.md)). The eval's privileged ground-truth is stripped from it.
-- A plan the lab rig ran is refused here: its episodes land under the prefix `submissions.get`
-  names.
+- A finished plan that the lab rig ran lists here too, to the account that filed it. The route
+  refuses an `eval` on such a plan.
 
 ### Failure reasons
 
