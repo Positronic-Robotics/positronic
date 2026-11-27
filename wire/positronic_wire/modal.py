@@ -173,7 +173,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                     keep = partial(self._park, endpoint, address)
                 else:
                     token = endpoint.spare
-                    self._set_spare(endpoint, None)
+                    self._drop_spare(endpoint)
                     keep = partial(self._keep_as_spare, endpoint)
             if token is not None:
                 try:
@@ -208,7 +208,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                     )
                 with self._changed:
                     if endpoint.spare == token:
-                        self._set_spare(endpoint, None)
+                        self._drop_spare(endpoint)
             token = self._wait_for_spare(endpoint, deadline, take=False)
             return self._keepalive_on(endpoint, address, token, deadline)
 
@@ -218,8 +218,9 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
         """``inner``'s keepalive with ``token``. A keepalive on the spare gives it another ``idle_timeout``."""
         seconds = self._inner.keepalive(address, self._call_headers(token), max(0.0, deadline - time.monotonic()))
         with self._changed:
-            if endpoint.spare == token:
-                self._set_spare(endpoint, token)
+            timer = self._record_spare(endpoint, token) if endpoint.spare == token else None
+        if timer is not None:
+            timer.start()
         return seconds
 
     def probe(
@@ -238,7 +239,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 tokens = [*endpoint.held, *endpoint.parked, *([endpoint.spare] if endpoint.spare else [])]
                 ending += [(endpoint, token) for token in tokens]
                 endpoint.held, endpoint.parked = {}, {}
-                self._set_spare(endpoint, None)
+                self._drop_spare(endpoint)
                 self._forget_if_idle(endpoint)
         for endpoint, token in ending:
             self._terminate(endpoint, token)
@@ -312,21 +313,29 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
 
     def _release(self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str, dropped: bool) -> None:
         """Park the session of a dropped connection on ``address``, and end that of a closed one."""
+        # Atomic: the session moves from held to parked with no moment where the endpoint looks idle.
         with self._changed:
             endpoint.held.pop(token, None)
-            if dropped:
-                self._park(endpoint, address, token)
-                return
+            timer = self._record_parked(endpoint, address, token) if dropped else None
             self._forget_if_idle(endpoint)
-        self._end_later(endpoint, token)
+        if timer is not None:
+            timer.start()
+        else:
+            self._end_later(endpoint, token)
 
     def _park(self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str) -> None:
         """Keep ``token`` for the next dial on ``address``, until ``idle_timeout`` passes."""
+        with self._changed:
+            timer = self._record_parked(endpoint, address, token)
+        timer.start()
+
+    def _record_parked(self, endpoint: _Endpoint, address: wire.HostPortAddress, token: str) -> threading.Timer:
+        """Record ``token`` as parked, with the timer that ends it. The caller holds the lock, and starts the timer
+        after it releases the lock."""
         timer = threading.Timer(self._idle_timeout, self._end_parked, (endpoint, token))
         timer.daemon = True
-        with self._changed:
-            endpoint.parked[token] = _Parked(address, timer)
-            timer.start()
+        endpoint.parked[token] = _Parked(address, timer)
+        return timer
 
     def _end_parked(self, endpoint: _Endpoint, token: str) -> None:
         with self._changed:
@@ -335,36 +344,40 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             self._forget_if_idle(endpoint)
         self._terminate(endpoint, token)
 
-    def _set_spare(self, endpoint: _Endpoint, token: str | None) -> None:
-        """Make ``token`` the spare for ``idle_timeout``. The caller holds the lock."""
+    @staticmethod
+    def _drop_spare(endpoint: _Endpoint) -> None:
+        """Clear the spare and cancel its timer. The caller holds the lock."""
         if endpoint.spare_timer is not None:
             endpoint.spare_timer.cancel()
-            endpoint.spare_timer = None
-        endpoint.spare = token
-        if token is None:
-            return
+        endpoint.spare, endpoint.spare_timer = None, None
+
+    def _record_spare(self, endpoint: _Endpoint, token: str) -> threading.Timer:
+        """Record ``token`` as the spare, with the timer that ends it after ``idle_timeout``. The caller holds the
+        lock, and starts the timer after it releases the lock. A timer cancelled before its start never fires."""
+        self._drop_spare(endpoint)
         timer = threading.Timer(self._idle_timeout, lambda: self._end_spare(endpoint, timer))
         timer.daemon = True
-        endpoint.spare_timer = timer
-        timer.start()
+        endpoint.spare, endpoint.spare_timer = token, timer
+        return timer
 
     def _end_spare(self, endpoint: _Endpoint, timer: threading.Timer) -> None:
         with self._changed:
             token = endpoint.spare
             if endpoint.spare_timer is not timer or token is None:
                 return
-            self._set_spare(endpoint, None)
+            self._drop_spare(endpoint)
             self._forget_if_idle(endpoint)
         self._terminate(endpoint, token)
 
     def _keep_as_spare(self, endpoint: _Endpoint, token: str) -> None:
         """Keep ``token`` as the spare, or end it where there is one already."""
         with self._changed:
-            if endpoint.spare is None:
-                self._set_spare(endpoint, token)
-                self._changed.notify_all()
-                return
-        self._end_later(endpoint, token)
+            timer = self._record_spare(endpoint, token) if endpoint.spare is None else None
+            self._changed.notify_all()
+        if timer is not None:
+            timer.start()
+        else:
+            self._end_later(endpoint, token)
 
     def _call_headers(self, token: str) -> dict[str, str]:
         return {SESSION_HEADER: f'Bearer {token}', IDLE_TIMEOUT_HEADER: str(self._idle_timeout)}
@@ -395,7 +408,7 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
                 self._changed.wait(left)
             token = endpoint.spare
             if take:
-                self._set_spare(endpoint, None)
+                self._drop_spare(endpoint)
             return token
 
     def _start(self, endpoint: _Endpoint) -> None:
@@ -413,15 +426,18 @@ class ModalClientWire(wire.ClientWire[wire.HostPortAddress]):
             )
             failure.__cause__ = e
         extra: str | None = None
+        timer: threading.Timer | None = None
         with self._changed:
             endpoint.starting = False
             endpoint.start_failure = failure
             if token is not None and endpoint.spare is None:
-                self._set_spare(endpoint, token)
+                timer = self._record_spare(endpoint, token)
             else:
                 extra = token
             self._forget_if_idle(endpoint)
             self._changed.notify_all()
+        if timer is not None:
+            timer.start()
         if extra is not None:
             self._terminate(endpoint, extra)
 
