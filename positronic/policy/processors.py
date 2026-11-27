@@ -1029,6 +1029,7 @@ class _Arriving(Mapping[str, np.ndarray]):
             return self._result.result()
         except CancelledError:
             pass
+        # The lock only claims the shared result, so one reader makes the change. The change runs after it.
         with self._lock:
             makes_it = self._read_change is None
             if self._read_change is None:

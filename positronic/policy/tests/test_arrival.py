@@ -548,7 +548,30 @@ def test_a_stacked_value_that_changes_each_step_resizes_no_repeated_frame(monkey
     assert resizes.count == STEPS // 2 * len(CAMERAS)
 
 
-def test_a_read_of_a_cancelled_frame_resizes_with_no_lock_held_and_once_for_all_readers():
+def _read_from_threads(arriving: _Arriving, count: int) -> list[Any]:
+    """The value or the error that each of ``count`` threads reads from ``arriving``, one thread after another."""
+    results: list[Any] = []
+
+    def read():
+        try:
+            results.append(arriving['frame'])
+        except ValueError as error:
+            results.append(error)
+
+    for _ in range(count):
+        reader = threading.Thread(target=read)
+        reader.start()
+        reader.join(timeout=10)
+    return results
+
+
+def _cancelled() -> Future:
+    result: Future = Future()
+    result.cancel()
+    return result
+
+
+def test_concurrent_reads_of_a_cancelled_frame_share_one_resize():
     started, release = threading.Event(), threading.Event()
     runs: list[int] = []
 
@@ -558,18 +581,14 @@ def test_a_read_of_a_cancelled_frame_resizes_with_no_lock_held_and_once_for_all_
         assert release.wait(timeout=10)
         return {name: value * 2 for name, value in values.items()}
 
-    cancelled: Future = Future()
-    cancelled.cancel()
-    arriving = _Arriving({'frame': np.ones(2)}, change, cancelled)
+    arriving = _Arriving({'frame': np.ones(2)}, change, _cancelled())
     results: list[np.ndarray] = []
     readers = [threading.Thread(target=lambda: results.append(arriving['frame'])) for _ in range(2)]
 
     readers[0].start()
     try:
         assert started.wait(timeout=10)
-        # The resize runs now, on the first reader. The lock is free, so a second reader waits for the result only.
-        assert arriving._lock.acquire(timeout=1)
-        arriving._lock.release()
+        # The first reader makes the resize now. The second reader comes while it runs.
         readers[1].start()
     finally:
         release.set()
@@ -578,3 +597,16 @@ def test_a_read_of_a_cancelled_frame_resizes_with_no_lock_held_and_once_for_all_
 
     assert len(runs) == 1
     np.testing.assert_equal(results, [np.full(2, 2.0)] * 2)
+
+
+def test_a_failed_resize_of_a_cancelled_frame_runs_once_and_each_reader_gets_its_error():
+    runs: list[int] = []
+
+    def change(values):
+        runs.append(1)
+        raise ValueError('no frame')
+
+    results = _read_from_threads(_Arriving({'frame': np.ones(2)}, change, _cancelled()), 2)
+
+    assert len(runs) == 1
+    assert len(results) == 2 and all(isinstance(result, ValueError) for result in results)
