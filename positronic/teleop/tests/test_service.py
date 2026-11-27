@@ -73,6 +73,7 @@ from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import (
     OTHERS_WIDTH,
+    Badge,
     Button,
     ButtonMap,
     CameraState,
@@ -458,6 +459,25 @@ def test_the_control_line_of_the_view_is_yellow_while_control_is_off_and_green_w
         _drive_until(run, lambda _: service.state().control)
         assert colours() == {'on'}
         run.close()
+
+
+def test_the_view_shows_that_the_trial_starts_until_its_first_frame(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect)
+    starting = service.view_text().lines
+    assert starting == ('Trial starting: waiting for the robot',), 'no task and no control line before the first frame'
+    connection.frame(FRAME_REQUEST)
+    running = service.view_text().lines
+    assert OBS[keys.TASK] in running
+    assert Badge('Control off (A: on)', TeleopService.CONTROL_OFF_COLOUR) in running
+    assert 'Trial starting: waiting for the robot' not in running
+    connection.close()
+
+
+def test_a_dropped_trial_with_no_frame_shows_that_it_starts_until_a_session_resumes_it(service, socket_path, connect):
+    connection = _readied_connection(service, socket_path, connect)
+    connection.close()
+    assert service.phase is Phase.RUNNING, 'the dropped trial stays for a session that resumes it'
+    assert service.view_text().lines == ('Trial starting: waiting for the robot',)
 
 
 def test_control_follows_the_hand_from_where_it_came_on_and_holds_the_last_target(service, socket_path, runtime):
