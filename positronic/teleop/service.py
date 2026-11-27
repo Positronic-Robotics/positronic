@@ -922,7 +922,10 @@ class TeleopService:
         return {ACTION: np.concatenate([np.append(pose.as_vector(QUAT), grip) for pose, grip in self._hold.values()])}
 
     def _clear_trial(self, cause: str) -> None:
-        """Show no trial. Hold the lock."""
+        """Show no trial, and log that control of each arm whose control is on goes off for ``cause``. Hold the
+        lock."""
+        for arm in [arm for arm, tracker in self._trackers.items() if tracker.on]:
+            self._log(f'{self._arm_name(arm)} off ({cause})')
         self._set_phase(Phase.IDLE, cause)
         self._events, self._connection_lost = [], set()
         self._task, self._trackers, self._images, self._trial_cameras = '', {}, {}, ()

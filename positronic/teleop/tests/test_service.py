@@ -523,6 +523,24 @@ def test_the_service_logs_each_change_of_the_phase_and_of_control_with_its_cause
     assert [message for message, free in lock_probe.lines if not free] == [], 'each line is written after the lock'
 
 
+def test_the_end_of_a_session_with_control_on_logs_that_control_goes_off_after_the_lock(
+    service, socket_path, connect, lock_probe
+):
+    connection = _readied_connection(service, socket_path, connect)
+    _take(service, _buttons(a=1.0))
+    _take(service, _buttons())
+    connection.frame(FRAME_REQUEST)
+    connection.frame(FRAME_REQUEST)
+    assert service.state().control
+    connection.close()
+    _until_phase(service, Phase.IDLE)
+    ends = [(message, free) for message, free in lock_probe.lines if 'the session ended' in message]
+    assert ends == [
+        ('Control off (the session ended)', True),
+        ('Teleop trial: running -> idle (the session ended)', True),
+    ]
+
+
 def test_the_view_logs_the_end_of_a_dropped_trial_after_the_lock(
     service, socket_path, connect, lock_probe, monkeypatch
 ):
