@@ -223,7 +223,7 @@ class TrialNotStarted(Exception):
 
 @dataclass(frozen=True)
 class TrialState:
-    """What the window on the station screen shows."""
+    """What the window on the station screen and the phase notice show."""
 
     phase: Phase
     task: str
@@ -231,6 +231,8 @@ class TrialState:
     cameras: tuple[str, ...]
     # A sample that tracks a controller came within the silence limit
     tracked: bool
+    # The count of the heads-ups that started
+    heads_ups: int
 
 
 # The use of Y on the left controller, at the bottom of the view
@@ -388,6 +390,7 @@ class TeleopService:
         self._resumable_until: float | None = None
         # The `time.monotonic()` instant at which the heads-up of a run goes.
         self._heads_up_until: float | None = None
+        self._heads_ups = 0
         # A wait ends at once when the service stops.
         self._stopping = False
         self._wire: WebsocketWire | None = None
@@ -498,7 +501,7 @@ class TeleopService:
         tracked = (
             self._tracked_at_ns is not None and time.monotonic_ns() - self._tracked_at_ns < self.silence_limit * 1e9
         )
-        return TrialState(self._phase, self._task, control, tuple(self._images), tracked)
+        return TrialState(self._phase, self._task, control, tuple(self._images), tracked, self._heads_ups)
 
     def state(self) -> TrialState:
         with self._locked():
@@ -799,6 +802,7 @@ class TeleopService:
             self._clear_trial('a warm-up session starts')
             self._set_phase(Phase.HEADS_UP, 'a warm-up session starts')
             self._heads_up_until = time.monotonic() + self.heads_up_limit
+            self._heads_ups += 1
 
     def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped after its first frame request, as the next session of its client.

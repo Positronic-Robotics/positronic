@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 import webbrowser
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -24,7 +24,7 @@ from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES
 from .protocol import DEFAULT_PORT, default_socket_path
-from .service import Phase, TeleopService
+from .service import Phase, TeleopService, TrialState
 from .window import Window, window_app
 
 logger = logging.getLogger(__name__)
@@ -153,13 +153,13 @@ class Notice(Protocol):
 
 
 class _PhaseNotice(pimm.ControlSystem):
-    """Show the text of each phase in ``texts`` with ``notice`` while the trial is in that phase."""
+    """Show the text of each phase in ``texts`` with ``notice`` while the trial that ``state`` gives is in that phase.
+    Each new heads-up shows its text again."""
 
-    def __init__(self, notice: Notice, texts: Mapping[Phase, NoticeText]):
+    def __init__(self, notice: Notice, texts: Mapping[Phase, NoticeText], state: Callable[[], TrialState]):
         self._notice = notice
         self._texts = dict(texts)
-        # The state of the trial, as a `PageState` mapping.
-        self.page_state = pimm.ControlSystemReceiver(self)
+        self._state = state
 
     def _switch(self, shown: NoticeText | None, text: NoticeText | None) -> None:
         """Hide the notice of ``shown``, and show ``text``. ``None`` is no notice."""
@@ -170,12 +170,14 @@ class _PhaseNotice(pimm.ControlSystem):
 
     def run(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
         shown: NoticeText | None = None
+        heads_ups = None
         try:
             while not should_stop.value:
-                state = pimm.read_updated(self.page_state)
-                if state is not None and (text := self._texts.get(PageState(**state.data).phase)) != shown:
+                state = self._state()
+                text = self._texts.get(state.phase)
+                if text != shown or state.heads_ups != heads_ups:
                     self._switch(shown, text)
-                    shown = text
+                    shown, heads_ups = text, state.heads_ups
                 yield pimm.Sleep(0.1)
         finally:
             self._switch(shown, None)
@@ -310,15 +312,13 @@ def serve(
         ),
         Phase.READY_WAIT: NoticeText('Teleoperation trial', ready_text),
     }
-    phase_notice = None if notice is None else _PhaseNotice(notice, texts)
+    phase_notice = None if notice is None else _PhaseNotice(notice, texts, service.state)
     with service, Window(window_app(service), window_port) as window, pimm.World() as world:
         world.connect(webxr.controller_positions, headset.controller_positions)
         world.connect(webxr.buttons, headset.buttons)
         world.connect(webxr.page_input, headset.page_input)
         world.connect(headset.view, webxr.frame)
         world.connect(headset.page_state, webxr.page_state)
-        if phase_notice is not None:
-            world.connect(headset.page_state, phase_notice.page_state)
         logger.info('The teleop service serves on %s. Its window is %s', service.served_address, window.url)
         if open_window:
             webbrowser.open(window.url)

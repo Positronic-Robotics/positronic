@@ -82,6 +82,7 @@ from positronic.teleop.service import (
     ReadyAnswer,
     TeleopModel,
     TeleopService,
+    TrialState,
 )
 from positronic.tests.testing_coutils import ManualCommandReceiver, MutableShouldStop, RecordingEmitter
 from positronic.tests.testing_inference import free_port
@@ -2359,14 +2360,11 @@ NOTICE_TEXTS = {
 
 def _ready_notice_after(phases: list[Phase]) -> tuple[_RecordingNotice, MutableShouldStop, Generator]:
     """A phase notice that has read ``phases``, its stop flag and its loop."""
-    notice = _RecordingNotice()
-    phase_notice = command._PhaseNotice(notice, NOTICE_TEXTS)
-    states = ManualCommandReceiver[dict]()
-    phase_notice.page_state._bind(states)
+    notice, polled = _RecordingNotice(), iter(phases)
+    phase_notice = command._PhaseNotice(notice, NOTICE_TEXTS, lambda: TrialState(next(polled), '', False, (), False, 0))
     stop = MutableShouldStop()
     loop = cast(Generator, phase_notice.run(cast(pimm.SignalReceiver, stop), SystemClock()))
-    for phase in phases:
-        states.push(asdict(command.PageState(phase, control=False)))
+    for _ in phases:
         next(loop)
     return notice, stop, loop
 
@@ -2380,6 +2378,31 @@ def test_the_notice_shows_while_a_trial_waits_for_ready():
 def test_the_notice_shows_the_heads_up_of_a_run_until_its_trial_waits_for_ready():
     notice, _, _ = _ready_notice_after([Phase.IDLE, Phase.HEADS_UP, Phase.HEADS_UP, Phase.READY_WAIT, Phase.RUNNING])
     assert notice.calls == ['show A teleop episode comes', 'hide', 'show Press Ready', 'hide']
+
+
+def _service_notice(service: TeleopService) -> tuple[_RecordingNotice, Callable[[], None]]:
+    """A phase notice of ``service``, and a function that runs one poll of its loop."""
+    notice = _RecordingNotice()
+    phase_notice = command._PhaseNotice(notice, NOTICE_TEXTS, service.state)
+    loop = cast(Generator, phase_notice.run(cast(pimm.SignalReceiver, MutableShouldStop()), SystemClock()))
+    return notice, lambda: next(loop)
+
+
+def test_each_warm_up_shows_the_notice_again(service):
+    notice, poll = _service_notice(service)
+    service.start_heads_up()
+    poll()
+    service.start_heads_up()
+    poll()
+    assert notice.calls == ['show A teleop episode comes', 'hide', 'show A teleop episode comes']
+
+
+def test_a_heads_up_that_stays_shows_the_notice_once(service):
+    notice, poll = _service_notice(service)
+    service.start_heads_up()
+    for _ in range(3):
+        poll()
+    assert notice.calls == ['show A teleop episode comes']
 
 
 def test_the_notice_hides_the_heads_up_when_it_expires():
