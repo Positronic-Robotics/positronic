@@ -12,8 +12,6 @@ RECEIVED_WORLD = f'{RECEIVED_PREFIX}world'
 # The harness's time of each message it records: the first receipt of an input, the emission of a command.
 HARNESS_WALL = 'harness.wall'
 HARNESS_WORLD = 'harness.world'
-# The number of the step that a sample of the record goes with. The harness counts the steps of an episode from 0.
-HARNESS_STEP = 'harness.step'
 # The timeline of a signal file from before named timelines, where the file names no timeline of its own.
 RECORDED_TIME = 'recorded'
 
