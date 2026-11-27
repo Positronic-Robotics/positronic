@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from positronic_model_server.serialization import deserialize
 
 from positronic.dataset.edits import EditedEpisode
+from positronic.dataset.episode import META_CREATED_TS_NS, META_UID
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.remote import RemoteDataset
 from positronic.dataset.remote_server import server as remote_server
@@ -301,6 +302,20 @@ def test_remote_timeline_metadata_is_required(running_server, monkeypatch):
         monkeypatch.setattr(dataset._client, 'get_episode_info', lambda index: info)
         with pytest.raises(KeyError):
             dataset[0]['action']
+
+
+def test_migrate_dataset_keeps_each_meta_item_that_the_writer_does_not_own(tmp_path):
+    source_root, dest_root = tmp_path / 'source', tmp_path / 'dest'
+    with LocalDatasetWriter(source_root) as w, w.new_episode(meta={'round': 2, 'record': 'record-uid'}) as ew:
+        ew.append('signal', np.array([0], dtype=np.float32), Time(**{RECORDED_TIME: 1000}))
+    source = LocalDataset(source_root)[0].meta
+
+    with pos3.mirror():
+        migrate_dataset(LocalDataset(source_root), str(dest_root))
+
+    copied = LocalDataset(dest_root)[0].meta
+    assert (copied['round'], copied['record']) == (2, 'record-uid')
+    assert (copied[META_UID], copied[META_CREATED_TS_NS]) == (source[META_UID], source[META_CREATED_TS_NS])
 
 
 def test_migrate_remote_dataset_numeric_only(tmp_path):

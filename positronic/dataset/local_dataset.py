@@ -51,7 +51,7 @@ META_WRITER = 'writer'
 META_SIZE_MB = 'size_mb'
 _META_DURATION_NS = 'duration_ns'
 # The meta items that a caller cannot give: the writer sets them, or the reader computes or removes them.
-_OWN_META_KEYS = frozenset({_META_SCHEMA_VERSION, META_WRITER, META_PATH, META_SIZE_MB, _META_DURATION_NS})
+OWN_META_KEYS = frozenset({_META_SCHEMA_VERSION, META_WRITER, META_PATH, META_SIZE_MB, _META_DURATION_NS})
 
 
 def sync_recording_dir(output_dir: str) -> Path:
@@ -125,7 +125,7 @@ class DiskEpisodeWriter(EpisodeWriter):
             video_frame_sizes: The frame size of each video signal whose encoder opens here, before its first frame.
                 A signal whose first frame has another size opens a new encoder.
         """
-        if taken := sorted(set(meta) & _OWN_META_KEYS):
+        if taken := sorted(set(meta) & OWN_META_KEYS):
             raise ValueError(f'A caller cannot give the meta items {taken}')
         try:
             json.dumps(dict(meta))
