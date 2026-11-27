@@ -135,8 +135,8 @@ def yam_bimanual(
     ``target_grip.{side}``. Each arm is mounted at ``mounts[side]``, so real ``ee_pose`` lands in the world
     frame the training data uses; static_meta records the mount of every arm built, keyed by the joint
     signal that drives it. ``compensation[side]`` is the gravity model and the friction that i2rt adds to the PD of
-    that arm. ``gripper_force_cap_n`` is the force cap of both grippers (see ``yam.Robot``). Each arm's meta
-    carries the settings that its chain reports.
+    that arm. ``gripper_force_cap_n`` is the force cap of both grippers, and ``grasp_tuning[side]`` is how the gripper
+    of that arm closes on an object (see ``yam.Robot``). Each arm's meta carries the settings that its chain reports.
     """
     from positronic import geom
     from positronic.drivers.roboarm.yam import driver as yam_driver

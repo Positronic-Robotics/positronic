@@ -45,7 +45,11 @@ class _Phase(enum.Enum):
 
 
 class Grasp:
-    """The close of one gripper motor, in motor radians and seconds."""
+    """The close of one gripper motor, in motor radians and seconds.
+
+    A touch holds until the request opens past ``open_margin_rad``. If the object slips out, the fingers close on at
+    the close rate under the hold cap, as intended.
+    """
 
     _MAX_STEP_S = 0.01  # i2rt warns when its control loop runs below 100 Hz
 

@@ -1,4 +1,5 @@
 import dataclasses
+import functools
 import logging
 import math
 import subprocess
@@ -2687,7 +2688,7 @@ def _gripper_chain(monkeypatch, stop_at: float = OBJECT_AT_RAD, start_at: float 
     motor_chain_robot = pytest.importorskip('i2rt.robots.motor_chain_robot')
     motors = GripperMotors(stop_at, start_at)
     monkeypatch.setattr('i2rt.robots.utils.time', types.SimpleNamespace(time=lambda: motors.now))
-    monkeypatch.setattr(yam, 'time', types.SimpleNamespace(monotonic=lambda: motors.now))
+    monkeypatch.setattr(yam, '_limit_gripper', functools.partial(yam._limit_gripper, now=lambda: motors.now))
     chain = motor_chain_robot.MotorChainRobot(
         motor_chain=motors,
         use_gravity_comp=False,
@@ -2992,6 +2993,12 @@ def test_an_opened_gripper_closes_again_with_no_hold_cap_until_a_new_touch(monke
 def test_a_grasp_tuning_value_that_is_negative_or_not_finite_is_refused(field, value):
     with pytest.raises(ValueError, match=field):
         GraspTuning(**{field: value})
+
+
+@pytest.mark.parametrize('field', ['close_rate_per_s', 'touch_effort_nm'])
+def test_a_grasp_tuning_close_rate_or_touch_effort_of_zero_is_refused(field):
+    with pytest.raises(ValueError, match=field):
+        GraspTuning(**{field: 0.0})
 
 
 def test_a_gripper_force_cap_from_its_input_is_in_force_before_the_next_command(monkeypatch):
