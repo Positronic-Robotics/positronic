@@ -86,12 +86,12 @@ class CommandReceipt:
         if self._recorded:
             return
         self._recorded = True
-        if not telemetry.enabled():
+        if not telemetry.enabled(telemetry.Level.STEP):
             return
         attrs: dict[str, bool | float] = {ATTR_COMMAND_SYNC: self.sync}
         if self.age_ms is not None:
             attrs[ATTR_COMMAND_AGE_MS] = self.age_ms
-        telemetry.record_span(SPAN_DRIVER_COMMAND, self.read_ns, time.time_ns(), **attrs)
+        telemetry.record_span(SPAN_DRIVER_COMMAND, self.read_ns, time.time_ns(), telemetry.Level.STEP, **attrs)
 
 
 class Moves(Generic[T]):

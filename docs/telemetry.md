@@ -47,6 +47,28 @@ A run that records episodes writes the harness sidecar without being asked: `pre
 and upload with the episodes. `--timing` adds the `eval.pass` span and the machine-load stream on top. A run
 with no `--output_dir` records nothing, and the span helpers compile to no-ops.
 
+### Levels
+
+Each span has a level, and a process records the spans at or below its active level:
+
+| Level | Records | Rate on a real robot |
+|---|---|---|
+| `call` | the pass, each episode, reset and policy call, with their spans: `eval.pass`, `episode`, `reset`, `policy.submit`, `policy.prepare`, `policy.encode` of a call, `policy.infer`, `wire.send`, `wire.recv`, the `record.io` that opens and closes the episode's writer | a few spans per policy call |
+| `step` | also the spans of each control step: `harness.step`, one `<processor>` span per processor per step, `record.io` of each append at a step, `step.record_wait_ms` of the samples between steps, `driver.command`, the client `env.step` and `materialize` | hundreds of spans per second |
+
+`POSITRONIC_TELEMETRY_LEVEL` names the level, `call` or `step`, and each process that a run spawns inherits it.
+Unset, `--timing` records at `step`, because the report reads the step spans. The sidecar that a recording run
+writes without being asked records at `call`: the export thread encodes each batch of spans while it holds the
+interpreter lock, so the step spans add latency to the control loop. A profiling run sets
+`POSITRONIC_TELEMETRY_LEVEL=step`. A name that is not a level stops the run.
+
+A span above the level returns one shared inert span: the helper builds no attributes and queues nothing for
+export. Instrumented code gives a span that opens once per control step, or more often, the level `telemetry.Level.STEP`, the
+second positional argument of each helper;
+every other span takes the default, `CALL`. A span at `call` that opens inside an unrecorded step span parents to
+the innermost anchor, for example the episode. The env server of a simulation writes its own file with its own
+writer, and it records every span at both levels.
+
 The recording stack is not a default dependency: it ships in the `telemetry` extra
 (`uv sync --extra telemetry`, or `pip install positronic[telemetry]`), which the dev dependency group pulls in,
 so a checkout has it. `--timing` raises without it and names the extra. A recording run without it warns and

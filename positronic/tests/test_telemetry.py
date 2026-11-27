@@ -826,3 +826,90 @@ def test_bind_from_env_defers_to_a_provider_already_bound(tmp_path, monkeypatch)
     assert set(_spans_by_name(path)) == {'client', 'after'}
     assert _run_id(path) == 'from-the-cli'
     assert not (tmp_path / 'ignored').exists()
+
+
+def _record_one_of_each(level):
+    """Open a call span holding a step span, and record a step span by its bounds, through each helper."""
+    with _anchored('episode'):
+        with telemetry.span('call'):
+            with telemetry.span('step', level):
+                pass
+        telemetry.record_span('recorded', time.time_ns(), time.time_ns(), level)
+        telemetry.traced('traced', level)(lambda: None)()
+        telemetry.start_span('started', level).end()
+
+
+@pytest.mark.parametrize(
+    ('bound', 'names'),
+    [
+        (telemetry.Level.CALL, ['call', 'episode']),
+        (telemetry.Level.STEP, ['call', 'episode', 'recorded', 'started', 'step', 'traced']),
+    ],
+)
+def test_a_bound_process_records_the_spans_up_to_its_level(tmp_path, bound, names):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'levels', level=bound):
+        _record_one_of_each(telemetry.Level.STEP)
+    spans = telemetry.read_spans(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+    assert sorted(span.name for span in spans) == names
+
+
+def test_a_span_above_the_level_builds_no_attributes(tmp_path):
+    """An object that json cannot encode raises when a span encodes its attributes, so a quiet run proves that
+    nothing encoded them."""
+    unencodable = object()
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'inert', level=telemetry.Level.CALL):
+        with telemetry.span('step', telemetry.Level.STEP, value=unencodable) as span:
+            telemetry.set_attrs(span, value=unencodable)
+        telemetry.record_span('step', 0, 1, telemetry.Level.STEP, value=unencodable)
+        telemetry.start_span('step', telemetry.Level.STEP, value=unencodable).end()
+        first = telemetry.span('step', telemetry.Level.STEP)
+        assert telemetry.span('other', telemetry.Level.STEP) is first
+        assert not telemetry.enabled(telemetry.Level.STEP)
+        assert telemetry.enabled(telemetry.Level.CALL)
+
+
+def test_a_call_span_inside_an_unrecorded_step_span_parents_to_the_anchor(tmp_path):
+    with telemetry.bind(tmp_path, HARNESS_PROCESS, 'parent', level=telemetry.Level.CALL):
+        with _anchored('episode'):
+            with telemetry.span('step', telemetry.Level.STEP):
+                with telemetry.span('call'):
+                    pass
+    spans = _spans_by_name(telemetry.spans_path(tmp_path, HARNESS_PROCESS))
+    assert spans['call'].parent_id == spans['episode'].span_id
+
+
+def test_a_timing_sink_outside_a_bind_gets_the_step_spans():
+    timings = []
+    with telemetry.timings_to(lambda *args: timings.append(args)):
+        with telemetry.span('step', telemetry.Level.STEP):
+            pass
+    assert [name for name, _, _ in timings] == ['step']
+
+
+def test_bind_records_every_span_unless_the_environment_names_a_level(tmp_path, monkeypatch):
+    monkeypatch.delenv(telemetry.ENV_TELEMETRY_LEVEL, raising=False)
+    with telemetry.bind(tmp_path / 'default', HARNESS_PROCESS, 'default'):
+        assert telemetry.enabled(telemetry.Level.STEP)
+    monkeypatch.setenv(telemetry.ENV_TELEMETRY_LEVEL, 'call')
+    with telemetry.bind(tmp_path / 'named', HARNESS_PROCESS, 'named'):
+        assert not telemetry.enabled(telemetry.Level.STEP)
+
+
+@pytest.mark.parametrize(('name', 'step_spans'), [(None, False), ('call', False), ('step', True)])
+def test_bind_from_env_records_the_step_spans_only_when_the_environment_asks(tmp_path, monkeypatch, name, step_spans):
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path))
+    if name is None:
+        monkeypatch.delenv(telemetry.ENV_TELEMETRY_LEVEL, raising=False)
+    else:
+        monkeypatch.setenv(telemetry.ENV_TELEMETRY_LEVEL, name)
+    with telemetry.bind_from_env(HARNESS_PROCESS):
+        assert telemetry.enabled(telemetry.Level.CALL)
+        assert telemetry.enabled(telemetry.Level.STEP) is step_spans
+    assert telemetry.enabled(telemetry.Level.STEP) is False
+
+
+def test_bind_from_env_refuses_a_level_name_that_is_not_valid(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV_TELEMETRY_DIR, str(tmp_path))
+    monkeypatch.setenv(telemetry.ENV_TELEMETRY_LEVEL, 'full')
+    with pytest.raises(ValueError, match='call, step'), telemetry.bind_from_env(HARNESS_PROCESS):
+        pass
