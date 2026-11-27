@@ -60,12 +60,13 @@ class Takeover:
     """The driver of one episode with a helper. The presses of the first element of the helper are not new: they
     came before the episode. When the first element has no press field, each later press is new. An element with no
     press field keeps the last presses. When both presses are new, the later press wins, and at one time Hand back
-    wins."""
+    wins. A step with no element keeps the commands of the newest element."""
 
     def __init__(self):
         self._driver = Driver.POLICY
         self._presses: _Presses | None = None
         self._event: Event | None = None
+        self._commands: Commands = {}
 
     def control(self) -> dict[str, Any]:
         """The ``CONTROL`` observation of the helper, as plain data."""
@@ -95,6 +96,8 @@ class Takeover:
         """The commands that the rig gets and the record of the step, for the commands of the policy and the element
         of the helper. While the helper drives, the record keeps the commands of the policy as its shadow actions."""
         events: tuple[Event, ...] = ()
+        if element:
+            self._commands = helper_commands(element)
         presses = self._parse_presses(element)
         if self._presses is None:
             self._presses = presses if presses is not None else _Presses()
@@ -108,6 +111,6 @@ class Takeover:
         match self._driver:
             case Driver.TELEOPERATOR:
                 shadow: dict[str, Commands] = {Driver.POLICY: policy} if policy else {}
-                return helper_commands(element), StepRecord(self._driver, frozenset({self._driver}), events, shadow)
+                return self._commands, StepRecord(self._driver, frozenset({self._driver}), events, shadow)
             case Driver.POLICY:
                 return policy, StepRecord(self._driver, frozenset({self._driver}), events)

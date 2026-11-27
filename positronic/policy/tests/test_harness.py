@@ -2109,7 +2109,7 @@ def test_a_helper_step_that_names_a_channel_the_embodiment_lacks_fails_the_episo
     assert h.commands.values == []
 
 
-def test_the_teleoperator_sends_each_new_console_message_and_no_element_while_none_comes(episode_harness):
+def test_the_teleoperator_sends_each_new_console_message_and_the_rig_keeps_it_while_none_comes(episode_harness):
     h = episode_harness
     console_out, console_in = h.world.local_pipe()
     console = pimm.ControlSystemReceiver[dict](Passive())
@@ -2124,7 +2124,7 @@ def test_the_teleoperator_sends_each_new_console_message_and_no_element_while_no
             console_out.emit(message)
         next(h.loop)
     _until_answered(h, answer)
-    assert [value for _, value in h.commands.values] == [1, 60, 4, 5]
+    assert [value for _, value in h.commands.values] == [1, 60, 60, 4, 5]
     [episode] = h.dataset.episodes
     assert [(data, step) for name, data, step in _control_records(episode) if name.startswith('shadow.')] == [
         (2, 1),

@@ -68,12 +68,19 @@ def test_an_element_with_no_press_field_keeps_the_last_presses():
     assert [record.source for _, record in steps] == ['policy', 'policy', 'policy', 'policy', 'teleoperator']
 
 
-def test_while_the_helper_drives_an_element_with_no_commands_gives_the_rig_none():
+def test_while_the_helper_drives_a_step_with_no_element_gives_the_rig_the_commands_of_the_newest_element():
     takeover = Takeover()
     *_, (commands, record) = _steps(takeover, _element(), _element(take_over=5), {})
-    assert commands == {}
+    assert commands == HELPER
     assert record.source == 'teleoperator'
     assert record.events == ()
+
+
+def test_while_the_helper_drives_an_element_with_only_press_fields_gives_the_rig_no_commands():
+    takeover = Takeover()
+    *_, (commands, record) = _steps(takeover, _element(), _element(take_over=5), {HELPER_TAKE_OVER: 5}, {})
+    assert commands == {}
+    assert record.source == 'teleoperator'
 
 
 def test_a_press_for_the_source_that_drives_switches_nothing():
