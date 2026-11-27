@@ -108,6 +108,7 @@ class _Resizes:
 
         def counted(frame, *args, **kwargs):
             result = original(frame, *args, **kwargs)
+            # Readers run on several threads, so only the count update is under the lock. The resize runs before it.
             with lock:
                 self.count += result is not frame
             return result
