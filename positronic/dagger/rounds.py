@@ -205,6 +205,42 @@ def _check_license(rule: LicenseRule, source: str, license: str) -> None:
         )
 
 
+def _round(
+    index: int,
+    rig: Rig,
+    tasks: Sequence[Task],
+    driver: AbstractContextManager[Policy],
+    model: ModelCommands,
+    folders: Mapping[str, Path],
+    license_rule: LicenseRule,
+    data: Sequence[DaggerDataset],
+) -> list[DaggerDataset]:
+    """DAgger round ``index`` in ``folders``: the Collect step of ``tasks`` with the policy of ``driver``, the training
+    data of ``data`` and of this round, and the convert and the train steps of ``model``. The value is ``data`` with the
+    data of this round."""
+    with driver as policy:
+        results = _collect(rig, tasks, policy, folders['records'], license_rule, takes_over_at_start=index == 0)
+    this_round = DaggerDataset(LocalDataset(folders['records']), rig.observations, model.labels, license_rule)
+    data = [*data, this_round]
+    write_training_data(data, folders['training_data'])
+    logging.info(
+        'Round %d: %d episodes, %d did the task, the license rule drops %d; %d teleoperator runs of %d steps in '
+        'all; steps with no shadow action: %s. The training data has %d episodes of rounds 0 to %d.',
+        index,
+        len(results),
+        sum(bool(result.get(eval_keys.SUCCESS)) for result in results),
+        this_round.dropped_records,
+        len(this_round),
+        sum(len(each.episode[model.labels[0]]) for each in this_round.runs),
+        dict(this_round.steps_without_shadow),
+        sum(len(each) for each in data),
+        index,
+    )
+    _run(model.convert, folders)
+    _run(model.train, folders)
+    return data
+
+
 @cfn.config()
 def run(
     rig: Rig,
@@ -232,36 +268,15 @@ def run(
     plan = iter(tasks)
     data: list[DaggerDataset] = []
     for index in range(rounds):
-        folders = _folders(output, index)
         round_tasks = list(islice(plan, episodes))
         if len(round_tasks) < episodes:
             raise ValueError(f'Round {index} has {episodes} episodes, but the tasks gave only {len(round_tasks)}')
-        if index == 0:
-            driver = nullcontext(RoundZeroPolicy(round_0_license, rig.commands))
-        else:
-            driver = _served(model, _folders(output, index - 1)['checkpoint'])
-        with driver as policy:
-            results = _collect(
-                rig, round_tasks, policy, folders['records'], license_rule, takes_over_at_start=index == 0
-            )
-        data.append(DaggerDataset(LocalDataset(folders['records']), rig.observations, model.labels, license_rule))
-        write_training_data(data, folders['training_data'])
-        this_round = data[-1]
-        logging.info(
-            'Round %d: %d episodes, %d did the task, the license rule drops %d; %d teleoperator runs of %d steps in '
-            'all; steps with no shadow action: %s. The training data has %d episodes of rounds 0 to %d.',
-            index,
-            len(results),
-            sum(bool(result.get(eval_keys.SUCCESS)) for result in results),
-            this_round.dropped_records,
-            len(this_round),
-            sum(len(each.episode[model.labels[0]]) for each in this_round.runs),
-            dict(this_round.steps_without_shadow),
-            sum(len(each) for each in data),
-            index,
+        driver: AbstractContextManager[Policy] = (
+            nullcontext(RoundZeroPolicy(round_0_license, rig.commands))
+            if index == 0
+            else _served(model, _folders(output, index - 1)['checkpoint'])
         )
-        _run(model.convert, folders)
-        _run(model.train, folders)
+        data = _round(index, rig, round_tasks, driver, model, _folders(output, index), license_rule, data)
     logging.info(
         'The checkpoint of the last round, the result of the run, is in %s', _folders(output, rounds - 1)['checkpoint']
     )
