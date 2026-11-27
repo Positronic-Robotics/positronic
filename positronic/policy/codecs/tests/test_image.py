@@ -18,12 +18,14 @@ from positronic.gui.video_stream import AnnexBDecoder
 from positronic.policy import spec, training
 from positronic.policy.codecs import (
     LEROBOT_FEATURES,
+    TASK_FIELD,
     Codec,
     EncodeImages,
     EncodeVideo,
     Resample,
     ResizeMode,
     TransformImages,
+    TransformOnArrival,
 )
 from positronic.policy.keys import RTC
 from positronic.policy.processors import EndOnField
@@ -523,3 +525,24 @@ class TestEncodeVideo:
     def test_a_bit_rate_or_frame_rate_that_is_not_a_positive_integer_is_refused(self, name, value):
         with pytest.raises(ValueError, match=f'{name} must be a positive integer'):
             EncodeVideo([['cam']], **{'bitrate': 500_000, 'fps': 15, name: value})
+
+
+def test_a_frame_transformed_on_arrival_matches_the_declared_transform():
+    frame = np.random.default_rng(3).integers(0, 256, (72, 128, 3), dtype=np.uint8)
+    declared = TransformImages(40, 24, mode=ResizeMode.STRETCH, resample=Resample.AREA)
+
+    encoded = TransformOnArrival(declared, [keys.WRIST_IMAGE]).encode({keys.WRIST_IMAGE: frame, TASK_FIELD: 'pick'})
+
+    expected = declared.encode({keys.WRIST_IMAGE: frame})[keys.WRIST_IMAGE]
+    np.testing.assert_array_equal(encoded[keys.WRIST_IMAGE], expected)
+    assert encoded[TASK_FIELD] == 'pick'
+
+
+def test_an_absent_field_and_a_value_that_is_no_rgb_frame_pass_on_arrival_unchanged():
+    depth = np.zeros((72, 128), dtype=np.uint16)
+    codec = TransformOnArrival(TransformImages(40, 24, mode=ResizeMode.PAD), [keys.WRIST_IMAGE, keys.EXTERIOR_IMAGE])
+
+    encoded = codec.encode({keys.EXTERIOR_IMAGE: depth})
+
+    assert encoded.keys() == {keys.EXTERIOR_IMAGE}
+    assert encoded[keys.EXTERIOR_IMAGE] is depth

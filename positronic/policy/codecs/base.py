@@ -8,7 +8,7 @@ from positronic_model_server.spec import PAR, SEQ
 from positronic import telemetry, telemetry_keys
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import Obs, ProcessorRun, Step
+from positronic.policy.base import FieldUse, Obs, ProcessorRun, Step
 from positronic.utils import merge_dicts
 
 
@@ -51,6 +51,10 @@ class Codec:
     def ordered(self) -> bool:
         """Each encode depends on the encode before it, so the calls through this codec run one at a time."""
         return False
+
+    def field_use(self, field: str) -> FieldUse:
+        """What ``encode`` does with the value at ``field`` of its input."""
+        return FieldUse.OTHER
 
     @overload
     def wrap(
@@ -159,6 +163,10 @@ class CommandsPathCodec(Codec):
         name, rest = self._commands_path[0], self._commands_path[1:]
         return {name: tree.update_at(data[name], rest, lambda commands: [self._encode_command(c) for c in commands])}
 
+    def field_use(self, field: str) -> FieldUse:
+        # ``encode`` reads and returns only the top-level field of the path.
+        return FieldUse.OTHER if self._commands_path and field == self._commands_path[0] else FieldUse.DROPPED
+
     def _commands_path_args(self) -> dict[str, Any]:
         return {} if self._commands_path is None else {'commands_path': list(self._commands_path)}
 
@@ -230,6 +238,9 @@ class _ComposedCodec(Codec):
     def ordered(self):
         return self._left.ordered or self._right.ordered
 
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.chained((self._left.field_use(field), self._right.field_use(field)))
+
     def to_spec(self):
         return {SEQ: [self._left.to_spec(), self._right.to_spec()]}
 
@@ -264,6 +275,9 @@ class _ParallelCodec(Codec):
     @property
     def ordered(self):
         return self._left.ordered or self._right.ordered
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.merged((self._left.field_use(field), self._right.field_use(field)))
 
     def to_spec(self):
         return {PAR: [self._left.to_spec(), self._right.to_spec()]}
