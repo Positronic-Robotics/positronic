@@ -265,7 +265,7 @@ def test_cancel_reports_a_run_the_platform_does_not_hold(platform, run_command):
 
 
 def test_a_refusal_that_is_not_a_missing_record_is_not_read_as_the_other_kind(platform, run_command):
-    platform.answer(refusal(ErrorCode.forbidden, 'no grant'), status=403)
+    platform.answer(refusal(ErrorCode.forbidden, 'refused'), status=403)
 
     with pytest.raises(SystemExit, match='forbidden'):
         run_command(status, id=ID)
