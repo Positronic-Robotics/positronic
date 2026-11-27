@@ -200,17 +200,17 @@ EVAL = EvalSummary(id=EvalRef('fake.smoke'), embodiment='franka', tasks=['a'], c
 TASK = TaskSummary(id=TaskRef('eight-spoons-into-grey-tote'), embodiments=[RigShape.franka], task='spoons')
 EVALS_ANSWER = (EvalListResponse(evals=[EVAL]), 200)
 TASKS_ANSWER = (TaskListResponse(tasks=[TASK]), 200)
-NO_GRANT = (refusal(ErrorCode.forbidden, 'no customer grant'), 403)
+IN_NO_ORG = (refusal(ErrorCode.forbidden, 'this key belongs to no org'), 403)
 
 
-def test_catalog_prints_the_evals_where_the_key_has_no_grant_for_the_tasks(platform, run_command, capsys):
-    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: NO_GRANT})
+def test_catalog_prints_the_evals_where_the_key_belongs_to_no_org(platform, run_command, capsys):
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: IN_NO_ORG})
 
     run_command(catalog)
 
     out, err = capsys.readouterr()
     assert EvalListResponse.model_validate_json(out).evals == [EVAL]
-    assert err.strip() == 'tasks: forbidden: no customer grant'
+    assert err.strip() == 'tasks: forbidden: this key belongs to no org'
 
 
 def test_catalog_prints_what_the_key_may_name(platform, run_command, capsys):
@@ -237,14 +237,14 @@ def test_catalog_json_prints_the_evals_and_the_tasks_as_one_value(platform, run_
     assert CatalogView.model_validate_json(capsys.readouterr().out) == CatalogView(evals=[EVAL], tasks=[TASK])
 
 
-def test_catalog_json_prints_null_tasks_where_the_key_has_no_grant_for_them(platform, run_command, capsys):
-    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: NO_GRANT})
+def test_catalog_json_prints_null_tasks_where_the_key_belongs_to_no_org(platform, run_command, capsys):
+    platform.answer_by_route({routes.CATALOG_EVALS: EVALS_ANSWER, routes.CATALOG_TASKS: IN_NO_ORG})
 
     run_command(catalog, json=True)
 
     out, err = capsys.readouterr()
     assert CatalogView.model_validate_json(out) == CatalogView(evals=[EVAL], tasks=None)
-    assert err.strip() == 'tasks: forbidden: no customer grant'
+    assert err.strip() == 'tasks: forbidden: this key belongs to no org'
 
 
 def test_cancel_reports_whether_the_quota_came_back(platform, run_command, capsys):

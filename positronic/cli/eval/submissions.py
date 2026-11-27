@@ -89,7 +89,7 @@ class CatalogView(EvalListResponse):
 
 
 def _tasks_or_none(client: PlatformClient) -> TaskListResponse | None:
-    """`catalog.tasks`, or None where the key has no customer grant. The refusal goes to stderr."""
+    """`catalog.tasks`, or None where the key belongs to no organization. The refusal goes to stderr."""
     try:
         return client.catalog_tasks()
     except PlatformError as exc:
@@ -103,7 +103,7 @@ def _tasks_or_none(client: PlatformClient) -> TaskListResponse | None:
 def catalog(platform_url: str | None = None, json: bool = False):
     """Print what this key may name: the evals a plan names, and the tasks a plan composes.
 
-    A key with no customer grant composes no plan, so `catalog.tasks` refuses it; the evals print, and
+    A key in no organization composes no plan, so `catalog.tasks` refuses it; the evals print, and
     the refusal goes to stderr. Both print as JSON. `--json` prints them as one `CatalogView`, and a
     refusal of the evals as JSON too.
     """

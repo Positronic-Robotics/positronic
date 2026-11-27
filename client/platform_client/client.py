@@ -270,8 +270,8 @@ class PlatformClient:
         return self._post(routes.BILLING_COUPONS_REDEEM, CouponRedeemRequest(code=code), CouponRedemption)
 
     def create_submission(self, plan: EvalPlan) -> SubmissionCreateResponse:
-        """Run one plan. A plan that states its own tasks needs a customer grant: a key without one
-        is refused `forbidden`."""
+        """Run one plan. A plan that states its own tasks runs for an organization of the caller. The
+        caller's personal organization runs one with no customer grant."""
         return self._post(routes.SUBMISSIONS_CREATE, plan, SubmissionCreateResponse)
 
     def resolve_plan(self, plan: EvalPlan) -> ResolvedPlan:
@@ -371,11 +371,12 @@ class PlatformClient:
         return self._get(routes.LEADERBOARDS_MODELS, LeaderboardModelsResponse, auth=Auth.NONE)
 
     def catalog_evals(self) -> EvalListResponse:
-        """The evals a plan names, for this key's grant. The catalogue expands one into its tasks."""
+        """The evals a plan of this key may name. The catalogue expands one into its tasks."""
         return self._get(routes.CATALOG_EVALS, EvalListResponse)
 
     def catalog_tasks(self) -> TaskListResponse:
-        """The tasks a plan may compose, for this key's grant. A key with no customer grant is refused `forbidden`."""
+        """The tasks a plan may compose, for each organization of this key. A key in no organization is refused
+        `forbidden`."""
         return self._get(routes.CATALOG_TASKS, TaskListResponse)
 
     # --- plumbing ----------------------------------------------------------------------------
