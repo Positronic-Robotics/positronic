@@ -6,7 +6,7 @@ from typing import Any
 from positronic_model_server.spec import SEQ
 
 from positronic.drivers.roboarm import keys as roboarm_keys
-from positronic.policy.base import InputT, OutputT, Processor, ProcessorRun, ReturnT, Runtime
+from positronic.policy.base import FieldUse, InputT, OutputT, Processor, ProcessorRun, ReturnT, Runtime
 from positronic.policy.codecs import Codec
 from positronic.utils import flatten_dict
 
@@ -73,8 +73,15 @@ class Sequential(Processor[InputT, OutputT, ReturnT]):
         return meta
 
     @property
+    def components(self) -> tuple[Processor[Any, Any, Any] | Codec, ...]:
+        return self._components
+
+    @property
     def ordered(self) -> bool:
         return any(component.ordered for component in self._components)
+
+    def field_use(self, field: str) -> FieldUse:
+        return FieldUse.chained(component.field_use(field) for component in self._components)
 
     def to_spec(self) -> dict[str, Any]:
         return {SEQ: [component.to_spec() for component in self._components]}
