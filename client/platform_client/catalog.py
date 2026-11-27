@@ -1,6 +1,6 @@
 """What the platform offers: the evals a caller may name, and the tasks a caller may compose into one.
 
-Every registered user sees the evals a submission names and the tasks its personal organization composes.
+Every registered user sees the evals a submission names and the tasks its personal organization can run.
 A customer grant adds the rig's evals and tasks.
 """
 

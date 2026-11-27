@@ -305,13 +305,10 @@ it on a rig of the shape it names, and a `blocked` run waits on what its `reason
 queues for an operator, so it answers `pending` with a `queue_position`, and it does not count against
 the `submissions.day` quota: that quota counts the image runs the platform executes itself.
 
-Registration gives each account a personal organization, and `users.me` names it in
-`organizations`. A plan that states its own tasks runs for that organization with no customer grant:
-`--org` names it. The plan composes the tasks that `catalog.tasks` lists, with `remote` and `image`
-endpoints. The organization's credits pay for the run (§Credit accounts). A plan needs a customer
-grant for a `served` endpoint, and for a task that only a grant offers. Write to hi@phail.ai for a
-grant. `users.me` names the grant's client in `client`. `catalog.tasks` refuses `forbidden` only a
-key that belongs to no organization.
+Each account has a personal organization. Name it with `--org`, and a plan can state its own tasks
+with no grant. Its credits pay for the run ([Credit accounts](#credit-accounts)). The plan can use
+each task that `positronic eval catalog` lists, with `image` and `remote` endpoints. For a `served`
+endpoint, or a task that only one customer gets, write to hi@phail.ai for a grant.
 
 Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
 as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
@@ -416,7 +413,7 @@ endpoints:
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose, each with the `embodiments` it runs on, for
 example `["franka", "yam"]` or `["yam"]`. Every registered user sees the evals a submission can name,
-and the tasks that its personal organization composes. A customer grant adds the rig's evals and
+and the tasks that its personal organization can run. A customer grant adds the rig's evals and
 tasks, filtered to the entries offered to the grant's client.
 
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
