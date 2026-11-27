@@ -72,7 +72,6 @@ from positronic.teleop import service as service_module
 from positronic.teleop.clutch import OperatorPosition
 from positronic.teleop.protocol import VIEW_SIZE, session_query
 from positronic.teleop.service import (
-    HEADS_UP_TEXT,
     OTHERS_WIDTH,
     Badge,
     Button,
@@ -2568,7 +2567,7 @@ def _warm_up(service: TeleopService, socket_path: Path, connect) -> None:
 def test_a_warm_up_session_opens_with_no_ready_and_leaves_the_heads_up_of_the_run(service, socket_path, connect):
     _warm_up(service, socket_path, connect)
     assert service.phase is Phase.HEADS_UP
-    assert service.view_text().lines == (HEADS_UP_TEXT,)
+    assert service.view_text().lines == ('Waiting for a trial',), 'only the notice shows the heads-up'
 
 
 def test_the_heads_up_stays_until_the_trial_of_the_run_waits_for_ready(service, socket_path, connect):

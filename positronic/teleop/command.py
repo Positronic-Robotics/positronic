@@ -24,7 +24,7 @@ from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES
 from .protocol import DEFAULT_PORT, default_socket_path
-from .service import HEADS_UP_TEXT, Phase, TeleopService
+from .service import Phase, TeleopService
 from .window import Window, window_app
 
 logger = logging.getLogger(__name__)
@@ -305,7 +305,9 @@ def serve(
         'or tap Ready on the phone page.'
     )
     texts = {
-        Phase.HEADS_UP: NoticeText('Teleoperation run', HEADS_UP_TEXT),
+        Phase.HEADS_UP: NoticeText(
+            'Teleoperation run', 'A run with a teleop episode is starting. The episode comes later.'
+        ),
         Phase.READY_WAIT: NoticeText('Teleoperation trial', ready_text),
     }
     phase_notice = None if notice is None else _PhaseNotice(notice, texts)

@@ -17,7 +17,6 @@
       .buttons { display: flex; gap: 10px; }
       .btn { appearance: none; border: none; border-radius: 10px; padding: 10px 14px; color: #111; font-weight: 700; background: #fff; font-size: 16px; min-width: 96px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
       .btn:active { transform: translateY(1px); }
-      .buttons[hidden] { display: none; }
       .btn__title { line-height: 1; }
       .btn__status { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; line-height: 1; transition: background-color 0.2s ease, color 0.2s ease; }
       .btn--pill .btn__status { background: rgba(0,0,0,0.18); color: #111; }
@@ -60,7 +59,7 @@
         <div class="hint">Slider has extra padding near 0 and 1 for easier reach</div>
         <div class="phase" id="phase"></div>
         <div class="row" style="margin-top: 12px;">
-          <div class="buttons" id="trialButtons">
+          <div class="buttons">
             <button class="btn btn--pill" id="btnA" title="Control (tap: on / off)" aria-label="Control">
               <span class="btn__title" data-title>Control</span>
               <span class="btn__status" data-status>tap: on / off</span>
@@ -140,11 +139,10 @@
       const STATE_ROUTE = '/state';
       // The fields of the state object, as the server names them.
       const STATE_FIELD = { phase: 'phase', control: 'control' };
-      const PHASE = { idle: 'idle', headsUp: 'heads_up', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
+      const PHASE = { idle: 'idle', readyWait: 'ready_wait', running: 'running', ended: 'ended' };
 
       function phaseText(state) {
         switch (state[STATE_FIELD.phase]) {
-          case PHASE.headsUp: return 'A run with a teleop episode is starting. The episode comes later.';
           case PHASE.readyWait: return 'Human trial: tap Ready';
           case PHASE.running: return 'Task running: hold Complete for 1 s';
           case PHASE.ended: return 'Trial ended';
@@ -171,8 +169,6 @@
             if (phase !== shownPhase && PHASES_THAT_OPEN_THE_GRIP.includes(phase)) setGrip(0.0);
             shownPhase = phase;
             phaseEl.textContent = phaseText(state);
-            // No button does anything in the heads-up of a run
-            document.getElementById('trialButtons').hidden = phase === PHASE.headsUp;
             const control = state[STATE_FIELD.control] === true;
             configs.control.el.classList.toggle('btn--control-on', control);
             configs.control.el.classList.toggle('btn--control-off', !control);

@@ -115,15 +115,16 @@ for Ready or runs, the window and the headset page show a notice when `tracked` 
 2. If the button shows EXIT VR, press it, reload the page, and press ENTER VR again.
 
 While a trial waits for Ready, the service shows a dialog with a sound on the screen of its computer. The dialog
-comes also when the window is not open, and the service closes it when the wait ends.
-
-A run can open a warm-up session before its episodes, with the session parameter `warm_up=true`. A warm-up session
-starts no trial and does not wait for Ready. It opens at once. The dialog, the window and the pages then show "A run
-with a teleop episode is starting. The episode comes later." The heads-up stays until a trial waits for Ready, or for
-30 min at most (`--heads_up_limit`, in seconds). A press of B in the heads-up does nothing. On macOS the service uses
+comes also when the window is not open, and the service closes it when the wait ends. On macOS the service uses
 `osascript` and `afplay`, and the dialog is in the centre of the screen. On Linux it uses `zenity` on `DISPLAY`, and
 plays the sound with `paplay`. The window manager puts the dialog, for example in the top left corner.
 `--notice.sound=<file>` changes the sound, and `--notice=None` turns the notice off.
+
+A run can open a warm-up session before its episodes, with the session parameter `warm_up=true`. A warm-up session
+starts no trial and does not wait for Ready. It opens at once. Only the dialog shows the heads-up: "A run with a teleop
+episode is starting. The episode comes later." The window, the headset and the phone page show "Waiting for a trial".
+The heads-up stays until a trial waits for Ready, or for 30 min at most (`--heads_up_limit`, in seconds). A press of B
+in the heads-up does nothing.
 
 A Linux service that runs as a user other than the user at the screen shows the dialog only with `DISPLAY=:0` and an X
 grant from the session at the screen: `xhost +SI:localuser:<user>`. The sound of `paplay` then plays nowhere, because

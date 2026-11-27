@@ -233,8 +233,6 @@ class TrialState:
     tracked: bool
 
 
-# What the dialog and the headset page tell the teleoperator in the heads-up of a run
-HEADS_UP_TEXT = 'A run with a teleop episode is starting. The episode comes later.'
 # The use of Y on the left controller, at the bottom of the view
 CAMERA_HINT = 'Y: next camera. Hold Y: panel'
 # The width of the column of the view that shows the other cameras of the session, half the width of the main camera
@@ -300,8 +298,8 @@ class TeleopService:
 
     ``take_sample`` takes each sample of the controllers. A frame request answers at once with the newest sample.
     When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The
-    preparation of a session waits for Ready or Cancel up to ``ready_limit``. A warm-up session opens at once and shows
-    the heads-up of its run, up to ``heads_up_limit`` or until a trial waits for Ready.
+    preparation of a session waits for Ready or Cancel up to ``ready_limit``. A warm-up session opens at once and starts
+    the heads-up of its run, up to ``heads_up_limit`` or until a trial waits for Ready. Only the notice shows it.
     """
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
@@ -766,10 +764,8 @@ class TeleopService:
     def _text_of(self, snapshot: _ViewSnapshot, task: bool) -> ViewText:
         footer = (CAMERA_HINT,)
         match snapshot.state.phase:
-            case Phase.IDLE:
+            case Phase.IDLE | Phase.HEADS_UP:
                 return ViewText(('Waiting for a trial',), footer)
-            case Phase.HEADS_UP:
-                return ViewText((HEADS_UP_TEXT,), footer)
             case Phase.READY_WAIT:
                 return ViewText(('Human trial', 'B: Ready', 'Stick: Cancel'), footer)
             case Phase.ENDED:
