@@ -8,23 +8,36 @@ OLD_SHA = 'a' * 40
 NEW_SHA = 'b' * 40
 
 
-def changed(name, *pairs, status=pin_move.MODIFIED):
-    """A files-API entry whose patch replaces each `old` line with its `new` line, one block each."""
-    patch = '\n'.join(f'@@ -1 +1 @@\n context\n-{old}\n+{new}\n context' for old, new in pairs)
-    return {pin_move.FILE_NAME: name, pin_move.FILE_STATUS: status, pin_move.FILE_PATCH: patch}
+def changed(name, *blocks, status=pin_move.MODIFIED):
+    """A files-API entry. Each block is (context above, [(old, new), ...]): one hunk that replaces each old line."""
+    hunks = []
+    for above, pairs in blocks:
+        lines = [f' {line}' for line in above]
+        lines += [f'-{old}' for old, _ in pairs] + [f'+{new}' for _, new in pairs]
+        hunks.append('\n'.join(['@@ -1 +1 @@', *lines, ' description = "x"']))
+    return {pin_move.FILE_NAME: name, pin_move.FILE_STATUS: status, pin_move.FILE_PATCH: '\n'.join(hunks)}
+
+
+def version_bump(path, package, old, new):
+    return changed(path, (['[project]', f'name = "{package}"'], [(f'version = "{old}"', f'version = "{new}"')]))
+
+
+def pin(package, old, new):
+    return (f'    "{package}=={old}",', f'    "{package}=={new}",')
 
 
 def a_pin_move():
     return [
+        version_bump('client/pyproject.toml', 'client', '1.4.2', '1.4.3'),
+        changed('client/pyproject.toml', (['dependencies = ['], [pin('evals', '0.2.1', '0.2.2')])),
+        changed('evals/evals/evals.py', ([], [(f"REVISION = '{OLD_SHA}'", f"REVISION = '{NEW_SHA}'")])),
+        version_bump('evals/pyproject.toml', 'evals', '0.2.1', '0.2.2'),
+        changed('pyproject.toml', (['dependencies = ['], [pin('client', '1.4.2', '1.4.3')])),
         changed(
-            'client/pyproject.toml',
-            ('version = "1.4.2"', 'version = "1.4.3"'),
-            ('    "evals==0.2.1",', '    "evals==0.2.2",'),
+            'uv.lock',
+            (['[[package]]', 'name = "evals"'], [('version = "0.2.1"', 'version = "0.2.2"')]),
+            (['[[package]]', 'name = "client"'], [('version = "1.4.2"', 'version = "1.4.3"')]),
         ),
-        changed('evals/evals/evals.py', (f"REVISION = '{OLD_SHA}'", f"REVISION = '{NEW_SHA}'")),
-        changed('evals/pyproject.toml', ('version = "0.2.1"', 'version = "0.2.2"')),
-        changed('pyproject.toml', ('    "client==1.4.2",', '    "client==1.4.3",')),
-        changed('uv.lock', ('version = "0.2.1"', 'version = "0.2.2"'), ('version = "1.4.2"', 'version = "1.4.3"')),
     ]
 
 
@@ -41,33 +54,44 @@ def test_a_pin_move_to_a_commit_off_the_guarded_branch_is_refused():
 
 
 def test_a_changed_line_of_code_beside_a_pin_move_is_refused():
-    files = [
-        *a_pin_move(),
-        changed('evals/evals/evals.py', ('    return run(task)', '    return run(task, retries=3)')),
-    ]
-    assert not pin_move.is_pin_move(files, on_branch(NEW_SHA))
+    code = changed('evals/evals/evals.py', ([], [('    return run(task)', '    return run(task, retries=3)')]))
+    assert not pin_move.is_pin_move([*a_pin_move(), code], on_branch(NEW_SHA))
 
 
 def test_a_quoted_number_outside_a_version_field_is_not_a_pin():
-    files = [*a_pin_move(), changed('evals/evals/evals.py', ("THRESHOLD = '0.5'", "THRESHOLD = '0.7'"))]
-    assert not pin_move.is_pin_move(files, on_branch(NEW_SHA))
+    code = changed('evals/evals/evals.py', ([], [("THRESHOLD = '0.5'", "THRESHOLD = '0.7'")]))
+    assert not pin_move.is_pin_move([*a_pin_move(), code], on_branch(NEW_SHA))
 
 
-def test_an_exact_pin_to_a_version_the_pull_request_does_not_set_is_refused():
-    """A third-party version bump brings code that no human of this repository reviewed."""
-    files = [changed('pyproject.toml', ('    "torch==2.5.0",', '    "torch==2.6.0",'))]
+def test_an_exact_pin_to_the_version_another_package_moves_to_is_refused():
+    """A pin of a third-party package that matches this repository's new version brings code no human reviewed."""
+    files = [
+        version_bump('pyproject.toml', 'evals', '1.0', '2.0'),
+        changed('pyproject.toml', (['dependencies = ['], [pin('torch', '1.0', '2.0')])),
+    ]
+    assert not pin_move.is_pin_move(files, on_branch())
+
+
+def test_an_exact_pin_outside_a_project_file_is_refused():
+    code = changed('evals/evals/evals.py', ([], [pin('evals', '0.2.1', '0.2.2')]))
+    assert not pin_move.is_pin_move([*a_pin_move(), code], on_branch(NEW_SHA))
+
+
+def test_a_version_field_with_no_package_name_above_it_is_refused():
+    nameless = changed('evals/pyproject.toml', (['[project]'], [('version = "0.2.1"', 'version = "0.2.2"')]))
+    files = [nameless, changed('pyproject.toml', (['dependencies = ['], [pin('evals', '0.2.1', '0.2.2')]))]
     assert not pin_move.is_pin_move(files, on_branch())
 
 
 def test_a_lock_version_the_pull_request_does_not_set_is_refused():
-    files = [*a_pin_move(), changed('uv.lock', ('version = "2.5.0"', 'version = "2.6.0"'))]
-    assert not pin_move.is_pin_move(files, on_branch(NEW_SHA))
+    lock = changed('uv.lock', (['[[package]]', 'name = "torch"'], [('version = "2.5.0"', 'version = "2.6.0"')]))
+    assert not pin_move.is_pin_move([*a_pin_move(), lock], on_branch(NEW_SHA))
 
 
 def test_an_added_line_or_an_added_file_is_refused():
     one_sided = {**changed('evals/pyproject.toml'), pin_move.FILE_PATCH: '@@ -1 +1,2 @@\n x = 1\n+y = 2'}
     assert not pin_move.is_pin_move([*a_pin_move(), one_sided], on_branch(NEW_SHA))
-    added = changed('evals/new.py', ('', 'import os'), status='added')
+    added = changed('evals/new.py', ([], [('', 'import os')]), status='added')
     assert not pin_move.is_pin_move([*a_pin_move(), added], on_branch(NEW_SHA))
 
 
@@ -77,5 +101,4 @@ def test_a_file_without_a_patch_is_refused():
 
 
 def test_version_fields_alone_move_no_pin():
-    files = [changed('evals/pyproject.toml', ('version = "0.2.1"', 'version = "0.2.2"'))]
-    assert not pin_move.is_pin_move(files, on_branch())
+    assert not pin_move.is_pin_move([version_bump('evals/pyproject.toml', 'evals', '0.2.1', '0.2.2')], on_branch())

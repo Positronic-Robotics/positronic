@@ -84,7 +84,7 @@ def same_name(slug):
     return slug.casefold()
 
 
-def no_pin_move(number, guarded_slug):
+def no_pin_move(number, guarded_slug, head):
     return False
 
 
@@ -649,50 +649,82 @@ def test_an_unauthorized_merge_is_refused_before_its_stack_is_read(git):
     assert read == []
 
 
-def test_a_pin_move_merges_without_a_receipt_and_spends_none(git):
+HEAD = 'c' * 40
+PIN_MERGE = f'gh pr merge 103 --squash --match-head-commit {HEAD}'
+
+
+def pin_move_at(number, head):
+    """A pin-move verdict for one pull request at one head commit."""
+    return lambda n, slug, h: (n, h) == (number, head)
+
+
+def test_a_pin_move_merges_at_the_head_it_names_without_a_receipt_and_spends_none(git):
     spent = []
-    allow = lambda n, slug: spent.append(n) or True  # noqa: E731
-    pin_move = lambda n, slug: n == 103  # noqa: E731
-    unauthorized = lambda n, slug: False  # noqa: E731
-    assert verdict(git, 'gh pr merge 103', allow_merge=allow, authorized=unauthorized, pins_only=pin_move) is None
-    args = merge_args(103)
-    assert mcp_verdict(MERGE_TOOL, args, allow_merge=allow, authorized=unauthorized, pins_only=pin_move) is None
+    denial = verdict(
+        git,
+        PIN_MERGE,
+        allow_merge=lambda n, slug: spent.append(n) or True,
+        authorized=lambda n, slug: False,
+        pins_only=pin_move_at(103, HEAD),
+    )
+    assert denial is None
     assert spent == []
 
 
-def test_a_merge_that_moves_more_than_a_pin_still_needs_a_receipt(git):
+@pytest.mark.parametrize(
+    'cmd',
+    ['gh pr merge 103 --squash', f'gh pr merge 103 --auto --match-head-commit {HEAD}', f'gh pr merge 103 -t {HEAD}'],
+)
+def test_a_pin_move_merge_that_names_no_head_or_may_be_deferred_needs_a_receipt(git, cmd):
+    asked = []
+    denial = verdict(git, cmd, authorized=lambda n, slug: False, pins_only=lambda n, slug, h: asked.append(h) or True)
+    assert denial == gmm.GH_MERGE_MSG
+    assert asked == []
+
+
+def test_an_mcp_merge_of_a_pin_move_needs_a_receipt():
+    """The MCP merge names no head commit, so a push after the read could ride on the verdict."""
     unauthorized = lambda n, slug: False  # noqa: E731
-    assert verdict(git, 'gh pr merge 103', authorized=unauthorized) == gmm.GH_MERGE_MSG
-    assert mcp_verdict(MERGE_TOOL, merge_args(103), authorized=unauthorized) is not None
+    assert mcp_verdict(MERGE_TOOL, merge_args(103), authorized=unauthorized, pins_only=lambda *_: True) is not None
+
+
+def test_a_merge_that_moves_more_than_a_pin_still_needs_a_receipt(git):
+    assert verdict(git, PIN_MERGE, authorized=lambda n, slug: False) == gmm.GH_MERGE_MSG
 
 
 def test_a_pin_move_on_a_stack_still_needs_a_receipt_for_each_pull_request_below_it(git):
     spent = []
     denial = verdict(
         git,
-        'gh pr merge 103',
+        PIN_MERGE,
         allow_merge=lambda n, slug: spent.append(n) or True,
         authorized=lambda n, slug: n == 102,
         stack_below=lambda n, slug: [101, 102],
-        pins_only=lambda n, slug: n == 103,
+        pins_only=pin_move_at(103, HEAD),
     )
     assert denial is not None and 'Not authorized: #101.' in denial
     assert spent == []
 
 
-def pin_move_github(patch, compare_status='ahead'):
-    """A `gh api` stand-in serving one pull request's changed files and a compare of its revision."""
+BASE = 'd' * 40
+REVISION_PATCH = "@@ -1 +1 @@\n-REVISION = '{}'\n+REVISION = '{}'".format('a' * 40, 'b' * 40)
+
+
+def pin_move_github(patch, compare_status='ahead', head=HEAD, allow_auto_merge=False):
+    """A `gh api` stand-in serving one repository, one pull request at `head`, and its compare reads."""
+    files = [
+        {pin_move.FILE_NAME: 'evals/evals.py', pin_move.FILE_STATUS: pin_move.MODIFIED, pin_move.FILE_PATCH: patch}
+    ]
 
     def gh_json(path, deadline):
-        if '/pulls/103/files' in path:
-            return [
-                {
-                    pin_move.FILE_NAME: 'evals/evals.py',
-                    pin_move.FILE_STATUS: pin_move.MODIFIED,
-                    pin_move.FILE_PATCH: patch,
-                }
-            ]
-        if '/compare/' in path:
+        path = path.replace(GUARDED.casefold(), GUARDED)  # the guard reads the repository by its casefolded name
+        if path == f'repos/{GUARDED}':
+            return {'allow_auto_merge': allow_auto_merge}
+        if path == f'repos/{GUARDED}/pulls/103':
+            return {'head': {'sha': head}, 'base': {'sha': BASE}}
+        if path == f'repos/{GUARDED}/compare/{BASE}...{HEAD}':
+            return {'files': files}
+        if path.endswith(f'...{gmm.GUARDED_BRANCH}'):
             if compare_status is None:
                 raise gmm.StackLookupError('`gh api` failed: Not Found')
             return {'status': compare_status}
@@ -701,20 +733,37 @@ def pin_move_github(patch, compare_status='ahead'):
     return gh_json
 
 
-REVISION_PATCH = "@@ -1 +1 @@\n-REVISION = '{}'\n+REVISION = '{}'".format('a' * 40, 'b' * 40)
+def test_only_moves_pins_reads_the_diff_at_the_head_and_asks_whether_the_revision_is_on_main():
+    assert gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=pin_move_github(REVISION_PATCH))
+    off_main = pin_move_github(REVISION_PATCH, compare_status='diverged')
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=off_main)
 
 
-def test_only_moves_pins_reads_the_diff_and_asks_whether_the_revision_is_on_main():
-    assert gmm.only_moves_pins(103, GUARDED, gh_json=pin_move_github(REVISION_PATCH))
-    assert not gmm.only_moves_pins(103, GUARDED, gh_json=pin_move_github(REVISION_PATCH, compare_status='diverged'))
+def test_only_moves_pins_is_false_when_the_pull_request_has_moved_past_the_named_head():
+    moved = pin_move_github(REVISION_PATCH, head='e' * 40)
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=moved)
+
+
+def test_only_moves_pins_is_false_where_the_repository_allows_auto_merge():
+    """An auto-merge enabled now can land a push made after the read."""
+    auto = pin_move_github(REVISION_PATCH, allow_auto_merge=True)
+    assert not gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=auto)
 
 
 def test_a_pin_lookup_github_does_not_answer_refuses_naming_the_reason(git):
-    def unknown_revision(number, slug):
-        return gmm.only_moves_pins(number, slug, gh_json=pin_move_github(REVISION_PATCH, compare_status=None))
+    def unknown_revision(number, slug, head):
+        return gmm.only_moves_pins(number, slug, head, gh_json=pin_move_github(REVISION_PATCH, compare_status=None))
 
-    denial = verdict(git, 'gh pr merge 103', authorized=lambda n, slug: False, pins_only=unknown_revision)
+    denial = verdict(git, PIN_MERGE, authorized=lambda n, slug: False, pins_only=unknown_revision)
     assert denial is not None and 'only moves a pin: `gh api` failed: Not Found' in denial
+
+
+def test_a_pin_lookup_answered_in_an_unexpected_shape_refuses():
+    def no_head(path, deadline):
+        return {'allow_auto_merge': False} if path == f'repos/{GUARDED}' else {}
+
+    with pytest.raises(gmm.StackLookupError):
+        gmm.only_moves_pins(103, GUARDED, HEAD, gh_json=no_head)
 
 
 def fake_github(stack_members, bases, stack_base='main'):

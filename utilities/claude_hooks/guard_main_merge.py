@@ -6,7 +6,7 @@ Blocks history-rewriting `git commit --amend`, merges / integrating pulls / dire
 into main requires an explicit human/operator command run outside the agent's Bash tool, or a
 receipt a human wrote from chat authorizing one named pull request (see `consume_merge_allow`). A merge
 needs a receipt for each pull request it takes (see `merged_along_with`). A pull request that only moves a
-dependency pin needs no receipt of its own (see `only_moves_pins`).
+dependency pin needs no receipt of its own when the merge names its head commit (see `only_moves_pins`).
 
 A GitHub MCP call that merges a pull request answers to the same receipt, and one that commits onto
 `main` is refused (`analyze_mcp`).
@@ -47,7 +47,8 @@ DENY_TAIL = (
 )
 MERGE_ESCAPE = (
     ' A named human can authorize THIS ONE merge from chat with `!allow_merge <pr>`, which the merge then spends.'
-    ' A pull request that only moves a pin to a commit on main, with its version fields and lock file, needs none.'
+    ' A pull request that only moves a pin to a commit on main, with its version fields and lock file, needs none'
+    ' when the merge names its head with `--match-head-commit <sha>`.'
 )
 UNNUMBERED_MSG = (
     'BLOCKED: name the pull request to merge (`gh pr merge <number>`) — an authorization names one pull'
@@ -552,22 +553,34 @@ def merged_along_with(number: int, guarded_slug: str, gh_json=_gh_json) -> list[
 PIN_MOVE_LOOKUP_BUDGET_S = 15
 
 
-def only_moves_pins(number: int, guarded_slug: str, gh_json=_gh_json) -> bool:
-    """Whether the pull request only moves pins, each revision to a commit on the guarded branch.
+def only_moves_pins(number: int, guarded_slug: str, head: str, gh_json=_gh_json) -> bool:
+    """Whether the pull request at commit `head` only moves pins, each revision to a commit on the guarded branch.
 
     A merge of such a pull request adds no code that a human did not review on that branch, so it
-    needs no receipt. Raises `StackLookupError` when GitHub does not answer a read, an unknown
-    revision included.
+    needs no receipt. The diff is read at `head`, and the merge must name the same commit, so a later
+    push cannot ride on the verdict. A repository that allows auto-merge gets no verdict: an
+    auto-merge can land a later push. Raises `StackLookupError` when GitHub does not answer a read,
+    an unknown revision included.
     """
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        return False
     deadline = time.monotonic() + PIN_MOVE_LOOKUP_BUDGET_S
 
     def on_guarded_branch(revision: str) -> bool:
         compared = gh_json(f'repos/{guarded_slug}/compare/{revision}...{GUARDED_BRANCH}', deadline)
         return isinstance(compared, dict) and compared.get('status') in ('ahead', 'identical')
 
-    # One page holds a pin move. A pull request with more files than a page is not one.
-    files = gh_json(f'repos/{guarded_slug}/pulls/{number}/files?per_page=100', deadline)
-    return isinstance(files, list) and len(files) < 100 and pin_move.is_pin_move(files, on_guarded_branch)
+    try:
+        if gh_json(f'repos/{guarded_slug}', deadline).get('allow_auto_merge') is not False:
+            return False
+        pull = gh_json(f'repos/{guarded_slug}/pulls/{number}', deadline)
+        if pull['head']['sha'] != head:
+            return False
+        files = gh_json(f'repos/{guarded_slug}/compare/{pull["base"]["sha"]}...{head}', deadline).get('files')
+    except (KeyError, TypeError, AttributeError) as e:
+        raise StackLookupError(f'GitHub answered #{number} in an unexpected shape: {e!r}') from None
+    # The compare read lists at most 300 files. A pull request with that many is not a pin move.
+    return isinstance(files, list) and len(files) < 300 and pin_move.is_pin_move(files, on_guarded_branch)
 
 
 # Each lookup of a repository's name. A merge makes two, which together stay inside the hook timeout.
@@ -647,7 +660,10 @@ def analyze_mcp(
     canonical=canonical_repository,
     pins_only=only_moves_pins,
 ) -> str | None:
-    """The deny message for a GitHub MCP call, or None to allow it."""
+    """The deny message for a GitHub MCP call, or None to allow it.
+
+    A merge here names no head commit, so a pin move gets no exemption on this path.
+    """
     if not tool.startswith(GITHUB_MCP_PREFIX):
         return None
     verb = tool.removeprefix(GITHUB_MCP_PREFIX)
@@ -661,7 +677,7 @@ def analyze_mcp(
         refused = MCP_MERGE_MSG.format(tool=tool)
         if slug != guarded_slug:
             return refused
-        return _authorize_merge(number, guarded_slug, allow_merge, authorized, stack_below, pins_only, refused)
+        return _authorize_merge(number, '', guarded_slug, allow_merge, authorized, stack_below, pins_only, refused)
     # A write the guard cannot place — no repository named, or none to compare it against — is
     # treated as a write onto this repository.
     if slug and guarded_slug and slug != guarded_slug:
@@ -837,6 +853,8 @@ def _gh_repo(explicit: str, inv_dir: str | None, git: GitInfo, cmd: str, gh_repo
 
 # gh's own spellings of the flag that selects a repository.
 GH_REPO_FLAGS = ('-R', '--repo')
+MATCH_HEAD_FLAG = '--match-head-commit'
+AUTO_MERGE_FLAG = '--auto'
 # Asking for help makes gh print it and merge nothing.
 GH_HELP_FLAGS = ('--help', '-h')
 # `gh pr merge` flags that consume the following argument, so its value is never the pull
@@ -848,7 +866,7 @@ GH_MERGE_VALUE_FLAGS = frozenset({
     '--body',
     '-F',
     '--body-file',
-    '--match-head-commit',
+    MATCH_HEAD_FLAG,
     '-t',
     '--subject',
     *GH_REPO_FLAGS,
@@ -877,6 +895,22 @@ def _gh_flag(word: str) -> tuple[str, str]:
     if flag in GH_HELP_FLAGS or flag in GH_MERGE_VALUE_FLAGS:
         return flag, value if eq else ''
     return ('', '') if word.startswith('--') else _gh_shorthand(word)
+
+
+def _matched_head(words: list[str]) -> str:
+    """The commit a `gh pr merge` requires the head to match, or '' when it names none or asks for auto-merge."""
+    head, pending = '', ''
+    for w in words:
+        if pending:
+            head, pending = (w if pending == MATCH_HEAD_FLAG else head), ''
+        elif w == AUTO_MERGE_FLAG or w.startswith(AUTO_MERGE_FLAG + '='):
+            return ''
+        elif w.startswith('-'):
+            flag, value = _gh_flag(w)
+            pending = flag if flag and not value else ''
+            if value and flag == MATCH_HEAD_FLAG:
+                head = value
+    return head
 
 
 def _gh_pr_merge(words: list[str]) -> tuple[bool, int | None, str]:
@@ -1126,7 +1160,7 @@ def analyze(  # noqa: C901
     def targets_main(inv_dir: str | None) -> bool:
         return on_main(inv_dir) or switches_to_main()
 
-    pending_merge = None
+    pending_merge, merge_head = None, ''
     for inv in invs:
         if inv.kind != 'gh' or _is_exact_merge_in_another_repository(
             inv.words, guarded_slug, cmd, gh_repo_env, canonical
@@ -1146,7 +1180,7 @@ def analyze(  # noqa: C901
                 return GH_MERGE_MSG
             # Spending it here would pay for a merge a later invocation in the same command can
             # still block, so the authorization is consulted once everything else has passed.
-            pending_merge = number
+            pending_merge, merge_head = number, _matched_head(inv.words)
 
     for inv, sub, rest in git_invs:
         if exempt(inv.dir):
@@ -1188,22 +1222,23 @@ def analyze(  # noqa: C901
         if not _merge_runs_alone(cmd):
             return MERGE_NOT_ALONE_MSG
         return _authorize_merge(
-            pending_merge, guarded_slug, allow_merge, authorized, stack_below, pins_only, GH_MERGE_MSG
+            pending_merge, merge_head, guarded_slug, allow_merge, authorized, stack_below, pins_only, GH_MERGE_MSG
         )
     return None
 
 
 def _authorize_merge(
-    number: int, guarded_slug: str, allow_merge, authorized, stack_below, pins_only, refused: str
+    number: int, head: str, guarded_slug: str, allow_merge, authorized, stack_below, pins_only, refused: str
 ) -> str | None:
     """The deny message for a merge of `number`, or None after spending one authorization per pull request it takes.
 
-    A pin move of `number` itself needs no authorization. Each pull request below it in a stack still needs one.
+    A pin move of `number` at the `head` the merge names needs no authorization. Each pull request below it in a
+    stack still needs one.
     """
     has_receipt = authorized(number, guarded_slug)
     if not has_receipt:
         try:
-            if not pins_only(number, guarded_slug):
+            if not head or not pins_only(number, guarded_slug, head):
                 return refused
         except StackLookupError as e:
             return PIN_LOOKUP_MSG.format(number=number, reason=e)

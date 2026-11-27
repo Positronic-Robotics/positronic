@@ -3,100 +3,136 @@
 
 A pin move changes only three kinds of value:
 
-- a quoted 40-hex revision, which must name a commit on the guarded branch;
-- an exact requirement `"name==<version>"`, which must move to a version that a version field of
-  the same pull request sets;
-- a `version = "<version>"` field. In a lock file it too must move to such a version.
+- a quoted 40-hex revision, in any file, which must name a commit on the guarded branch;
+- the `version` field of a package in a `pyproject.toml`;
+- an exact `"name==<version>"` pin in a `pyproject.toml`, or the `version` of a package in
+  `uv.lock`. Each must move to the version that the same pull request gives that package.
 
-Each removed line pairs, in order, with an added line of the same block, and the two may differ
-only in those values. A pull request that adds, deletes, renames or changes a binary file is not a
-pin move. A pull request that moves no pin is not a pin move. Stdlib-only, as every hook in this
+A package is the `name` line that the diff shows above a version field, in the same table. Each
+removed line pairs, in order, with an added line of the same block, and the two may differ only in
+those values. A pull request that adds, deletes, renames or changes a binary file is not a pin
+move. A pull request that moves no pin is not a pin move. Stdlib-only, as every hook in this
 directory.
 """
 
 from __future__ import annotations
 
+import enum
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import NamedTuple
 
-# Field names of an entry of GitHub's `GET /repos/{owner}/{repo}/pulls/{number}/files`.
+# Field names of an entry of the `files` list that GitHub's pull request and compare reads return.
 FILE_NAME = 'filename'
 FILE_STATUS = 'status'
 FILE_PATCH = 'patch'
 MODIFIED = 'modified'
 
-LOCK_FILES = frozenset({'uv.lock'})
+
+class FileKind(enum.Enum):
+    PROJECT = 'pyproject.toml'
+    LOCK = 'uv.lock'
+    OTHER = ''
+
 
 _VERSION = r'\d[\w.+!-]*'
 _VERSION_FIELD = re.compile(rf'^(\s*version\s*=\s*)(["\'])({_VERSION})\2(\s*,?\s*)$')
-_EXACT_PIN = re.compile(rf'(["\'])([\w.\[\],-]+)==({_VERSION})\1')
+_EXACT_PIN = re.compile(rf'(["\'])([\w.-]+)(\[[\w,.-]*\])?==({_VERSION})\1')
 _REVISION = re.compile(r'(["\'])([0-9a-f]{40})\1')
+_PACKAGE_NAME = re.compile(r'^\s*name\s*=\s*(["\'])([\w.-]+)\1\s*$')
+_TABLE = re.compile(r'^\s*\[')
+
+
+def package_key(name: str) -> str:
+    """The normalized form of a distribution name, so that `Foo_Bar` and `foo-bar` match."""
+    return re.sub(r'[-_.]+', '-', name).lower()
 
 
 class _Values(NamedTuple):
     """A diff line with its pin values replaced by placeholders, and the values it carried."""
 
     shape: str
-    versions: list[str]
-    pins: list[str]
+    version: str
+    pins: list[tuple[str, str]]
     revisions: list[str]
 
 
-def _values(line: str) -> _Values:
-    versions = []
-    field = _VERSION_FIELD.match(line)
+def _values(line: str, kind: FileKind) -> _Values:
+    version = ''
+    field = _VERSION_FIELD.match(line) if kind is not FileKind.OTHER else None
     if field:
-        versions.append(field.group(3))
+        version = field.group(3)
         line = f'{field.group(1)}{field.group(2)}<version>{field.group(2)}{field.group(4)}'
-    pins = [m.group(3) for m in _EXACT_PIN.finditer(line)]
-    line = _EXACT_PIN.sub(lambda m: f'{m.group(1)}{m.group(2)}==<pin>{m.group(1)}', line)
+    pins = []
+    if kind is FileKind.PROJECT:
+        pins = [(package_key(m.group(2)), m.group(4)) for m in _EXACT_PIN.finditer(line)]
+        line = _EXACT_PIN.sub(lambda m: f'{m.group(1)}{m.group(2)}{m.group(3) or ""}==<pin>{m.group(1)}', line)
     revisions = [m.group(2) for m in _REVISION.finditer(line)]
     line = _REVISION.sub(r'\1<revision>\1', line)
-    return _Values(line, versions, pins, revisions)
+    return _Values(line, version, pins, revisions)
 
 
-def _blocks(patch: str) -> Iterator[tuple[list[str], list[str]]]:
-    """Each run of changed lines in a unified-diff patch, as its removed and its added lines."""
+class Moves(NamedTuple):
+    """The values that a diff moves, each version beside the package it belongs to."""
+
+    versions: set[tuple[str, str]]
+    lock_versions: set[tuple[str, str]]
+    pins: set[tuple[str, str]]
+    revisions: set[str]
+
+
+def _add_block(removed: list[str], added: list[str], kind: FileKind, package: str, moves: Moves) -> bool:
+    """Record the values one block moves. False when the block changes more than a value."""
+    if len(removed) != len(added):
+        return False
+    for old, new in zip((_values(r, kind) for r in removed), (_values(a, kind) for a in added), strict=True):
+        if old.shape != new.shape:
+            return False
+        if new.version != old.version:
+            if not package:
+                return False
+            (moves.lock_versions if kind is FileKind.LOCK else moves.versions).add((package, new.version))
+        moves.pins.update(n for o, n in zip(old.pins, new.pins, strict=True) if o != n)
+        moves.revisions.update(n for o, n in zip(old.revisions, new.revisions, strict=True) if o != n)
+    return True
+
+
+def _add_file(patch: str, kind: FileKind, moves: Moves) -> bool:
+    """Record the values one file's patch moves. False when it changes more than a value."""
     removed: list[str] = []
     added: list[str] = []
+    package = ''
     for line in [*patch.splitlines(), '']:
         if line.startswith('\\'):  # "\ No newline at end of file" belongs to the line before it
             continue
         if line.startswith('-'):
             removed.append(line[1:])
-        elif line.startswith('+'):
+            continue
+        if line.startswith('+'):
             added.append(line[1:])
-        else:
-            if removed or added:
-                yield removed, added
-            removed, added = [], []
+            continue
+        if (removed or added) and not _add_block(removed, added, kind, package, moves):
+            return False
+        removed, added = [], []
+        text = line[1:]
+        if line.startswith('@@') or _TABLE.match(text):
+            package = ''
+        elif name := _PACKAGE_NAME.match(text):
+            package = package_key(name.group(2))
+    return True
 
 
-class _Moves(NamedTuple):
-    versions: set[str]
-    lock_versions: set[str]
-    pins: set[str]
-    revisions: set[str]
-
-
-def _moves(files: list[dict]) -> _Moves | None:
+def moves_of(files: list[dict]) -> Moves | None:
     """The values that the files move, or None when a change is more than a moved value."""
-    moves = _Moves(set(), set(), set(), set())
+    moves = Moves(set(), set(), set(), set())
     for entry in files:
         patch = entry.get(FILE_PATCH)
         if entry.get(FILE_STATUS) != MODIFIED or not isinstance(patch, str):
             return None
-        is_lock = str(entry.get(FILE_NAME) or '').rpartition('/')[2] in LOCK_FILES
-        for removed, added in _blocks(patch):
-            if len(removed) != len(added):
-                return None
-            for old, new in zip(map(_values, removed), map(_values, added), strict=True):
-                if old.shape != new.shape:
-                    return None
-                (moves.lock_versions if is_lock else moves.versions).update(set(new.versions) - set(old.versions))
-                moves.pins.update(n for o, n in zip(old.pins, new.pins, strict=True) if o != n)
-                moves.revisions.update(n for o, n in zip(old.revisions, new.revisions, strict=True) if o != n)
+        base_name = str(entry.get(FILE_NAME) or '').rpartition('/')[2]
+        kind = next((k for k in FileKind if k.value == base_name), FileKind.OTHER)
+        if not _add_file(patch, kind, moves):
+            return None
     return moves
 
 
@@ -105,7 +141,7 @@ def is_pin_move(files: list[dict], on_guarded_branch: Callable[[str], bool]) -> 
 
     `on_guarded_branch` answers whether a revision names a commit on the guarded branch.
     """
-    moves = _moves(files)
+    moves = moves_of(files)
     if moves is None or not (moves.pins or moves.revisions):
         return False
     if not (moves.pins | moves.lock_versions) <= moves.versions:
