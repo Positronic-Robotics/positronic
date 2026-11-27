@@ -472,14 +472,14 @@ class Harness(pimm.ControlSystem):
                     self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
                     if is_frame and emitted_ns is not None:
                         self._frame_ns_by_signal[name] = emitted_ns
-        if self._writer is None and self._control is None:
-            return
-        for name, receiver in self.privileged.items():
-            message = receiver.read()
-            if message is None or isinstance(message.data, pimm.SignalError):
-                continue
-            if message.updated or name not in self._ground_truth:
-                self._ground_truth[name] = self._convert_and_record(name, message, None)
+        if self._writer is not None:
+            for name, receiver in self.privileged.items():
+                message = receiver.read()
+                if message is None or isinstance(message.data, pimm.SignalError):
+                    continue
+                if message.updated or name not in self._recorded_privileged:
+                    self._convert_and_record(name, message, None)
+                    self._recorded_privileged.add(name)
 
     def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives. Return every pose: each
