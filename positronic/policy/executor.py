@@ -238,9 +238,9 @@ class Executor(Runtime):
 
     Real execution exposes completed futures immediately and never waits for simulated time. In
     simulation, ``charge`` says what a call costs on ``clock``: ``WALL`` calls include queueing and execution
-    time, ``SERVER`` calls the server time they report, and ``NONE`` calls hold the simulator until the worker
-    finishes. Submission and result reads belong to the control thread; submitted functions must not mutate
-    episode state.
+    time, ``SERVER`` calls the server time that they report with ``report_server_time``, and ``NONE`` calls hold
+    the simulator until the worker finishes. Submission and result reads belong to the control thread; submitted
+    functions must not mutate episode state.
 
     ``max_in_flight`` bounds local calls until their results are read or cancelled calls finish.
     Each ``ExecutionRuntime`` owns an independent limit and workers; every answer participates in

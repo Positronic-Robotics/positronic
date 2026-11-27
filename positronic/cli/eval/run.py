@@ -342,7 +342,7 @@ def run(
     eval: Eval | str | None,
     policy,
     output_dir=None,
-    inference_charge: InferenceCharge = InferenceCharge.WALL,
+    inference_charge: str = InferenceCharge.WALL.value,
     timing=False,
     dataset_factory: DatasetFactory = LocalDatasetWriter,
     policy_image: str | None = None,
@@ -395,11 +395,13 @@ def run(
         raise CommandFailed(
             '--policy runs the eval here and --policy-image runs it on the platform; pass one', Fault.USAGE
         )
+    with refusing_bad_input():
+        charge = InferenceCharge(inference_charge)
     # A switch stated at what every place already does asks for nothing, so it normalises to unstated.
     # Only a switch does: `--alias=False` stays a value, and is refused like `--alias=''`.
     local_only = {
         '--output-dir': output_dir,
-        '--inference-charge': None if inference_charge == InferenceCharge.WALL else inference_charge,
+        '--inference-charge': None if charge is InferenceCharge.WALL else inference_charge,
         '--timing': timing or None,
         '--dataset-factory': None if dataset_factory is LocalDatasetWriter else dataset_factory,
     }
@@ -438,8 +440,6 @@ def run(
             raise CommandFailed(
                 f'--eval={eval!r} names nothing to run: pass an eval config, or the name of a public eval', Fault.USAGE
             )
-        with refusing_bad_input():
-            charge = InferenceCharge(inference_charge)
         chosen = replace(chosen, tasks=partial(_charged, chosen.tasks, charge))
         recorded = main(
             policy=policy, evals=[chosen], output_dir=output_dir, timing=timing, dataset_factory=dataset_factory

@@ -311,6 +311,7 @@ class TestTheWire:
             client.connect()
             assert len(endpoint_over(client)(encoded())) == 32
 
+    # rules-allow: hardcoded-keys — the wire's own spelling, held independent of the code under test
     def test_a_server_charge_costs_the_infer_time_that_the_reply_states(self):
         reply = {'actions': np.zeros((32, 8), dtype=np.float32), 'server_timing': {'infer_ms': 125.0}}
         websocket = websocket_answering(serialize(ANNOUNCED), serialize(reply))
