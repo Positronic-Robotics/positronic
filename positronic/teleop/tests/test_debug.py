@@ -1,5 +1,7 @@
+import sys
 import types
 
+import configuronic as cfn
 import numpy as np
 import pytest
 
@@ -12,7 +14,7 @@ from positronic.drivers.webxr import LEFT, RIGHT, ControllerButtons
 from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.teleop.clutch import CONTROLLER_AXES, OperatorPosition
-from positronic.teleop.debug import Arm, ArmControl, Panel, debug, yam_bimanual_arms
+from positronic.teleop.debug import Arm, ArmControl, Panel, commands, debug, yam_bimanual_arms
 from positronic.teleop.service import Button
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
@@ -489,3 +491,17 @@ def test_the_yam_bimanual_arms_are_the_arms_of_the_yambox_station():
         robot = arms[side].robot
         assert isinstance(robot, yam_driver.Robot) and arms[side].gripper is robot
         np.testing.assert_allclose(robot.base_pose.translation, mounts[f'{keys.ROBOT_STATE}.{arm}.q'])
+
+
+@pytest.mark.parametrize(
+    'args',
+    [*([name] for name in commands), ['yam_bimanual', '--arms.station.left_channel=can2']],
+    ids=[*commands, 'yam_bimanual with a channel'],
+)
+def test_the_help_of_each_robot_shows_its_whole_config(args, monkeypatch, capsys):
+    monkeypatch.setattr(sys, 'argv', ['positronic', *args, '--help'])
+    cfn.cli(commands)
+
+    shown = capsys.readouterr().out
+    assert 'Config:' in shown and '<REQUIRED>' not in shown
+    assert all(arg.split('=')[1] in shown for arg in args[1:])
