@@ -102,3 +102,9 @@ def test_a_file_without_a_patch_is_refused():
 
 def test_version_fields_alone_move_no_pin():
     assert not pin_move.is_pin_move([version_bump('evals/pyproject.toml', 'evals', '0.2.1', '0.2.2')], on_branch())
+
+
+def test_a_line_that_already_holds_a_placeholder_is_not_a_pin_move():
+    """A revision moved into the place of a literal placeholder changes which name holds the revision."""
+    swap = (f"SAFE = '<revision>'; REVISION = '{OLD_SHA}'", f"SAFE = '{NEW_SHA}'; REVISION = '<revision>'")
+    assert not pin_move.is_pin_move([changed('evals/evals/evals.py', ([], [swap]))], on_branch(NEW_SHA))

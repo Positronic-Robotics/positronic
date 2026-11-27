@@ -41,6 +41,12 @@ _EXACT_PIN = re.compile(rf'(["\'])([\w.-]+)(\[[\w,.-]*\])?==({_VERSION})\1')
 _REVISION = re.compile(r'(["\'])([0-9a-f]{40})\1')
 _PACKAGE_NAME = re.compile(r'^\s*name\s*=\s*(["\'])([\w.-]+)\1\s*$')
 _TABLE = re.compile(r'^\s*\[')
+# Stand-ins for a moved value in the shape of a line. A line that holds one already is not a pin move,
+# since its own text could then match the shape of another line.
+_VERSION_MARK = '<version>'
+_PIN_MARK = '<pin>'
+_REVISION_MARK = '<revision>'
+_MARKS = (_VERSION_MARK, _PIN_MARK, _REVISION_MARK)
 
 
 def package_key(name: str) -> str:
@@ -62,13 +68,13 @@ def _values(line: str, kind: FileKind) -> _Values:
     field = _VERSION_FIELD.match(line) if kind is not FileKind.OTHER else None
     if field:
         version = field.group(3)
-        line = f'{field.group(1)}{field.group(2)}<version>{field.group(2)}{field.group(4)}'
+        line = f'{field.group(1)}{field.group(2)}{_VERSION_MARK}{field.group(2)}{field.group(4)}'
     pins = []
     if kind is FileKind.PROJECT:
         pins = [(package_key(m.group(2)), m.group(4)) for m in _EXACT_PIN.finditer(line)]
-        line = _EXACT_PIN.sub(lambda m: f'{m.group(1)}{m.group(2)}{m.group(3) or ""}==<pin>{m.group(1)}', line)
+        line = _EXACT_PIN.sub(lambda m: f'{m.group(1)}{m.group(2)}{m.group(3) or ""}=={_PIN_MARK}{m.group(1)}', line)
     revisions = [m.group(2) for m in _REVISION.finditer(line)]
-    line = _REVISION.sub(r'\1<revision>\1', line)
+    line = _REVISION.sub(rf'\1{_REVISION_MARK}\1', line)
     return _Values(line, version, pins, revisions)
 
 
@@ -83,7 +89,7 @@ class Moves(NamedTuple):
 
 def _add_block(removed: list[str], added: list[str], kind: FileKind, package: str, moves: Moves) -> bool:
     """Record the values one block moves. False when the block changes more than a value."""
-    if len(removed) != len(added):
+    if len(removed) != len(added) or any(mark in line for line in (*removed, *added) for mark in _MARKS):
         return False
     for old, new in zip((_values(r, kind) for r in removed), (_values(a, kind) for a in added), strict=True):
         if old.shape != new.shape:
