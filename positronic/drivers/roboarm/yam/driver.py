@@ -1193,7 +1193,7 @@ class Robot(pimm.ControlSystem):
                     elif not serving.park_failed:
                         if not fingers.busy:
                             return
-                        yield self._finish_grip_move(arm, serving, fingers, clock)
+                        yield self._step_grip_move(arm, serving, fingers, clock)
                         continue
                     else:
                         yield self._hold_unparked(arm, serving, fingers)
@@ -1217,7 +1217,7 @@ class Robot(pimm.ControlSystem):
             if serving.parking is not None:
                 serving.parking.close()
 
-    def _finish_grip_move(self, arm: _Arm, serving: _Serving, fingers: Moves[float], clock: pimm.Clock) -> pimm.Command:
+    def _step_grip_move(self, arm: _Arm, serving: _Serving, fingers: Moves[float], clock: pimm.Clock) -> pimm.Command:
         """Refuse every new move, and serve the grip move in flight, for one control tick."""
         self._refuse(
             (arm.moves, fingers),
