@@ -2535,6 +2535,16 @@ def test_a_helper_that_states_no_frames_fails_at_its_first_pose_command(command)
         run_robot_rollout(FramedPolicy(RIG_FRAMES), helper=helper).result()
 
 
+def test_the_teleoperator_states_the_frames_of_its_console_as_a_policy_does():
+    console = pimm.ControlSystemReceiver[dict](Passive())
+    assert Teleoperator(console, 'cc-by-4.0', RIG_FRAMES).meta() == {
+        policy_keys.TYPE: TELEOPERATOR,
+        policy_keys.LICENSE: 'cc-by-4.0',
+        **ee_frames_entry(RIG_FRAMES),
+    }
+    assert roboarm_keys.EE_FRAMES not in Teleoperator(console, 'cc-by-4.0').meta()
+
+
 @pytest.mark.parametrize('command', POSE_COMMANDS, ids=['position', 'delta'])
 def test_a_helper_that_states_the_frame_of_the_commanded_pose_drives_the_rig_after_take_over(command):
     presses = {2: {policy_keys.HELPER_TAKE_OVER: 1}}
