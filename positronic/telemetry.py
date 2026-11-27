@@ -21,6 +21,9 @@ machine-load sample per line). The env server writes its own set; nothing rides 
 
 Instrumented code sees one seam: ``from positronic import telemetry`` then ``with telemetry.span('reset'):``.
 Spans need no caller-side check: without an exporter or a ``timings_to`` sink they emit nothing.
+
+Each span has a ``Level``, and a bound process records the spans at or below its active level. A span above it
+returns a shared inert span: it builds no attributes and queues nothing for export.
 The pass-level report is an offline reduce over the raw files (``positronic.cli.eval.timing_report``).
 
 An instrumented call site needs only the OTel API, a default dependency, for the no-op span surface. The
@@ -28,6 +31,7 @@ An instrumented call site needs only the OTel API, a default dependency, for the
 recording run warns.
 """
 
+import enum
 import functools
 import io
 import json
@@ -39,7 +43,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
-from contextlib import ExitStack, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, NamedTuple
@@ -77,6 +81,8 @@ _MISSING_EXTRA = (
 # The subdirectory under a run's output dir where every process's sidecars live. The eval CLI writer, a
 # launched env server (via the env-var it is handed) and the offline reduce all resolve to this same dir.
 TELEMETRY_SUBDIR = 'telemetry'
+# The level that a bound process records at, by its name in lower case. A process that a run spawns inherits it.
+ENV_TELEMETRY_LEVEL = 'POSITRONIC_TELEMETRY_LEVEL'
 # A span file compressed as one zstd frame.
 COMPRESSED_SPANS_SUFFIX = f'{SPANS_SUFFIX}.zst'
 
@@ -108,6 +114,32 @@ GPU_POWER_W = 'power_w'
 GPU_PROC_MEM_B = 'proc_mem_b'
 GPU_PROC_UTIL_PCT = 'proc_util_pct'
 
+
+class Level(enum.IntEnum):
+    """How often a span opens. A bound process records each span whose level is at or below its active level.
+
+    ``CALL`` records the spans of a pass, an episode, a reset and a policy call: a few spans for each call.
+    ``STEP`` adds the spans of each control step, of each processor in it and of each device command: hundreds of
+    spans each second on a real robot. The environment variable ``POSITRONIC_TELEMETRY_LEVEL`` holds the name in
+    lower case, ``call`` or ``step``.
+    """
+
+    CALL = 1
+    STEP = 2
+
+
+def level_from_env(default: Level) -> Level:
+    """The level that ``POSITRONIC_TELEMETRY_LEVEL`` names, or ``default`` when it is unset or empty."""
+    name = os.environ.get(ENV_TELEMETRY_LEVEL, '')
+    if not name:
+        return default
+    try:
+        return Level[name.upper()]
+    except KeyError:
+        names = ', '.join(level.name.lower() for level in Level)
+        raise ValueError(f'{ENV_TELEMETRY_LEVEL}={name!r} names no telemetry level; use one of: {names}') from None
+
+
 # The bound provider is process-global; the anchor stack is per-context. An anchor is a long-running span its
 # owner holds open (a pass, a rollout).
 #
@@ -117,6 +149,8 @@ GPU_PROC_UTIL_PCT = 'proc_util_pct'
 # - A copied context carries the anchors it was copied with; a push or pop after the copy does not reach it.
 # - The stack stands in for OTel's ambient context, which does not survive the scheduler's generator hops.
 _provider: 'TracerProvider | None' = None
+# The level of the bound provider. Unbound, a timing sink gets every span.
+_level = Level.STEP
 _anchors: ContextVar[tuple[Span, ...]] = ContextVar('positronic_telemetry_anchors', default=())
 _active_span: ContextVar[Span | None] = ContextVar('positronic_active_span', default=None)
 
@@ -169,11 +203,11 @@ def _encode_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 @contextmanager
-def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
-    """Provider lifecycle for one process's telemetry: stream spans to ``path`` under a resource block
-    carrying this process's identity, and register the provider so ``span`` records. The batch processor is
-    flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
-    global _provider
+def _bind_to(path: Path, process: str, run_id: str, level: Level) -> Generator['TracerProvider', None, None]:
+    """Provider lifecycle for one process's telemetry: stream the spans up to ``level`` to ``path`` under a
+    resource block carrying this process's identity, and register the provider so ``span`` records. The batch
+    processor is flushed and shut down on exit — an abrupt exit would otherwise lose its queued tail."""
+    global _provider, _level
     try:  # the OTel SDK and its file exporter ship in the optional `telemetry` extra
         from opentelemetry.exporter.otlp.json.file import FileSpanExporter  # noqa: PLC0415
         from opentelemetry.sdk.resources import Resource  # noqa: PLC0415
@@ -199,19 +233,26 @@ def _bind_to(path: Path, process: str, run_id: str) -> Generator['TracerProvider
     # line — otherwise read_spans merges the first new record into the fragment and skips both.
     _seal_truncated_line(path)
     provider.add_span_processor(BatchSpanProcessor(FileSpanExporter(path)))
-    _provider = provider
+    logger.info('telemetry: recording the spans up to the %s level to %s', level.name.lower(), path)
+    _provider, _level = provider, level
     try:
         yield provider
     finally:
         provider.force_flush()
         provider.shutdown()
-        _provider = None
+        _provider, _level = None, Level.STEP
 
 
 @contextmanager
-def bind(out_dir: Path | str, process: str, run_id: str) -> Generator['TracerProvider', None, None]:
-    """``_bind_to`` for a run's output directory, which holds the spans at ``<process>.spans.jsonl``."""
-    with _bind_to(spans_path(out_dir, process), process, run_id) as provider:
+def bind(
+    out_dir: Path | str, process: str, run_id: str, level: Level | None = None
+) -> Generator['TracerProvider', None, None]:
+    """``_bind_to`` for a run's output directory, which holds the spans at ``<process>.spans.jsonl``.
+
+    A caller of ``bind`` asked for telemetry, so ``level`` defaults to the environment's level, else ``STEP``.
+    """
+    level = level if level is not None else level_from_env(Level.STEP)
+    with _bind_to(spans_path(out_dir, process), process, run_id, level) as provider:
         yield provider
 
 
@@ -223,6 +264,10 @@ def bind_from_env(process: str) -> Iterator[None]:
     mints a run id when the environment sets none. Every record holds the run id in its resource block, and
     the reduce keys an episode by it. Two runs that share one file therefore stay apart.
 
+    The level is the environment's level, else ``CALL``: a run that records episodes writes this sidecar
+    whether or not its user asked for timing, so it pays for the spans of each step only on request. A level
+    name that is not valid raises.
+
     Inert while the directory is unset, while a provider is already bound, and where the sidecar refuses to
     open: a run this fails on still delivers its episodes. ``bind`` serves a caller that asked for telemetry
     and still raises.
@@ -231,11 +276,12 @@ def bind_from_env(process: str) -> Iterator[None]:
     if directory is None or _provider is not None:
         yield
         return
+    level = level_from_env(Level.CALL)
     run_id = os.environ.get(ENV_RUN_ID) or uuid.uuid4().hex
     path = Path(directory) / f'{process}{SPANS_SUFFIX}'
     with ExitStack() as opened:
         try:
-            opened.enter_context(_bind_to(path, process, run_id))
+            opened.enter_context(_bind_to(path, process, run_id, level))
         except Exception as error:
             # rules-allow: swallowed-error — the warning IS the report; there is no caller to raise to that
             # would not also lose the episodes.
@@ -299,23 +345,28 @@ def _anchor_parent() -> Any:
     return _anchor_context()
 
 
-def start_span(name: str, **attrs: Any) -> Span:
+def start_span(name: str, level: Level = Level.CALL, /, **attrs: Any) -> Span:
     """Start a span its caller holds and ends itself, without entering it as the OTel-current span. A no-op
-    while unbound returns an invalid span the caller ends harmlessly."""
+    while unbound, or above the active level, returns an invalid span the caller ends harmlessly."""
+    if level > _level:
+        return trace.INVALID_SPAN
     return _tracer().start_span(name, context=_anchor_context(), attributes=_encode_attrs(attrs))
 
 
 def set_attrs(span: Span, **attrs: Any) -> None:
-    """Stamp attributes on a span the caller holds, coerced to what OTel accepts."""
-    span.set_attributes(_encode_attrs(attrs))
+    """Stamp attributes on a span the caller holds, coerced to what OTel accepts. Inert on a span that records
+    nothing."""
+    if span.is_recording():
+        span.set_attributes(_encode_attrs(attrs))
 
 
 _timing_sink: ContextVar[Callable[[str, int, int], None] | None] = ContextVar('timing_sink', default=None)
 
 
-def enabled() -> bool:
-    """Whether an exporter or a timing sink is active."""
-    return _provider is not None or _timing_sink.get() is not None
+def enabled(level: Level = Level.CALL) -> bool:
+    """Whether a span at ``level`` records: an exporter or a timing sink is active, and ``level`` is not above the
+    active level."""
+    return level <= _level and (_provider is not None or _timing_sink.get() is not None)
 
 
 @contextmanager
@@ -328,12 +379,20 @@ def timings_to(sink: Callable[[str, int, int], None]) -> Iterator[None]:
         _timing_sink.reset(token)
 
 
+# What ``span`` returns for a span that records nothing. One shared object, so an inert span allocates nothing.
+_INERT_SPAN: AbstractContextManager[Span] = nullcontext(trace.INVALID_SPAN)
+
+
+def span(name: str, level: Level = Level.CALL, /, **attrs: Any) -> AbstractContextManager[Span]:
+    """Time a block and make it the parent of nested spans. Inert without an exporter or timing sink, and above
+    the active level."""
+    if not enabled(level):
+        return _INERT_SPAN
+    return _recorded_span(name, attrs)
+
+
 @contextmanager
-def span(name: str, **attrs: Any) -> Iterator[Span]:
-    """Time a block and make it the parent of nested spans. Inert without an exporter or timing sink."""
-    if not enabled():
-        yield trace.INVALID_SPAN
-        return
+def _recorded_span(name: str, attrs: dict[str, Any]) -> Iterator[Span]:
     sink = _timing_sink.get()
     started = time.time_ns() if sink is not None else 0
     try:
@@ -356,15 +415,15 @@ def component_name(component: object) -> str:
     return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).lower()
 
 
-def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+def traced(name: str, level: Level = Level.CALL, /, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator form of ``span``, timing the whole function call."""
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if not enabled():
+            if not enabled(level):
                 return func(*args, **kwargs)
-            with span(name, **attrs):
+            with _recorded_span(name, attrs):
                 return func(*args, **kwargs)
 
         return wrapper
@@ -372,8 +431,11 @@ def traced(name: str, **attrs: Any) -> Callable[[Callable[..., Any]], Callable[.
     return decorator
 
 
-def record_span(name: str, start_ns: int, end_ns: int, **attrs: Any) -> None:
-    """Record a completed span with explicit wall-clock bounds. Parents like ``span``, and reaches a timing sink."""
+def record_span(name: str, start_ns: int, end_ns: int, level: Level = Level.CALL, /, **attrs: Any) -> None:
+    """Record a completed span with explicit wall-clock bounds. Parents like ``span``, and reaches a timing sink.
+    Inert without an exporter or timing sink, and above the active level."""
+    if not enabled(level):
+        return
     sink = _timing_sink.get()
     if sink is not None:
         sink(name, start_ns, end_ns)

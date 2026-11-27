@@ -11,6 +11,7 @@ from typing import Any, overload
 from positronic_model_server.spec import ARGS, NAME, SEQ, VERSION, component, sequence
 
 from positronic import keys as obs_keys
+from positronic import telemetry
 from positronic.dataset.transforms.episode import Derive, EpisodeTransform, Get
 from positronic.dataset.transforms.image import Resample, ResizeMode
 from positronic.drivers.roboarm import RobotStatus
@@ -301,23 +302,27 @@ class ChunkFromV1Answer(Codec):
     """
 
     @overload
-    def wrap(self, function: Callable[[dict], Any]) -> Callable[[Obs], Any]: ...
+    def wrap(
+        self, function: Callable[[dict], Any], *, level: telemetry.Level = telemetry.Level.CALL
+    ) -> Callable[[Obs], Any]: ...
 
     @overload
-    def wrap(self, function: ProcessorRun[Obs, Any]) -> ProcessorRun[Obs, Any]: ...
+    def wrap(
+        self, function: ProcessorRun[Obs, Any], *, level: telemetry.Level = telemetry.Level.CALL
+    ) -> ProcessorRun[Obs, Any]: ...
 
     def wrap(
-        self, function: Callable[[dict], Any] | ProcessorRun[Obs, Any]
+        self, function: Callable[[dict], Any] | ProcessorRun[Obs, Any], *, level: telemetry.Level = telemetry.Level.CALL
     ) -> Callable[[Obs], Any] | ProcessorRun[Obs, Any]:
         if isinstance(function, Generator):
-            return super().wrap(function)
+            return super().wrap(function, level=level)
         infer = function
 
         def answer_or_empty_chunk(obs: dict) -> Any:
             answer = infer(obs)
             return [] if answer is None else answer
 
-        return super().wrap(answer_or_empty_chunk)
+        return super().wrap(answer_or_empty_chunk, level=level)
 
     def encode(self, data: dict) -> dict:
         return data
