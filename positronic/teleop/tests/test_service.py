@@ -2557,7 +2557,7 @@ def test_a_session_that_ends_before_its_first_frame_ends_its_trial_at_once(servi
 
 
 def _warm_up(service: TeleopService, socket_path: Path, connect) -> None:
-    """Open and close a warm-up session, as a console does before its run."""
+    """Open and close a warm-up session."""
     connection = connect(socket_path, session_query(warm_up=True))
     connection.wait_open()
     assert service.phase is Phase.HEADS_UP
@@ -2567,7 +2567,7 @@ def _warm_up(service: TeleopService, socket_path: Path, connect) -> None:
 def test_a_warm_up_session_opens_with_no_ready_and_leaves_the_heads_up_of_the_run(service, socket_path, connect):
     _warm_up(service, socket_path, connect)
     assert service.phase is Phase.HEADS_UP
-    assert service.view_text().lines == ('Waiting for a trial',), 'only the notice shows the heads-up'
+    assert service.view_text().lines == ('Waiting for a trial',), 'the headset view shows no heads-up'
 
 
 def test_the_heads_up_stays_until_the_trial_of_the_run_waits_for_ready(service, socket_path, connect):

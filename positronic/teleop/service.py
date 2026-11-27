@@ -299,7 +299,7 @@ class TeleopService:
     ``take_sample`` takes each sample of the controllers. A frame request answers at once with the newest sample.
     When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The
     preparation of a session waits for Ready or Cancel up to ``ready_limit``. A warm-up session opens at once and starts
-    the heads-up of its run, up to ``heads_up_limit`` or until a trial waits for Ready. Only the notice shows it.
+    the heads-up of its run, up to ``heads_up_limit`` or until a trial waits for Ready.
     """
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
@@ -336,7 +336,7 @@ class TeleopService:
         # The axes of the controller in the frame of the headset, or None for the axes of the headset (see `Tracker`)
         self.controller_axes = controller_axes
         self.ready_limit = ready_limit
-        # The longest time that the heads-up of a run shows, so the heads-up of a run that stopped goes.
+        # The longest time of the heads-up of a run, so the heads-up of a run that stopped ends.
         self.heads_up_limit = heads_up_limit
         self.silence_limit = silence_limit
         self._buttons = {
@@ -793,8 +793,8 @@ class TeleopService:
                 return name
         return next(iter(self._trial_cameras), None)
 
-    def show_heads_up(self) -> None:
-        """Show the heads-up of a run that has a teleop episode, in place of the trial that the service kept."""
+    def start_heads_up(self) -> None:
+        """Start the heads-up of a run that has a teleop episode, in place of the trial that the service kept."""
         with self._locked():  # Field writes only: no reader sees the heads-up with the fields of the old trial.
             self._clear_trial('a warm-up session starts')
             self._set_phase(Phase.HEADS_UP, 'a warm-up session starts')
@@ -1073,7 +1073,7 @@ class TeleopModel(Model):
         self._open = True
         try:
             if settings.warm_up:
-                self._service.show_heads_up()
+                self._service.start_heads_up()
             elif self._service.resume_dropped_trial(settings) is ResumeOutcome.NO_DROPPED_TRIAL:
                 self._service.wait_for_ready(settings, self.preparation_cancelled)
         except BaseException:

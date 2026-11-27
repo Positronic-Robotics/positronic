@@ -77,8 +77,8 @@ class SessionParams:
     ``cameras`` names the cameras that the client sends. ``headset_camera`` names the one that the headset shows;
     ``None`` is the first one. The client sends the camera images as JPEG at ``jpeg_quality``. With a
     ``video_bitrate`` in bits per second, it sends them as H.264 at that bit rate and ``video_fps`` in place of JPEG.
-    A ``warm_up`` session starts no trial: it opens at once, and the notice of the service tells the teleoperator that
-    a run with a teleop episode starts.
+    A ``warm_up`` session opens at once and starts no trial. It tells the service that a run with a teleop episode
+    starts.
     """
 
     operator_position: OperatorPosition | None = OperatorPosition.FRONT
