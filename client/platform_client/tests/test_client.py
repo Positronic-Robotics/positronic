@@ -685,7 +685,7 @@ def test_an_answer_from_a_platform_at_the_oldest_contract_the_client_reads_is_ta
 
 def test_a_refusal_that_names_no_platform_version_raises_its_own_envelope():
     # A proxy's error page names no version either; calling it an old platform would hide the fault.
-    gateway = Gateway(403, {'error': {'code': 'forbidden', 'message': 'no grant'}}, headers={})
+    gateway = Gateway(403, {'error': {'code': 'forbidden', 'message': 'this key belongs to no org'}}, headers={})
     with pytest.raises(PlatformError) as raised:
         make_client(gateway).catalog_tasks()
     assert raised.value.code is ErrorCode.forbidden

@@ -3,7 +3,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
@@ -194,6 +194,30 @@ class _GcSteps:
             self._step_ended_ns, self._step_ended_collections = ended_ns, collections
 
 
+class _RecordWait:
+    """Sum the time that the samples between two steps spend in the recorder, and stamp it on the next step span.
+
+    A sample between steps records no span of its own.
+    """
+
+    def __init__(self) -> None:
+        self._ns: int | None = None
+
+    @contextmanager
+    def timing(self) -> Iterator[None]:
+        started_ns = time.perf_counter_ns()
+        try:
+            yield
+        finally:
+            self._ns = (self._ns or 0) + time.perf_counter_ns() - started_ns
+
+    def stamp(self, step_ms: dict[str, float]) -> None:
+        """Put the time summed since the previous stamp into ``step_ms``, when a sample recorded in that time."""
+        if self._ns is not None:
+            step_ms[telemetry_keys.ATTR_STEP_RECORD_WAIT_MS] = self._ns / 1e6
+        self._ns = None
+
+
 @dataclass(frozen=True)
 class _Source:
     """The run of one top-level source of an episode. The source observes and commands only ``stated_poses``, and
@@ -282,6 +306,7 @@ class Harness(pimm.ControlSystem):
         self._clock: pimm.Clock | None = None
         self._telemetry = _EpisodeTelemetry()
         self._gc = _GcMeter()
+        self._record_wait = _RecordWait()
         # A ready call the harness made between episodes, by device name, until the device answers it.
         self._repairs: dict[str, pimm.calls.Answer[None]] = {}
 
@@ -384,10 +409,19 @@ class Harness(pimm.ControlSystem):
         """The text the policy gets: the newest goal that this episode read, or the task's instruction before any."""
         return self._goal if self._goal is not None else task.instruction
 
-    def _append(self, values: dict[str, Any], timestamps: pimm.Time) -> None:
+    @staticmethod
+    def _record_io_span() -> AbstractContextManager[object]:
+        return telemetry.span(telemetry_keys.SPAN_RECORD_IO)
+
+    def _append(
+        self,
+        values: dict[str, Any],
+        timestamps: pimm.Time,
+        timing: Callable[[], AbstractContextManager[object]] = _record_io_span,
+    ) -> None:
         if self._writer is None:
             return
-        with telemetry.span(telemetry_keys.SPAN_RECORD_IO):
+        with timing():
             for name, value in values.items():
                 self._writer.append(name, value.copy() if isinstance(value, np.ndarray) else value, timestamps)
                 self._recorded_signals.add(name)
@@ -416,7 +450,12 @@ class Harness(pimm.ControlSystem):
             self._append({signal: value}, timestamps)
 
     def _convert_and_record(
-        self, name: str, message: pimm.Message, serializer: Serializer | None, step_ms: dict[str, float] | None = None
+        self,
+        name: str,
+        message: pimm.Message,
+        serializer: Serializer | None,
+        step_ms: dict[str, float] | None = None,
+        timing: Callable[[], AbstractContextManager[object]] = _record_io_span,
     ) -> dict[str, Any]:
         stamp = message.time
         if self._writer is not None and not message.updated:
@@ -435,7 +474,7 @@ class Harness(pimm.ControlSystem):
         if self._writer is not None:
             world, wall = (RECEIVED_WORLD, RECEIVED_WALL) if RECEIVED_WORLD in stamp else (EMITTED_WORLD, EMITTED_WALL)
             timestamps = pimm.Time(**message.time, **self._harness_coordinates(stamp[world], stamp[wall]))
-            self._append(values, timestamps)
+            self._append(values, timestamps, timing)
         return values
 
     def _time_frame(self, name: str, stamps: pimm.Time, emitted_ns: int | None, step_ms: dict[str, float]) -> None:
@@ -452,7 +491,12 @@ class Harness(pimm.ControlSystem):
                 stamps[HANDOFF_TIME] - stamps[CAPTURE_TIME]
             ) / 1e6
 
-    def _sample(self, step_ms: dict[str, float] | None = None) -> None:
+    def _sample(
+        self,
+        step_ms: dict[str, float] | None = None,
+        timing: Callable[[], AbstractContextManager[object]] = _record_io_span,
+    ) -> None:
+        """Read each observation, and record each new message. ``timing`` brackets each append to the recorder."""
         for name, obs in self._embodiment.observations.items():
             read_started_ns = time.perf_counter_ns()
             message = self.observations[name].read()
@@ -469,7 +513,7 @@ class Harness(pimm.ControlSystem):
                 if is_frame and step_ms is not None:
                     self._time_frame(name, message.time, emitted_ns, step_ms)
                 if message.updated or not isinstance(self._obs_by_signal.get(name), dict):
-                    self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms)
+                    self._obs_by_signal[name] = self._convert_and_record(name, message, obs.serializer, step_ms, timing)
                     if is_frame and emitted_ns is not None:
                         self._frame_ns_by_signal[name] = emitted_ns
         if self._writer is None and self._control is None:
@@ -479,7 +523,7 @@ class Harness(pimm.ControlSystem):
             if message is None or isinstance(message.data, pimm.SignalError):
                 continue
             if message.updated or name not in self._ground_truth:
-                self._ground_truth[name] = self._convert_and_record(name, message, None)
+                self._ground_truth[name] = self._convert_and_record(name, message, None, timing=timing)
 
     def read_obs(self, task: Task, step_ms: dict[str, float]) -> Obs | None:
         """Read sensors, reusing each signal's serialized fields until a new message arrives. Return every pose: each
@@ -559,6 +603,7 @@ class Harness(pimm.ControlSystem):
         """
         step_ms: dict[str, float] = {}
         with telemetry.span(telemetry_keys.SPAN_HARNESS_STEP) as span, gc_steps.step(span):
+            self._record_wait.stamp(step_ms)
             try:
                 if due_ns is not None and runtime.time_ns >= due_ns:
                     step_ms[telemetry_keys.ATTR_STEP_LATE_MS] = (runtime.time_ns - due_ns) / 1e6
@@ -676,6 +721,7 @@ class Harness(pimm.ControlSystem):
             self._recorded_instruction = None
             self._step_number = 0
             self._goal = None
+            self._record_wait = _RecordWait()
 
     def _rollout(
         self,
@@ -702,7 +748,7 @@ class Harness(pimm.ControlSystem):
                     resume_at_ns = stepped
                 sample_at_ns = sampled_ns + self._recording_period_ns
             elif self._writer is not None and sampled_ns >= sample_at_ns:
-                self._sample()
+                self._sample(timing=self._record_wait.timing)
                 sample_at_ns = sampled_ns + self._recording_period_ns
             # No complete observation yet: read the sensors again after one poll period.
             wake_at_ns = runtime.time_ns + round(POLL_PERIOD_SEC * 1e9) if resume_at_ns is None else resume_at_ns

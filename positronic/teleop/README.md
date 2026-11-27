@@ -90,8 +90,10 @@ controller, as for one arm.
 
 When the left controller is not tracked for 0.5 s, control of the left arm goes off. The right arm does the same with
 the right controller. The headset video shows the control state of each arm on its own line, for example
-`Left on (X: off)` and `Right off (A: on)`. The window and the phone page show "Control on" while control of at least
-one arm is on.
+`Left on (X: off)` and `Right off (A: on)`. When no controller data comes in the silence limit, the line gives the
+cause, for example `Control off: connection lost (A: on)`. Control stays off when the data comes again, until a press of
+A or X. The service logs each change of the phase and of control, with its cause. The window and the phone page show
+"Control on" while control of at least one arm is on.
 
 The phone is one controller, so a phone drives only a one-arm session. In a one-arm session, the left controller
 drives no arm.
@@ -102,8 +104,9 @@ trial waits for Ready, and it is green while the trial runs. At each new trial a
 slider, so a closed gripper does not close again at the next Control.
 
 The Quest shows the phase, the task and the control state on its video. While a trial waits for Ready, the video shows
-no task. The control state of an arm is on green while control is on, and on yellow while it is off. The window on the
-laptop shows the same state, and the control state.
+no task. From Ready to the first frame request of the run, the video shows "Trial starting: waiting for the robot" and
+no control state. The control state of an arm is on green while control is on, and on yellow while it is off. The window
+on the laptop shows the same state, and the control state.
 
 The page sends controller data only in VR, so outside VR a press of B does nothing. `tracked` in `GET /status` of the
 window and in the page state is false when no controller data came in the silence limit (0.5 s). While a trial waits

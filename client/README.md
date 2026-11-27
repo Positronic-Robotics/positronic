@@ -301,18 +301,23 @@ Percent-encode a character that `query` refuses: a space is `%20`, and `#` is `%
 JSON, and an `--eval` value is a name. Two or more endpoints make one blind sample: the operator is
 told no policy, and each episode records which one served it. `eval status` and `eval list` read it back by
 the submission id every run carries. The platform records the plan, the rollouts coordinator runs
-it on a rig of the shape it names, and a `blocked` run waits on what its `reason` names. A plan that states its own
-tasks needs a customer grant; a key without one is refused `forbidden`, and so is `catalog.tasks`.
-Write to hi@phail.ai for a grant. A rig plan queues for an operator, so it answers `pending` with a
-`queue_position`, and it does not count against the `submissions.day` quota: that quota counts the
-image runs the platform executes itself. `users.me` names the grant's client in `client`.
+it on a rig of the shape it names, and a `blocked` run waits on what its `reason` names. A rig plan
+queues for an operator, so it answers `pending` with a `queue_position`, and it does not count against
+the `submissions.day` quota: that quota counts the image runs the platform executes itself.
+
+Each account has a personal organization. Name it with `--org`, and a plan can state its own tasks
+with no grant. Its credits pay for the run ([Credit accounts](#credit-accounts)). The plan can use
+`image` and `remote` endpoints, and the tasks that `positronic eval catalog` lists for every
+registered user. A `served` endpoint, or a task that a grant adds, needs a grant: write to
+hi@phail.ai.
 
 Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
 as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
 episodes, `report`, a page that shows their results, and `outcome`, the kept, judged and successful
-episodes per endpoint. `replay` and `report` are absent until the platform has built each page. The
-rig writes the episodes to the org's own bucket, and `artifacts.result` names the prefix they landed
-under. Read it with the org's own credential for that bucket: `submissions.artifacts` refuses a rig plan.
+episodes per endpoint. `replay` and `report` are absent until the platform has built each page.
+`artifacts.result` names the prefix of the episodes. To download them, call `submissions.artifacts`
+as the account that filed the plan: it gives a signed URL for each file. An episode is every file
+under its prefix. An organization with a customer grant also finds the episodes in its client's bucket.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
@@ -409,9 +414,9 @@ endpoints:
 
 `positronic eval catalog` prints what the key may name: `catalog.evals` lists the evals a plan
 names, and `catalog.tasks` the tasks a plan may compose, each with the `embodiments` it runs on, for
-example `["franka", "yam"]` or `["yam"]`. Every registered user sees the evals a submission can name.
-A customer grant adds the rig's evals and tasks, filtered to the entries offered to the grant's
-client.
+example `["franka", "yam"]` or `["yam"]`. Every registered user sees the evals a submission can name,
+and the tasks that its personal organization can run. A customer grant adds the rig's evals and
+tasks, filtered to the entries offered to the grant's client.
 
 From Python, `PlatformClient` takes and answers the models in `platform_client.eval_plan` and
 `platform_client.catalog`. The rollouts coordinator's request record is a subclass of `EvalPlan`, so the ask has one
@@ -635,8 +640,8 @@ the episodes, read `result.json`. Its `episode_locations` lists their addresses.
 to list the records of one eval of a submission of several; without it, the page lists the first. The route
 refuses an `eval` that the submission does not run. A platform that sends no `evals` ignores `eval`. The route
 refuses every other run: a run still going has a part-written prefix, and a run that failed with no
-`scores` reads its records off `submissions.get`. It refuses a rig plan, whose episodes are in the
-org's own bucket (§Eval plans).
+`scores` reads its records off `submissions.get`. It also lists a finished rig plan, for the account
+that filed it (§Eval plans).
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package
