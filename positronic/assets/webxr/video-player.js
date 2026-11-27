@@ -2,6 +2,8 @@
  * WebXR Video Player class that displays a video stream on a plane in AR
  */
 
+import { WebRTCVideo } from './webrtc-video.js';
+
 // How the plane shows the video: as it is, as it is for a view with no task, with black clear so that only bright parts
 // float over the room, or not at all
 export const PANEL_MODE = { ON_BLACK: 'on_black', NO_TASK: 'no_task', CLEAR_BLACK: 'clear_black', HIDDEN: 'hidden' };
@@ -15,23 +17,23 @@ export class WebXRVideoPlayer {
         this.videoMaterial = null;
         this.videoPlane = null;
         this.videoGroup = null;
-        this.ws = null;
-        this.decoder = null;
-        this.canvas = null;
-        this.lastFrameAt = 0;
-        this.watchdog = null;
+        this.video = null;
+        this.rtc = null;
         this.scene = null;
         this.camera = null;
     }
 
-    async init(scene, camera) {
+    // `signaling` carries the WebRTC setup messages of the video (`SocketSignaling` of core.js)
+    async init(scene, camera, signaling) {
         console.log("Initializing WebXRVideoPlayer");
         this.scene = scene;
         this.camera = camera;
 
-        // The decoder draws each frame on this canvas, and the plane shows the canvas
-        this.canvas = document.createElement('canvas');
-        this.videoTexture = new THREE.CanvasTexture(this.canvas);
+        // The WebRTC track plays in this element, and the plane shows it
+        this.video = document.createElement('video');
+        this.video.muted = true;
+        this.video.playsInline = true;
+        this.videoTexture = new THREE.VideoTexture(this.video);
         this.videoMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 map: { value: this.videoTexture },
@@ -72,7 +74,7 @@ export class WebXRVideoPlayer {
             transparent: true,
         });
 
-        // A plane of a fixed height, whose width follows the aspect of each frame (see showFrame)
+        // A plane of a fixed height, whose width follows the aspect of the video (see fitPlane)
         this.videoPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.videoMaterial);
         this.videoPlane.scale.set(PANEL_HEIGHT_M * 4 / 3, PANEL_HEIGHT_M, 1);
 
@@ -83,96 +85,13 @@ export class WebXRVideoPlayer {
         this.mode = PANEL_MODE.ON_BLACK;
         this.applyMode();
 
-
-        // Connect to video websocket
-        console.log("Connecting to video websocket...");
-        this.connectWebSocket();
-        this.watchdog = setInterval(() => this.replaceLostSocket(), 1000);
+        this.video.addEventListener('resize', () => this.fitPlane());
+        this.rtc = new WebRTCVideo(signaling, this.video);
     }
 
-    connectWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/video`;
-
-        this.ws = new WebSocket(wsUrl);
-        this.ws.binaryType = 'arraybuffer';
-        this.lastFrameAt = performance.now();
-        const stream = this.openStream();
-
-        this.ws.onmessage = (event) => {
-            this.lastFrameAt = performance.now();
-            stream(event.data);
-        };
-
-        this.ws.onopen = () => {
-            console.log("Video WebSocket connected");
-        };
-
-        this.ws.onerror = (error) => {
-            console.error("Video WebSocket error:", error);
-        };
-
-        this.ws.onclose = () => {
-            console.log("Video WebSocket closed");
-        };
-    }
-
-    // The handler of one socket: a text message is the decoder config of the next key frame, a binary one a frame.
-    // A decoder error closes the socket, so that the watchdog opens a new one with a stream from a key frame
-    openStream() {
-        if (this.decoder && this.decoder.state !== 'closed') this.decoder.close();
-        const ws = this.ws;
-        const decoder = new VideoDecoder({
-            output: (frame) => this.showFrame(frame),
-            error: (error) => {
-                console.error("Video decoder error:", error);
-                ws.close();
-            },
-        });
-        this.decoder = decoder;
-        let config = null;
-        let keyNext = false;
-        let timestamp = 0;
-        return (data) => {
-            if (decoder.state === 'closed') return;
-            if (typeof data === 'string') {
-                const next = JSON.parse(data);
-                if (!config || next.codec !== config.codec || next.width !== config.width || next.height !== config.height) {
-                    decoder.configure({
-                        codec: next.codec, codedWidth: next.width, codedHeight: next.height, optimizeForLatency: true,
-                    });
-                    config = next;
-                }
-                keyNext = true;
-                return;
-            }
-            if (!config) return;
-            decoder.decode(new EncodedVideoChunk({ type: keyNext ? 'key' : 'delta', timestamp: timestamp++, data }));
-            keyNext = false;
-        };
-    }
-
-    showFrame(frame) {
-        if (this.canvas.width !== frame.displayWidth || this.canvas.height !== frame.displayHeight) {
-            this.canvas.width = frame.displayWidth;
-            this.canvas.height = frame.displayHeight;
-            this.videoTexture.dispose();
-        }
-        this.canvas.getContext('2d').drawImage(frame, 0, 0);
-        frame.close();
-        this.videoTexture.needsUpdate = true;
-        this.videoPlane.scale.x = PANEL_HEIGHT_M * this.canvas.width / this.canvas.height;
-    }
-
-    replaceLostSocket() {
-        // The service sends a frame on every view tick. A socket with no frame for this long is lost: the page never
-        // sends on it, so a connection that dies with no close frame never closes on the page.
-        const frameTimeoutMs = 3000;
-        const silentMs = performance.now() - this.lastFrameAt;
-        if (this.ws.readyState !== WebSocket.CLOSED && silentMs < frameTimeoutMs) return;
-        console.log(`Video WebSocket lost (no frame for ${Math.round(silentMs)} ms), reconnecting...`);
-        this.ws.close();
-        this.connectWebSocket();
+    fitPlane() {
+        if (this.video.videoHeight === 0) return;
+        this.videoPlane.scale.x = PANEL_HEIGHT_M * this.video.videoWidth / this.video.videoHeight;
     }
 
     update() {
@@ -222,12 +141,8 @@ export class WebXRVideoPlayer {
     }
 
     dispose() {
-        clearInterval(this.watchdog);
-        if (this.ws) {
-            this.ws.close();
-        }
-        if (this.decoder && this.decoder.state !== 'closed') {
-            this.decoder.close();
+        if (this.rtc) {
+            this.rtc.close();
         }
         if (this.videoTexture) {
             this.videoTexture.dispose();

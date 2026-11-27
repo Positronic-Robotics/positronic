@@ -165,11 +165,11 @@
             controllerAxes[hand] = axesGroup;
           });
         }
-        function onInit({ scene, camera }) {
+        function onInit({ scene, camera, signaling }) {
           initControllerAxes(scene);
           // Initialize video player
           videoPlayer = new WebXRVideoPlayer();
-          videoPlayer.init(scene, camera);
+          videoPlayer.init(scene, camera, signaling);
         }
 
         // `presses` are the press counts by hand that `countPresses` returned in this frame

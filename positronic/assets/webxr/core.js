@@ -10,8 +10,41 @@ export function controllerSample(position, orientation, buttons, presses) {
   return { position, orientation, buttons, presses };
 }
 
+// The field of a message on `/ws` that carries a WebRTC setup message of the video, from the page or to it
+// (`positronic.drivers.webxr`)
+const SIGNAL = 'webrtc';
+
+// The WebRTC setup messages on the controller socket. Another channel of setup messages gives the same surface:
+// `isOpen`, `send(message)`, and the handlers `onopen` and `onmessage`
+export class SocketSignaling {
+  constructor() {
+    this.socket = null;
+    this.onopen = null;
+    this.onmessage = null;
+  }
+
+  // Carry the setup messages on `socket`, in place of the socket before it
+  attach(socket) {
+    this.socket = socket;
+    socket.onopen = () => this.onopen?.();
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (SIGNAL in data) this.onmessage?.(data[SIGNAL]);
+    };
+  }
+
+  get isOpen() {
+    return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+  }
+
+  send(message) {
+    if (this.isOpen) this.socket.send(JSON.stringify({ [SIGNAL]: message }));
+  }
+}
+
 export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'local', domOverlayRoot = (typeof document !== 'undefined' ? document.body : null) }) {
   let websocket = null;
+  const signaling = new SocketSignaling();
   let xrButton = null;
   let xrRefSpace = null;
   let scene = null, camera = null, renderer = null, gl = null;
@@ -30,7 +63,7 @@ export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'lo
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambientLight);
     if (typeof onInit === 'function') {
-      onInit({ scene, camera, renderer });
+      onInit({ scene, camera, renderer, signaling });
     }
   }
 
@@ -104,6 +137,7 @@ export function startXRApp({ onInit, onFrame, onEveryFrame, referenceSpace = 'lo
   function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     websocket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    signaling.attach(websocket);
     websocket.onclose = () => {
       console.log('Controller WebSocket closed, attempting to reconnect...');
       setTimeout(connectWebSocket, 1000);
