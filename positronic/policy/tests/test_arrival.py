@@ -429,3 +429,70 @@ def test_a_change_on_arrival_that_fails_stops_the_stack_while_the_camera_repeats
             TemporalStack(CAMERAS, (-0.1, 0.0)).with_arrival(_fail),
             lambda step: {name: np.array(frame) for name, frame in first.items()},
         )
+
+
+class _HeldChange:
+    """A change on arrival that waits for ``release``, and keeps the second and the newest sample of ``inner``.
+
+    The first frame starts on the thread and waits there, so the second frame is the first one that stays queued.
+    """
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.runs = 0
+        self.second_sample: Mapping[str, Any] = {}
+        self.newest_sample: Mapping[str, Any] = {}
+
+    def __call__(self, values: dict[str, Any]) -> dict[str, Any]:
+        assert self.release.wait(timeout=10)
+        self.runs += 1
+        return {name: frame[::2, ::2] for name, frame in values.items()}
+
+    def inner(self):
+        obs = yield None
+        obs = yield None
+        self.second_sample = obs
+        while True:
+            self.newest_sample = obs
+            obs = yield None
+
+
+def _drive_held(held: _HeldChange, frames: list[dict[str, np.ndarray]]) -> None:
+    """Send ``frames`` while ``held`` blocks the background thread, then release it and read the newest frame."""
+    inner = held.inner()
+    next(inner)
+    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge_inference_time=False)
+    run = TemporalStack(CAMERAS, (-0.1, 0.0)).with_arrival(held).run(runtime, inner)
+    next(run)
+    try:
+        for step, cameras in enumerate(frames):
+            _CLOCK[0] = round(step * 1e9 / FPS)
+            runtime.start_tick(_CLOCK[0])
+            run.send(cameras)
+        held.release.set()
+        # One thread changes the frames in order, so this read waits for every change still queued.
+        held.newest_sample[CAMERAS[0]]
+    finally:
+        run.close()
+        runtime.close()
+
+
+def test_a_slow_change_on_arrival_runs_only_for_the_frames_that_the_history_still_holds():
+    held = _HeldChange()
+
+    _drive_held(held, _camera_frames(STEPS))
+
+    # The first frame runs while the thread waits. Of the rest, only the 3 frames that a window of 0.1 s holds
+    # at 15 Hz run; the frames that left the history run no change.
+    assert held.runs == 1 + 3
+
+
+def test_a_sample_that_holds_a_dropped_frame_still_reads_the_changed_frame():
+    held = _HeldChange()
+    frames = _camera_frames(STEPS)
+
+    _drive_held(held, frames)
+
+    for name in CAMERAS:
+        expected = np.stack([frames[0][name][::2, ::2], frames[1][name][::2, ::2]])
+        np.testing.assert_array_equal(held.second_sample[name], expected)

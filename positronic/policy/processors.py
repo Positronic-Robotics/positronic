@@ -16,11 +16,12 @@ Describe a local stack without creating episode state::
     step = episode.send(obs)
 """
 
+import threading
 from abc import ABC, abstractmethod
 from bisect import bisect_right, insort
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from copy import deepcopy
 from enum import Enum
 from functools import partial
@@ -1001,23 +1002,47 @@ class _StackedObs(Mapping[str, Any]):
 
 
 class _Arriving(Mapping[str, np.ndarray]):
-    """The values of one entry while a background thread changes them. A read of a value waits for the result."""
+    """The values of one entry while a background thread changes them. A read of a value waits for the result.
 
-    def __init__(self, keys: tuple[str, ...], result: Future[dict[str, np.ndarray]]):
-        self._keys = keys
+    ``cancel`` drops the change when the thread has not started it. A later read makes the change on the
+    reading thread, for a sample that an earlier step gave to a call that still runs.
+    """
+
+    def __init__(
+        self,
+        values: dict[str, np.ndarray],
+        change: Callable[[dict[str, Any]], dict[str, Any]],
+        result: Future[dict[str, np.ndarray]],
+    ):
+        self._values = values
+        self._change = change
         self._result = result
+        self._lock = threading.Lock()
+        self._changed: dict[str, np.ndarray] | None = None
+
+    def cancel(self) -> None:
+        self._result.cancel()
+
+    def _get(self) -> dict[str, np.ndarray]:
+        try:
+            return self._result.result()
+        except CancelledError:
+            with self._lock:
+                if self._changed is None:
+                    self._changed = self._change(self._values)
+                return self._changed
 
     def __contains__(self, key: object) -> bool:
-        return key in self._keys
+        return key in self._values
 
     def __getitem__(self, key: str) -> np.ndarray:
-        return self._result.result()[key]
+        return self._get()[key]
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._keys)
+        return iter(self._values)
 
     def __len__(self) -> int:
-        return len(self._keys)
+        return len(self._values)
 
 
 class _ArrivalThread:
@@ -1035,7 +1060,7 @@ class _ArrivalThread:
     def __call__(self, values: dict[str, np.ndarray]) -> Mapping[str, np.ndarray]:
         result = self._pool.submit(self._change, values)
         result.add_done_callback(self._keep_error)
-        return _Arriving(tuple(values), result)
+        return _Arriving(values, self._change, result)
 
     def check(self) -> None:
         if self._error is not None:
@@ -1055,12 +1080,12 @@ class _StackBuffer:
     ``values`` maps each key to an array; every entry holds the same keys. ``append`` copies each new entry and
     stores what ``arrive`` makes of the copy. An entry byte-identical to the previous one that came shares the
     stored values — a source slower than the control loop repeats its value, and carry-over sampling reuses the
-    stored one. It then drops entries before the oldest sampled offset, keeping the one at or before it. ``sample``
-    replaces each key of an observation with a stack holding, for each offset, the latest value at or before that
-    time — carry-over, never the future. Offsets that precede the first entry either repeat the oldest entry
-    (``pad_start=True``, a fixed ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack
-    grows from 1 to ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's
-    values.
+    stored one. It then drops entries before the oldest sampled offset, keeping the one at or before it, and cancels
+    the change of each dropped entry that no kept entry shares. ``sample`` replaces each key of an observation with
+    a stack holding, for each offset, the latest value at or before that time — carry-over, never the future.
+    Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
+    ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
+    ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's values.
     """
 
     def __init__(
@@ -1087,7 +1112,9 @@ class _StackBuffer:
             self._entries.append((now, observed_ns, self._arrive(self._newest_new)))
         cutoff = now + min(self._offsets_sec)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
-            self._entries.popleft()
+            _, _, dropped = self._entries.popleft()
+            if isinstance(dropped, _Arriving) and dropped is not self._entries[0][2]:
+                dropped.cancel()
 
     def sample(self, now: float, obs: Obs) -> Obs:
         times = np.array([t for t, _, _ in self._entries])
