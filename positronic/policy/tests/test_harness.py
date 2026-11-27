@@ -1464,7 +1464,7 @@ def test_the_episode_span_counts_its_late_steps_and_its_slow_encodes_in_the_poli
             while True:
                 yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
 
-    # The counts replace the step spans, so they record at the call level too.
+    # The counts need no step spans, so they record at the call level too.
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-episode-counts', level=level):
         h.observation.emit(1)
         h.caller(Rollout(Task('move', None), EncodesInAWorker(), None))
