@@ -17,6 +17,7 @@
       .buttons { display: flex; gap: 10px; }
       .btn { appearance: none; border: none; border-radius: 10px; padding: 10px 14px; color: #111; font-weight: 700; background: #fff; font-size: 16px; min-width: 96px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
       .btn:active { transform: translateY(1px); }
+      .btn[hidden] { display: none; }
       .btn__title { line-height: 1; }
       .btn__status { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; line-height: 1; transition: background-color 0.2s ease, color 0.2s ease; }
       .btn--pill .btn__status { background: rgba(0,0,0,0.18); color: #111; }
@@ -176,6 +177,8 @@
             configs.cancel.label = phase === PHASE.running ? 'Hold: Give up' : 'Cancel';
             applyVisual('cancel');
             const running = phase === PHASE.running;
+            // B does nothing in the heads-up of a run
+            configs.trial.el.hidden = phase === PHASE.headsUp;
             configs.trial.el.classList.toggle('btn--next-press', phase === PHASE.readyWait);
             configs.trial.el.classList.toggle('btn--task-running', running);
             configs.trial.label = trialLabel(phase);
