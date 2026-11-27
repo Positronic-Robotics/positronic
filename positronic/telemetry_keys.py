@@ -62,7 +62,7 @@ ATTR_SERVED_PREFIX = 'served.'
 # of them, when the call starts. The history frames of a temporal stack do not count.
 ATTR_OBS_AGE_MS = 'obs.age_ms'
 # On `policy.submit`, in a sim that charges server time: the milliseconds of episode time that the call costs. It is the
-# server's own compute time, or the span's wall time for a call that reports none.
+# server's own compute time, or the wall time from submission to completion for a call that reports none.
 ATTR_CHARGED_MS = 'charged_ms'
 
 # Which codec a `policy.encode` span timed, and how many bytes the observation took on the wire.

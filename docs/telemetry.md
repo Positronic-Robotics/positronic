@@ -198,8 +198,9 @@ count, and a hold that the episode end cuts does not count. The hold share of a 
 `hold_sum_ms / 1000 / episode.virtual_s`.
 
 The `charged_ms` of a `policy.submit` span is the episode time that the call costs when the trial's
-`inference_charge` is `server`: the time that the server reports it computed for the call, or the wall time of the span
-for a server that reports none. Compare it, not the span's duration, with the latency of a solo run.
+`inference_charge` is `server`: the time that the server reports it computed for the call, or the wall time from
+submission to completion for a server that reports none. The span's duration also holds the wait at the server, and
+`charged_ms` does not.
 
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of a camera frame to the start of the
 call. The frame is the newest frame of each camera that the harness reads, and with several cameras the oldest of
