@@ -401,6 +401,10 @@ uv run positronic teleop-debug cron_bimanual --arms.left_arm.ip=192.168.68.67 --
 Open the page of the headset, as for `positronic teleop`. One arm follows the right controller. On two arms, the left
 controller drives the left arm.
 
+`yam_bimanual` drives the arms of the yambox station as its embodiment `positronic.cfg.embodiment.yam_bimanual_yambox`
+builds them: with its CAN chains, its mounts, the compensation of each arm and its gripper settings. Use
+`--arms.station.<setting>` to change one of them, for example `--arms.station.left_channel=can2`.
+
 | Quest | What it does |
 |---|---|
 | A (right) or X (left) | control of the arm on or off |

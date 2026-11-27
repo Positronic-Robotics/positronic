@@ -4,11 +4,15 @@ import numpy as np
 import pytest
 
 import pimm
+import positronic.cfg.embodiment as embodiment_cfg
+from positronic import keys
 from positronic.drivers.roboarm import RobotStatus, command
+from positronic.drivers.roboarm.yam import driver as yam_driver
 from positronic.drivers.webxr import LEFT, RIGHT, ControllerButtons
+from positronic.eval import keys as eval_keys
 from positronic.geom import Rotation, Transform3D
 from positronic.teleop.clutch import CONTROLLER_AXES, OperatorPosition
-from positronic.teleop.debug import Arm, ArmControl, Panel, debug
+from positronic.teleop.debug import Arm, ArmControl, Panel, debug, yam_bimanual_arms
 from positronic.teleop.service import Button
 from positronic.tests.testing_coutils import ManualDriver, RecordingEmitter, drive_scheduler
 
@@ -474,3 +478,14 @@ def test_a_silence_limit_that_is_not_finite_and_positive_is_refused(silence_sec)
     arms = {RIGHT: Arm(ManualDriver([]), START_JOINTS)}
     with pytest.raises(ValueError, match='silence_sec'):
         debug(arms, webxr=None, operator_position=OperatorPosition.FRONT, silence_sec=silence_sec)  # pyright: ignore[reportArgumentType]
+
+
+def test_the_yam_bimanual_arms_are_the_arms_of_the_yambox_station():
+    station = embodiment_cfg.yam_bimanual_yambox.override(cameras={}).instantiate()
+    mounts = station.static_meta[eval_keys.MOUNTS]
+    arms = yam_bimanual_arms.instantiate()
+
+    for side, arm in ((LEFT, keys.LEFT_ARM), (RIGHT, keys.RIGHT_ARM)):
+        robot = arms[side].robot
+        assert isinstance(robot, yam_driver.Robot) and arms[side].gripper is robot
+        np.testing.assert_allclose(robot.base_pose.translation, mounts[f'{keys.ROBOT_STATE}.{arm}.q'])

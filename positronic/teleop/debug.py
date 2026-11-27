@@ -28,12 +28,15 @@ import numpy as np
 from configuronic.cli import CommandTree
 
 import pimm
+import positronic.cfg.embodiment
 import positronic.cfg.hardware.gripper
 import positronic.cfg.hardware.roboarm
 import positronic.cfg.webxr
-from positronic import geom
+from positronic import geom, keys
 from positronic.drivers.roboarm import RobotStatus, command
 from positronic.drivers.webxr import LEFT, RIGHT, ControllerButtons, WebXR
+from positronic.eval import Embodiment
+from positronic.eval import keys as eval_keys
 from positronic.utils import check_finite_positive
 
 from .clutch import CONTROLLER_AXES, OperatorPosition, Tracker
@@ -436,16 +439,17 @@ def yam_arms(robot_arm, start_joints: Sequence[float]) -> dict[str, Arm]:
 
 
 @cfn.config(
-    left_arm=positronic.cfg.hardware.roboarm.yam.override(channel='can0'),
-    right_arm=positronic.cfg.hardware.roboarm.yam.override(channel='can1'),
+    station=positronic.cfg.embodiment.yam_bimanual_yambox.override(cameras={}),
     start_joints=positronic.cfg.hardware.roboarm.YAM_NOMINAL_JOINTS,
 )
-def yam_bimanual_arms(left_arm, right_arm, start_joints: Sequence[float]) -> dict[str, Arm]:
-    """Two YAM arms on two CAN chains. The driver of each arm also drives its gripper. A station whose chains have
-    other names sets ``--arms.left_arm.channel`` and ``--arms.right_arm.channel``."""
-    return {
-        side: Arm(robot, start_joints, robot, (robot.ready,)) for side, robot in ((LEFT, left_arm), (RIGHT, right_arm))
-    }
+def yam_bimanual_arms(station: Embodiment, start_joints: Sequence[float]) -> dict[str, Arm]:
+    """The two YAM arms of a bimanual station, as the embodiment of the station builds them. The driver of each arm
+    also drives its gripper."""
+    arms = {}
+    for side, arm in ((LEFT, keys.LEFT_ARM), (RIGHT, keys.RIGHT_ARM)):
+        ready = station.ready_handlers[f'{eval_keys.ARM}.{arm}']
+        arms[side] = Arm(ready.owner, start_joints, ready.owner, (ready,))
+    return arms
 
 
 @cfn.config(
