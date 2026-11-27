@@ -1,5 +1,7 @@
 """The keys a trial writes: what it readies, the conditions it runs under and the verdict it ends on."""
 
+from enum import StrEnum
+
 from eval_vocabulary import episode as vocabulary
 from eval_vocabulary.episode import BENCHMARK_TASK
 
@@ -28,9 +30,23 @@ JOINT_SIGNALS = 'joint_signals'
 POSE_SIGNALS = 'pose_signals'
 MOUNTS = 'mounts'
 
-# Whether the trial charged each model call the wall time it really took. True on a real rig whatever the
-# task asked, since it cannot hold the world still while the model thinks.
-CHARGE_INFERENCE_TIME = 'eval.charge_inference_time'
+# What the trial charged each model call on the episode clock, an ``InferenceCharge`` value. ``wall`` on a real rig
+# whatever the task asked, since it cannot hold the world still while the model thinks.
+INFERENCE_CHARGE = 'eval.inference_charge'
+
+
+class InferenceCharge(StrEnum):
+    """What a model call costs a simulated episode on its clock."""
+
+    # The world holds still until the call answers, so the call costs no episode time.
+    NONE = 'none'
+    # The wall time the call took, with every wait on its way: the network and a queue at a shared server.
+    WALL = 'wall'
+    # The time the server reports it computed for the call, without its wait for a slot that other sessions hold.
+    # A call that reports no server time costs its wall time.
+    SERVER = 'server'
+
+
 # True when the operator replaced the trial's own instruction. The episode's ``keys.TASK`` holds the text that
 # the policy got.
 INSTRUCTION_OVERRIDDEN = 'eval.instruction_overridden'

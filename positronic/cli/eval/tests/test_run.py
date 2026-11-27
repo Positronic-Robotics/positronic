@@ -263,10 +263,19 @@ def test_a_failed_episode_ends_the_run_and_no_task_runs_twice(failure):
 run_module = importlib.import_module('positronic.cli.eval.run')
 
 
-@pytest.mark.parametrize('states, charged', [({}, True), ({'charge_inference_time': False}, False)])
-def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, states: dict, charged: bool):
-    """A local run charges inference time unless it states otherwise, and stamps that on every task the
-    eval makes."""
+@pytest.mark.parametrize(
+    'states, charged',
+    [
+        ({}, eval_keys.InferenceCharge.WALL),
+        ({'inference_charge': 'server'}, eval_keys.InferenceCharge.SERVER),
+        ({'inference_charge': 'none'}, eval_keys.InferenceCharge.NONE),
+    ],
+)
+def test_a_local_run_stamps_its_charge_on_every_task(
+    run_command, monkeypatch, states: dict, charged: eval_keys.InferenceCharge
+):
+    """A local run charges the wall time of each call unless it states another charge, and stamps that on every
+    task the eval makes."""
     made = [Task(instruction='t', timeout_sec=1.0) for _ in range(2)]
     seen: list[Task] = []
 
@@ -278,7 +287,13 @@ def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, s
 
     run_command(run_module.run, eval=eval_cfg, policy='a policy', **states)
 
-    assert [task.charge_inference_time for task in seen] == [charged, charged]
+    assert [task.inference_charge for task in seen] == [charged, charged]
+
+
+def test_a_local_run_refuses_an_unknown_charge(run_command):
+    eval_cfg = Eval(embodiment=cast(Embodiment, SimpleNamespace(simulated=True)), tasks=partial(iter, []))
+    with pytest.raises(SystemExit, match='model'):
+        run_command(run_module.run, eval=eval_cfg, policy='a policy', inference_charge='model')
 
 
 SMOKE = 'molmo.franka_pick_mini_smoke'

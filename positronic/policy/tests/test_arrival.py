@@ -12,6 +12,7 @@ from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.image import Resample, ResizeMode
+from positronic.eval import InferenceCharge
 from positronic.policy import keys as policy_keys
 from positronic.policy.arrival import transform_frames_on_arrival
 from positronic.policy.base import Processor
@@ -130,7 +131,7 @@ def _run(stack: Processor, frames: list[dict[str, np.ndarray]]) -> list[dict[str
         calls.append({name: np.array(value) for name, value in obs.items() if isinstance(value, np.ndarray)})
         return None
 
-    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge=InferenceCharge.NONE)
     run = runtime.start(stack, infer)
     try:
         for step, cameras in enumerate(frames):
@@ -340,7 +341,7 @@ def _record(stack: Processor, frames: list[dict[str, np.ndarray]], answers: bool
         assert step_done.wait(timeout=10)
         return [{keys.TARGET_JOINTS: np.full(7, len(calls) / 10)} for _ in range(4)] if answers else None
 
-    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge=InferenceCharge.NONE)
     run = runtime.start(stack, infer)
     try:
         for step, cameras in enumerate(frames):
@@ -403,7 +404,7 @@ def _send_until_raised(stack: TemporalStack, frames: Callable[[int], dict[str, n
 
     inner = reads_nothing()
     next(inner)
-    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge=InferenceCharge.NONE)
     run = stack.run(runtime, inner)
     next(run)
     deadline = time.monotonic() + 5
@@ -470,7 +471,7 @@ def _drive_held(held: _HeldChange, frames: list[dict[str, np.ndarray]]) -> None:
     """Send ``frames`` while ``held`` blocks the background thread, then release it and read the newest frame."""
     inner = held.inner()
     next(inner)
-    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: _CLOCK[0], simulated=True, charge=InferenceCharge.NONE)
     run = TemporalStack(CAMERAS, (-0.1, 0.0)).with_arrival(held).run(runtime, inner)
     next(run)
     try:

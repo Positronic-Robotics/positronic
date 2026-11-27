@@ -11,6 +11,7 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
+from positronic.eval.keys import InferenceCharge
 from positronic.geom import Transform3D
 from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, ResizeMode, TransformImages
@@ -73,7 +74,7 @@ def test_codec_work_is_inside_submit(nested):
             threads.append(threading.get_ident())
             return {'value': data['value'] + 10}
 
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
     conversion = (
         Sequential(ThreadCodec(), TransformImages(640, 640, mode=ResizeMode.BOUND)) if nested else ThreadCodec()
     )
@@ -125,7 +126,7 @@ def test_sequence_preserves_normal_processor_completion_and_its_return(with_code
     stack = (
         Sequential(TransformImages(640, 640, mode=ResizeMode.BOUND), Finite()) if with_codec else Sequential(Finite())
     )
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
     with telemetry.timings_to(lambda *_: None) if timed else nullcontext():
         run = runtime.start(stack)
         try:
@@ -191,7 +192,7 @@ def test_mixed_sequence_preserves_order_step_timing_and_empty_commands(tmp_path)
 
     stack = Sequential(TraceCodec('outer', 2), Forward(), TraceCodec('inner', 3))
     assert stack.meta() == {'codec.outer': 2, 'codec.inner': 3}
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
     with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'mixed-stack'):
         run = runtime.start(stack, infer)
         try:
@@ -233,7 +234,7 @@ def test_generator_forwards_exceptions_and_closes(finish, timed):
             finally:
                 closed.append(True)
 
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
     with telemetry.timings_to(lambda *_: None) if timed else nullcontext():
         run = runtime.start(Recover())
         try:

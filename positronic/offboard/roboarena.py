@@ -23,6 +23,10 @@ RESET_ACKNOWLEDGEMENT = 'reset successful'
 # The session a frame belongs to, on a server that keeps per-session history.
 SESSION_ID = 'session_id'
 
+# What an openpi-style server adds to an answer: its timing, and in it the milliseconds its model took for the call.
+SERVER_TIMING = 'server_timing'
+INFER_MS = 'infer_ms'
+
 # How long each read waits, in seconds: a backbone loading, one forward pass, one acknowledgement.
 HANDSHAKE_TIMEOUT_S = 60.0
 INFER_TIMEOUT_S = 120.0

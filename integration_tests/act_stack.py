@@ -60,7 +60,7 @@ def run_episode(wire: str, host: str, port: int, output: Path, seed: int, wall_t
         f'--eval.seed={seed}',
         '--eval.trial_count=1',
         f'--eval.timeout={EPISODE_SECONDS}',
-        '--charge_inference_time=False',
+        '--inference_charge=none',
         f'--output_dir={output}',
     ]
     log = output.with_suffix('.log')
@@ -79,7 +79,7 @@ def read_episode(output: Path, seed: int) -> Episode:
     expected = {
         eval_keys.SEED: seed,
         eval_keys.TIMEOUT: EPISODE_SECONDS,
-        eval_keys.CHARGE_INFERENCE_TIME: False,
+        eval_keys.INFERENCE_CHARGE: eval_keys.InferenceCharge.NONE.value,
         eval_keys.TERMINATED: False,
         f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_PATH}': CHECKPOINT_PATH,
     }

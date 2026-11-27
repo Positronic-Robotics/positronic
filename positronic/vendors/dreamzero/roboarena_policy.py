@@ -17,9 +17,11 @@ import numpy as np
 from positronic_model_server.serialization import check_int_range
 from positronic_wire import roboarena as roboarena_wire
 
+from positronic.offboard import roboarena as offboard_roboarena
 from positronic.offboard.roboarena import DEFAULT_CONNECT_DEADLINE_S, RoboarenaClient
 from positronic.policy import Policy, PolicyRun, Runtime, Sequential
 from positronic.policy.codecs import ACTION
+from positronic.policy.executor import report_server_time
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.vendors.dreamzero import codecs, roboarena
@@ -137,6 +139,8 @@ class RoboarenaEndpoint:
             raise RuntimeError(
                 f'the roboarena server at {self._client.url} answered an error instead of an action chunk: {e.text}'
             ) from e
+        if (timing := reply.get(offboard_roboarena.SERVER_TIMING)) is not None:
+            report_server_time(timing[offboard_roboarena.INFER_MS] / 1e3)
         field = next((field for field in ACTIONS_FIELDS if field in reply), None)
         if field is None:
             raise ValueError(

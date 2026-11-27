@@ -117,7 +117,7 @@ The span names are the contract:
 | `record.io` | `episode` | — | the recorder's serialize + append, at a step and at the open and close of the recording. A sample between two steps records no span: the next `harness.step` carries its time as `step.record_wait_ms` |
 | `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation`, `step.record_wait_ms` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
-| `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
+| `policy.submit` | the processor span that submits the call | `obs.age_ms`; `charged_ms` in a sim that charges server time | one call on a worker thread |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
 | `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
@@ -196,6 +196,10 @@ The `episode` span carries `episode.waypoints.hold_sum_ms` and `episode.waypoint
 command of the next chunk. During a hold the arm keeps its last target. The wait for the first chunk does not
 count, and a hold that the episode end cuts does not count. The hold share of a rollout is
 `hold_sum_ms / 1000 / episode.virtual_s`.
+
+The `charged_ms` of a `policy.submit` span is the episode time that the call costs when the trial's
+`inference_charge` is `server`: the time that the server reports it computed for the call, or the wall time of the span
+for a server that reports none. Compare it, not the span's duration, with the latency of a solo run.
 
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of a camera frame to the start of the
 call. The frame is the newest frame of each camera that the harness reads, and with several cameras the oldest of

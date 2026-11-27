@@ -26,6 +26,7 @@ from positronic.offboard.client import (
     UPLINK_MS,
     InferenceClient,
     InferenceSession,
+    server_compute_ms,
 )
 from positronic.policy import keys as policy_keys
 
@@ -34,7 +35,7 @@ from .base import Policy, PolicyRun, Processor, Runtime, Step
 from .codecs import PolicyCommandError
 from .codecs.action import JointPositionAction
 from .compatibility import from_v1_spec
-from .executor import ExecutionRuntime
+from .executor import ExecutionRuntime, report_server_time
 from .spec import from_spec
 
 
@@ -73,17 +74,21 @@ def round_trip(
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """One inference over the wire, timed as the ``policy.infer`` span.
 
-    Image preparation has its own span; the inference span covers only the server round trip.
+    Image preparation has its own span; the inference span covers only the server round trip. The server's own
+    compute time, where it reports one, goes to ``report_server_time``.
     """
     with telemetry.span(telemetry_keys.SPAN_POLICY_PREPARE):
         prepared = prepare_obs(obs, compress_images, jpeg_quality)
     with telemetry.span(telemetry_keys.SPAN_POLICY_INFER) as span:
         try:
-            return session.infer(prepared)
+            answer = session.infer(prepared)
         finally:
             served = {f'{telemetry_keys.ATTR_SERVED_PREFIX}{k}': v for k, v in session.served_timing.items()}
             alone = {} if session.sent_alone is None else {telemetry_keys.ATTR_WIRE_SENT_ALONE: session.sent_alone}
             telemetry.set_attrs(span, **served, **_network_attrs(session.wire_timing), **alone)
+    if (compute_ms := server_compute_ms(session.served_timing)) is not None:
+        report_server_time(compute_ms / 1e3)
+    return answer
 
 
 def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersion) -> Processor:

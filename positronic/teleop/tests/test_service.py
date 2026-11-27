@@ -57,6 +57,7 @@ from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, ControllerButtons, WebXR
 from positronic.eval import keys as eval_keys
+from positronic.eval.keys import InferenceCharge
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step
@@ -245,7 +246,7 @@ def service(socket_path):
 
 @pytest.fixture
 def runtime():
-    executor = Executor(time.monotonic_ns, simulated=False, charge_inference_time=False)
+    executor = Executor(time.monotonic_ns, simulated=False, charge=InferenceCharge.NONE)
     yield executor
     executor.close()
 

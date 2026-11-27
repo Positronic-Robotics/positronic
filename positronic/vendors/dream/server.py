@@ -9,7 +9,7 @@ each call. `<session_id>.npz` beside it holds each chunk as DreamAPI answered it
 Usage
   uv run --locked --extra dream python -m positronic.vendors.dream.server yam_bimanual
   uv run --locked --extra dream positronic eval run --eval=.sim.amazon_abc.put_bottles --policy=.remote \\
-      --policy.address.host=localhost --policy.address.port=8000 --charge_inference_time=False
+      --policy.address.host=localhost --policy.address.port=8000 --inference_charge=none
 """
 
 import base64

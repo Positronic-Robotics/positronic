@@ -27,6 +27,7 @@ from pydantic_ai.settings import ModelSettings
 from pimm.world import VirtualClock
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval.keys import InferenceCharge
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, PolicyEnd, Step
 from positronic.policy.executor import Executor, WaitStatus
@@ -80,7 +81,7 @@ def model(monkeypatch):
 @contextmanager
 def execution(policy):
     clock = VirtualClock()
-    runtime = Executor(clock.now_ns, simulated=True, charge_inference_time=False)
+    runtime = Executor(clock.now_ns, simulated=True, charge=InferenceCharge.NONE)
     run = cast(Generator[Step, Obs, PolicyEnd], runtime.start(policy))
     try:
         yield run, runtime, clock

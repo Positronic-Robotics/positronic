@@ -11,6 +11,7 @@ from positronic_model_server import serialization
 from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command
+from positronic.eval.keys import InferenceCharge
 from positronic.policy import spec
 from positronic.policy.codecs import Codec
 from positronic.policy.executor import Executor, WaitStatus
@@ -233,7 +234,7 @@ def test_periodic_recipe_plays_commands_while_history_calls_return_none(mode):
         'prediction_period_sec': 0.4,
     })
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.NONE)
 
     def round_trip(obs):
         return session.infer(serialization.deserialise(serialization.serialise(obs)))

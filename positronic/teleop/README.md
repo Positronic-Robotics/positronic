@@ -360,7 +360,7 @@ and vary how you come to the object.
   the wait, the error of the ready limit says so.
 - The phone page shows no video. Watch the window on the laptop.
 - MolmoSpaces runs slowly and with jerks on a Mac, and the person feels it.
-- A sim run must charge inference time, as `eval run` does by default. With `--charge_inference_time=False` the sim
+- A sim run must charge inference time, as `eval run` does by default. With `--inference_charge=none` the sim
   stops while each call runs, so a person cannot control the run. The service does not refuse such a run.
 - The service waits for Ready while it prepares the session, before the episode starts. So the wait is outside the
   recording and the time limit. The wait blocks the control loop of the World. The service ends the wait after 120 s.

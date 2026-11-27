@@ -17,6 +17,7 @@ from positronic_wire import websocket, wire
 from positronic import keys as obs_keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command
+from positronic.eval.keys import InferenceCharge
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
@@ -318,7 +319,7 @@ def test_rtc_schedule_keeps_playing_during_next_prediction(rtc):
     served = model(native, rtc)
     session = served.prepare_session({**served.parameters, 'compress_images': False})
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.NONE)
     pending = threading.Event()
     release = threading.Event()
 

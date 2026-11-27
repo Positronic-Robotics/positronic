@@ -21,6 +21,7 @@ from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.eval import keys as eval_keys
+from positronic.eval.keys import InferenceCharge
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, QueueFull, Step
@@ -95,7 +96,7 @@ class Echo(Policy):
 @pytest.fixture
 def periodic_execution():
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.NONE)
     try:
         yield runtime, now
     finally:
@@ -468,7 +469,7 @@ def test_matching_sampling_and_request_rates_deliver_every_observation(periodic_
 
 def test_periodic_capacity_skips_samples_and_preserves_recovery_intent():
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_in_flight=2)
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.NONE, max_in_flight=2)
     started, release = threading.Event(), threading.Event()
     calls = []
 
@@ -531,7 +532,7 @@ def test_periodic_stack_spec_round_trip():
 def test_schedule_retries_after_another_branch_releases_runtime_capacity(rtc):
     now = [0]
     release = threading.Event()
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False, max_in_flight=1)
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.NONE, max_in_flight=1)
     occupied = runtime.submit(release.wait, 2)
     schedule = RTCSchedule(10, call_after_sec=0.5, latency_estimate=ConstantDuration()) if rtc else ChunkedSchedule(10)
     calls = []
@@ -766,7 +767,7 @@ def test_temporal_stack_builds_a_stack_on_the_first_read_of_its_key(execution, m
 @pytest.fixture
 def execution(monkeypatch):
     with pimm.World(virtual_time=True) as world:
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, charge=InferenceCharge.NONE)
 
         def submit(function, *args, **kwargs):
             future = Future()

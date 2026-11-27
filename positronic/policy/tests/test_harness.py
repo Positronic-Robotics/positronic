@@ -36,6 +36,7 @@ from positronic.drivers.roboarm.models import EE_LINK, GRIPPER_SITE, EEFrame, bu
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
 from positronic.eval import NO_MODEL_ROBOT_META, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
+from positronic.eval.keys import InferenceCharge
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
@@ -176,7 +177,7 @@ def observed_harness():
             emitters[name], physical_receiver = world.local_pipe()
             receiver._bind(physical_receiver)
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, charge=InferenceCharge.NONE)
         policy_run = runtime.start(Observe())
         step = partial(
             harness._step,
@@ -732,7 +733,7 @@ def test_each_ask_refused_on_one_error_starts_a_new_traceback(episode_harness):
 
 
 @contextmanager
-def policy_world(policy, *, simulated=True, charged=False):
+def policy_world(policy, *, simulated=True, charge=InferenceCharge.NONE):
     """Drive the harness and its worker threads against a deterministic one-millisecond world clock."""
     with pimm.World(virtual_time=True) as world:
         timer = Passive()
@@ -753,7 +754,7 @@ def policy_world(policy, *, simulated=True, charged=False):
         harness.commands[MOTOR]._bind(commands, clock=world.clock)
         harness.deadline_ns._bind(Trace(world.clock), clock=world.clock)
         loop = world.start([harness, timer])
-        caller(Rollout(Task('test', None, charge_inference_time=charged), policy, None))
+        caller(Rollout(Task('test', None, inference_charge=charge), policy, None))
         try:
             yield world, loop, commands
         finally:
@@ -863,7 +864,7 @@ def test_charged_completion_waits_for_its_simulated_time(monkeypatch):
             while True:
                 yield Step({}, runtime.time_ns + 1_000_000_000)
 
-    with policy_world(Waiting(), charged=True) as (world, loop, commands):
+    with policy_world(Waiting(), charge=InferenceCharge.WALL) as (world, loop, commands):
         next(loop)
         assert cast(_UnchargedAnswer[int], answers[0]).call.result(timeout=1) == 42
         while world.clock.now_ns() < 10_000_000:
@@ -940,7 +941,7 @@ def test_simulated_act_cadence_and_uncharged_boundaries(delay, prepare):
         observations.emit(0)
         answer = caller(
             Rollout(
-                Task('move', 2.0, prepare_args={RESET: None} if prepare else {}, charge_inference_time=False),
+                Task('move', 2.0, prepare_args={RESET: None} if prepare else {}, inference_charge=InferenceCharge.NONE),
                 definition,
                 None,
             )
@@ -2057,7 +2058,9 @@ def test_rollout_records_commands_and_the_state_they_produce(tmp_path, record_pr
         wire.wire_embodiment(world, harness, embodiment, privileged=privileged)
         caller = world.pair(harness.perform_task)
         loop = world.start([harness, motion])
-        answer = caller(Rollout(Task('move', 0.21, charge_inference_time=False), Move(), LocalDatasetWriter(tmp_path)))
+        answer = caller(
+            Rollout(Task('move', 0.21, inference_charge=InferenceCharge.NONE), Move(), LocalDatasetWriter(tmp_path))
+        )
         try:
             for _ in range(1000):
                 next(loop)
@@ -2236,7 +2239,9 @@ def test_every_command_is_recorded_when_completions_reenter_at_one_simulated_ins
                 yield Step({}, runtime.time_ns + 100_000_000)
 
     h.observation.emit(0)
-    answer = h.caller(Rollout(Task('move', None, charge_inference_time=False), Chain(), LocalDatasetWriter(tmp_path)))
+    answer = h.caller(
+        Rollout(Task('move', None, inference_charge=InferenceCharge.NONE), Chain(), LocalDatasetWriter(tmp_path))
+    )
     next(h.loop)
     assert h.world.clock.now_ns() == 0
     h.done.emit({eval_keys.SUCCESS: True})
@@ -2747,7 +2752,7 @@ def test_wake_interval_is_clamped_from_call_start(episode_harness, requested_ns,
             yield Step({}, requested_ns)
             return PolicyEnd.COMPLETE
 
-    runtime = Executor(lambda: now[0], simulated=False, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=False, charge=InferenceCharge.NONE)
     run = runtime.start(Slow())
     try:
         assert (
@@ -2783,7 +2788,7 @@ def test_robot_observation_serialization_and_typed_command_emission():
         state = make_robot_state([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
         emitter.emit(state)
         policy = FramedPolicy(RIG_FRAMES)
-        runtime = Executor(world.clock.now_ns, simulated=True, charge_inference_time=False)
+        runtime = Executor(world.clock.now_ns, simulated=True, charge=InferenceCharge.NONE)
         run = runtime.start(policy)
         try:
             harness._step(

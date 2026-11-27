@@ -3,6 +3,7 @@
 import threading
 import time
 from socket import create_server
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -13,9 +14,10 @@ from positronic_wire.wire import ConnectRefused
 
 from positronic import keys as rig
 from positronic.drivers.roboarm import RobotStatus
+from positronic.eval.keys import InferenceCharge
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codecs import ACTION
-from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.vendors.dreamzero import roboarena as wire
 from positronic.vendors.dreamzero import roboarena_policy
 
@@ -129,7 +131,7 @@ def start_stack(client, clock: Clock):
 
     Built through `local_stack` rather than here, so the test runs the stack a run executes.
     """
-    runtime = Executor(clock, simulated=True, charge_inference_time=False)
+    runtime = Executor(clock, simulated=True, charge=InferenceCharge.NONE)
     run = runtime.start(roboarena_policy.local_stack(ANNOUNCED), endpoint_over(client, ANNOUNCED))
     return runtime, run
 
@@ -309,6 +311,23 @@ class TestTheWire:
             client.connect()
             assert len(endpoint_over(client)(encoded())) == 32
 
+    def test_a_server_charge_costs_the_infer_time_that_the_reply_states(self):
+        reply = {'actions': np.zeros((32, 8), dtype=np.float32), 'server_timing': {'infer_ms': 125.0}}
+        websocket = websocket_answering(serialize(ANNOUNCED), serialize(reply))
+        client = RoboarenaClient(ADDRESS.host, ADDRESS.port)
+        now = [0]
+        runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.SERVER)
+        try:
+            with patch('positronic_wire.roboarena.connect', return_value=websocket):
+                client.connect()
+                answer = cast(_UnchargedAnswer, runtime.submit(endpoint_over(client), encoded()))
+                assert len(answer.call.result(timeout=5)) == 32
+            now[0] = 125_000_000
+            assert answer.done()
+            assert answer.elapsed_sec == pytest.approx(0.125)
+        finally:
+            runtime.close()
+
     def test_a_reply_with_no_chunk_names_the_keys_it_carried(self):
         websocket = websocket_answering(serialize(ANNOUNCED), serialize({'status': 'ok'}))
         client = RoboarenaClient(ADDRESS.host, ADDRESS.port)
@@ -335,7 +354,7 @@ class TestTheWire:
 
         with patch('positronic_wire.roboarena.connect', side_effect=sockets):
             for _ in range(2):
-                runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+                runtime = Executor(Clock(), simulated=True, charge=InferenceCharge.NONE)
                 run = runtime.start(policy)
                 runtime.close()
                 run.close()
@@ -348,7 +367,7 @@ class TestTheWire:
         policy = roboarena_policy.RoboarenaPolicy(ADDRESS, headers)
 
         with patch('positronic_wire.roboarena.connect', return_value=websocket_answering(serialize(ANNOUNCED))) as dial:
-            runtime = Executor(Clock(), simulated=True, charge_inference_time=False)
+            runtime = Executor(Clock(), simulated=True, charge=InferenceCharge.NONE)
             run = runtime.start(policy)
             runtime.close()
             run.close()
@@ -362,7 +381,7 @@ class TestTheWire:
             policy = roboarena_policy.RoboarenaPolicy(address, connect_deadline=CONNECT_DEADLINE_S)
             started = time.monotonic()
             with pytest.raises(ConnectRefused):
-                Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
+                Executor(Clock(), simulated=True, charge=InferenceCharge.NONE).start(policy)
 
         assert time.monotonic() - started < CONNECT_DEADLINE_S + DEADLINE_SLACK_S
 
@@ -382,7 +401,7 @@ class TestTheWire:
         with patch('positronic_wire.roboarena.connect', side_effect=sockets):
             for _ in range(2):
                 with pytest.raises(StopRun):
-                    Executor(Clock(), simulated=True, charge_inference_time=False).start(policy)
+                    Executor(Clock(), simulated=True, charge=InferenceCharge.NONE).start(policy)
 
         assert [config[wire.RESOLUTION] for config in built] == [[180, 320], [144, 256]]
 

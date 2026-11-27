@@ -60,6 +60,21 @@ UPLINK_MS = 'uplink_ms'
 DOWNLINK_MS = 'downlink_ms'
 
 
+def server_compute_ms(served: Mapping[str, float]) -> float | None:
+    """The time a server worked on one call, from its timing: its span less the wait for its inference slot, plus
+    the encode that follows the span. ``None`` for a server that reports no span.
+
+    A server may count the wait inside another phase, as ``infer_ms``, so only the span and the wait decide.
+    """
+    if protocol.TIMING_SERVED not in served:
+        return None
+    return (
+        served[protocol.TIMING_SERVED]
+        - served.get(protocol.TIMING_QUEUED, 0.0)
+        + served.get(protocol.TIMING_ENCODE, 0.0)
+    )
+
+
 class Dial(NamedTuple):
     """The dial that opened a connection: the URL it dialed, and its milliseconds."""
 

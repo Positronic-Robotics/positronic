@@ -11,6 +11,7 @@ import time
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -34,6 +35,7 @@ from positronic.drivers.roboarm.models import (
     parse_ee_frames,
 )
 from positronic.eval import keys as eval_keys
+from positronic.eval.keys import InferenceCharge
 from positronic.geom import Rotation, Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody
@@ -51,6 +53,7 @@ from positronic.offboard.client import (
     InferenceClient,
     InferenceSession,
     SessionOpeningCancelled,
+    server_compute_ms,
 )
 from positronic.offboard.spec import Model, PolicyDeployment
 from positronic.policy import keys as policy_keys
@@ -64,7 +67,7 @@ from positronic.policy.codecs import (
     ResizeMode,
     TransformImages,
 )
-from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer
 from positronic.policy.keys import ACTION_FPS
 from positronic.policy.processors import (
     ChunkedSchedule,
@@ -436,7 +439,7 @@ class TestAHostNameThatDoesNotResolve:
 
         monkeypatch.setattr(socket, 'getaddrinfo', no_answer_yet)
         policy = RemotePolicy('websocket', _address('policy.example', 8000), unresolved_host_deadline=60.0)
-        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
         with pytest.raises(wire.ConnectRefused) as refused:
             runtime.start(policy)
 
@@ -486,7 +489,7 @@ class TestACancelledSessionOpening:
     def test_a_cancel_ends_a_remote_run_whose_session_is_still_opening(self, never_accepting_port):
         """The first dial runs out its open timeout; the cancel then ends the 1 s pause after it."""
         policy = RemotePolicy('websocket', _address('localhost', never_accepting_port), open_timeout=0.2)
-        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
         asked = []
 
         def cancelled() -> bool:
@@ -973,7 +976,7 @@ def test_remote_chunk_cadence_and_fresh_episode_state(served, transport, resize_
     obs = {'image': np.zeros((16, 16, 3), dtype=np.uint8)}
     for episode in range(2):
         now = [0]
-        runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda now=now: now[0], simulated=True, charge=InferenceCharge.NONE)
         run = runtime.start(policy)
         try:
             first = run.send(obs)
@@ -1049,7 +1052,7 @@ def test_periodic_jpeg_history_and_prediction_share_one_call(served, transport):
     policy = RemotePolicy(transport, address)
     for episode in range(2):
         now = [0]
-        runtime = Executor(lambda now=now: now[0], simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda now=now: now[0], simulated=True, charge=InferenceCharge.NONE)
         run = runtime.start(policy)
         try:
             for index in range(3):
@@ -1092,7 +1095,7 @@ def test_a_declared_prompt_is_in_episode_meta_and_the_task_reaches_the_model_unc
     address, model, _ = served(model=DeclaredPromptModel())
     policy = RemotePolicy('websocket', address)
 
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
     run = runtime.start(policy)
     try:
         run.send({keys.TASK: 'the task this episode sends'})
@@ -1442,7 +1445,7 @@ def test_act_codec_can_run_on_either_side_of_the_connection(served):
         {'local': Sequential(codec, TrajectoryPlayer(replan_on_error=True), ChunkedSchedule(fps=10))},
     ):
         address, model, _ = served(model=EchoStateModel(), **placement)
-        runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+        runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
         run = runtime.start(RemotePolicy(transport, address))
         try:
             first = run.send(obs)
@@ -1480,7 +1483,7 @@ def test_pipeline_takes_frame_conversions_of_different_signals_on_each_side():
 
 @pytest.fixture
 def runtime():
-    runtime = Executor(lambda: 0, simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: 0, simulated=True, charge=InferenceCharge.NONE)
     try:
         yield runtime
     finally:
@@ -2006,6 +2009,40 @@ def test_the_inference_span_carries_the_one_way_times_and_their_sum(tmp_path, on
     assert tuple(infer.attrs.get(key) for key in network_keys) == expected
 
 
+@pytest.mark.parametrize(
+    'served, charged_ms',
+    [
+        # The wait for the slot is a phase of its own, as `PolicyServer` reports it.
+        ({protocol.TIMING_SERVED: 900.0, protocol.TIMING_DECODE: 5.0, protocol.TIMING_QUEUED: 600.0}, 300.0),
+        # The encode follows the span, as `ModelServer` reports it.
+        ({protocol.TIMING_SERVED: 900.0, protocol.TIMING_QUEUED: 600.0, protocol.TIMING_ENCODE: 4.0}, 304.0),
+        # The wait sits inside `infer_ms`.
+        ({protocol.TIMING_SERVED: 900.0, protocol.TIMING_INFER: 895.0, protocol.TIMING_QUEUED: 600.0}, 300.0),
+        # No queue at all.
+        ({protocol.TIMING_SERVED: 120.0}, 120.0),
+    ],
+)
+def test_a_server_charge_costs_the_server_span_without_its_wait_for_the_slot(served, charged_ms):
+    session = _mock_session()
+    session.served_timing = served
+    session.wire_timing = {}
+    now = [0]
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.SERVER)
+    try:
+        answer = cast(_UnchargedAnswer, runtime.submit(round_trip, session, {}, False))
+        assert answer.call.result(timeout=5) == {'action': 'test'}
+        now[0] = round(charged_ms * 1e6)
+        assert answer.done()
+        assert answer.elapsed_sec == pytest.approx(charged_ms / 1e3)
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize('served', [{}, {protocol.TIMING_INFER: 50.0, protocol.TIMING_QUEUED: 10.0}])
+def test_a_server_that_reports_no_span_reports_no_compute_time(served):
+    assert server_compute_ms(served) is None
+
+
 @pytest.mark.parametrize('sent_alone', [True, False])
 def test_the_inference_span_says_whether_the_call_went_alone(tmp_path, sent_alone):
     session = _mock_session()
@@ -2339,7 +2376,7 @@ def test_an_end_command_in_the_codec_ends_the_client_run_when_its_element_plays(
         }
     address, _, _ = served(model=_EndingModel(), transport=transport, **placement)
     now = [0]
-    runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
+    runtime = Executor(lambda: now[0], simulated=True, charge=InferenceCharge.NONE)
     run = runtime.start(RemotePolicy(transport, address))
     try:
         run.send({})

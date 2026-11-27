@@ -21,7 +21,7 @@ _GUARDED = {
     keys.EXTERIOR_IMAGE,
     eval_keys.SUCCESS,
     eval_keys.TERMINATED,
-    eval_keys.CHARGE_INFERENCE_TIME,
+    eval_keys.INFERENCE_CHARGE,
     eval_keys.UNIVERSE,
     eval_keys.EMBODIMENT,
     eval_keys.TIMEOUT,

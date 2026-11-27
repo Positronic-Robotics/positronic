@@ -977,7 +977,9 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = raw
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        task = replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt, charge_inference_time=False)
+        task = replace(
+            next(iter(ev.tasks())), timeout_sec=20 * control_dt, inference_charge=eval_keys.InferenceCharge.NONE
+        )
         trial = number_trials([(task, {eval_keys.SEED: 100})])[0]
         main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 
