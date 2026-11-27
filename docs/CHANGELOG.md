@@ -6,7 +6,7 @@
 - Each span has a level, `call` or `step`, and `POSITRONIC_TELEMETRY_LEVEL` sets the level that a process records. The sidecar that a recording run writes without being asked records at `call`: the pass, each episode, reset and policy call. It no longer records the spans of each control step. Set `POSITRONIC_TELEMETRY_LEVEL=step` to record them. `--timing` records at `step`. `telemetry.span`, `traced`, `record_span` and `start_span` take `level`, and a span above the active level builds no attributes and queues nothing for export
 
 ### Platform client
-- A plan takes a bearer token on the `modal_websocket_tls` wire. The token goes on each Modal session start and end, so a plan can reach a Modal Server that requires proxy auth. `positronic-platform-client` goes to 0.47.46, `positronic-wire` to 0.12.7 and `positronic-model-server` to 0.3.12
+- A plan takes a bearer token on the `modal_websocket_tls` wire. The token goes on each Modal session start and end, so a plan can reach a Modal Server that requires proxy auth. `positronic-platform-client` goes to 0.47.47, `positronic-wire` to 0.12.7 and `positronic-model-server` to 0.3.12
 
 ### Evals
 - The public evals `molmo.franka_pick_mini_strict` and `molmo.franka_pick_mini_strict_smoke` run the episodes of `molmo.franka_pick_mini` and `molmo.franka_pick_mini_smoke` under the `strict_v1` success profile. They are for practice on your machine: `positronic eval run --eval=molmo.franka_pick_mini_strict`. `positronic-evals` goes to 0.2.20, and `positronic-platform-client` goes to 0.47.38 and pins it ([#1346](https://github.com/Positronic-Robotics/positronic/pull/1346))
