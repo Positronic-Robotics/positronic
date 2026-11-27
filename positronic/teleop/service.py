@@ -812,6 +812,9 @@ class TeleopService:
                 self._trackers = {
                     arm: Tracker(settings.operator(), self.controller_axes) for arm in settings.arms.value
                 }
+                # In UMI mode control comes on with the trackers
+                for arm in [arm for arm, tracker in self._trackers.items() if tracker.on]:
+                    self._log(f'{self._arm_name(arm)} on (B: Ready, in UMI mode)')
             elif self._stopping or cancelled.is_set():
                 self._clear_trial('the session closed before Ready')
             elif ready is ReadyAnswer.CANCELLED:

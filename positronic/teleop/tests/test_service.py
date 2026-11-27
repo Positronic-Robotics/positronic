@@ -523,22 +523,77 @@ def test_the_service_logs_each_change_of_the_phase_and_of_control_with_its_cause
     assert [message for message, free in lock_probe.lines if not free] == [], 'each line is written after the lock'
 
 
-def test_the_end_of_a_session_with_control_on_logs_that_control_goes_off_after_the_lock(
-    service, socket_path, connect, lock_probe
-):
-    connection = _readied_connection(service, socket_path, connect)
+def _press_a(service: TeleopService, connection) -> None:
     _take(service, _buttons(a=1.0))
     _take(service, _buttons())
     connection.frame(FRAME_REQUEST)
+
+
+def _ready_in_umi_mode(service: TeleopService, connection) -> None:
+    connection.close()
+
+
+def _control_on_with_a(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    connection.close()
+
+
+def _control_off_with_a(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    _press_a(service, connection)
+    connection.close()
+
+
+def _control_off_in_a_silence(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    time.sleep(service.silence_limit + 0.05)
     connection.frame(FRAME_REQUEST)
-    assert service.state().control
+    connection.close()
+
+
+def _control_off_with_an_untracked_controller(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    service.take_sample({webxr.RIGHT: None}, {webxr.RIGHT: _buttons()})
+    connection.frame(FRAME_REQUEST)
+    connection.close()
+
+
+def _control_off_at_the_end_of_the_session(service: TeleopService, connection) -> None:
+    _press_a(service, connection)
+    connection.frame(FRAME_REQUEST)
     connection.close()
     _until_phase(service, Phase.IDLE)
-    ends = [(message, free) for message, free in lock_probe.lines if 'the session ended' in message]
-    assert ends == [
-        ('Control off (the session ended)', True),
-        ('Teleop trial: running -> idle (the session ended)', True),
-    ]
+
+
+def _control_off_at_the_end_of_a_dropped_trial(service: TeleopService, connection) -> None:
+    connection.frame(FRAME_REQUEST)
+    connection.close()
+    time.sleep(TeleopService.RESUME_LIMIT_SEC + 0.05)
+    service.view()
+
+
+# Each site that turns control of an arm on or off, by its cause: the trackers that Ready makes, a press of A, a
+# silence, a controller that the headset does not track, and the end of a trial
+@pytest.mark.parametrize(
+    ('umi', 'drive', 'line'),
+    [
+        (True, _ready_in_umi_mode, 'Control on (B: Ready, in UMI mode)'),
+        (False, _control_on_with_a, 'Control on (A)'),
+        (False, _control_off_with_a, 'Control off (A)'),
+        (False, _control_off_in_a_silence, 'Control off: connection lost, no controller data within the silence limit'),
+        (False, _control_off_with_an_untracked_controller, 'Control off: the headset does not track the controller'),
+        (False, _control_off_at_the_end_of_the_session, 'Control off (the session ended)'),
+        (True, _control_off_at_the_end_of_a_dropped_trial, 'Control off (no session resumed the dropped trial)'),
+    ],
+)
+def test_each_change_of_control_logs_one_line_with_its_cause_after_the_lock(
+    service, socket_path, connect, lock_probe, monkeypatch, umi, drive, line
+):
+    monkeypatch.setattr(TeleopService, 'RESUME_LIMIT_SEC', 0.2)
+    query = session_query(operator_position=None) if umi else ''
+    drive(service, _readied_connection(service, socket_path, connect, query))
+    changes = [free for message, free in lock_probe.lines if message.startswith(line)]
+    assert changes == [True], f'one log line {line!r}, written after the lock, in {lock_probe.lines}'
 
 
 def test_the_view_logs_the_end_of_a_dropped_trial_after_the_lock(
@@ -563,7 +618,7 @@ def test_a_silence_in_umi_mode_leaves_control_on_and_logs_no_change_of_control(
     connection.frame(FRAME_REQUEST)
     assert service.state().control
     assert Badge('Control on (A: off)', TeleopService.CONTROL_ON_COLOUR) in service.view_text().lines
-    assert [message for message, _ in lock_probe.lines if message.startswith('Control ')] == []
+    assert [message for message, _ in lock_probe.lines if message.startswith('Control off')] == []
     connection.close()
 
 
