@@ -1,7 +1,7 @@
 """RoboLab behind the env-server protocol, in RoboLab's own interpreter, as ``launcher.py`` runs it.
 
 It imports only robolab, isaaclab and the modules beside it, never positronic. One server serves one robot
-(``--robot``) and one camera set (``--cameras``), and steps at most ``--max-envs`` scene clones, one per slot.
+(``--robot``) and every camera set of that robot, and steps at most ``--max-envs`` scene clones, one per slot.
 
 The wire contract:
 
@@ -11,19 +11,20 @@ The wire contract:
 - YAM: the env steps the 14 values of ``yam_spec.ACTION_TERMS``, from one command and one grip per arm on the
   ``protocol.arm_channel`` channels. It solves no pose command. Every pose is in the rig world frame
   (``yam_spec.ROOT_IN_RIG_WORLD``), and ``robot_meta`` carries the arm mounts in that frame.
-- The reset token names the RoboLab env and the instruction variant, and carries no seed: RoboLab's eval path has no
-  seed hook. A reset rebuilds the scene only when the task key or the clone count changes.
+- The reset token names the RoboLab env, the instruction variant and the camera set, and carries no seed: RoboLab's
+  eval path has no seed hook. A reset rebuilds the scene only when its ``scene_key`` changes.
 - A success ends its episode ``success_tail.TAIL_SEC`` later, or earlier at the time limit or at a fault of its arm
   state, so that the video shows the result. The clone runs on under its client's commands until then, and the
   success stays.
-- A clone that terminates freezes, with a zero action, on its verdict until the slowest clone of the batch ends.
+- A clone that terminates freezes, with a zero action, on its verdict until the slowest clone of the batch ends, or
+  until its slot resets alone into the batch (``reset_slot``), with the batch's task.
 - ``gt_state`` (``keys.GT_STATE``) holds per slot, for each contact object but the table, its pose (position in the
   clone frame, for the YAM in the rig world; rotation in the world frame) and whether the gripper contact sensor
   touches it (for the YAM, any finger of either hand); and RoboLab's progress through each condition chain of the
   current subtask.
 - ``--task-lib`` adds a task library (``task_catalog``) to the server: its tasks run by name beside the
-  benchmark. On a DROID server, the camera sets its ``cameras.py`` returns join RoboLab's presets for ``--cameras``;
-  the YAM renders its own three cameras.
+  benchmark. On a DROID server, the camera sets its ``cameras.py`` returns join RoboLab's presets for the reset
+  token; the YAM renders its own three cameras.
 """
 
 import argparse
@@ -49,6 +50,7 @@ import success_tail
 import torch
 import yam_spec
 from isaaclab.app import AppLauncher
+from scene_key import scene_key
 from server import DEFAULT_JOIN_DEADLINE, EnvProtocol, EnvServer
 from task_catalog import TaskCatalog, camera_sets
 
@@ -89,9 +91,6 @@ parser = argparse.ArgumentParser(description='Serve RoboLab over the env-server 
 parser.add_argument('--host', default='localhost')
 parser.add_argument('--port', type=int)
 parser.add_argument('--robot', default=keys.DROID, choices=keys.ROBOTS)
-parser.add_argument(
-    '--cameras', help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; keys.DEFAULT_CAMERA_SETS without it'
-)
 parser.add_argument('--max-envs', type=int, default=1, help='the most scene clones this server steps at once')
 parser.add_argument(
     '--join-deadline',
@@ -102,8 +101,6 @@ parser.add_argument(
 parser.add_argument('--task-lib', type=Path, action='append', default=[], help='a task library directory; repeatable')
 AppLauncher.add_app_launcher_args(parser)
 args, _ = parser.parse_known_args()
-args.cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
-keys.camera_set(args.robot, args.cameras)
 args.enable_cameras = True  # not a CLI flag: every robolab runner forces it (the image obs need rendering)
 simulation_app = AppLauncher(args).app
 
@@ -161,10 +158,10 @@ def _load_robot_meta() -> dict[str, Any]:
 class RobolabEnv(EnvProtocol):
     """A RoboLab task behind the ``tasks``/``reset``/``step``/``close`` the env server serves.
 
-    Built from the reset token's key (RoboLab env name, instruction variant, episode length) and the clone count,
-    and cached; ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's own reset
-    events, or restores an exact recorded state when the token carries one (demo replay). ``step`` maps each slot's
-    forwarded commands into its row of the robot's action and reports, per slot, ``done`` (episode over)
+    Built from the reset token's key (RoboLab env name, instruction variant, episode length, camera set) and the
+    clone count, and cached; ``reset`` rebuilds when the key changes and re-randomizes the scene through RoboLab's
+    own reset events, or restores an exact recorded state when the token carries one (demo replay). ``step`` maps
+    each slot's forwarded commands into its row of the robot's action and reports, per slot, ``done`` (episode over)
     and ``success`` (the task's success termination fired). A slot whose arm state has a fault
     (``arm_fault.arm_faults``) ends its episode as a failure with ``fault``, and the other slots continue. A fault
     after the step of a success only ends the tail of that success.
@@ -195,9 +192,9 @@ class RobolabEnv(EnvProtocol):
         self._env_cfg: Any = None
         self._meta = None
         self._control_dt = None
-        # Tasks registered with gymnasium in this process; re-registering rebuilds the cfg class and churns
-        # the registry, so each registers once.
-        self._registered: set[str] = set()
+        # The camera set of each task registered with gymnasium in this process. RoboLab names the env by the task
+        # alone, so a task registers again, in place of its prior entry, only when its camera set changes.
+        self._registered: dict[str, str] = {}
         self._catalog = TaskCatalog.load(
             Path(robolab.constants.TASK_DIR), args.task_lib, robolab.constants.BENCHMARK_TASK_CATEGORIES
         )
@@ -251,14 +248,16 @@ class RobolabEnv(EnvProtocol):
             for t in selected
         ]
 
-    def _build(self, task: str, instruction_type: str, episode_length_s: float | None, num_envs: int) -> None:
+    def _build(
+        self, task: str, instruction_type: str, episode_length_s: float | None, cameras: str, num_envs: int
+    ) -> None:
         self._key = None  # a build that raises leaves no cached env for the next reset to reuse
         if self._env is not None:
             self._env.close()  # release the prior task's env before create_env opens a fresh USD stage
         self._num_envs = num_envs
-        if task not in self._registered:
-            self._register(task)
-            self._registered.add(task)
+        if self._registered.get(task) != cameras:
+            self._register(task, cameras)
+            self._registered[task] = cameras
         env_name = get_envs(task=task)[0]
         scene: Any = env_name
         if episode_length_s is not None:
@@ -316,8 +315,8 @@ class RobolabEnv(EnvProtocol):
                 UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Set(False)
 
     @abstractmethod
-    def _register(self, task: str) -> None:
-        """Register the RoboLab env of ``task`` with this server's robot and cameras."""
+    def _register(self, task: str, cameras: str) -> None:
+        """Register the RoboLab env of ``task`` with this server's robot and the camera set ``cameras``."""
 
     @abstractmethod
     def _bind_robot(self) -> None:
@@ -337,8 +336,8 @@ class RobolabEnv(EnvProtocol):
     def _arm_observations(self, proprio: dict[str, Any]) -> list[dict[str, Any]]:
         """Per slot, the arm fields of the observation payload."""
 
-    def _end_episode(self) -> None:
-        """Report what the episode that ends has to report."""
+    def _end_episode(self, slots: list[int] | None = None) -> None:
+        """Report what the episode of each slot of ``slots``, or of every slot, has to report as it ends."""
 
     def _arm_faults(self) -> list[str | None]:
         """Per slot, the fault of its arm state now, or ``None``."""
@@ -381,12 +380,7 @@ class RobolabEnv(EnvProtocol):
         self._end_episode()
         self._episode += 1
         self._episode_task = token[keys.TOKEN_TASK]
-        key = (
-            token[keys.TOKEN_TASK],
-            token[keys.TOKEN_INSTRUCTION_TYPE],
-            token.get(keys.TOKEN_EPISODE_LENGTH_S),
-            num_envs,
-        )
+        key = scene_key(token, num_envs)
         if key != self._key:
             self._build(*key)
             self._key = key
@@ -413,13 +407,65 @@ class RobolabEnv(EnvProtocol):
             obs, _extras = self._env.reset_to(merged, None, is_relative=True)
         self._faults = self._arm_faults()
         # Zero progress: the recorder's infos still hold the prior trial until a step refreshes them.
-        observed = self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32), reset=True)
+        slots_all = list(range(self._num_envs))
+        observed = self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32), slots_all, reset=True)
         return {
             protocol.SLOTS: [{protocol.FRAME_OBS: o} for o in observed],
             protocol.FRAME_META: self._meta,
             protocol.FRAME_ROBOT_META: self._robot_meta(),
             protocol.FRAME_CONTROL_DT: self._control_dt,
         }
+
+    @telemetry.traced(telemetry.SPAN_ENV_RESET)
+    def reset_slot(self, token: dict[str, Any], slot: int) -> dict[str, Any]:
+        """Reset clone ``slot`` alone, with the task of the batch, while the other clones keep their state.
+
+        The reset writes the default state of the clone into the scene and does not step the physics. It runs twice, as
+        ``reset`` does. Each per-slot field of this server starts again for the clone.
+        """
+        if self._env is None or scene_key(token, self._num_envs) != self._key:
+            raise ValueError(
+                'a slot resets alone only with the task, the episode length, the camera set and the clones of the batch'
+            )
+        if token.get(keys.TOKEN_STATE) is not None:
+            raise ValueError('a slot that resets alone restores no recorded state')
+        assert self._success_tail is not None  # built with the env
+        self._end_episode([slot])
+        self._success_tail.reset([slot])
+        self._grip[slot] = 0.0
+        self._shown_chains[slot] = None
+        env_ids = torch.tensor([slot], dtype=torch.long, device=self._env.device)
+        self._reset_clones(env_ids)
+        obs = self._reset_clones(env_ids)
+        self._faults[slot] = self._arm_faults()[slot]
+        (observed,) = self._observe(obs, np.zeros((self._num_envs, 4), dtype=np.float32), [slot], reset=True)
+        return {
+            protocol.SLOTS: {slot: {protocol.FRAME_OBS: observed}},
+            protocol.FRAME_META: self._meta,
+            protocol.FRAME_ROBOT_META: self._robot_meta(),
+            protocol.FRAME_CONTROL_DT: self._control_dt,
+        }
+
+    def _reset_clones(self, env_ids: torch.Tensor) -> dict[str, Any]:
+        """Isaac Lab's reset of the clones ``env_ids`` alone, and the observation after it.
+
+        RoboLab's ``RobolabEnv`` has no reset of one clone. After the first step, its ``_reset_idx`` freezes a clone in
+        place of a reset, and only ``reset_eval_state`` unfreezes, for every clone. So the clones leave RoboLab's frozen
+        set and its results, and the reset runs as before the first step, where ``_reset_idx`` resets each clone it
+        gets. These are the fields of RoboLab v0.3.3 (``robolab/core/environments/env.py``).
+        """
+        env = self._env
+        env._frozen_envs[env_ids] = False
+        env._pre_step_frozen[env_ids] = False
+        for env_id in env_ids.tolist():
+            env._env_results.pop(env_id, None)
+            env._env_term_step.pop(env_id, None)
+        stepped, env._has_stepped = env._has_stepped, False
+        try:
+            obs, _extras = env.reset(env_ids=env_ids)
+        finally:
+            env._has_stepped = stepped
+        return obs
 
     def _frozen_slots(self) -> list[bool]:
         """Per slot, whether RoboLab froze it — its episode ended and its verdict is recorded."""
@@ -445,7 +491,7 @@ class RobolabEnv(EnvProtocol):
         # a success ends the tail, and the success stays.
         frozen = self._frozen_slots()
         results = self._env.get_env_results()
-        observed = self._observe(obs, self._subtask_progress(), reset=False)
+        observed = self._observe(obs, self._subtask_progress(), list(range(self._num_envs)), reset=False)
         return {
             protocol.SLOTS: [
                 {
@@ -484,16 +530,16 @@ class RobolabEnv(EnvProtocol):
         return subtask
 
     @telemetry.traced('gt_state')
-    def _gt_state(self, *, reset: bool) -> list[dict[str, Any]]:
-        """Every slot's ``keys.GT_STATE`` entry: a flat dict from a recorded suffix to its value."""
-        states: list[dict[str, Any]] = [{} for _ in range(self._num_envs)]
+    def _gt_state(self, slots: list[int], *, reset: bool) -> list[dict[str, Any]]:
+        """The ``keys.GT_STATE`` entry of each slot of ``slots``: a flat dict from a recorded suffix to its value."""
+        states: list[dict[str, Any]] = [{} for _ in slots]
         for name in self._objects:
             pos, quat = link_pose.object_pose(self._world, name, self._links)
             poses = torch.cat([pos, quat], dim=-1).cpu().numpy().astype(np.float32)
             poses[:, :3] += self._ENV_IN_WORLD
-            for slot, pose in enumerate(poses):
-                states[slot][f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}'] = pose
-        for slot, state in enumerate(states):
+            for state, slot in zip(states, slots, strict=True):
+                state[f'.{keys.GT_STATE_OBJECTS}.{name}.{keys.GT_STATE_POSE}'] = poses[slot]
+        for slot, state in zip(slots, states, strict=True):
             # On a reset frame the contact sensor still holds the prior trial's last physics step.
             touched = (
                 set()
@@ -533,19 +579,21 @@ class RobolabEnv(EnvProtocol):
                 progress[f'{prefix}.{group}.{index}.{name}'] = bool(condition_done)
         return progress
 
-    def _observe(self, obs: dict[str, Any], subtask: np.ndarray, *, reset: bool) -> list[dict[str, Any]]:
-        """One observation payload per slot."""
+    def _observe(
+        self, obs: dict[str, Any], subtask: np.ndarray, slots: list[int], *, reset: bool
+    ) -> list[dict[str, Any]]:
+        """The observation payload of each slot of ``slots``. It moves the chain machine that each of them shows."""
         images = obs['image_obs']
         arms = self._arm_observations(obs['proprio_obs'])
-        gt_states = self._gt_state(reset=reset)
+        gt_states = self._gt_state(slots, reset=reset)
         return [
             {
                 **arms[slot],
                 **{name: frame[slot].cpu().numpy() for name, frame in images.items()},
                 keys.SUBTASK: subtask[slot],
-                keys.GT_STATE: gt_states[slot],
+                keys.GT_STATE: gt_state,
             }
-            for slot in range(self._num_envs)
+            for slot, gt_state in zip(slots, gt_states, strict=True)
         ]
 
     def close(self) -> None:
@@ -585,15 +633,15 @@ class DroidEnv(RobolabEnv):
             keys.WRIST_LEFT: camera_presets.WRIST_LEFT,
             keys.WRIST_RIGHT: camera_presets.WRIST_RIGHT,
         }
-        sets = camera_sets(args.task_lib, presets, keys.CAMERA_SETS)
-        if args.cameras not in sets:
-            raise ValueError(f'no task library gives the camera set {args.cameras!r}; this server has {sorted(sets)}')
-        self._cameras = sets[args.cameras]
+        self._camera_sets = camera_sets(args.task_lib, presets, keys.CAMERA_SETS)
 
-    def _register(self, task: str) -> None:
+    def _register(self, task: str, cameras: str) -> None:
+        if cameras not in self._camera_sets:
+            sets = sorted(self._camera_sets)
+            raise ValueError(f'no task library gives the camera set {cameras!r}; this server has {sets}')
         # A library task registers by its file path; RoboLab names the env by the Task class in that file.
         with _no_table_fixture() if task in self._catalog.library else nullcontext():
-            auto_register_droid_envs(task=[self._catalog.register_target(task)], cameras=self._cameras)
+            auto_register_droid_envs(task=[self._catalog.register_target(task)], cameras=self._camera_sets[cameras])
 
     def _bind_robot(self) -> None:
         robot = self._robot
@@ -613,16 +661,17 @@ class DroidEnv(RobolabEnv):
         # The DROID rig's model, which the launcher serialized, since this server cannot build it.
         return self._franka_meta
 
-    def _end_episode(self) -> None:
-        """Print each slot's count of this episode's IK solves with a joint far past a limit, then zero the counts."""
-        for slot, solves in enumerate(self._far_past_limit_solves):
+    def _end_episode(self, slots: list[int] | None = None) -> None:
+        """Print the count of this episode's IK solves with a joint far past a limit of each slot of ``slots``, or of
+        every slot, then zero those counts."""
+        for slot in range(len(self._far_past_limit_solves)) if slots is None else slots:
+            solves, self._far_past_limit_solves[slot] = self._far_past_limit_solves[slot], 0
             if solves:
                 print(
                     f'{self._episode_task} episode {self._episode} slot {slot}: {solves} IK solves with a joint '
                     f'more than {pose_ik.MAX_JOINT_STEP} rad past a limit',
                     file=sys.stderr,
                 )
-        self._far_past_limit_solves = [0] * self._num_envs
 
     def _action(self, actions: dict[int, dict[str, Any]]) -> torch.Tensor:
         wires = {slot: protocol.single_arm(action) for slot, action in actions.items()}
@@ -780,7 +829,8 @@ class YamEnv(RobolabEnv):
         self._register_envs = functools.partial(yam_robolab.register_envs, robot_usd=robot_usd, stand_usd=stand_usd)
         self._pose_refusals = yam_spec.PoseRefusals(0)
 
-    def _register(self, task: str) -> None:
+    def _register(self, task: str, cameras: str) -> None:
+        keys.camera_set(keys.YAM, cameras)  # a set of another robot fails; the YAM renders its own cameras
         # A library task registers by its file path, and keeps the YAM stand fixture.
         self._register_envs([self._catalog.register_target(task)])
 
@@ -815,11 +865,11 @@ class YamEnv(RobolabEnv):
                 print(f'{self._episode_task} episode {self._episode} {warning}', file=sys.stderr)
         return torch.as_tensor(rows, dtype=torch.float32, device=self._env.device)
 
-    def _end_episode(self) -> None:
-        """Print each arm's count of this episode's steps that held on a pose command, then zero the counts."""
-        for line in self._pose_refusals.report():
+    def _end_episode(self, slots: list[int] | None = None) -> None:
+        """Print the count of this episode's steps that held on a pose command of each arm of each slot of ``slots``,
+        or of every slot, then zero those counts."""
+        for line in self._pose_refusals.report(slots):
             print(f'{self._episode_task} episode {self._episode} {line}', file=sys.stderr)
-        self._pose_refusals = yam_spec.PoseRefusals(self._num_envs)
 
     def _arm_observations(self, proprio: dict[str, Any]) -> list[dict[str, Any]]:
         # The proprio group holds no joint velocities, so they come from the articulation.

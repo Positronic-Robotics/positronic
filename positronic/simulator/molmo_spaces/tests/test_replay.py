@@ -10,7 +10,6 @@ Run on a box with the asset packs (a GPU-less one uses mesa software EGL)::
         uv run --locked pytest positronic/simulator/molmo_spaces/tests/test_replay.py --no-cov
 """
 
-import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -29,7 +28,7 @@ from positronic.drivers.roboarm.models import GRIPPER_SITE
 from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.client import EnvConnection
 from positronic.simulator.molmo_spaces import launcher, mapping
-from positronic.simulator.molmo_spaces.adapter import MolmoAdapter, ShoulderSide, camera_dict
+from positronic.simulator.molmo_spaces.adapter import WRIST_CAMERAS, MolmoAdapter, ShoulderSide, camera_dict
 from positronic.simulator.molmo_spaces.tests import make_replay_fixture as fixture_fields
 from positronic.simulator.molmo_spaces.tests.make_replay_fixture import replay_commands
 
@@ -83,14 +82,15 @@ def _assets_without_grasps(tmp_path: Path, uids: list[str]) -> Path:
     assets = Path(os.environ[mapping.ASSETS_DIR_ENV])
     copy = tmp_path / 'assets'
     copy.mkdir()
+    # filelock refuses a lock file that is a symlink, so the server makes its own lock file in the copy.
     for entry in assets.iterdir():
-        if entry.name != 'grasps':
+        if entry.name not in (mapping.ASSETS_GRASPS_DIR, mapping.ASSETS_LOCK_FILE):
             (copy / entry.name).symlink_to(entry)
-    for library in (assets / 'grasps').iterdir():
-        (copy / 'grasps' / library.name).mkdir(parents=True)
+    for library in (assets / mapping.ASSETS_GRASPS_DIR).iterdir():
+        (copy / mapping.ASSETS_GRASPS_DIR / library.name).mkdir(parents=True)
         for obj in library.iterdir():
             if obj.name not in uids:
-                (copy / 'grasps' / library.name / obj.name).symlink_to(obj)
+                (copy / mapping.ASSETS_GRASPS_DIR / library.name / obj.name).symlink_to(obj)
     return copy
 
 
@@ -153,27 +153,50 @@ def test_an_episode_without_the_right_shoulder_serves_the_left_shoulder_alone():
     assert any(name in obs for name in mapping.LEFT_SHOULDER_CAMERAS) and mapping.RIGHT_SHOULDER_CAMERA not in obs
 
 
-def test_a_hooked_server_reports_the_grip_of_its_hook(tmp_path):
+def _hook_file(path: Path, source: str) -> mapping.HookFile:
+    path.write_text(source)
+    return mapping.HookFile.read(path)
+
+
+def _wrist_frame(frame: dict) -> np.ndarray:
+    obs = frame[protocol.FRAME_OBS]
+    return obs[next(camera for camera in WRIST_CAMERAS if camera in obs)]
+
+
+def test_each_reset_runs_the_hook_of_its_token_and_a_reset_without_one_builds_the_bundled_robot(tmp_path):
     _skip_unless_present(_HARD_BENCHMARK)
-    hook = tmp_path / 'site_hook.py'
-    hook.write_text(
+    # The hook changes the robot config in place: it takes the stand away, so the wrist camera sees the scene lower.
+    hook_file = _hook_file(
+        tmp_path / 'site_hook.py',
         'from env_hook import EnvHook\n\n'
-        'class FixedGrip(EnvHook):\n'
+        'class NoStand(EnvHook):\n'
+        '    def eval_config(self, cfg, episode):\n'
+        '        cfg.robot_config.base_size = None\n\n'
         '    def grip(self, gripper_qpos):\n'
         '        return 0.25\n\n'
-        'HOOK = FixedGrip()\n'
+        'HOOK = NoStand()\n',
     )
     spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: [1], mapping.WITH_RIGHT_SHOULDER: False}
     token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: False}
-    with launcher.serve_molmo_spaces(hook=hook) as (host, port):
+    with launcher.serve_molmo_spaces(hook_root=tmp_path) as (host, port):
         conn = EnvConnection(host, port)
         try:
-            [listed] = conn.tasks(spec)
-            obs = conn.reset(token)[protocol.FRAME_OBS]
+            [listed] = conn.tasks({**spec, **hook_file.request()})
+            stock = conn.reset(token)
+            hooked = conn.reset({**token, **hook_file.request()})
+            again = conn.reset(token)
         finally:
             conn.close()
-    assert obs[protocol.OBS_GRIP] == np.float32(0.25)
-    assert listed[mapping.TASK_ENV_HOOK] == f'site_hook.py@sha256:{hashlib.sha256(hook.read_bytes()).hexdigest()}'
+    assert listed[mapping.TASK_ENV_HOOK] == hook_file.record
+    assert [frame[protocol.FRAME_META][mapping.META_ENV_HOOK] for frame in (stock, hooked, again)] == [
+        None,
+        hook_file.record,
+        None,
+    ]
+    assert hooked[protocol.FRAME_OBS][protocol.OBS_GRIP] == np.float32(0.25)
+    assert not np.array_equal(_wrist_frame(hooked), _wrist_frame(stock))
+    np.testing.assert_array_equal(_wrist_frame(again), _wrist_frame(stock))
+    assert again[protocol.FRAME_OBS][protocol.OBS_GRIP] == stock[protocol.FRAME_OBS][protocol.OBS_GRIP]
 
 
 def test_a_script_that_imports_the_server_answers_help_with_its_own_flags():
@@ -193,18 +216,19 @@ def test_a_script_that_imports_the_server_answers_help_with_its_own_flags():
 def test_a_hook_sees_the_right_shoulder_camera_when_the_server_lists_and_when_it_builds(tmp_path):
     _skip_unless_present(_HARD_BENCHMARK)
     seen = tmp_path / 'seen.txt'
-    hook = tmp_path / 'camera_hook.py'
-    hook.write_text(
+    hook_file = _hook_file(
+        tmp_path / 'camera_hook.py',
         'from env_hook import EnvHook\n\n'
         'class Cameras(EnvHook):\n'
         '    def eval_config(self, cfg, episode):\n'
         f'        with open({str(seen)!r}, "a") as f:\n'
         '            f.write(" ".join(camera.name for camera in episode.cameras) + "\\n")\n\n'
-        'HOOK = Cameras()\n'
+        'HOOK = Cameras()\n',
     )
     spec = {**_HARD_BENCHMARK._asdict(), mapping.SELECT_EPISODES: [1], mapping.WITH_RIGHT_SHOULDER: True}
     token = {**_HARD_BENCHMARK._asdict(), mapping.TOKEN_EPISODE_INDEX: 1, mapping.WITH_RIGHT_SHOULDER: True}
-    with launcher.serve_molmo_spaces(hook=hook) as (host, port):
+    spec, token = ({**request, **hook_file.request()} for request in (spec, token))
+    with launcher.serve_molmo_spaces(hook_root=tmp_path) as (host, port):
         conn = EnvConnection(host, port)
         try:
             conn.tasks(spec)

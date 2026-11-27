@@ -127,13 +127,20 @@ class GrpcClientConnection(wire.ClientConnection):
             # The call is over, so no further frame leaves the iterator. Release a send waiting on one.
             self._written.put(False)
 
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
         if self._closed or self._ended:
             raise wire.PeerDisconnected(f'The session on {self._target} has ended')
         self._outbox.put(message)
         # The call's end releases this wait, so a dead connection raises here instead of blocking. The end is
         # recorded here too: the receipt queue says it once, and a later send must not wait for it again.
-        if not self._written.get():
+        try:
+            written = self._written.get(timeout=timeout)
+        except queue.Empty:
+            # Cancel the call, so the late frame never leaves and ``close`` does not wait for the server.
+            self._ended = True
+            self._responses.cancel()
+            raise TimeoutError(f'gRPC wrote no frame to {self._target} within {timeout}s') from None
+        if not written:
             self._ended = True
             raise wire.PeerDisconnected(f'{self._target} ended the session: {self._stopped_by}') from self._stopped_by
 

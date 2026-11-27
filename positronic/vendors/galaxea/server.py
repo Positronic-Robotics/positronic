@@ -10,6 +10,7 @@ import configuronic as cfn
 import msgpack
 import numpy as np
 import pos3
+from platform_client.policy_container import WARMUP_DEADLINE_S
 from positronic_model_server.serialization import serialize
 from websockets.sync.client import ClientConnection, connect
 
@@ -83,7 +84,7 @@ class _BackendProcess:
             cwd=self._root,
             env=env,
         )
-        wait_for_subprocess_ready(self._ready, self._crashed, 'Galaxea model', max_wait=1800)
+        wait_for_subprocess_ready(self._ready, self._crashed, 'Galaxea model', max_wait=WARMUP_DEADLINE_S)
 
     def stop(self):
         if self._process is None:
