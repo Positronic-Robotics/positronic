@@ -288,21 +288,14 @@ class ViewText:
 
 
 @dataclass(frozen=True)
-class _ArmControl:
-    """Whether control of an arm is on, by the arm name of its channels."""
-
-    arm: str | None
-    on: bool
-
-
-@dataclass(frozen=True)
 class _ViewSnapshot:
     """What the headset view shows, read in one hold of the lock."""
 
     state: TrialState
     shown: str | None
     answered: bool
-    controls: tuple[_ArmControl, ...]
+    # Each arm, by the arm name of its channels, and whether its control is on
+    controls: tuple[tuple[str | None, bool], ...]
     names: tuple[str, ...]
     images: Mapping[str, np.ndarray]
 
@@ -687,7 +680,7 @@ class TeleopService:
 
     def _view_snapshot(self) -> _ViewSnapshot:
         """Hold the lock."""
-        controls = tuple(_ArmControl(arm, tracker.on) for arm, tracker in self._trackers.items())
+        controls = tuple((arm, tracker.on) for arm, tracker in self._trackers.items())
         # The task and the state of the arms come with the first frame request.
         answered = self._frames > 0
         state, shown, names = self.state(), self._shown_camera(), self.cameras().names
@@ -713,14 +706,14 @@ class TeleopService:
     CONTROL_ON_COLOUR = (6, 214, 160)
     CONTROL_OFF_COLOUR = (255, 209, 102)
 
-    def _control_lines(self, controls: Sequence[_ArmControl]) -> list[Badge]:
+    def _control_lines(self, controls: Sequence[tuple[str | None, bool]]) -> list[Badge]:
         """The state of the clutch of each arm and the button that changes it, on the colour of the state."""
         clutch_labels = {LEFT: 'X', RIGHT: 'A'}
         lines = []
-        for control in controls:
-            name = 'Control' if control.arm is None else control.arm.capitalize()
-            clutch = clutch_labels[ARM_CONTROLLERS[control.arm]]
-            if control.on:
+        for arm, on in controls:
+            name = 'Control' if arm is None else arm.capitalize()
+            clutch = clutch_labels[ARM_CONTROLLERS[arm]]
+            if on:
                 lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
             else:
                 lines.append(Badge(f'{name} off ({clutch}: on)', self.CONTROL_OFF_COLOUR))
