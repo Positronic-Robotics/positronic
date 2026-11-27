@@ -1029,7 +1029,8 @@ def test_a_chunk_that_opens_with_an_empty_waypoint_counts_the_hold_to_its_first_
     assert metadata[f'{eval_keys.SCHEDULE}.{eval_keys.GAP_MAX_MS}'] == 100.0
 
 
-def test_each_hold_records_a_span_as_long_as_the_hold(execution, tmp_path):
+@pytest.mark.parametrize('level', list(telemetry.Level))
+def test_each_hold_records_a_span_as_long_as_the_hold_at_each_level(execution, tmp_path, level):
     runtime, clock = execution
     inner = Mock(
         send=Mock(
@@ -1041,7 +1042,7 @@ def test_each_hold_records_a_span_as_long_as_the_hold(execution, tmp_path):
             ]
         )
     )
-    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-spans'):
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-hold-spans', level=level):
         run = runtime.start(TrajectoryPlayer(), inner)
         try:
             for now_ms in (0, 100, 200, 300, 450, 550, 600, 700, 800, 1000):

@@ -9,11 +9,7 @@ oculus = webxr.override(frontend=Frontend.HEADSET)
 psvr2 = webxr.override(frontend=Frontend.HEADSET, session_mode=SessionMode.VR)
 
 # iPhone controller: open http://<server-ip>:5005/ on the phone in XR Browser
-iphone = webxr.override(frontend=Frontend.IPHONE, use_https=False, sensitivity=2.0)
+iphone = webxr.override(frontend=Frontend.PHONE, use_https=False, sensitivity=2.0)
 
 # Android phones require https
-android = webxr.override(frontend=Frontend.IPHONE, use_https=True, sensitivity=2.0)
-
-# The phone pages for `positronic teleop`: the same page, with momentary buttons that carry the teleop labels
-iphone_teleop = iphone.override(frontend=Frontend.IPHONE_TELEOP)
-android_teleop = android.override(frontend=Frontend.IPHONE_TELEOP)
+android = webxr.override(frontend=Frontend.PHONE, use_https=True, sensitivity=2.0)

@@ -52,6 +52,7 @@ from platform_client.leaderboards import (
     OutcomeGroup,
     OutcomeKey,
     PairVerdict,
+    PartReplay,
     ProgressBand,
     ProgressPanel,
     RankRange,
@@ -466,7 +467,8 @@ WIRE_FIELDS: dict[type[BaseModel], set[str]] = {
         'submission',
         'caveats',
     },
-    TeamSubmission: {'id', 'submitted_at', 'replay', 'part_replays'},
+    TeamSubmission: {'id', 'submitted_at', 'replay', 'part_replays', 'score_replays'},
+    PartReplay: {'eval', 'replay'},
     PairVerdict: {'rows', 'separated'},
     LeaderboardTask: {'id', 'label', 'counted', 'difficulty'},
     LeaderboardCounts: {'tasks', 'episodes'},
@@ -624,6 +626,41 @@ def test_a_team_row_with_no_parts_has_no_part_replays():
     row = LeaderboardRow.model_validate_json(json.dumps(TEAM_ROW_WIRE))
     assert row.submission is not None
     assert row.submission.part_replays == {}
+    assert row.submission.score_replays == {}
+
+
+def test_a_score_of_two_parts_carries_the_replay_of_each_part_in_order():
+    other = {'url': 'https://replays.example/r/other/', 'data_url': 'https://replays.example/r/other/r.json'}
+    first = {'eval': 'sim_a.standard', 'replay': TEAM_ROW_WIRE['submission']['replay']}
+    second = {'eval': 'sim_a.lab', 'replay': other}
+    submission = {**TEAM_ROW_WIRE['submission'], 'score_replays': {'sim_a': [first, second]}}
+    row = LeaderboardRow.model_validate_json(json.dumps({**TEAM_ROW_WIRE, 'submission': submission}))
+    assert row.submission is not None
+    assert row.submission.score_replays == {
+        MetricKey('sim_a'): [
+            PartReplay(eval=EvalRef('sim_a.standard'), replay=REPLAY),
+            PartReplay(eval=EvalRef('sim_a.lab'), replay=DataBackedReplayLink.model_validate(other)),
+        ]
+    }
+    assert json.loads(row.model_dump_json())['submission']['score_replays']['sim_a'] == [first, second]
+
+
+def _with_score_replays(keys: list[str]) -> dict:
+    wire = json.loads(TEAM_LEADERBOARD.model_dump_json())
+    part = {'eval': 'sim_a.standard', 'replay': wire['rows'][0]['submission']['replay']}
+    wire['rows'][0]['submission']['score_replays'] = {key: [part] for key in keys}
+    return wire
+
+
+def test_a_leaderboard_refuses_a_score_replay_that_no_metric_names():
+    with pytest.raises(ValidationError, match='a part that no metric names'):
+        LeaderboardResponse.model_validate(_with_score_replays([PRIMARY_METRIC, 'unknown_part']))
+
+
+def test_a_leaderboard_reads_a_score_replay_that_a_metric_names():
+    response = LeaderboardResponse.model_validate(_with_score_replays([PRIMARY_METRIC]))
+    assert response.rows[0].submission is not None
+    assert list(response.rows[0].submission.score_replays) == [PRIMARY_METRIC]
 
 
 @pytest.mark.parametrize('dropped', ['id', 'submitted_at'])

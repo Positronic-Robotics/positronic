@@ -27,6 +27,7 @@ from positronic.simulator.env_server import protocol
 from positronic.simulator.env_server.proxy import RemoteEnvControlSystem
 from positronic.simulator.robolab import keys as robolab_keys
 from positronic.simulator.robolab.adapter import RobolabDroidAdapter, RobolabYamAdapter
+from positronic.simulator.robolab.scene_key import SceneKey, scene_key
 
 
 class _Listing:
@@ -77,13 +78,21 @@ def test_the_adapter_names_a_task_the_way_the_reset_token_does():
     assert params == [
         {eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.EPISODE_LENGTH: 90.0, robolab_keys.INSTRUCTION_TYPE: 'vague'}
     ]
-    token = adapter.reset_token(params[0])
-    assert token == {robolab_keys.TOKEN_TASK: 'AnimalsInBinTask', robolab_keys.TOKEN_INSTRUCTION_TYPE: 'vague'}
+    token = adapter.reset_token({**params[0], robolab_keys.CAMERAS: robolab_keys.WRIST_LEFT})
+    assert token == {
+        robolab_keys.TOKEN_TASK: 'AnimalsInBinTask',
+        robolab_keys.TOKEN_INSTRUCTION_TYPE: 'vague',
+        robolab_keys.TOKEN_CAMERAS: robolab_keys.WRIST_LEFT,
+    }
 
 
 def test_the_reset_token_carries_an_episode_length_only_when_one_replaces_the_budget():
     adapter = RobolabDroidAdapter({keys.EXTERIOR_IMAGE: 'over_shoulder_left_camera'})
-    params = {eval_keys.TASK: 'AnimalsInBinTask', robolab_keys.INSTRUCTION_TYPE: 'default'}
+    params = {
+        eval_keys.TASK: 'AnimalsInBinTask',
+        robolab_keys.INSTRUCTION_TYPE: 'default',
+        robolab_keys.CAMERAS: robolab_keys.WRIST_LEFT,
+    }
 
     budget = adapter.reset_token({**params, robolab_keys.EPISODE_LENGTH: 90.0})
     override = adapter.reset_token({
@@ -94,6 +103,26 @@ def test_the_reset_token_carries_an_episode_length_only_when_one_replaces_the_bu
 
     assert robolab_keys.TOKEN_EPISODE_LENGTH_S not in budget
     assert override[robolab_keys.TOKEN_EPISODE_LENGTH_S] == 240.0
+
+
+@pytest.mark.parametrize('cameras', list(robolab_keys.CAMERA_SETS))
+def test_each_reset_token_names_the_camera_set_of_its_eval(listing, cameras):
+    trials = list(robolab_cfg.benchmark.override(cameras=cameras).instantiate().tasks())
+    adapter = RobolabDroidAdapter({})
+
+    tokens = [adapter.reset_token(trial.prepare_args[eval_keys.SCENE]) for trial in trials]
+    assert [token[robolab_keys.TOKEN_CAMERAS] for token in tokens] == [cameras, cameras]
+
+
+def test_two_camera_sets_of_one_task_have_two_scene_keys():
+    adapter = RobolabDroidAdapter({})
+    params = {eval_keys.TASK: 'BananaInBowlTask', robolab_keys.INSTRUCTION_TYPE: 'default'}
+
+    def key(cameras: str) -> SceneKey:
+        return scene_key(adapter.reset_token({**params, robolab_keys.CAMERAS: cameras}), 4)
+
+    assert key(robolab_keys.WRIST_LEFT_RIGHT) != key(robolab_keys.EXTERIOR_PAIR_WRIST)
+    assert key(robolab_keys.WRIST_LEFT_RIGHT) == key(robolab_keys.WRIST_LEFT_RIGHT)
 
 
 def test_the_env_answers_which_tasks_the_sweep_runs(asked):
@@ -113,6 +142,7 @@ def test_the_env_answers_which_tasks_the_sweep_runs(asked):
         eval_keys.TASK: 'BananaInBowlTask',
         robolab_keys.EPISODE_LENGTH: 50.0,
         robolab_keys.INSTRUCTION_TYPE: 'specific',
+        robolab_keys.CAMERAS: robolab_keys.WRIST_LEFT_RIGHT,
     }
 
 

@@ -19,6 +19,7 @@ from positronic.drivers.roboarm.models import (
     EEFrame,
     parse_ee_frames,
 )
+from positronic.offboard import server_utils
 from positronic.policy.codecs import ACTION
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
@@ -27,6 +28,7 @@ from positronic.vendors.openpi import codecs
 pytest.importorskip('openpi_client')
 
 from openpi_client import msgpack_numpy
+from platform_client.policy_container import WARMUP_DEADLINE_S
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
@@ -228,3 +230,36 @@ def test_other_server_presets_preserve_native_predictions(preset):
         chunk = model({}, session_id='test')
 
     np.testing.assert_array_equal(np.stack([record[ACTION] for record in chunk]), predictions, strict=True)
+
+
+class _Clock:
+    """A monotonic clock that each sleep moves forward."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _start_ready_after(monkeypatch, seconds: float) -> None:
+    """Start the subprocess on a fake clock, with a server that accepts connections `seconds` after the start."""
+    clock = _Clock()
+    monkeypatch.setattr(server_utils.time, 'monotonic', clock.monotonic)
+    monkeypatch.setattr(server_utils.time, 'sleep', clock.sleep)
+    monkeypatch.setattr(OpenpiSubprocess, '_is_ready', lambda self: clock.now >= seconds)
+    with mock.patch('subprocess.Popen') as popen:
+        popen.return_value.poll.return_value = None
+        OpenpiSubprocess(checkpoint_dir='/checkpoints/exp/1000', config_name='pi05_droid', infer_timeout=120.0).start()
+
+
+def test_a_subprocess_that_starts_slower_than_300_s_still_serves(monkeypatch):
+    _start_ready_after(monkeypatch, 301.0)
+
+
+def test_a_subprocess_that_does_not_start_within_the_published_deadline_fails(monkeypatch):
+    with pytest.raises(RuntimeError, match='did not become ready'):
+        _start_ready_after(monkeypatch, WARMUP_DEADLINE_S + 10.0)

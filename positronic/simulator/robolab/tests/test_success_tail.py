@@ -60,6 +60,18 @@ def test_a_reset_clears_the_success_of_the_last_episode():
     assert not any(e.any() for e in ended)
 
 
+def test_a_reset_of_one_clone_keeps_the_tail_of_the_other():
+    tail = success_tail.SuccessTail(2, _CONTROL_DT)
+    tail.step(np.array([True, True]), np.array([False, False]), np.array([False, False]), np.array([3, 3]))
+    tail.reset([0])
+    ended = [
+        tail.step(np.array([False, False]), np.array([False, False]), np.array([False, False]), np.array([s, s]))
+        for s in range(4, 4 + _TAIL_STEPS)
+    ]
+    assert tail.succeeded().tolist() == [False, True]
+    assert not any(e[0] for e in ended) and ended[-1][1]
+
+
 _FAULT = 'arm out of range'
 
 

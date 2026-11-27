@@ -2,11 +2,19 @@
 
 ## [Unreleased]
 
+### Telemetry
+- Each span has a level, `call` or `step`, and `POSITRONIC_TELEMETRY_LEVEL` sets the level that a process records. The sidecar that a recording run writes without being asked records at `call`: the pass, each episode, reset and policy call. It no longer records the spans of each control step. Set `POSITRONIC_TELEMETRY_LEVEL=step` to record them. `--timing` records at `step`. `telemetry.span`, `traced`, `record_span` and `start_span` take `level`, and a span above the active level builds no attributes and queues nothing for export
+
 ### Evals
 - The public evals `molmo.franka_pick_mini_strict` and `molmo.franka_pick_mini_strict_smoke` run the episodes of `molmo.franka_pick_mini` and `molmo.franka_pick_mini_smoke` under the `strict_v1` success profile. They are for practice on your machine: `positronic eval run --eval=molmo.franka_pick_mini_strict`. `positronic-evals` goes to 0.2.20, and `positronic-platform-client` goes to 0.47.38 and pins it ([#1346](https://github.com/Positronic-Robotics/positronic/pull/1346))
 - A MolmoSpaces eval can set `success_profile='molmo_native_tail_v1'`. The profile takes the verdict of `molmo_native`, and the episode runs 1 s more after a success, so that its video shows the result. The scores equal the `molmo_native` scores ([#1353](https://github.com/Positronic-Robotics/positronic/pull/1353))
 - A MolmoSpaces eval can set `success_profile='strict_v2'`. It is `strict_v1`, except that the opening of a joint counts only the travel toward its open end. A drawer or a door that a push takes past its closed position then reads as closed. Under `strict_v1` it reads as open by the distance of the push ([#1356](https://github.com/Positronic-Robotics/positronic/pull/1356))
+- A RoboLab eval on a shared env server can set `refill=True`. Its clone then resets alone into the batch that runs, while the other clones run, in place of a wait for the whole batch to end. Only a clone that is frozen at the end of its episode, or whose eval left, takes it, and only with the task and the episode length of the batch. The env-server reset takes `refill`, and an env serves it through `EnvProtocol.reset_slot`
 - A RoboLab episode runs 1 s more after a success, so that its video shows the result. The success stays, and the episode does not run past the time limit of its task ([#1352](https://github.com/Positronic-Robotics/positronic/pull/1352))
+- Each RoboLab reset token names the camera set of its eval, so one RoboLab env server serves every camera set of its robot. Evals that render two camera sets can share one server. `serve_robolab` and the server take no camera set, and `serve_robolab` takes only keyword arguments ([#1373](https://github.com/Positronic-Robotics/positronic/pull/1373))
+
+### Vendors
+- The OpenPI and Galaxea servers wait `WARMUP_DEADLINE_S` (1800 s) for their model subprocess to start. The OpenPI server waited 300 s, so a start on a slow disk ended the server before the published deadline.
 
 ## [0.4.6] - 2026-11-12
 

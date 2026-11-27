@@ -193,7 +193,9 @@ class StackCubesAdapter(WireCommandAdapter):
 
     def observations(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         state = MujocoFrankaState()
-        ee_pose = geom.Transform3D(raw_obs['ee_pos'], geom.Rotation.from_quat(raw_obs['ee_quat']))
+        ee_pose = self._measure(
+            geom.Transform3D(raw_obs['ee_pos'], geom.Rotation.from_quat(raw_obs['ee_quat'])), raw_obs['q']
+        )
         state.encode(raw_obs['q'], raw_obs['dq'], ee_pose)
         state.array[14 + 7] = float(raw_obs['status'])
         obs: dict[str, Any] = {keys.ROBOT_STATE: state, keys.GRIP: float(raw_obs['grip'])}

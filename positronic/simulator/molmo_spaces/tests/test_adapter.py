@@ -254,6 +254,42 @@ def test_a_reset_that_states_the_profile_of_the_trial_is_accepted_beside_fields_
     _adapter().check_reset({molmo_keys.SUCCESS_PROFILE: profile.value}, frame)
 
 
+_HOOK_FILE = mapping.HookFile(Path('/hooks/site_hook.py'), 'ab12')
+
+
+def _hooked_adapter() -> MolmoAdapter:
+    return MolmoAdapter(camera_dict(_LEFT_FIRST), with_right_shoulder=True, hook_file=_HOOK_FILE)
+
+
+def test_reset_token_names_the_hook_file_and_its_digest_only_when_the_eval_has_a_hook():
+    params = {**_BENCH_PARAMS, **_NATIVE, molmo_keys.EPISODE_INDEX: 3}
+    token = _hooked_adapter().reset_token(params)
+    assert mapping.HookFile.of(token) == _HOOK_FILE
+    assert mapping.HookFile.of(_adapter().reset_token(params)) is None
+
+
+@pytest.mark.parametrize(
+    ('adapter', 'ran'),
+    [
+        (_hooked_adapter, None),  # A server that takes no hook from the token states none.
+        (_hooked_adapter, 'site_hook.py@sha256:cd34'),
+        (_adapter, _HOOK_FILE.record),
+    ],
+)
+def test_a_reset_under_another_hook_than_the_eval_asks_is_refused(adapter, ran):
+    frame = _reset_frame({mapping.META_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value, mapping.META_ENV_HOOK: ran})
+    with pytest.raises(RuntimeError, match='env hook'):
+        adapter().check_reset(_NATIVE, frame)
+
+
+def test_a_reset_under_the_hook_that_the_eval_asks_is_accepted():
+    frame = _reset_frame({
+        mapping.META_SUCCESS_PROFILE: SuccessProfile.MOLMO_NATIVE.value,
+        mapping.META_ENV_HOOK: 'site_hook.py@sha256:ab12',
+    })
+    _hooked_adapter().check_reset(_NATIVE, frame)
+
+
 @pytest.mark.parametrize('exterior_sides', [[ShoulderSide.LEFT], list(ShoulderSide)])
 @pytest.mark.parametrize('with_right_shoulder', [False, True])
 def test_reset_token_asks_for_the_right_shoulder_as_the_adapter_is_told_whatever_its_cameras(

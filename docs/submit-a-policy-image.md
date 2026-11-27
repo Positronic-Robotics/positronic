@@ -592,8 +592,8 @@ client calls it with `list_artifacts`, and `positronic eval` has no command for 
 - `attempts/<n>/episodes/` is a positronic dataset root. Download the whole tree, and positronic
   reads it as a dataset, the same as one a local `positronic eval run` writes
   ([Evaluation](evaluation.md)). The eval's privileged ground-truth is stripped from it.
-- A plan the lab rig ran is refused here: its episodes land under the prefix `submissions.get`
-  names.
+- A finished rig plan lists here too, for the account that filed it. Its episodes are under the
+  prefix that its `artifacts.result` names ([Eval plans](../client/README.md#eval-plans)).
 
 ### Failure reasons
 
@@ -620,7 +620,7 @@ model that loaded too slowly. Check the offline variables above first.
 
 ## See also
 
-- [Eval plans](../client/README.md#eval-plans) — compose your own tasks and endpoints; needs a
-  customer grant.
+- [Eval plans](../client/README.md#eval-plans) — compose your own tasks and endpoints. Your
+  personal organization needs no grant.
 - [Examples](../positronic/cli/examples/README.md) — the same flow from Python.
 - [Evaluation](evaluation.md) — the evals, and the local run that needs no platform.

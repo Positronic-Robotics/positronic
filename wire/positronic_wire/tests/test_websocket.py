@@ -1,23 +1,33 @@
 """The client side of the websocket wire."""
 
 import dataclasses
+import datetime
 import errno
+import ipaddress
 import json
 import socket
 import ssl
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from positronic_wire import websocket, wire
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+from positronic_wire import roboarena, websocket, wire
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake, InvalidMessage, InvalidStatus
 from websockets.http11 import Response
-from websockets.sync.client import connect
+from websockets.sync.client import connect, unix_connect
+from websockets.sync.connection import Connection
 from websockets.sync.server import serve
 from websockets.utils import accept_key
 
@@ -583,8 +593,8 @@ def test_a_probe_ignores_a_proxy_the_environment_names(monkeypatch):
     assert via_proxy == []
 
 
-def _upgrade_then_ignore_the_close(conn: socket.socket) -> None:
-    """Answer the upgrade with 101, then read every frame and answer none, not even a close."""
+def _answer_the_upgrade(conn: socket.socket) -> None:
+    """Read the upgrade request and answer it with 101."""
     request = b''
     while b'\r\n\r\n' not in request and (chunk := conn.recv(4096)):
         request += chunk
@@ -597,6 +607,11 @@ def _upgrade_then_ignore_the_close(conn: socket.socket) -> None:
         b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
         b'Sec-WebSocket-Accept: ' + accept_key(key).encode() + b'\r\n\r\n'
     )
+
+
+def _upgrade_then_ignore_the_close(conn: socket.socket) -> None:
+    """Answer the upgrade with 101, then read every frame and answer none, not even a close."""
+    _answer_the_upgrade(conn)
     while conn.recv(4096):
         pass
 
@@ -634,3 +649,162 @@ def test_a_close_with_no_timeout_keeps_the_wires_bound():
 
 def test_a_close_timeout_bounds_a_close_the_wire_left_unbounded():
     assert _seconds_to_close(None, timeout=_SHORT_CLOSE_S) < _SHORT_CLOSE_S + _CLOSE_SLACK_S
+
+
+# More than the send and receive buffers of a loopback connection hold, so the write waits for the peer to read.
+_BUFFER_FILLING_BYTES = 64 * 1024 * 1024
+_SEND_LIMIT_S = 1.0
+
+
+def _upgrade_then_read_nothing(released: threading.Event) -> Callable[[socket.socket], None]:
+    def handler(conn: socket.socket) -> None:
+        _answer_the_upgrade(conn)
+        released.wait(_LONG_CLOSE_S)
+
+    return handler
+
+
+def _upgrade_then_read_slowly(released: threading.Event) -> Callable[[socket.socket], None]:
+    """Read 64 KiB each 50 ms: the peer takes the data, but too slowly for the message to fit the timeout."""
+
+    def handler(conn: socket.socket) -> None:
+        _answer_the_upgrade(conn)
+        while not released.is_set() and conn.recv(64 * 1024):
+            time.sleep(0.05)
+
+    return handler
+
+
+def _over_tls(handler: Callable[[socket.socket], None], context: ssl.SSLContext) -> Callable[[socket.socket], None]:
+    def over_tls(conn: socket.socket) -> None:
+        with context.wrap_socket(conn, server_side=True) as tls:
+            handler(tls)
+
+    return over_tls
+
+
+def _tls_contexts(directory: Path) -> tuple[ssl.SSLContext, ssl.SSLContext]:
+    """A server context with a certificate for 127.0.0.1, and a client context that trusts only it."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, '127.0.0.1')])
+    now = datetime.datetime.now(datetime.UTC)
+    certificate = (
+        x509
+        .CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=1))
+        .not_valid_after(now + datetime.timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_file, key_file = directory / 'cert.pem', directory / 'key.pem'
+    cert_file.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_file.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server.load_cert_chain(cert_file, key_file)
+    # The server sends no TLS traffic after the handshake, so a test sees only application data on the connection.
+    server.num_tickets = 0
+    return server, ssl.create_default_context(cafile=str(cert_file))
+
+
+def _served_on_unix(handler: Callable[[socket.socket], None], path: Path) -> None:
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(1)
+
+    def serve() -> None:
+        with listener, listener.accept()[0] as conn:
+            handler(conn)
+
+    threading.Thread(target=serve, daemon=True).start()
+
+
+@contextmanager
+def _tcp_session(
+    handler: Callable[[socket.socket], None],
+    session: Callable[[Connection], websocket.WebsocketClientConnection] = websocket.WebsocketClientConnection,
+) -> Iterator[websocket.WebsocketClientConnection]:
+    host, port = _served(handler)
+    yield session(connect(f'ws://{host}:{port}/', max_size=None, open_timeout=_LONG_CLOSE_S))
+
+
+@contextmanager
+def _tls_session(handler: Callable[[socket.socket], None]) -> Iterator[websocket.WebsocketClientConnection]:
+    with tempfile.TemporaryDirectory() as directory:
+        server, client = _tls_contexts(Path(directory))
+        host, port = _served(_over_tls(handler, server))
+        yield websocket.WebsocketClientConnection(
+            connect(f'wss://{host}:{port}/', ssl=client, max_size=None, open_timeout=_LONG_CLOSE_S)
+        )
+
+
+@contextmanager
+def _unix_session(handler: Callable[[socket.socket], None]) -> Iterator[websocket.WebsocketClientConnection]:
+    # A short directory: a Unix socket path has a length limit.
+    with tempfile.TemporaryDirectory(prefix='ws') as directory:
+        path = Path(directory) / 's'
+        _served_on_unix(handler, path)
+        yield websocket.WebsocketClientConnection(
+            unix_connect(str(path), 'ws://localhost/', max_size=None, open_timeout=_LONG_CLOSE_S)
+        )
+
+
+# The roboarena connection keeps the websocket send, on its own class.
+_roboarena_session = partial(_tcp_session, session=roboarena.RoboarenaClientConnection)
+
+
+@pytest.mark.parametrize(
+    'session', [_tcp_session, _tls_session, _unix_session, _roboarena_session], ids=['tcp', 'tls', 'unix', 'roboarena']
+)
+def test_a_send_to_a_peer_that_reads_nothing_raises_a_timeout_at_its_timeout(session):
+    released = threading.Event()
+    try:
+        with session(_upgrade_then_read_nothing(released)) as connection:
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
+            assert time.monotonic() - started < _SEND_LIMIT_S + _CLOSE_SLACK_S
+    finally:
+        released.set()
+
+
+def test_a_send_to_a_peer_that_reads_slowly_raises_a_timeout_at_its_timeout():
+    released = threading.Event()
+    try:
+        with _tcp_session(_upgrade_then_read_slowly(released)) as connection:
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                connection.send(bytes(_BUFFER_FILLING_BYTES), timeout=_SEND_LIMIT_S)
+            assert time.monotonic() - started < _SEND_LIMIT_S + _CLOSE_SLACK_S
+    finally:
+        released.set()
+
+
+# Longer than the bound of the first send, so a bound left on the socket would end the second send.
+_STALL_S = 3.0
+
+
+def _read_a_chunk_then_stall(conn: socket.socket) -> None:
+    """Answer the upgrade, read one chunk, read nothing for ``_STALL_S``, then read until the end."""
+    _answer_the_upgrade(conn)
+    conn.recv(4096)
+    time.sleep(_STALL_S)
+    while conn.recv(1 << 20):
+        pass
+
+
+def test_a_send_with_no_timeout_outlasts_the_timeout_of_an_earlier_send():
+    host, port = _served(_read_a_chunk_then_stall)
+    connection = websocket.WebsocketClientConnection(
+        connect(f'ws://{host}:{port}/', max_size=None, close_timeout=_SHORT_CLOSE_S)
+    )
+    try:
+        connection.send(b'observation', timeout=_SHORT_CLOSE_S)
+        connection.send(bytes(_BUFFER_FILLING_BYTES))
+    finally:
+        connection.close()

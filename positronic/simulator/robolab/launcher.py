@@ -50,12 +50,10 @@ def _spawn(
     host: str,
     port: int,
     robot: str,
-    cameras: str,
     max_envs: int,
     join_deadline: float = DEFAULT_JOIN_DEADLINE,
     task_libs: tuple[Path, ...] = (),
 ) -> subprocess.Popen:
-    keys.camera_set(robot, cameras)
     # A missing library fails here, before the Isaac boot, rather than in the server after it.
     for lib in task_libs:
         if not (lib / TASK_LIB_METADATA).is_file():
@@ -96,8 +94,6 @@ def _spawn(
         str(port),
         '--robot',
         robot,
-        '--cameras',
-        cameras,
         '--max-envs',
         str(max_envs),
         '--join-deadline',
@@ -118,25 +114,19 @@ def _spawn(
 
 
 def serve_robolab(
-    cameras: str,
-    host: str = 'localhost',
-    *,
-    robot: str = keys.DROID,
-    max_envs: int = 1,
-    task_libs: tuple[Path, ...] = (),
+    *, host: str = 'localhost', robot: str = keys.DROID, max_envs: int = 1, task_libs: tuple[Path, ...] = ()
 ) -> AbstractContextManager[tuple[str, int]]:
     """The RoboLab env server as a ``serve`` context manager (the ``serve_subprocess`` contract).
 
-    ``robot`` names the robot that the server puts in the task scenes, one of ``keys.ROBOTS``. ``cameras`` names
-    the set in ``keys.ROBOT_CAMERA_SETS[robot]`` the server renders; RoboLab bakes it into the registered task, so one
-    server serves one set.
+    ``robot`` names the robot that the server puts in the task scenes, one of ``keys.ROBOTS``. Each reset token names
+    the camera set that the server renders, one of ``keys.ROBOT_CAMERA_SETS[robot]``.
 
     ``max_envs`` is the most clones of the scene the one Isaac process steps together. Each batch of evals gets as
     many clones as the batch size its first reset carries.
 
     ``task_libs`` are task library directories on this host (see ``task_catalog``); their tasks run by name.
     """
-    return serve_subprocess(partial(_spawn, robot=robot, cameras=cameras, max_envs=max_envs, task_libs=task_libs), host)
+    return serve_subprocess(partial(_spawn, robot=robot, max_envs=max_envs, task_libs=task_libs), host)
 
 
 def main() -> None:
@@ -144,9 +134,6 @@ def main() -> None:
         description='Serve RoboLab to several evals, one scene clone each, batch after batch until it is stopped.'
     )
     parser.add_argument('--robot', default=keys.DROID, choices=keys.ROBOTS)
-    parser.add_argument(
-        '--cameras', help='a camera set of the robot, in keys.ROBOT_CAMERA_SETS; keys.DEFAULT_CAMERA_SETS without it'
-    )
     parser.add_argument('--max-envs', type=int, required=True, help='the most scene clones, one per eval of a batch')
     parser.add_argument(
         '--join-deadline',
@@ -160,8 +147,7 @@ def main() -> None:
         '--task-lib', type=Path, action='append', default=[], help='a task library directory; repeatable'
     )
     args = parser.parse_args()
-    cameras = args.cameras or keys.DEFAULT_CAMERA_SETS[args.robot]
-    proc = _spawn(args.host, args.port, args.robot, cameras, args.max_envs, args.join_deadline, tuple(args.task_lib))
+    proc = _spawn(args.host, args.port, args.robot, args.max_envs, args.join_deadline, tuple(args.task_lib))
     try:
         sys.exit(proc.wait())
     finally:

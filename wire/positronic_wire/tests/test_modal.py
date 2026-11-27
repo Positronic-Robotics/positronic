@@ -56,8 +56,10 @@ class FakeConnection(wire.ClientConnection):
     def __init__(self, token: str):
         self.token = token
         self.dropped = False
+        self.send_timeouts: list[float | None] = []
 
-    def send(self, message: bytes) -> None:
+    def send(self, message: bytes, timeout: float | None = None) -> None:
+        self.send_timeouts.append(timeout)
         if self.dropped:
             raise wire.PeerDisconnected('dropped')
 
@@ -82,6 +84,7 @@ class FakeWire(wire.ClientWire[wire.HostPortAddress]):
         self.called: list[str] = []
         self.ended: set[str] = set()
         self.refusals: list[wire.Refusal] = []
+        self.connections: list[FakeConnection] = []
 
     @staticmethod
     def _token(headers: Mapping[str, str] | None) -> str:
@@ -98,7 +101,8 @@ class FakeWire(wire.ClientWire[wire.HostPortAddress]):
             raise wire.ConnectRefused(self.refusals.pop(0), 'refused')
         if token in self.ended:
             raise wire.ConnectRefused(wire.Refusal.FINAL, '404')
-        return FakeConnection(token)
+        self.connections.append(FakeConnection(token))
+        return self.connections[-1]
 
     def keepalive(self, address: wire.HostPortAddress, headers: Mapping[str, str] | None, timeout: float) -> int:
         token = self._token(headers)
@@ -161,6 +165,11 @@ def test_a_dial_starts_a_session_with_the_credentials_and_dials_its_token(modal_
     assert edge.starts[0]['Modal-Key'] == 'KEY'
     assert edge.starts[0][modal.IDLE_TIMEOUT_HEADER] == str(modal.IDLE_TIMEOUT)
     assert inner.dialled == ['token-1']
+
+
+def test_a_send_gives_its_timeout_to_the_wire_under_it(modal_wire, inner):
+    modal_wire.dial(_ADDRESS, _CREDENTIALS, 5.0).send(b'observation', timeout=2.5)
+    assert inner.connections[-1].send_timeouts == [2.5]
 
 
 def test_a_closed_connection_ends_its_session(modal_wire, edge):

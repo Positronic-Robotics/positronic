@@ -47,6 +47,28 @@ A run that records episodes writes the harness sidecar without being asked: `pre
 and upload with the episodes. `--timing` adds the `eval.pass` span and the machine-load stream on top. A run
 with no `--output_dir` records nothing, and the span helpers compile to no-ops.
 
+### Levels
+
+Each span has a level, and a process records the spans at or below its active level:
+
+| Level | Records | Rate on a real robot |
+|---|---|---|
+| `call` | the pass, each episode, reset and policy call, with their spans: `eval.pass`, `episode`, `reset`, `policy.submit`, `policy.prepare`, `policy.encode` of a call, `policy.infer`, `wire.send`, `wire.recv`, `waypoints.hold`, the `record.io` that opens and closes the episode's writer | a few spans per policy call |
+| `step` | also the spans of each control step: `harness.step`, one `<processor>` span per processor per step, `record.io` of each append at a step, `step.record_wait_ms` of the samples between steps, `driver.command`, the client `env.step` and `materialize` | hundreds of spans per second |
+
+`POSITRONIC_TELEMETRY_LEVEL` names the level, `call` or `step`, and each process that a run spawns inherits it.
+Unset, `--timing` records at `step`, because the report reads the step spans. The sidecar that a recording run
+writes without being asked records at `call`: the export thread encodes each batch of spans while it holds the
+interpreter lock, so the step spans add latency to the control loop. A profiling run sets
+`POSITRONIC_TELEMETRY_LEVEL=step`. A name that is not a level stops the run.
+
+A span above the level returns one shared inert span: the helper builds no attributes and queues nothing for
+export. Instrumented code gives a span that opens once per control step, or more often, the level `telemetry.Level.STEP`, the
+second positional argument of each helper;
+every other span takes the default, `CALL`. A span at `call` that opens inside an unrecorded step span parents to
+the innermost anchor, for example the episode. The env server of a simulation writes its own file with its own
+writer, and it records every span at both levels.
+
 The recording stack is not a default dependency: it ships in the `telemetry` extra
 (`uv sync --extra telemetry`, or `pip install positronic[telemetry]`), which the dev dependency group pulls in,
 so a checkout has it. `--timing` raises without it and names the extra. A recording run without it warns and
@@ -92,11 +114,11 @@ The span names are the contract:
 | `reset` | `episode` | — | scene reset (the harness readying the rig + the producer publishing what it drew) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
-| `record.io` | `episode` | — | the recorder's serialize + append |
-| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation` | one harness step: it reads the observations, calls the policy and emits the commands |
+| `record.io` | `episode` | — | the recorder's serialize + append, at a step and at the open and close of the recording. A sample between two steps records no span: the next `harness.step` carries its time as `step.record_wait_ms` |
+| `harness.step` | `episode` | `step.late_ms`, `step.observe_ms`, `step.policy_ms`, `step.emit_ms`, `step.read_ms.<signal>`, `step.convert_ms.<signal>`, `step.frame_wait_ms.<signal>`, `step.frame_driver_ms.<signal>`, `step.gc_wait_ms`, `step.gc_ms`, `step.gc_generation`, `step.record_wait_ms` | one harness step: it reads the observations, calls the policy and emits the commands |
 | `<processor>` (the class name in snake case) | `harness.step`, or the processor that calls it | — | one call of one processor in the policy stack |
 | `policy.submit` | the processor span that submits the call | `obs.age_ms` | one call on a worker thread |
-| `waypoints.hold` | the `trajectory_player` span of the round that ends the hold | — | one hold of the arm between two chunks |
+| `waypoints.hold` | the `trajectory_player` span of the round that ends the hold; at the `call` level, the `episode` | — | one hold of the arm between two chunks |
 | `policy.infer` | a processor span | `served.<name>` from the answer's `timing`; `wire.uplink_ms`, `wire.downlink_ms`, `wire.network_ms`; `wire.sent_alone` | one real inference round-trip, client-side image compression excluded (a scheduler replay gets none) |
 | `wire.send` | `policy.infer` | `wire.bytes`; `wire.new_connection`; on the first send of a connection, `wire.endpoint` (the URL that the client dialed) and `wire.connect_ms` (the time of that dial) | the send of one request |
 | `wire.recv` | `policy.infer` | — | the wait for one answer, from the end of its send |
@@ -145,13 +167,18 @@ A `harness.step` span holds the durations of one step in milliseconds, and one c
   starts at the start of the rollout, so it covers the opening of the recording.
 - `step.gc_ms`: the garbage-collection time of the process inside the step.
 - `step.gc_generation`: the highest generation that a collection in either window reached, from 0 to 2.
+- `step.record_wait_ms`: the time that the samples between the previous step and this step spent in their appends.
+  The harness samples the observations at its recording rate between two steps, and each sample appends the new
+  messages to the recording. These samples record no `record.io` span, because on a rig they give most of the
+  spans of the harness. The value is present only when a sample appended a message in that time. The samples after
+  the last step of an episode have no next step, so their time is not recorded.
 
 The three collection values are present only when a collection ran in one of the two windows. A collection in any
 thread stops the harness thread too, so each value counts all threads. The harness counts collections only while
 telemetry records.
 
 A step can find a required observation missing, for example while a camera starts. That step calls no policy,
-so its span has only `step.late_ms`, the observe values and the collection values.
+so its span has only `step.late_ms`, the observe values, the collection values and `step.record_wait_ms`.
 
 The span's own duration less the observe, policy and emit times is the other work in the step. On a real rig the
 producers run in other processes, and each writes its own sidecar. Their cost reaches a step only as CPU
@@ -175,7 +202,8 @@ When the player records its stats (`record_stats`), each hold longer than zero a
 span. The span ends at the wall time of the round that sends the first command of the next chunk. Its length is the hold on the clock of the policy runtime, so the lengths
 of the spans add up to `hold_sum_ms`. On a real rig this clock is the monotonic clock of the host. In a simulation it
 is the world clock, so the span has the simulated length of the hold. The span carries no id of the call that made
-the next chunk, so an analysis joins a hold to its `policy.submit` span by time.
+the next chunk, so an analysis joins a hold to its `policy.submit` span by time. A hold comes at most once per chunk,
+so the span records at the `call` level.
 
 An inference schedule states its settings in its metadata, so the `episode` span carries them under
 `inference.policy.`:
@@ -260,7 +288,8 @@ Reduces the sidecars under `<run_dir>/telemetry/` into a pass report and writes 
 the input (`<run_dir>` may be an `s3://` URI). It reports:
 
 - the **wall split** — each phase's share of the report's wall window (reset / env.step / policy wait / record
-  IO / overhead / between-episodes), summing to 1; the policy-wait share also carries the sizing figure derived
+  IO / overhead / between-episodes), summing to 1. Record IO is the `record.io` spans plus the `step.record_wait_ms`
+  of the steps; the policy-wait share also carries the sizing figure derived
   from it, how many such evals one policy server could keep fed;
 - the **env-step split** — physics / render / server-other (the env server's own decomposition), plus the wire
   and materialisation shares of the client step; absent for a native sim, which reports no server decomposition;

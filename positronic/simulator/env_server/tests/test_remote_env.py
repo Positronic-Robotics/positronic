@@ -433,14 +433,14 @@ class TestChannelMapAction:
         action = adapter.action(_held(**{'hand_command.left': np.arange(16.0)}))
         np.testing.assert_array_equal(action['hand_command.left'], np.arange(16.0))
 
-    def test_a_delta_fires_once_on_its_own_channel_only(self):
+    def test_a_cartesian_delta_fires_once_on_its_own_channel_only(self):
         adapter = _CommandOnlyAdapter()
         commands = _held(**{
-            'robot_command.left': roboarm_command.JointDelta(np.ones(6)),
+            'robot_command.left': roboarm_command.CartesianDelta(geom.Transform3D(np.array([0.0, 0.0, 0.01]))),
             'robot_command.right': roboarm_command.JointPosition(np.zeros(6)),
         })
         action = adapter.action(commands)
-        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.JOINT_DELTA
+        assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.CARTESIAN_DELTA
         assert action['robot_command.right'][protocol.COMMAND_TYPE] == protocol.JOINT_POS
         action = adapter.action(_held(**{'robot_command.left': None, 'robot_command.right': None}))
         assert action['robot_command.left'][protocol.COMMAND_TYPE] == protocol.HOLD

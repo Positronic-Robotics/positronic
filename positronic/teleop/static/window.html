@@ -9,6 +9,7 @@
     #state.task-running { display: inline-block; padding: 4px 12px; background: #06d6a0; color: #111; }
     #control { font-size: 20px; margin-bottom: 8px; }
     #task { font-size: 20px; margin-bottom: 16px; }
+    #no-controller-data { font-size: 22px; margin-bottom: 16px; padding: 8px 12px; background: #ffd166; color: #111; }
     button { font-size: 22px; padding: 12px 28px; margin-right: 12px; }
     #error { color: #f88; min-height: 1.5em; }
     #cameras { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 16px; }
@@ -21,6 +22,10 @@
   <div id="state">Waiting for a trial</div>
   <div id="control"></div>
   <div id="task"></div>
+  <div id="no-controller-data" hidden>
+    The service gets no controller data from the headset or the phone. On its page, press ENTER VR. If the page shows
+    EXIT VR, press it, reload the page, and press ENTER VR again.
+  </div>
   <button id="cancel" disabled>Cancel</button>
   <div id="error"></div>
   <div id="cameras"></div>
@@ -39,7 +44,7 @@
     };
     // The fields of `/status`, as the server names them. `parseStatus` reads them once.
     const STATUS_FIELD = {
-      phase: 'phase', task: 'task', control: 'control', cameras: 'cameras',
+      phase: 'phase', task: 'task', control: 'control', cameras: 'cameras', tracked: 'tracked',
     };
     function parseStatus(json) {
       return Object.fromEntries(Object.entries(STATUS_FIELD).map(([name, field]) => [name, json[field]]));
@@ -69,6 +74,7 @@
       document.getElementById('task').textContent = status.task;
       const waiting = status.phase === PHASE.readyWait;
       document.getElementById('cancel').disabled = !waiting;
+      document.getElementById('no-controller-data').hidden = !(waiting || running) || status.tracked;
       if (waiting && shownPhase !== PHASE.readyWait) {
         document.title = 'Human trial';
         window.focus();

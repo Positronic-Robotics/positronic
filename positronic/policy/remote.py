@@ -29,6 +29,7 @@ from positronic.offboard.client import (
 )
 from positronic.policy import keys as policy_keys
 
+from .arrival import transform_frames_on_arrival
 from .base import Policy, PolicyRun, Processor, Runtime, Step
 from .codecs import PolicyCommandError
 from .codecs.action import JointPositionAction
@@ -102,7 +103,7 @@ def declared_stack(meta: cabc.Mapping[str, Any], protocol_version: ProtocolVersi
         raise PolicyCommandError(f'This client cannot build the client stack that the server declares: {e!r}') from e
     if not isinstance(stack, Processor):
         raise PolicyCommandError('The declared client stack must be a processor')
-    return stack
+    return transform_frames_on_arrival(stack)
 
 
 logger = logging.getLogger(__name__)

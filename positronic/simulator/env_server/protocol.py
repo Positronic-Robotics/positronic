@@ -24,6 +24,8 @@ ACTION = 'action'
 ERROR = 'error'
 # How many slots the batch has, in the reset that starts a batch.
 BATCH_SIZE = 'batch_size'
+# In a reset: reset this slot alone into the batch that runs, with the batch's own token.
+REFILL = 'refill'
 # The text the policy gets for a task, in each record an env answers ``tasks`` with.
 TASK_INSTRUCTION = 'instruction'
 

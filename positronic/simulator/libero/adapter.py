@@ -53,7 +53,8 @@ class LiberoAdapter(WireCommandAdapter):
         ee_pose = self._measure(
             geom.Transform3D(
                 raw_obs[protocol.OBS_EEF_POS], geom.Rotation.from_quat_xyzw(raw_obs[protocol.OBS_EEF_QUAT])
-            )
+            ),
+            raw_obs[protocol.OBS_JOINT_POS],
         )
         state = MujocoFrankaState()
         state.encode(raw_obs[protocol.OBS_JOINT_POS], raw_obs[protocol.OBS_JOINT_VEL], ee_pose)

@@ -1442,6 +1442,62 @@ def test_an_episode_stopped_in_its_reset_still_names_the_policy(episode_harness,
     assert episode.attrs[f'{policy_keys.POLICY_META}.config.name'] == 'hold'
 
 
+class HoldWithSchedule(Hold):
+    """States the metadata of an inference schedule, as a policy stack with a schedule does."""
+
+    def meta(self):
+        return ChunkedSchedule(fps=10, horizon_sec=0.5).meta()
+
+
+def test_the_episode_span_carries_the_schedule_settings_at_the_call_level(episode_harness, tmp_path):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-schedule-meta', level=telemetry.Level.CALL):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), HoldWithSchedule(), h.dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    prefix = f'{policy_keys.POLICY_META}.{policy_keys.REQUEST_TIMING}'
+    assert episode.attrs[f'{prefix}.reference'] == 'before_end'
+    assert episode.attrs[f'{prefix}.seconds'] == 0.0
+    assert episode.attrs[f'{policy_keys.POLICY_META}.{policy_keys.LATENCY_ESTIMATE}'] == 0.0
+    assert episode.attrs[f'{policy_keys.POLICY_META}.{policy_keys.ACTION_HORIZON_SEC}'] == 0.5
+
+
+@pytest.mark.parametrize('level', list(telemetry.Level))
+def test_the_harness_records_its_step_spans_only_at_the_step_level(episode_harness, tmp_path, level):
+    h = episode_harness
+
+    class EveryTenMs(Policy):
+        def run(self, runtime):
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-levels', level=level):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EveryTenMs(), h.dataset))
+        next(h.loop)
+        h.world.clock.advance_to_ns(13_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    names = [s.name for s in spans]
+    assert telemetry_keys.SPAN_RESET in names
+    assert (telemetry_keys.SPAN_HARNESS_STEP in names) is (level is telemetry.Level.STEP)
+    record_io = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    if level is telemetry.Level.CALL:
+        # The writer opens and closes once per episode; the samples between steps record no span.
+        assert len(record_io) == 2
+        assert all(s.parent_id == episode.span_id for s in record_io)
+    else:
+        assert len(record_io) > 2
+
+
 def test_step_spans_carry_the_step_durations_and_parent_the_policy(episode_harness, tmp_path):
     h = episode_harness
 
@@ -1584,6 +1640,63 @@ def test_the_harness_counts_collections_only_while_telemetry_records(episode_har
     assert gc.callbacks == callbacks
     h.world.request_stop()
     list(h.loop)
+
+
+_SLOW_APPEND_SEC = 0.005
+
+
+class SlowAppendEpisode(MemoryEpisode):
+    def append(self, signal_name, data, timestamps):
+        time.sleep(_SLOW_APPEND_SEC)
+        super().append(signal_name, data, timestamps)
+
+
+class SlowAppendDataset(MemoryDataset):
+    def new_episode(self):
+        episode = SlowAppendEpisode()
+        self.episodes.append(episode)
+        return episode
+
+
+def test_a_sample_between_steps_writes_no_record_span_and_its_time_goes_on_the_next_step(episode_harness, tmp_path):
+    h = episode_harness
+    dataset = SlowAppendDataset()
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-record-wait'):
+        h.observation.emit(0)
+        h.caller(Rollout(Task('sample', None), Positions(), dataset))
+        next(h.loop)
+        h.world.clock.advance_to_ns(1_000_000)
+        h.observation.emit(1)
+        next(h.loop)
+        h.world.clock.advance_to_ns(100_000_000)
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    assert [data for name, data, _ in dataset.episodes[0].records if name == POSITION] == [0, 1]
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    first, second = sorted((s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP), key=lambda s: s.start_ns)[
+        :2
+    ]
+    records = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    assert not [s for s in records if first.end_ns <= s.start_ns < second.start_ns]
+    assert second.attrs[telemetry_keys.ATTR_STEP_RECORD_WAIT_MS] >= _SLOW_APPEND_SEC * 1000
+
+
+def test_a_step_keeps_the_record_spans_of_its_own_samples_and_carries_no_wait_without_a_sample_before_it(
+    episode_harness, tmp_path
+):
+    h = episode_harness
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-record-in-step'):
+        h.observation.emit(0)
+        h.caller(Rollout(Task('sample', None), Positions(), h.dataset))
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    step = next(s for s in spans if s.name == telemetry_keys.SPAN_HARNESS_STEP)
+    records = [s for s in spans if s.name == telemetry_keys.SPAN_RECORD_IO]
+    assert [s for s in records if step.start_ns <= s.start_ns and s.end_ns <= step.end_ns]
+    assert telemetry_keys.ATTR_STEP_RECORD_WAIT_MS not in step.attrs
 
 
 def test_the_harness_stops_counting_collections_when_it_stops(episode_harness, tmp_path):

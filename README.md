@@ -169,7 +169,7 @@ For training and inference servers, use vendor-specific Docker services (see [Tr
 In terminal 1, start the teleop service for a phone. In terminal 2, start a MuJoCo run that the person drives:
 
 ```bash
-uv run --locked positronic teleop --webxr=@positronic.cfg.webxr.iphone_teleop
+uv run --locked positronic teleop --webxr=@positronic.cfg.webxr.iphone
 uv run --locked positronic eval run \
     --eval=@positronic.cfg.eval.sim.positronic.stack_cubes_collect \
     --policy=@positronic.cfg.policy.teleop_collect \

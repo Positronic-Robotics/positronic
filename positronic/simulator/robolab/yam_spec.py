@@ -436,11 +436,16 @@ class PoseRefusals:
                 )
         return warnings
 
-    def report(self) -> list[str]:
-        """One line per clone and arm that held on a pose command in this episode."""
-        return [
-            f'slot {slot}: the {side} arm held on a pose command on {steps} steps, as {JOINT_COMMANDS_ONLY}'
-            for slot, counts in enumerate(self._steps)
-            for side, steps in counts.items()
-            if steps
-        ]
+    def report(self, slots: list[int] | None = None) -> list[str]:
+        """One line per clone of ``slots``, or of every clone, and arm that held on a pose command in this episode.
+        It zeroes the counts it reports."""
+        lines = []
+        for slot in range(len(self._steps)) if slots is None else slots:
+            counts = self._steps[slot]
+            lines += [
+                f'slot {slot}: the {side} arm held on a pose command on {steps} steps, as {JOINT_COMMANDS_ONLY}'
+                for side, steps in counts.items()
+                if steps
+            ]
+            self._steps[slot] = dict.fromkeys(SIDES, 0)
+        return lines

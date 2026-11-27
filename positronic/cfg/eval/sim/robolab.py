@@ -85,9 +85,10 @@ def _task_lib_paths(task_libs: str | Path | Sequence[str | Path]) -> tuple[Path,
     env_server=None,
     batch_size=None,
     task_libs=(),
+    refill=False,
 )
 def _robolab_eval(
-    task, instruction_type, trial_count, timeout, horizon_sec, robot, cameras, env_server, batch_size, task_libs
+    task, instruction_type, trial_count, timeout, horizon_sec, robot, cameras, env_server, batch_size, task_libs, refill
 ):
     """A RoboLab eval: the embodiment proxies a remote RoboLab env, the task carries the scenario.
 
@@ -104,26 +105,28 @@ def _robolab_eval(
 
     ``cameras`` names the set the run renders, one of ``keys.ROBOT_CAMERA_SETS[robot]``. For the DROID rig: both
     exteriors and the wrist, or one exterior and the wrist. For the YAM: the top camera and both wrists. Without it,
-    the run renders ``keys.DEFAULT_CAMERA_SETS[robot]``. RoboLab bakes the set into the registered task, so a run
-    holds one set.
+    the run renders ``keys.DEFAULT_CAMERA_SETS[robot]``. The set rides each trial's reset token, so evals of two sets
+    can share one env server. One batch holds one task and one set: the server refuses a batch whose resets differ.
 
     ``horizon_sec`` replaces the episode length of every task of the run, and the default deadline follows it. A
     run with it is not comparable with RoboLab's own scores.
 
     ``env_server`` is the ``host:port`` of a RoboLab env server that already runs, which this eval shares with
-    other evals: each drives one clone of its scene. The server's robot and camera set must be ``robot`` and
-    ``cameras``, and every eval that shares it must set the same ``horizon_sec``. Without it, the eval launches a
-    server of its own.
+    other evals: each drives one clone of its scene. The server's robot must be ``robot``, and every eval that
+    shares it must set the same ``horizon_sec``. Without it, the eval launches a server of its own.
     ``batch_size`` is how many evals start each batch on that server; the server builds that many clones for them.
     Without it, a batch waits for every clone of the server.
+    ``refill`` resets this eval's clone alone into the batch that runs on ``env_server``, while the other clones run.
+    Its task, its ``cameras``, its ``horizon_sec`` and its ``batch_size`` must be those of the batch. Only a frozen
+    clone, or a clone whose eval left, takes it.
 
     ``task_libs`` are task library directories on the env server's host (``positronic.simulator.robolab.task_catalog``);
     ``task`` may name their tasks, and no category or ``None`` sweep includes them. A DROID run also takes the
     camera sets of their ``cameras.py``. A shared ``env_server`` must serve the same libraries.
 
     positronic launches a single task-agnostic env server in RoboLab's own Isaac Lab interpreter; the proxy
-    drives it over the socket and the task name, instruction type and episode length override ride each trial's
-    reset token.
+    drives it over the socket and the task name, instruction type, camera set and episode length override ride each
+    trial's reset token.
     The eval records two privileged signals and never gives them to the policy. ``subtask`` is the env's live
     subtask progress ``[status, completed, total, score]``. ``gt_state`` is the scene state: object poses, gripper
     contacts and progress per condition chain.
@@ -134,16 +137,18 @@ def _robolab_eval(
     robot_eval = _ROBOT_EVALS[robot]
     camera_dict = robot_eval.camera_dict(robolab_keys.camera_set(robot, cameras))
     if env_server is None:
-        serve = serve_robolab(cameras, robot=robot, task_libs=_task_lib_paths(task_libs))
+        serve = serve_robolab(robot=robot, task_libs=_task_lib_paths(task_libs))
     else:
         serve = nullcontext(env_server_address(env_server))
-    proxy = RemoteEnvControlSystem(robot_eval.adapter(camera_dict), serve, batch_size)
+    if refill and env_server is None:
+        raise ValueError('refill resets a clone into the batch of a shared env_server, and this eval names none')
+    proxy = RemoteEnvControlSystem(robot_eval.adapter(camera_dict), serve, batch_size, refill=refill)
     embodiment = robot_eval.embodiment(proxy, camera_dict)
 
     def tasks() -> list[Task]:
         trials = []
         for listed in proxy.tasks(spec(task=task, **{robolab_keys.SELECT_INSTRUCTION_TYPE: instruction_type})):
-            params = listed.params
+            params = {**listed.params, robolab_keys.CAMERAS: cameras}
             if horizon_sec is not None:
                 params = {**params, robolab_keys.EPISODE_LENGTH_OVERRIDE: horizon_sec}
             # RoboLab truncates an episode at its length, so the deadline sits above it and the env's verdict ends a

@@ -231,7 +231,7 @@ class MujocoSim(pimm.ControlSystem):
         # An env step is the sim advance plus the observations it produces, rendering included
         # (``_emit_cameras``): on an image-heavy scene the rendering is most of the step, and outside
         # this span the wall split reads it as overhead.
-        with telemetry.span(telemetry_keys.SPAN_ENV_STEP):
+        with telemetry.span(telemetry_keys.SPAN_ENV_STEP, telemetry.Level.STEP):
             self.step()
             self.fps_counter.tick()
             ended = self._moves.active and self._settle_move(now) is not MoveStatus.MOVING

@@ -250,6 +250,20 @@ def test_an_episode_of_pose_commands_warns_once_per_arm_and_reports_the_count_pe
     ]
 
 
+def test_a_report_of_one_clone_zeroes_only_the_counts_of_that_clone():
+    refusals = spec.PoseRefusals(num_envs=2)
+    for slot in (0, 1):
+        refusals.add(slot, spec.SIDES[:1])
+
+    assert refusals.report([0]) == [
+        f'slot 0: the {spec.SIDES[0]} arm held on a pose command on 1 steps, as {spec.JOINT_COMMANDS_ONLY}'
+    ]
+    assert refusals.report() == [
+        f'slot 1: the {spec.SIDES[0]} arm held on a pose command on 1 steps, as {spec.JOINT_COMMANDS_ONLY}'
+    ]
+    assert refusals.report() == []
+
+
 def test_a_channel_of_no_arm_is_refused():
     wire = {**_wire(_HOLD, _HOLD), protocol.ROBOT_COMMAND: _HOLD}
 

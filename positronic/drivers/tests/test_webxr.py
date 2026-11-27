@@ -91,7 +91,10 @@ def test_the_headset_video_stream_ends_when_the_page_closes_it_with_no_frame_to_
     asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=5))
 
 
-@pytest.mark.parametrize('route', ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js'])
+@pytest.mark.parametrize(
+    'route',
+    ['/', '/core.js', '/three.min.js', '/webxr-button.js', '/video-player.js', '/quest-trigger.js', '/press-count.js'],
+)
 def test_the_headset_page_is_served_from_any_working_directory(tmp_path, monkeypatch, route):
     monkeypatch.chdir(tmp_path)
     with _served_webxr() as base:
@@ -105,11 +108,9 @@ def test_the_headset_server_logs_through_the_process_handlers():
         assert root.handlers == handlers
 
 
-def test_the_phone_page_for_teleop_redirects_to_its_teleop_query():
-    with _served_webxr(Frontend.IPHONE_TELEOP) as base:
-        bare = httpx.get(base + '/', timeout=1.0)
-        assert bare.status_code == 307 and bare.headers['location'] == f'/?{webxr.PHONE_TELEOP_QUERY}'
-        assert httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0).status_code == 200
+def test_the_phone_page_is_served_at_the_root():
+    with _served_webxr(Frontend.PHONE) as base:
+        assert httpx.get(base + '/', timeout=1.0).status_code == 200
 
 
 @pytest.mark.parametrize(('preset', 'session'), [(cfg_webxr.oculus, 'immersive-ar'), (cfg_webxr.psvr2, 'immersive-vr')])
@@ -122,15 +123,16 @@ def test_the_headset_page_serves_the_session_mode_of_its_preset(preset, session)
         assert script.text == f'export const SESSION_MODE = "{session}";\n'
 
 
-def test_the_headset_page_drops_a_query():
-    with _served_webxr() as base:
-        stale = httpx.get(f'{base}/?mode=vr', timeout=1.0)
+@pytest.mark.parametrize('frontend', list(Frontend))
+def test_the_page_drops_a_query(frontend):
+    with _served_webxr(frontend) as base:
+        stale = httpx.get(f'{base}/?mode=teleop', timeout=1.0)
         assert stale.status_code == 307 and stale.headers['location'] == '/'
 
 
 def test_a_vr_session_on_the_phone_page_is_refused():
     with pytest.raises(ValueError, match='session_mode VR needs the headset frontend'):
-        WebXR(port=free_port(), frontend=Frontend.IPHONE, session_mode=SessionMode.VR)
+        WebXR(port=free_port(), frontend=Frontend.PHONE, session_mode=SessionMode.VR)
 
 
 def test_the_banner_lists_each_ipv4_address_that_is_not_a_loopback(monkeypatch):
@@ -157,7 +159,7 @@ def test_a_video_rate_that_is_not_a_positive_integer_is_refused(fps):
 
 
 def test_the_page_state_is_empty_until_something_sends_one(world):
-    served = WebXR(port=free_port(), frontend=Frontend.IPHONE_TELEOP, use_https=False)
+    served = WebXR(port=free_port(), frontend=Frontend.PHONE, use_https=False)
     emitter, receiver = world.local_pipe()
     served.page_state._bind(receiver)
     with _served_webxr(webxr=served) as base:
@@ -185,19 +187,33 @@ def test_the_page_input_emits_each_object_that_the_page_posts(world):
 
 def test_a_controller_message_parses_back_to_its_poses_and_buttons():
     pose = Transform3D(np.array([0.1, 1.0, -0.3]), Rotation.from_quat([0.0, 1.0, 0.0, 0.0]))
-    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: [0.5, 0.0, 1.0, 0.0, 1.0, 0.0]})
+    sent = webxr.ControllerButtons((0.5, 0.0, 1.0, 0.0, 1.0, 0.0), (0, 0, 3, 0, 7, 1))
+    message = webxr.controller_message({webxr.RIGHT: pose}, {webxr.RIGHT: sent})
     positions, buttons = webxr.parse_controller_message(json.loads(json.dumps(message)))
     assert positions[webxr.LEFT] is None and buttons[webxr.LEFT] is None
-    right, right_buttons = positions[webxr.RIGHT], buttons[webxr.RIGHT]
-    assert right is not None and right_buttons is not None
+    right = positions[webxr.RIGHT]
+    assert right is not None
     np.testing.assert_allclose(right.translation, pose.translation)
     np.testing.assert_allclose(right.rotation.as_quat, pose.rotation.as_quat)
-    np.testing.assert_allclose(right_buttons, [0.5, 0.0, 1.0, 0.0, 1.0, 0.0])
+    assert buttons[webxr.RIGHT] == sent
+
+
+@pytest.mark.parametrize(
+    ('presses', 'match'),
+    [((0,) * 5, 'a press count for each button value'), ((0, 0, -1, 0, 0, 0), 'an integer of at least 0')],
+    ids=['too few counts', 'a negative count'],
+)
+def test_controller_buttons_refuse_press_counts_that_do_not_match_the_values(presses, match):
+    with pytest.raises(ValueError, match=match):
+        webxr.ControllerButtons((0.0,) * 6, presses)
+
+
+RELEASED = webxr.ControllerButtons((0.0,) * 6, (0,) * 6)
 
 
 def _hand_message(values: list[float]) -> dict:
     """A page message of a right hand that the headset tracks with no controller in it, with ``values``."""
-    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
+    message = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: RELEASED})
     message['controllers'][webxr.RIGHT]['buttons'] = values
     return message
 
@@ -213,7 +229,7 @@ def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(
     positions, buttons = RecordingEmitter(), RecordingEmitter()
     served.controller_positions._bind(positions, clock=world.clock)
     served.buttons._bind(buttons, clock=world.clock)
-    controller = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 6})
+    controller = webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: RELEASED})
     hand = _hand_message([])
     with (
         _served_webxr(webxr=served) as base,
@@ -230,6 +246,71 @@ def test_the_controller_stream_emits_a_sample_in_which_no_controller_is_tracked(
     assert buttons.emitted[1][1] == {webxr.LEFT: None, webxr.RIGHT: None}
 
 
+def _presses_of_a(world, connections: list[list[tuple[int, float]]]) -> list[int]:
+    """The presses of A that the controller stream emits for ``connections``, one after the other. Each message of a
+    connection is the count of A presses on the page and how many milliseconds before it reaches the stream the page
+    sent it. The page clock is far from the clock of the stream."""
+    served = WebXR(port=free_port(), use_https=False)
+    buttons = RecordingEmitter()
+    served.controller_positions._bind(RecordingEmitter(), clock=world.clock)
+    served.buttons._bind(buttons, clock=world.clock)
+    page_clock_ms = -1e9
+
+    def message(presses_of_a: int, delay_ms: float) -> str:
+        state = webxr.ControllerButtons((0.0,) * 6, (0, 0, 0, 0, presses_of_a, 0))
+        sent_ms = time.monotonic() * 1000 + page_clock_ms - delay_ms
+        return json.dumps(webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: state}, sent_ms))
+
+    with _served_webxr(webxr=served) as base:
+        for messages in connections:
+            with ws_client.connect(base.replace('http', 'ws') + webxr.CONTROLLER_PATH) as ws:
+                sent = len(buttons.emitted) + len(messages)
+                for presses_of_a, delay_ms in messages:
+                    ws.send(message(presses_of_a, delay_ms))
+                deadline = time.monotonic() + 5
+                while len(buttons.emitted) < sent:
+                    assert time.monotonic() < deadline, 'the stream emitted no sample'
+                    time.sleep(0.01)
+    return [sample[webxr.RIGHT].presses[4] for _, sample in buttons.emitted]
+
+
+def test_a_press_that_the_page_counted_while_its_socket_was_closed_does_not_count(world):
+    # The page counts 3 presses of A while it is not connected
+    assert _presses_of_a(world, [[(1, 0), (2, 0)], [(5, 0), (6, 0)]]) == [0, 1, 0, 1]
+
+
+def test_the_presses_of_a_backlog_after_a_stall_of_the_network_do_not_count(world):
+    # The page sends 3 presses during a stall of 3 s, and they all come at once when the stall ends
+    backlog = [(2, 3000), (3, 2000), (4, 1000)]
+    assert _presses_of_a(world, [[(0, 0), (1, 0), *backlog, (5, 0)]]) == [0, 1, 0, 0, 0, 1]
+
+
+def test_a_press_right_after_a_slow_stretch_that_is_not_stale_counts(world):
+    # Each message comes later than the one before, but never more than the stale limit of 500 ms later than the first
+    assert _presses_of_a(world, [[(0, 0), (0, 200), (0, 400), (1, 400)]]) == [0, 0, 0, 1]
+
+
+def test_a_press_at_the_end_of_a_long_connection_counts_while_the_page_clock_runs_slow():
+    # The page sends once each second for 3 hours, and its clock runs 100 ppm slow: the delay grows by 1080 ms
+    presses = webxr._ConnectionPresses(stale_limit=0.5)
+    received = np.arange(3 * 3600 + 1) * 1000.0
+    sent = received * (1 - 100e-6) - 1e9
+    counts = [0] * (len(received) - 1) + [1]
+    seen = []
+    for count, sent_ms, received_ms in zip(counts, sent, received, strict=True):
+        state = webxr.ControllerButtons((0.0,) * 6, (0, 0, 0, 0, count, 0))
+        right = presses.counted({webxr.RIGHT: state}, sent_ms, received_ms)[webxr.RIGHT]
+        assert right is not None
+        seen.append(right.presses[4])
+    assert seen == counts
+
+
+@pytest.mark.parametrize('limit', [0.0, -0.5, float('inf'), float('nan')])
+def test_a_stale_limit_that_is_not_finite_and_positive_is_refused(limit):
+    with pytest.raises(ValueError, match='stale_limit must be finite and positive'):
+        WebXR(port=free_port(), stale_limit=limit)
+
+
 def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
     with pytest.raises(ValueError, match='positions and buttons must name the same controllers'):
         webxr.controller_message({webxr.RIGHT: Transform3D()}, {})
@@ -237,14 +318,9 @@ def test_a_controller_message_refuses_a_controller_with_a_pose_and_no_buttons():
 
 def test_a_controller_message_refuses_a_controller_with_fewer_button_values_than_a_controller_has():
     with pytest.raises(ValueError, match='at least 6 button values'):
-        webxr.controller_message({webxr.RIGHT: Transform3D()}, {webxr.RIGHT: [0.0] * 5})
-
-
-def test_the_plain_phone_page_drops_the_teleop_query():
-    with _served_webxr(Frontend.IPHONE) as base:
-        assert httpx.get(base + '/', timeout=1.0).status_code == 200
-        stale = httpx.get(f'{base}/?{webxr.PHONE_TELEOP_QUERY}', timeout=1.0)
-        assert stale.status_code == 307 and stale.headers['location'] == '/'
+        webxr.controller_message(
+            {webxr.RIGHT: Transform3D()}, {webxr.RIGHT: webxr.ControllerButtons((0.0,) * 5, (0,) * 5)}
+        )
 
 
 def test_the_headset_video_sends_the_decoder_config_and_then_each_frame_as_binary_at_the_video_rate(world):

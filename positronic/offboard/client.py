@@ -265,6 +265,8 @@ class InferenceSession:
         logger.debug('Size of serialised obs: %1.f KiB', len(serialised) / 1024)
         send_attrs: dict[str, Any] = {telemetry_keys.ATTR_WIRE_BYTES: len(serialised)}
         send_started = time.time_ns()
+        # The send counts toward the answer's timeout: a peer that stops reading stalls the write, not the read.
+        deadline = time.monotonic() + self._infer_timeout
         token = object()
         try:
             try:
@@ -278,13 +280,12 @@ class InferenceSession:
                         sent_alone = len(self._pending) == 1
                     self.sent_alone = sent_alone
                     send_attrs.update(self._connection_attrs())
-                    self._conn.send(serialised)
+                    self._conn.send(serialised, timeout=time_left(deadline))
             finally:
                 # A send that raises gets timed too, so the span is recorded on the way out.
                 sent = time.time_ns()
                 telemetry.record_span(telemetry_keys.SPAN_WIRE_SEND, send_started, sent, **send_attrs)
             try:
-                deadline = time.monotonic() + self._infer_timeout
                 with self._responses:
                     ready = self._responses.wait_for(
                         lambda: self._closed or self._pending[0] is token, timeout=max(0.0, deadline - time.monotonic())
@@ -373,7 +374,7 @@ class InferenceSession:
             message = {protocol.SESSION_ID: self._session_id, protocol.END_SESSION: True}
             # The server can acknowledge and close before the transport confirms the final write.
             with suppress(wire.PeerDisconnected):
-                self._conn.send(serialization.serialise(message))
+                self._conn.send(serialization.serialise(message), timeout=self._infer_timeout)
             raw = self._conn.recv(timeout=self._infer_timeout)
             response = (
                 serialization.deserialise(raw) if self._protocol is protocol.ProtocolVersion.V3 else deserialise(raw)
