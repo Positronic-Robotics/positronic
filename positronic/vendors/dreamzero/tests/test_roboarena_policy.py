@@ -390,7 +390,7 @@ class TestTheWire:
 
 class TestTheTelemetry:
     def test_a_call_records_the_spans_of_a_remote_call_under_its_worker_span(self, tmp_path):
-        """The same names as the websocket path, so a rig call splits into rig, wire and server time."""
+        """The same names as the websocket path, so a call splits into client, wire and server time."""
         reply = serialize({roboarena_policy.ACTIONS_FIELDS[0]: np.zeros((32, 8), dtype=np.float32)})
         websocket = websocket_answering(serialize(ANNOUNCED), reply)
         with (
