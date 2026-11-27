@@ -9,6 +9,8 @@ CHECKPOINT_ID = 'checkpoint_id'
 CHECKPOINT_PATH = 'checkpoint_path'
 # The license of the weights or the code that a source runs. A remote source states it in its server metadata.
 LICENSE = 'license'
+# The value of a missing license: a source that states no license, or that states the license `none`.
+NO_LICENSE = 'none'
 EXPERIMENT_NAME = 'experiment_name'
 CONFIG_NAME = 'config_name'
 # The `provider:model` id that an API policy calls.

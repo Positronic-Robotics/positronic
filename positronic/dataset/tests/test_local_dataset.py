@@ -568,9 +568,26 @@ def test_episode_meta_has_unique_uid(tmp_path):
 
 def test_new_episode_carries_provided_uid(tmp_path):
     with LocalDatasetWriter(tmp_path / 'ds') as w:
-        with w.new_episode(uid='source-uid') as ew:
+        with w.new_episode(meta={META_UID: 'source-uid'}) as ew:
             ew.set_static('id', 0)
     assert LocalDataset(tmp_path / 'ds')[0].meta['uid'] == 'source-uid'
+
+
+def test_new_episode_carries_the_meta_items_of_the_caller(tmp_path):
+    with LocalDatasetWriter(tmp_path / 'ds') as w, w.new_episode(meta={'round': 2, 'record': 'record-uid'}):
+        pass
+    meta = LocalDataset(tmp_path / 'ds')[0].meta
+    assert (meta['round'], meta['record']) == (2, 'record-uid')
+    assert meta['uid'] != 'record-uid'
+
+
+@pytest.mark.parametrize(
+    'meta', [{'writer': {}}, {'path': 'other'}, {'size_mb': 1.0}, {'round': b'x'}, {'round': object()}]
+)
+def test_new_episode_refuses_a_meta_item_of_the_writer_or_the_reader_or_one_that_is_not_json(tmp_path, meta):
+    with LocalDatasetWriter(tmp_path / 'ds') as w, pytest.raises(ValueError):
+        w.new_episode(meta=meta)
+    assert list((tmp_path / 'ds').glob('*/*')) == []
 
 
 def test_episode_without_stamped_uid_derives_one_from_created_ts(tmp_path):
@@ -814,7 +831,7 @@ def test_load_all_datasets_undrop_restores_an_episode_of_a_child_dataset(tmp_pat
 
 def _write_copy(root: Path, uid: str, value: int) -> None:
     """A dataset at `root` holding one episode with `uid`, as a copy of an episode keeps its uid."""
-    with LocalDatasetWriter(root) as w, w.new_episode(uid=uid) as ew:
+    with LocalDatasetWriter(root) as w, w.new_episode(meta={META_UID: uid}) as ew:
         ew.set_static('id', value)
 
 

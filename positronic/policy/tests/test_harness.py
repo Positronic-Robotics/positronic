@@ -41,8 +41,10 @@ from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs, Policy, PolicyEnd, PolicyRun, Processor, Step
 from positronic.policy.codecs import ChangeEEFrame, PolicyCommandError
+from positronic.policy.dagger import DaggerDataset
 from positronic.policy.executor import Executor, _UnchargedAnswer
 from positronic.policy.harness import POLL_PERIOD_SEC, Harness, Rollout, _GcSteps, _Source
+from positronic.policy.license import LicenseRule
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
 from positronic.policy.record import Event, EventKind, encode_uses
 from positronic.policy.remote import round_trip
@@ -2033,6 +2035,28 @@ def test_take_over_and_hand_back_switch_the_commands_that_the_rig_gets_in_the_st
         (5, 4),
     ]
     assert episode.static[f'{policy_keys.SOURCES}.{policy_keys.TELEOPERATOR}.{policy_keys.TYPE}'] == 'expert'
+
+
+def test_the_dagger_reader_gives_the_teleoperator_steps_of_a_record_that_the_harness_writes(episode_harness, tmp_path):
+    h = episode_harness
+    licensed = {policy_keys.LICENSE: 'apache-2.0'}
+
+    class LicensedEndAfter(EndAfter):
+        def meta(self):
+            return licensed
+
+    h.observation.emit(1)
+    helper = Helper(TAKE_OVER_AT_2_HAND_BACK_AT_4, meta=licensed)
+    rollout = Rollout(Task('test', 1.0), LicensedEndAfter(calls=6), LocalDatasetWriter(tmp_path), helper)
+    _until_answered(h, h.caller(rollout))
+
+    data = DaggerDataset(LocalDataset(tmp_path), [POSITION], [MOTOR], LicenseRule({'apache-2.0'}))
+    [episode] = data
+    assert list(episode[MOTOR].values()) == [102, 103]
+    assert list(episode[MOTOR].timestamps(HARNESS_STEP)) == [1, 2]
+    assert list(episode[f'{policy_keys.SHADOW}.{policy_keys.POLICY_SOURCE}.{MOTOR}'].values()) == [2, 3]
+    assert list(episode[POSITION].timestamps(HARNESS_STEP)) == [1, 2]
+    assert dict(data.steps_without_shadow) == {policy_keys.POLICY_SOURCE: 0}
 
 
 def test_a_rollout_with_no_helper_records_no_control_signal(episode_harness):

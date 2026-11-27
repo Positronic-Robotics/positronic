@@ -46,6 +46,12 @@ from .vector import SimpleSignal, SimpleSignalWriter
 from .video import DEFAULT_VIDEO_ENCODER, FrameSize, VideoEncoder, VideoSignal, VideoSignalWriter
 
 UNFINISHED_MARKER = '.unfinished'
+_META_SCHEMA_VERSION = 'schema_version'
+_META_WRITER = 'writer'
+_META_SIZE_MB = 'size_mb'
+_META_DURATION_NS = 'duration_ns'
+# The meta items that a caller cannot give: the writer sets them, or the reader computes or removes them.
+_OWN_META_KEYS = frozenset({_META_SCHEMA_VERSION, _META_WRITER, META_PATH, _META_SIZE_MB, _META_DURATION_NS})
 
 
 def sync_recording_dir(output_dir: str) -> Path:
@@ -103,8 +109,7 @@ class DiskEpisodeWriter(EpisodeWriter):
         directory: Path,
         *,
         on_close: Callable[[DiskEpisodeWriter], None] | None = None,
-        created_ts_ns: int | None = None,
-        uid: str | None = None,
+        meta: Mapping[str, Any] = MappingProxyType({}),
         video_encoder: VideoEncoder = DEFAULT_VIDEO_ENCODER,
         video_frame_sizes: Mapping[str, FrameSize] = MappingProxyType({}),
     ) -> None:
@@ -113,14 +118,19 @@ class DiskEpisodeWriter(EpisodeWriter):
         Args:
             directory: Directory to write episode data to (must not exist)
             on_close: Optional callback invoked after successful episode close
-            created_ts_ns: Optional creation timestamp (defaults to current time).
-                Use this to preserve original creation time during migration.
-            uid: Optional episode identity (defaults to a fresh uuid4 hex).
-                Use this to preserve identity when copying an existing recording.
+            meta: More items of the episode meta, such as the ``uid`` and the ``created_ts_ns`` of a copied recording.
+                Without them, the uid is a fresh uuid4 hex and the creation time is the current time. A key of
+                ``schema_version``, ``writer``, ``path``, ``size_mb`` and ``duration_ns`` fails the write.
             video_encoder: The encoder for video signals.
             video_frame_sizes: The frame size of each video signal whose encoder opens here, before its first frame.
                 A signal whose first frame has another size opens a new encoder.
         """
+        if taken := sorted(set(meta) & _OWN_META_KEYS):
+            raise ValueError(f'A caller cannot give the meta items {taken}')
+        try:
+            json.dumps(dict(meta))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'Meta items must be JSON-serializable, but got {meta!r}') from exc
         self._path = directory
         assert not self._path.exists(), f'Writing to existing directory {self._path}'
         # Create the episode directory for output files
@@ -138,14 +148,14 @@ class DiskEpisodeWriter(EpisodeWriter):
         self._on_close = on_close
         self._video_encoder = video_encoder
 
-        # Write system metadata immediately
         # NB: falsy created_ts_ns (including 0) defaults to current time — epoch 0 is not a valid episode timestamp
         self._meta = {
-            'schema_version': EPISODE_SCHEMA_VERSION,
-            META_UID: uid or uuid.uuid4().hex,
-            META_CREATED_TS_NS: created_ts_ns or time.time_ns(),
+            _META_SCHEMA_VERSION: EPISODE_SCHEMA_VERSION,
+            **meta,
+            META_UID: meta.get(META_UID) or uuid.uuid4().hex,
+            META_CREATED_TS_NS: meta.get(META_CREATED_TS_NS) or time.time_ns(),
         }
-        self._meta['writer'] = {
+        self._meta[_META_WRITER] = {
             **_cached_env_writer_info(),
             'name': f'{self.__class__.__module__}.{self.__class__.__qualname__}',
             META_WRITER_VIDEO_ENCODER: repr(video_encoder),
@@ -438,7 +448,7 @@ class DiskEpisode(Episode):
                         pass
 
             # Legacy files may carry an unnamed duration cache; bounds come from named signal coordinates.
-            meta.pop('duration_ns', None)
+            meta.pop(_META_DURATION_NS, None)
 
             # Episodes without a stamped uid derive a stable identity from the recording timestamp,
             # which is immutable and travels with the episode across copies
@@ -448,8 +458,8 @@ class DiskEpisode(Episode):
             meta[META_PATH] = str(self._dir.expanduser().resolve(strict=False))
 
             lazy_getters: dict[str, Any] = {}
-            if 'size_mb' not in meta:
-                lazy_getters['size_mb'] = self._compute_size_mb
+            if _META_SIZE_MB not in meta:
+                lazy_getters[_META_SIZE_MB] = self._compute_size_mb
 
             self._meta = LazyDict(meta, lazy_getters)
         return self._meta.copy()
@@ -563,14 +573,11 @@ class LocalDatasetWriter(DatasetWriter):
                     max_id = eid
         return max_id + 1
 
-    def new_episode(self, *, created_ts_ns: int | None = None, uid: str | None = None) -> DiskEpisodeWriter:
+    def new_episode(self, *, meta: Mapping[str, Any] = MappingProxyType({})) -> DiskEpisodeWriter:
         """Create a new episode writer.
 
         Args:
-            created_ts_ns: Optional creation timestamp (defaults to current time).
-                Use this to preserve original creation time during migration.
-            uid: Optional episode identity (defaults to a fresh uuid4 hex).
-                Use this to preserve identity when copying an existing recording.
+            meta: More items of the episode meta, as ``DiskEpisodeWriter`` takes them.
         """
         if self._lock is None:
             raise RuntimeError('Open the dataset writer with a context manager before allocating an episode')
@@ -585,8 +592,7 @@ class LocalDatasetWriter(DatasetWriter):
         return DiskEpisodeWriter(
             ep_dir,
             on_close=self._keep_video_frame_sizes,
-            created_ts_ns=created_ts_ns,
-            uid=uid,
+            meta=meta,
             video_encoder=self._video_encoder,
             video_frame_sizes=self._video_frame_sizes,
         )

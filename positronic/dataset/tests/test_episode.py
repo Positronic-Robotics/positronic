@@ -729,11 +729,11 @@ class TestLazyMetaProperties:
         assert size1 == size2
 
     def test_created_ts_ns_preserved(self, tmp_path):
-        """Test that created_ts_ns parameter is preserved in meta.json."""
+        """Test that a created_ts_ns meta item is preserved in meta.json."""
         ep_dir = tmp_path / 'ep_created'
         original_ts = 1234567890123456789
 
-        with DiskEpisodeWriter(ep_dir, created_ts_ns=original_ts) as w:
+        with DiskEpisodeWriter(ep_dir, meta={'created_ts_ns': original_ts}) as w:
             w.append('a', 1, Time(**{RECORDED_TIME: 1000}))
 
         ep = DiskEpisode(ep_dir)
