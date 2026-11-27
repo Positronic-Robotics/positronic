@@ -47,11 +47,11 @@ from .video import DEFAULT_VIDEO_ENCODER, FrameSize, VideoEncoder, VideoSignal, 
 
 UNFINISHED_MARKER = '.unfinished'
 _META_SCHEMA_VERSION = 'schema_version'
-_META_WRITER = 'writer'
-_META_SIZE_MB = 'size_mb'
+META_WRITER = 'writer'
+META_SIZE_MB = 'size_mb'
 _META_DURATION_NS = 'duration_ns'
 # The meta items that a caller cannot give: the writer sets them, or the reader computes or removes them.
-_OWN_META_KEYS = frozenset({_META_SCHEMA_VERSION, _META_WRITER, META_PATH, _META_SIZE_MB, _META_DURATION_NS})
+_OWN_META_KEYS = frozenset({_META_SCHEMA_VERSION, META_WRITER, META_PATH, META_SIZE_MB, _META_DURATION_NS})
 
 
 def sync_recording_dir(output_dir: str) -> Path:
@@ -155,7 +155,7 @@ class DiskEpisodeWriter(EpisodeWriter):
             META_UID: meta.get(META_UID) or uuid.uuid4().hex,
             META_CREATED_TS_NS: meta.get(META_CREATED_TS_NS) or time.time_ns(),
         }
-        self._meta[_META_WRITER] = {
+        self._meta[META_WRITER] = {
             **_cached_env_writer_info(),
             'name': f'{self.__class__.__module__}.{self.__class__.__qualname__}',
             META_WRITER_VIDEO_ENCODER: repr(video_encoder),
@@ -458,8 +458,8 @@ class DiskEpisode(Episode):
             meta[META_PATH] = str(self._dir.expanduser().resolve(strict=False))
 
             lazy_getters: dict[str, Any] = {}
-            if _META_SIZE_MB not in meta:
-                lazy_getters[_META_SIZE_MB] = self._compute_size_mb
+            if META_SIZE_MB not in meta:
+                lazy_getters[META_SIZE_MB] = self._compute_size_mb
 
             self._meta = LazyDict(meta, lazy_getters)
         return self._meta.copy()
