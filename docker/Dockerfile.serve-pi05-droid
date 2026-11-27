@@ -20,7 +20,7 @@ ARG CLOUD_SDK_IMAGE=google/cloud-sdk:slim@sha256:c70885ba9f0450ea9987b1c5dc1ab80
 # image is pinned by digest: a moved tag would download the weights again and push them as a new layer.
 FROM ${CLOUD_SDK_IMAGE} AS assets
 ARG CHECKPOINT_URI=gs://openpi-assets-simeval/pi05_droid_jointpos
-ARG TOKENIZER_URL=https://storage.eu-north1.nebius.cloud/positronic-public/assets/paligemma_tokenizer.model
+ARG TOKENIZER_URL=https://data.phail.ai/assets/paligemma_tokenizer.model
 # The checkpoint sits one level down, under a directory named by digits: a local `checkpoints_dir`
 # lists its subdirectories as model ids, and the id has to be digits.
 RUN gcloud config set auth/disable_credentials true \

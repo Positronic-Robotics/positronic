@@ -14,6 +14,7 @@
 - Each RoboLab reset token names the camera set of its eval, so one RoboLab env server serves every camera set of its robot. Evals that render two camera sets can share one server. `serve_robolab` and the server take no camera set, and `serve_robolab` takes only keyword arguments ([#1373](https://github.com/Positronic-Robotics/positronic/pull/1373))
 
 ### Vendors
+- The OpenPI vendor and `docker/Dockerfile.serve-pi05-droid` fetch the PaliGemma tokenizer from `https://data.phail.ai/assets/paligemma_tokenizer.model`. The file is the same.
 - The OpenPI and Galaxea servers wait `WARMUP_DEADLINE_S` (1800 s) for their model subprocess to start. The OpenPI server waited 300 s, so a start on a slow disk ended the server before the published deadline.
 
 ## [0.4.6] - 2026-11-12
