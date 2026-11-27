@@ -304,6 +304,7 @@ class ArmControl(pimm.ControlSystem):
 
             if Button.STICK in presses:  # the start move turns control off, so it wins over A in the same sample
                 yield from self._go_to_start(should_stop, clock)
+                self._read_buttons(self.buttons.read(), clock.now_ns(), silent)  # drop the presses made during the move
             elif Button.A in presses:
                 for _ in range(ButtonMap.clutches(presses[Button.A])):
                     self._toggle_control(hand)  # a silent headset gives no press

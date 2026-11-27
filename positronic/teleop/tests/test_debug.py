@@ -223,6 +223,36 @@ def test_a_press_of_the_stick_and_of_a_in_one_sample_moves_the_arm_to_its_start_
     assert 'to the start pose' in rig.events()
 
 
+def test_presses_made_during_the_start_move_do_nothing_after_it(world):
+    rig = _Rig(world)
+    readies = [world.pair(rig.control.ready['0']), world.pair(rig.control.ready['1'])]
+    cleared: list = []
+
+    def clear() -> None:
+        for ready in readies:
+            cleared.extend(ready.incoming())
+
+    driver = ManualDriver([
+        *rig.control_on(),
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.press(stick=1.0), 0.01),
+        (clear, 0.01),
+        (lambda: [call.set_result(None) for call in cleared], 0.01),
+        *rig.states(),
+        (lambda: rig.take_calls(), 0.01),
+        (lambda: rig.press(more={Button.A: 1, Button.STICK: 1}), 0.01),
+        (lambda: rig.calls[0].set_result(None), 0.01),
+        (lambda: rig.press(), 0.01),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    events = rig.events()
+    after = events[events.index('at the start pose') + 1 :]
+    assert 'control on' not in after and 'to the start pose' not in after
+    assert len(rig.calls) == 1
+
+
 def test_the_start_move_waits_for_the_settle_states_of_the_arm_after_the_press(world):
     rig = _Rig(world)
     marks = {}
