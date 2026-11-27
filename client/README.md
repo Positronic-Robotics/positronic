@@ -307,8 +307,9 @@ the `submissions.day` quota: that quota counts the image runs the platform execu
 
 Each account has a personal organization. Name it with `--org`, and a plan can state its own tasks
 with no grant. Its credits pay for the run ([Credit accounts](#credit-accounts)). The plan can use
-each task that `positronic eval catalog` lists, with `image` and `remote` endpoints. For a `served`
-endpoint, or a task that only one customer gets, write to hi@phail.ai for a grant.
+`image` and `remote` endpoints, and the tasks that `positronic eval catalog` lists for every
+registered user. A `served` endpoint, or a task that a grant adds, needs a grant: write to
+hi@phail.ai.
 
 Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
 as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
