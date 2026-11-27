@@ -397,8 +397,7 @@ async def test_the_timing_channel_gives_the_rtp_time_of_each_frame_less_one_offs
     assert [pong.pong for pong in pongs] == [12.5] and pongs[0].service_ms > 0
     sent = [webrtc.FrameSent.model_validate(message).frame for message in parsed if 'frame' in message]
     # The page finds the offset of the RTP timestamps: the one difference that each shown frame has with a sent time
-    # The page finds the offset of the RTP time from the one difference that each shown frame has with a sent time.
-    # The decoder of aiortc rounds the RTP time of a frame by up to one tick.
+    # One offset joins each received frame to a sent time. The decoder of aiortc rounds the RTP time by up to 1 tick.
     first, *others = rtp_times
     offsets = [
         first - pts

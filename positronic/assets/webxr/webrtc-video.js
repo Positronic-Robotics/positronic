@@ -6,20 +6,8 @@
 // The types of the setup messages, and the label of the timing channel
 const SIGNAL_TYPE = { offer: 'offer', answer: 'answer', candidate: 'candidate' };
 const TIMING_CHANNEL = 'timing';
-// A gap between two shown frames above this is a stall. The service sends a view at least each 67 ms
-const STALL_MS = 250;
 // With no new decoded frame for this long, the page connects again
 const LOST_MS = 5000;
-const PING_MS = 1000;
-const REPORT_MS = 5000;
-// The pings whose round trip the clock offset comes from: the one with the shortest round trip among them
-const PING_SAMPLES = 10;
-// The RTP clock of video, in ticks per ms
-const RTP_TICKS_PER_MS = 90;
-// The number of shown frames that must agree on the RTP offset before the page uses it
-const OFFSET_VOTES = 3;
-// The sent times that the page keeps to find the RTP offset: 3 s of frames at 30 frames per second
-const SENT_KEPT = 90;
 
 export class WebRTCVideo {
   constructor(signaling, video) {
@@ -36,7 +24,7 @@ export class WebRTCVideo {
     this.watchdog = setInterval(() => this.replaceLost(), 1000);
   }
 
-  // A new peer connection, in place of the one before it. The service closes the connection of the offer before
+  // A new peer connection, in place of the one before it
   connect() {
     this.closeConnection();
     const id = ++this.offerId;
@@ -113,6 +101,19 @@ function preferH264(transceiver) {
   const h264 = codecs.filter((codec) => codec.mimeType === 'video/H264');
   transceiver.setCodecPreferences([...h264, ...codecs.filter((codec) => codec.mimeType !== 'video/H264')]);
 }
+
+// A gap between two shown frames above this is a stall
+const STALL_MS = 250;
+const PING_MS = 1000;
+const REPORT_MS = 5000;
+// The pings whose round trip the clock offset comes from: the one with the shortest round trip among them
+const PING_SAMPLES = 10;
+// The RTP clock of video, in ticks per ms
+const RTP_TICKS_PER_MS = 90;
+// The number of shown frames that must agree on the RTP offset before the page uses it
+const OFFSET_VOTES = 3;
+// The sent times that the page keeps to find the RTP offset: 3 s of frames at 30 frames per second
+const SENT_KEPT = 90;
 
 // The page end of the timing channel. An age goes from the hand-over of a frame to the encoder to its show on the page.
 // The RTP timestamp of a frame is its sent time plus an offset that only the sender knows, so shown frames vote for it

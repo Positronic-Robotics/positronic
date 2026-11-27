@@ -142,26 +142,26 @@ class FrameTrack(MediaStreamTrack):
     last frame, and gives ``None`` until a newer frame comes. ``on_frame`` takes the pts of each frame of the track."""
 
     kind = 'video'
+    # How often the track looks for a new frame.
+    POLL_SEC = 0.002
 
     def __init__(
         self,
         next_frame: Callable[[pimm.Time | None], pimm.Message | None],
         clock: _ConnectionClock,
         on_frame: Callable[[int], None],
-        poll_sec: float,
     ):
         super().__init__()
         self._next_frame = next_frame
         self._clock = clock
         self._on_frame = on_frame
-        self._poll_sec = poll_sec
         self._last_time: pimm.Time | None = None
 
     async def recv(self) -> av.VideoFrame:
         while (message := self._next_frame(self._last_time)) is None:
             if self.readyState != 'live':
                 raise MediaStreamError
-            await asyncio.sleep(self._poll_sec)
+            await asyncio.sleep(self.POLL_SEC)
         self._last_time = message.time
         rgb = message.data
         # The encoder takes the frame as YUV 4:2:0, which needs an even width and height
@@ -215,9 +215,6 @@ class VideoPeer:
 
     The peer has no ICE servers, so it offers only the addresses of this computer: the page must reach one of them."""
 
-    # How often a track looks for a new frame.
-    POLL_SEC = 0.002
-
     def __init__(
         self,
         next_frame: Callable[[pimm.Time | None], pimm.Message | None],
@@ -252,7 +249,7 @@ class VideoPeer:
                 elif signal.id == self._offer_id and self._connection is not None:
                     await self._connection.addIceCandidate(self._ice_candidate(signal))
             except (ValueError, InvalidStateError, InvalidAccessError) as error:
-                # The next offer of the page starts a new connection, so one bad message does not end the video.
+                # One bad message must not end the peer: it still answers the next offer.
                 logger.error('The video peer cannot use a setup message of the page: %s', error)
 
     @staticmethod
@@ -277,7 +274,7 @@ class VideoPeer:
             logger.info('The video connection %d of the page is %s', offer.id, connection.connectionState)
 
         await connection.setRemoteDescription(RTCSessionDescription(offer.sdp, 'offer'))
-        connection.addTrack(FrameTrack(self._next_frame, clock, timing.frame_sent, self.POLL_SEC))
+        connection.addTrack(FrameTrack(self._next_frame, clock, timing.frame_sent))
         await connection.setLocalDescription(await connection.createAnswer())
         await self._send(Answer(id=offer.id, sdp=connection.localDescription.sdp).model_dump())
 

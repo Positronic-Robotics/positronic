@@ -157,15 +157,11 @@ Conversion for training picks its own keys from the recording.
 - A session that sets `video_bitrate` sends each camera as an H.264 stream in place of JPEG. H.264 sends only the
   changes between frames, so each frame request is smaller. Set `video_fps` to the frame rate of the cameras. Such a
   session asks for frames at most `video_fps` times a second, so the target of the robot updates at most that often.
-- `positronic teleop` sends the headset video at up to 30 frames per second, as one WebRTC video track (H.264 when
-  the browser has it). The page and the service exchange the WebRTC setup messages on the controller socket. With
-  H.264 the bit rate starts at 1 Mbit/s and follows the estimate of the headset browser, from 0.5 to 3 Mbit/s (aiortc
-  sets these limits). A lost packet does not stop the video: the browser asks for the packet again or for a key
-  frame. `--webxr.video_fps=<frames per second>` changes the frame rate.
-- Each 5 s the headset page reports the video to the service, which logs a line such as `Video over WebRTC:
-  148 frames in 5.0 s, age 41/55/73 ms (median/95th/max), 0 stalls (0 ms); ...`. The age of a frame goes from the
-  time the service gives it to the encoder to the time the page shows it. A stall is a gap of more than 250 ms
-  between two frames that the page shows.
+- `positronic teleop` sends the headset video at up to 30 frames per second, as one WebRTC video track.
+  `--webxr.video_fps=<frames per second>` changes the frame rate. The bit rate follows the estimate of the headset
+  browser, so a slow Wi-Fi lowers the quality.
+- Each 5 s the service logs the video that the headset page shows: the frames, the age of a frame from the encoder
+  to the page, and the stalls (`Video over WebRTC: ...`).
 
 ## Collect demonstrations in MuJoCo
 
