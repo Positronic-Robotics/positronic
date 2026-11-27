@@ -20,7 +20,7 @@ from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, Observation, Task
+from positronic.eval import ROBOT_STATIC_META, Command, Embodiment, InferenceCharge, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.offboard.server import PolicyServer
 from positronic.policy import PolicyEnd
@@ -136,7 +136,7 @@ def arm_with_wrist_camera() -> Embodiment:
 
 
 @pytest.mark.timeout(30)
-@pytest.mark.parametrize('charge', [eval_keys.InferenceCharge.NONE, eval_keys.InferenceCharge.WALL])
+@pytest.mark.parametrize('charge', [InferenceCharge.NONE, InferenceCharge.WALL])
 @pytest.mark.parametrize('distance', [0.01, 0.2])
 def test_move_then_end_records_the_policy_end_across_episodes(monkeypatch, tmp_path, charge, distance):
     states = script_move_then_end(monkeypatch, distance)
@@ -207,7 +207,7 @@ def served(policy: LLMPolicy, sessions_dir: Path) -> Iterator[RemotePolicy]:
 
 
 @pytest.mark.timeout(60)
-@pytest.mark.parametrize('charge', [eval_keys.InferenceCharge.NONE, eval_keys.InferenceCharge.WALL])
+@pytest.mark.parametrize('charge', [InferenceCharge.NONE, InferenceCharge.WALL])
 def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch, tmp_path, charge):
     states = script_move_then_end(monkeypatch, 0.01)
     task = Task(instruction='Smoke test.', timeout_sec=10, inference_charge=charge)
@@ -240,5 +240,5 @@ def test_a_served_policy_moves_and_ends_each_episode_of_a_remote_run(monkeypatch
         # The client plays the move at the local cadence. A charged run also counts the real round trips to the server.
         first, last = episode.bounds(RECEIVED_WORLD)
         assert move_sec <= (last - first) / 1e9
-        if charge is eval_keys.InferenceCharge.NONE:
+        if charge is InferenceCharge.NONE:
             assert (last - first) / 1e9 <= move_sec + 0.1

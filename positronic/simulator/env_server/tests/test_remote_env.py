@@ -28,6 +28,7 @@ from positronic.dataset.local_dataset import LocalDataset
 from positronic.drivers.roboarm import command as roboarm_command
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE
+from positronic.eval import InferenceCharge
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy
 from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
@@ -977,9 +978,7 @@ def test_full_chunk_executes_between_replans(env_server, tmp_path):
     policy = raw
     with pos3.mirror():
         ev = remote_stack_cubes_eval(host, port, camera_dict=CAMERAS)
-        task = replace(
-            next(iter(ev.tasks())), timeout_sec=20 * control_dt, inference_charge=eval_keys.InferenceCharge.NONE
-        )
+        task = replace(next(iter(ev.tasks())), timeout_sec=20 * control_dt, inference_charge=InferenceCharge.NONE)
         trial = number_trials([(task, {eval_keys.SEED: 100})])[0]
         main(policy=policy, evals=[replace(ev, tasks=partial(iter, [trial]))], output_dir=str(tmp_path))
 

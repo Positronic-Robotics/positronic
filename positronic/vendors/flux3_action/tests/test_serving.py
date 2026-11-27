@@ -17,7 +17,7 @@ from positronic_wire import websocket, wire
 from positronic import keys as obs_keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec

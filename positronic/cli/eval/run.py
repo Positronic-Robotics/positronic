@@ -25,8 +25,7 @@ from positronic.cli.eval.submit import submit
 from positronic.dataset.dataset import DatasetFactory, DatasetWriter
 from positronic.dataset.episode import META_PATH
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter, sync_recording_dir
-from positronic.eval import Embodiment, Eval, Task
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import Embodiment, Eval, InferenceCharge, Task
 from positronic.policy import Policy, RemotePolicy
 from positronic.policy.harness import Harness, Rollout
 from positronic.simulator.env_server.telemetry import ATTR_RUN_ID, ENV_RUN_ID, ENV_TELEMETRY_DIR

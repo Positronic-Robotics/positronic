@@ -15,7 +15,7 @@ from positronic_wire import wire
 
 from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient, InferenceSession
 from positronic.offboard.server import PolicyServer

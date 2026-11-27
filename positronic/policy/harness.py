@@ -27,7 +27,7 @@ from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.keys import EE_FRAMES
 from positronic.drivers.roboarm.models import EEFrame
-from positronic.eval import Embodiment, Task, only_keep_written_signals
+from positronic.eval import Embodiment, InferenceCharge, Task, only_keep_written_signals
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Answer, Commands, Obs, Policy, PolicyEnd, PolicyRun
@@ -436,7 +436,7 @@ class Harness(pimm.ControlSystem):
         meta = self._statics()
         meta[eval_keys.UNIVERSE] = 'sim' if self._embodiment.simulated else 'real'
         meta[eval_keys.EMBODIMENT] = self._embodiment.descriptor
-        charge = task.inference_charge if self._embodiment.simulated else eval_keys.InferenceCharge.WALL
+        charge = task.inference_charge if self._embodiment.simulated else InferenceCharge.WALL
         meta[eval_keys.INFERENCE_CHARGE] = charge.value
         if task.timeout_sec is not None:  # the recorder takes no nulls, and an unbounded episode has none
             meta[eval_keys.TIMEOUT] = task.timeout_sec

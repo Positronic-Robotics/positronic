@@ -34,8 +34,8 @@ from positronic.drivers.roboarm.models import (
     ee_frames_entry,
     parse_ee_frames,
 )
+from positronic.eval import InferenceCharge
 from positronic.eval import keys as eval_keys
-from positronic.eval.keys import InferenceCharge
 from positronic.geom import Rotation, Transform3D
 from positronic.gui.station import Outcome, Phase
 from positronic.gui.web import EndBody

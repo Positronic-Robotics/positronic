@@ -14,7 +14,7 @@ from positronic_wire.wire import ConnectRefused
 
 from positronic import keys as rig
 from positronic.drivers.roboarm import RobotStatus
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.offboard.roboarena import RoboarenaClient
 from positronic.policy.codecs import ACTION
 from positronic.policy.executor import Executor, WaitStatus, _UnchargedAnswer

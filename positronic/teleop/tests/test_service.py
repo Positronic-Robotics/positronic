@@ -56,8 +56,8 @@ from positronic.drivers import webxr
 from positronic.drivers.roboarm.ik import ee_frames
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
 from positronic.drivers.webxr import INPUT_PATH, STATE_PATH, ControllerButtons, WebXR
+from positronic.eval import InferenceCharge
 from positronic.eval import keys as eval_keys
-from positronic.eval.keys import InferenceCharge
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import PolicyEnd, Step

@@ -19,6 +19,7 @@ from positronic.cfg.simulator import STACK_GREEN_CUBE, STACK_RED_CUBE
 from positronic.dataset.episode import Episode
 from positronic.dataset.local_dataset import LocalDataset
 from positronic.dataset.video import VideoSignal
+from positronic.eval import InferenceCharge
 from positronic.eval import keys as eval_keys
 from positronic.policy import keys as policy_keys
 from positronic.simulator.mujoco.sim import SCENE_XML, SIM_STATE_INTEGRATION
@@ -79,7 +80,7 @@ def read_episode(output: Path, seed: int) -> Episode:
     expected = {
         eval_keys.SEED: seed,
         eval_keys.TIMEOUT: EPISODE_SECONDS,
-        eval_keys.INFERENCE_CHARGE: eval_keys.InferenceCharge.NONE.value,
+        eval_keys.INFERENCE_CHARGE: InferenceCharge.NONE.value,
         eval_keys.TERMINATED: False,
         f'{policy_keys.SERVER_META}.{policy_keys.CHECKPOINT_PATH}': CHECKPOINT_PATH,
     }

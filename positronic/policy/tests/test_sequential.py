@@ -11,7 +11,7 @@ import pytest
 
 from positronic import telemetry, telemetry_keys
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.geom import Transform3D
 from positronic.policy.base import Policy, PolicyEnd, Step
 from positronic.policy.codecs import ChangeEEFrame, Codec, Metadata, ResizeMode, TransformImages

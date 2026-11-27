@@ -34,9 +34,16 @@ from positronic.drivers.roboarm import keys as roboarm_keys
 from positronic.drivers.roboarm.command import CartesianDelta, CartesianPosition, JointPosition, from_wire, to_wire
 from positronic.drivers.roboarm.models import EE_LINK, GRIPPER_SITE, EEFrame, bundled_franka_model, ee_frames_entry
 from positronic.drivers.roboarm.tests.fakes import make_robot_state
-from positronic.eval import NO_MODEL_ROBOT_META, ROBOT_STATIC_META, Command, Embodiment, Observation, Task
+from positronic.eval import (
+    NO_MODEL_ROBOT_META,
+    ROBOT_STATIC_META,
+    Command,
+    Embodiment,
+    InferenceCharge,
+    Observation,
+    Task,
+)
 from positronic.eval import keys as eval_keys
-from positronic.eval.keys import InferenceCharge
 from positronic.geom import Rotation, Transform3D
 from positronic.policy import executor as executor_module
 from positronic.policy import keys as policy_keys

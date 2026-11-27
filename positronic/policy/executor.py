@@ -15,7 +15,7 @@ from functools import partial
 from typing import Any, ParamSpec, TypeVar
 
 from positronic import telemetry, telemetry_keys
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.policy.base import Answer, NotAnswered, QueueFull, Runtime
 from positronic.utils import check_positive_int
 

@@ -11,7 +11,7 @@ from positronic_model_server import serialization
 from positronic import keys
 from positronic.cfg.hardware.roboarm import DROID_IMPEDANCE
 from positronic.drivers.roboarm import command
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.policy import spec
 from positronic.policy.codecs import Codec
 from positronic.policy.executor import Executor, WaitStatus

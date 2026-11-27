@@ -51,7 +51,7 @@ from positronic.dataset.episode import META_UID, META_WRITER_VIDEO_ENCODER
 from positronic.dataset.local_dataset import LocalDataset, LocalDatasetWriter
 from positronic.dataset.vector import SimpleSignalWriter
 from positronic.dataset.video import LibavEncoder
-from positronic.eval import Embodiment, Eval, Task
+from positronic.eval import Embodiment, Eval, InferenceCharge, Task
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyRun, Runtime, Step
 from positronic.policy.harness import Rollout
@@ -266,14 +266,12 @@ run_module = importlib.import_module('positronic.cli.eval.run')
 @pytest.mark.parametrize(
     'states, charged',
     [
-        ({}, eval_keys.InferenceCharge.WALL),
-        ({'inference_charge': 'server'}, eval_keys.InferenceCharge.SERVER),
-        ({'inference_charge': 'none'}, eval_keys.InferenceCharge.NONE),
+        ({}, InferenceCharge.WALL),
+        ({'inference_charge': 'server'}, InferenceCharge.SERVER),
+        ({'inference_charge': 'none'}, InferenceCharge.NONE),
     ],
 )
-def test_a_local_run_stamps_its_charge_on_every_task(
-    run_command, monkeypatch, states: dict, charged: eval_keys.InferenceCharge
-):
+def test_a_local_run_stamps_its_charge_on_every_task(run_command, monkeypatch, states: dict, charged: InferenceCharge):
     """A local run charges the wall time of each call unless it states another charge, and stamps that on every
     task the eval makes."""
     made = [Task(instruction='t', timeout_sec=1.0) for _ in range(2)]

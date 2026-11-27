@@ -11,6 +11,7 @@ from positronic.cfg.eval.real.tasks import SCISSORS_TASK, SPOONS_TASK, TOWELS_TA
 from positronic.dataset.local_dataset import LocalDatasetWriter
 from positronic.dataset.serializers import Serializers
 from positronic.drivers.recording.ds_writer_agent import DsWriterAgent, DsWriterCommand
+from positronic.eval import InferenceCharge
 from positronic.eval import keys as eval_keys
 
 # --- Metadata Templates ---
@@ -142,7 +143,7 @@ class FakeGenerator(pimm.ControlSystem):
                 'eval.tote_placement': random.choice(['left', 'right']),
                 'eval.external_camera': random.choices(['left', 'right', 'NA'], [5, 5, 1])[0],
                 'inference.policy_fps': self.fps,
-                eval_keys.INFERENCE_CHARGE: eval_keys.InferenceCharge.NONE.value,
+                eval_keys.INFERENCE_CHARGE: InferenceCharge.NONE.value,
                 **self.policy_meta,
             }
 

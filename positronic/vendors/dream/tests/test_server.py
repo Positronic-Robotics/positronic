@@ -14,7 +14,7 @@ from shared.faceblur import FaceBlurrer, _self_check_frame
 
 import pimm
 from positronic import keys
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION
 from positronic.policy.executor import Executor

@@ -14,7 +14,7 @@ from positronic_wire import grpc, websocket, wire
 
 from positronic import keys as obs_keys
 from positronic.drivers.roboarm import command
-from positronic.eval.keys import InferenceCharge
+from positronic.eval import InferenceCharge
 from positronic.offboard import protocol as legacy_protocol
 from positronic.offboard.client import InferenceClient
 from positronic.policy import keys as policy_keys

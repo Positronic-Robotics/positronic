@@ -20,8 +20,8 @@ from positronic import keys
 from positronic.drivers.roboarm import RobotStatus
 from positronic.drivers.roboarm.command import JointPosition, PositionControl
 from positronic.drivers.roboarm.models import GRIPPER_SITE, EEFrame
+from positronic.eval import InferenceCharge
 from positronic.eval import keys as eval_keys
-from positronic.eval.keys import InferenceCharge
 from positronic.policy import keys as policy_keys
 from positronic.policy import spec
 from positronic.policy.base import Answer, NotAnswered, Policy, PolicyEnd, QueueFull, Step
