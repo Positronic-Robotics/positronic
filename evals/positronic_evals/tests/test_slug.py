@@ -91,3 +91,13 @@ def test_the_base_name_type_refuses_a_value_by_its_class_name(value: str):
         Name(value)
     with pytest.raises(ValidationError, match=f'not a Name: {re.escape(repr(value))}'):
         TypeAdapter(Name).validate_python(value)
+
+
+def test_a_name_refuses_exactly_the_characters_that_str_isspace_names():
+    refused = []
+    for c in map(chr, range(0x110000)):
+        try:
+            Name(f'a{c}b')
+        except ValueError:
+            refused.append(c)
+    assert refused == [c for c in map(chr, range(0x110000)) if c.isspace()]
