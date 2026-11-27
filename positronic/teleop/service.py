@@ -648,7 +648,7 @@ class TeleopService:
 
     def view_text(self, task: bool = True) -> ViewText:
         """The text of the headset view in the state of the trial. A running trial shows its task only with ``task``."""
-        with self._changed:
+        with self._changed:  # Three reads. The text is built after the release.
             state = self.state()
             shown = self._shown_camera()
             # The task and the state of the arms come with the first frame request.
@@ -671,8 +671,8 @@ class TeleopService:
     def view(self, camera: bool = True, task: bool = True) -> np.ndarray:
         """The image for the headset: the camera image of a running trial, or black with no ``camera``, with
         `view_text` on it. With more than one camera, a column on the right shows the other cameras."""
-        with self._changed:
-            text = self.view_text(task)
+        text = self.view_text(task)
+        with self._changed:  # A few references: the state, and the image of each camera.
             shows_images = self.state().phase is Phase.RUNNING and camera
             image = self._headset_image() if shows_images else None
             shown = self._shown_camera()
