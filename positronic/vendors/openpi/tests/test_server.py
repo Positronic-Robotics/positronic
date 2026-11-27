@@ -21,6 +21,7 @@ from positronic.drivers.roboarm.models import (
 )
 from positronic.offboard import server_utils
 from positronic.policy.codecs import ACTION
+from positronic.policy.processors import InferenceSchedule
 from positronic.policy.spec import from_spec
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs
@@ -29,6 +30,7 @@ pytest.importorskip('openpi_client')
 
 from openpi_client import msgpack_numpy
 from platform_client.policy_container import WARMUP_DEADLINE_S
+from positronic_model_server.spec import ARGS, NAME, SEQ
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 
@@ -74,8 +76,9 @@ def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
 
 def _latency_estimate(deployment) -> float:
     """The lead, in seconds, that the deployment's client schedule declares."""
-    (schedule,) = (node for node in deployment.local.to_spec()['seq'] if node['name'] == 'inference_schedule')
-    return schedule['args']['latency_estimate']
+    stack = deployment.local.to_spec()[SEQ]
+    (schedule,) = (node for node in stack if node[NAME] == InferenceSchedule.WIRE_NAME)
+    return schedule[ARGS]['latency_estimate']
 
 
 @pytest.mark.parametrize('name', ['droid', 'droid_jointpos'])
