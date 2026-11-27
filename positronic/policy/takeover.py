@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_serializer
 
+from positronic.drivers.roboarm.command import CartesianDelta, JointDelta
 from positronic.policy.base import Commands
 from positronic.policy.codecs import PolicyCommandError
 from positronic.policy.keys import HELPER_FIELDS, HELPER_HAND_BACK, HELPER_TAKE_OVER, POLICY_SOURCE, TELEOPERATOR
@@ -54,19 +55,22 @@ class _Presses(BaseModel):
 
 # The driver that each press gives the rig to.
 _PRESS_TO = {HELPER_TAKE_OVER: Driver.TELEOPERATOR, HELPER_HAND_BACK: Driver.POLICY}
+# The commands that move the arm once from where it is.
+_DELTAS = (CartesianDelta, JointDelta)
 
 
 class Takeover:
     """The driver of one episode with a helper. The presses of the first element of the helper are not new: they
     came before the episode. When the first element has no press field, each later press is new. An element with no
     press field keeps the last presses. When both presses are new, the later press wins, and at one time Hand back
-    wins. A step with no element keeps the commands of the newest element."""
+    wins. A step with no element repeats the absolute targets of the newest element, and not its deltas, which move
+    the arm once."""
 
     def __init__(self):
         self._driver = Driver.POLICY
         self._presses: _Presses | None = None
         self._event: Event | None = None
-        self._commands: Commands = {}
+        self._held: Commands = {}
 
     def control(self) -> dict[str, Any]:
         """The ``CONTROL`` observation of the helper, as plain data."""
@@ -97,7 +101,10 @@ class Takeover:
         of the helper. While the helper drives, the record keeps the commands of the policy as its shadow actions."""
         events: tuple[Event, ...] = ()
         if element:
-            self._commands = helper_commands(element)
+            commands = helper_commands(element)
+            self._held = {name: value for name, value in commands.items() if not isinstance(value, _DELTAS)}
+        else:
+            commands = self._held
         presses = self._parse_presses(element)
         if self._presses is None:
             self._presses = presses if presses is not None else _Presses()
@@ -111,6 +118,6 @@ class Takeover:
         match self._driver:
             case Driver.TELEOPERATOR:
                 shadow: dict[str, Commands] = {Driver.POLICY: policy} if policy else {}
-                return self._commands, StepRecord(self._driver, frozenset({self._driver}), events, shadow)
+                return commands, StepRecord(self._driver, frozenset({self._driver}), events, shadow)
             case Driver.POLICY:
                 return policy, StepRecord(self._driver, frozenset({self._driver}), events)

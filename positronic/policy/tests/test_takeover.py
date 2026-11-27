@@ -1,5 +1,8 @@
+import numpy as np
 import pytest
 
+from positronic.drivers.roboarm.command import JointDelta
+from positronic.keys import ROBOT_COMMAND
 from positronic.policy.base import Commands
 from positronic.policy.codecs import PolicyCommandError
 from positronic.policy.keys import HELPER_HAND_BACK, HELPER_TAKE_OVER, POLICY_SOURCE, TELEOPERATOR
@@ -7,6 +10,7 @@ from positronic.policy.record import Event, EventKind, StepRecord
 from positronic.policy.takeover import Takeover, helper_commands
 
 MOTOR = 'motor'
+ARM = ROBOT_COMMAND
 POLICY = {MOTOR: 1}
 HELPER = {MOTOR: 2}
 TAKE_OVER = Event(kind=EventKind.SWITCH, from_=POLICY_SOURCE, to=TELEOPERATOR, cause=HELPER_TAKE_OVER)
@@ -80,6 +84,15 @@ def test_while_the_helper_drives_a_step_with_no_element_gives_the_rig_the_comman
     assert commands == HELPER
     assert record.source == TELEOPERATOR
     assert record.events == ()
+
+
+def test_a_step_with_no_element_repeats_the_absolute_targets_of_the_newest_element_but_not_its_deltas():
+    takeover = Takeover()
+    delta = JointDelta(velocities=np.ones(7))
+    newest = {**_element(take_over=5), MOTOR: 2, ARM: delta}
+    _, (sent, _), (repeated, _) = _steps(takeover, _element(), newest, {})
+    assert sent == {MOTOR: 2, ARM: delta}
+    assert repeated == {MOTOR: 2}
 
 
 def test_while_the_helper_drives_an_element_with_only_press_fields_gives_the_rig_no_commands():
