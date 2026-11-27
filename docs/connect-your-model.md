@@ -435,43 +435,65 @@ Observations sent: ['grip', 'image.exterior', 'image.exterior_2', 'image.wrist',
 - Remove `--start_sec` and `--calls` to play the whole episode. `--end_sec` stops the play at that time.
 - `--dataset.path` also takes a local directory, such as the `--output_dir` of an eval. `--episode` selects an
   episode of a dataset that holds more than one.
-- The server gets `robot_state.ee_pose` only when it states the frame of that pose, as on a rig
-  ([State the end-effector frame](#state-the-end-effector-frame)).
+- The server gets `robot_state.ee_pose` only when it states the frame of that pose, at the site the recording
+  reports it at, as on a rig ([State the end-effector frame](#state-the-end-effector-frame)).
 - Each observation comes from the recording, whatever the server commands.
 - The recorded commands are the commands of π0.5. Compare the type, the size and the range of your commands with them.
-- A step that names a channel other than `robot_command` and `target_grip` stops the play with a
-  `PolicyCommandError`. A rig refuses the same step.
+- A step that names a channel the episode records no command on, or a pose command whose frame the server does not
+  state, stops the play with a `PolicyCommandError`. A rig refuses the same step.
 
 ## Expose your server
 
 Positronic can run an eval against a server on your machine ([Four ways to start](evaluation.md#four-ways-to-start)).
-The platform then dials the server over the internet. Prepare the server in three steps:
+The platform then dials the server over the internet. It needs only this:
 
-1. Give the server a public host name or a public IP address.
-2. Put a TLS edge in front of the server, such as a reverse proxy with a certificate for the host name.
-   [Wires](../positronic/offboard/README.md#wires) tells which wire to name behind the edge.
-3. Start the server with a bearer token in `AUTH_TOKEN`
-   ([Authentication](../positronic/offboard/README.md#authentication)).
+- A public host name or a public IP address.
+- A port that the platform can reach from the internet.
 
-The endpoint entry of the eval plan names the wire, the address and the file that holds the token
+An open server on the plain `websocket` or `grpc` wire is enough. Tailscale and other private networks are not
+offered: the platform dials only a public address.
+
+The endpoint entry of the eval plan names the wire and the address
 ([Eval plans](../client/README.md#eval-plans)).
 
-Check the endpoint from a machine outside your network. A `401` answer shows that the server is reachable and checks
-the token:
+Two options limit who can use the server:
+
+- **A bearer token.** Start the server with the token in `AUTH_TOKEN`
+  ([Authentication](../positronic/offboard/README.md#authentication)). The endpoint entry then names the file that
+  holds the token, in `auth_token_file`. The server refuses a request without the token.
+- **A TLS wire.** Put a TLS edge in front of the server, such as a reverse proxy with a certificate for the host name,
+  and name `websocket_tls` or `grpc_tls` ([Wires](../positronic/offboard/README.md#wires)).
+
+On a wire without TLS, the token travels in clear. Use the two options together.
+
+A server on Modal works in two forms:
+
+- **A Modal web endpoint** (`@modal.asgi_app` or `@modal.web_server`) at its `*.modal.run` URL takes `websocket_tls`
+  on port 443. It can run open. With Modal proxy auth on, the token file holds the proxy token as
+  `<token-id>.<token-secret>`, which Modal takes as a bearer token
+  ([Proxy auth](https://modal.com/docs/guide/webhook-proxy-auth)).
+- **A Modal Server with sticky sessions** (`modal_websocket_tls`, a `*.modal.direct` URL) works from a plan only when
+  it lets a session start with no authentication (`@app.server(unauthenticated=True)`). A plan refuses a token on
+  that wire ([Eval plans](../client/README.md#eval-plans)).
+
+Check the endpoint from a machine outside your network:
 
 ```bash
-curl -X POST https://policy.example.com/api/v1/keepalive
+curl -X POST http://policy.example.com:8000/api/v1/keepalive
 ```
 
-Then play the public episode to the endpoint, with the token in `AUTH_TOKEN`:
+An answer shows that the server is reachable. A server with a token answers `401` here. Then play the public episode
+to the endpoint:
 
 ```bash
 uv run python -m positronic.offboard.replay_episode \
   --dataset.path=s3://PUBLIC@positronic-public/datasets/droid-3cam-pi05/v1/ \
-  --policy=@positronic.cfg.policy.authed_remote --policy.wire=websocket_tls \
-  --policy.address.host=policy.example.com --policy.address.port=443 \
+  --policy.address.host=policy.example.com --policy.address.port=8000 \
   --start_sec=10 --calls=1
 ```
+
+For a server with a token and TLS, put the token in `AUTH_TOKEN` and add
+`--policy=@positronic.cfg.policy.authed_remote --policy.wire=websocket_tls --policy.address.port=443`.
 
 ## See Also
 

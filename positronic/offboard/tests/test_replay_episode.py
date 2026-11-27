@@ -1,3 +1,5 @@
+import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -5,7 +7,7 @@ import pytest
 from positronic_wire.websocket import WebsocketClientWire
 
 from pimm.time import RECEIVED_WORLD
-from positronic import keys
+from positronic import geom, keys
 from positronic.dataset.episode import EpisodeContainer
 from positronic.dataset.tests.utils import DummySignal
 from positronic.dataset.vector import RECORDED_TIME
@@ -37,8 +39,10 @@ def _episode(timeline: str = HARNESS_WORLD) -> EpisodeContainer:
         keys.EE_POSE: signal([np.array([t, 0, 0, 1, 0, 0, 0]) for t in seconds]),
         keys.GRIP: signal([0.5] * len(TIMES_NS)),
         keys.TARGET_JOINTS: signal([np.full(7, -t) for t in seconds]),
+        keys.TARGET_GRIP: signal([1.0] * len(TIMES_NS)),
         keys.TASK: 'Put the cup in the bowl',
         eval_keys.EMBODIMENT: 'test.franka',
+        **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE), keys.TARGET_EE_POSE: EEFrame(site=GRIPPER_SITE)}),
     })
 
 
@@ -84,26 +88,76 @@ def test_an_answer_with_a_field_a_rig_does_not_take_raises(start_server):
         play(_episode(), _served(start_server, _Hold(extra={'unknown': 1})), calls=1, out=lambda _: None)
 
 
-class _StatesItsPoseFrame(Policy):
-    """A policy that states the frame of the pose and keeps the first three observations it gets."""
+def test_an_answer_on_a_channel_the_episode_does_not_record_raises(start_server):
+    grip_of_left_arm = keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM)
 
-    def __init__(self):
+    with pytest.raises(PolicyCommandError, match=grip_of_left_arm):
+        play(_episode(), _served(start_server, _Hold(extra={grip_of_left_arm: 1.0})), calls=1, out=lambda _: None)
+
+
+class _Local(Policy):
+    """A local policy that states ``frames``, answers ``commands`` and keeps the first three observations it gets.
+
+    With ``call``, each step submits a call that reads, 0.1 s after it starts, whether the run is still open.
+    """
+
+    def __init__(
+        self, frames: dict[str, EEFrame] | None = None, commands: dict[str, Any] | None = None, call: bool = False
+    ):
         self.seen: list[Obs] = []
+        self.open_in_calls: list[bool] = []
+        self._frames = frames or {}
+        self._commands = commands or {}
+        self._call = call
+        self._call_started = threading.Event()
+        self._open = False
 
     def meta(self) -> dict[str, Any]:
-        return ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
+        return ee_frames_entry(self._frames) if self._frames else {}
 
     def run(self, runtime: Runtime) -> PolicyRun:
-        obs = yield
-        while len(self.seen) < 3:
-            self.seen.append(obs)
-            obs = yield Step({}, runtime.time_ns + round(1e9 / FPS))
-        return PolicyEnd.COMPLETE
+        self._open = True
+        try:
+            obs = yield
+            while len(self.seen) < 3:
+                self.seen.append(obs)
+                if self._call:
+                    runtime.submit(self._read_open)
+                    assert self._call_started.wait(5)
+                obs = yield Step(self._commands, runtime.time_ns + round(1e9 / FPS))
+            return PolicyEnd.COMPLETE
+        finally:
+            self._open = False
+
+    def _read_open(self) -> None:
+        self._call_started.set()
+        time.sleep(0.1)
+        self.open_in_calls.append(self._open)
 
 
 def test_a_policy_that_states_the_frame_of_the_pose_gets_the_pose():
-    policy = _StatesItsPoseFrame()
+    policy = _Local(frames={keys.EE_POSE: EEFrame(site=GRIPPER_SITE)})
 
     play(_episode(), policy, out=lambda _: None)
 
     np.testing.assert_allclose(policy.seen[2][keys.EE_POSE], [0.2, 0, 0, 1, 0, 0, 0])
+
+
+def test_a_policy_that_states_another_site_than_the_recording_raises():
+    with pytest.raises(ValueError, match='site the rig does not report'):
+        play(_episode(), _Local(frames={keys.EE_POSE: EEFrame(site='other_site')}), out=lambda _: None)
+
+
+def test_a_pose_command_whose_frame_the_policy_does_not_state_raises():
+    policy = _Local(commands={keys.ROBOT_COMMAND: command.CartesianPosition(geom.Transform3D())})
+
+    with pytest.raises(PolicyCommandError, match='states no'):
+        play(_episode(), policy, out=lambda _: None)
+
+
+def test_a_call_open_when_the_play_stops_ends_before_the_run_closes():
+    policy = _Local(call=True)
+
+    play(_episode(), policy, calls=0, out=lambda _: None)
+
+    assert policy.open_in_calls == [True]

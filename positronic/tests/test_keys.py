@@ -117,12 +117,19 @@ def test_a_control_mode_follows_the_command_channel_or_its_arm():
     assert not keys.is_control_mode(f'{command_of_left_arm}.joints{mode}')
 
 
-def test_a_command_channel_is_a_robot_command_or_a_grip_target_of_any_arm():
-    assert keys.is_command_channel(keys.TARGET_JOINTS)
-    assert keys.is_command_channel(keys.TARGET_GRIP)
-    assert keys.is_command_channel(keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM))
-    assert not keys.is_command_channel(keys.GRIP)
-    assert not keys.is_command_channel(f'{keys.TARGET_GRIP}_speed')
+def test_a_recorded_command_names_the_channel_it_unfolds_from():
+    left = keys.arm_channel(keys.ROBOT_COMMAND, keys.LEFT_ARM)
+    grip_of_left_arm = keys.arm_channel(keys.TARGET_GRIP, keys.LEFT_ARM)
+
+    assert keys.command_channel(keys.TARGET_JOINTS) == keys.ROBOT_COMMAND
+    assert keys.command_channel(keys.TARGET_EE_POSE_DELTA_FRAME) == keys.ROBOT_COMMAND
+    assert keys.command_channel(f'{left}{keys.JOINT_TARGETS_SUFFIX}') == left
+    assert keys.command_channel(f'{left}{keys.CONTROL_MODE_SUFFIX}.impedance.kq') == left
+    assert keys.command_channel(keys.TARGET_GRIP) == keys.TARGET_GRIP
+    assert keys.command_channel(grip_of_left_arm) == grip_of_left_arm
+    assert keys.command_channel(keys.GRIP) is None
+    assert keys.command_channel(f'{keys.TARGET_GRIP}_speed') is None
+    assert keys.command_channel(f'{keys.ROBOT_COMMAND}.unknown') is None
 
 
 def test_an_observation_is_an_arm_state_a_grip_or_a_camera():

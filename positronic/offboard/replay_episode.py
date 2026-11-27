@@ -1,8 +1,7 @@
 """Play the observations of a recorded episode to a policy server, and print the commands that come back.
 
-The client stack that the server declares runs as on a rig, on the episode's clock. The clock stops while a call
-is open, so the latency of the server does not change which observations it gets. Each command prints beside the
-command that the episode recorded at the same time.
+The client stack that the server declares runs as on a rig, on the episode's clock, which stops while a call is open.
+Each command prints beside the command that the episode recorded at the same time.
 
 Usage
     uv run python -m positronic.offboard.replay_episode --dataset.path=<dataset> \
@@ -18,7 +17,7 @@ import time
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 import configuronic as cfn
 import numpy as np
@@ -34,15 +33,50 @@ from positronic.dataset.time import Time
 from positronic.dataset.vector import RECORDED_TIME
 from positronic.drivers.recording import HARNESS_WORLD
 from positronic.drivers.roboarm.ik import ee_frames
+from positronic.drivers.roboarm.models import EEFrame
 from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyCommandError
 from positronic.policy.base import PolicyRun, Step
 from positronic.policy.executor import Executor, WaitStatus
+from positronic.policy.harness import policy_frames, refuse_unstated_pose_commands, stated_pose_signals
 
 TIMELINES = (HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME)
 """The timelines to play an episode on, in order of preference. An older recording carries only the later ones."""
 WAIT_SEC = 0.1
 MIN_STEP_SEC = 0.005
+
+
+@dataclass
+class _Rig:
+    """What the rig of an episode takes from a policy and sends it, as the harness decides it for that policy."""
+
+    sent: list[str]
+    """The observations sent: a pose only where the policy states its frame at the site the rig reports it at."""
+    recorded: list[str]
+    """The recorded commands to print beside the policy's."""
+    channels: frozenset[str]
+    """The command channels the episode records, which a step may name."""
+    stated_poses: frozenset[str]
+    """The pose signals whose frame the policy states. A pose command names only their channels."""
+
+    @classmethod
+    def of(cls, ep: Episode, timeline: str, observed: list[str], declared: dict[str, EEFrame]) -> Self:
+        rig_frames = ee_frames(ep.static)
+        stated = stated_pose_signals(declared, rig_frames)
+        # An older recording states no frames, and its poses carry only the suffix.
+        poses = rig_frames.keys() | {name for name in observed if name.endswith(keys.EE_POSE_SUFFIX)}
+        return cls(
+            sent=sorted(name for name in observed if name not in poses - stated),
+            recorded=sorted(
+                name
+                for name, signal in ep.signals.items()
+                if keys.command_channel(name) is not None
+                and not keys.is_control_mode(name)
+                and timeline in signal.timelines
+            ),
+            channels=frozenset(channel for name in ep.signals if (channel := keys.command_channel(name)) is not None),
+            stated_poses=stated,
+        )
 
 
 @dataclass
@@ -74,14 +108,13 @@ class _Recording:
     def say(self, time_ns: int, line: str) -> None:
         self.out(f'{(time_ns - self.first_ns) / 1e9:8.3f} s  {line}')
 
-    def step(self, run: PolicyRun, sent: list[str], recorded: list[str], time_ns: int) -> Step | None:
+    def step(self, run: PolicyRun, rig: _Rig, time_ns: int) -> Step | None:
         """Send the observation at ``time_ns`` to ``run``, and write each command it returns beside the recorded ones.
 
-        Return ``None`` when the policy ends the run. Raise ``PolicyCommandError`` for a step that names a channel a
-        rig does not take.
+        Return ``None`` when the policy ends the run. Raise ``PolicyCommandError`` for a step that the harness refuses.
         """
         obs = {
-            **self.at(sent, time_ns),
+            **self.at(rig.sent, time_ns),
             keys.TASK: self.instruction(time_ns),
             keys.DESCRIPTOR: self.ep.static.get(eval_keys.EMBODIMENT, ''),
         }
@@ -91,12 +124,15 @@ class _Recording:
             self.say(time_ns, f'the policy ended the run: {end.value}')
             return None
         assert step is not None, 'a policy must yield a Step for each observation'
-        if unknown := sorted(name for name in step.commands if not keys.is_command_channel(name)):
-            raise PolicyCommandError(f'The step names {unknown}, and a rig takes only command and grip channels')
+        if unknown := sorted(step.commands.keys() - rig.channels):
+            raise PolicyCommandError(
+                f'The step names {unknown}, and the episode records commands only on {sorted(rig.channels)}'
+            )
+        refuse_unstated_pose_commands(step.commands, rig.stated_poses)
         if step.commands:
             for name, value in step.commands.items():
                 self.say(time_ns, f'{name} = {value}')
-            for name, value in self.at(recorded, time_ns).items():
+            for name, value in self.at(rig.recorded, time_ns).items():
                 self.say(time_ns, f'recorded {name} = {value}')
         return step
 
@@ -118,18 +154,13 @@ def play(
 ) -> int:
     """Play ``ep`` from ``start_sec`` to ``end_sec`` to ``policy``, write each line to ``out``, and return the calls.
 
-    ``calls`` stops the play when the client asks for one more call than it. Raise ``PolicyCommandError`` for a step
-    that names a channel a rig does not take.
+    ``calls`` stops the play when the client asks for one more call than it. Raise as the harness does: ``ValueError``
+    for a policy that states a pose frame the rig does not report, and ``PolicyCommandError`` for a step it refuses.
     """
     observed = [name for name in ep.signals if keys.is_observation(name)]
     timeline = next((t for t in TIMELINES if all(t in ep.signals[name].timelines for name in observed)), None)
     if not observed or timeline is None:
         raise ValueError(f'The episode has no observation on one of the timelines {TIMELINES}')
-    recorded = [
-        name
-        for name, signal in ep.signals.items()
-        if keys.is_command_channel(name) and not keys.is_control_mode(name) and timeline in signal.timelines
-    ]
     first_ns = max(ep.signals[name].bounds(timeline).start for name in observed)
     last_ns = min(ep.signals[name].bounds(timeline).finish for name in observed)
     stop_ns = last_ns if end_sec is None else min(last_ns, first_ns + round(end_sec * 1e9))
@@ -139,16 +170,15 @@ def play(
 
     runtime = Executor(lambda: now[0], simulated=True, charge_inference_time=False)
     run = runtime.start(policy)
-    frames = ee_frames(policy.meta()) | ee_frames(runtime.metadata_snapshot())
-    # The harness sends a pose only to a policy that states the frame of that pose.
-    sent = sorted(name for name in observed if not name.endswith(keys.EE_POSE_SUFFIX) or name in frames)
-    out(f'Observations sent: {sent}')
     answered = 0
-    with closing(runtime), closing(run):
+    # The runtime drains its calls before the run closes, as on a rig.
+    with closing(run), closing(runtime):
+        rig = _Rig.of(ep, timeline, observed, policy_frames(policy, runtime))
+        out(f'Observations sent: {rig.sent}')
         while now[0] <= stop_ns:
             runtime.start_tick(now[0])
             called_ns = time.monotonic_ns()
-            step = recording.step(run, sent, recorded, now[0])
+            step = recording.step(run, rig, now[0])
             if step is None or (calls is not None and answered >= calls and runtime.has_pending):
                 break
             if completed := _wait_for_answers(runtime):
