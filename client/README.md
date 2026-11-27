@@ -310,9 +310,12 @@ image runs the platform executes itself. `users.me` names the grant's client in 
 Each run of a rig plan carries `episodes`: what the run took on, and what it recorded. `done` moves
 as the rig records each episode. A finished rig plan also carries `replay`, a page that plays back its
 episodes, `report`, a page that shows their results, and `outcome`, the kept, judged and successful
-episodes per endpoint. `replay` and `report` are absent until the platform has built each page. The
-rig writes the episodes to the org's own bucket, and `artifacts.result` names the prefix they landed
-under. Read it with the org's own credential for that bucket: `submissions.artifacts` refuses a rig plan.
+episodes per endpoint. `replay` and `report` are absent until the platform has built each page.
+`artifacts.result` names the prefix that the episodes landed under. The rig writes the episodes of an
+organization with a customer grant to the bucket of the grant's client. It writes the episodes of a
+personal organization to a bucket of the platform, and the owner holds no credential for that bucket.
+`submissions.artifacts` lists the episodes of a finished rig plan to the account that filed it, each
+under a signed URL. A personal organization reads its episodes that way.
 
 The answer to `submissions.create` carries `resolved`, the plan as the rig runs it:
 `episodes_total`, and for each task the count per endpoint, the cap, the preset, each side, the
@@ -635,8 +638,8 @@ the episodes, read `result.json`. Its `episode_locations` lists their addresses.
 to list the records of one eval of a submission of several; without it, the page lists the first. The route
 refuses an `eval` that the submission does not run. A platform that sends no `evals` ignores `eval`. The route
 refuses every other run: a run still going has a part-written prefix, and a run that failed with no
-`scores` reads its records off `submissions.get`. It refuses a rig plan, whose episodes are in the
-org's own bucket (§Eval plans).
+`scores` reads its records off `submissions.get`. The route lists a finished rig plan to the account
+that filed it, and it refuses an `eval` on a rig plan (§Eval plans).
 
 `users.me` reports the plan's rules as a list of `QuotaLimit`, each with its own key, window and
 subject; `MeResponse.quota_for(QUOTA_SUBMISSIONS_DAY)` reads one by key, from the keys the package

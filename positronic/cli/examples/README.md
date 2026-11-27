@@ -40,10 +40,11 @@ Two or more endpoints in the plan make one blind sample: the operator is told no
 episode records which one served it. The plan is a YAML or JSON file, and each endpoint in it names
 its wire and that wire's address, as the [client README](../../../client/README.md) sets out.
 
-`eval status --id=<hex id>` reads a filed plan back. A finished plan carries `artifacts.result`,
-the prefix in your org's own bucket that its episodes landed under. Read that prefix with your own
-credential for the bucket. It also carries `outcome`, the kept, judged and successful episodes per
-endpoint, and `replay`, a page that plays the episodes back once the platform has built it.
+`eval status --id=<hex id>` reads a filed plan back. A finished plan carries `artifacts.result`, the
+prefix that its episodes landed under. It also carries `outcome`, the kept, judged and successful
+episodes per endpoint, and `replay`, a page that plays the episodes back once the platform has built it.
+`PlatformClient.list_artifacts` lists the episodes to the account that filed the plan, each under a
+signed URL. A personal organization holds no credential for the bucket, so it reads them that way.
 
 An eval names the embodiment it runs on — a task suite belongs to a simulator or to one real robot,
 never to both — so the eval is the whole of the choice. The platform owns the list. Read the names
