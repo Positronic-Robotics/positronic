@@ -482,10 +482,6 @@ class TeleopService:
             self._forget_an_old_dropped_trial()
             return self._phase
 
-    def state(self) -> TrialState:
-        with self._locked():
-            return self._state()
-
     def _state(self) -> TrialState:
         """Hold the lock."""
         self._forget_an_old_dropped_trial()
@@ -494,6 +490,36 @@ class TeleopService:
             self._tracked_at_ns is not None and time.monotonic_ns() - self._tracked_at_ns < self.silence_limit * 1e9
         )
         return TrialState(self._phase, self._task, control, tuple(self._images), tracked)
+
+    def state(self) -> TrialState:
+        with self._locked():
+            return self._state()
+
+    @staticmethod
+    def _arm_name(arm: str | None) -> str:
+        """The name of ``arm`` in the view and the log. The one arm of a one-arm session is 'Control'."""
+        return 'Control' if arm is None else arm.capitalize()
+
+    def _log(self, line: str) -> None:
+        """Keep ``line`` for the log, until `_locked` releases the lock. Hold the lock."""
+        self._log_lines.append(line)
+
+    def _set_phase(self, phase: Phase, cause: str) -> None:
+        """Go to ``phase``, and log a change with its ``cause``. Hold the lock."""
+        if phase is not self._phase:
+            self._log(f'Teleop trial: {self._phase} -> {phase} ({cause})')
+        self._phase = phase
+
+    def _clear_trial(self, cause: str) -> None:
+        """Show no trial, and log that control of each arm whose control is on goes off for ``cause``. Hold the
+        lock."""
+        for arm in [arm for arm, tracker in self._trackers.items() if tracker.on]:
+            self._log(f'{self._arm_name(arm)} off ({cause})')
+        self._set_phase(Phase.IDLE, cause)
+        self._events, self._connection_lost = [], set()
+        self._task, self._trackers, self._images, self._trial_cameras = '', {}, {}, ()
+        self._headset_camera, self._hold, self._frames, self._resumable_until = None, {}, 0, None
+        self._end = None
 
     def _forget_an_old_dropped_trial(self) -> None:
         """Show no trial once no session can resume it. Hold the lock."""
@@ -708,6 +734,21 @@ class TeleopService:
         connection_lost = frozenset(self._connection_lost)
         return self._ViewSnapshot(state, shown, answered, controls, connection_lost, names, dict(self._images))
 
+    def _control_lines(
+        self, controls: Sequence[tuple[str | None, bool]], connection_lost: frozenset[str | None]
+    ) -> list[Badge]:
+        """The state of the clutch of each arm and the button that changes it, on the colour of the state. The line of
+        an arm in ``connection_lost`` names that cause."""
+        lines = []
+        for arm, on in controls:
+            name, clutch = self._arm_name(arm), self.CLUTCH_BUTTONS[ARM_CONTROLLERS[arm]]
+            if on:
+                lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
+            else:
+                cause = ': connection lost' if arm in connection_lost else ''
+                lines.append(Badge(f'{name} off{cause} ({clutch}: on)', self.CONTROL_OFF_COLOUR))
+        return lines
+
     def _text_of(self, snapshot: _ViewSnapshot, task: bool) -> ViewText:
         footer = (CAMERA_HINT,)
         match snapshot.state.phase:
@@ -733,36 +774,12 @@ class TeleopService:
     # The button that turns control on and off, by controller
     CLUTCH_BUTTONS = {LEFT: 'X', RIGHT: 'A'}
 
-    @staticmethod
-    def _arm_name(arm: str | None) -> str:
-        """The name of ``arm`` in the view and the log. The one arm of a one-arm session is 'Control'."""
-        return 'Control' if arm is None else arm.capitalize()
-
-    def _control_lines(
-        self, controls: Sequence[tuple[str | None, bool]], connection_lost: frozenset[str | None]
-    ) -> list[Badge]:
-        """The state of the clutch of each arm and the button that changes it, on the colour of the state. The line of
-        an arm in ``connection_lost`` names that cause."""
-        lines = []
-        for arm, on in controls:
-            name, clutch = self._arm_name(arm), self.CLUTCH_BUTTONS[ARM_CONTROLLERS[arm]]
-            if on:
-                lines.append(Badge(f'{name} on ({clutch}: off)', self.CONTROL_ON_COLOUR))
-            else:
-                cause = ': connection lost' if arm in connection_lost else ''
-                lines.append(Badge(f'{name} off{cause} ({clutch}: on)', self.CONTROL_OFF_COLOUR))
-        return lines
-
     def _shown_camera(self) -> str | None:
         """The camera that the headset shows. Hold the lock."""
         for name in (self._chosen_camera, self._headset_camera):
             if name is not None and name in self._trial_cameras:
                 return name
         return next(iter(self._trial_cameras), None)
-
-    def _log(self, line: str) -> None:
-        """Keep ``line`` for the log, until `_locked` releases the lock. Hold the lock."""
-        self._log_lines.append(line)
 
     def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped before its first answer, as the next session of its client.
@@ -777,12 +794,6 @@ class TeleopService:
             self._headset_camera = settings.headset_camera
             self._log('A new session resumed the dropped trial')
             return ResumeOutcome.RESUMED
-
-    def _set_phase(self, phase: Phase, cause: str) -> None:
-        """Go to ``phase``, and log a change with its ``cause``. Hold the lock."""
-        if phase is not self._phase:
-            self._log(f'Teleop trial: {self._phase} -> {phase} ({cause})')
-        self._phase = phase
 
     def wait_for_ready(self, settings: SessionParams, cancelled: threading.Event) -> None:
         """Start a new trial of a session with ``settings``, and wait up to the ready limit for Ready.
@@ -863,24 +874,6 @@ class TeleopService:
         grip = np.asarray(request[keys.arm_channel(GRIP, arm)], dtype=float).reshape(-1)[0]
         return geom.Transform3D.from_vector(pose, QUAT), float(grip)
 
-    def _apply(
-        self,
-        sample: _Sample | None,
-        events: Sequence[tuple[str, Event]],
-        robot_poses: Mapping[str | None, geom.Transform3D],
-    ) -> dict[str, Any]:
-        """The frame element of ``sample`` and ``events``. Control of each arm starts from its pose in
-        ``robot_poses``, so the robot does not jump. Hold the lock."""
-        for _, event in events:
-            match event:
-                case Event.COMPLETE:
-                    return self._end_trial(PolicyEnd.COMPLETE, 'hold B: Complete')
-                case Event.GIVE_UP:
-                    return self._end_trial(PolicyEnd.GIVE_UP, 'hold the stick: Give up')
-        for arm in self._trackers:
-            self._drive_arm(arm, sample, events, robot_poses[arm])
-        return self._hold_element()
-
     def _end_trial(self, end: PolicyEnd, cause: str) -> dict[str, Any]:
         """End the trial with ``end``, and return the element that ends it. Hold the lock."""
         self._end = {**self._hold_element(), END: end.value}
@@ -919,21 +912,28 @@ class TeleopService:
         if tracker.on and target is not None:
             self._hold[arm] = target, 0.0 if buttons is None else ButtonMap.grip(buttons.values)
 
+    def _apply(
+        self,
+        sample: _Sample | None,
+        events: Sequence[tuple[str, Event]],
+        robot_poses: Mapping[str | None, geom.Transform3D],
+    ) -> dict[str, Any]:
+        """The frame element of ``sample`` and ``events``. Control of each arm starts from its pose in
+        ``robot_poses``, so the robot does not jump. Hold the lock."""
+        for _, event in events:
+            match event:
+                case Event.COMPLETE:
+                    return self._end_trial(PolicyEnd.COMPLETE, 'hold B: Complete')
+                case Event.GIVE_UP:
+                    return self._end_trial(PolicyEnd.GIVE_UP, 'hold the stick: Give up')
+        for arm in self._trackers:
+            self._drive_arm(arm, sample, events, robot_poses[arm])
+        return self._hold_element()
+
     def _hold_element(self) -> dict[str, Any]:
         """The element that sends the hold targets, arm after arm. Hold the lock."""
         assert self._hold, 'the first frame request sets the hold targets'
         return {ACTION: np.concatenate([np.append(pose.as_vector(QUAT), grip) for pose, grip in self._hold.values()])}
-
-    def _clear_trial(self, cause: str) -> None:
-        """Show no trial, and log that control of each arm whose control is on goes off for ``cause``. Hold the
-        lock."""
-        for arm in [arm for arm, tracker in self._trackers.items() if tracker.on]:
-            self._log(f'{self._arm_name(arm)} off ({cause})')
-        self._set_phase(Phase.IDLE, cause)
-        self._events, self._connection_lost = [], set()
-        self._task, self._trackers, self._images, self._trial_cameras = '', {}, {}, ()
-        self._headset_camera, self._hold, self._frames, self._resumable_until = None, {}, 0, None
-        self._end = None
 
     def end_session(self) -> None:
         """End the session of the trial. A trial that answered at most one frame stays for a client that opens its
