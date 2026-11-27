@@ -551,10 +551,15 @@ current limit. The count starts again at 00:00 UTC each day.
 `users.me` tells how many submissions your team used today, and how many are left. Read it from Python:
 
 ```python
+import os
+
 from platform_client.client import PlatformClient
+from platform_client.config import api_key_from, platform_url_from, record_if_needed
 from platform_client.responses import QUOTA_SUBMISSIONS_DAY
 
-day = PlatformClient().me().quota_for(QUOTA_SUBMISSIONS_DAY)
+record = record_if_needed(os.environ, None)  # the key that `positronic account register` saved
+client = PlatformClient(platform_url_from(os.environ, None, record), api_key=api_key_from(os.environ, record))
+day = client.me().quota_for(QUOTA_SUBMISSIONS_DAY)
 print(f'{day.used} of {day.limit} used, {day.remaining} left, until {day.resets_at}')
 ```
 
