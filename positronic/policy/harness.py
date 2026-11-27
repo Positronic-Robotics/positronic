@@ -835,43 +835,45 @@ class Harness(pimm.ControlSystem):
         runtime = Executor(
             clock.now_ns, simulated=self._embodiment.simulated, charge_inference_time=task.charge_inference_time
         )
-        policy_run = None
-        try:
-            policy_run = runtime.start(rollout.policy)
-            stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
-            withheld_poses = self._pose_signals() - stated_poses
-            deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
-            self.deadline_ns.emit(deadline_ns)
-            self._telemetry.start_rollout(clock.now())
-            gc_steps = _GcSteps(self._gc)
+        # Start the policy in the scope, so that the calls it submits before its first step count too.
+        with self._telemetry.counting_encodes():
+            policy_run = None
             try:
-                with self._recording(rollout.writer), self._telemetry.counting_encodes():
-                    payload = yield from self._rollout(
-                        should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns, gc_steps
-                    )
-                    if self._writer is not None:
-                        static = only_keep_written_signals(
-                            self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
+                policy_run = runtime.start(rollout.policy)
+                stated_poses = self._stated_poses(self._policy_frames(rollout.policy, runtime))
+                withheld_poses = self._pose_signals() - stated_poses
+                deadline_ns = clock.now_ns() + round(task.timeout_sec * 1e9) if task.timeout_sec is not None else None
+                self.deadline_ns.emit(deadline_ns)
+                self._telemetry.start_rollout(clock.now())
+                gc_steps = _GcSteps(self._gc)
+                try:
+                    with self._recording(rollout.writer):
+                        payload = yield from self._rollout(
+                            should_stop, task, withheld_poses, stated_poses, runtime, policy_run, deadline_ns, gc_steps
                         )
-                        for name, value in static.items():
-                            self._writer.set_static(name, value)
+                        if self._writer is not None:
+                            static = only_keep_written_signals(
+                                self._build_episode_meta(rollout, runtime) | (payload or {}), self._recorded_signals
+                            )
+                            for name, value in static.items():
+                                self._writer.set_static(name, value)
+                finally:
+                    self.deadline_ns.emit(None)
             finally:
-                self.deadline_ns.emit(None)
-        finally:
-            # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
-            self._telemetry.describe_policy(
-                lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
-            )
-            self._telemetry.describe_schedule(runtime.metadata_snapshot())
-            # Cleanup stops at the first error. Later resources may remain open; do not add nested
-            # finally blocks to guarantee their closure.
-            logging.info('Closing the policy runtime')
-            runtime.close()
-            logging.info('Policy runtime closed')
-            if policy_run is not None:
-                logging.info('Closing the policy')
-                policy_run.close()
-                logging.info('Policy closed')
+                # Write the server's metadata before cleanup, so that a cleanup failure keeps it on the span.
+                self._telemetry.describe_policy(
+                    lambda: self._recorded_policy_meta(rollout.policy.meta(), runtime.metadata_snapshot())
+                )
+                self._telemetry.describe_schedule(runtime.metadata_snapshot())
+                # Cleanup stops at the first error. Later resources may remain open; do not add nested
+                # finally blocks to guarantee their closure.
+                logging.info('Closing the policy runtime')
+                runtime.close()
+                logging.info('Policy runtime closed')
+                if policy_run is not None:
+                    logging.info('Closing the policy')
+                    policy_run.close()
+                    logging.info('Policy closed')
 
         self._telemetry.end(clock.now())
         if payload is not None:

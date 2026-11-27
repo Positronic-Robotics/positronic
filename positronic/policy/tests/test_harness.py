@@ -1494,6 +1494,38 @@ def test_the_episode_span_counts_its_late_steps_and_its_slow_encodes_in_the_poli
     }
 
 
+def test_the_episode_span_counts_an_encode_that_the_policy_submits_before_its_first_step(episode_harness, tmp_path):
+    h = episode_harness
+    encoded = threading.Event()
+
+    def encode() -> None:
+        start_ns = time.time_ns()
+        telemetry.record_span(telemetry_keys.SPAN_POLICY_ENCODE, start_ns, start_ns + 1_000_000)
+        encoded.set()
+
+    class EncodesAtStart(Policy):
+        def run(self, runtime):
+            runtime.submit(encode)
+            assert encoded.wait(5.0)
+            yield
+            while True:
+                yield Step({MOTOR: 1}, runtime.time_ns + 10_000_000)
+
+    with telemetry.bind(tmp_path, telemetry_keys.HARNESS_PROCESS, 'test-encode-at-start'):
+        h.observation.emit(1)
+        h.caller(Rollout(Task('move', None), EncodesAtStart(), None))
+        next(h.loop)
+        h.world.clock.advance_to_ns(10_000_000)
+        next(h.loop)
+        h.done.emit({eval_keys.SUCCESS: True})
+        next(h.loop)
+        h.world.request_stop()
+        list(h.loop)
+    spans = list(telemetry.read_spans(telemetry.spans_path(tmp_path, telemetry_keys.HARNESS_PROCESS)))
+    episode = next(s for s in spans if s.name == telemetry_keys.SPAN_EPISODE)
+    assert episode.attrs[telemetry_keys.ATTR_EPISODE_ENCODES] == 1
+
+
 def test_an_encode_that_outlives_its_episode_does_not_count_for_the_next_episode(episode_harness, tmp_path):
     h = episode_harness
     release, encoded = threading.Event(), threading.Event()
