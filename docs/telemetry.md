@@ -110,7 +110,7 @@ The span names are the contract:
 | Span | Parent | Attributes | Measures |
 |---|---|---|---|
 | `eval.pass` | root | `run.id`, policy name | one eval sweep (its wall is `W_pass`) |
-| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; `inference.policy.*`, the scalar fields of the policy's recorded metadata, at start and again before the policy cleanup; at end `episode.steps`, `episode.virtual_s`, `episode.waypoints.hold_sum_ms`, `episode.waypoints.hold_max_ms` | one rollout's wall |
+| `episode` | `eval.pass` | `episode.index` + the trial's flat `params` keys; `inference.policy.*`, the scalar fields of the policy's recorded metadata, at start and again before the policy cleanup; at end `episode.steps`, `episode.virtual_s`, `episode.steps_late_ge_<N>ms`, `episode.encodes`, `episode.encodes_gt_<N>ms`, `episode.waypoints.hold_sum_ms`, `episode.waypoints.hold_max_ms` | one rollout's wall |
 | `reset` | `episode` | — | scene reset (the harness readying the rig + the producer publishing what it drew) |
 | `env.step` | `episode` | — | the client-observed env step (materialisation included) |
 | `materialize` | `env.step` | — | client-side observation assembly (shared-memory image alloc + camera copies) |
@@ -196,6 +196,15 @@ The `episode` span carries `episode.waypoints.hold_sum_ms` and `episode.waypoint
 command of the next chunk. During a hold the arm keeps its last target. The wait for the first chunk does not
 count, and a hold that the episode end cuts does not count. The hold share of a rollout is
 `hold_sum_ms / 1000 / episode.virtual_s`.
+
+The `episode` span also counts the late steps and the slow encodes, so a query of the episodes alone can test a
+latency target. `episode.steps_late_ge_<N>ms` counts the harness steps that start N ms or more after their due time
+(the `step.late_ms` of a `harness.step` span), for N in 1, 2, 5, 10, 20 and 50. A step that reads no complete
+observation counts too, and `episode.steps` does not count it. `episode.encodes` counts the `policy.encode` spans of
+the policy calls that the rollout submits, and `episode.encodes_gt_<N>ms` counts the spans of them that take more than
+N ms, for N in 5, 10, 15, 30 and 60. Each episode span carries each count, 0 included. The counts record at the `call`
+level, so a run gets them without the step spans. They count only the encode spans that the active level records. The
+counts cost each step and each encode one bisect and one integer add.
 
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of a camera frame to the start of the
 call. The frame is the newest frame of each camera that the harness reads, and with several cameras the oldest of
