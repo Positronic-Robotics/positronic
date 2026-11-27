@@ -15,8 +15,18 @@ PARENT_ID="${NEBIUS_PARENT_ID:-project-e00f38wexevrr52b8j}"
 SUBNET_ID="${NEBIUS_SUBNET_ID:-vpcsubnet-e00pk1j1x6hjmr4m92}"
 
 # Shared filesystem (RWX) holding the uv / HF / openpi caches across cold starts. An ID, not a name
-# — `--volume` rejects names. pos3's cache stays on local disk (~/.cache/positronic/s3).
-CACHE_FS="${NEBIUS_CACHE_FS:-computefilesystem-e00f6jyfr5wkawyrab}"
+# — `--volume` rejects names. pos3's cache stays on local disk (~/.cache/positronic/s3). It has no
+# default: create one (README.md § Shared cache filesystem) and export its ID.
+CACHE_FS="${NEBIUS_CACHE_FS:-}"
+
+# A script that mounts the cache filesystem calls this before it creates a job or an endpoint.
+require_cache_fs() {
+  if [ -z "$CACHE_FS" ]; then
+    echo "NEBIUS_CACHE_FS is not set. Create a shared filesystem (workflows/nebius/README.md" \
+      "§ Shared cache filesystem) and export its ID." >&2
+    exit 1
+  fi
+}
 
 # Docker image tag every job and endpoint pulls. `make push-*` only updates `:latest` under CI;
 # locally it pushes `:<branch>`/`:<sha>`. To run a branch build: `make push-<x> IMAGE_TAG=<branch>`

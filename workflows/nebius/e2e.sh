@@ -44,6 +44,8 @@ EOF
   exit 1
 fi
 
+require_cache_fs
+
 CONVERT_CONFIG=()
 case "$VENDOR" in
   lerobot_0_3_3) CODEC=positronic.vendors.lerobot_0_3_3.codecs.ee ;;

@@ -141,6 +141,7 @@ if [ -n "$GRPC_PORT" ]; then PORT_ARGS+=(--container-port "${GRPC_PORT}"); fi
 
 SERVER_LAUNCH+=(-m "$SERVER_MODULE" "$@")
 
+require_cache_fs
 echo "Creating $VENDOR endpoint '$NAME'..."
 nebius ai endpoint create \
   --parent-id "$PARENT_ID" \
