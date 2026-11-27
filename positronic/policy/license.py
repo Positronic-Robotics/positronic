@@ -11,20 +11,10 @@ the server metadata of a remote source::
 """
 
 from collections.abc import Collection
-from typing import Any
 
 from positronic.dataset.episode import Episode
 from positronic.policy.keys import CONTROL_SOURCE, CONTROL_USES, LICENSE, NO_LICENSE, SERVER, SOURCES
 from positronic.policy.record import decode_uses
-
-
-def _sources(record: Episode) -> set[str]:
-    """The name of each source that drove or that a step used in ``record``."""
-    sources = set(record[CONTROL_SOURCE].values()) if CONTROL_SOURCE in record else set()
-    if CONTROL_USES in record:
-        for uses in record[CONTROL_USES].values():
-            sources |= decode_uses(uses)
-    return sources
 
 
 def license_keys(name: str) -> tuple[str, str]:
@@ -32,16 +22,6 @@ def license_keys(name: str) -> tuple[str, str]:
     metadata."""
     prefix = f'{SOURCES}.{name}.'
     return prefix + LICENSE, f'{prefix}{SERVER}.{LICENSE}'
-
-
-def _license(value: Any) -> str:
-    return value if isinstance(value, str) else NO_LICENSE
-
-
-def _licenses(record: Episode, name: str) -> list[str]:
-    """Each license that ``record`` has for the source ``name``, or ``[NO_LICENSE]`` when it has none."""
-    stated = [_license(record[key]) for key in license_keys(name) if key in record]
-    return stated or [NO_LICENSE]
 
 
 class LicenseRule:
@@ -62,11 +42,27 @@ class LicenseRule:
     def allows(self, license: str) -> bool:
         return license in self._allowed
 
+    @staticmethod
+    def _sources(record: Episode) -> set[str]:
+        """The name of each source that drove or that a step used in ``record``."""
+        sources = set(record[CONTROL_SOURCE].values()) if CONTROL_SOURCE in record else set()
+        if CONTROL_USES in record:
+            for uses in record[CONTROL_USES].values():
+                sources |= decode_uses(uses)
+        return sources
+
+    @staticmethod
+    def _licenses(record: Episode, name: str) -> list[str]:
+        """Each license that ``record`` has for the source ``name``, or ``[NO_LICENSE]`` when it has none. A value that
+        is not a string is ``NO_LICENSE``."""
+        stated = [record[key] for key in license_keys(name) if key in record]
+        return [value if isinstance(value, str) else NO_LICENSE for value in stated] or [NO_LICENSE]
+
     def refused(self, record: Episode) -> dict[str, str]:
         """A license of each source of ``record`` that the rule refuses, by name: the first of its licenses that is not
         in ``allowed``. A source with no license, or with no entry in the record, has ``NO_LICENSE``."""
         refused = {}
-        for name in sorted(_sources(record)):
-            if not_allowed := [value for value in _licenses(record, name) if not self.allows(value)]:
+        for name in sorted(self._sources(record)):
+            if not_allowed := [value for value in self._licenses(record, name) if not self.allows(value)]:
                 refused[name] = not_allowed[0]
         return refused
