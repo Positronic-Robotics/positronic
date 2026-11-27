@@ -499,12 +499,6 @@ class TeleopService:
         )
         return TrialState(self._phase, self._task, control, tuple(self._images), tracked)
 
-    def _set_phase(self, phase: Phase, cause: str) -> None:
-        """Go to ``phase``, and log a change with its ``cause``. Hold the lock."""
-        if phase is not self._phase:
-            self._log(f'Teleop trial: {self._phase} -> {phase} ({cause})')
-        self._phase = phase
-
     def _forget_an_old_dropped_trial(self) -> None:
         """Show no trial once no session can resume it. Hold the lock."""
         if self._resumable_until is not None and time.monotonic() >= self._resumable_until:
@@ -783,6 +777,12 @@ class TeleopService:
             self._headset_camera = settings.headset_camera
             self._log('A new session resumed the dropped trial')
             return ResumeOutcome.RESUMED
+
+    def _set_phase(self, phase: Phase, cause: str) -> None:
+        """Go to ``phase``, and log a change with its ``cause``. Hold the lock."""
+        if phase is not self._phase:
+            self._log(f'Teleop trial: {self._phase} -> {phase} ({cause})')
+        self._phase = phase
 
     def wait_for_ready(self, settings: SessionParams, cancelled: threading.Event) -> None:
         """Start a new trial of a session with ``settings``, and wait up to the ready limit for Ready.
