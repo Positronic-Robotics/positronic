@@ -395,7 +395,7 @@ On a bimanual rig, use `--policy=@positronic.cfg.policy.teleop_yam`, and do step
 up a new robot, or to find a fault. The robots are `franka`, `yam`, `yam_bimanual`, `so101` and `cron_bimanual`.
 
 ```bash
-uv run positronic teleop-debug cron_bimanual --arms.left_arm.ip=192.168.68.67 --arms.right_arm.ip=192.168.68.66
+uv run positronic teleop-debug cron_bimanual
 ```
 
 Open the page of the headset, as for `positronic teleop`. One arm follows the right controller. On two arms, the left
@@ -408,7 +408,7 @@ builds them: with its CAN chains, its mounts, the compensation of each arm and i
 | Quest | What it does |
 |---|---|
 | A (right) or X (left) | control of the arm on or off |
-| a press of the stick | control off, the errors of the arm and its gripper cleared, and the arm at its start pose |
+| a press of the stick | control off, the errors cleared (see below), and a move of the arm to its start pose |
 | the trigger | the grip, while control of the arm is on |
 | press or hold Y | the camera and the panel (see Cameras) |
 
@@ -417,6 +417,13 @@ Control of an arm goes off when its controller is not tracked, when the headset 
 arm, the trigger and the grip, the shift of the target and of the arm since control came on, and the last events.
 The log has the same events. `--arms.start_joints` (or `--arms.left_start_joints` and `--arms.right_start_joints`)
 changes the start pose.
+
+A press of the stick calls the ready handler of each device of the arm that has one: the Franka arm and its Robotiq
+gripper, and a YAM arm with its gripper. A device answers when it clears its error, or with the error that it cannot
+clear. A CRON arm and an SO-101 arm have no ready handler. A CRON arm clears its error before the move starts, and an
+SO-101 arm leaves its error when the move arrives.
+
+No control of the headset stops a move to the start pose. Only Ctrl-C stops it, because Ctrl-C stops the tool.
 
 ## See Also
 

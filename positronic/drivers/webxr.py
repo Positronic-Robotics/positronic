@@ -410,7 +410,8 @@ class WebXR(pimm.ControlSystem):
                                 transform.translation *= self.sensitivity
 
                         # A sample with no controller in it tells a reader that the controllers are not tracked.
-                        # The poses go before the buttons: `teleop.debug` reads the buttons first to pair them
+                        # The poses go before the buttons, so a reader that reads the buttons first gets the poses
+                        # of the same sample or a later one
                         self.controller_positions.emit(controller_positions)
                         self.buttons.emit(buttons)
                         fps.tick()

@@ -5,7 +5,8 @@ fault.
 Each arm has its own controls:
 
 - A (right controller) or X (left controller): control of the arm on or off.
-- A press of the stick: control off, the errors of the arm and its gripper cleared, and the arm at its start pose.
+- A press of the stick: control off, a call of the ready handler of each device of the arm that has one, and a move
+  of the arm to its start pose. No control stops this move.
 - Y on the left controller stays with the headset page: the camera and the panel.
 - The trigger: the grip, while control of the arm is on.
 
@@ -266,8 +267,7 @@ class ArmControl(pimm.ControlSystem):
             yield pimm.Sleep(self.POLL_SEC)
 
     def _to_start(self, should_stop: pimm.SignalReceiver, clock: pimm.Clock) -> Iterator[pimm.Sleep]:
-        """Clear the errors of the arm and its gripper, and put the arm at its start pose. Raise what a device failed
-        on."""
+        """Call the ready handlers of the arm, and put the arm at its start pose. Raise what a device failed on."""
         yield from self._wait(pimm.calls.all_of([ready(None) for ready in self.ready.values()]), should_stop, clock)
         yield from self._settle(should_stop, clock)
         if should_stop.value:
