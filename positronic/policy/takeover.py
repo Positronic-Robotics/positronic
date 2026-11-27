@@ -45,15 +45,15 @@ class Driver(StrEnum):
     TELEOPERATOR = TELEOPERATOR
 
 
-# The driver that each press gives the rig to.
-_PRESS_TO = {HELPER_TAKE_OVER: Driver.TELEOPERATOR, HELPER_HAND_BACK: Driver.POLICY}
-
-
 class _Presses(BaseModel):
     model_config = ConfigDict(frozen=True, extra='forbid')
 
     take_over: StrictInt | None = Field(default=None, alias=HELPER_TAKE_OVER)
     hand_back: StrictInt | None = Field(default=None, alias=HELPER_HAND_BACK)
+
+
+# The driver that each press gives the rig to.
+_PRESS_TO = {HELPER_TAKE_OVER: Driver.TELEOPERATOR, HELPER_HAND_BACK: Driver.POLICY}
 
 
 class Takeover:
