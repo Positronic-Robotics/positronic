@@ -35,7 +35,8 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: ${{ env.PYTHONPATH }}:$PWD
-        run: uv run pytest
+        # A test that hangs fails and names itself, before the timeout-minutes of this job cancels the run.
+        run: uv run pytest --timeout=300
 
   gstreamer:
     runs-on: ubuntu-latest
