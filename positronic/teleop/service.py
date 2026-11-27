@@ -301,7 +301,7 @@ class TeleopService:
     ``take_sample`` takes each sample of the controllers. A frame request answers at once with the newest sample.
     When that sample is older than ``silence_limit``, the frame has no pose ("not tracked"), and control goes off. The
     preparation of a session waits for Ready or Cancel up to ``ready_limit``. A warm-up session opens at once and shows
-    the heads-up of its run, up to ``HEADS_UP_SEC`` or until a trial waits for Ready.
+    the heads-up of its run, up to ``heads_up_limit`` or until a trial waits for Ready.
     """
 
     # How often a wait for Ready checks that the model server cancelled the preparation.
@@ -311,8 +311,6 @@ class TeleopService:
     LIVE_SEC = 30.0
     # A client opens a session again within its reconnect deadline when the connection drops before its first answer.
     RESUME_LIMIT_SEC = DEFAULT_RECONNECT_DEADLINE
-    # The longest time that the heads-up of a run shows, so the heads-up of a run that stopped goes.
-    HEADS_UP_SEC = 30 * 60.0
     # The span over which `camera_feeds` counts the images of a camera.
     FEED_SEC = 2.0
     # The most recent images of one camera that `camera_feeds` counts.
@@ -328,8 +326,10 @@ class TeleopService:
         auth_token: str | None = None,
         cameras: Sequence[str] = (),
         controller_axes: geom.Rotation | None = CONTROLLER_AXES,
+        heads_up_limit: float = 30 * 60.0,
     ):
-        for name, value in (('ready_limit', ready_limit), ('silence_limit', silence_limit)):
+        limits = (('ready_limit', ready_limit), ('silence_limit', silence_limit), ('heads_up_limit', heads_up_limit))
+        for name, value in limits:
             check_finite_positive(value, name)
         self._binds = served_address
         self._auth_token = auth_token
@@ -338,6 +338,8 @@ class TeleopService:
         # The axes of the controller in the frame of the headset, or None for the axes of the headset (see `Tracker`)
         self.controller_axes = controller_axes
         self.ready_limit = ready_limit
+        # The longest time that the heads-up of a run shows, so the heads-up of a run that stopped goes.
+        self.heads_up_limit = heads_up_limit
         self.silence_limit = silence_limit
         self._buttons = {
             RIGHT: ButtonMap(hold_sec, hold_threshold),
@@ -800,7 +802,7 @@ class TeleopService:
         with self._locked():
             self._clear_trial('a warm-up session starts')
             self._set_phase(Phase.HEADS_UP, 'a warm-up session starts')
-            self._heads_up_until = time.monotonic() + self.HEADS_UP_SEC
+            self._heads_up_until = time.monotonic() + self.heads_up_limit
 
     def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped after its first frame request, as the next session of its client.

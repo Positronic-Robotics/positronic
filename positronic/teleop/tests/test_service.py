@@ -1250,7 +1250,7 @@ def test_a_model_server_that_fails_after_its_start_stops_the_process(socket_path
         assert interrupted.wait(timeout=5)
 
 
-@pytest.mark.parametrize('name', ['ready_limit', 'silence_limit'])
+@pytest.mark.parametrize('name', ['ready_limit', 'silence_limit', 'heads_up_limit'])
 @pytest.mark.parametrize('value', [0.0, -1.0, float('nan'), float('inf')])
 def test_a_time_limit_that_is_not_finite_and_positive_is_refused(socket_path, name, value):
     limits = {'ready_limit': 1.0, 'silence_limit': 0.05, name: value}
@@ -2546,10 +2546,10 @@ def test_the_heads_up_stays_until_the_trial_of_the_run_waits_for_ready(service, 
     assert service.phase is Phase.RUNNING
 
 
-def test_the_heads_up_goes_after_its_time_limit(service, socket_path, connect, monkeypatch):
-    monkeypatch.setattr(TeleopService, 'HEADS_UP_SEC', 0.2)
-    _warm_up(service, socket_path, connect)
-    _until_cleared(service)
+def test_the_heads_up_goes_after_its_time_limit(socket_path, connect):
+    with TeleopService(ServedUnixSocket(socket_path), 2.0, 0.1, HOLD_SEC, heads_up_limit=0.2) as service:
+        _warm_up(service, socket_path, connect)
+        _until_cleared(service)
 
 
 def test_a_warm_up_session_does_not_resume_a_dropped_trial(service, socket_path, connect):

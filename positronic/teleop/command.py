@@ -252,6 +252,7 @@ def serve(
     open_window: bool = True,
     cameras: Sequence[str] = (),
     controller_axes: geom.Rotation | None = CONTROLLER_AXES,
+    heads_up_limit: float = 30 * 60.0,
 ):
     """Run the teleop service until Ctrl-C. Open the WebXR page in the headset, and the window on the station screen.
 
@@ -260,7 +261,7 @@ def serve(
     ``AUTH_TOKEN_ENV``, and serves open when that is unset. A run sets the parameters of its session (``SessionParams``)
     in the query of its address.
     ``notice`` shows on this computer while a trial waits for Ready, and in the heads-up of a run that has a teleop
-    episode. ``--notice=None`` turns it off.
+    episode. ``--notice=None`` turns it off. The heads-up shows for ``heads_up_limit`` seconds at most.
     ``cameras`` names the cameras of the station, such as ``'["image.exterior", "image.wrist"]'``. A run whose address
     names no cameras sends these, and the headset page offers them.
     ``controller_axes`` turns the axes of the moves of the teleoperator by the heading of the controller, so the way the
@@ -296,6 +297,7 @@ def serve(
         auth_token=auth_token,
         cameras=cameras,
         controller_axes=controller_axes,
+        heads_up_limit=heads_up_limit,
     )
     headset = _Headset(service, webxr.video_fps)
     ready_text = (

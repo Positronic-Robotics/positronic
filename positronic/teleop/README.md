@@ -120,7 +120,7 @@ comes also when the window is not open, and the service closes it when the wait 
 A run can open a warm-up session before its episodes, with the session parameter `warm_up=true`. A warm-up session
 starts no trial and does not wait for Ready. It opens at once. The dialog, the window and the pages then show "A run
 with a teleop episode is starting. The episode comes later." The heads-up stays until a trial waits for Ready, or for
-30 min at most. A press of B in the heads-up does nothing. On macOS the service uses
+30 min at most (`--heads_up_limit`, in seconds). A press of B in the heads-up does nothing. On macOS the service uses
 `osascript` and `afplay`, and the dialog is in the centre of the screen. On Linux it uses `zenity` on `DISPLAY`, and
 plays the sound with `paplay`. The window manager puts the dialog, for example in the top left corner.
 `--notice.sound=<file>` changes the sound, and `--notice=None` turns the notice off.
