@@ -47,10 +47,15 @@ def _views() -> dict[str, np.ndarray]:
 
 
 def _planned(left: float, right: float) -> dict:
-    """A planned command: each arm's joints at `left` or `right` plus 0..5, the left grip at 0.25, the right open."""
+    """A planned command inside the YAM joint limits: each arm's joints at `left` or `right` plus 0.0..0.5, the left
+    grip at 0.25, the right open."""
+    return _planned_joints(left + np.arange(6) / 10, right + np.arange(6) / 10)
+
+
+def _planned_joints(left: np.ndarray, right: np.ndarray) -> dict:
     planned = {}
-    for arm, base, grip in ((keys.LEFT_ARM, left, 0.25), (keys.RIGHT_ARM, right, 0.0)):
-        planned[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=base + np.arange(6))
+    for arm, joints, grip in ((keys.LEFT_ARM, left, 0.25), (keys.RIGHT_ARM, right, 0.0)):
+        planned[keys.arm_channel(keys.ROBOT_COMMAND, arm)] = command.JointPosition(positions=np.asarray(joints))
         planned[keys.arm_channel(keys.TARGET_GRIP, arm)] = grip
     return planned
 
@@ -65,12 +70,22 @@ def _with_plan(obs: dict, plan: list[dict]) -> dict:
 
 
 def test_the_last_command_is_the_command_that_the_arm_holds_in_the_layout_of_the_state():
-    request = codecs.abc(last_command=True).encode(_with_plan(_obs(_views()), [_planned(10, 20), _planned(30, 40)]))
+    request = codecs.abc(last_command=True).encode(_with_plan(_obs(_views()), [_planned(0.1, 0.2), _planned(0.3, 0.4)]))
 
     # Per arm the joints, then the gripper width, as in the state: 1 - 0.25 for the left grip, 1 - 0 for the right.
-    expected = [*range(10, 16), 0.75, *range(20, 26), 1.0]
+    expected = [*(0.1 + np.arange(6) / 10), 0.75, *(0.2 + np.arange(6) / 10), 1.0]
     np.testing.assert_allclose(request[pi05_abc.LAST_COMMAND], expected)
     assert set(request) == {pi05_abc.STATE, pi05_abc.IMAGES, pi05_abc.PROMPT, pi05_abc.LAST_COMMAND}
+
+
+def test_a_held_command_past_the_yam_joint_limits_reaches_the_model_at_the_limits():
+    # The right wrist roll at 5.33 rad (its limit is 2.0944 rad) and the left base yaw at -4 (its limit is -2.61799).
+    left, right = np.full(6, 0.5), np.full(6, 0.5)
+    left[0], right[5] = -4.0, 5.33
+    request = codecs.abc(last_command=True).encode(_with_plan(_obs(_views()), [_planned_joints(left, right)]))
+
+    expected = [-2.61799, *[0.5] * 5, 0.75, *[0.5] * 5, 2.0944, 1.0]
+    np.testing.assert_allclose(request[pi05_abc.LAST_COMMAND], expected, atol=1e-6)
 
 
 @pytest.mark.parametrize('plan', [None, []], ids=['no plan', 'an ended plan'])

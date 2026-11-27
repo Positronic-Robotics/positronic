@@ -31,7 +31,7 @@ from positronic.utils import check_finite_positive, package_assets_path
 from .. import RobotStatus, State, command
 from .. import keys as roboarm_keys
 from ..ik import qpos_from_site_pose
-from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model
+from ..models import GRIPPER_SITE, YAM_JOINT_NAMES, YAM_MJCF_PATH, bundled_yam_model, yam_joint_range
 from .compensation import I2RT_COMPENSATION, Compensation, FrictionFade
 from .settle import MOVE_SETTLE, PARK_SETTLE, SettleTuning
 
@@ -207,8 +207,7 @@ class _Kinematics:
         self._site_id = mj.mj_name2id(self._model, site, GRIPPER_SITE)
         self._qpos_ids = np.array([self._model.joint(name).qposadr.item() for name in YAM_JOINT_NAMES])
         self._dof_ids = np.array([self._model.joint(name).dofadr.item() for name in YAM_JOINT_NAMES])
-        ranges = np.array([self._model.joint(name).range for name in YAM_JOINT_NAMES])
-        self._lower, self._upper = ranges[:, 0], ranges[:, 1]
+        self._lower, self._upper = yam_joint_range()
 
     @property
     def lower(self) -> np.ndarray:

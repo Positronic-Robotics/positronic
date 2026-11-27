@@ -100,9 +100,11 @@ last command is the measured state.
 `abc11_last_command` serves such a checkpoint. The client sends its plan in each observation, and the codec sends the
 first command of that plan as `last_command`: the command that the arm holds at the observation, per arm the joints
 and then the gripper width. Before the first chunk the plan is empty, and the codec sends the state. A plan that ends
-before the next answer arrives also sends the state. The author's server passes `last_command` to the model with its
-flag `--last-command-key`, which the fork's server at commit `e0aedd27` does not have. Serve the command from a fork
-commit whose server has the flag.
+before the next answer arrives also sends the state. The codec clamps each joint of a command from the plan to the
+joint range of the YAM model, and sends the state as it is. The arm stops at that range, and the checkpoint takes each
+action relative to the last command, so a held command past the range moves each later chunk farther from the arm. The
+author's server passes `last_command` to the model with its flag `--last-command-key`, which the fork's server at
+commit `e0aedd27` does not have. Serve the command from a fork commit whose server has the flag.
 
 ## Docker image
 

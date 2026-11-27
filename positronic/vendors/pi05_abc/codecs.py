@@ -12,6 +12,7 @@ from positronic import keys
 from positronic.cfg import codecs
 from positronic.dataset.transforms import image
 from positronic.dataset.transforms.episode import EpisodeTransform, Identity
+from positronic.drivers.roboarm import models
 from positronic.policy import keys as policy_keys
 from positronic.policy.codecs import ACTION, BimanualJointsAction, Codec, FlipGrip, bimanual_joints_state
 from positronic.utils import check_rgb_frame
@@ -22,7 +23,7 @@ FPS = 30.0
 # ABC's cameras record 4:3 views; the codec sends each one at this (width, height), and openpi pads it to a square.
 VIEW_SIZE = (224, 168)
 # Per arm, the state and each action hold the joints of a YAM arm and then the gripper width.
-YAM_JOINTS = 6
+YAM_JOINTS = models.YAM_JOINTS
 BIMANUAL_SIZE = (YAM_JOINTS + 1) * len(keys.BIMANUAL_ARMS)
 # The task of the bottles checkpoint, and the prompt it trained under: the task folder name of the ABC-130k release.
 TASK = 'put the plastic bottles in the bin'
@@ -170,13 +171,25 @@ class LastCommandState(Codec):
     action codec encodes the plan to the layout of the state before this codec reads it. With no plan, as at the first
     request of a session, the last command is the state, as at the first frame of a training episode. A plan that
     ended before the observation also leaves no command, and the last command is then the state too.
+
+    Each joint of a command from the plan is clamped to the YAM joint range. The arm does not go past that range, and
+    the checkpoint takes each action relative to the last command, so a held command past the range moves every later
+    chunk farther from the arm. The state goes as it is.
     """
+
+    def __init__(self):
+        lower, upper = models.yam_joint_range()
+        grip = np.array([np.inf])
+        arms = len(keys.BIMANUAL_ARMS)
+        self._lower = np.tile(np.concatenate([lower, -grip]), arms)
+        self._upper = np.tile(np.concatenate([upper, grip]), arms)
 
     def encode(self, data: dict) -> dict:
         request = {key: value for key, value in data.items() if key != policy_keys.RTC.ACTION_PREFIX}
         prefix = data.get(policy_keys.RTC.ACTION_PREFIX)
         plan = prefix[policy_keys.RTC.PREFIX_ACTIONS] if prefix else []
-        request[pi05_abc.LAST_COMMAND] = np.asarray(plan[0][ACTION] if plan else data[pi05_abc.STATE], np.float32)
+        held = np.clip(plan[0][ACTION], self._lower, self._upper) if plan else data[pi05_abc.STATE]
+        request[pi05_abc.LAST_COMMAND] = np.asarray(held, np.float32)
         return request
 
     def decode(self, data: Any) -> Any:

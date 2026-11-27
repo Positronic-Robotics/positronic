@@ -8,11 +8,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, NamedTuple
 
+import mujoco as mj
 import numpy as np
 from pydantic import BaseModel, BeforeValidator, ConfigDict, PlainSerializer, TypeAdapter
 
 from positronic import geom, keys
 from positronic.drivers.roboarm import keys as roboarm_keys
+from positronic.utils import package_assets_path
 
 FLANGE_LINK = 'link8'
 ROBOLAB_EEF_LINK = 'robolab_eef'
@@ -270,6 +272,19 @@ YAM_JOINTS = len(YAM_JOINT_NAMES)
 YAM_WRIST_LINK = 'link6'
 # The vendored YAM MJCF, relative to the package: the model the driver solves FK and IK on, at ``GRIPPER_SITE``.
 YAM_MJCF_PATH = 'assets/i2rt_yam/yam.xml'
+
+
+@lru_cache(maxsize=1)
+def yam_joint_range() -> tuple[np.ndarray, np.ndarray]:
+    """The lower and the upper limit of each YAM joint in radians, in the order of ``YAM_JOINT_NAMES``: the ranges of
+    the vendored YAM MJCF. The YAM driver keeps each streamed joint target inside them."""
+    model = mj.MjModel.from_xml_path(package_assets_path(YAM_MJCF_PATH))
+    ranges = np.array([model.joint(name).range for name in YAM_JOINT_NAMES])
+    lower, upper = ranges[:, 0], ranges[:, 1]
+    lower.flags.writeable = upper.flags.writeable = False
+    return lower, upper
+
+
 # The base frame of the bundled YAM model, measured from the base frame of the earlier YAM model that ABC's arms
 # carry: 9.5mm lower. There, the bundled model reports the ``ee_pose`` of the earlier one for the same joints.
 YAM_BASE_IN_EARLIER_BASE = geom.Transform3D(np.array([0.0, 0.0, -0.0095]))
