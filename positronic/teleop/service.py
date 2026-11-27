@@ -476,10 +476,6 @@ class TeleopService:
         for line in lines:
             logger.info(line)
 
-    def _log(self, line: str) -> None:
-        """Keep ``line`` for the log, until `_locked` releases the lock. Hold the lock."""
-        self._log_lines.append(line)
-
     @property
     def phase(self) -> Phase:
         with self._locked():
@@ -763,6 +759,10 @@ class TeleopService:
             if name is not None and name in self._trial_cameras:
                 return name
         return next(iter(self._trial_cameras), None)
+
+    def _log(self, line: str) -> None:
+        """Keep ``line`` for the log, until `_locked` releases the lock. Hold the lock."""
+        self._log_lines.append(line)
 
     def resume_dropped_trial(self, settings: SessionParams) -> ResumeOutcome:
         """Resume the trial whose session dropped before its first answer, as the next session of its client.
