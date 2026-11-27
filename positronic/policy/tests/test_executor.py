@@ -2,6 +2,7 @@
 
 import contextvars
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from typing import cast
 
@@ -317,6 +318,30 @@ def test_server_charge_takes_the_wall_time_of_a_call_that_reports_none(executors
     now[0] = 20_000_000
     assert runtime.wait(timeout_sec=0) == WaitResult(WaitStatus.ANSWERS_READY, (answer,))
     assert answer.elapsed_sec == answer.execution_sec == 0.02
+
+
+def test_server_charge_of_a_call_that_reports_none_includes_its_wait_for_a_worker(executors, monkeypatch):
+    wall = [0]
+    monkeypatch.setattr(module.time, 'monotonic_ns', lambda: wall[0])
+    runtime, now = executors(charge=InferenceCharge.SERVER)
+    release = threading.Event()
+
+    def occupy_the_worker():
+        assert release.wait(timeout=2)
+        wall[0] = 10_000_000
+
+    def work():
+        wall[0] = 30_000_000
+        return 42
+
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        runtime._submit_on(workers, 2, occupy_the_worker)
+        answer = cast(_UnchargedAnswer[int], runtime._submit_on(workers, 2, work))
+        release.set()
+        assert answer.call.result(timeout=1) == 42
+    now[0] = 30_000_000
+    assert runtime.wait(timeout_sec=0).status is WaitStatus.ANSWERS_READY
+    assert answer.elapsed_sec == answer.execution_sec == 0.03
 
 
 def test_wall_charge_ignores_a_reported_server_time(executors, monkeypatch):

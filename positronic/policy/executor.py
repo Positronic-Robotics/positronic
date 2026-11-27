@@ -120,21 +120,21 @@ _CALL_CHARGE: ContextVar['_CallCharge | None'] = ContextVar('call_charge', defau
 class _CallCharge:
     """The episode time one call costs under ``InferenceCharge.SERVER``.
 
-    That is the server time that the call's function reports with ``report_server_time``, or the call's own wall
-    time where it reports none.
+    That is the server time that the call's function reports with ``report_server_time``, or the wall time from
+    submission to completion where it reports none.
     """
 
     def __init__(self) -> None:
+        self._submitted_wall_ns = time.monotonic_ns()
         self.reported_ns: int | None = None
         self.charged_ns = 0
 
     def run(self, function: Callable[[], T]) -> T:
         _CALL_CHARGE.set(self)
-        started_ns = time.monotonic_ns()
         try:
             return function()
         finally:
-            wall_ns = time.monotonic_ns() - started_ns
+            wall_ns = time.monotonic_ns() - self._submitted_wall_ns
             self.charged_ns = wall_ns if self.reported_ns is None else self.reported_ns
 
 

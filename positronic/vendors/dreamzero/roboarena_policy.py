@@ -113,7 +113,10 @@ JOINT_POSITION_WIDTH = 8
 
 
 class RoboarenaEndpoint:
-    """The inference function one episode submits: an observation in, the chunk the server answers."""
+    """The inference function one episode submits: an observation in, the chunk the server answers.
+
+    It gives the server's own ``infer_ms`` to ``report_server_time``.
+    """
 
     def __init__(self, client: RoboarenaClient, config: Mapping[str, Any]):
         self._client = client
