@@ -83,6 +83,12 @@ def _fit(error: np.ndarray) -> Fit:
     return Fit.CONVERGED if _within(error, IK_POSITION_TOLERANCE, IK_ROTATION_TOLERANCE) else Fit.MISS
 
 
+def _error_at(kinematics: Kinematics, q: np.ndarray, target_pos: Any, target_rot: Any) -> tuple[np.ndarray, np.ndarray]:
+    """The error from the site's pose at the joints ``q`` to the target (``_pose_error``), and the Jacobian there."""
+    site_pos, site_rot, jac = kinematics(q)
+    return _pose_error(target_pos, target_rot, site_pos, site_rot), jac
+
+
 def _step(jac: np.ndarray, error: np.ndarray) -> np.ndarray:
     return jac.T @ np.linalg.solve(jac @ jac.T + IK_DAMPING**2 * np.eye(6), error)
 
@@ -103,8 +109,7 @@ def damped_least_squares_ik(
     lower, upper = np.asarray(lower, dtype=np.float64), np.asarray(upper, dtype=np.float64)
     q = np.clip(np.array(start_q, dtype=np.float64), lower, upper)
     for _ in range(IK_ITERATIONS):
-        site_pos, site_rot, jac = kinematics(q)
-        error = _pose_error(target_pos, target_rot, site_pos, site_rot)
+        error, jac = _error_at(kinematics, q, target_pos, target_rot)
         if _within(error, IK_POSITION_TOLERANCE, IK_ROTATION_TOLERANCE):
             return IkSolution(q, error, Fit.CONVERGED)
         dq, free = _step(jac, error), np.ones(q.size, dtype=bool)
@@ -112,8 +117,7 @@ def damped_least_squares_ik(
             free &= ~blocked
             dq = _step(jac * free, error)
         q = np.clip(q + dq, lower, upper)
-    site_pos, site_rot, _ = kinematics(q)
-    error = _pose_error(target_pos, target_rot, site_pos, site_rot)
+    error, _ = _error_at(kinematics, q, target_pos, target_rot)
     return IkSolution(q, error, _fit(error))
 
 
