@@ -90,8 +90,10 @@ controller, as for one arm.
 
 When the left controller is not tracked for 0.5 s, control of the left arm goes off. The right arm does the same with
 the right controller. The headset video shows the control state of each arm on its own line, for example
-`Left on (X: off)` and `Right off (A: on)`. The window and the phone page show "Control on" while control of at least
-one arm is on.
+`Left on (X: off)` and `Right off (A: on)`. When no controller data comes in the silence limit, the line gives the
+cause, for example `Control off: connection lost (A: on)`. Control stays off when the data comes again, until a press of
+A or X. The service logs each change of the phase and of control, with its cause. The window and the phone page show
+"Control on" while control of at least one arm is on.
 
 The phone is one controller, so a phone drives only a one-arm session. In a one-arm session, the left controller
 drives no arm.
