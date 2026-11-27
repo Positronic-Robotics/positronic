@@ -25,7 +25,7 @@ from positronic.policy import Codec, Sequential
 from positronic.policy import keys as policy_keys
 from positronic.policy.base import Obs
 from positronic.policy.codecs import ACTION, ChangeEEFrame, ResizeMode, TransformImages
-from positronic.policy.processors import ChunkedSchedule, TrajectoryPlayer
+from positronic.policy.processors import ChunkedSchedule, ConstantDuration, TrajectoryPlayer
 from positronic.utils.checkpoints import get_latest_checkpoint
 from positronic.vendors import openpi
 from positronic.vendors.openpi import codecs, ensure_paligemma_tokenizer
@@ -254,15 +254,22 @@ def openpi_model(
 # ``ee_frame`` takes no default: a wrong frame does not error, it just puts the arm somewhere else, so a
 # deployment states the frame of the checkpoint it binds.
 @cfn.config(codec=codecs.ee)
-def pipeline(codec: Codec, ee_frame: EEFrame | None, fps: float = 15.0, horizon_sec: float | None = None):
+def pipeline(
+    codec: Codec,
+    ee_frame: EEFrame | None,
+    fps: float = 15.0,
+    horizon_sec: float | None = None,
+    inference_lead: float = 0.0,
+):
     """The OpenPI serving pipeline: rig-side chunk scheduling and the server-side codec.
 
     ``ee_frame`` is the frame this checkpoint's poses live in (``cfg.codecs.gripper_frame`` for a checkpoint
-    trained on poses at ``GRIPPER_SITE``); ``None`` for one that speaks joints only.
+    trained on poses at ``GRIPPER_SITE``); ``None`` for one that speaks joints only. ``inference_lead`` is how
+    many seconds before the current chunk ends the client requests the next one.
     """
     local = Sequential(
         TrajectoryPlayer(replan_on_error=True),
-        ChunkedSchedule(fps, horizon_sec),
+        ChunkedSchedule(fps, horizon_sec, ConstantDuration(inference_lead)),
         TransformImages(224, 224, mode=ResizeMode.BOUND),
     )
     if ee_frame is not None:

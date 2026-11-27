@@ -194,6 +194,9 @@ The server exposes the following endpoints:
 is a dotted path into the pipeline config, e.g. `ws://host:8000/api/v1/session?fps=10`. Values must
 be JSON literals; the model is fixed at launch, and a session param cannot reach it. See
 [`positronic/offboard/README.md`](../../offboard/README.md) for the full rules.
+`inference_lead=0.25` requests the next chunk 0.25 seconds before the current chunk ends. The default `0` requests
+it at the end, and the arm holds its last target while the call runs. A launch sets the default with
+`--pipeline.inference_lead=0.25`.
 
 **Message Protocol:**
 `RemotePolicy` handles the handshake, session ID, inference requests, and session cleanup.

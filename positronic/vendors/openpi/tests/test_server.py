@@ -72,6 +72,26 @@ def test_a_bound_checkpoint_states_the_frame_it_was_trained_in(name, offset):
     assert frame == EEFrame(site=GRIPPER_SITE, offset=offset)
 
 
+def _latency_estimate(deployment) -> float:
+    """The lead, in seconds, that the deployment's client schedule declares."""
+    (schedule,) = (node for node in deployment.local.to_spec()['seq'] if node['name'] == 'inference_schedule')
+    return schedule['args']['latency_estimate']
+
+
+@pytest.mark.parametrize('name', ['droid', 'droid_jointpos'])
+def test_a_session_inference_lead_requests_before_the_chunk_ends(name):
+    pipeline = COMMANDS[name].kwargs['pipeline']
+
+    assert _latency_estimate(pipeline.instantiate()) == 0.0
+    assert _latency_estimate(pipeline.override_data(inference_lead=0.25).instantiate()) == 0.25
+
+
+@pytest.mark.parametrize('lead', [-0.1, float('inf'), float('nan')])
+def test_a_negative_or_infinite_inference_lead_fails_to_build(lead):
+    with pytest.raises(ValueError, match='seconds'):
+        COMMANDS['droid_jointpos'].kwargs['pipeline'].override_data(inference_lead=lead).instantiate()
+
+
 @contextlib.contextmanager
 def _openpi_server(before_answer: Callable[[], Awaitable[None]]) -> Iterator[int]:
     """The port of a server that speaks openpi's protocol. It awaits ``before_answer`` before each answer."""
