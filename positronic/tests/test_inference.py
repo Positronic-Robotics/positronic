@@ -29,7 +29,7 @@ from positronic.dataset.serializers import Serializers
 from positronic.dataset.tests.utils import InMemoryS3
 from positronic.dataset.video import VideoSignal
 from positronic.drivers import keyboard
-from positronic.drivers.recording import HARNESS_WALL, HARNESS_WORLD
+from positronic.drivers.recording import HARNESS_STEP, HARNESS_WALL, HARNESS_WORLD
 from positronic.eval import Embodiment, Observation, Task
 from positronic.eval import keys as eval_keys
 from positronic.gui.station import Episode, Outcome, Phase, Verdict
@@ -345,6 +345,7 @@ def test_the_web_console_records_each_episode_with_its_instruction_and_verdict(t
                 RECEIVED_WORLD,
                 HARNESS_WALL,
                 HARNESS_WORLD,
+                HARNESS_STEP,
                 _CAMERA_FRAME,
             }
             times = camera.timestamps(camera.timelines)
