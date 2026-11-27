@@ -683,6 +683,7 @@ class InferenceSchedule(Policy):
 
     WIRE_NAME = 'inference_schedule'
     WIRE_VERSION = 1
+    LATENCY_ESTIMATE_ARG = 'latency_estimate'
 
     def __init__(
         self,
@@ -825,7 +826,7 @@ class InferenceSchedule(Policy):
                 'fps': self._fps,
                 'request_timing': self._request_timing.to_spec(),
                 'merge': self._merge.to_spec(),
-                'latency_estimate': self._latency_estimate.to_spec(),
+                self.LATENCY_ESTIMATE_ARG: self._latency_estimate.to_spec(),
                 'obs_time_key': self._obs_time_key,
             },
         }
@@ -834,7 +835,7 @@ class InferenceSchedule(Policy):
     def from_spec_args(cls, **args: Any) -> Self:
         args['request_timing'] = RequestTiming.from_spec(args['request_timing'])
         args['merge'] = TrajectoryMerge.from_spec(args['merge'])
-        args['latency_estimate'] = DurationEstimate.from_spec(args['latency_estimate'])
+        args[cls.LATENCY_ESTIMATE_ARG] = DurationEstimate.from_spec(args[cls.LATENCY_ESTIMATE_ARG])
         return cls(**args)
 
 
@@ -945,7 +946,6 @@ class RTCSchedule(InferenceSchedule):
     """
 
     CALL_AFTER_ARG = 'call_after_sec'
-    LATENCY_ESTIMATE_ARG = 'latency_estimate'
 
     def __init__(self, fps: float, call_after_sec: float, latency_estimate: DurationEstimate) -> None:
         super().__init__(

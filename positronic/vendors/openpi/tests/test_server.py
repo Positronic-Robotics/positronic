@@ -78,7 +78,7 @@ def _latency_estimate(deployment) -> float:
     """The lead, in seconds, that the deployment's client schedule declares."""
     stack = deployment.local.to_spec()[SEQ]
     (schedule,) = (node for node in stack if node[NAME] == InferenceSchedule.WIRE_NAME)
-    return schedule[ARGS]['latency_estimate']
+    return schedule[ARGS][InferenceSchedule.LATENCY_ESTIMATE_ARG]
 
 
 @pytest.mark.parametrize('name', ['droid', 'droid_jointpos'])
