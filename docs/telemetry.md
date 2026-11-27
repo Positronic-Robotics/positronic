@@ -197,14 +197,6 @@ command of the next chunk. During a hold the arm keeps its last target. The wait
 count, and a hold that the episode end cuts does not count. The hold share of a rollout is
 `hold_sum_ms / 1000 / episode.virtual_s`.
 
-The `episode` span also counts the late steps and the slow encodes, so a query of the episodes alone can test a
-latency target. `episode.steps_late_ge_<N>ms` counts the harness steps that start N ms or more after their due time
-(the `step.late_ms` of a `harness.step` span), for N in 1, 2, 5, 10, 20 and 50. A step that reads no complete
-observation counts too, and `episode.steps` does not count it. `episode.encodes` counts the `policy.encode` spans of
-the policy calls that the rollout submits, and `episode.encodes_gt_<N>ms` counts the spans of them that take more than
-N ms, for N in 5, 10, 15, 30 and 60. Each episode span carries each count, 0 included. The counts record at the `call`
-level, so a run gets them without the step spans. They count only the encode spans that the active level records.
-
 The `obs.age_ms` of a `policy.submit` span is the time from the emission of a camera frame to the start of the
 call. The frame is the newest frame of each camera that the harness reads, and with several cameras the oldest of
 them. A remote deployment puts each of these cameras on the wire, and the server drops the cameras that its model does
@@ -216,6 +208,16 @@ simulated time and does not include the wall time of the simulator. The age uses
 `Runtime.observed_ns` when the call is submitted. The harness sets it for each step. A processor that sends an older
 sample sets the capture time of that sample: `Periodic` on an answer wake-up, and a `TemporalStack` of camera frames
 whose newest offset is in the past. An observation with no camera gives no value.
+
+### Reading late steps and slow encodes
+
+The `episode` span counts the late steps and the slow encodes, so a query of the episodes alone can test a
+latency target. `episode.steps_late_ge_<N>ms` counts the harness steps that start N ms or more after their due time
+(the `step.late_ms` of a `harness.step` span), for N in 1, 2, 5, 10, 20 and 50. A step that reads no complete
+observation counts too, and `episode.steps` does not count it. `episode.encodes` counts the `policy.encode` spans of
+the policy calls that the rollout submits, and `episode.encodes_gt_<N>ms` counts the spans of them that take more than
+N ms, for N in 5, 10, 15, 30 and 60. Each episode span carries each count, 0 included. The counts record at the `call`
+level, so a run gets them without the step spans. They count only the encode spans that the active level records.
 
 ### Reading the network time of a call
 
