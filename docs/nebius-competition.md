@@ -266,7 +266,8 @@ that you used for `positronic account register`.
 - Reuse the transaction key only to retry the same submission. The same key returns the same submission,
   and it does not count again. A new image or another eval needs a new key: the platform refuses a changed
   request under a used key with `transaction_conflict`.
-- You can make one submission per day. [Submissions per day](#submissions-per-day) says what counts.
+- Your team has a daily limit of submissions. [Submissions per day](#submissions-per-day) says where to
+  read the limit and what counts.
 - [Read the outcome](#read-the-outcome) says what the status tells you.
 - To run another eval, add `--eval=<name>`. `positronic eval catalog` lists the evals that you can name.
   Such a submission counts for the day, and the leaderboard does not rank it.
@@ -544,8 +545,21 @@ The example image serves the cameras of `droid_molmo`, so the image needs no oth
 
 ## Submissions per day
 
-You can make one submission per day. The count starts again at 00:00 UTC each day, so you can submit at
-23:00 UTC and again at 01:00 UTC on the next day.
+Your team has a daily limit of submissions. The [rules](https://competition.phail.ai/rules) state the
+current limit. The count starts again at 00:00 UTC each day.
+
+`users.me` tells how many submissions your team used today, and how many are left. Read it from Python:
+
+```python
+from platform_client.client import PlatformClient
+from platform_client.responses import QUOTA_SUBMISSIONS_DAY
+
+day = PlatformClient().me().quota_for(QUOTA_SUBMISSIONS_DAY)
+print(f'{day.used} of {day.limit} used, {day.remaining} left, until {day.resets_at}')
+```
+
+`users.me` carries this rule only for an account that has entered. For another account, `quota_for`
+returns `None`.
 
 - A submission counts from the time that the platform accepts it. Your cancel never gives it back, also
   when you cancel before the run starts.

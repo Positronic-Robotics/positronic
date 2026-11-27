@@ -10,6 +10,9 @@
 - A RoboLab episode runs 1 s more after a success, so that its video shows the result. The success stays, and the episode does not run past the time limit of its task ([#1352](https://github.com/Positronic-Robotics/positronic/pull/1352))
 - Each RoboLab reset token names the camera set of its eval, so one RoboLab env server serves every camera set of its robot. Evals that render two camera sets can share one server. `serve_robolab` and the server take no camera set, and `serve_robolab` takes only keyword arguments ([#1373](https://github.com/Positronic-Robotics/positronic/pull/1373))
 
+### Competition
+- The competition guide states no number of submissions per day. It sends the reader to the rules for the current limit, and it shows how `users.me` reports the submissions that the team used today
+
 ### Vendors
 - The OpenPI and Galaxea servers wait `WARMUP_DEADLINE_S` (1800 s) for their model subprocess to start. The OpenPI server waited 300 s, so a start on a slow disk ended the server before the published deadline.
 
