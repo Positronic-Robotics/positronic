@@ -1005,7 +1005,8 @@ class _Arriving(Mapping[str, np.ndarray]):
     """The values of one entry while a background thread changes them. A read of a value waits for the result.
 
     ``cancel`` drops the change when the thread has not started it. A later read makes the change on the
-    reading thread, for a sample that an earlier step gave to a call that still runs.
+    reading thread, for a sample that an earlier step gave to a call that still runs. The first such reader makes
+    it with no lock held, and the other readers wait for its result.
     """
 
     def __init__(
@@ -1018,7 +1019,7 @@ class _Arriving(Mapping[str, np.ndarray]):
         self._change = change
         self._result = result
         self._lock = threading.Lock()
-        self._changed: dict[str, np.ndarray] | None = None
+        self._read_change: Future[dict[str, np.ndarray]] | None = None
 
     def cancel(self) -> None:
         self._result.cancel()
@@ -1027,10 +1028,18 @@ class _Arriving(Mapping[str, np.ndarray]):
         try:
             return self._result.result()
         except CancelledError:
-            with self._lock:
-                if self._changed is None:
-                    self._changed = self._change(self._values)
-                return self._changed
+            pass
+        with self._lock:
+            makes_it = self._read_change is None
+            if self._read_change is None:
+                self._read_change = Future()
+            read_change = self._read_change
+        if makes_it:
+            try:
+                read_change.set_result(self._change(self._values))
+            except BaseException as error:
+                read_change.set_exception(error)
+        return read_change.result()
 
     def __contains__(self, key: object) -> bool:
         return key in self._values
@@ -1074,18 +1083,38 @@ class _ArrivalThread:
         self._pool.shutdown(cancel_futures=True)
 
 
+class _Entry(Mapping[str, np.ndarray]):
+    """The values of one history entry. ``sources`` maps each key to the stored values that hold it."""
+
+    def __init__(self, sources: dict[str, Mapping[str, np.ndarray]]):
+        self.sources = sources
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.sources
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        return self.sources[key][key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.sources)
+
+    def __len__(self) -> int:
+        return len(self.sources)
+
+
 class _StackBuffer:
     """Time-ordered history of ``(timestamp, observed_ns, values)`` entries, capped to the sampled window.
 
-    ``values`` maps each key to an array; every entry holds the same keys. ``append`` copies each new entry and
-    stores what ``arrive`` makes of the copy. An entry byte-identical to the previous one that came shares the
-    stored values — a source slower than the control loop repeats its value, and carry-over sampling reuses the
-    stored one. It then drops entries before the oldest sampled offset, keeping the one at or before it, and cancels
-    the change of each dropped entry that no kept entry shares. ``sample`` replaces each key of an observation with
-    a stack holding, for each offset, the latest value at or before that time — carry-over, never the future.
-    Offsets that precede the first entry either repeat the oldest entry (``pad_start=True``, a fixed
-    ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the stack grows from 1 to
-    ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the entry's values.
+    ``values`` maps each key to an array; every entry holds the same keys. ``append`` compares each value with the
+    newest value that came for its key. It copies the values that differ and stores what ``arrive`` makes of the
+    copies. A value byte-identical to the newest one shares the stored value — a source slower than the control loop
+    repeats its value, and carry-over sampling reuses the stored one. It then drops entries before the oldest
+    sampled offset, keeping the one at or before it, and cancels each stored change that only dropped entries share.
+    ``sample`` replaces each key of an observation with a stack holding, for each offset, the latest value at or
+    before that time — carry-over, never the future. Offsets that precede the first entry either repeat the oldest
+    entry (``pad_start=True``, a fixed ``len(offsets_sec)``-long stack) or are dropped (``pad_start=False``, the
+    stack grows from 1 to ``len(offsets_sec)`` as history accumulates). ``observed_ns`` is the capture time of the
+    entry's values.
     """
 
     def __init__(
@@ -1097,24 +1126,32 @@ class _StackBuffer:
         self._offsets_sec = offsets_sec
         self._pad_start = pad_start
         self._arrive = arrive
-        self._entries: deque[tuple[float, int | None, Mapping[str, np.ndarray]]] = deque()
-        self._newest_new: dict[str, np.ndarray] = {}
+        self._entries: deque[tuple[float, int | None, _Entry]] = deque()
+        self._newest_values: dict[str, np.ndarray] = {}
 
     def reset(self):
         self._entries.clear()
-        self._newest_new = {}
+        self._newest_values = {}
 
     def append(self, now: float, observed_ns: int | None, values: dict[str, np.ndarray]):
-        if self._entries and all(np.array_equal(self._newest_new[k], v) for k, v in values.items()):
-            self._entries.append((now, observed_ns, self._entries[-1][2]))
-        else:
-            self._newest_new = {k: np.array(v) for k, v in values.items()}
-            self._entries.append((now, observed_ns, self._arrive(self._newest_new)))
+        self._entries.append((now, observed_ns, self._entry(values)))
         cutoff = now + min(self._offsets_sec)
         while len(self._entries) >= 2 and self._entries[1][0] <= cutoff:
             _, _, dropped = self._entries.popleft()
-            if isinstance(dropped, _Arriving) and dropped is not self._entries[0][2]:
-                dropped.cancel()
+            kept = {id(stored) for stored in self._entries[0][2].sources.values()}
+            for stored in {id(stored): stored for stored in dropped.sources.values()}.values():
+                if isinstance(stored, _Arriving) and id(stored) not in kept:
+                    stored.cancel()
+
+    def _entry(self, values: dict[str, np.ndarray]) -> _Entry:
+        """An entry whose new values are copied and stored, and whose repeated values share the stored ones."""
+        newest = self._newest_values
+        new = {k: np.array(v) for k, v in values.items() if k not in newest or not np.array_equal(newest[k], v)}
+        if not new and self._entries:
+            return self._entries[-1][2]
+        self._newest_values = {**newest, **new}
+        stored = self._arrive(new)
+        return _Entry({**(self._entries[-1][2].sources if self._entries else {}), **dict.fromkeys(new, stored)})
 
     def sample(self, now: float, obs: Obs) -> Obs:
         times = np.array([t for t, _, _ in self._entries])

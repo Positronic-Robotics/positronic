@@ -1,6 +1,7 @@
 import threading
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future
 from typing import Any
 
 import numpy as np
@@ -27,7 +28,14 @@ from positronic.policy.compatibility import (
 )
 from positronic.policy.executor import Executor, WaitStatus
 from positronic.policy.keys import RTC
-from positronic.policy.processors import ChunkedSchedule, EndOnField, Periodic, TemporalStack, TrajectoryPlayer
+from positronic.policy.processors import (
+    ChunkedSchedule,
+    EndOnField,
+    Periodic,
+    TemporalStack,
+    TrajectoryPlayer,
+    _Arriving,
+)
 from positronic.policy.sequential import Sequential
 from positronic.policy.spec import from_spec
 
@@ -496,3 +504,77 @@ def test_a_sample_that_holds_a_dropped_frame_still_reads_the_changed_frame():
     for name in CAMERAS:
         expected = np.stack([frames[0][name][::2, ::2], frames[1][name][::2, ::2]])
         np.testing.assert_array_equal(held.second_sample[name], expected)
+
+
+def _held_frames(periods: dict[str, int]) -> list[dict[str, np.ndarray]]:
+    """Camera frames over ``STEPS`` steps, where each camera sends a new frame every ``periods[camera]`` steps."""
+    fresh = _camera_frames(STEPS)
+    return [
+        {name: np.array(fresh[step - step % period][name]) for name, period in periods.items()} for step in range(STEPS)
+    ]
+
+
+def test_a_new_frame_of_one_camera_resizes_only_that_camera(monkeypatch):
+    frames = _held_frames({keys.EXTERIOR_IMAGE: 1, keys.WRIST_IMAGE: 3, keys.EXTERIOR_IMAGE_2: 3})
+    before = _run(_declared(_three_camera_history_spec()), frames)
+    resizes = _Resizes(monkeypatch)
+
+    after = _run(transform_frames_on_arrival(_declared(_three_camera_history_spec())), frames)
+
+    np.testing.assert_equal(after, before)
+    assert resizes.count == STEPS + 2 * STEPS // 3
+
+
+# A stacked value beside the camera frames that changes on each step.
+STEP_COUNT = 'step_count'
+
+
+def test_a_stacked_value_that_changes_each_step_resizes_no_repeated_frame(monkeypatch):
+    declared = Sequential(
+        TemporalStack((*CAMERAS, STEP_COUNT), (-0.2, -0.1, 0.0)),
+        ChunkedSchedule(FPS),
+        TransformImages(32, 32, mode=ResizeMode.PAD, paths=[[name] for name in CAMERAS]),
+    )
+    frames = [
+        {**cameras, STEP_COUNT: np.array([step])}
+        for step, cameras in enumerate(_held_frames(dict.fromkeys(CAMERAS, 2)))
+    ]
+    before = _run(declared, frames)
+    resizes = _Resizes(monkeypatch)
+
+    after = _run(transform_frames_on_arrival(declared), frames)
+
+    np.testing.assert_equal(after, before)
+    assert resizes.count == STEPS // 2 * len(CAMERAS)
+
+
+def test_a_read_of_a_cancelled_frame_resizes_with_no_lock_held_and_once_for_all_readers():
+    started, release = threading.Event(), threading.Event()
+    runs: list[int] = []
+
+    def change(values):
+        runs.append(1)
+        started.set()
+        assert release.wait(timeout=10)
+        return {name: value * 2 for name, value in values.items()}
+
+    cancelled: Future = Future()
+    cancelled.cancel()
+    arriving = _Arriving({'frame': np.ones(2)}, change, cancelled)
+    results: list[np.ndarray] = []
+    readers = [threading.Thread(target=lambda: results.append(arriving['frame'])) for _ in range(2)]
+
+    readers[0].start()
+    try:
+        assert started.wait(timeout=10)
+        # The resize runs now, on the first reader. The lock is free, so a second reader waits for the result only.
+        assert arriving._lock.acquire(timeout=1)
+        arriving._lock.release()
+        readers[1].start()
+    finally:
+        release.set()
+    for reader in readers:
+        reader.join(timeout=10)
+
+    assert len(runs) == 1
+    np.testing.assert_equal(results, [np.full(2, 2.0)] * 2)
