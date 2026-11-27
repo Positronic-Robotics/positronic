@@ -707,6 +707,8 @@ def _tls_contexts(directory: Path) -> tuple[ssl.SSLContext, ssl.SSLContext]:
     )
     server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server.load_cert_chain(cert_file, key_file)
+    # The server sends no TLS traffic after the handshake, so a test sees only application data on the connection.
+    server.num_tickets = 0
     return server, ssl.create_default_context(cafile=str(cert_file))
 
 

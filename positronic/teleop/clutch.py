@@ -1,4 +1,3 @@
-import logging
 from enum import Enum
 from typing import Any
 
@@ -49,11 +48,9 @@ class Tracker:
     def turn_on(self, robot_pos: geom.Transform3D, hand_pos: geom.Transform3D):
         operator = self._operator_position
         if operator is None:
-            logging.info('Ignoring tracking on/off in UMI mode')
             return
 
         self.on = True
-        logging.info('Starting tracking')
         self._axes = operator.rotation
         if self._controller_axes is not None:
             # How far the controller is turned from the way the operator holds it facing ahead, in the robot frame
@@ -65,10 +62,8 @@ class Tracker:
 
     def turn_off(self):
         if self.is_umi_mode:
-            logging.info('Ignoring tracking on/off in UMI mode')
             return
         self.on = False
-        logging.info('Stopped tracking')
 
     def update(self, tracker_pos: geom.Transform3D):
         operator = self._operator_position

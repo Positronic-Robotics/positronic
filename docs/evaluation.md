@@ -49,7 +49,7 @@ uv run positronic eval run --eval=molmo.franka_pick_mini_smoke \
   --output_dir=~/evals/molmo_smoke
 ```
 
-Real-hardware DROID evals take the same model endpoint, but we run them for you — operated and operator-scored on our fleet, not self-driven in sim. Write to hi@phail.ai for those.
+Real-hardware DROID evals take the same model endpoint. An operator runs and scores them on our robots. File one yourself as an [eval plan](../client/README.md#eval-plans): it names the tasks and your image or server, and your credits pay for it. Write to hi@phail.ai if you want us to set up the run.
 
 ## What a run cost
 
@@ -62,10 +62,10 @@ scores never do. See [Eval telemetry](telemetry.md).
 
 1. **Run it yourself, in sim.** Self-serve, on your own compute — the reference-policy path above. RoboLab renders in Isaac Sim and wants an RTX-class host.
 2. **Have us run the sim.** Point us at your endpoint and we run the suite on our GPUs and return the runs, so nobody on your side provisions a GPU or installs Isaac.
-3. **Get evaluated on real hardware.** The same endpoint, on our rigs, operated and operator-scored. The first one is on us, with full results back within a day.
+3. **Get evaluated on real hardware.** The same endpoint, on our rigs, operated and operator-scored. The first one is on us, with full results back within a day. Or file an [eval plan](../client/README.md#eval-plans) yourself and pay with credits.
 4. **Submit a policy image to the platform.** Self-serve: the platform pulls an image that serves your model, runs a named eval on its own GPUs, and scores it. [Submit a policy image](submit-a-policy-image.md) is the path, with a recipe per model family.
 
-The second and the third start at hi@phail.ai.
+Write to hi@phail.ai for the second, or for a third that we set up for you.
 
 ## Public or private
 

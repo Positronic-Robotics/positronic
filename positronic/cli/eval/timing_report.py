@@ -49,6 +49,7 @@ from positronic.telemetry_keys import (
     ATTR_EPISODE_VIRTUAL_S,
     ATTR_PASS_FAILED,
     ATTR_SERVED_PREFIX,
+    ATTR_STEP_RECORD_WAIT_MS,
     ATTR_WAYPOINTS_DROPPED,
     ATTR_WAYPOINTS_EMITTED,
     ATTR_WAYPOINTS_LATE_MAX_MS,
@@ -509,7 +510,10 @@ def _episode_timing(episode: SpanRec, children: dict[str, list[SpanRec]]) -> _Ep
     kids = children.get(episode.span_id, [])
     reset_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RESET)
     env_step_s = sum(_dur_s(k) for k in kids if k.name == SPAN_ENV_STEP)
-    record_io_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RECORD_IO)
+    # A sample between two steps records no span. The next step span carries its time.
+    record_io_s = sum(_dur_s(k) for k in kids if k.name == SPAN_RECORD_IO) + sum(
+        float(k.attrs.get(ATTR_STEP_RECORD_WAIT_MS, 0.0)) / 1000.0 for k in kids if k.name == SPAN_HARNESS_STEP
+    )
     infer_ms = [_dur_s(s) * 1000.0 for s in _descendants(episode, children) if s.name == SPAN_POLICY_INFER]
     materialize_s = sum(
         _dur_s(child)
