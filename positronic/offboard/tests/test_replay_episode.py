@@ -192,3 +192,27 @@ def test_a_call_of_a_policy_that_fails_to_start_ends_before_the_play_raises():
         play(_episode(), policy, out=lambda _: None)
 
     assert policy.call_ended.is_set()
+
+
+class _AsksToResumeLate(Policy):
+    """A policy that asks to resume 2 s after each observation, and keeps the joints it sees."""
+
+    def __init__(self):
+        self.seen_joints: list[float] = []
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        obs = yield
+        while True:
+            self.seen_joints.append(float(obs[keys.JOINTS][0]))
+            obs = yield Step({}, runtime.time_ns + round(2e9))
+
+
+def test_a_late_resume_reads_the_episode_at_most_one_second_apart():
+    policy = _AsksToResumeLate()
+
+    play(_episode(), policy, out=lambda _: None)
+
+    np.testing.assert_allclose(policy.seen_joints, [0.0, 1.0, 2.0, 3.0])

@@ -306,6 +306,15 @@ class _PolicyEnded:
     time_ns: int
 
 
+def next_wake_ns(started_at_ns: int, resume_at_ns: int) -> int:
+    """When a step that started at ``started_at_ns`` and asks to resume at ``resume_at_ns`` reads sensors again.
+
+    The period between the two is clamped to ``MIN_POLL_PERIOD_SEC`` and ``MAX_POLL_PERIOD_SEC``.
+    """
+    period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, (resume_at_ns - started_at_ns) / 1e9))
+    return started_at_ns + round(period_sec * 1e9)
+
+
 def policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
     """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
 
@@ -692,9 +701,7 @@ class Harness(pimm.ControlSystem):
             finally:
                 if span.is_recording():
                     telemetry.set_attrs(span, **step_ms)
-        period_sec = (step.resume_at_ns - started_at_ns) / 1e9
-        period_sec = min(MAX_POLL_PERIOD_SEC, max(MIN_POLL_PERIOD_SEC, period_sec))
-        return started_at_ns + round(period_sec * 1e9)
+        return next_wake_ns(started_at_ns, step.resume_at_ns)
 
     @staticmethod
     def _trial_terminal(

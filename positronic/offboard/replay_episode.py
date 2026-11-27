@@ -38,12 +38,11 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyCommandError
 from positronic.policy.base import PolicyRun, Step
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.harness import policy_frames, refuse_unstated_pose_commands, stated_pose_signals
+from positronic.policy.harness import next_wake_ns, policy_frames, refuse_unstated_pose_commands, stated_pose_signals
 
 TIMELINES = (HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME)
 """The timelines to play an episode on, in order of preference. An older recording carries only the later ones."""
 WAIT_SEC = 0.1
-MIN_STEP_SEC = 0.005
 
 
 @dataclass
@@ -199,7 +198,7 @@ def play(
                 answered += completed
                 recording.say(now[0], f'call {answered} answered in {(time.monotonic_ns() - called_ns) / 1e6:.0f} ms')
                 continue
-            now[0] = max(step.resume_at_ns, now[0] + round(MIN_STEP_SEC * 1e9))
+            now[0] = next_wake_ns(now[0], step.resume_at_ns)
     out(f'{answered} calls answered')
     return answered
 
