@@ -315,6 +315,13 @@ def next_wake_ns(started_at_ns: int, resume_at_ns: int) -> int:
     return started_at_ns + round(period_sec * 1e9)
 
 
+def policy_end(end: StopIteration) -> PolicyEnd:
+    """The ``PolicyEnd`` that a policy run returned as it raised ``end``. Raise ``ValueError`` for another value."""
+    if not isinstance(end.value, PolicyEnd):
+        raise ValueError(f'a policy run returned {end.value!r}, which is not a PolicyEnd') from None
+    return end.value
+
+
 def policy_frames(policy: Policy, runtime: Executor) -> dict[str, EEFrame]:
     """The frames that ``policy`` states. Call it after ``runtime.start(policy)``, before the first observation.
 
@@ -680,9 +687,7 @@ class Harness(pimm.ControlSystem):
                 try:
                     step = policy_run.send(obs)
                 except StopIteration as end:
-                    if not isinstance(end.value, PolicyEnd):
-                        raise ValueError(f'a policy run returned {end.value!r}, which is not a PolicyEnd') from None
-                    return _PolicyEnded(end.value, runtime.time_ns)
+                    return _PolicyEnded(policy_end(end), runtime.time_ns)
                 finally:
                     step_ms[telemetry_keys.ATTR_STEP_POLICY_MS] = (time.perf_counter_ns() - policy_started_ns) / 1e6
                 assert step is not None, 'a policy must yield a Step for each observation'

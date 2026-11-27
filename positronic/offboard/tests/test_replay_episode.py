@@ -27,8 +27,11 @@ CHUNK = 3
 FPS = 10
 
 
-def _episode(timeline: str = HARNESS_WORLD) -> EpisodeContainer:
-    """A 3 s episode at 10 Hz: each joint holds ``t``, the pose is at ``t`` in x, and the recorded target is ``-t``."""
+def _episode(timeline: str = HARNESS_WORLD, signals: dict[str, DummySignal] | None = None) -> EpisodeContainer:
+    """A 3 s episode at 10 Hz: each joint holds ``t``, the pose is at ``t`` in x, and the recorded target is ``-t``.
+
+    Each of ``signals`` adds a signal or takes the place of one.
+    """
     seconds = np.array(TIMES_NS) / 1e9
 
     def signal(values: list[Any]) -> DummySignal:
@@ -40,6 +43,7 @@ def _episode(timeline: str = HARNESS_WORLD) -> EpisodeContainer:
         keys.GRIP: signal([0.5] * len(TIMES_NS)),
         keys.TARGET_JOINTS: signal([np.full(7, -t) for t in seconds]),
         keys.TARGET_GRIP: signal([1.0] * len(TIMES_NS)),
+        **(signals or {}),
         keys.TASK: 'Put the cup in the bowl',
         eval_keys.EMBODIMENT: 'test.franka',
         **ee_frames_entry({keys.EE_POSE: EEFrame(site=GRIPPER_SITE), keys.TARGET_EE_POSE: EEFrame(site=GRIPPER_SITE)}),
@@ -216,3 +220,70 @@ def test_a_late_resume_reads_the_episode_at_most_one_second_apart():
     play(_episode(), policy, out=lambda _: None)
 
     np.testing.assert_allclose(policy.seen_joints, [0.0, 1.0, 2.0, 3.0])
+
+
+class _ReturnsNone(Policy):
+    """A policy whose run returns ``None`` in place of a ``PolicyEnd`` after its first observation."""
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        yield
+        yield Step({}, runtime.time_ns + round(1e9 / FPS))
+        not_an_end: Any = None
+        return not_an_end
+
+
+def test_a_run_that_returns_no_policy_end_raises():
+    with pytest.raises(ValueError, match='not a PolicyEnd'):
+        play(_episode(), _ReturnsNone(), out=lambda _: None)
+
+
+class _KeepsEachStep(Policy):
+    """A policy that asks to resume 1 s after each observation, and keeps the joints, the grip and the capture time."""
+
+    def __init__(self):
+        self.seen: list[tuple[float, float]] = []
+        self.observed_ns: list[int | None] = []
+
+    def meta(self) -> dict[str, Any]:
+        return {}
+
+    def run(self, runtime: Runtime) -> PolicyRun:
+        obs = yield
+        while True:
+            self.seen.append((float(obs[keys.JOINTS][0]), float(obs[keys.GRIP])))
+            self.observed_ns.append(runtime.observed_ns)
+            obs = yield Step({}, runtime.time_ns + round(1e9))
+
+
+def test_a_stream_that_stops_early_keeps_its_last_value_until_the_episode_ends():
+    grip_to_1_sec = DummySignal(TIMES_NS[:11], [t / 1e9 for t in TIMES_NS[:11]], timelines=(HARNESS_WORLD,))
+    policy = _KeepsEachStep()
+
+    play(_episode(signals={keys.GRIP: grip_to_1_sec}), policy, out=lambda _: None)
+
+    assert policy.seen == [(0.0, 0.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0)]
+
+
+def _frames(times_ns: list[int]) -> DummySignal:
+    return DummySignal(times_ns, [np.zeros((2, 2, 3), dtype=np.uint8)] * len(times_ns), timelines=(HARNESS_WORLD,))
+
+
+def test_a_tick_is_observed_at_the_capture_of_its_oldest_frame():
+    wrist = _frames([0, round(0.5e9), round(1.5e9), round(2.5e9)])
+    exterior = _frames([0, round(0.9e9), round(2.9e9)])
+    policy = _KeepsEachStep()
+
+    play(_episode(signals={keys.WRIST_IMAGE: wrist, keys.EXTERIOR_IMAGE: exterior}), policy, out=lambda _: None)
+
+    assert policy.observed_ns == [0, round(0.5e9), round(0.9e9), round(2.5e9)]
+
+
+def test_a_tick_without_a_frame_has_no_capture_time():
+    policy = _KeepsEachStep()
+
+    play(_episode(), policy, out=lambda _: None)
+
+    assert policy.observed_ns == [None, None, None, None]

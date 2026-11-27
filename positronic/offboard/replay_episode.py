@@ -38,7 +38,13 @@ from positronic.eval import keys as eval_keys
 from positronic.policy import Policy, PolicyCommandError
 from positronic.policy.base import PolicyRun, Step
 from positronic.policy.executor import Executor, WaitStatus
-from positronic.policy.harness import next_wake_ns, policy_frames, refuse_unstated_pose_commands, stated_pose_signals
+from positronic.policy.harness import (
+    next_wake_ns,
+    policy_end,
+    policy_frames,
+    refuse_unstated_pose_commands,
+    stated_pose_signals,
+)
 
 TIMELINES = (HARNESS_WORLD, RECEIVED_WORLD, RECORDED_TIME)
 """The timelines to play an episode on, in order of preference. An older recording carries only the later ones."""
@@ -87,16 +93,24 @@ class _Recording:
     first_ns: int
     out: Callable[[str], None]
 
-    def at(self, names: list[str], time_ns: int) -> dict[str, Any]:
-        """The value of each signal in ``names`` at ``time_ns``, for each signal that has a sample by then."""
+    def samples(self, names: list[str], time_ns: int) -> dict[str, tuple[Any, int]]:
+        """The last sample of each signal in ``names`` at ``time_ns``, as its value and its time on the timeline.
+
+        A signal with no sample by then is absent.
+        """
         at = Time(**{self.timeline: time_ns})
-        values = {}
+        samples = {}
         for name in names:
             try:
-                values[name] = self.ep.signals[name].time[at][0]
+                value, stamp = self.ep.signals[name].time[at]
             except KeyError:
                 continue
-        return values
+            samples[name] = value, stamp[self.timeline]
+        return samples
+
+    def at(self, names: list[str], time_ns: int) -> dict[str, Any]:
+        """The value of each signal in ``names`` at ``time_ns``, for each signal that has a sample by then."""
+        return {name: value for name, (value, _) in self.samples(names, time_ns).items()}
 
     def instruction(self, time_ns: int) -> str:
         """The instruction the policy got at ``time_ns``, or the episode's task where the episode records none."""
@@ -107,20 +121,26 @@ class _Recording:
     def say(self, time_ns: int, line: str) -> None:
         self.out(f'{(time_ns - self.first_ns) / 1e9:8.3f} s  {line}')
 
-    def step(self, run: PolicyRun, rig: _Rig, time_ns: int) -> Step | None:
+    def step(self, runtime: Executor, run: PolicyRun, rig: _Rig, time_ns: int) -> Step | None:
         """Send the observation at ``time_ns`` to ``run``, and write each command it returns beside the recorded ones.
 
-        Return ``None`` when the policy ends the run. Raise ``PolicyCommandError`` for a step that the harness refuses.
+        As the harness does, start the tick of ``runtime`` at the time of the oldest camera frame sent.
+        Return ``None`` when the policy ends the run. Raise as the harness does: ``ValueError`` for a run that returns
+        another value than a ``PolicyEnd``, and ``PolicyCommandError`` for a step that the harness refuses.
         """
+        samples = self.samples(rig.sent, time_ns)
+        runtime.start_tick(
+            min((stamp for name, (_, stamp) in samples.items() if name.startswith(keys.IMAGE_PREFIX)), default=None)
+        )
         obs = {
-            **self.at(rig.sent, time_ns),
+            **{name: value for name, (value, _) in samples.items()},
             keys.TASK: self.instruction(time_ns),
             keys.DESCRIPTOR: self.ep.static.get(eval_keys.EMBODIMENT, ''),
         }
         try:
             step = run.send(obs)
         except StopIteration as end:
-            self.say(time_ns, f'the policy ended the run: {end.value}')
+            self.say(time_ns, f'the policy ended the run: {policy_end(end)}')
             return None
         assert step is not None, 'a policy must yield a Step for each observation'
         if unknown := sorted(step.commands.keys() - rig.channels):
@@ -169,15 +189,17 @@ def play(
 ) -> int:
     """Play ``ep`` from ``start_sec`` to ``end_sec`` to ``policy``, write each line to ``out``, and return the calls.
 
-    ``calls`` stops the play when the client asks for one more call than it. Raise as the harness does: ``ValueError``
-    for a policy that states a pose frame the rig does not report, and ``PolicyCommandError`` for a step it refuses.
+    Each observation keeps its last value until the last observation of the episode, as on a rig. ``calls`` stops the
+    play when the client asks for one more call than it. Raise as the harness does: ``ValueError`` for a policy that
+    states a pose frame the rig does not report or a run that returns another value than a ``PolicyEnd``, and
+    ``PolicyCommandError`` for a step it refuses.
     """
     observed = [name for name in ep.signals if keys.is_observation(name)]
     timeline = next((t for t in TIMELINES if all(t in ep.signals[name].timelines for name in observed)), None)
     if not observed or timeline is None:
         raise ValueError(f'The episode has no observation on one of the timelines {TIMELINES}')
     first_ns = max(ep.signals[name].bounds(timeline).start for name in observed)
-    last_ns = min(ep.signals[name].bounds(timeline).finish for name in observed)
+    last_ns = max(ep.signals[name].bounds(timeline).finish for name in observed)
     stop_ns = last_ns if end_sec is None else min(last_ns, first_ns + round(end_sec * 1e9))
     now = [first_ns + round(start_sec * 1e9)]
     recording = _Recording(ep, timeline, first_ns, out)
@@ -189,9 +211,8 @@ def play(
         rig = _Rig.of(ep, timeline, observed, policy_frames(policy, runtime))
         out(f'Observations sent: {rig.sent}')
         while now[0] <= stop_ns:
-            runtime.start_tick(now[0])
             called_ns = time.monotonic_ns()
-            step = recording.step(run, rig, now[0])
+            step = recording.step(runtime, run, rig, now[0])
             if step is None or (calls is not None and answered >= calls and runtime.has_pending):
                 break
             if completed := _wait_for_answers(runtime):
