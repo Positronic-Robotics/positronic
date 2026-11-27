@@ -233,12 +233,31 @@ def test_the_start_move_fails_with_no_move_when_the_arm_sends_no_state(world):
     assert rig.events()[-1] == f'the start pose failed: the arm sent 0 new states in {ArmControl.SETTLE_SEC} s'
 
 
-def test_the_grip_goes_to_the_gripper_once_for_each_sample_of_the_buttons(world):
+def test_the_grip_goes_to_the_gripper_once_for_each_sample_of_the_buttons_while_control_is_on(world):
     rig = _Rig(world)
-    driver = ManualDriver([(lambda: rig.press(trigger=0.6), 0.05)])
+    driver = ManualDriver([*rig.control_on(), (lambda: rig.press(trigger=0.6), 0.05)])
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
-    assert [grip for _, grip in rig.grips.emitted] == [pytest.approx(0.6)]
+    assert [grip for _, grip in rig.grips.emitted] == [0.0, pytest.approx(0.6)]
+
+
+def test_the_trigger_moves_no_gripper_while_control_is_off_or_the_arm_is_in_an_error(world):
+    rig = _Rig(world)
+    marks = {}
+    driver = ManualDriver([
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.hand(HAND), 0.01),
+        (lambda: rig.press(trigger=0.6), 0.01),
+        (lambda: marks.update(off=len(rig.grips.emitted)), 0.01),
+        (lambda: rig.press(a=1.0), 0.01),
+        (lambda: rig.state.emit(_state(RobotStatus.ERROR)), 0.01),
+        (lambda: marks.update(on=len(rig.grips.emitted)), 0.01),
+        (lambda: rig.press(trigger=0.9), 0.01),
+    ])
+    drive_scheduler(world.start([rig.control, driver]), steps=400)
+
+    assert marks['off'] == 0 and marks['on'] == 1
+    assert len(rig.grips.emitted) == marks['on']
 
 
 def test_a_start_pose_that_the_arm_refuses_is_an_event_and_the_teleoperation_goes_on(world):
@@ -250,12 +269,15 @@ def test_a_start_pose_that_the_arm_refuses_is_an_event_and_the_teleoperation_goe
         *rig.states(),
         (lambda: rig.take_calls(), 0.01),
         (lambda: rig.calls[0].set_exception(RuntimeError('out of reach')), 0.01),
-        (lambda: rig.press(trigger=0.4), 0.01),
+        (lambda: rig.state.emit(_state()), 0.01),
+        (lambda: rig.hand(HAND), 0.01),
+        (lambda: rig.press(a=1.0), 0.01),
+        (lambda: rig.hand(_raised(HAND, 0.05)), 0.01),
     ])
     drive_scheduler(world.start([rig.control, driver]), steps=400)
 
-    assert rig.events()[-1] == 'the start pose failed: out of reach'
-    assert rig.grips.emitted[-1][1] == pytest.approx(0.4)
+    assert rig.events()[-2:] == ['the start pose failed: out of reach', 'control on']
+    assert isinstance(rig.commands.emitted[-1][1], command.CartesianPosition)
 
 
 def test_an_error_turns_control_off_so_the_arm_stays_when_the_error_clears(world):

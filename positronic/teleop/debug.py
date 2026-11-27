@@ -7,7 +7,7 @@ Each arm has its own controls:
 - A (right controller) or X (left controller): control of the arm on or off.
 - A press of the stick: control off, the errors of the arm and its gripper cleared, and the arm at its start pose.
 - Y on the left controller stays with the headset page: the camera and the panel.
-- The trigger: the grip.
+- The trigger: the grip, while control of the arm is on.
 
 Control of an arm goes off when its controller is not tracked, when the headset sends nothing for a while, and when
 the arm is not available: in an error, busy with a move of its own, or with no state. A press of A or X turns it on
@@ -205,17 +205,16 @@ class ArmControl(pimm.ControlSystem):
 
     def _read_buttons(
         self, message: pimm.Message[dict[str, ControllerButtons | None]], now_ns: int, silent: bool
-    ) -> dict[Button, int]:
-        """The number of presses of each button of the controller in ``message``, and the grip of a new sample to the
-        gripper."""
+    ) -> tuple[dict[Button, int], float | None]:
+        """The number of presses of each button of the controller in ``message``, and the grip of a new sample."""
         buttons = message.data.get(self.side)
         if buttons is None or silent:
             self._buttons.cancel_holds()
-            return {}
+            return {}, None
+        grip = None
         if message.updated:
-            self._trigger = ButtonMap.grip(buttons.values)
-            self.target_grip.emit(self._trigger)
-        return self._buttons.new_presses(buttons, now_ns)
+            grip = self._trigger = ButtonMap.grip(buttons.values)
+        return self._buttons.new_presses(buttons, now_ns), grip
 
     def _check_availability(self, hand: geom.Transform3D | None, silent: bool) -> None:
         """Turn control off when the controller or the arm is not available, and note an error of the arm once."""
@@ -295,7 +294,7 @@ class ArmControl(pimm.ControlSystem):
                 last_sample = clock.now()
             silent = clock.now() - last_sample > self._silence_sec
             hand = positions.data.get(self.side)
-            presses = self._read_buttons(buttons, clock.now_ns(), silent)
+            presses, grip = self._read_buttons(buttons, clock.now_ns(), silent)
             self._check_availability(hand, silent)
 
             if Button.A in presses:
@@ -308,6 +307,8 @@ class ArmControl(pimm.ControlSystem):
                 self.robot_commands.emit(command.CartesianPosition(target))
                 self._states_since_target = 0
                 self._target = np.array(target.translation, dtype=np.float64)
+            if self._tracker.on and grip is not None:
+                self.target_grip.emit(grip)
 
             if clock.now() >= next_report:
                 self._send_report()

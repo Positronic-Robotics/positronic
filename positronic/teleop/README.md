@@ -405,7 +405,7 @@ controller drives the left arm.
 |---|---|
 | A (right) or X (left) | control of the arm on or off |
 | a press of the stick | control off, the errors of the arm and its gripper cleared, and the arm at its start pose |
-| the trigger | the grip |
+| the trigger | the grip, while control of the arm is on |
 | press or hold Y | the camera and the panel (see Cameras) |
 
 Control of an arm goes off when its controller is not tracked, when the headset sends nothing for 0.5 s
